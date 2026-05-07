@@ -169,7 +169,10 @@ async def test_upload_quota_race_condition(
         from app.core.redis import get_redis
         from app.main import app
 
-        app.dependency_overrides[get_redis] = lambda: fake_redis
+        async def override_get_redis():
+            yield fake_redis
+
+        app.dependency_overrides[get_redis] = override_get_redis
 
         try:
             reqs = [

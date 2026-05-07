@@ -115,7 +115,7 @@ async def moderator_stats(
 async def moderator_list_directories(
     _user: Annotated[User, Depends(require_moderator())],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[dict]:
+) -> list[dict]:  # type: ignore[type-arg]
     result = await db.execute(select(Directory).order_by(Directory.sort_order, Directory.name))
     dirs = result.scalars().all()
     return [

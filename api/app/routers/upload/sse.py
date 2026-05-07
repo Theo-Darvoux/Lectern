@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -31,7 +31,7 @@ _SSE_COUNTER_TTL = 700  # slightly longer than _SSE_TIMEOUT as a safety net
 
 
 @asynccontextmanager
-async def sse_concurrency_guard(redis: Redis, user_id: str):
+async def sse_concurrency_guard(redis: Redis, user_id: str):  # type: ignore[no-untyped-def,type-arg]
     """Async context manager to track and limit concurrent SSE streams per user."""
     sse_counter_key = f"{_SSE_COUNTER_PREFIX}{user_id}"
     _sse_count = await redis.incr(sse_counter_key)
@@ -43,10 +43,8 @@ async def sse_concurrency_guard(redis: Redis, user_id: str):
     try:
         yield
     finally:
-        try:
+        with suppress(Exception):
             await redis.decr(sse_counter_key)
-        except Exception:
-            pass
 
 
 async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -> None:
@@ -67,9 +65,7 @@ async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -
         # Ensure user_id is a UUID object for SQLAlchemy type processing.
         uid = uuid.UUID(str(user_id))
         exists = await db.scalar(
-            select(Upload.id)
-            .where(Upload.final_key == file_key, Upload.user_id == uid)
-            .limit(1)
+            select(Upload.id).where(Upload.final_key == file_key, Upload.user_id == uid).limit(1)
         )
         if exists:
             return
@@ -81,7 +77,7 @@ async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -
 async def upload_status(
     file_key: str,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadStatusOut:
     """Non-SSE status poll for upload processing.
@@ -144,7 +140,7 @@ async def upload_events(
     file_key: str,
     request: Request,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EventSourceResponse:
     """SSE stream for upload processing status.
@@ -210,14 +206,14 @@ async def upload_events(
                 log_entries: list[bytes] = await redis.lrange(event_log_key, 0, -1)
                 events: list[dict[str, str]] = []
                 for i, raw in enumerate(log_entries):
-                    entry = raw.decode() if isinstance(raw, bytes) else str(raw)
+                    entry = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[redundant-expr]
                     events.append({"event": "upload", "data": entry, "id": str(i + 1)})
                 # Ensure the terminal event is present (it should be the last log entry,
                 # but append cached_status as a safety net if the log is empty).
                 if not events:
                     events.append({"event": "upload", "data": cached_status, "id": "final"})
                 return EventSourceResponse(
-                    AsyncIteratorAdapter(events),
+                    AsyncIteratorAdapter(events),  # type: ignore[no-untyped-call]
                     headers={"X-Accel-Buffering": "no"},
                 )
         except (json.JSONDecodeError, KeyError):
@@ -281,7 +277,7 @@ async def upload_events(
             yielded_count = last_event_id
 
             for i, raw in enumerate(replayed):
-                payload_str = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore
+                payload_str = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[ignore-without-code]
                 yielded_count = last_event_id + i + 1
                 yield {"event": "upload", "data": payload_str, "id": str(yielded_count)}
                 try:
@@ -360,10 +356,8 @@ async def upload_events(
 
             finally:
                 reader_task.cancel()
-                try:
+                with suppress(asyncio.CancelledError):
                     await reader_task
-                except asyncio.CancelledError:
-                    pass
                 try:
                     await pubsub.unsubscribe(f"upload:events:{file_key}")
                     await pubsub.reset()
@@ -371,10 +365,8 @@ async def upload_events(
                     pass
         finally:
             # Decrement the concurrency counter when the stream ends
-            try:
+            with suppress(Exception):
                 await redis.decr(sse_counter_key)
-            except Exception:
-                pass
 
     return EventSourceResponse(
         event_generator(),

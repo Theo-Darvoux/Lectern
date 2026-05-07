@@ -315,7 +315,10 @@ class TestSoftDelete:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, mod,
+            client,
+            db_session,
+            student,
+            mod,
             [{"op": "delete_material", "material_id": str(mat_id)}],
         )
         assert pr_data["status"] == "approved"
@@ -337,7 +340,9 @@ class TestSoftDelete:
         student = await _create_user(db_session, UserRole.STUDENT)
         mod = await _create_user(db_session, UserRole.BUREAU)
         parent = await _create_directory(db_session, "Parent", user_id=student.id)
-        child = await _create_directory(db_session, "Child", parent_id=parent.id, user_id=student.id)
+        child = await _create_directory(
+            db_session, "Child", parent_id=parent.id, user_id=student.id
+        )
         m = await _create_material(db_session, child.id, "ChildMat", student.id)
         parent_id = parent.id
         child_id = child.id
@@ -345,14 +350,19 @@ class TestSoftDelete:
         await db_session.commit()
 
         await _create_and_approve_pr(
-            client, db_session, student, mod,
+            client,
+            db_session,
+            student,
+            mod,
             [{"op": "delete_directory", "directory_id": str(parent_id)}],
         )
 
         # All should be invisible to normal queries
         for model, item_id in [(Directory, parent_id), (Directory, child_id), (Material, mat_id)]:
             result = await db_session.execute(select(model).where(model.id == item_id))
-            assert result.scalar_one_or_none() is None, f"{model.__name__} {item_id} should be hidden"
+            assert result.scalar_one_or_none() is None, (
+                f"{model.__name__} {item_id} should be hidden"
+            )
 
         # All should be visible with include_deleted
         for model, item_id in [(Directory, parent_id), (Directory, child_id), (Material, mat_id)]:
@@ -360,7 +370,9 @@ class TestSoftDelete:
                 select(model).where(model.id == item_id).execution_options(include_deleted=True)  # type: ignore
             )
             row = result.scalar_one()
-            assert row.deleted_at is not None, f"{model.__name__} {item_id} should have deleted_at set"  # type: ignore
+            assert row.deleted_at is not None, (
+                f"{model.__name__} {item_id} should have deleted_at set"
+            )  # type: ignore
 
     async def test_soft_deleted_material_versions_hidden(
         self, client: AsyncClient, db_session: AsyncSession
@@ -375,7 +387,10 @@ class TestSoftDelete:
         await db_session.commit()
 
         await _create_and_approve_pr(
-            client, db_session, student, mod,
+            client,
+            db_session,
+            student,
+            mod,
             [{"op": "delete_material", "material_id": str(mat_id)}],
         )
 
@@ -385,7 +400,9 @@ class TestSoftDelete:
         assert result.scalar_one_or_none() is None
 
         result = await db_session.execute(
-            select(MaterialVersion).where(MaterialVersion.id == mv_id).execution_options(include_deleted=True)
+            select(MaterialVersion)
+            .where(MaterialVersion.id == mv_id)
+            .execution_options(include_deleted=True)
         )
         assert result.scalar_one().deleted_at is not None
 
@@ -403,7 +420,10 @@ class TestSoftDelete:
 
         db_session.info["post_commit_jobs"] = []
         await _create_and_approve_pr(
-            client, db_session, student, mod,
+            client,
+            db_session,
+            student,
+            mod,
             [{"op": "delete_material", "material_id": str(mat_id)}],
         )
 
@@ -431,7 +451,10 @@ class TestPreStateSnapshot:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, mod,
+            client,
+            db_session,
+            student,
+            mod,
             [{"op": "edit_material", "material_id": str(mat_id), "title": "NewTitle"}],
         )
 
@@ -452,7 +475,10 @@ class TestPreStateSnapshot:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, mod,
+            client,
+            db_session,
+            student,
+            mod,
             [{"op": "edit_directory", "directory_id": str(dir_id), "name": "NewName"}],
         )
 
@@ -476,13 +502,18 @@ class TestPreStateSnapshot:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, mod,
-            [{
-                "op": "move_item",
-                "target_type": "material",
-                "target_id": str(mat_id),
-                "new_parent_id": str(d2_id),
-            }],
+            client,
+            db_session,
+            student,
+            mod,
+            [
+                {
+                    "op": "move_item",
+                    "target_type": "material",
+                    "target_id": str(mat_id),
+                    "new_parent_id": str(d2_id),
+                }
+            ],
         )
 
         applied = pr_data.get("applied_result", [])
@@ -505,13 +536,18 @@ class TestPreStateSnapshot:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, mod,
-            [{
-                "op": "move_item",
-                "target_type": "directory",
-                "target_id": str(child_id),
-                "new_parent_id": str(dest_id),
-            }],
+            client,
+            db_session,
+            student,
+            mod,
+            [
+                {
+                    "op": "move_item",
+                    "target_type": "directory",
+                    "target_id": str(child_id),
+                    "new_parent_id": str(dest_id),
+                }
+            ],
         )
 
         applied = pr_data.get("applied_result", [])
@@ -528,7 +564,10 @@ class TestPreStateSnapshot:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, mod,
+            client,
+            db_session,
+            student,
+            mod,
             [{"op": "create_directory", "name": "Fresh"}],
         )
 
@@ -545,22 +584,26 @@ class TestPreStateSnapshot:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, mod,
+            client,
+            db_session,
+            student,
+            mod,
             [{"op": "delete_directory", "directory_id": str(dir_id)}],
         )
 
         applied = pr_data.get("applied_result", [])
         assert applied[0].get("pre_state") is None
 
-    async def test_approved_at_is_set(
-        self, client: AsyncClient, db_session: AsyncSession
-    ) -> None:
+    async def test_approved_at_is_set(self, client: AsyncClient, db_session: AsyncSession) -> None:
         student = await _create_user(db_session, UserRole.STUDENT)
         mod = await _create_user(db_session, UserRole.BUREAU)
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, mod,
+            client,
+            db_session,
+            student,
+            mod,
             [{"op": "create_directory", "name": "Dir"}],
         )
 
@@ -616,10 +659,14 @@ class TestBuildReverseOps:
 
     def test_move_item_carries_pre_state(self) -> None:
         pre = {"target_type": "material", "prev_directory_id": "dir-old"}
-        applied = [{
-            "op": "move_item", "result_id": "mat-1",
-            "target_type": "material", "pre_state": pre,
-        }]
+        applied = [
+            {
+                "op": "move_item",
+                "result_id": "mat-1",
+                "target_type": "material",
+                "pre_state": pre,
+            }
+        ]
         reverse = _build_reverse_ops(applied)
         assert reverse[0]["op"] == "move_item"
         assert reverse[0]["pre_state"] == pre
@@ -664,7 +711,10 @@ class TestRevertEndpoint:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "RevertMe"}],
         )
         pr_id = pr_data["id"]
@@ -703,8 +753,18 @@ class TestRevertEndpoint:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
-            [{"op": "create_material", "directory_id": str(dir_id), "title": "RevertMat", "type": "document"}],
+            client,
+            db_session,
+            student,
+            admin,
+            [
+                {
+                    "op": "create_material",
+                    "directory_id": str(dir_id),
+                    "title": "RevertMat",
+                    "type": "document",
+                }
+            ],
         )
         pr_id = pr_data["id"]
 
@@ -732,7 +792,10 @@ class TestRevertEndpoint:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "delete_material", "material_id": str(mat_id)}],
         )
         pr_id = pr_data["id"]
@@ -765,7 +828,10 @@ class TestRevertEndpoint:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "delete_directory", "directory_id": str(parent_id)}],
         )
 
@@ -792,7 +858,10 @@ class TestRevertEndpoint:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "edit_material", "material_id": str(mat_id), "title": "Changed"}],
         )
 
@@ -821,7 +890,10 @@ class TestRevertEndpoint:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "edit_directory", "directory_id": str(dir_id), "name": "NewDirName"}],
         )
 
@@ -850,11 +922,18 @@ class TestRevertEndpoint:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
-            [{
-                "op": "move_item", "target_type": "material",
-                "target_id": str(mat_id), "new_parent_id": str(d2_id),
-            }],
+            client,
+            db_session,
+            student,
+            admin,
+            [
+                {
+                    "op": "move_item",
+                    "target_type": "material",
+                    "target_id": str(mat_id),
+                    "new_parent_id": str(d2_id),
+                }
+            ],
         )
 
         await db_session.refresh(m)
@@ -881,11 +960,18 @@ class TestRevertEndpoint:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
-            [{
-                "op": "move_item", "target_type": "directory",
-                "target_id": str(child_id), "new_parent_id": str(dest_id),
-            }],
+            client,
+            db_session,
+            student,
+            admin,
+            [
+                {
+                    "op": "move_item",
+                    "target_type": "directory",
+                    "target_id": str(child_id),
+                    "new_parent_id": str(dest_id),
+                }
+            ],
         )
 
         await db_session.refresh(child)
@@ -900,9 +986,7 @@ class TestRevertEndpoint:
         await db_session.refresh(child)
         assert child.parent_id == root_id
 
-    async def test_revert_multi_op_pr(
-        self, client: AsyncClient, db_session: AsyncSession
-    ) -> None:
+    async def test_revert_multi_op_pr(self, client: AsyncClient, db_session: AsyncSession) -> None:
         """Revert a PR with multiple ops: create_dir + create_material + edit_directory."""
         student = await _create_user(db_session, UserRole.STUDENT)
         admin = await _create_user(db_session, UserRole.BUREAU)
@@ -911,11 +995,28 @@ class TestRevertEndpoint:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [
-                {"op": "create_directory", "temp_id": "$d1", "name": "NewDir", "parent_id": str(existing_id)},
-                {"op": "create_material", "directory_id": "$d1", "title": "NewMat", "type": "document"},
-                {"op": "edit_directory", "directory_id": str(existing_id), "description": "Updated desc"},
+                {
+                    "op": "create_directory",
+                    "temp_id": "$d1",
+                    "name": "NewDir",
+                    "parent_id": str(existing_id),
+                },
+                {
+                    "op": "create_material",
+                    "directory_id": "$d1",
+                    "title": "NewMat",
+                    "type": "document",
+                },
+                {
+                    "op": "edit_directory",
+                    "directory_id": str(existing_id),
+                    "description": "Updated desc",
+                },
             ],
             title="Multi-Op PR Title",
         )
@@ -955,7 +1056,10 @@ class TestRevertGuards:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "Guarded"}],
         )
 
@@ -974,7 +1078,10 @@ class TestRevertGuards:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "Guarded"}],
         )
 
@@ -984,16 +1091,17 @@ class TestRevertGuards:
         )
         assert resp.status_code == 403
 
-    async def test_vieux_can_revert(
-        self, client: AsyncClient, db_session: AsyncSession
-    ) -> None:
+    async def test_vieux_can_revert(self, client: AsyncClient, db_session: AsyncSession) -> None:
         student = await _create_user(db_session, UserRole.STUDENT)
         vieux = await _create_user(db_session, UserRole.VIEUX)
         admin = await _create_user(db_session, UserRole.BUREAU)
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "VieuxTest"}],
         )
 
@@ -1065,7 +1173,10 @@ class TestRevertGuards:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "DoubleRevert"}],
         )
 
@@ -1092,7 +1203,10 @@ class TestRevertGuards:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "OnceOnly"}],
         )
 
@@ -1119,7 +1233,10 @@ class TestRevertGuards:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "ExpiredGrace"}],
         )
 
@@ -1166,7 +1283,10 @@ class TestRevertResponseSchema:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "SchemaTest"}],
         )
 
@@ -1209,7 +1329,10 @@ class TestRevertResponseSchema:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "ForRevertSchema"}],
         )
 
@@ -1231,7 +1354,10 @@ class TestRevertResponseSchema:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "ForRevertedBy"}],
         )
 
@@ -1257,7 +1383,10 @@ class TestRevertResponseSchema:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "ForListTest"}],
         )
 
@@ -1292,7 +1421,10 @@ class TestRevertEdgeCases:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "TitleCheck"}],
             title="My Cool Contribution",
         )
@@ -1313,7 +1445,10 @@ class TestRevertEdgeCases:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "Preserved"}],
         )
 
@@ -1371,14 +1506,20 @@ class TestRevertEdgeCases:
 
         # PR A: edit title to V2
         pr_a = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "edit_material", "material_id": str(mat_id), "title": "V2Title"}],
             title="PR A Long Title",
         )
 
         # PR B: edit title to V3
         await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "edit_material", "material_id": str(mat_id), "title": "V3Title"}],
             title="PR B Long Title",
         )
@@ -1408,8 +1549,18 @@ class TestRevertEdgeCases:
 
         # Create and approve
         pr1 = await _create_and_approve_pr(
-            client, db_session, student, admin,
-            [{"op": "create_material", "directory_id": str(dir_id), "title": "Unique", "type": "document"}],
+            client,
+            db_session,
+            student,
+            admin,
+            [
+                {
+                    "op": "create_material",
+                    "directory_id": str(dir_id),
+                    "title": "Unique",
+                    "type": "document",
+                }
+            ],
             title="PR 1 Long Title",
         )
 
@@ -1422,14 +1573,22 @@ class TestRevertEdgeCases:
 
         # Create another material with the same title/slug — should not conflict
         await _create_and_approve_pr(
-            client, db_session, student, admin,
-            [{"op": "create_material", "directory_id": str(dir_id), "title": "Unique", "type": "document"}],
+            client,
+            db_session,
+            student,
+            admin,
+            [
+                {
+                    "op": "create_material",
+                    "directory_id": str(dir_id),
+                    "title": "Unique",
+                    "type": "document",
+                }
+            ],
             title="PR 2 Long Title",
         )
         # If we got here without an error, slug uniqueness works correctly
-        result = await db_session.execute(
-            select(Material).where(Material.title == "Unique")
-        )
+        result = await db_session.execute(select(Material).where(Material.title == "Unique"))
         assert result.scalar_one_or_none() is not None
 
     async def test_revert_notifies_author(
@@ -1441,7 +1600,10 @@ class TestRevertEdgeCases:
         await db_session.commit()
 
         pr_data = await _create_and_approve_pr(
-            client, db_session, student, admin,
+            client,
+            db_session,
+            student,
+            admin,
             [{"op": "create_directory", "name": "Notified"}],
         )
 
@@ -1454,4 +1616,6 @@ class TestRevertEdgeCases:
 
             mock_notify.assert_called_once()
             args = mock_notify.call_args
-            assert args[1].get("link") or (len(args[0]) >= 4 and "/pull-requests/" in str(args[0][3]))
+            assert args[1].get("link") or (
+                len(args[0]) >= 4 and "/pull-requests/" in str(args[0][3])
+            )

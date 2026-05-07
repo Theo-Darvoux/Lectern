@@ -280,7 +280,9 @@ async def test_search_pagination_offset(
     await db_session.commit()
     mock_meili_client.multi_search = AsyncMock(return_value=_meili_response(mat_total=30))
 
-    response = await client.get("/api/search?query=test&page=3&limit=7", headers=_auth_headers(user))
+    response = await client.get(
+        "/api/search?query=test&page=3&limit=7", headers=_auth_headers(user)
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["page"] == 3
@@ -407,9 +409,7 @@ async def test_search_filter_type_forwarded_to_both_indexes(
     await db_session.commit()
     mock_meili_client.multi_search = AsyncMock(return_value=_meili_response())
 
-    response = await client.get(
-        "/api/search?query=test&type=document", headers=_auth_headers(user)
-    )
+    response = await client.get("/api/search?query=test&type=document", headers=_auth_headers(user))
     assert response.status_code == 200
 
     params = mock_meili_client.multi_search.call_args[0][0]
@@ -473,9 +473,7 @@ async def test_service_filter_type_valid_values_allowed(mock_meili_client: Async
     db.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
 
     for valid_type in ("document", "video", "polycopie", "module", "CS101", "other"):
-        mock_meili_client.multi_search = AsyncMock(
-            return_value=_meili_response()
-        )
+        mock_meili_client.multi_search = AsyncMock(return_value=_meili_response())
         await perform_search(db, "test", type_filter=valid_type)
         mock_meili_client.multi_search.assert_called_once()
         mock_meili_client.reset_mock()
@@ -498,25 +496,52 @@ async def test_settings_idempotency_no_update_when_unchanged():
     from app.core.meilisearch import _DIRECTORIES_RANKING_RULES, _MATERIALS_RANKING_RULES
 
     desired_mat = MeilisearchSettings(
-        searchable_attributes=["title", "description", "tags", "slug", "type", "authorName", "ancestor_path", "extra_searchable"],
+        searchable_attributes=[
+            "title",
+            "description",
+            "tags",
+            "slug",
+            "type",
+            "authorName",
+            "ancestor_path",
+            "extra_searchable",
+        ],
         filterable_attributes=["type", "directory_id"],
         sortable_attributes=["like_count", "total_views", "created_at"],
         ranking_rules=_MATERIALS_RANKING_RULES,
-        typo_tolerance=TypoTolerance(enabled=True, min_word_size_for_typos=MinWordSizeForTypos(one_typo=5, two_typos=9)),
+        typo_tolerance=TypoTolerance(
+            enabled=True, min_word_size_for_typos=MinWordSizeForTypos(one_typo=5, two_typos=9)
+        ),
     )
     desired_dir = MeilisearchSettings(
-        searchable_attributes=["name", "description", "slug", "type", "tags", "code", "ancestor_path", "extra_searchable"],
+        searchable_attributes=[
+            "name",
+            "description",
+            "slug",
+            "type",
+            "tags",
+            "code",
+            "ancestor_path",
+            "extra_searchable",
+        ],
         filterable_attributes=["parent_id", "type"],
         sortable_attributes=["like_count", "created_at"],
         ranking_rules=_DIRECTORIES_RANKING_RULES,
-        typo_tolerance=TypoTolerance(enabled=True, min_word_size_for_typos=MinWordSizeForTypos(one_typo=5, two_typos=9)),
+        typo_tolerance=TypoTolerance(
+            enabled=True, min_word_size_for_typos=MinWordSizeForTypos(one_typo=5, two_typos=9)
+        ),
     )
-
 
     def _index_side_effect(uid):
         mock_idx = AsyncMock()
-        mock_idx.update_settings = AsyncMock(side_effect=lambda _: (_ for _ in ()).throw(AssertionError("update_settings called unexpectedly")))
-        mock_idx.get_settings = AsyncMock(return_value=desired_mat if uid == "materials" else desired_dir)
+        mock_idx.update_settings = AsyncMock(
+            side_effect=lambda _: (_ for _ in ()).throw(
+                AssertionError("update_settings called unexpectedly")
+            )
+        )
+        mock_idx.get_settings = AsyncMock(
+            return_value=desired_mat if uid == "materials" else desired_dir
+        )
         return mock_idx
 
     mock_admin = MagicMock()
@@ -527,6 +552,7 @@ async def test_settings_idempotency_no_update_when_unchanged():
 
     with patch("app.core.meilisearch.meili_admin_client", mock_admin):
         from app.core.meilisearch import setup_meilisearch
+
         await setup_meilisearch()  # Must not raise
 
 
@@ -555,6 +581,7 @@ async def test_settings_update_called_when_changed():
 
     with patch("app.core.meilisearch.meili_admin_client", mock_admin):
         from app.core.meilisearch import setup_meilisearch
+
         await setup_meilisearch()
 
     assert "materials" in update_called

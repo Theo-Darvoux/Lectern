@@ -63,7 +63,7 @@ def validate_webhook_url(url: str) -> bool:
     return is_safe_url(url)
 
 
-async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> None:
+async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> None:  # type: ignore[type-arg]
     """ARQ job: look up the Upload row and POST the signed payload to the webhook URL.
 
     On transient failure (network error or 5xx), re-enqueues itself via ARQ with
@@ -197,7 +197,7 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
     try:
         from app.workers.upload.repository import UploadWorkerRepository
 
-        repo = UploadWorkerRepository(ctx)
+        repo = UploadWorkerRepository(ctx)  # type: ignore[arg-type]
         await repo.insert_dead_letter(
             upload_id=upload_id,
             job_name="dispatch_webhook",

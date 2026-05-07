@@ -181,7 +181,7 @@ export function MaterialLineItem({
     const handleDetails = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        openSidebar("details", { type: "material", id, data: material });
+        openSidebar("details", { type: "material", id, data: { ...material, __path: buildPath() } });
     };
 
     const handleChat = (e: React.MouseEvent) => {
@@ -236,6 +236,7 @@ export function MaterialLineItem({
         <ItemActionsMenu 
             item={{ id, type: "material", data: material, staged, isExternal }}
             onAddAttachment={onAddAttachment}
+            itemPath={buildPath()}
         >
             <div
                 onClick={handleCardClick}

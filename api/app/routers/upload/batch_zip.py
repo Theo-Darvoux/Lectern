@@ -37,7 +37,6 @@ from app.core.storage import get_s3_client
 from app.core.upload_errors import (
     ERR_BATCH_TOO_LARGE,
     ERR_INVALID_ZIP,
-    ERR_SVG_UNSAFE,
     ERR_ZIP_BOMB,
 )
 from app.dependencies.auth import CurrentUser
@@ -53,7 +52,7 @@ from app.routers.upload.validators import (
     _check_per_type_size,
     _validate_filename,
 )
-from app.schemas.material import BatchZipEntry, BatchZipResponse, UploadStatus
+from app.schemas.material import BatchZipEntry, BatchZipResponse
 from app.services.auth import get_full_auth_config
 
 logger = logging.getLogger("wikint")
@@ -62,12 +61,12 @@ router = APIRouter()
 
 # ── Security limits ───────────────────────────────────────────────────────────
 
-_MAX_ZIP_BYTES = 500 * 1024 * 1024          # 500 MiB — the zip file itself
-_MAX_MEMBERS = 200                           # regular users
-_MAX_MEMBERS_PRIVILEGED = 2_000             # moderator / bureau / vieux
-_MAX_TOTAL_EXTRACTED_BYTES = 2 * 1024 ** 3  # 2 GiB total uncompressed
-_MAX_COMPRESSION_RATIO = 100                # uncompressed/compressed ratio (zip bomb)
-_MAX_PATH_DEPTH = 20                        # folder nesting depth within zip
+_MAX_ZIP_BYTES = 500 * 1024 * 1024  # 500 MiB — the zip file itself
+_MAX_MEMBERS = 200  # regular users
+_MAX_MEMBERS_PRIVILEGED = 2_000  # moderator / bureau / vieux
+_MAX_TOTAL_EXTRACTED_BYTES = 2 * 1024**3  # 2 GiB total uncompressed
+_MAX_COMPRESSION_RATIO = 100  # uncompressed/compressed ratio (zip bomb)
+_MAX_PATH_DEPTH = 20  # folder nesting depth within zip
 
 # OS-generated junk to skip silently
 _SKIP_PREFIXES = ("__MACOSX/",)
@@ -88,10 +87,7 @@ def _is_safe_zip_path(path: str) -> bool:
         return False
     if "\x00" in norm:
         return False
-    for part in norm.split("/"):
-        if part == "..":
-            return False
-    return True
+    return all(part != ".." for part in norm.split("/"))
 
 
 def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:
@@ -112,17 +108,14 @@ def _should_skip_metadata(info: zipfile.ZipInfo) -> bool:
     for pfx in _SKIP_BASENAME_PREFIXES:
         if basename.startswith(pfx):
             return True
-    for pfx in _SKIP_PREFIXES:
-        if fname.startswith(pfx):
-            return True
-    return False
+    return any(fname.startswith(pfx) for pfx in _SKIP_PREFIXES)
 
 
 @dataclass
 class _ExtractedEntry:
     tmp_path: Path
-    filename: str        # sanitized basename
-    relative_path: str   # path within the zip (slash-separated)
+    filename: str  # sanitized basename
+    relative_path: str  # path within the zip (slash-separated)
     size: int
 
 
@@ -166,8 +159,8 @@ def _extract_zip_sync(
         total_declared = sum(m.file_size for m in file_members)
         if total_declared > _MAX_TOTAL_EXTRACTED_BYTES:
             raise BadRequestError(
-                f"Zip would extract to {total_declared // (1024 ** 3):.1f} GiB; "
-                f"limit is {_MAX_TOTAL_EXTRACTED_BYTES // (1024 ** 3):.0f} GiB.",
+                f"Zip would extract to {total_declared // (1024**3):.1f} GiB; "
+                f"limit is {_MAX_TOTAL_EXTRACTED_BYTES // (1024**3):.0f} GiB.",
                 code=ERR_ZIP_BOMB,
             )
 
@@ -208,8 +201,10 @@ def _extract_zip_sync(
                             break
                         bytes_written += len(data)
                         # Hard extraction limit (catches decompression bombs)
-                        if bytes_written > info.file_size + 1024 or \
-                                total_bytes_read + bytes_written > _MAX_TOTAL_EXTRACTED_BYTES:
+                        if (
+                            bytes_written > info.file_size + 1024
+                            or total_bytes_read + bytes_written > _MAX_TOTAL_EXTRACTED_BYTES
+                        ):
                             dst.close()
                             tmp_path.unlink(missing_ok=True)
                             raise BadRequestError(
@@ -243,7 +238,7 @@ def _extract_zip_sync(
 async def upload_batch_zip(
     file: UploadFile,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
     request: Request,
     _: Annotated[None, Depends(rate_limit_uploads)],
@@ -268,7 +263,11 @@ async def upload_batch_zip(
     if config.get("allowed_extensions"):
         raw = config["allowed_extensions"]
         parts = raw.split(",") if isinstance(raw, str) else list(raw)
-        allowed_exts = {(e.strip().lower() if e.strip().startswith(".") else f".{e.strip().lower()}") for e in parts if e.strip()}
+        allowed_exts = {
+            (e.strip().lower() if e.strip().startswith(".") else f".{e.strip().lower()}")
+            for e in parts
+            if e.strip()
+        }
 
     allowed_mimes: set[str] | None = None
     if config.get("allowed_mime_types"):
@@ -291,7 +290,7 @@ async def upload_batch_zip(
                 bytes_written += len(chunk)
                 if bytes_written > _MAX_ZIP_BYTES:
                     raise BadRequestError(
-                        f"Zip file exceeds {_MAX_ZIP_BYTES // (1024 ** 2)} MiB limit.",
+                        f"Zip file exceeds {_MAX_ZIP_BYTES // (1024**2)} MiB limit.",
                         code=ERR_BATCH_TOO_LARGE,
                     )
                 fh.write(chunk)
@@ -300,7 +299,7 @@ async def upload_batch_zip(
             raise BadRequestError("Empty zip file.", code=ERR_INVALID_ZIP)
 
         # Quick magic-byte check before full parse
-        with open(zip_path, "rb") as fh:
+        with open(zip_path, "rb") as fh:  # type: ignore[assignment]
             magic = fh.read(4)
         if magic not in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
             raise BadRequestError("File is not a valid zip archive.", code=ERR_INVALID_ZIP)
@@ -407,8 +406,9 @@ async def upload_batch_zip(
 
                     # Upload to quarantine
                     from app.config import settings as _settings
+
                     async with get_s3_client() as s3:
-                        await s3.upload_file(
+                        await s3.upload_file(  # type: ignore[call-arg]
                             Filename=str(pf.path),
                             Bucket=config.get("s3_bucket") or _settings.s3_bucket,
                             Key=quarantine_key,
@@ -444,7 +444,7 @@ async def upload_batch_zip(
 
                 except BadRequestError:
                     raise
-                except Exception as exc:
+                except Exception:
                     logger.exception("Unexpected error processing zip entry %s", entry.filename)
                     per_file_errors.append(f"{entry.filename}: internal error, skipped.")
                     skipped_count += 1

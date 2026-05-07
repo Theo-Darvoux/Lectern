@@ -19,7 +19,10 @@ from app.models.user import User, UserRole
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT, auto_approve: bool = False) -> User:
+
+async def _create_user(
+    db: AsyncSession, role: UserRole = UserRole.STUDENT, auto_approve: bool = False
+) -> User:
     user = User(
         id=uuid.uuid4(),
         email=f"{uuid.uuid4().hex[:8]}@telecom-sudparis.eu",
@@ -32,6 +35,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT, auto
     db.add(user)
     await db.flush()
     return user
+
 
 async def _create_directory(
     db: AsyncSession,
@@ -50,6 +54,7 @@ async def _create_directory(
     db.add(d)
     await db.flush()
     return d
+
 
 async def _create_material(
     db: AsyncSession,
@@ -70,13 +75,18 @@ async def _create_material(
     await db.flush()
     return m
 
+
 def _auth_headers(user: User) -> dict[str, str]:
     from app.core.security import create_access_token
+
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
 
+
 @pytest.fixture(autouse=True)
-def mock_pr_deps(mock_redis: AsyncMock) -> typing.Generator[tuple[AsyncMock, AsyncMock], None, None]:
+def mock_pr_deps(
+    mock_redis: AsyncMock,
+) -> typing.Generator[tuple[AsyncMock, AsyncMock], None, None]:
     """Mock external dependencies for PR creation."""
     with patch("app.services.pr.object_exists", new_callable=AsyncMock) as m_exists:
         m_exists.return_value = True
@@ -89,12 +99,16 @@ def mock_pr_deps(mock_redis: AsyncMock) -> typing.Generator[tuple[AsyncMock, Asy
         mock_redis.get.side_effect = mock_get
         yield m_exists, mock_redis
 
+
 # ---------------------------------------------------------------------------
 # Circular Move Prevention
 # ---------------------------------------------------------------------------
 
+
 class TestCircularMove:
-    async def test_move_directory_into_itself(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_move_directory_into_itself(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         admin = await _create_user(db_session, UserRole.BUREAU, auto_approve=True)
         d = await _create_directory(db_session, "Target")
         await db_session.commit()
@@ -117,7 +131,9 @@ class TestCircularMove:
         assert resp.status_code == 400
         assert "into itself" in resp.json()["detail"]
 
-    async def test_move_directory_into_descendant(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_move_directory_into_descendant(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         admin = await _create_user(db_session, UserRole.BUREAU, auto_approve=True)
         parent = await _create_directory(db_session, "Parent")
         child = await _create_directory(db_session, "Child", parent_id=parent.id)
@@ -141,12 +157,16 @@ class TestCircularMove:
         assert resp.status_code == 400
         assert "own descendants" in resp.json()["detail"]
 
+
 # ---------------------------------------------------------------------------
 # Optimistic Locking
 # ---------------------------------------------------------------------------
 
+
 class TestOptimisticLocking:
-    async def test_edit_material_conflict(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_edit_material_conflict(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         vieux = await _create_user(db_session, UserRole.VIEUX, auto_approve=True)
         d = await _create_directory(db_session)
         m = await _create_material(db_session, d.id)
@@ -192,7 +212,9 @@ class TestOptimisticLocking:
         )
         assert resp.status_code == 409
 
-    async def test_edit_material_missing_lock_conflict(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_edit_material_missing_lock_conflict(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         vieux = await _create_user(db_session, UserRole.VIEUX, auto_approve=True)
         d = await _create_directory(db_session)
         m = await _create_material(db_session, d.id)
@@ -239,7 +261,9 @@ class TestOptimisticLocking:
         assert resp.status_code == 409
         assert "expected version_lock=None, found 0" in resp.json()["detail"]
 
-    async def test_material_get_includes_version_lock(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_material_get_includes_version_lock(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         user = await _create_user(db_session)
         d = await _create_directory(db_session)
         m = await _create_material(db_session, d.id)
@@ -259,7 +283,9 @@ class TestOptimisticLocking:
         data = resp.json()
         assert data["current_version_info"]["version_lock"] == 42
 
-    async def test_edit_material_success_correct_lock(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_edit_material_success_correct_lock(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         vieux = await _create_user(db_session, UserRole.VIEUX, auto_approve=True)
         d = await _create_directory(db_session)
         m = await _create_material(db_session, d.id)
@@ -305,19 +331,22 @@ class TestOptimisticLocking:
         # Check new version lock
         result = await db_session.execute(
             select(MaterialVersion).where(
-                MaterialVersion.material_id == m.id,
-                MaterialVersion.version_number == 2
+                MaterialVersion.material_id == m.id, MaterialVersion.version_number == 2
             )
         )
         new_mv = result.scalar_one()
         assert new_mv.version_lock == 8
 
+
 # ---------------------------------------------------------------------------
 # File Claiming & Ownership
 # ---------------------------------------------------------------------------
 
+
 class TestFileClaiming:
-    async def test_double_claim_rejected(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_double_claim_rejected(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         user1 = await _create_user(db_session, UserRole.STUDENT)
         user2 = await _create_user(db_session, UserRole.STUDENT)
         file_key = f"cas/{uuid.uuid4().hex}"
@@ -339,7 +368,14 @@ class TestFileClaiming:
             "/api/pull-requests",
             json={
                 "title": "PR 1",
-                "operations": [{"op": "create_material", "title": "M1", "type": "document", "file_key": file_key}],
+                "operations": [
+                    {
+                        "op": "create_material",
+                        "title": "M1",
+                        "type": "document",
+                        "file_key": file_key,
+                    }
+                ],
             },
             headers=_auth_headers(user1),
         )
@@ -350,14 +386,23 @@ class TestFileClaiming:
             "/api/pull-requests",
             json={
                 "title": "PR 2",
-                "operations": [{"op": "create_material", "title": "M2", "type": "document", "file_key": file_key}],
+                "operations": [
+                    {
+                        "op": "create_material",
+                        "title": "M2",
+                        "type": "document",
+                        "file_key": file_key,
+                    }
+                ],
             },
             headers=_auth_headers(user2),
         )
         assert resp2.status_code == 400
         assert "already included" in resp2.json()["detail"]
 
-    async def test_file_ownership_enforcement(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_file_ownership_enforcement(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         user1 = await _create_user(db_session, UserRole.STUDENT)
         user2 = await _create_user(db_session, UserRole.STUDENT)
         # user1 tries to use user2's file_key
@@ -367,49 +412,76 @@ class TestFileClaiming:
             "/api/pull-requests",
             json={
                 "title": "Stolen File",
-                "operations": [{"op": "create_material", "title": "X", "type": "document", "file_key": bad_key}],
+                "operations": [
+                    {"op": "create_material", "title": "X", "type": "document", "file_key": bad_key}
+                ],
             },
             headers=_auth_headers(user1),
         )
         assert resp.status_code == 400
         assert "does not belong" in resp.json()["detail"]
 
+
 # ---------------------------------------------------------------------------
 # RBAC & Access Control
 # ---------------------------------------------------------------------------
 
+
 class TestRBAC:
-    async def test_student_cannot_approve(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_student_cannot_approve(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         student = await _create_user(db_session, UserRole.STUDENT)
         await _create_user(db_session, UserRole.BUREAU)
         pr = PullRequest(
-            id=uuid.uuid4(), type="batch", status="open", title="T", payload=[], author_id=student.id
+            id=uuid.uuid4(),
+            type="batch",
+            status="open",
+            title="T",
+            payload=[],
+            author_id=student.id,
         )
         db_session.add(pr)
         await db_session.commit()
 
-        resp = await client.post(f"/api/pull-requests/{pr.id}/approve", headers=_auth_headers(student))
+        resp = await client.post(
+            f"/api/pull-requests/{pr.id}/approve", headers=_auth_headers(student)
+        )
         assert resp.status_code == 403
 
     async def test_author_can_cancel(self, client: AsyncClient, db_session: AsyncSession) -> None:
         student = await _create_user(db_session, UserRole.STUDENT)
         pr = PullRequest(
-            id=uuid.uuid4(), type="batch", status="open", title="To Cancel", payload=[], author_id=student.id
+            id=uuid.uuid4(),
+            type="batch",
+            status="open",
+            title="To Cancel",
+            payload=[],
+            author_id=student.id,
         )
         db_session.add(pr)
         await db_session.commit()
 
-        resp = await client.post(f"/api/pull-requests/{pr.id}/cancel", headers=_auth_headers(student))
+        resp = await client.post(
+            f"/api/pull-requests/{pr.id}/cancel", headers=_auth_headers(student)
+        )
         assert resp.status_code == 200
 
         await db_session.refresh(pr)
         assert pr.status == "cancelled"
 
-    async def test_non_author_cannot_cancel(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_non_author_cannot_cancel(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         user1 = await _create_user(db_session, UserRole.STUDENT)
         user2 = await _create_user(db_session, UserRole.STUDENT)
         pr = PullRequest(
-            id=uuid.uuid4(), type="batch", status="open", title="Protected", payload=[], author_id=user1.id
+            id=uuid.uuid4(),
+            type="batch",
+            status="open",
+            title="Protected",
+            payload=[],
+            author_id=user1.id,
         )
         db_session.add(pr)
         await db_session.commit()
@@ -417,9 +489,11 @@ class TestRBAC:
         resp = await client.post(f"/api/pull-requests/{pr.id}/cancel", headers=_auth_headers(user2))
         assert resp.status_code == 403
 
+
 # ---------------------------------------------------------------------------
 # Specialized Endpoints
 # ---------------------------------------------------------------------------
+
 
 class TestSpecializedEndpoints:
     async def test_list_for_item(self, client: AsyncClient, db_session: AsyncSession) -> None:
@@ -432,14 +506,14 @@ class TestSpecializedEndpoints:
             status="open",
             title="PR for Dir",
             payload=[{"op": "edit_directory", "directory_id": str(d.id), "description": "New"}],
-            author_id=user.id
+            author_id=user.id,
         )
         db_session.add(pr)
         await db_session.commit()
 
         resp = await client.get(
             f"/api/pull-requests/for-item?targetType=directory&targetId={d.id}",
-            headers=_auth_headers(user)
+            headers=_auth_headers(user),
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -454,14 +528,16 @@ class TestSpecializedEndpoints:
             type="batch",
             status="open",
             title="Diff Test",
-            payload=[{
-                "op": "create_material",
-                "directory_id": str(d.id),
-                "title": "M1",
-                "type": "document",
-                "file_key": "cas/abc"
-            }],
-            author_id=user.id
+            payload=[
+                {
+                    "op": "create_material",
+                    "directory_id": str(d.id),
+                    "title": "M1",
+                    "type": "document",
+                    "file_key": "cas/abc",
+                }
+            ],
+            author_id=user.id,
         )
         db_session.add(pr)
         await db_session.commit()
@@ -478,29 +554,37 @@ class TestSpecializedEndpoints:
             type="batch",
             status="open",
             title="Preview Test",
-            payload=[{
-                "op": "create_material",
-                "title": "PreMat",
-                "type": "document",
-                "file_key": "cas/abc",
-                "file_name": "test.pdf",
-                "file_mime_type": "application/pdf"
-            }],
-            author_id=user.id
+            payload=[
+                {
+                    "op": "create_material",
+                    "title": "PreMat",
+                    "type": "document",
+                    "file_key": "cas/abc",
+                    "file_name": "test.pdf",
+                    "file_mime_type": "application/pdf",
+                }
+            ],
+            author_id=user.id,
         )
         db_session.add(pr)
         await db_session.commit()
 
-        resp = await client.get(f"/api/pull-requests/{pr.id}/preview?opIndex=0", headers=_auth_headers(user))
+        resp = await client.get(
+            f"/api/pull-requests/{pr.id}/preview?opIndex=0", headers=_auth_headers(user)
+        )
         assert resp.status_code == 200
         assert resp.json()["file_name"] == "test.pdf"
+
 
 # ---------------------------------------------------------------------------
 # Operation Constraints
 # ---------------------------------------------------------------------------
 
+
 class TestConstraints:
-    async def test_attachment_nesting_limit(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_attachment_nesting_limit(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         user = await _create_user(db_session)
         d = await _create_directory(db_session)
         grandparent_mat = await _create_material(db_session, d.id, "GrandParent")
@@ -527,12 +611,16 @@ class TestConstraints:
         assert resp.status_code == 400
         assert "Cannot attach" in resp.json()["detail"]
 
+
 # ---------------------------------------------------------------------------
 # Recursive Reindexing
 # ---------------------------------------------------------------------------
 
+
 class TestReindexing:
-    async def test_move_directory_triggers_recursive_reindex(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_move_directory_triggers_recursive_reindex(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         admin = await _create_user(db_session, UserRole.BUREAU, auto_approve=True)
         root = await _create_directory(db_session, "Root")
         dest = await _create_directory(db_session, "Dest")
@@ -567,12 +655,16 @@ class TestReindexing:
         assert str(child.id) in queued_ids
         assert str(mat.id) in queued_ids
 
+
 # ---------------------------------------------------------------------------
 # Notifications
 # ---------------------------------------------------------------------------
 
+
 class TestNotifications:
-    async def test_comment_reply_notifies(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_comment_reply_notifies(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         user1 = await _create_user(db_session)
         user2 = await _create_user(db_session)
         pr = PullRequest(

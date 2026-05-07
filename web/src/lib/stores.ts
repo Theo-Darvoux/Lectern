@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { isRestrictedTarget } from "@/lib/utils";
 
 export interface UserBrief {
     id: string;
@@ -44,7 +45,7 @@ interface UIState {
     hideFooter: boolean;
     materialActionsOpen: boolean;
     openSidebar: (tab: SidebarTab, target: SidebarTarget) => void;
-    setSidebarTarget: (tab: SidebarTab, target: SidebarTarget) => void;
+    setSidebarTarget: (target: SidebarTarget) => void;
     updateSidebarData: (data: Record<string, unknown>) => void;
     closeSidebar: () => void;
     setSidebarTab: (tab: SidebarTab) => void;
@@ -64,8 +65,18 @@ export const useUIStore = create<UIState>((set) => ({
     materialActionsOpen: false,
     openSidebar: (tab, target) =>
         set({ sidebarOpen: true, sidebarTab: tab, sidebarTarget: target }),
-    setSidebarTarget: (tab, target) =>
-        set({ sidebarTab: tab, sidebarTarget: target }),
+    setSidebarTarget: (target) =>
+        set((state) => {
+            // Auto-fallback to "details" if the new target is restricted (drafts)
+            // and the current tab is one that gets disabled for restricted targets.
+            const isRestricted = isRestrictedTarget(target.id);
+            const restrictedTabs: SidebarTab[] = ["chat", "annotations", "edits"];
+            const nextTab =
+                isRestricted && restrictedTabs.includes(state.sidebarTab)
+                    ? "details"
+                    : state.sidebarTab;
+            return { sidebarTarget: target, sidebarTab: nextTab };
+        }),
     updateSidebarData: (data) =>
         set((state) => ({
             sidebarTarget: state.sidebarTarget
@@ -116,6 +127,7 @@ export interface PublicConfig {
     primary_color: string;
     footer_text: string;
     organization_url: string | null;
+    og_image_url: string | null;
     legal_name: string | null;
     legal_address: string | null;
     legal_siret: string | null;

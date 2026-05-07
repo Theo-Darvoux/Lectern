@@ -1,5 +1,5 @@
 /** Viewer types that support printing. */
-export const PRINTABLE_VIEWERS = new Set([
+const PRINTABLE_VIEWERS = new Set([
   "pdf",
   "image",
   "code",

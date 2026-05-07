@@ -144,7 +144,7 @@ export function ViewerFab({
   const isDraft = materialId.startsWith("$");
   const isRestricted = isPreview || isDraft;
 
-  const { openSidebar, updateSidebarData } = useUIStore();
+  const { openSidebar, updateSidebarData, sidebarTarget } = useUIStore();
   const { downloadMaterial, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
@@ -152,13 +152,19 @@ export function ViewerFab({
     fileName,
     mimeType,
   });
-  const [isLiked, setIsLiked] = useState(Boolean(material.is_liked));
-  const [likeCount, setLikeCount] = useState(Number(material.like_count ?? 0));
+  // Source of truth for like state: the sidebar target when it points at this
+  // material (so FAB and Details tab stay in sync), else the material prop.
+  const liveData =
+    sidebarTarget && sidebarTarget.type === "material" && sidebarTarget.id === materialId
+      ? sidebarTarget.data
+      : material;
+  const isLiked = Boolean(liveData.is_liked);
+  const likeCount = Number(liveData.like_count ?? 0);
   const [isLiking, setIsLiking] = useState(false);
   const addOperation = useStagingStore((s) => s.addOperation);
 
   const handleShare = async () => {
-    const shareUrl = window.location.href;
+    const shareUrl = `${window.location.origin}${pathname}`;
     if (navigator.share) {
       try {
         await navigator.share({
@@ -181,17 +187,15 @@ export function ViewerFab({
     if (isLiking) return;
     const next = !isLiked;
     const nextCount = likeCount + (next ? 1 : -1);
-    
-    setIsLiked(next);
-    setLikeCount(nextCount);
+
+    // Optimistic update through the store so FAB and Details tab stay in sync.
+    updateSidebarData({ is_liked: next, like_count: nextCount });
     setIsLiking(true);
-    
+
     try {
       await apiFetch(`/materials/${materialId}/like`, { method: "POST" });
-      updateSidebarData({ is_liked: next, like_count: nextCount });
     } catch {
-      setIsLiked(!next);
-      setLikeCount(likeCount);
+      updateSidebarData({ is_liked: !next, like_count: likeCount });
       toast.error(t("failedToUpdateLike") || "Failed to update like");
     } finally {
       setIsLiking(false);

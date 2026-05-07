@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { DirectoryLineItem } from "@/components/browse/directory-line-item";
 import { MaterialLineItem } from "@/components/browse/material-line-item";
@@ -41,41 +41,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useStagingStore } from "@/lib/staging-store";
-import { unwrapOp } from "@/lib/staging-store";
 import { useDropZoneStore } from "@/components/pr/global-drop-zone";
 import { useSelectionStore } from "@/lib/selection-store";
-import type {
-  CreateMaterialOp,
-  CreateDirectoryOp,
-  MoveItemOp,
-  Operation,
-  StagedOperation,
-} from "@/lib/staging-store";
+import type { Operation } from "@/lib/staging-store";
 import type { SelectedItem } from "@/lib/selection-store";
 import { useTranslations } from "next-intl";
-
-/** Check if a real item has any staged edit/delete/move targeting it */
-function stagedStatus(
-  ops: (StagedOperation | Operation)[],
-  id: string,
-  kind: "directory" | "material",
-): "edited" | "deleted" | "moved" | null {
-  for (const staged of ops) {
-    const op = unwrapOp(staged as StagedOperation);
-    if (kind === "directory") {
-      if (op.op === "delete_directory" && op.directory_id === id)
-        return "deleted";
-      if (op.op === "edit_directory" && op.directory_id === id) return "edited";
-    } else {
-      if (op.op === "delete_material" && op.material_id === id)
-        return "deleted";
-      if (op.op === "edit_material" && op.material_id === id) return "edited";
-    }
-    if (op.op === "move_item" && op.target_type === kind && op.target_id === id)
-      return "moved";
-  }
-  return null;
-}
+import { useAugmentedListing, stagedStatus, type NavItem } from "@/hooks/use-augmented-listing";
 
 interface DirectoryListingProps {
   directory: Record<string, unknown> | null;
@@ -83,24 +54,10 @@ interface DirectoryListingProps {
   materials: Record<string, unknown>[];
   breadcrumbs?: { id: string; name: string; slug: string }[];
   isAttachmentListing?: boolean;
-  /** The parent material when viewing its attachments */
   parentMaterial?: Record<string, unknown> | null;
-  /** Operations from a PR being previewed */
   previewOperations?: Operation[];
-  /** PR id when in preview mode — used to link blue ghost files to the preview page */
   previewPrId?: string;
 }
-
-/** Represents a staged directory the user has navigated into */
-interface GhostDirEntry {
-  tempId: string;
-  name: string;
-}
-
-type AugmentedOp = Operation & {
-  isExternal: boolean;
-  _previewIdx: number | undefined;
-};
 
 export function DirectoryListing({
   directory,
@@ -114,7 +71,6 @@ export function DirectoryListing({
 }: DirectoryListingProps) {
   const t = useTranslations("Browse");
   const tAutoTitle = useTranslations("AutoTitle");
-  // const isMobile = useIsMobile(); // removed to fix warning
   const router = useRouter();
   const pathname = usePathname();
   const triggerBrowseRefresh = useBrowseRefreshStore(
@@ -127,13 +83,34 @@ export function DirectoryListing({
   const requestUpload = useDropZoneStore((s) => s.requestUpload);
   const setBrowseContext = useDropZoneStore((s) => s.setBrowseContext);
 
-  // Stack of ghost dirs the user has navigated into (supports nesting)
-  const [ghostDirStack, setGhostDirStack] = useState<GhostDirEntry[]>([]);
-  const activeGhostDir =
-    ghostDirStack.length > 0 ? ghostDirStack[ghostDirStack.length - 1] : null;
+  const {
+    operations,
+    allOps,
+    realDirId,
+    realDirName,
+    dirId,
+    dirName,
+    activeGhostDir,
+    ghostDirStack,
+    setGhostDirStack,
+    enterGhostDir,
+    goBack,
+    sortedDirs,
+    sortedMats,
+    ghostDirs,
+    ghostMaterials,
+    isEmpty,
+    flatItems,
+    allSelectableItems,
+  } = useAugmentedListing({
+    directory,
+    directories,
+    materials,
+    isAttachmentListing,
+    parentMaterial,
+    previewOperations,
+  });
 
-  const rawOperations = useStagingStore((s) => s.operations);
-  const operations = useMemo(() => rawOperations ?? [], [rawOperations]);
   const addOperations = useStagingStore((s) => s.addOperations);
   const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
@@ -141,52 +118,8 @@ export function DirectoryListing({
   const handleAddAttachment = useCallback((id: string, name: string) => {
     setUploadParentMat({ id, name });
     setUploadOpen(true);
-  }, []);
+  }, [setUploadOpen, setUploadParentMat]);
 
-  // Merge logic: local operations take precedence over preview operations
-  const allOps = useMemo(() => {
-    const local = operations.map((s) => unwrapOp(s));
-    // We only want preview ops that don't conflict with local edits on the same target.
-    // Preserve the original payload index (_previewIdx) so ghost materials can link
-    // to /pull-requests/{prId}/preview/{opIndex}.
-    const external = (previewOperations ?? [])
-      .map((op, idx) => ({ op, idx }))
-      .filter(({ op: externalOp }) => {
-        if (
-          externalOp.op === "edit_directory" ||
-          externalOp.op === "delete_directory"
-        ) {
-          return !local.some(
-            (l) =>
-              (l.op === "edit_directory" || l.op === "delete_directory") &&
-              l.directory_id === externalOp.directory_id,
-          );
-        }
-        if (
-          externalOp.op === "edit_material" ||
-          externalOp.op === "delete_material"
-        ) {
-          return !local.some(
-            (l) =>
-              (l.op === "edit_material" || l.op === "delete_material") &&
-              l.material_id === externalOp.material_id,
-          );
-        }
-        return true; // creates/moves are merged additive
-      })
-      .map(({ op, idx }) => ({ ...op, isExternal: true, _previewIdx: idx }));
-
-    return [
-      ...local.map((op) => ({
-        ...op,
-        isExternal: false,
-        _previewIdx: undefined as number | undefined,
-      })),
-      ...external,
-    ];
-  }, [operations, previewOperations]);
-
-  // Selection / batch operations
   const selectMode = useSelectionStore((s) => s.selectMode);
   const selected = useSelectionStore((s) => s.selected);
   const clipboard = useSelectionStore((s) => s.clipboard);
@@ -197,121 +130,17 @@ export function DirectoryListing({
   const cutRaw = useSelectionStore((s) => s.cut);
   const clearClipboard = useSelectionStore((s) => s.clearClipboard);
 
-  // When viewing a ghost dir, the effective id/name come from the ghost entry
-  const realDirId = directory?.id ? String(directory.id) : null;
-  const realDirName = directory?.name ? String(directory.name) : "Root";
-  const dirId = activeGhostDir ? activeGhostDir.tempId : realDirId;
-  const dirName = activeGhostDir ? activeGhostDir.name : realDirName;
-
-  // Keep the global drop-zone store in sync with the effective directory
   useEffect(() => {
     setBrowseContext({ directoryId: dirId || "", directoryName: dirName });
     return () => setBrowseContext(null);
   }, [dirId, dirName, setBrowseContext]);
 
-  // Ghost items: staged creates targeting the current effective directory.
-  // At root, dirId is "" but parent_id is null — treat both as "root".
-  const isRoot = !dirId;
-  const ghostDirs = allOps.filter((op) => {
-    if (
-      op.op === "create_directory" &&
-      (isRoot ? !op.parent_id : op.parent_id === dirId)
-    )
-      return true;
-    if (op.op === "move_item" && op.target_type === "directory") {
-      const isTarget = isRoot ? !op.new_parent_id : op.new_parent_id === dirId;
-      return isTarget;
-    }
-    return false;
-  }) as (AugmentedOp & (CreateDirectoryOp | MoveItemOp))[];
-
-  const ghostMaterials = allOps.filter((op) => {
-    if (op.op === "create_material") {
-      const isCreatedHere = isAttachmentListing
-        ? op.parent_material_id === (parentMaterial?.id as string)
-        : isRoot
-          ? !op.directory_id
-          : op.directory_id === dirId;
-      if (isCreatedHere) return true;
-    }
-
-    if (op.op === "move_item" && op.target_type === "material") {
-      const isTarget = isAttachmentListing
-        ? op.new_parent_id === (parentMaterial?.id as string)
-        : isRoot
-          ? !op.new_parent_id
-          : op.new_parent_id === dirId;
-      return isTarget;
-    }
-    return false;
-  }) as (AugmentedOp & (CreateMaterialOp | MoveItemOp))[];
-
-  // When inside a ghost dir, there are no real items
-  const effectiveDirs = useMemo(
-    () => (activeGhostDir ? [] : directories),
-    [activeGhostDir, directories],
-  );
-  const effectiveMats = useMemo(
-    () => (activeGhostDir ? [] : materials),
-    [activeGhostDir, materials],
-  );
-
-  const sortedDirs = useMemo(() => {
-    return [...effectiveDirs].sort((a, b) =>
-      String(a.name ?? "").localeCompare(String(b.name ?? "")),
-    );
-  }, [effectiveDirs]);
-
-  const sortedMats = useMemo(() => {
-    return [...effectiveMats].sort((a, b) =>
-      String(a.title ?? "").localeCompare(String(b.title ?? "")),
-    );
-  }, [effectiveMats]);
-
-  const isEmpty =
-    effectiveDirs.length === 0 &&
-    effectiveMats.length === 0 &&
-    ghostDirs.length === 0 &&
-    ghostMaterials.length === 0;
-
-  const enterGhostDir = (tempId: string, name: string) => {
-    setGhostDirStack((prev) => [...prev, { tempId, name }]);
-  };
-
-  const goBack = () => {
-    setGhostDirStack((prev) => prev.slice(0, -1));
-  };
-
-  // Keyboard navigation
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const focusedIndexRef = useRef<number | null>(null);
-  focusedIndexRef.current = focusedIndex;
+  useEffect(() => {
+    focusedIndexRef.current = focusedIndex;
+  }, [focusedIndex]);
 
-  // Build a flat ordered list mirroring the render order for arrow-key nav
-  type NavItem =
-    | { type: "dir"; dir: Record<string, unknown> }
-    | { type: "ghost-dir"; tempId: string; name: string }
-    | { type: "mat"; mat: Record<string, unknown> }
-    | { type: "ghost-mat"; op: AugmentedOp & (CreateMaterialOp | MoveItemOp) };
-
-  const flatItems = useMemo<NavItem[]>(
-    () => [
-      ...sortedDirs.map((dir) => ({ type: "dir" as const, dir })),
-      ...ghostDirs.map((op) => ({
-        type: "ghost-dir" as const,
-        tempId:
-          (op.op === "create_directory" ? op.temp_id : op.target_id) || "",
-        name:
-          (op.op === "create_directory" ? op.name : op.target_name) ||
-          "Unnamed",
-      })),
-      ...sortedMats.map((mat) => ({ type: "mat" as const, mat })),
-      ...ghostMaterials.map((op) => ({ type: "ghost-mat" as const, op })),
-    ],
-    [sortedDirs, ghostDirs, sortedMats, ghostMaterials],
-  );
-
-  // Reset focus when directory changes
   useEffect(() => {
     setFocusedIndex(null);
     setLastSelectedIndex(null);
@@ -385,14 +214,12 @@ export function DirectoryListing({
     [flatItems, lastSelectedIndex, selectAll, toggleSelect, dirId],
   );
 
-  // Build path helper (mirrors logic in line-item components)
   const pathBase = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
   const buildItemPath = (slug: string) =>
     previewPrId
       ? `${pathBase}/${slug}?preview_pr=${previewPrId}`
       : `${pathBase}/${slug}`;
 
-  // Scroll focused item into view
   useEffect(() => {
     if (focusedIndex === null) return;
     document
@@ -400,10 +227,8 @@ export function DirectoryListing({
       ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [focusedIndex]);
 
-  // Keydown handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't hijack events from inputs / modals
       const tag = (e.target as HTMLElement).tagName;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
       if ((e.target as HTMLElement).isContentEditable) return;
@@ -446,54 +271,21 @@ export function DirectoryListing({
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flatItems, selectMode, router, pathBase, previewPrId]);
-
-  // Build the full list of selectable real items for "select all"
-  const allSelectableItems: SelectedItem[] = [
-    ...effectiveDirs.map((d) => ({
-      id: String(d.id),
-      type: "directory" as const,
-      name: String(d.name ?? ""),
-      parentId: dirId || null,
-    })),
-    ...ghostDirs.filter(op => !op.isExternal).map((op) => ({
-      id: (op.op === "create_directory" ? op.temp_id : op.target_id) || "",
-      type: "directory" as const,
-      name: (op.op === "create_directory" ? op.name : op.target_name) || "Unnamed",
-      parentId: dirId || null,
-    })),
-    ...effectiveMats.map((m) => ({
-      id: String(m.id),
-      type: "material" as const,
-      name: String(m.title ?? ""),
-      parentId: dirId || null,
-      material_type: String(m.type ?? "other"),
-    })),
-    ...ghostMaterials.filter(op => !op.isExternal).map((op) => ({
-      id: (op.op === "create_material" ? op.temp_id : op.target_id) || "",
-      type: "material" as const,
-      name: (op.op === "create_material" ? op.title : op.target_title) || "Unnamed",
-      parentId: dirId || null,
-      material_type: (op.op === "create_material" ? op.type : op.target_material_type) || "other",
-    })),
-  ];
+     
+  }, [flatItems, selectMode, router, pathBase, previewPrId, enterGhostDir, setReviewOpen, buildItemPath, setFocusedIndex]);
 
   const selectedCount = selected.size;
   const allSelected =
     allSelectableItems.length > 0 &&
     allSelectableItems.every((item) => selected.has(item.id));
 
-  const [batchDeleteOps, setBatchDeleteOps] = useState<Operation[] | null>(
-    null,
-  );
+  const [batchDeleteOps, setBatchDeleteOps] = useState<Operation[] | null>(null);
   const [batchPasteOps, setBatchPasteOps] = useState<Operation[] | null>(null);
   const [submittingBatch, setSubmittingBatch] = useState(false);
 
   const handleBatchDelete = () => {
     const ops: Operation[] = [];
     for (const item of selected.values()) {
-      // Skip if this item already has a staged delete or move
       const existing = stagedStatus(operations, item.id, item.type);
       if (existing === "deleted") {
         continue;
@@ -513,7 +305,6 @@ export function DirectoryListing({
   };
 
   const handleCut = () => {
-    // Warn if any selected items are already staged for deletion
     let hasConflict = false;
     for (const item of selected.values()) {
       if (stagedStatus(operations, item.id, item.type) === "deleted") {
@@ -529,13 +320,10 @@ export function DirectoryListing({
     toast.success(t("itemsCut", { count: selected.size }));
   };
 
-  // IDs of the current directory and all its ancestors — used to prevent
-  // pasting a folder into itself or any of its descendants.
   const ancestorIds = new Set([dirId, ...breadcrumbs.map((b) => b.id)]);
 
   const handlePaste = () => {
     const targetParent = dirId || null;
-    // Filter out circular moves and no-op moves (already in this directory)
     const safe = clipboard.filter((item) => {
       if (item.type === "directory" && ancestorIds.has(item.id)) return false;
       if (item.parentId === targetParent) return false;
@@ -588,7 +376,6 @@ export function DirectoryListing({
             </div>
           )}
 
-          {/* Ghost dir breadcrumb header */}
           {activeGhostDir && (
             <div className="flex items-center gap-2">
               <Button
@@ -600,7 +387,6 @@ export function DirectoryListing({
                 <ArrowLeft className="h-4 w-4" />
               </Button>
               <div className="flex items-center gap-1.5 min-w-0">
-                {/* Show real dir name as clickable ancestor */}
                 <button
                   className="text-sm text-muted-foreground hover:text-foreground transition-colors truncate"
                   onClick={() => setGhostDirStack([])}
@@ -639,14 +425,12 @@ export function DirectoryListing({
             </div>
           )}
         </div>
-
       </div>
 
       {!isAttachmentListing && (
         <div className="mt-2">
           {!selectMode ? (
             <div className="flex items-center justify-between h-11">
-              {/* Left side: Selection trigger */}
               <div className="flex items-center">
                 {allSelectableItems.length > 0 && (
                   <Button
@@ -662,9 +446,7 @@ export function DirectoryListing({
                 )}
               </div>
 
-              {/* Right side: Primary CTAs & Paste */}
               <div className="flex items-center gap-2">
-                {/* Clipboard paste flow */}
                 {clipboard.length > 0 && (
                   <div className="flex items-center gap-1 group">
                     <Button
@@ -675,7 +457,7 @@ export function DirectoryListing({
                       onClick={handlePaste}
                     >
                       <ClipboardPaste className="w-4 h-4" />
-                      {t("paste")}{clipboard.length})
+                      {t("paste")}({clipboard.length})
                     </Button>
                     <Button
                       key="cancel-paste-btn"
@@ -712,7 +494,6 @@ export function DirectoryListing({
             </div>
           </div>
         ) : (
-          /* Selection Toolbar (replaces the CTA row) */
           <div className="flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 h-11 animate-in fade-in slide-in-from-top-1 duration-200 dark:bg-primary/10">
             <div
               className="h-8 gap-2 text-muted-foreground hover:text-foreground flex items-center cursor-pointer transition-colors rounded-md hover:bg-accent/50"
@@ -817,14 +598,10 @@ export function DirectoryListing({
         </div>
       )}
 
-
-
-      {/* Open PRs targeting this directory */}
       {!isAttachmentListing && !activeGhostDir && (
         <DirectoryOpenPRs directoryId={realDirId || "root"} />
       )}
 
-      {/* Hint when inside an empty ghost dir */}
       {activeGhostDir && isEmpty && (
         <div className="flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed border-green-300 bg-green-50/30 dark:bg-green-950/10 py-12 px-4 text-center">
           <Folder className="h-10 w-10 text-green-400" />
@@ -878,7 +655,6 @@ export function DirectoryListing({
       ) : (
         !isEmpty && (
           <div className={`divide-y rounded-lg border ${selectMode ? "select-none" : ""}`}>
-            {/* Real directories */}
             {sortedDirs.map((dir, i) => {
               const id = String(dir.id);
               const op = allOps.find(
@@ -926,7 +702,6 @@ export function DirectoryListing({
               );
             })}
 
-            {/* Ghost directories (staged creates and moves) — clickable to enter */}
             {ghostDirs.map((op, i) => {
               const tempId =
                 (op.op === "create_directory" ? op.temp_id : op.target_id) ||
@@ -937,7 +712,6 @@ export function DirectoryListing({
               
               const ghostDirNavIndex = sortedDirs.length + i;
               
-              // Map op to directory shape for component
               const ghostDir = {
                 id: tempId,
                 name: name || "Unnamed",
@@ -961,7 +735,6 @@ export function DirectoryListing({
               );
             })}
 
-            {/* Real materials */}
             {sortedMats.map((mat, i) => {
               const id = String(mat.id);
               const op = allOps.find(
@@ -1017,10 +790,8 @@ export function DirectoryListing({
               );
             })}
 
-            {/* Ghost materials (staged creates and moves) */}
             {ghostMaterials.map((op, i) => {
               const isExternal = op.isExternal;
-              // const isMove = op.op === "move_item"; // removed to fix warning
               const title =
                 op.op === "create_material" ? op.title : op.target_title;
               const tempId =
@@ -1029,7 +800,7 @@ export function DirectoryListing({
               const draftAttachmentCount =
                 op.op === "create_material" && op.temp_id
                   ? allOps.filter(
-                      (o): o is AugmentedOp =>
+                      (o): o is typeof op =>
                         o.op === "create_material" &&
                         o.parent_material_id === op.temp_id,
                     ).length
@@ -1038,7 +809,6 @@ export function DirectoryListing({
               const ghostMatNavIndex =
                 sortedDirs.length + ghostDirs.length + sortedMats.length + i;
 
-              // Map op to material shape for component
               const ghostMat = {
                 id: tempId || `ghost-mat-${i}`,
                 title: title || "Unnamed",
@@ -1076,7 +846,6 @@ export function DirectoryListing({
         )
       )}
 
-      {/* Upload Drawer — targets effective dirId (real UUID or temp_id) */}
       <UploadDrawer
         open={uploadOpen}
         onOpenChange={(open) => {
@@ -1088,14 +857,12 @@ export function DirectoryListing({
         parentMaterialId={uploadParentMat?.id}
       />
 
-      {/* New Folder Dialog — targets effective dirId */}
       <NewFolderDialog
         open={newFolderOpen}
         onOpenChange={setNewFolderOpen}
         parentId={dirId || null}
         parentName={dirName}
       />
-      {/* Batch Delete Dialog */}
       <Dialog
         open={batchDeleteOps !== null}
         onOpenChange={(open) => !open && setBatchDeleteOps(null)}
@@ -1162,7 +929,6 @@ export function DirectoryListing({
         </DialogContent>
       </Dialog>
 
-      {/* Batch Paste/Move Dialog */}
       <Dialog
         open={batchPasteOps !== null}
         onOpenChange={(open) => !open && setBatchPasteOps(null)}

@@ -113,10 +113,9 @@ def check_polyglot(file_path: Path, detected_mime: str) -> None:
     # ── ZIP tail check (appended archive polyglot) ───────────────────────────
     # Archives are OK in archive MIME types; for everything else the presence
     # of a ZIP EOCD record near the end is suspicious.
-    if "archive" not in allowed:
-        if _ZIP_EOCD in tail:
-            raise ValueError(
-                f"Polyglot file detected: {detected_mime!r} file contains a "
-                "ZIP End-of-Central-Directory record at its tail "
-                "(possible appended ZIP/JAR/APK polyglot)"
-            )
+    if "archive" not in allowed and _ZIP_EOCD in tail:
+        raise ValueError(
+            f"Polyglot file detected: {detected_mime!r} file contains a "
+            "ZIP End-of-Central-Directory record at its tail "
+            "(possible appended ZIP/JAR/APK polyglot)"
+        )

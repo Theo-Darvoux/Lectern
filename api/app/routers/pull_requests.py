@@ -44,10 +44,11 @@ router = APIRouter(prefix="/api/pull-requests", tags=["pull-requests"])
 async def create_pull_request(
     data: PullRequestCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> PullRequestOut:
     pr = await create_pull_request_service(db, data, current_user, redis=redis)
+    await db.commit()
     return PullRequestOut.model_validate(pr)
 
 
@@ -100,6 +101,7 @@ async def get_pull_request(
         raise NotFoundError("Pull request not found")
     return PullRequestOut.model_validate(pr)
 
+
 @router.post("/{id}/approve")
 async def approve_pull_request(
     id: uuid.UUID,
@@ -107,6 +109,7 @@ async def approve_pull_request(
     current_user: Annotated[User, Depends(require_moderator())],
 ) -> dict[str, Any]:
     await approve_pr_service(db, id, current_user)
+    await db.commit()
     return {"status": "ok"}
 
 
@@ -118,6 +121,7 @@ async def reject_pull_request(
     current_user: Annotated[User, Depends(require_moderator())],
 ) -> dict[str, Any]:
     await reject_pr_service(db, id, data.reason, current_user)
+    await db.commit()
     return {"status": "ok"}
 
 
@@ -125,9 +129,19 @@ async def reject_pull_request(
 async def revert_pull_request(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_role(UserRole.BUREAU, UserRole.VIEUX, message="Only administrators can revert contributions"))],
+    current_user: Annotated[
+        User,
+        Depends(
+            require_role(
+                UserRole.BUREAU,
+                UserRole.VIEUX,
+                message="Only administrators can revert contributions",
+            )
+        ),
+    ],
 ) -> PullRequestOut:
     revert = await revert_pr_service(db, id, current_user)
+    await db.commit()
     return PullRequestOut.model_validate(revert)
 
 
@@ -139,6 +153,7 @@ async def cancel_pull_request(
 ) -> dict[str, Any]:
     """Author cancels their own open pull request."""
     await cancel_pr_service(db, id, current_user)
+    await db.commit()
     return {"status": "ok"}
 
 
@@ -208,6 +223,7 @@ async def create_pull_request_comment(
         parent = await db.scalar(select(PRComment).where(PRComment.id == data.parent_id))
         if parent and parent.author_id and parent.author_id != current_user.id:
             from app.services.notification import notify_user
+
             await notify_user(
                 db,
                 parent.author_id,

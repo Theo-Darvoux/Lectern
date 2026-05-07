@@ -19,22 +19,22 @@ from pydantic import BeforeValidator
 #   - Interlinear annotation anchors
 _DANGEROUS_CHARS_RE = re.compile(
     "["
-    "\x00-\x08"        # C0: NUL..BS  (HT=\x09 kept)
-    "\x0b\x0c"         # C0: VT, FF   (LF=\x0a, CR=\x0d kept)
-    "\x0e-\x1f"        # C0: SO..US
-    "\x7f"             # DEL
-    "\x80-\x9f"        # C1 controls
-    "\u0300-\u036f"    # Combining Diacritical Marks (Zalgo main range)
-    "\u1dc0-\u1dff"    # Combining Diacritical Marks Supplement
-    "\u20d0-\u20ff"    # Combining Diacritical Marks for Symbols
-    "\ufe20-\ufe2f"    # Combining Half Marks
-    "\u200b-\u200f"    # zero-width space/non-joiner/joiner, LRM, RLM
-    "\u2028\u2029"     # line/paragraph separator (can break JS parsers)
-    "\u202a-\u202e"    # BIDI embedding/override chars
-    "\u2060-\u2064"    # word joiner, function application, etc.
-    "\u206a-\u206f"    # deprecated formatting chars
-    "\ufeff"           # BOM / ZWNBSP
-    "\ufff9-\ufffb"    # interlinear annotation anchors
+    "\x00-\x08"  # C0: NUL..BS  (HT=\x09 kept)
+    "\x0b\x0c"  # C0: VT, FF   (LF=\x0a, CR=\x0d kept)
+    "\x0e-\x1f"  # C0: SO..US
+    "\x7f"  # DEL
+    "\x80-\x9f"  # C1 controls
+    "\u0300-\u036f"  # Combining Diacritical Marks (Zalgo main range)
+    "\u1dc0-\u1dff"  # Combining Diacritical Marks Supplement
+    "\u20d0-\u20ff"  # Combining Diacritical Marks for Symbols
+    "\ufe20-\ufe2f"  # Combining Half Marks
+    "\u200b-\u200f"  # zero-width space/non-joiner/joiner, LRM, RLM
+    "\u2028\u2029"  # line/paragraph separator (can break JS parsers)
+    "\u202a-\u202e"  # BIDI embedding/override chars
+    "\u2060-\u2064"  # word joiner, function application, etc.
+    "\u206a-\u206f"  # deprecated formatting chars
+    "\ufeff"  # BOM / ZWNBSP
+    "\ufff9-\ufffb"  # interlinear annotation anchors
     "]"
 )
 
@@ -45,9 +45,7 @@ _DANGEROUS_CHARS_RE = re.compile(
 #   U+00D8–U+00F6  Ø–ö  (Latin-1 mixed, excl. ÷ U+00F7)
 #   U+00F8–U+017F  ø–ſ  (Latin-1 remainder + Latin Extended-A: ç œ Œ æ Æ …)
 # Combining marks are already stripped by _DANGEROUS_CHARS_RE before this check.
-_INVALID_NAME_CHAR_RE = re.compile(
-    r"[^\x20-\x7e\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f]"
-)
+_INVALID_NAME_CHAR_RE = re.compile(r"[^\x20-\x7e\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f]")
 
 
 def clean_text(v: str) -> str:

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -112,7 +113,9 @@ class UploadPipeline:
     def _record_pipeline_metrics(self, status: str) -> None:
         elapsed = self._elapsed()
         upload_pipeline_total.labels(status=status, mime_category=self.mime_category).inc()
-        upload_pipeline_duration.labels(status=status, mime_category=self.mime_category).observe(elapsed)
+        upload_pipeline_duration.labels(status=status, mime_category=self.mime_category).observe(
+            elapsed
+        )
 
     async def emit_status(
         self,
@@ -137,7 +140,9 @@ class UploadPipeline:
             payload["overall_percent"] = _overall(stage_index, stage_percent)
 
         payload_json = json.dumps(payload)
-        await self.cache.emit_event(self.status_key, self.event_channel, self.event_log_key, payload_json)
+        await self.cache.emit_event(
+            self.status_key, self.event_channel, self.event_log_key, payload_json
+        )
 
     async def _fail_upload(self, detail: str, status: UploadStatus = UploadStatus.FAILED) -> None:
         """Helper to transition upload to FAILED/MALICIOUS status and record it."""
@@ -168,27 +173,43 @@ class UploadPipeline:
             if self.pf is None or self.tmp_path is None:
                 raise UploadError(UploadStatus.FAILED, "Pipeline state missing at scan_strip stage")
             if self.completed_stage == 1:
-                await self.emit_status(UploadStatus.PROCESSING, detail="Stripping metadata", stage_name_or_label="stripping", stage_percent=0.5)
-                await run_strip_only(self.pf, self.tmp_path, self.mime_type, self.upload_id, self.tracer)
+                await self.emit_status(
+                    UploadStatus.PROCESSING,
+                    detail="Stripping metadata",
+                    stage_name_or_label="stripping",
+                    stage_percent=0.5,
+                )
+                await run_strip_only(
+                    self.pf, self.tmp_path, self.mime_type, self.upload_id, self.tracer
+                )
             else:
                 # Emit scan start, then run a heartbeat task so progress advances
                 # while the scanner works (scan can take up to 120 s).
-                await self.emit_status(UploadStatus.PROCESSING, detail="Scanning for malware", stage_name_or_label="scanning", stage_percent=0.0)
+                await self.emit_status(
+                    UploadStatus.PROCESSING,
+                    detail="Scanning for malware",
+                    stage_name_or_label="scanning",
+                    stage_percent=0.0,
+                )
                 scan_heartbeat_task = asyncio.create_task(
                     self._scan_heartbeat(interval=4.0, max_duration=120.0)
                 )
                 try:
                     await run_scan_and_strip(
-                        self.ctx, self.pf, self.tmp_path, self.original_filename,
-                        self.original_sha256, self.mime_type, self.mime_category,
-                        self.upload_id, self.tracer
+                        self.ctx,
+                        self.pf,
+                        self.tmp_path,
+                        self.original_filename,
+                        self.original_sha256,
+                        self.mime_type,
+                        self.mime_category,
+                        self.upload_id,
+                        self.tracer,
                     )
                 finally:
                     scan_heartbeat_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await scan_heartbeat_task
-                    except asyncio.CancelledError:
-                        pass
             await self.repo.checkpoint_pipeline_stage(self.upload_id, 2)
 
         if self.pf is None:
@@ -199,21 +220,28 @@ class UploadPipeline:
         # Checkpoint 2: Compression
         if self.completed_stage < 3:
             await self._check_deadline("compressing")
-            await self.emit_status(UploadStatus.PROCESSING, detail="Compressing file", stage_name_or_label="compressing", stage_percent=0.0)
+            await self.emit_status(
+                UploadStatus.PROCESSING,
+                detail="Compressing file",
+                stage_name_or_label="compressing",
+                stage_percent=0.0,
+            )
             comp_timeout = _compression_timeout(self.mime_type)
             compress_heartbeat_task = asyncio.create_task(
                 self._compress_heartbeat(interval=5.0, max_duration=comp_timeout)
             )
             try:
                 comp_res = await run_compress_stage(
-                    self.pf, self.mime_type, self.original_filename, self.tracer, config=self.auth_config
+                    self.pf,
+                    self.mime_type,
+                    self.original_filename,
+                    self.tracer,
+                    config=self.auth_config,
                 )
             finally:
                 compress_heartbeat_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await compress_heartbeat_task
-                except asyncio.CancelledError:
-                    pass
             self.final_mime = comp_res.final_mime
             self.content_encoding = comp_res.content_encoding
             await self.repo.checkpoint_pipeline_stage(self.upload_id, 3)
@@ -230,9 +258,15 @@ class UploadPipeline:
                 stage_percent=0.0,
             )
             if self.pf is None:
-                raise UploadError(UploadStatus.FAILED, "Pipeline state missing at thumbnailing stage")
+                raise UploadError(
+                    UploadStatus.FAILED, "Pipeline state missing at thumbnailing stage"
+                )
             self.thumbnail_path = await run_thumbnail_stage(
-                self.pf, self.final_mime, self.original_filename, self.tracer, config=self.auth_config
+                self.pf,
+                self.final_mime,
+                self.original_filename,
+                self.tracer,
+                config=self.auth_config,
             )
             await self.repo.checkpoint_pipeline_stage(self.upload_id, 4)
 
@@ -240,7 +274,12 @@ class UploadPipeline:
 
         # Checkpoint 4: Finalize
         await self._check_deadline("finalizing")
-        await self.emit_status(UploadStatus.PROCESSING, detail="Finalizing upload", stage_name_or_label="finalizing", stage_percent=0.0)
+        await self.emit_status(
+            UploadStatus.PROCESSING,
+            detail="Finalizing upload",
+            stage_name_or_label="finalizing",
+            stage_percent=0.0,
+        )
 
         if self.pf is None:
             raise UploadError(UploadStatus.FAILED, "Pipeline state missing at finalizing stage")
@@ -314,7 +353,13 @@ class UploadPipeline:
             "content_encoding": self.content_encoding,
         }
 
-        await self.emit_status(UploadStatus.CLEAN, detail="Finalising upload", result=res_data, stage_name_or_label="finalizing", stage_percent=1.0)
+        await self.emit_status(
+            UploadStatus.CLEAN,
+            detail="Finalising upload",
+            result=res_data,
+            stage_name_or_label="finalizing",
+            stage_percent=1.0,
+        )
 
         await self.repo.update_upload_status(
             self.upload_id,
@@ -382,7 +427,9 @@ class UploadPipeline:
             return
 
         stage_name, stage_label, _ = _STAGES[0]
-        await self.emit_status(UploadStatus.PROCESSING, detail=stage_label, stage_name_or_label=stage_name)
+        await self.emit_status(
+            UploadStatus.PROCESSING, detail=stage_label, stage_name_or_label=stage_name
+        )
         await self.repo.update_upload_status(self.upload_id, "processing")
 
         tmp = NamedTemporaryFile(delete=False)
@@ -405,13 +452,17 @@ class UploadPipeline:
             self.mime_category = download_result.mime_category
             self.cas_key = download_result.cas_key
 
-            await self.repo.update_upload_status(self.upload_id, "processing", sha256=self.original_sha256)
+            await self.repo.update_upload_status(
+                self.upload_id, "processing", sha256=self.original_sha256
+            )
             await self._run_stages()
 
         except UploadError as exc:
             if "cancelled" in exc.detail:
-                return # Already handled
-            self._record_pipeline_metrics("malicious" if exc.status == UploadStatus.MALICIOUS else "failed")
+                return  # Already handled
+            self._record_pipeline_metrics(
+                "malicious" if exc.status == UploadStatus.MALICIOUS else "failed"
+            )
             await self._fail_upload(exc.detail, exc.status)
         except Exception as exc:
             logger.exception("Error processing upload %s", self.quarantine_key)
@@ -437,7 +488,9 @@ class UploadPipeline:
                 try:
                     await delete_object(self.quarantine_key)
                 except Exception as del_exc:
-                    logger.warning("Failed to clean up quarantine object %s: %s", self.quarantine_key, del_exc)
+                    logger.warning(
+                        "Failed to clean up quarantine object %s: %s", self.quarantine_key, del_exc
+                    )
         finally:
             if self.pf is not None:
                 self.pf.cleanup()

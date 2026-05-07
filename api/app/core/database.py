@@ -25,6 +25,7 @@ def _soft_delete_filter(execute_state):  # type: ignore[no-untyped-def]
 
     from app.models.directory import Directory
     from app.models.material import Material, MaterialVersion
+    from app.models.user import User
 
     execute_state.statement = execute_state.statement.options(
         with_loader_criteria(Material, Material.deleted_at.is_(None), include_aliases=True),
@@ -32,10 +33,11 @@ def _soft_delete_filter(execute_state):  # type: ignore[no-untyped-def]
         with_loader_criteria(
             MaterialVersion, MaterialVersion.deleted_at.is_(None), include_aliases=True
         ),
+        with_loader_criteria(User, User.deleted_at.is_(None), include_aliases=True),
     )
 
 
-def _coalesce_index_jobs(jobs: list) -> list:
+def _coalesce_index_jobs(jobs: list) -> list:  # type: ignore[type-arg]
     """Coalesce consecutive index_material / index_directory jobs into batch calls.
 
     Preserves relative order of non-index jobs (delete_indexed_item,
@@ -47,7 +49,7 @@ def _coalesce_index_jobs(jobs: list) -> list:
     while i < len(jobs):
         kind = jobs[i][0]
         if kind == "index_material":
-            batch: list = [jobs[i][1]]
+            batch: list = [jobs[i][1]]  # type: ignore[type-arg]
             i += 1
             while i < len(jobs) and jobs[i][0] == "index_material":
                 batch.append(jobs[i][1])

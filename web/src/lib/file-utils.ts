@@ -1,6 +1,5 @@
 /** Maximum upload size in bytes, configurable via NEXT_PUBLIC_MAX_FILE_SIZE_MB (default 100 MiB). */
 export const MAX_FILE_SIZE_MB = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE_MB || "100", 10);
-export const MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 /** Comma-separated string of accepted file extensions for <input accept="...">. */
 export const ACCEPTED_FILE_TYPES = [
@@ -130,18 +129,6 @@ export function getFileBadgeLabel(fileName: string, mimeType?: string): string {
     return "FILE";
 }
 
-export function isPreviewable(mimeType: string): boolean {
-    const previewable = [
-        "application/pdf",
-        "image/",
-        "video/",
-        "audio/",
-        "text/",
-        "application/json",
-        "application/xml",
-    ];
-    return previewable.some((type) => mimeType.startsWith(type));
-}
 
 
 // ────────────────────────────────────────────────────────────────────────────────
@@ -153,7 +140,7 @@ import imageCompression from "browser-image-compression";
 const COMPRESSIBLE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MIN_COMPRESSION_SIZE = 512 * 1024; // 512 KB — skip small files to avoid overhead
 
-export interface CompressResult {
+interface CompressResult {
     file: File;
     /** True if client-side compression was actually applied and reduced the file size. */
     compressed: boolean;
@@ -204,7 +191,7 @@ export async function compressImageIfNeeded(file: File, skip = false): Promise<C
 }
 
 /** MIME type → viewer type mapping. */
-export const MIME_TO_VIEWER: Record<string, string> = {
+const MIME_TO_VIEWER: Record<string, string> = {
     // Documents
     "application/pdf": "pdf",
     // Markdown
@@ -311,7 +298,7 @@ export const MIME_TO_VIEWER: Record<string, string> = {
 };
 
 /** Code extensions that should use the code viewer. */
-export const CODE_EXTENSIONS = new Set([
+const CODE_EXTENSIONS = new Set([
     // JavaScript / TypeScript / Web
     "js", "mjs", "cjs", "ts", "jsx", "tsx", "vue", "svelte",
     "html", "htm", "css", "scss", "sass", "less",
@@ -345,7 +332,7 @@ export const CODE_EXTENSIONS = new Set([
 ]);
 
 /** Extension → viewer type fallback mapping. */
-export const EXT_TO_VIEWER: Record<string, string> = {
+const EXT_TO_VIEWER: Record<string, string> = {
     pdf: "pdf",
     md: "markdown",
     png: "image",

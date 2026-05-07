@@ -55,6 +55,8 @@ import { useBrowseRefreshStore } from "@/lib/stores";
 import { PreviewDialog } from "./preview-dialog";
 import { apiFetch } from "@/lib/api-client";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
 
 const OP_ICONS: Record<string, React.ElementType> = {
     create_material: FilePlus,
@@ -65,6 +67,10 @@ const OP_ICONS: Record<string, React.ElementType> = {
     delete_directory: FolderX,
     move_item: ArrowRightLeft,
 };
+
+const PRIVILEGED_ROLES = new Set(["moderator", "bureau", "vieux"]);
+const LIMIT_REGULAR = 50;
+const LIMIT_PRIVILEGED = 500;
 
 const OP_COLORS: Record<string, string> = {
     create_material: "text-green-600 dark:text-green-400",
@@ -177,9 +183,7 @@ export function ReviewDrawer() {
     const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
     const removeOperation = useStagingStore((s) => s.removeOperation);
     const clearOperations = useStagingStore((s) => s.clearOperations);
-    const clearUploads = useStagingStore((s) => s.clearUploads);
     const purgeExpired = useStagingStore((s) => s.purgeExpired);
-
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
     const [submitting, setSubmitting] = useState(false);
@@ -223,6 +227,52 @@ export function ReviewDrawer() {
             let cancelled = false;
 
             async function resolveAllPaths() {
+                const materialIdsToFetch: string[] = [];
+                const directoryIdsToFetch: string[] = [];
+                
+                for (const op of ops) {
+                    if (op.op === "edit_material" || op.op === "delete_material") {
+                        if (!op.material_id.startsWith("$")) {
+                            materialIdsToFetch.push(op.material_id);
+                        }
+                    } else if (op.op === "move_item") {
+                        if (op.new_parent_id && !op.new_parent_id.startsWith("$")) {
+                            directoryIdsToFetch.push(op.new_parent_id);
+                        }
+                    } else if (op.op === "create_material") {
+                        if (op.directory_id && !op.directory_id.startsWith("$")) {
+                            directoryIdsToFetch.push(op.directory_id);
+                        }
+                    } else if (op.op === "create_directory") {
+                        if (op.parent_id && !op.parent_id.startsWith("$")) {
+                            directoryIdsToFetch.push(op.parent_id);
+                        }
+                    }
+                }
+
+                let resolvedMats: Record<string, { directory_id: string | null; title: string }> = {};
+                let resolvedDirs: Record<string, { id: string; name: string; slug: string }[]> = {};
+
+                if (materialIdsToFetch.length > 0 || directoryIdsToFetch.length > 0) {
+                    try {
+                        const payload = {
+                            material_ids: Array.from(new Set(materialIdsToFetch)),
+                            directory_ids: Array.from(new Set(directoryIdsToFetch))
+                        };
+                        const res = await apiFetch<{
+                            materials: Record<string, { directory_id: string | null; title: string }>;
+                            directories: Record<string, { id: string; name: string; slug: string }[]>;
+                        }>("/directories/resolve-paths", {
+                            method: "POST",
+                            body: JSON.stringify(payload)
+                        });
+                        resolvedMats = res.materials || {};
+                        resolvedDirs = res.directories || {};
+                    } catch {
+                        // ignore
+                    }
+                }
+
                 const paths: string[] = [];
                 
                 for (const op of ops) {
@@ -230,11 +280,11 @@ export function ReviewDrawer() {
                     let itemName: string | null = null;
 
                     if (op.op === "edit_material" || op.op === "delete_material") {
-                        try {
-                            const mat = await apiFetch<{ directory_id: string; title: string }>(`/materials/${op.material_id}`);
+                        const mat = resolvedMats[op.material_id];
+                        if (mat) {
                             dirId = mat.directory_id;
                             itemName = mat.title;
-                        } catch { /* ignore */ }
+                        }
                     } else if (op.op === "move_item") {
                         dirId = op.new_parent_id;
                         itemName = op.target_title || op.target_name || t("item");
@@ -247,14 +297,12 @@ export function ReviewDrawer() {
                     }
 
                     if (dirId && !dirId.startsWith("$")) {
-                        try {
-                            const path = await apiFetch<{ name: string; id: string }[]>(`/directories/${dirId}/path`);
-                            const pathStr = path.length > 0 
-                                ? path.map(p => p.name).join(" › ") + " › " + (itemName || "")
-                                : itemName || "";
+                        const path = resolvedDirs[dirId];
+                        if (path && path.length > 0) {
+                            const pathStr = path.map(p => p.name).join(" › ") + " › " + (itemName || "");
                             paths.push(pathStr);
-                        } catch { 
-                            if (itemName) paths.push(itemName);
+                        } else if (itemName) {
+                            paths.push(itemName);
                         }
                     } else if (itemName) {
                         paths.push(itemName);
@@ -269,15 +317,20 @@ export function ReviewDrawer() {
             resolveAllPaths();
             return () => { cancelled = true; };
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+         
     }, [operations.length]);
+
+    const { user } = useAuth();
+    const isPrivileged = PRIVILEGED_ROLES.has(user?.role ?? "");
+    const maxOps = isPrivileged ? LIMIT_PRIVILEGED : LIMIT_REGULAR;
+    const overLimit = operations.length > maxOps;
 
     const expiredCount = operations.filter((s) => isExpired(s)).length;
     const expiringSoonCount = operations.filter((s) => isExpiringSoon(s)).length;
     const hasExpired = expiredCount > 0;
 
     const canSubmit =
-        title.trim().length >= 3 && operations.length > 0 && !submitting && !hasExpired;
+        title.trim().length >= 3 && operations.length > 0 && !submitting && !hasExpired && !overLimit;
 
     const handleSubmit = async () => {
         if (!canSubmit) return;
@@ -292,7 +345,6 @@ export function ReviewDrawer() {
 
         if (result) {
             clearOperations();
-            clearUploads();
             setTitle("");
             setDescription("");
             setReviewOpen(false);
@@ -306,7 +358,6 @@ export function ReviewDrawer() {
 
     const handleClear = () => {
         clearOperations();
-        clearUploads();
         setTitle("");
         setDescription("");
         setShowDiscardConfirm(false);
@@ -348,6 +399,21 @@ export function ReviewDrawer() {
                             {t("description")}
                         </SheetDescription>
                     </SheetHeader>
+
+                    {/* Over limit banner */}
+                    {overLimit && (
+                        <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30 my-4">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                            <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                                    {t("overLimitTitle", { count: operations.length, max: maxOps })}
+                                </p>
+                                <p className="text-xs text-red-600/80 dark:text-red-400/70 mt-0.5">
+                                    {t("overLimitText")}
+                                </p>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Summary badges */}
                     {Object.keys(typeCounts).length > 0 && (
@@ -450,11 +516,19 @@ export function ReviewDrawer() {
                         <div className="space-y-1.5">
                             <label
                                 htmlFor="pr-desc"
-                                className="text-sm font-medium"
+                                className="text-sm font-medium flex justify-between items-center"
                             >
-                                {t("moderatorNote")}{" "}
-                                <span className="text-muted-foreground">
-                                    {t("optional")}
+                                <span>
+                                    {t("moderatorNote")}{" "}
+                                    <span className="text-muted-foreground">
+                                        {t("optional")}
+                                    </span>
+                                </span>
+                                <span className={cn(
+                                    "text-[10px] font-mono",
+                                    description.length > 9500 ? "text-destructive font-bold" : "text-muted-foreground"
+                                )}>
+                                    {description.length}/10000
                                 </span>
                             </label>
                             <Textarea
@@ -462,8 +536,8 @@ export function ReviewDrawer() {
                                 placeholder={t("moderatorNotePlaceholder")}
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
-                                maxLength={1000}
-                                rows={2}
+                                maxLength={10000}
+                                rows={4}
                             />
                         </div>
                     </div>

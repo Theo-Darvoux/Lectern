@@ -102,9 +102,7 @@ async def test_admin_get_auth_config_does_not_return_secrets(
 
     from app.core.security import create_access_token
 
-    token, _ = create_access_token(
-        user_id=str(admin.id), role=admin.role.value, email=admin.email
-    )
+    token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
     response = await client.get(
         "/api/admin/auth-config",
@@ -127,13 +125,11 @@ async def test_prune_rejects_non_pruneable_prefix(
 ):
     admin = User(email="admin@telecom-sudparis.eu", role=UserRole.VIEUX)
     db_session.add(admin)
-    await db_session.flush()
+    await db_session.commit()
 
     from app.core.security import create_access_token
 
-    token, _ = create_access_token(
-        user_id=str(admin.id), role=admin.role.value, email=admin.email
-    )
+    token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
     fake_rc = AsyncMock()
     fake_rc.delete = AsyncMock()
@@ -166,14 +162,14 @@ async def test_prune_accepts_valid_prefixes(
 
     from app.core.security import create_access_token
 
-    token, _ = create_access_token(
-        user_id=str(admin.id), role=admin.role.value, email=admin.email
-    )
+    token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
     fake_rc = AsyncMock()
     fake_rc.delete = AsyncMock()
-    with patch("app.routers.admin_storage.delete_object", new_callable=AsyncMock), \
-         patch("app.core.redis.redis_client", fake_rc):
+    with (
+        patch("app.routers.admin_storage.delete_object", new_callable=AsyncMock),
+        patch("app.core.redis.redis_client", fake_rc),
+    ):
         response = await client.post(
             "/api/admin/storage/prune",
             json=["cas/abc123", "thumbnails/xyz.webp"],
@@ -196,7 +192,6 @@ async def test_google_oauth_verify_runs_in_thread(
     await db_session.flush()
 
     call_thread_ids: list = []
-
 
     async def spy_to_thread(fn, *args, **kwargs):
         call_thread_ids.append(fn)
@@ -339,7 +334,9 @@ async def test_allow_all_domains_new_user_from_unknown_domain_gets_student_not_p
     """With allow_all_domains=True and a listed domain with auto_approve, new user gets STUDENT."""
     from app.services.auth import get_or_create_user
 
-    user, is_new = await get_or_create_user(db_session, "user@telecom-sudparis.eu", auto_approve=True)
+    user, is_new = await get_or_create_user(
+        db_session, "user@telecom-sudparis.eu", auto_approve=True
+    )
     assert is_new is True
     assert user.role == UserRole.STUDENT
 
@@ -380,6 +377,7 @@ def test_tus_patch_sets_inflight_ttl_in_source():
 
     # Extract the TTL argument — must be >= 60
     import re
+
     ttl_match = re.search(r"redis\.expire\(_inflight_key,\s*(\d+)\)", src)
     assert ttl_match, "expire() must have a literal integer TTL argument"
     ttl = int(ttl_match.group(1))
@@ -410,9 +408,7 @@ def test_pdf_quality_zero_not_ignored():
     from app.core.file_security._pdf import _compress_pdf_path
 
     src = inspect.getsource(_compress_pdf_path)
-    assert "is not None" in src, (
-        "pdf_quality config read must use 'is not None' check"
-    )
+    assert "is not None" in src, "pdf_quality config read must use 'is not None' check"
 
 
 def test_video_profile_config_zero_not_ignored():
@@ -442,9 +438,7 @@ async def test_admin_cannot_set_pending_role(
 
     from app.core.security import create_access_token
 
-    token, _ = create_access_token(
-        user_id=str(admin.id), role=admin.role.value, email=admin.email
-    )
+    token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
     response = await client.patch(
         f"/api/admin/users/{target.id}/role",
@@ -465,13 +459,11 @@ async def test_admin_test_email_rejects_invalid_email(
 ):
     admin = User(email="admin@telecom-sudparis.eu", role=UserRole.VIEUX)
     db_session.add(admin)
-    await db_session.flush()
+    await db_session.commit()
 
     from app.core.security import create_access_token
 
-    token, _ = create_access_token(
-        user_id=str(admin.id), role=admin.role.value, email=admin.email
-    )
+    token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
     for bad_email in ["not-an-email", "foo\nbar@evil.com", "a@", "@domain.com"]:
         response = await client.post(
@@ -490,6 +482,7 @@ async def test_check_storage_limit_clamps_negative_redis_value():
     """A negative Redis counter (post-flush scenario) must not allow unlimited uploads."""
     import app.core.redis as redis_core
     from app.routers.upload.helpers import _check_storage_limit
+
     fake_redis = AsyncMock()
     # Simulate a negative counter value after a Redis flush + DECRBY
     fake_redis.get = AsyncMock(return_value=b"-999999999")

@@ -1,0 +1,79 @@
+
+> web@0.1.0 knip /home/psders/Documents/Projects/Programming/WikINT/web
+> knip
+
+Unused files (7)
+src/components/pr/edit-item-dialog.tsx     
+src/components/pr/file-preview.tsx         
+src/components/pr/pr-structure-dialog.tsx  
+src/components/profile/reputation-badge.tsx
+src/components/sidebar/floating-panel.tsx  
+src/components/viewers/mute-pdf-warnings.ts
+src/hooks/use-upload.ts                    
+Unused dependencies (4)
+@tailwindcss/typography      package.json:18:6
+openapi-typescript-helpers   package.json:32:6
+react-diff-viewer-continued  package.json:36:6
+unist-util-visit             package.json:48:6
+Unused devDependencies (2)
+shadcn       package.json:61:6
+tailwindcss  package.json:62:6
+Unlisted dependencies (1)
+postcss  postcss.config.mjs
+Unused exports (48)
+AvatarBadge               src/components/ui/avatar.tsx:106:3       
+AvatarGroup               src/components/ui/avatar.tsx:107:3       
+AvatarGroupCount          src/components/ui/avatar.tsx:108:3       
+badgeVariants             src/components/ui/badge.tsx:48:17        
+buttonVariants            src/components/ui/button.tsx:64:18       
+CardFooter                src/components/ui/card.tsx:87:3          
+CardAction                src/components/ui/card.tsx:89:3          
+CommandShortcut           src/components/ui/command.tsx:203:3      
+CommandSeparator          src/components/ui/command.tsx:204:3      
+ContextMenuPortal         src/components/ui/context-menu.tsx:241:3 
+ContextMenuGroup          src/components/ui/context-menu.tsx:244:3 
+ContextMenuCheckboxItem   src/components/ui/context-menu.tsx:247:3 
+ContextMenuRadioGroup     src/components/ui/context-menu.tsx:248:3 
+ContextMenuRadioItem      src/components/ui/context-menu.tsx:249:3 
+ContextMenuShortcut       src/components/ui/context-menu.tsx:251:3 
+ContextMenuSub            src/components/ui/context-menu.tsx:252:3 
+ContextMenuSubTrigger     src/components/ui/context-menu.tsx:253:3 
+ContextMenuSubContent     src/components/ui/context-menu.tsx:254:3 
+DialogClose               src/components/ui/dialog.tsx:152:3       
+DialogOverlay             src/components/ui/dialog.tsx:157:3       
+DialogPortal              src/components/ui/dialog.tsx:158:3       
+DrawerPortal              src/components/ui/drawer.tsx:108:3       
+DrawerOverlay             src/components/ui/drawer.tsx:109:3       
+DrawerTrigger             src/components/ui/drawer.tsx:110:3       
+DropdownMenuPortal        src/components/ui/dropdown-menu.tsx:243:3
+DropdownMenuGroup         src/components/ui/dropdown-menu.tsx:246:3
+DropdownMenuCheckboxItem  src/components/ui/dropdown-menu.tsx:249:3
+DropdownMenuRadioGroup    src/components/ui/dropdown-menu.tsx:250:3
+DropdownMenuRadioItem     src/components/ui/dropdown-menu.tsx:251:3
+DropdownMenuShortcut      src/components/ui/dropdown-menu.tsx:253:3
+DropdownMenuSub           src/components/ui/dropdown-menu.tsx:254:3
+DropdownMenuSubTrigger    src/components/ui/dropdown-menu.tsx:255:3
+DropdownMenuSubContent    src/components/ui/dropdown-menu.tsx:256:3
+PopoverAnchor             src/components/ui/popover.tsx:85:3       
+PopoverHeader             src/components/ui/popover.tsx:86:3       
+PopoverTitle              src/components/ui/popover.tsx:87:3       
+PopoverDescription        src/components/ui/popover.tsx:88:3       
+ScrollBar                 src/components/ui/scroll-area.tsx:58:22  
+SelectGroup               src/components/ui/select.tsx:182:3       
+SelectLabel               src/components/ui/select.tsx:184:3       
+SelectScrollDownButton    src/components/ui/select.tsx:185:3       
+SelectScrollUpButton      src/components/ui/select.tsx:186:3       
+SelectSeparator           src/components/ui/select.tsx:187:3       
+SheetPortal               src/components/ui/sheet.tsx:141:3        
+SheetOverlay              src/components/ui/sheet.tsx:142:3        
+SheetTrigger              src/components/ui/sheet.tsx:143:3        
+SheetClose                src/components/ui/sheet.tsx:144:3        
+tabsListVariants          src/components/ui/tabs.tsx:91:52         
+Unused exported types (5)
+FileTypeStyle   interface  src/components/home/file-type-display.tsx:5:18
+SearchResponse  interface  src/components/search/use-search.ts:22:18     
+AnnotationsAPI  type       src/hooks/use-annotations.ts:141:13           
+GhostDirEntry   interface  src/hooks/use-augmented-listing.ts:34:18      
+SSEOptions      interface  src/lib/sse-client.ts:3:18                    
+Configuration hints (1)
+ ELIFECYCLE  Command failed with exit code 1.

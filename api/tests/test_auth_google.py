@@ -116,11 +116,7 @@ async def test_google_login_success_existing_user(
     mock_google_verify,
 ):
     # Create an existing user
-    user = User(
-        email="existing@example.com",
-        display_name="Old Name",
-        role=UserRole.STUDENT
-    )
+    user = User(email="existing@example.com", display_name="Old Name", role=UserRole.STUDENT)
     db_session.add(user)
     await db_session.commit()
 

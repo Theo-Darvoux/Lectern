@@ -30,7 +30,6 @@ MAX_METADATA_KEYS = 20
 MAX_FILE_NAME_LENGTH = 255
 
 
-
 def _validate_tags(tags: list[str] | None) -> list[str] | None:
     """Validate tag list: limit count, individual length, strip whitespace."""
     if tags is None:
@@ -341,7 +340,9 @@ MAX_OPERATIONS = 50
 class PullRequestCreate(BaseModel):
     title: SanitizedStr = Field(..., min_length=3, max_length=300, pattern=r"^\s*\S.*$")
     description: SanitizedStr | None = Field(None, max_length=1000)
-    operations: Annotated[list[Operation], BeforeValidator(strip_null_chars)] = Field(..., min_length=1)
+    operations: Annotated[list[Operation], BeforeValidator(strip_null_chars)] = Field(
+        ..., min_length=1
+    )
 
     @field_validator("operations")
     @classmethod

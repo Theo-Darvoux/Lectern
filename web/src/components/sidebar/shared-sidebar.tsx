@@ -1,7 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useUIStore, type SidebarTab } from "@/lib/stores";
-import { cn } from "@/lib/utils";
+import { cn, isRestrictedTarget } from "@/lib/utils";
 import { useIsDesktop } from "@/hooks/use-media-query";
 import { useSearchParams } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -52,10 +53,19 @@ function SidebarContent() {
   const t = useTranslations("Sidebar");
   const searchParams = useSearchParams();
 
-  const isRestricted = (sidebarTarget?.id?.startsWith("$")) || !!searchParams.get("preview_pr");
+  const isRestricted = isRestrictedTarget(sidebarTarget?.id, searchParams.get("preview_pr"));
+
+  // Defensive auto-fallback: if the active tab is one disabled for restricted
+  // targets, switch to "details" so the user never sees a locked panel.
+  useEffect(() => {
+    const restrictedTabs: SidebarTab[] = ["chat", "annotations", "edits"];
+    if (isRestricted && restrictedTabs.includes(sidebarTab)) {
+      setSidebarTab("details");
+    }
+  }, [isRestricted, sidebarTab, setSidebarTab]);
 
   return (
-    <div className="flex flex-1 flex-col min-h-0 bg-background">
+    <div className="flex flex-1 flex-col min-h-0 bg-background overflow-hidden">
       {/* Header - Only visible on desktop as Drawer handles its own header/dismissal needs */}
       {isDesktop && (
         <div className="flex items-center justify-between border-b px-3 py-2 shrink-0 bg-muted/10">
@@ -79,7 +89,7 @@ function SidebarContent() {
       <Tabs
         value={sidebarTab}
         onValueChange={(v) => setSidebarTab(v as SidebarTab)}
-        className="flex flex-1 min-h-0 flex-col gap-0"
+        className="flex flex-1 min-h-0 flex-col gap-0 overflow-hidden"
       >
         <TabsList
           variant="line"
@@ -91,21 +101,21 @@ function SidebarContent() {
               <TabsTrigger
                 key={tab.value}
                 value={tab.value}
-                className={cn("px-2.5 py-2 text-xs", isTabRestricted && "opacity-40 cursor-not-allowed")}
+                className={cn("px-2.5 py-2 text-xs transition-opacity", isTabRestricted && "opacity-40 cursor-not-allowed")}
                 disabled={isTabRestricted}
               >
-                {t(tab.labelKey as any)}
+                {t(tab.labelKey as Parameters<typeof t>[0])}
               </TabsTrigger>
             );
           })}
         </TabsList>
 
-        <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <TabsContent
             value="details"
             className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
           >
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
               <DetailsTab target={sidebarTarget} />
             </div>
           </TabsContent>
@@ -121,7 +131,7 @@ function SidebarContent() {
             value="annotations"
             className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
           >
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
               <AnnotationsTab target={sidebarTarget} disabled={isRestricted} />
             </div>
           </TabsContent>
@@ -130,7 +140,7 @@ function SidebarContent() {
             value="edits"
             className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
           >
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
               <EditsTab target={sidebarTarget} />
             </div>
           </TabsContent>
@@ -144,6 +154,13 @@ export function SharedSidebar() {
   const { sidebarOpen, closeSidebar } = useUIStore();
   const isDesktop = useIsDesktop();
   const t = useTranslations("Sidebar");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) return null;
 
   // Desktop: render directly inside the page's bounded container with transition
   if (isDesktop) {
@@ -154,7 +171,7 @@ export function SharedSidebar() {
           sidebarOpen ? "w-80 opacity-100" : "w-0 opacity-0 border-transparent pointer-events-none"
         )}
       >
-        <div className="w-80 h-full min-h-full flex flex-col">
+        <div className="w-80 h-full min-h-full flex flex-col overflow-hidden">
           <SidebarContent />
         </div>
       </aside>
@@ -164,7 +181,7 @@ export function SharedSidebar() {
   // Mobile: Drawer for native feel and swipe-to-dismiss
   return (
     <Drawer open={sidebarOpen} onOpenChange={(o) => !o && closeSidebar()}>
-      <DrawerContent className="h-[90dvh] pb-0 outline-none">
+      <DrawerContent className="h-[90dvh] pb-0 outline-none overflow-hidden">
         <DrawerTitle className="sr-only">{t("itemInspector")}</DrawerTitle>
         <div className="flex-1 overflow-hidden">
           <SidebarContent />

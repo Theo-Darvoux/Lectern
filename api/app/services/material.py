@@ -305,8 +305,7 @@ async def toggle_like(db: AsyncSession, user_id: uuid.UUID, material_id: uuid.UU
     # Check if exists
     result = await db.execute(
         select(MaterialLike).where(
-            MaterialLike.user_id == user_id,
-            MaterialLike.material_id == material_id
+            MaterialLike.user_id == user_id, MaterialLike.material_id == material_id
         )
     )
     like = result.scalar_one_or_none()
@@ -322,11 +321,7 @@ async def toggle_like(db: AsyncSession, user_id: uuid.UUID, material_id: uuid.UU
         liked = False
     else:
         # Like
-        new_like = MaterialLike(
-            id=uuid.uuid4(),
-            user_id=user_id,
-            material_id=material_id
-        )
+        new_like = MaterialLike(id=uuid.uuid4(), user_id=user_id, material_id=material_id)
         db.add(new_like)
         await db.execute(
             update(Material)
@@ -344,8 +339,7 @@ async def toggle_favourite(db: AsyncSession, user_id: uuid.UUID, material_id: uu
     # Check if exists
     result = await db.execute(
         select(MaterialFavourite).where(
-            MaterialFavourite.user_id == user_id,
-            MaterialFavourite.material_id == material_id
+            MaterialFavourite.user_id == user_id, MaterialFavourite.material_id == material_id
         )
     )
     favourite = result.scalar_one_or_none()
@@ -356,11 +350,7 @@ async def toggle_favourite(db: AsyncSession, user_id: uuid.UUID, material_id: uu
         favourited = False
     else:
         # Add favourite
-        new_favourite = MaterialFavourite(
-            id=uuid.uuid4(),
-            user_id=user_id,
-            material_id=material_id
-        )
+        new_favourite = MaterialFavourite(id=uuid.uuid4(), user_id=user_id, material_id=material_id)
         db.add(new_favourite)
         favourited = True
 

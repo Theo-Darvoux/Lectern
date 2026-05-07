@@ -1,8 +1,11 @@
 import uuid
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.user import User, UserRole
+
 
 async def _create_user(
     db: AsyncSession,
@@ -28,10 +31,13 @@ async def _create_user(
     await db.flush()
     return user
 
+
 def _auth_headers(user: User) -> dict[str, str]:
     from app.core.security import create_access_token
+
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
+
 
 @pytest.mark.asyncio
 async def test_update_profile_bio(client: AsyncClient, db_session: AsyncSession) -> None:
@@ -65,6 +71,7 @@ async def test_update_profile_bio(client: AsyncClient, db_session: AsyncSession)
     assert response.status_code == 200
     assert response.json()["bio"] is None
 
+
 @pytest.mark.asyncio
 async def test_update_profile_omitted_fields(client: AsyncClient, db_session: AsyncSession) -> None:
     user = await _create_user(db_session, bio="Don't change me", display_name="Keeper")
@@ -82,10 +89,13 @@ async def test_update_profile_omitted_fields(client: AsyncClient, db_session: As
     assert data["bio"] == "Don't change me"
     assert data["display_name"] == "Keeper"
 
+
 @pytest.mark.asyncio
 async def test_clear_avatar(client: AsyncClient, db_session: AsyncSession, monkeypatch) -> None:
-    import app.services.user as user_service
     from unittest.mock import AsyncMock
+
+    import app.services.user as user_service
+
     monkeypatch.setattr(user_service, "delete_object", AsyncMock())
 
     user = await _create_user(db_session, avatar_url="avatars/test.webp")

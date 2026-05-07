@@ -213,6 +213,18 @@ Each viewer handles a specific file type. All viewers that support zoom include 
 - `ActionsTab` — Download, flag, share actions
 - `ChatTab` — Comments/discussion
 
+#### Sidebar state model (`useUIStore`)
+The sidebar target/tab live in a single Zustand store and are shared across desktop aside, mobile drawer, the FAB, and listing item buttons.
+
+- `openSidebar(tab, target)` — opens the sidebar AND sets both tab and target. Use this when the user explicitly picks an item/tab (clicking "Details" on a list row, picking "Annotations" from the FAB, etc.).
+- `setSidebarTarget(target)` — updates only the target. **Does not change the active tab** unless the new target is restricted (id starting with `$` for drafts), in which case a disabled tab (`chat`/`annotations`/`edits`) auto-falls back to `details`. This is the correct primitive for synchronisation effects (e.g. browse page seeding the current directory).
+- `updateSidebarData(partial)` — shallow-merges into the current target's `data`. Used by interaction primitives (likes, favourites) so all surfaces (FAB, Details tab) read from a single source.
+- `closeSidebar()` — closes the panel but preserves the target so the closing transition doesn't flicker into an empty state.
+
+The browse page (`app/browse/[[...path]]/page.tsx`) seeds the directory target only on **path change** via a `seededPathRef`. Background refetches triggered by `triggerBrowseRefresh` (e.g. after a like/favourite) refresh the directory's metadata in place when the sidebar is still showing that directory, but never overwrite a child material/directory the user explicitly opened. This prevents the "sidebar jumps back to the parent directory after liking a child" regression.
+
+The viewer FAB (`viewer-fab.tsx`) reads `is_liked`/`like_count` from `sidebarTarget.data` when the target points at the same material, so optimistic updates stay synchronised with the Details tab.
+
 #### Layout fix: `absolute inset-0` on `TabsContent`
 Radix `ScrollAreaViewport` only activates `overflow-y: scroll` once a `ResizeObserver` fires and detects `offsetHeight < scrollHeight`. When the viewport has no concrete CSS height (only flex/percentage chains), `offsetHeight` always equals `scrollHeight` and scrolling never activates. The fix is to give each `TabsContent` panel `position: absolute; inset: 0` inside a `relative flex-1 min-h-0` container — this provides a concrete, positioned height without relying on CSS percentage resolution through flex chains. Scroll-heavy tabs (`details`, `edits`) use `overflow-y-auto` directly on the `TabsContent`; flex-column tabs (`chat`, `annotations`, `actions`) use `flex flex-col`.
 

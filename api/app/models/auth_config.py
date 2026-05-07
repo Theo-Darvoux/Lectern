@@ -14,11 +14,17 @@ class AuthConfig(UUIDMixin, Base):
     __tablename__ = "auth_configs"
 
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    google_oauth_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    google_oauth_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     google_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    classic_auth_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    classic_auth_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     allow_all_domains: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    auto_approve_all_domains: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    auto_approve_all_domains: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     jwt_access_expire_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
     jwt_refresh_expire_days: Mapped[int] = mapped_column(Integer, default=31, server_default="31")
 
@@ -66,6 +72,7 @@ class AuthConfig(UUIDMixin, Base):
     primary_color: Mapped[str | None] = mapped_column(String(10), nullable=True)
     footer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     organization_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    og_image_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     legal_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     legal_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     legal_siret: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -74,7 +81,9 @@ class AuthConfig(UUIDMixin, Base):
     dpo_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     data_transfers: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

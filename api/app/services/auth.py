@@ -43,21 +43,24 @@ def _extract_secrets(config_row: AuthConfig | None) -> dict[str, Any]:
     """Return the secret fields from a DB row, falling back to env settings."""
     return {
         "smtp_password": (
-            config_row.smtp_password if config_row and config_row.smtp_password is not None
+            config_row.smtp_password
+            if config_row and config_row.smtp_password is not None
             else settings.smtp_password
         ),
         "s3_access_key": (
-            config_row.s3_access_key if config_row and config_row.s3_access_key is not None
+            config_row.s3_access_key
+            if config_row and config_row.s3_access_key is not None
             else settings.s3_access_key
         ),
         "s3_secret_key": (
-            config_row.s3_secret_key if config_row and config_row.s3_secret_key is not None
+            config_row.s3_secret_key
+            if config_row and config_row.s3_secret_key is not None
             else settings.s3_secret_key
         ),
     }
 
 
-async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]:
+async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]:  # type: ignore[type-arg]
     """Return auth config from Redis cache, falling back to DB.
 
     Secrets (smtp_password, s3_access_key, s3_secret_key) are never stored in
@@ -71,13 +74,13 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
         # Re-hydrate secrets from DB (never cached in Redis)
         config_row = await db.scalar(select(AuthConfig))
         result.update(_extract_secrets(config_row))
-        return result
+        return result  # type: ignore[no-any-return]
 
     config_row = await db.scalar(select(AuthConfig))
     domain_rows = list((await db.execute(select(AllowedDomain))).scalars().all())
 
     if config_row is None:
-        result: dict[str, Any] = {
+        result: dict[str, Any] = {  # type: ignore[no-redef]
             "totp_enabled": True,
             "google_oauth_enabled": False,
             "google_client_id": None,
@@ -139,67 +142,149 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "classic_auth_enabled": config_row.classic_auth_enabled,
             "allow_all_domains": config_row.allow_all_domains,
             "auto_approve_all_domains": config_row.auto_approve_all_domains,
-            "jwt_access_expire_days": config_row.jwt_access_expire_days if config_row.jwt_access_expire_days is not None else settings.jwt_access_token_expire_days,
-            "jwt_refresh_expire_days": config_row.jwt_refresh_expire_days if config_row.jwt_refresh_expire_days is not None else settings.jwt_refresh_token_expire_days,
-            "smtp_host": config_row.smtp_host if config_row.smtp_host is not None else settings.smtp_host,
+            "jwt_access_expire_days": config_row.jwt_access_expire_days
+            if config_row.jwt_access_expire_days is not None  # type: ignore[redundant-expr]
+            else settings.jwt_access_token_expire_days,
+            "jwt_refresh_expire_days": config_row.jwt_refresh_expire_days
+            if config_row.jwt_refresh_expire_days is not None  # type: ignore[redundant-expr]
+            else settings.jwt_refresh_token_expire_days,
+            "smtp_host": config_row.smtp_host
+            if config_row.smtp_host is not None
+            else settings.smtp_host,
             "smtp_ip": config_row.smtp_ip if config_row.smtp_ip is not None else settings.smtp_ip,
-            "smtp_port": config_row.smtp_port if config_row.smtp_port is not None else settings.smtp_port,
-            "smtp_user": config_row.smtp_user if config_row.smtp_user is not None else settings.smtp_user,
-            "smtp_password": config_row.smtp_password if config_row.smtp_password is not None else settings.smtp_password,
-            "smtp_from": config_row.smtp_from if config_row.smtp_from is not None else settings.smtp_from,
-            "smtp_use_tls": config_row.smtp_use_tls if config_row.smtp_use_tls is not None else settings.smtp_use_tls,
-            "s3_endpoint": config_row.s3_endpoint if config_row.s3_endpoint is not None else settings.s3_endpoint,
-            "s3_access_key": config_row.s3_access_key if config_row.s3_access_key is not None else settings.s3_access_key,
-            "s3_secret_key": config_row.s3_secret_key if config_row.s3_secret_key is not None else settings.s3_secret_key,
-            "s3_bucket": config_row.s3_bucket if config_row.s3_bucket is not None else settings.s3_bucket,
-            "s3_public_endpoint": config_row.s3_public_endpoint if config_row.s3_public_endpoint is not None else settings.s3_public_endpoint,
-            "s3_region": config_row.s3_region if config_row.s3_region is not None else settings.s3_region,
-            "s3_use_ssl": config_row.s3_use_ssl if config_row.s3_use_ssl is not None else settings.s3_use_ssl,
-            "max_storage_gb": config_row.max_storage_gb if config_row.max_storage_gb is not None else settings.max_storage_gb,
-            "max_file_size_mb": config_row.max_file_size_mb if config_row.max_file_size_mb is not None else settings.max_file_size_mb,
-            "max_image_size_mb": config_row.max_image_size_mb if config_row.max_image_size_mb is not None else settings.max_image_size_mb,
-            "max_audio_size_mb": config_row.max_audio_size_mb if config_row.max_audio_size_mb is not None else settings.max_audio_size_mb,
-            "max_video_size_mb": config_row.max_video_size_mb if config_row.max_video_size_mb is not None else settings.max_video_size_mb,
-            "max_document_size_mb": config_row.max_document_size_mb if config_row.max_document_size_mb is not None else settings.max_document_size_mb,
-            "max_office_size_mb": config_row.max_office_size_mb if config_row.max_office_size_mb is not None else settings.max_office_size_mb,
-            "max_text_size_mb": config_row.max_text_size_mb if config_row.max_text_size_mb is not None else settings.max_text_size_mb,
-            "pdf_quality": config_row.pdf_quality if config_row.pdf_quality is not None else settings.pdf_quality,
-            "video_compression_profile": config_row.video_compression_profile if config_row.video_compression_profile is not None else settings.video_compression_profile,
-            "thumbnail_quality": config_row.thumbnail_quality if config_row.thumbnail_quality is not None else 85,
-            "thumbnail_size_px": config_row.thumbnail_size_px if config_row.thumbnail_size_px is not None else 640,
+            "smtp_port": config_row.smtp_port
+            if config_row.smtp_port is not None
+            else settings.smtp_port,
+            "smtp_user": config_row.smtp_user
+            if config_row.smtp_user is not None
+            else settings.smtp_user,
+            "smtp_password": config_row.smtp_password
+            if config_row.smtp_password is not None
+            else settings.smtp_password,
+            "smtp_from": config_row.smtp_from
+            if config_row.smtp_from is not None
+            else settings.smtp_from,
+            "smtp_use_tls": config_row.smtp_use_tls
+            if config_row.smtp_use_tls is not None  # type: ignore[redundant-expr]
+            else settings.smtp_use_tls,
+            "s3_endpoint": config_row.s3_endpoint
+            if config_row.s3_endpoint is not None
+            else settings.s3_endpoint,
+            "s3_access_key": config_row.s3_access_key
+            if config_row.s3_access_key is not None
+            else settings.s3_access_key,
+            "s3_secret_key": config_row.s3_secret_key
+            if config_row.s3_secret_key is not None
+            else settings.s3_secret_key,
+            "s3_bucket": config_row.s3_bucket
+            if config_row.s3_bucket is not None
+            else settings.s3_bucket,
+            "s3_public_endpoint": config_row.s3_public_endpoint
+            if config_row.s3_public_endpoint is not None
+            else settings.s3_public_endpoint,
+            "s3_region": config_row.s3_region
+            if config_row.s3_region is not None
+            else settings.s3_region,
+            "s3_use_ssl": config_row.s3_use_ssl
+            if config_row.s3_use_ssl is not None  # type: ignore[redundant-expr]
+            else settings.s3_use_ssl,
+            "max_storage_gb": config_row.max_storage_gb
+            if config_row.max_storage_gb is not None
+            else settings.max_storage_gb,
+            "max_file_size_mb": config_row.max_file_size_mb
+            if config_row.max_file_size_mb is not None
+            else settings.max_file_size_mb,
+            "max_image_size_mb": config_row.max_image_size_mb
+            if config_row.max_image_size_mb is not None
+            else settings.max_image_size_mb,
+            "max_audio_size_mb": config_row.max_audio_size_mb
+            if config_row.max_audio_size_mb is not None
+            else settings.max_audio_size_mb,
+            "max_video_size_mb": config_row.max_video_size_mb
+            if config_row.max_video_size_mb is not None
+            else settings.max_video_size_mb,
+            "max_document_size_mb": config_row.max_document_size_mb
+            if config_row.max_document_size_mb is not None
+            else settings.max_document_size_mb,
+            "max_office_size_mb": config_row.max_office_size_mb
+            if config_row.max_office_size_mb is not None
+            else settings.max_office_size_mb,
+            "max_text_size_mb": config_row.max_text_size_mb
+            if config_row.max_text_size_mb is not None
+            else settings.max_text_size_mb,
+            "pdf_quality": config_row.pdf_quality
+            if config_row.pdf_quality is not None
+            else settings.pdf_quality,
+            "video_compression_profile": config_row.video_compression_profile
+            if config_row.video_compression_profile is not None
+            else settings.video_compression_profile,
+            "thumbnail_quality": config_row.thumbnail_quality
+            if config_row.thumbnail_quality is not None
+            else 85,
+            "thumbnail_size_px": config_row.thumbnail_size_px
+            if config_row.thumbnail_size_px is not None
+            else 640,
             "allowed_extensions": config_row.allowed_extensions,
             "allowed_mime_types": config_row.allowed_mime_types,
-            "site_name": config_row.site_name if config_row.site_name is not None else settings.site_name,
-            "site_description": config_row.site_description if config_row.site_description is not None else settings.site_description,
-            "site_logo_url": config_row.site_logo_url if config_row.site_logo_url is not None else settings.site_logo_url,
-            "site_favicon_url": config_row.site_favicon_url if config_row.site_favicon_url is not None else settings.site_favicon_url,
-            "primary_color": config_row.primary_color if config_row.primary_color is not None else settings.primary_color,
-            "footer_text": config_row.footer_text if config_row.footer_text is not None else settings.footer_text,
-            "organization_url": config_row.organization_url if config_row.organization_url is not None else settings.organization_url,
-            "legal_name": config_row.legal_name if config_row.legal_name is not None else settings.legal_name,
-            "legal_address": config_row.legal_address if config_row.legal_address is not None else settings.legal_address,
-            "legal_siret": config_row.legal_siret if config_row.legal_siret is not None else settings.legal_siret,
-            "contact_email": config_row.contact_email if config_row.contact_email is not None else settings.contact_email,
-            "dpo_email": config_row.dpo_email if config_row.dpo_email is not None else settings.dpo_email,
-            "dpo_address": config_row.dpo_address if config_row.dpo_address is not None else settings.dpo_address,
-            "data_transfers": config_row.data_transfers if config_row.data_transfers is not None else settings.data_transfers,
+            "site_name": config_row.site_name
+            if config_row.site_name is not None
+            else settings.site_name,
+            "site_description": config_row.site_description
+            if config_row.site_description is not None
+            else settings.site_description,
+            "site_logo_url": config_row.site_logo_url
+            if config_row.site_logo_url is not None
+            else settings.site_logo_url,
+            "site_favicon_url": config_row.site_favicon_url
+            if config_row.site_favicon_url is not None
+            else settings.site_favicon_url,
+            "primary_color": config_row.primary_color
+            if config_row.primary_color is not None
+            else settings.primary_color,
+            "footer_text": config_row.footer_text
+            if config_row.footer_text is not None
+            else settings.footer_text,
+            "organization_url": config_row.organization_url
+            if config_row.organization_url is not None
+            else settings.organization_url,
+            "legal_name": config_row.legal_name
+            if config_row.legal_name is not None
+            else settings.legal_name,
+            "legal_address": config_row.legal_address
+            if config_row.legal_address is not None
+            else settings.legal_address,
+            "legal_siret": config_row.legal_siret
+            if config_row.legal_siret is not None
+            else settings.legal_siret,
+            "contact_email": config_row.contact_email
+            if config_row.contact_email is not None
+            else settings.contact_email,
+            "dpo_email": config_row.dpo_email
+            if config_row.dpo_email is not None
+            else settings.dpo_email,
+            "dpo_address": config_row.dpo_address
+            if config_row.dpo_address is not None
+            else settings.dpo_address,
+            "data_transfers": config_row.data_transfers
+            if config_row.data_transfers is not None
+            else settings.data_transfers,
             "domains": domains if domains else _FALLBACK_DOMAINS,
         }
 
     cacheable = {k: v for k, v in result.items() if k not in _REDIS_SECRET_FIELDS}
     await redis.setex(AUTH_CONFIG_CACHE_KEY, AUTH_CONFIG_CACHE_TTL, json.dumps(cacheable))
-    return result
+    return result  # type: ignore[no-any-return]
 
 
 async def get_auth_config(db: AsyncSession) -> AuthConfig | None:
     return await db.scalar(select(AuthConfig))
 
 
-async def bust_auth_config_cache(redis: Redis) -> None:
+async def bust_auth_config_cache(redis: Redis) -> None:  # type: ignore[type-arg]
     await redis.delete(AUTH_CONFIG_CACHE_KEY)
 
 
-async def validate_email_for_auth(email: str, db: AsyncSession, redis: Redis) -> bool:
+async def validate_email_for_auth(email: str, db: AsyncSession, redis: Redis) -> bool:  # type: ignore[type-arg]
     """Validate email domain against DB config.
 
     Returns the domain's ``auto_approve`` flag for new-user role assignment.
@@ -240,16 +325,16 @@ def generate_magic_token() -> str:
     return secrets.token_urlsafe(48)
 
 
-async def store_code(redis: Redis, email: str, code: str) -> None:
+async def store_code(redis: Redis, email: str, code: str) -> None:  # type: ignore[type-arg]
     await redis.setex(f"auth:code:{email}", CODE_TTL_SECONDS, code)
 
 
-async def store_magic_token(redis: Redis, email: str, token: str) -> None:
+async def store_magic_token(redis: Redis, email: str, token: str) -> None:  # type: ignore[type-arg]
     await redis.setex(f"auth:magic:{token}", CODE_TTL_SECONDS, email)
     await redis.setex(f"auth:magic_ref:{email}", CODE_TTL_SECONDS, token)
 
 
-async def verify_code(redis: Redis, email: str, code: str) -> bool:
+async def verify_code(redis: Redis, email: str, code: str) -> bool:  # type: ignore[type-arg]
     if settings.is_dev and code in {"00000000", "AAAAAAAA"}:
         return True
 
@@ -264,7 +349,7 @@ async def verify_code(redis: Redis, email: str, code: str) -> bool:
     return False
 
 
-async def verify_magic_token(redis: Redis, token: str) -> str | None:
+async def verify_magic_token(redis: Redis, token: str) -> str | None:  # type: ignore[type-arg]
     email = await redis.get(f"auth:magic:{token}")
     if not email:
         return None
@@ -278,7 +363,7 @@ async def verify_magic_token(redis: Redis, token: str) -> str | None:
     return email
 
 
-async def check_rate_limit(redis: Redis, email: str) -> bool:
+async def check_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[type-arg]
     if settings.is_dev:
         return True
 
@@ -293,18 +378,16 @@ async def check_rate_limit(redis: Redis, email: str) -> bool:
     return True
 
 
-async def check_verify_rate_limit(redis: Redis, email: str) -> bool:
+async def check_verify_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[type-arg]
     if settings.is_dev:
         return True
 
     key = f"auth:verify_rate:{email}"
     count = await redis.get(key)
-    if count and int(count) >= VERIFY_RATE_LIMIT_MAX:
-        return False
-    return True
+    return not (count and int(count) >= VERIFY_RATE_LIMIT_MAX)
 
 
-async def increment_verify_rate_limit(redis: Redis, email: str) -> None:
+async def increment_verify_rate_limit(redis: Redis, email: str) -> None:  # type: ignore[type-arg]
     if settings.is_dev:
         return
     key = f"auth:verify_rate:{email}"
@@ -314,7 +397,7 @@ async def increment_verify_rate_limit(redis: Redis, email: str) -> None:
     await pipe.execute()
 
 
-async def reset_verify_rate_limit(redis: Redis, email: str) -> None:
+async def reset_verify_rate_limit(redis: Redis, email: str) -> None:  # type: ignore[type-arg]
     await redis.delete(f"auth:verify_rate:{email}")
 
 
@@ -351,30 +434,27 @@ def issue_tokens(
         user_id=str(user.id),
         role=user.role.value,
         email=user.email,
-        expire_days=jwt_access_expire_days
+        expire_days=jwt_access_expire_days,
     )
-    refresh_token = create_refresh_token(
-        user_id=str(user.id),
-        expire_days=jwt_refresh_expire_days
-    )
+    refresh_token = create_refresh_token(user_id=str(user.id), expire_days=jwt_refresh_expire_days)
     return access_token, refresh_token, jti
 
 
-async def blacklist_token(redis: Redis, jti: str, ttl_seconds: int) -> None:
+async def blacklist_token(redis: Redis, jti: str, ttl_seconds: int) -> None:  # type: ignore[type-arg]
     await redis.setex(f"auth:blacklist:{jti}", ttl_seconds, "1")
 
 
-async def is_token_blacklisted(redis: Redis, jti: str) -> bool:
+async def is_token_blacklisted(redis: Redis, jti: str) -> bool:  # type: ignore[type-arg]
     result = await redis.get(f"auth:blacklist:{jti}")
     return result is not None
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return pwd_context.verify(plain_password, hashed_password)  # type: ignore[no-any-return]
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    return pwd_context.hash(password)  # type: ignore[no-any-return]
 
 
 async def authenticate_user(db: AsyncSession, email: str, password: str) -> User | None:

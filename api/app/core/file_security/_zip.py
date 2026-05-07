@@ -35,13 +35,37 @@ _ZIP_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".tiff", ".t
 _ZIP_IMAGE_MIN_BYTES = 10 * 1024  # 10 KiB
 
 # Extensions that are already compressed — DEFLATE on top adds CPU cost with no benefit.
-_INCOMPRESSIBLE_EXTENSIONS = frozenset({
-    ".jpg", ".jpeg", ".png", ".gif", ".tiff", ".tif",
-    ".webp", ".mp3", ".mp4", ".m4a", ".m4v", ".webm",
-    ".ogg", ".opus", ".flac", ".aac", ".avi", ".mov",
-    ".wmv", ".wma", ".zip", ".gz", ".bz2", ".xz",
-    ".7z", ".rar", ".zst",
-})
+_INCOMPRESSIBLE_EXTENSIONS = frozenset(
+    {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".tiff",
+        ".tif",
+        ".webp",
+        ".mp3",
+        ".mp4",
+        ".m4a",
+        ".m4v",
+        ".webm",
+        ".ogg",
+        ".opus",
+        ".flac",
+        ".aac",
+        ".avi",
+        ".mov",
+        ".wmv",
+        ".wma",
+        ".zip",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".rar",
+        ".zst",
+    }
+)
 
 # I/O buffer for streaming zip entries (256 KiB)
 _CHUNK_SIZE = 256 * 1024
@@ -64,11 +88,7 @@ def _sanitize_zip_entry_name(name: str) -> str:
     name = re.sub(r"[\x00-\x1f\x7f]", "", name)
     name = re.sub(r"^([a-zA-Z]:[\\/]|[/\\]+)", "", name)
     parts = re.split(r"[\\/]", name)
-    safe_parts = [
-        "_" if (p == ".." or p == ".") else p[:255]
-        for p in parts
-        if p
-    ]
+    safe_parts = ["_" if (p == ".." or p == ".") else p[:255] for p in parts if p]
     return "/".join(safe_parts) or "_unknown_"
 
 
@@ -267,9 +287,7 @@ def _recompress_zip_path(file_path: Path) -> Path:
                             break
                         written += len(chunk)
                         if written > _ZIP_MAX_ENTRY_BYTES:
-                            raise ValueError(
-                                f"ZIP entry '{item.filename}' expanded beyond limit"
-                            )
+                            raise ValueError(f"ZIP entry '{item.filename}' expanded beyond limit")
                         total_actual += len(chunk)
                         if total_actual > _ZIP_MAX_TOTAL_BYTES:
                             raise ValueError(
@@ -281,8 +299,7 @@ def _recompress_zip_path(file_path: Path) -> Path:
                 safe_name = _sanitize_zip_entry_name(item.filename)
                 entry_ext = Path(safe_name).suffix.lower()
                 is_image = (
-                    entry_ext in _ZIP_IMAGE_EXTENSIONS
-                    and len(entry_data) >= _ZIP_IMAGE_MIN_BYTES
+                    entry_ext in _ZIP_IMAGE_EXTENSIONS and len(entry_data) >= _ZIP_IMAGE_MIN_BYTES
                 )
 
                 sanitized_info = zipfile.ZipInfo(filename=safe_name, date_time=item.date_time)
@@ -296,9 +313,7 @@ def _recompress_zip_path(file_path: Path) -> Path:
         if image_entries:
             with ThreadPoolExecutor() as pool:
                 futures = {
-                    pool.submit(
-                        _compress_zip_image_entry, data, info.filename
-                    ): info.filename
+                    pool.submit(_compress_zip_image_entry, data, info.filename): info.filename
                     for info, data in image_entries
                 }
                 for future in as_completed(futures):

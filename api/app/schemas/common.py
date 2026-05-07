@@ -1,8 +1,6 @@
-from typing import Any, TypeVar
+from typing import Any
 
 from pydantic import BaseModel
-
-T = TypeVar("T")
 
 
 class ErrorResponse(BaseModel):

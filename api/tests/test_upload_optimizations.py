@@ -84,7 +84,7 @@ async def test_atomic_pr_application_copy_not_move(db_session: AsyncSession):
     from app.services.pr import apply_pr
 
     student = await _create_user(db_session, UserRole.STUDENT)
-    mod = await _create_user(db_session, UserRole.BUREAU)
+    await _create_user(db_session, UserRole.BUREAU)
     d = await _create_directory(db_session, "Dir", user_id=student.id)
 
     file_key = f"uploads/{student.id}/{uuid.uuid4()}/test.pdf"
@@ -119,7 +119,7 @@ async def test_atomic_pr_application_copy_not_move(db_session: AsyncSession):
         mock_info.return_value = {"size": 100, "content_type": "application/pdf"}
 
         # Apply PR
-        await apply_pr(db_session, pr, mod.id)
+        await apply_pr(db_session, pr)
 
         # Verify: copy_object was called (to destination)
         assert mock_copy.call_count == 1

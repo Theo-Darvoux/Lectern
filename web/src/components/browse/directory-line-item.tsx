@@ -60,7 +60,7 @@ export function DirectoryLineItem({
     const handleDetails = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        openSidebar("details", { type: "directory", id, data: directory });
+        openSidebar("details", { type: "directory", id, data: { ...directory, __path: buildPath() } });
     };
 
     const handleChat = (e: React.MouseEvent) => {
@@ -117,7 +117,10 @@ export function DirectoryLineItem({
         const isRestricted = !!staged || !!previewPrId;
 
         return (
-        <ItemActionsMenu item={{ id, type: "directory", data: directory, staged, isExternal }}>
+        <ItemActionsMenu 
+            item={{ id, type: "directory", data: directory, staged, isExternal }}
+            itemPath={buildPath()}
+        >
             <div
                 onClick={handleCardClick}
                 data-nav-index={navIndex}

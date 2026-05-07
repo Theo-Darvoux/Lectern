@@ -94,7 +94,11 @@ async def _pr(db: AsyncSession, author: User, ops: list) -> PullRequest:
 
 
 def _index_jobs(db: AsyncSession) -> list[tuple]:
-    return [j for j in db.info.get("post_commit_jobs", []) if j[0] in ("index_material", "index_directory")]
+    return [
+        j
+        for j in db.info.get("post_commit_jobs", [])
+        if j[0] in ("index_material", "index_directory")
+    ]
 
 
 def _deindex_jobs(db: AsyncSession) -> list[tuple]:
@@ -154,7 +158,11 @@ async def test_enqueue_reindex_deduplication(db_session: AsyncSession):
     await _enqueue_reindex_directory_recursive(db_session, root.id)
     await _enqueue_reindex_directory_recursive(db_session, root.id)  # second call
 
-    dir_jobs = [j for j in db_session.info["post_commit_jobs"] if j[0] == "index_directory" and j[1] == root.id]
+    dir_jobs = [
+        j
+        for j in db_session.info["post_commit_jobs"]
+        if j[0] == "index_directory" and j[1] == root.id
+    ]
     assert len(dir_jobs) == 1
 
 
@@ -170,10 +178,15 @@ async def test_edit_directory_name_change_subtree_reindexed(db_session: AsyncSes
     root = await _directory(db_session, "Old Name", user_id=u.id)
     child = await _directory(db_session, "Child", parent_id=root.id, user_id=u.id)
     mat = await _material(db_session, "Paper", directory_id=child.id, author_id=u.id)
-    pr = await _pr(db_session, u, [{"op": "edit_directory", "directory_id": str(root.id), "name": "New Name"}])
+    pr = await _pr(
+        db_session, u, [{"op": "edit_directory", "directory_id": str(root.id), "name": "New Name"}]
+    )
 
-    with patch("app.services.pr._enqueue_reindex_directory_recursive", wraps=_enqueue_reindex_directory_recursive) as spy:
-        await apply_pr(db_session, pr, u.id)
+    with patch(
+        "app.services.pr._enqueue_reindex_directory_recursive",
+        wraps=_enqueue_reindex_directory_recursive,
+    ) as spy:
+        await apply_pr(db_session, pr)
 
     spy.assert_called_once_with(db_session, root.id)
     jobs = _index_jobs(db_session)
@@ -190,9 +203,13 @@ async def test_edit_directory_description_only_single_reindex(db_session: AsyncS
     u = await _user(db_session)
     root = await _directory(db_session, "Root", user_id=u.id)
     child = await _directory(db_session, "Child", parent_id=root.id, user_id=u.id)
-    pr = await _pr(db_session, u, [{"op": "edit_directory", "directory_id": str(root.id), "description": "New desc"}])
+    pr = await _pr(
+        db_session,
+        u,
+        [{"op": "edit_directory", "directory_id": str(root.id), "description": "New desc"}],
+    )
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _index_jobs(db_session)
     dir_ids = [j[1] for j in jobs if j[0] == "index_directory"]
@@ -207,9 +224,11 @@ async def test_edit_directory_tags_only_single_reindex(db_session: AsyncSession)
     u = await _user(db_session)
     root = await _directory(db_session, "Root", user_id=u.id)
     child = await _directory(db_session, "Child", parent_id=root.id, user_id=u.id)
-    pr = await _pr(db_session, u, [{"op": "edit_directory", "directory_id": str(root.id), "tags": []}])
+    pr = await _pr(
+        db_session, u, [{"op": "edit_directory", "directory_id": str(root.id), "tags": []}]
+    )
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _index_jobs(db_session)
     dir_ids = [j[1] for j in jobs if j[0] == "index_directory"]
@@ -233,11 +252,21 @@ async def test_move_directory_subtree_reindexed(db_session: AsyncSession):
     pr = await _pr(
         db_session,
         u,
-        [{"op": "move_item", "target_type": "directory", "target_id": str(src.id), "new_parent_id": str(dest.id)}],
+        [
+            {
+                "op": "move_item",
+                "target_type": "directory",
+                "target_id": str(src.id),
+                "new_parent_id": str(dest.id),
+            }
+        ],
     )
 
-    with patch("app.services.pr._enqueue_reindex_directory_recursive", wraps=_enqueue_reindex_directory_recursive) as spy:
-        await apply_pr(db_session, pr, u.id)
+    with patch(
+        "app.services.pr._enqueue_reindex_directory_recursive",
+        wraps=_enqueue_reindex_directory_recursive,
+    ) as spy:
+        await apply_pr(db_session, pr)
 
     spy.assert_called_once_with(db_session, src.id)
     jobs = _index_jobs(db_session)
@@ -263,10 +292,17 @@ async def test_move_material_single_reindex(db_session: AsyncSession):
     pr = await _pr(
         db_session,
         u,
-        [{"op": "move_item", "target_type": "material", "target_id": str(mat.id), "new_parent_id": str(dst_dir.id)}],
+        [
+            {
+                "op": "move_item",
+                "target_type": "material",
+                "target_id": str(mat.id),
+                "new_parent_id": str(dst_dir.id),
+            }
+        ],
     )
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _index_jobs(db_session)
     mat_ids = [j[1] for j in jobs if j[0] == "index_material"]
@@ -288,10 +324,17 @@ async def test_create_material_enqueues_index(db_session: AsyncSession):
     pr = await _pr(
         db_session,
         u,
-        [{"op": "create_material", "title": "New Mat", "type": "document", "directory_id": str(d.id)}],
+        [
+            {
+                "op": "create_material",
+                "title": "New Mat",
+                "type": "document",
+                "directory_id": str(d.id),
+            }
+        ],
     )
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _index_jobs(db_session)
     assert any(j[0] == "index_material" for j in jobs)
@@ -306,7 +349,7 @@ async def test_create_directory_enqueues_index(db_session: AsyncSession):
         [{"op": "create_directory", "name": "New Dir", "type": "folder"}],
     )
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _index_jobs(db_session)
     assert any(j[0] == "index_directory" for j in jobs)
@@ -328,7 +371,7 @@ async def test_delete_material_enqueues_deindex(db_session: AsyncSession):
         [{"op": "delete_material", "material_id": str(mat.id)}],
     )
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _deindex_jobs(db_session)
     item_ids = {j[2] for j in jobs}
@@ -348,7 +391,7 @@ async def test_delete_directory_recursive_deindex(db_session: AsyncSession):
         [{"op": "delete_directory", "directory_id": str(root.id)}],
     )
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _deindex_jobs(db_session)
     item_ids = {j[2] for j in jobs}
@@ -377,7 +420,9 @@ async def test_dedup_same_directory_not_double_enqueued(db_session: AsyncSession
         ],
     )
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
-    dir_jobs = [j for j in db_session.info["post_commit_jobs"] if j[0] == "index_directory" and j[1] == d.id]
+    dir_jobs = [
+        j for j in db_session.info["post_commit_jobs"] if j[0] == "index_directory" and j[1] == d.id
+    ]
     assert len(dir_jobs) == 1

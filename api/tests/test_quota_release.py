@@ -1,15 +1,16 @@
 import time
 import uuid
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from app.models.user import User, UserRole
-from app.models.upload import Upload
-from unittest.mock import patch, AsyncMock, ANY
 from app.core.security import create_access_token
+from app.models.upload import Upload
+from app.models.user import User, UserRole
 from app.routers.upload.helpers import _QUOTA_KEY_PREFIX
+
 
 async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> User:
     user = User(
@@ -24,18 +25,21 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
     await db.flush()
     return user
 
+
 @pytest.fixture
 def mock_storage(mock_redis):
     with (
         patch("app.services.pr.object_exists", new_callable=AsyncMock) as m,
-        patch("app.core.redis.redis_client", mock_redis)
+        patch("app.core.redis.redis_client", mock_redis),
     ):
         m.return_value = True
         yield m
 
+
 def _auth_headers(user: User) -> dict[str, str]:
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
+
 
 @pytest.mark.asyncio
 async def test_quota_released_on_pr_approval(
@@ -48,17 +52,17 @@ async def test_quota_released_on_pr_approval(
     upload_id = str(uuid.uuid4())
     quarantine_key = f"quarantine/{user.id}/{upload_id}/test.pdf"
     staging_key = f"staging:{user.id}:{upload_id}"
-    
+
     # 1. Add to quota
     await fake_redis_setup.zadd(f"{_QUOTA_KEY_PREFIX}{user.id}", {quarantine_key: time.time()})
     await fake_redis_setup.zadd(f"{_QUOTA_KEY_PREFIX}{user.id}", {staging_key: time.time()})
-    
+
     # 2. Create Upload record
     up = Upload(
         upload_id=upload_id,
         user_id=user.id,
         quarantine_key=quarantine_key,
-        final_key=f"cas/somehash",
+        final_key="cas/somehash",
         filename="test.pdf",
         mime_type="application/pdf",
         status="clean",
@@ -78,38 +82,29 @@ async def test_quota_released_on_pr_approval(
                     "title": "New Material",
                     "type": "document",
                     "file_key": "cas/somehash",
-                    "file_name": "test.pdf"
+                    "file_name": "test.pdf",
                 }
-            ]
-        }
+            ],
+        },
     )
     assert pr_resp.status_code == 201
-    data = pr_resp.json()
-    pr_id = data["id"]
-    await db_session.commit()
-    
-    from app.models.pull_request import PullRequest
-    pr_in_db = await db_session.get(PullRequest, uuid.UUID(pr_id))
-    print(f"PR in DB: {pr_in_db}")
+    pr_id = pr_resp.json()["id"]
 
     # Verify quota is still there
     assert await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}") == 2
 
     # 4. Approve PR
-    app_resp = await client.post(
-        f"/api/pull-requests/{pr_id}/approve",
-        headers=_auth_headers(admin)
-    )
-    if app_resp.status_code != 200:
-        print(f"Approve failed: {app_resp.status_code} {app_resp.text}")
+    url = f"/api/pull-requests/{pr_id}/approve"
+    app_resp = await client.post(url, headers=_auth_headers(admin))
     assert app_resp.status_code == 200
 
     # 5. Verify quota released
     assert await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}") == 0
-    
+
     # 6. Verify Upload status updated to 'applied'
     await db_session.refresh(up)
     assert up.status == "applied"
+
 
 @pytest.mark.asyncio
 async def test_quota_released_on_pr_rejection(
@@ -121,14 +116,14 @@ async def test_quota_released_on_pr_rejection(
 
     upload_id = str(uuid.uuid4())
     quarantine_key = f"quarantine/{user.id}/{upload_id}/test.pdf"
-    
+
     await fake_redis_setup.zadd(f"{_QUOTA_KEY_PREFIX}{user.id}", {quarantine_key: time.time()})
-    
+
     up = Upload(
         upload_id=upload_id,
         user_id=user.id,
         quarantine_key=quarantine_key,
-        final_key=f"cas/somehash",
+        final_key="cas/somehash",
         filename="test.pdf",
         mime_type="application/pdf",
         status="clean",
@@ -147,23 +142,19 @@ async def test_quota_released_on_pr_rejection(
                     "title": "New Material",
                     "type": "document",
                     "file_key": "cas/somehash",
-                    "file_name": "test.pdf"
+                    "file_name": "test.pdf",
                 }
-            ]
-        }
+            ],
+        },
     )
     assert pr_resp.status_code == 201
     pr_id = pr_resp.json()["id"]
-    await db_session.commit()
 
-    # Reject PR
+    # 4. Reject PR
+    url = f"/api/pull-requests/{pr_id}/reject"
     rej_resp = await client.post(
-        f"/api/pull-requests/{pr_id}/reject",
-        headers=_auth_headers(admin),
-        json={"reason": "Inappropriate content detected"}
+        url, headers=_auth_headers(admin), json={"reason": "Inappropriate content detected"}
     )
-    if rej_resp.status_code != 200:
-        print(f"Reject failed: {rej_resp.status_code} {rej_resp.text}")
     assert rej_resp.status_code == 200
 
     # Verify quota released

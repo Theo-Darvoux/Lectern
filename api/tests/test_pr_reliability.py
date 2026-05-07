@@ -66,7 +66,7 @@ async def test_apply_pr_idempotency(db_session: AsyncSession):
         mock_slug.return_value = "idempotent-mat"
 
         # 2. Apply PR for the first time
-        await apply_pr(db_session, pr, user.id)
+        await apply_pr(db_session, pr)
         await db_session.commit()
 
         # Verify material created
@@ -75,7 +75,7 @@ async def test_apply_pr_idempotency(db_session: AsyncSession):
 
         # 3. Apply PR again (simulating a retry or double-click)
         # It should skip because result_id is now in the payload
-        await apply_pr(db_session, pr, user.id)
+        await apply_pr(db_session, pr)
         await db_session.commit()
 
         # Verify STILL only one material

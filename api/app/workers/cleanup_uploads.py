@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 logger = logging.getLogger("wikint")
 
 
-async def cleanup_uploads(ctx: dict) -> None:
+async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     logger.info("Running upload cleanup cron job")
     from sqlalchemy import select, update
 
@@ -27,7 +27,7 @@ async def cleanup_uploads(ctx: dict) -> None:
 
         from sqlalchemy.engine import CursorResult
 
-        res = cast(CursorResult, await db.execute(expire_stmt))
+        res = cast(CursorResult, await db.execute(expire_stmt))  # type: ignore[type-arg]
         await db.commit()
         if res.rowcount > 0:
             logger.info("Expired %d stale Pull Requests (older than 7 days)", res.rowcount)
@@ -59,7 +59,7 @@ async def cleanup_uploads(ctx: dict) -> None:
             .where(Upload.created_at < pending_cutoff)
             .values(status="failed", error_detail="Upload never completed (timed out)")
         )
-        pending_res = cast(CursorResult, await db.execute(pending_stmt))
+        pending_res = cast(CursorResult, await db.execute(pending_stmt))  # type: ignore[type-arg]
         await db.commit()
         if pending_res.rowcount > 0:
             logger.info("Expired %d stale pending uploads (older than 2h)", pending_res.rowcount)
@@ -71,12 +71,12 @@ async def cleanup_uploads(ctx: dict) -> None:
             select(PullRequest).where(PullRequest.status.in_([PRStatus.OPEN, PRStatus.APPROVED]))
         )
         for pr in result.scalars():
-            payload = cast(list[dict], pr.payload)
+            payload = cast(list[dict], pr.payload)  # type: ignore[type-arg]
             for op in payload:
                 fk = op.get("file_key")
                 if fk:
                     protected_keys.add(fk)
-                attachments = cast(list[dict], op.get("attachments", []))
+                attachments = cast(list[dict], op.get("attachments", []))  # type: ignore[type-arg]
                 for att in attachments:
                     att_fk = att.get("file_key")
                     if att_fk:
@@ -159,8 +159,7 @@ async def cleanup_uploads(ctx: dict) -> None:
         # Collect all active legacy file_keys to prevent deleting valid production data
         result = await db.execute(
             select(MaterialVersion.file_key).where(
-                MaterialVersion.file_key.is_not(None),
-                MaterialVersion.file_key.not_like("cas/%")
+                MaterialVersion.file_key.is_not(None), MaterialVersion.file_key.not_like("cas/%")
             )
         )
         valid_legacy_keys = {row[0] for row in result if row[0]}

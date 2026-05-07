@@ -11,7 +11,9 @@ from tests.test_materials import _auth_headers, _create_directory, _create_user
 
 
 @pytest.mark.asyncio
-async def test_get_material_text_content_implicit_gzip(client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_get_material_text_content_implicit_gzip(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
     """
     Test that text content is correctly decompressed even if the DB
     metadata doesn't explicitly flag it as gzip, but the bytes start with 1f 8b.
@@ -51,16 +53,18 @@ async def test_get_material_text_content_implicit_gzip(client: AsyncClient, db_s
         mock_read.return_value = gzipped_bytes
 
         response = await client.get(
-            f"/api/materials/{material.id}/text-content",
-            headers=_auth_headers(user)
+            f"/api/materials/{material.id}/text-content", headers=_auth_headers(user)
         )
 
         assert response.status_code == 200
         assert response.text == original_text
         assert "text/plain" in response.headers["Content-Type"]
 
+
 @pytest.mark.asyncio
-async def test_get_material_text_content_plain_text(client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_get_material_text_content_plain_text(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
     """Test that normal plain text still works."""
     user = await _create_user(db_session)
     directory = await _create_directory(db_session, user)
@@ -93,8 +97,7 @@ async def test_get_material_text_content_plain_text(client: AsyncClient, db_sess
         mock_read.return_value = original_text.encode("utf-8")
 
         response = await client.get(
-            f"/api/materials/{material.id}/text-content",
-            headers=_auth_headers(user)
+            f"/api/materials/{material.id}/text-content", headers=_auth_headers(user)
         )
 
         assert response.status_code == 200

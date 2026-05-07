@@ -68,9 +68,7 @@ async def run_scan_and_strip(
         if owns_scanner:
             await scanner.close()
 
-    upload_scan_duration.labels(mime_category=mime_category).observe(
-        time.monotonic() - scan_start
-    )
+    upload_scan_duration.labels(mime_category=mime_category).observe(time.monotonic() - scan_start)
 
     # Error handling
     if isinstance(scan_res, TimeoutError):

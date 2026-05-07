@@ -45,7 +45,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
       // No token and no hint — clear loading state so navbar renders correctly
       fetchMe();
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);  
 
   useEffect(() => {
     if (isLoading) return;

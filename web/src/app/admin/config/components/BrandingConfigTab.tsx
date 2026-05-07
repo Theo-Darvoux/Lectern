@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Palette, Layout, Loader2, Save } from "lucide-react";
+import { Palette, Layout, Loader2, Save, Search } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,7 @@ interface AuthConfig {
     primary_color: string;
     footer_text: string;
     organization_url: string | null;
+    og_image_url: string | null;
     legal_name: string | null;
     legal_address: string | null;
     legal_siret: string | null;
@@ -49,6 +50,7 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
             primary_color: config.primary_color,
             footer_text: config.footer_text,
             organization_url: config.organization_url,
+            og_image_url: config.og_image_url,
             legal_name: config.legal_name,
             legal_address: config.legal_address,
             legal_siret: config.legal_siret,
@@ -75,6 +77,7 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
             primary_color: config.primary_color,
             footer_text: config.footer_text,
             organization_url: config.organization_url,
+            og_image_url: config.og_image_url,
             legal_name: config.legal_name,
             legal_address: config.legal_address,
             legal_siret: config.legal_siret,
@@ -188,6 +191,32 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
                                 }}
                             />
                         </div>
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                        <Search className="h-5 w-5 text-primary" />
+                        {t("seo.title")}
+                    </CardTitle>
+                    <CardDescription>
+                        {t("seo.description")}
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                    <div className="space-y-2">
+                        <Label htmlFor="og_image_url">{t("seo.ogImageUrl")}</Label>
+                        <Input
+                            id="og_image_url"
+                            placeholder={t("seo.placeholders.ogImageUrl")}
+                            value={brandingForm.og_image_url || ""}
+                            onChange={(e) => {
+                                setBrandingForm(prev => ({ ...prev, og_image_url: e.target.value }));
+                                setIsBrandingModified(true);
+                            }}
+                        />
                     </div>
                 </CardContent>
             </Card>

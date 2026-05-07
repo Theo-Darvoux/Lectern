@@ -42,7 +42,7 @@ async def delete_pr_comment(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> dict:
+) -> dict:  # type: ignore[type-arg]
     comment = await db.scalar(select(PRComment).where(PRComment.id == id))
     if not comment:
         raise NotFoundError("PR comment not found")

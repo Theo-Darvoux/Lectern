@@ -10,7 +10,7 @@ logger = logging.getLogger("wikint")
 ROLLOVER_MAP = {"1A": "2A", "2A": "3A+", "3A+": "3A+"}
 
 
-async def year_rollover(ctx: dict) -> None:
+async def year_rollover(ctx: dict) -> None:  # type: ignore[type-arg]
     engine = create_async_engine(settings.database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as db:

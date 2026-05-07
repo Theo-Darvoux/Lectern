@@ -46,7 +46,9 @@ class UserUpdateIn(BaseModel):
             or v.startswith("materials/")
             or v.startswith("quarantine/")
         ):
-            raise ValueError("avatar_url must be an https:// URL or a storage key (cas/, materials/, or quarantine/)")
+            raise ValueError(
+                "avatar_url must be an https:// URL or a storage key (cas/, materials/, or quarantine/)"
+            )
         return v
 
 

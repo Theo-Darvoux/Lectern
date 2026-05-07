@@ -24,9 +24,11 @@ async def test_user(db_session: AsyncSession) -> User:
     await db_session.flush()
     return user
 
+
 def auth_headers(user: User) -> dict[str, str]:
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
+
 
 @pytest.mark.asyncio
 async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession, test_user: User):
@@ -39,19 +41,21 @@ async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession,
         filename="avatar.png",
         status="clean",
         mime_type="image/png",
-        size_bytes=1024
+        size_bytes=1024,
     )
     db_session.add(upload)
     await db_session.commit()
 
     # 2. Mock storage and processing
-    with patch("app.services.user.download_file", new_callable=AsyncMock) as mock_download, \
-         patch("app.services.user.upload_file", new_callable=AsyncMock) as mock_upload, \
-         patch("app.services.user.delete_object", new_callable=AsyncMock) as mock_delete, \
-         patch("app.services.user.process_avatar") as mock_process:
-
+    with (
+        patch("app.services.user.download_file", new_callable=AsyncMock) as mock_download,
+        patch("app.services.user.upload_file", new_callable=AsyncMock) as mock_upload,
+        patch("app.services.user.delete_object", new_callable=AsyncMock) as mock_delete,
+        patch("app.services.user.process_avatar") as mock_process,
+    ):
         # Create a real dummy file to be "processed"
         import tempfile
+
         with tempfile.NamedTemporaryFile(suffix=".webp", delete=False) as tf:
             tf.write(b"dummy webp content")
             dummy_processed_path = Path(tf.name)
@@ -63,7 +67,7 @@ async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession,
             response = await client.patch(
                 "/api/users/me",
                 json={"avatar_url": quarantine_key},
-                headers=auth_headers(test_user)
+                headers=auth_headers(test_user),
             )
         finally:
             if dummy_processed_path.exists():
@@ -81,8 +85,11 @@ async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession,
     # Should delete the quarantine file
     mock_delete.assert_any_call(quarantine_key)
 
+
 @pytest.mark.asyncio
-async def test_avatar_upload_unauthorized(client: AsyncClient, db_session: AsyncSession, test_user: User):
+async def test_avatar_upload_unauthorized(
+    client: AsyncClient, db_session: AsyncSession, test_user: User
+):
     # 1. Create an upload belonging to ANOTHER user
     other_user_id = uuid.uuid4()
     quarantine_key = f"quarantine/{other_user_id}/{uuid.uuid4()}/avatar.png"
@@ -93,16 +100,14 @@ async def test_avatar_upload_unauthorized(client: AsyncClient, db_session: Async
         filename="avatar.png",
         status="clean",
         mime_type="image/png",
-        size_bytes=1024
+        size_bytes=1024,
     )
     db_session.add(upload)
     await db_session.commit()
 
     # 2. Try to use this key for test_user
     response = await client.patch(
-        "/api/users/me",
-        json={"avatar_url": quarantine_key},
-        headers=auth_headers(test_user)
+        "/api/users/me", json={"avatar_url": quarantine_key}, headers=auth_headers(test_user)
     )
 
     # 3. Assertions

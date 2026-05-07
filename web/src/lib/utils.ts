@@ -6,6 +6,14 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * Determines if a target (material or directory) is restricted based on its ID 
+ * (starts with '$' for drafts) or if it's currently being previewed in a Pull Request.
+ */
+export function isRestrictedTarget(id: string | null | undefined, previewPr?: string | null): boolean {
+  return (id?.startsWith("$") ?? false) || !!previewPr;
+}
+
+/**
  * Strip characters not allowed in name/title fields.
  * Keeps printable ASCII plus precomposed Latin accented characters
  * (U+00C0–U+017F) used in French and other Western European languages.

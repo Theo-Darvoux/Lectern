@@ -92,6 +92,7 @@ async def test_create_flag_duplicate(client: AsyncClient, db_session: AsyncSessi
         "reason": "spam",
     }
     await client.post("/api/flags", json=payload, headers=_auth_headers(user))
+    await db_session.commit()
     res = await client.post("/api/flags", json=payload, headers=_auth_headers(user))
     assert res.status_code == 400
 
@@ -170,6 +171,7 @@ async def test_list_flags_with_filters(client: AsyncClient, db_session: AsyncSes
         json={"target_type": "comment", "target_id": str(comment.id), "reason": "spam"},
         headers=_auth_headers(mod),
     )
+    await db_session.commit()
 
     res = await client.get("/api/flags?status=open", headers=_auth_headers(mod))
     assert res.status_code == 200
@@ -263,6 +265,7 @@ async def test_soft_delete_user(client: AsyncClient, db_session: AsyncSession) -
 
     res = await client.delete("/api/users/me", headers=_auth_headers(user))
     assert res.status_code == 204
+    await db_session.commit()
 
     res = await client.get("/api/users/me", headers=_auth_headers(user))
     assert res.status_code == 401

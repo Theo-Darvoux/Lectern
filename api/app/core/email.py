@@ -1,3 +1,4 @@
+import contextlib
 import re
 import textwrap
 from email.message import EmailMessage
@@ -25,13 +26,15 @@ async def send_email(
     config: AuthConfig | None = None,
 ) -> None:
     # Use config from DB if provided, fallback to settings from .env
-    host = (config.smtp_host if config and config.smtp_host else settings.smtp_host)
-    ip = (config.smtp_ip if config and config.smtp_ip else settings.smtp_ip)
-    port = (config.smtp_port if config and config.smtp_port else settings.smtp_port)
-    user = (config.smtp_user if config and config.smtp_user else settings.smtp_user)
-    password = (config.smtp_password if config and config.smtp_password else settings.smtp_password)
-    from_email = (config.smtp_from if config and config.smtp_from else settings.smtp_from)
-    use_tls = (config.smtp_use_tls if config and config.smtp_use_tls is not None else settings.smtp_use_tls)
+    host = config.smtp_host if config and config.smtp_host else settings.smtp_host
+    ip = config.smtp_ip if config and config.smtp_ip else settings.smtp_ip
+    port = config.smtp_port if config and config.smtp_port else settings.smtp_port
+    user = config.smtp_user if config and config.smtp_user else settings.smtp_user
+    password = config.smtp_password if config and config.smtp_password else settings.smtp_password
+    from_email = config.smtp_from if config and config.smtp_from else settings.smtp_from
+    use_tls = (
+        config.smtp_use_tls if config and config.smtp_use_tls is not None else settings.smtp_use_tls
+    )
 
     # Ensure HTML body is wrapped in <html> tags (SpamAssassin HTML_MIME_NO_HTML_TAG)
     html_body = body.strip()
@@ -94,7 +97,5 @@ async def send_email(
 
         await smtp.send_message(message)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await smtp.quit()
-        except Exception:
-            pass

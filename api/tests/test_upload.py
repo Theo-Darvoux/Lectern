@@ -79,14 +79,10 @@ async def test_upload_extension_not_allowed(client: AsyncClient, db_session: Asy
     assert "not supported" in response.json()["detail"]
 
 
-
 @pytest.mark.asyncio
 @patch("app.routers.upload.direct.get_s3_client")
 async def test_upload_too_large(
-    mock_s3_client,
-    client: AsyncClient,
-    db_session: AsyncSession,
-    mock_redis: AsyncMock
+    mock_s3_client, client: AsyncClient, db_session: AsyncSession, mock_redis: AsyncMock
 ) -> None:
     # Setup S3 mock
     mock_s3 = AsyncMock()
@@ -96,6 +92,7 @@ async def test_upload_too_large(
 
     # 1. Seed dynamic config with a 0 MiB limit for documents (PDFs)
     from app.models.auth_config import AuthConfig
+
     config = AuthConfig(max_document_size_mb=0)
     db_session.add(config)
     await db_session.commit()

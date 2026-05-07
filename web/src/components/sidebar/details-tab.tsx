@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   Folder,
   FileText,
@@ -31,6 +31,7 @@ import { ExpandableText } from "@/components/ui/expandable-text";
 import { useUIStore, useBrowseRefreshStore } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
+import { isRestrictedTarget } from "@/lib/utils";
 
 /* -------------------------------------------------------------------------- */
 /*  Reusable primitives for a card-sectioned sidebar                          */
@@ -283,7 +284,7 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
   const likeCount = Number(data.like_count ?? 0);
   const isFavourited = Boolean(data.is_favourited);
   const searchParams = useSearchParams();
-  const isRestricted = (String(data.id ?? "").startsWith("$")) || !!searchParams.get("preview_pr");
+  const isRestricted = isRestrictedTarget(String(data.id ?? ""), searchParams.get("preview_pr"));
 
   return (
     <div className="space-y-3">
@@ -391,24 +392,46 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
 /*  Material details                                                           */
 /* -------------------------------------------------------------------------- */
 
+// Module-level cache keyed by authorId so repeated sidebar opens don't
+// re-fetch the same user. In-flight requests are deduplicated.
+const authorNameCache = new Map<string, string>();
+const authorNameInflight = new Map<string, Promise<string>>();
+
 function AuthorName({ authorId }: { authorId: string | null }) {
   const t = useTranslations("Sidebar");
-  const [name, setName] = useState<string | null>(null);
+  const [name, setName] = useState<string | null>(
+    authorId ? (authorNameCache.get(authorId) ?? null) : null,
+  );
 
   useEffect(() => {
     if (!authorId) return;
+    const cached = authorNameCache.get(authorId);
+    if (cached !== undefined) {
+      if (name !== cached) {
+        setName(cached);
+      }
+      return;
+    }
     let active = true;
-    apiFetch<{ display_name: string | null }>(`/users/${authorId}`)
-      .then((u) => {
-        if (active) setName(u.display_name ?? t("unknown"));
-      })
-      .catch(() => {
-        if (active) setName(t("unknown"));
-      });
+    let promise = authorNameInflight.get(authorId);
+    if (!promise) {
+      promise = apiFetch<{ display_name: string | null }>(`/users/${authorId}`)
+        .then((u) => u.display_name ?? t("unknown"))
+        .catch(() => t("unknown"))
+        .then((resolved) => {
+          authorNameCache.set(authorId, resolved);
+          authorNameInflight.delete(authorId);
+          return resolved;
+        });
+      authorNameInflight.set(authorId, promise);
+    }
+    promise.then((resolved) => {
+      if (active) setName(resolved);
+    });
     return () => {
       active = false;
     };
-  }, [authorId]);
+  }, [authorId, t]);
 
   if (!authorId) return <span>{t("deletedUser")}</span>;
   if (!name)
@@ -455,7 +478,8 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const likeCount = Number(data.like_count ?? 0);
   const isFavourited = Boolean(data.is_favourited);
   const searchParams = useSearchParams();
-  const isRestricted = (String(data.id ?? "").startsWith("$")) || !!searchParams.get("preview_pr");
+  const pathname = usePathname();
+  const isRestricted = isRestrictedTarget(String(data.id ?? ""), searchParams.get("preview_pr"));
 
   return (
     <div className="space-y-3">
@@ -556,7 +580,7 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
       {/* Attachments card */}
       {!parentMaterialId && (
         <Link
-          href={`${typeof window !== "undefined" ? window.location.pathname : ""}/attachments`}
+          href={`${(data.__path as string) || pathname}/attachments`}
           className="group flex items-center gap-3 rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-3 transition-colors hover:bg-violet-100/70 dark:border-violet-800/50 dark:bg-violet-950/20 dark:hover:bg-violet-950/40"
         >
           <div className="flex h-9 w-9 items-center justify-center rounded-md bg-violet-100 text-violet-600 dark:bg-violet-900/50 dark:text-violet-400">

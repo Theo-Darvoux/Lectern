@@ -29,7 +29,7 @@ def _build_material_doc(
     material: Material,
     ancestor_path: str,
     browse_path: str,
-) -> dict:
+) -> dict:  # type: ignore[type-arg]
     file_name = None
     file_mime_type = None
     for v in material.versions:
@@ -49,7 +49,7 @@ def _build_material_doc(
         "tags": [t.name for t in material.tags] if material.tags else [],
         "authorName": material.author.display_name if material.author else None,
         "directory_id": str(material.directory_id) if material.directory_id else None,
-        "created_at": material.created_at.isoformat() if material.created_at is not None else None,
+        "created_at": material.created_at.isoformat() if material.created_at is not None else None,  # type: ignore[redundant-expr]
         "ancestor_path": ancestor_path,
         "extra_searchable": extra,
         "browse_path": browse_path,
@@ -65,10 +65,10 @@ def _build_directory_doc(
     directory: Directory,
     ancestor_path: str,
     browse_path: str,
-) -> dict:
+) -> dict:  # type: ignore[type-arg]
     metadata = directory.metadata_ or {}
     code = metadata.get("code") or ""
-    extra = f"{split_identifiers(directory.name)} {split_identifiers(code)}"
+    extra = f"{split_identifiers(directory.name)} {split_identifiers(code)}"  # type: ignore[arg-type]
 
     return {
         "id": str(directory.id),
@@ -79,7 +79,9 @@ def _build_directory_doc(
         "tags": [t.name for t in directory.tags] if directory.tags else [],
         "code": code,
         "parent_id": str(directory.parent_id) if directory.parent_id else None,
-        "created_at": directory.created_at.isoformat() if directory.created_at is not None else None,
+        "created_at": directory.created_at.isoformat()
+        if directory.created_at is not None  # type: ignore[redundant-expr]
+        else None,
         "ancestor_path": ancestor_path,
         "extra_searchable": extra,
         "browse_path": browse_path,
@@ -87,7 +89,7 @@ def _build_directory_doc(
     }
 
 
-async def index_material(ctx: dict, material_id: uuid.UUID) -> None:
+async def index_material(ctx: dict, material_id: uuid.UUID) -> None:  # type: ignore[type-arg]
     """Index or update a single material in Meilisearch."""
     async with db_core.async_session_factory() as db:
         result = await db.execute(
@@ -120,7 +122,7 @@ async def index_material(ctx: dict, material_id: uuid.UUID) -> None:
         logger.info(f"Indexed material {material_id}")
 
 
-async def index_materials_batch(ctx: dict, material_ids: list[uuid.UUID]) -> None:
+async def index_materials_batch(ctx: dict, material_ids: list[uuid.UUID]) -> None:  # type: ignore[type-arg]
     """Index multiple materials in a single Meilisearch add_documents call."""
     if not material_ids:
         return
@@ -160,7 +162,7 @@ async def index_materials_batch(ctx: dict, material_ids: list[uuid.UUID]) -> Non
             logger.info(f"Batch-indexed {len(docs)} materials")
 
 
-async def index_directory(ctx: dict, directory_id: uuid.UUID) -> None:
+async def index_directory(ctx: dict, directory_id: uuid.UUID) -> None:  # type: ignore[type-arg]
     """Index or update a single directory in Meilisearch."""
     async with db_core.async_session_factory() as db:
         result = await db.execute(
@@ -189,7 +191,7 @@ async def index_directory(ctx: dict, directory_id: uuid.UUID) -> None:
         logger.info(f"Indexed directory {directory_id}")
 
 
-async def index_directories_batch(ctx: dict, directory_ids: list[uuid.UUID]) -> None:
+async def index_directories_batch(ctx: dict, directory_ids: list[uuid.UUID]) -> None:  # type: ignore[type-arg]
     """Index multiple directories in a single Meilisearch add_documents call."""
     if not directory_ids:
         return
@@ -226,7 +228,7 @@ async def index_directories_batch(ctx: dict, directory_ids: list[uuid.UUID]) -> 
             logger.info(f"Batch-indexed {len(docs)} directories")
 
 
-async def delete_indexed_item(ctx: dict, index_name: str, item_id: str) -> None:
+async def delete_indexed_item(ctx: dict, index_name: str, item_id: str) -> None:  # type: ignore[type-arg]
     """Delete an item from a specified Meilisearch index."""
     try:
         await meili_admin_client.index(index_name).delete_document(item_id)

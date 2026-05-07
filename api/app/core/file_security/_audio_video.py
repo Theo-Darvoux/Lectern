@@ -44,7 +44,7 @@ _AUDIO_FILENAME_HINTS: dict[str, str] = {
 }
 
 
-def _build_video_codec_args(suffix: str, config: dict | None = None) -> list[str]:
+def _build_video_codec_args(suffix: str, config: dict | None = None) -> list[str]:  # type: ignore[type-arg]
     """Return ffmpeg codec arguments for the given video container suffix based on compression profile."""
     from app.config import settings
 
@@ -280,7 +280,7 @@ def _strip_audio_from_path(file_path: Path, mime_type: str) -> Path:
 
     hint = _AUDIO_FILENAME_HINTS.get(mime_type, "audio.mp3")
     # mutagen.File is used dynamically here to avoid export issues with mypy
-    audio = getattr(mutagen, "File")(str(new_path), filename=hint)
+    audio = mutagen.File(str(new_path), filename=hint)  # type: ignore[attr-defined]
     if audio is None or audio.tags is None:
         new_path.unlink(missing_ok=True)
         return file_path
@@ -290,7 +290,7 @@ def _strip_audio_from_path(file_path: Path, mime_type: str) -> Path:
     return new_path
 
 
-async def _compress_video_path(file_path: Path, suffix: str, config: dict | None = None) -> Path:
+async def _compress_video_path(file_path: Path, suffix: str, config: dict | None = None) -> Path:  # type: ignore[type-arg]
     from app.config import settings
 
     cfg_profile = config.get("video_compression_profile") if config else None
@@ -306,7 +306,14 @@ async def _compress_video_path(file_path: Path, suffix: str, config: dict | None
         async with _get_concurrency_guard("subprocess"):
             result = await asyncio.to_thread(
                 sandboxed_run,
-                ["ffmpeg", "-y", "-i", str(file_path), *_build_video_codec_args(suffix, config=config), out_name],
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(file_path),
+                    *_build_video_codec_args(suffix, config=config),
+                    out_name,
+                ],
                 rw_paths=[Path(out_name).parent, file_path.parent],
                 timeout=1200,
             )

@@ -1,3 +1,4 @@
+import contextlib
 import re
 import uuid
 
@@ -21,7 +22,7 @@ async def perform_search(
     current_user_id: uuid.UUID | None = None,
     directory_id: uuid.UUID | None = None,
     type_filter: str | None = None,
-) -> dict:
+) -> dict:  # type: ignore[type-arg]
     if not query.strip():
         return {"items": [], "total": 0, "page": page, "limit": limit}
 
@@ -46,33 +47,29 @@ async def perform_search(
         q=query,
         offset=offset,
         limit=limit,
-        filter=material_filters or None,
+        filter=material_filters or None,  # type: ignore[arg-type]
     )
     dir_params = SearchParams(
         index_uid="directories",
         q=query,
         offset=offset,
         limit=limit,
-        filter=directory_filters or None,
+        filter=directory_filters or None,  # type: ignore[arg-type]
     )
 
     results = await meili_search_client.multi_search([mat_params, dir_params])
-    materials_res = results[0]
-    directories_res = results[1]
+    materials_res = results[0]  # type: ignore[index]
+    directories_res = results[1]  # type: ignore[index]
 
     # Scope like lookups to only the hits returned — avoids loading full like history.
     hit_material_ids: set[uuid.UUID] = set()
     hit_directory_ids: set[uuid.UUID] = set()
     for hit in materials_res.hits:
-        try:
+        with contextlib.suppress(KeyError, ValueError):
             hit_material_ids.add(uuid.UUID(hit["id"]))
-        except (KeyError, ValueError):
-            pass
     for hit in directories_res.hits:
-        try:
+        with contextlib.suppress(KeyError, ValueError):
             hit_directory_ids.add(uuid.UUID(hit["id"]))
-        except (KeyError, ValueError):
-            pass
 
     liked_material_ids: set[uuid.UUID] = set()
     liked_directory_ids: set[uuid.UUID] = set()
@@ -115,9 +112,7 @@ async def perform_search(
                 hit["is_liked"] = False
         items.append(hit)
 
-    total = (
-        (materials_res.estimated_total_hits or 0) + (directories_res.estimated_total_hits or 0)
-    )
+    total = (materials_res.estimated_total_hits or 0) + (directories_res.estimated_total_hits or 0)
 
     return {
         "items": items,

@@ -67,6 +67,7 @@ interface AuthConfig {
     primary_color: string;
     footer_text: string;
     organization_url: string | null;
+    og_image_url: string | null;
     legal_name: string | null;
     legal_address: string | null;
     legal_siret: string | null;

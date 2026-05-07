@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Edit2, Send } from "lucide-react";
 import { FlagButton } from "@/components/flags/flag-button";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
@@ -176,6 +176,17 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    if (comments.length > 0 && !loading) {
+      scrollToBottom();
+    }
+  }, [comments, loading]);
 
   const fetchComments = useCallback(
     async () => {
@@ -358,6 +369,7 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
               />
             ),
           )}
+          <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
 

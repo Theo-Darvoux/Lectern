@@ -42,7 +42,12 @@ def test_clean_html_passes(tmp_path):
 
 def test_opendocument_passes(tmp_path):
     """An OpenDocument file (e.g. ODS, ODT) with ZIP magic bytes passes."""
-    data = b"PK\x03\x04" + b"\x00" * 50 + b"mimetypeapplication/vnd.oasis.opendocument.spreadsheet" + b"\x00" * 22
+    data = (
+        b"PK\x03\x04"
+        + b"\x00" * 50
+        + b"mimetypeapplication/vnd.oasis.opendocument.spreadsheet"
+        + b"\x00" * 22
+    )
     p = _write(tmp_path, "sheet.ods", data)
     check_polyglot(p, "application/vnd.oasis.opendocument.spreadsheet")  # must not raise
 

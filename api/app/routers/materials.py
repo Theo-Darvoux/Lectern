@@ -127,9 +127,9 @@ async def inline_material(
     # to download so the browser never executes or parses unknown content.
     file_mime = version.get("file_mime_type") or ""
     inline_safe = (
-        file_mime.startswith("image/") or
-        file_mime.startswith("video/") or
-        file_mime == "application/pdf"
+        file_mime.startswith("image/")
+        or file_mime.startswith("video/")
+        or file_mime == "application/pdf"
     )
     url = await generate_presigned_get_url(
         version["file_key"],
@@ -176,13 +176,11 @@ async def thumbnail_material(
     #    because the browser cannot render them in an <img> / <video> thumbnail.
     if not target_key:
         file_mime = version.get("file_mime_type") or ""
-        if file_mime.startswith("image/"):
-            target_key = version["file_key"]
-            content_type = file_mime
-        elif file_mime.startswith("video/"):
-            target_key = version["file_key"]
-            content_type = file_mime
-        elif file_mime == "application/pdf":
+        if (
+            file_mime.startswith("image/")
+            or file_mime.startswith("video/")
+            or file_mime == "application/pdf"
+        ):
             target_key = version["file_key"]
             content_type = file_mime
         else:
@@ -458,13 +456,10 @@ async def save_material_text_content(
         raise NotFoundError("No version found for this material")
 
     current_mime = (version.get("file_mime_type") or "").lower()
-    current_name = (version.get("file_name") or "")
+    current_name = version.get("file_name") or ""
 
     # Strip any previous .gz suffix to derive the "logical" original name
-    if current_name.endswith(".gz"):
-        logical_name = current_name[:-3]
-    else:
-        logical_name = current_name
+    logical_name = current_name[:-3] if current_name.endswith(".gz") else current_name
 
     is_gzip_wrapped = current_mime == "application/gzip" or current_name.endswith(".gz")
 
@@ -498,13 +493,15 @@ async def save_material_text_content(
     except Exception:
         old_text = ""
 
-    diff_lines = list(difflib.unified_diff(
-        old_text.splitlines(),
-        body.splitlines(),
-        fromfile=current_name,
-        tofile=logical_name,
-        lineterm=""
-    ))
+    diff_lines = list(
+        difflib.unified_diff(
+            old_text.splitlines(),
+            body.splitlines(),
+            fromfile=current_name,
+            tofile=logical_name,
+            lineterm="",
+        )
+    )
     diff_text = "```diff\n" + "\n".join(diff_lines) + "\n```" if diff_lines else ""
 
     # Encode without compression

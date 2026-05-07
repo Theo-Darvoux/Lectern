@@ -63,9 +63,7 @@ class PullRequest(UUIDMixin, TimestampMixin, Base):
         server_default="pending",
     )
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    approved_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reverts_pr_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pull_requests.id", ondelete="SET NULL"), nullable=True
     )
@@ -95,6 +93,7 @@ class PullRequest(UUIDMixin, TimestampMixin, Base):
         if self.status != PRStatus.OPEN:
             return None
         from datetime import timedelta
+
         return self.updated_at + timedelta(days=settings.pr_expiry_days)
 
     @property
@@ -102,6 +101,7 @@ class PullRequest(UUIDMixin, TimestampMixin, Base):
         if self.status != PRStatus.APPROVED or self.approved_at is None:
             return None
         from datetime import timedelta
+
         approved_at = self.approved_at
         if approved_at.tzinfo is None:
             approved_at = approved_at.replace(tzinfo=UTC)

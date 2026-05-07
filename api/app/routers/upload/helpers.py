@@ -23,7 +23,11 @@ async def _check_storage_limit(size_bytes: int, config: dict[str, Any]) -> None:
     from app.core.cas import _STORAGE_USAGE_KEY
     from app.models.material import MaterialVersion
 
-    max_gb = config.get("max_storage_gb") if config.get("max_storage_gb") is not None else settings.max_storage_gb
+    max_gb = (
+        config.get("max_storage_gb")
+        if config.get("max_storage_gb") is not None
+        else settings.max_storage_gb
+    )
     if not max_gb:
         return
 
@@ -41,25 +45,37 @@ async def _check_storage_limit(size_bytes: int, config: dict[str, Any]) -> None:
                 # We subquery to get the first version of each unique CAS blob
                 # and sum their sizes.
                 subq = select(func.min(MaterialVersion.id)).group_by(MaterialVersion.cas_sha256)
-                usage = await session.scalar(
-                    select(func.sum(MaterialVersion.file_size))
-                    .where(MaterialVersion.id.in_(subq))
-                ) or 0
+                usage = (
+                    await session.scalar(
+                        select(func.sum(MaterialVersion.file_size)).where(
+                            MaterialVersion.id.in_(subq)
+                        )
+                    )
+                    or 0
+                )
 
             # Cache the result for 1 hour
             await redis.set(_STORAGE_USAGE_KEY, usage, ex=3600)
     except Exception as exc:
-        logger.warning("Failed to get/set storage usage from Redis: %s. Falling back to logical sum.", exc)
+        logger.warning(
+            "Failed to get/set storage usage from Redis: %s. Falling back to logical sum.", exc
+        )
         # Deep fallback to logical sum if everything else fails
         async with async_session_factory() as session:
             usage = await session.scalar(select(func.sum(MaterialVersion.file_size))) or 0
 
     if usage + size_bytes > max_bytes:
-        logger.warning("Storage limit reached: %d bytes usage + %d bytes upload > %d bytes limit", usage, size_bytes, max_bytes)
+        logger.warning(
+            "Storage limit reached: %d bytes usage + %d bytes upload > %d bytes limit",
+            usage,
+            size_bytes,
+            max_bytes,
+        )
         raise BadRequestError(
             f"Global storage limit reached ({max_gb} GB). Please contact an administrator.",
-            code=ERR_STORAGE_FULL
+            code=ERR_STORAGE_FULL,
         )
+
 
 MAX_PENDING_UPLOADS = 50
 LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MiB
@@ -105,7 +121,7 @@ async def _create_upload_row(
 
 async def _check_pending_cap(
     user_id: str,
-    redis: "Redis",
+    redis: "Redis",  # type: ignore[type-arg]
     *,
     privileged: bool = False,
     reserve_key: str | None = None,

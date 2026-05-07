@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import time
 from dataclasses import dataclass
@@ -83,10 +84,8 @@ async def run_finalize_storage(
                 timeout=30.0,
             )
             # Cleanup thumbnail temp file
-            try:
+            with contextlib.suppress(Exception):
                 Path(input_data.thumbnail_path).unlink(missing_ok=True)
-            except Exception:
-                pass
 
     final_size = input_data.pf.size
 
@@ -112,9 +111,7 @@ async def run_finalize_storage(
     # Quota tracking: use a synthetic staging key (no S3 object) so quota
     # cleanup doesn't interfere with shared CAS objects.
     staging_quota_key = f"staging:{input_data.user_id}:{input_data.upload_id}"
-    await redis_client.zadd(
-        f"quota:uploads:{input_data.user_id}", {staging_quota_key: time.time()}
-    )
+    await redis_client.zadd(f"quota:uploads:{input_data.user_id}", {staging_quota_key: time.time()})
 
     return FinalizeResult(
         final_key=cas_s3_key,

@@ -30,8 +30,6 @@ _PDF_DANGEROUS_ACTION_KEYS = frozenset(
         "/OpenAction",
         "/AA",
         "/Launch",
-        "/GoToR",
-        "/URI",
         "/SubmitForm",
         "/ImportData",
     }
@@ -41,11 +39,11 @@ _PDF_DANGEROUS_ACTION_KEYS = frozenset(
 # Explicit DPI values override the profile defaults and give fine-grained control.
 # At quality=75 (default) we target 96 dpi — matching ilovepdf "recommended" output.
 _GS_QUALITY_TIERS: list[tuple[int, str, int, int, int]] = [
-    # (min_quality, profile,      colour_dpi, gray_dpi, mono_dpi)
+    # (min_quality, profile,      colour_dpi, gray_dpi, mono_dpi)  # noqa: ERA001
     (95, "/prepress", 300, 300, 1200),
-    (85, "/printer",  200, 200,  600),
-    (70, "/ebook",     96,  96,  300),
-    (0,  "/screen",    72,  72,  300),
+    (85, "/printer", 200, 200, 600),
+    (70, "/ebook", 96, 96, 300),
+    (0, "/screen", 72, 72, 300),
 ]
 
 
@@ -53,7 +51,7 @@ def _walk_page_tree_for_actions(page_node: pikepdf.Dictionary, depth: int = 0) -
     """Recursively walk the PDF page tree checking for dangerous actions."""
     if depth > 50:
         return  # Guard against circular references
-    for key in ("/AA", "/Launch", "/GoToR", "/URI", "/SubmitForm", "/ImportData"):
+    for key in ("/AA", "/Launch", "/SubmitForm", "/ImportData"):
         if pikepdf.Name(key) in page_node:
             raise ValueError(f"PDF page contains dangerous action: {key}")
     if pikepdf.Name("/Kids") in page_node:
@@ -92,7 +90,9 @@ def check_pdf_safety(file_path: Path) -> None:
         raise
     except Exception as exc:
         logger.warning("PDF structure malformed, failing closed: %s", exc)
-        raise ValueError("File appears malformed or corrupted and cannot be validated for safety.")
+        raise ValueError(
+            "File appears malformed or corrupted and cannot be validated for safety."
+        ) from exc
 
 
 def _apply_pdf_security_strip(pdf: pikepdf.Pdf) -> None:
@@ -114,6 +114,8 @@ def _apply_pdf_security_strip(pdf: pikepdf.Pdf) -> None:
         names = catalog["/Names"]
         if "/EmbeddedFiles" in names:
             del names["/EmbeddedFiles"]
+        if "/JavaScript" in names:
+            del names["/JavaScript"]
     for page in pdf.pages:
         if "/AA" in page:
             del page["/AA"]  # type: ignore[operator]  # pikepdf stubs
@@ -154,7 +156,10 @@ async def _compress_pdf_ghostscript(file_path: Path, quality: int) -> Path:
     try:
         proc = await asyncio.create_subprocess_exec(
             "gs",
-            "-dBATCH", "-dNOPAUSE", "-dQUIET", "-dSAFER",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dSAFER",
             "-sDEVICE=pdfwrite",
             "-dCompatibilityLevel=1.4",
             f"-dPDFSETTINGS={profile}",
@@ -321,7 +326,7 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
     return Path(out_name).stat().st_size < file_path.stat().st_size
 
 
-async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Path:
+async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Path:  # type: ignore[type-arg]
     """Two-stage PDF compression: Ghostscript font subsetting, then pikepdf stream packing.
 
     Stage 1 — Ghostscript:

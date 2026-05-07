@@ -18,9 +18,9 @@ security = HTTPBearer(auto_error=False)
 
 
 async def _validate_access_payload(
-    payload: dict,
+    payload: dict,  # type: ignore[type-arg]
     db: AsyncSession,
-    redis: Redis,
+    redis: Redis,  # type: ignore[type-arg]
 ) -> User:
     if payload.get("type") != "access":
         raise UnauthorizedError("Invalid token type")
@@ -43,7 +43,7 @@ async def _validate_access_payload(
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> User:
     if not credentials:
         raise UnauthorizedError()
@@ -64,7 +64,7 @@ async def get_current_user(
 async def get_optional_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> User | None:
     if not credentials:
         return None
@@ -78,7 +78,7 @@ async def get_optional_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-def require_role(*roles: UserRole, message: str = "Insufficient permissions"):
+def require_role(*roles: UserRole, message: str = "Insufficient permissions"):  # type: ignore[no-untyped-def]
     async def check_role(user: CurrentUser) -> User:
         if user.role not in roles:
             raise ForbiddenError(message)
@@ -87,7 +87,7 @@ def require_role(*roles: UserRole, message: str = "Insufficient permissions"):
     return check_role
 
 
-def require_onboarded():
+def require_onboarded():  # type: ignore[no-untyped-def]
     async def check_onboarded(user: CurrentUser) -> User:
         if not user.onboarded:
             raise ForbiddenError("Onboarding required")
@@ -96,7 +96,7 @@ def require_onboarded():
     return check_onboarded
 
 
-def require_moderator():
+def require_moderator():  # type: ignore[no-untyped-def]
     return require_role(UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX)
 
 
@@ -105,7 +105,7 @@ OnboardedUser = Annotated[User, Depends(require_onboarded())]
 
 async def get_user_from_token(
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     token: Annotated[str | None, Query()] = None,
 ) -> User:
     """Authenticate via query-param JWT (useful when headers can't be set)."""
@@ -122,7 +122,7 @@ async def get_user_from_token(
 
 async def get_sse_user(
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     token: Annotated[str | None, Query()] = None,
 ) -> User:
     """Authenticate via query-param JWT (EventSource cannot send headers)."""

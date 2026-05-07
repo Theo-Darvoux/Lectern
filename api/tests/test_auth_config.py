@@ -1,4 +1,5 @@
 """Tests for Phase 2: DB-backed auth config and Phase 3: PENDING approval flow."""
+
 from __future__ import annotations
 
 import uuid
@@ -43,6 +44,7 @@ async def _seed_config(db: AsyncSession, **kwargs) -> AuthConfig:
 
 def _auth(user: User) -> dict[str, str]:
     from app.core.security import create_access_token
+
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
 
@@ -50,9 +52,7 @@ def _auth(user: User) -> dict[str, str]:
 # ── auth-config GET/PATCH ─────────────────────────────────────────────────────
 
 
-async def test_get_auth_config_defaults(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_get_auth_config_defaults(client: AsyncClient, db_session: AsyncSession) -> None:
     """Empty DB → fallback defaults returned."""
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.get("/api/admin/auth-config", headers=_auth(admin))
@@ -64,9 +64,7 @@ async def test_get_auth_config_defaults(
     assert isinstance(data["domains"], list)
 
 
-async def test_patch_auth_config(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_patch_auth_config(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.patch(
         "/api/admin/auth-config",
@@ -92,18 +90,14 @@ async def test_patch_auth_config_moderator_forbidden(
 # ── allowed domains CRUD ──────────────────────────────────────────────────────
 
 
-async def test_list_domains_empty(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_list_domains_empty(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.get("/api/admin/auth-config/domains", headers=_auth(admin))
     assert r.status_code == 200
     assert r.json() == []
 
 
-async def test_add_domain(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_add_domain(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.post(
         "/api/admin/auth-config/domains",
@@ -117,9 +111,7 @@ async def test_add_domain(
     assert "id" in data
 
 
-async def test_add_domain_strips_at_sign(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_add_domain_strips_at_sign(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.post(
         "/api/admin/auth-config/domains",
@@ -130,9 +122,7 @@ async def test_add_domain_strips_at_sign(
     assert r.json()["domain"] == "example.com"
 
 
-async def test_add_domain_duplicate_conflict(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_add_domain_duplicate_conflict(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     await _seed_domain(db_session, "dupe.edu")
     r = await client.post(
@@ -143,9 +133,7 @@ async def test_add_domain_duplicate_conflict(
     assert r.status_code == 409
 
 
-async def test_update_domain_auto_approve(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_update_domain_auto_approve(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     domain = await _seed_domain(db_session, "school.fr", auto_approve=True)
     r = await client.patch(
@@ -157,9 +145,7 @@ async def test_update_domain_auto_approve(
     assert r.json()["auto_approve"] is False
 
 
-async def test_delete_domain(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_delete_domain(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     domain = await _seed_domain(db_session, "todelete.edu")
     r = await client.delete(
@@ -172,9 +158,7 @@ async def test_delete_domain(
     assert all(d["domain"] != "todelete.edu" for d in r2.json())
 
 
-async def test_delete_domain_not_found(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_delete_domain_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.delete(
         f"/api/admin/auth-config/domains/{uuid.uuid4()}",
@@ -186,9 +170,7 @@ async def test_delete_domain_not_found(
 # ── email domain validation ───────────────────────────────────────────────────
 
 
-async def test_request_code_allowed_domain(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_request_code_allowed_domain(client: AsyncClient, db_session: AsyncSession) -> None:
     """Fallback defaults allow telecom-sudparis.eu."""
     r = await client.post(
         "/api/auth/request-code",
@@ -213,7 +195,9 @@ async def test_request_code_open_registration(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     """With allow_all_domains=True, any email is allowed."""
-    await _seed_config(db_session, allow_all_domains=True, totp_enabled=True, classic_auth_enabled=True)
+    await _seed_config(
+        db_session, allow_all_domains=True, totp_enabled=True, classic_auth_enabled=True
+    )
     r = await client.post(
         "/api/auth/request-code",
         json={"email": "anyone@gmail.com"},
@@ -249,9 +233,7 @@ async def test_request_code_removed_domain_rejected(
 # ── PENDING role & approval flow ──────────────────────────────────────────────
 
 
-async def test_pending_user_blocked(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_pending_user_blocked(client: AsyncClient, db_session: AsyncSession) -> None:
     """PENDING user cannot access protected endpoints."""
     pending = User(
         id=uuid.uuid4(),
@@ -264,6 +246,7 @@ async def test_pending_user_blocked(
     await db_session.flush()
 
     from app.core.security import create_access_token
+
     token, _ = create_access_token(str(pending.id), pending.role.value, pending.email)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -272,9 +255,7 @@ async def test_pending_user_blocked(
     assert r.json().get("error_code") == "USER_PENDING"
 
 
-async def test_approve_pending_user(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_approve_pending_user(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     pending = User(
         id=uuid.uuid4(),
@@ -310,9 +291,7 @@ async def test_approve_non_pending_user_error(
     assert r.status_code == 400
 
 
-async def test_reject_pending_user(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_reject_pending_user(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     pending = User(
         id=uuid.uuid4(),
@@ -334,13 +313,12 @@ async def test_reject_pending_user(
     from sqlalchemy import select
 
     from app.models.user import User as UserModel
+
     remaining = await db_session.scalar(select(UserModel).where(UserModel.id == pending_id))
     assert remaining is None
 
 
-async def test_reject_non_pending_user_error(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_reject_non_pending_user_error(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     mod = await _make_user(db_session, UserRole.MODERATOR)
 

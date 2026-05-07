@@ -21,6 +21,7 @@ _PRUNEABLE_PREFIXES = ("cas/", "thumbnails/")
 router = APIRouter(prefix="/api/admin/storage", tags=["Admin Storage"])
 logger = logging.getLogger("wikint")
 
+
 @router.get("/reconcile")
 async def reconcile_storage(
     _user: AdminUser,
@@ -35,6 +36,7 @@ async def reconcile_storage(
     for cas_sha256, thumbnail_key in result.all():
         if cas_sha256:
             from app.core.cas import hmac_cas_key
+
             cas_id = hmac_cas_key(cas_sha256).split(":")[-1]
             db_cas_ids.add(cas_id)
         if thumbnail_key:
@@ -55,21 +57,19 @@ async def reconcile_storage(
             db_cas_ids.add(final_key.split("/")[-1])
 
     # Protect CAS objects referenced by open PRs (not yet approved)
-    pr_result = await db.execute(
-        select(PullRequest).where(PullRequest.status == PRStatus.OPEN)
-    )
+    pr_result = await db.execute(select(PullRequest).where(PullRequest.status == PRStatus.OPEN))
     for pr in pr_result.scalars():
         for op in pr.payload:
             for fk in [op.get("file_key")] + [
                 att.get("file_key") if isinstance(att, dict) else None
-                for att in (op.get("attachments") or [])
+                for att in (op.get("attachments") or [])  # type: ignore[attr-defined]
             ]:
                 if fk and str(fk).startswith("cas/"):
                     db_cas_ids.add(str(fk).split("/")[-1])
 
     # 2. List all objects in S3
-    s3_cas_ids = {} # cas_id -> size
-    s3_thumbnail_keys = {} # key -> size
+    s3_cas_ids = {}  # cas_id -> size
+    s3_thumbnail_keys = {}  # key -> size
     other_objects = []
 
     total_s3_bytes = 0
@@ -102,7 +102,9 @@ async def reconcile_storage(
     missing_cas = [cid for cid in db_cas_ids if cid not in s3_cas_ids]
     missing_thumbnails = [key for key in db_thumbnail_keys if key not in s3_thumbnail_keys]
 
-    orphan_total_size = sum(o["size"] for o in orphaned_cas) + sum(o["size"] for o in orphaned_thumbnails)
+    orphan_total_size = sum(o["size"] for o in orphaned_cas) + sum(
+        o["size"] for o in orphaned_thumbnails
+    )
 
     return {
         "status": "success",
@@ -116,13 +118,11 @@ async def reconcile_storage(
         "orphans": {
             "cas": orphaned_cas,
             "thumbnails": orphaned_thumbnails,
-            "others": other_objects
+            "others": other_objects,
         },
-        "missing": {
-            "cas": missing_cas,
-            "thumbnails": missing_thumbnails
-        }
+        "missing": {"cas": missing_cas, "thumbnails": missing_thumbnails},
     }
+
 
 @router.post("/prune")
 async def prune_storage(
@@ -158,10 +158,11 @@ async def prune_storage(
     # Trigger a Redis counter re-sync on next check
     from app.core.cas import _STORAGE_USAGE_KEY
     from app.core.redis import redis_client
+
     await redis_client.delete(_STORAGE_USAGE_KEY)
 
     return {
         "status": "success",
         "deleted_count": deleted_count,
-        "message": f"Successfully pruned {deleted_count} objects. Storage counter will be re-synced on next upload."
+        "message": f"Successfully pruned {deleted_count} objects. Storage counter will be re-synced on next upload.",
     }

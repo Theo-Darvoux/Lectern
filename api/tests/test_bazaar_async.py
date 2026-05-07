@@ -16,9 +16,7 @@ Covers:
 
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,9 +27,7 @@ from sqlalchemy import select
 from app.core.cas import hmac_cas_key
 from app.models.material import Material, MaterialVersion
 from app.models.upload import Upload
-from app.schemas.material import UploadStatus
 from app.workers.upload.context import WorkerContext
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -246,7 +242,7 @@ async def test_check_bazaar_idempotent_via_tombstone(
     mock_redis: AsyncMock,
 ) -> None:
     """check_bazaar must skip Bazaar call if tombstone already exists."""
-    from app.workers.check_bazaar import check_bazaar, _BAZAAR_CLEAN_PREFIX
+    from app.workers.check_bazaar import _BAZAAR_CLEAN_PREFIX, check_bazaar
 
     sha256 = "aabbccdd" * 8
     # Pre-seed the tombstone
@@ -305,9 +301,7 @@ async def test_check_bazaar_timeout_fail_closed(
 
     sha256 = "aabbccdd" * 8
     ctx = _make_arq_ctx(mock_redis)
-    ctx["scanner"].check_malwarebazaar = AsyncMock(
-        side_effect=httpx.TimeoutException("timed out")
-    )
+    ctx["scanner"].check_malwarebazaar = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
 
     with (
         patch("app.workers.check_bazaar.settings") as mock_settings,
@@ -329,13 +323,11 @@ async def test_check_bazaar_timeout_fail_open(
     mock_redis: AsyncMock,
 ) -> None:
     """check_bazaar must write skip tombstone and NOT raise when fail_closed=False."""
-    from app.workers.check_bazaar import check_bazaar, _BAZAAR_SKIPPED_PREFIX
+    from app.workers.check_bazaar import _BAZAAR_SKIPPED_PREFIX, check_bazaar
 
     sha256 = "aabbccdd" * 8
     ctx = _make_arq_ctx(mock_redis)
-    ctx["scanner"].check_malwarebazaar = AsyncMock(
-        side_effect=httpx.TimeoutException("timed out")
-    )
+    ctx["scanner"].check_malwarebazaar = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
 
     with patch("app.workers.check_bazaar.settings") as mock_settings:
         mock_settings.malwarebazaar_fail_closed = False
@@ -362,8 +354,9 @@ async def test_retroactive_quarantine_marks_upload_malicious(
     mock_redis: AsyncMock,
 ) -> None:
     """retroactive_quarantine must set Upload.status = 'malicious'."""
-    from app.workers.retroactive_quarantine import retroactive_quarantine
     from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.workers.retroactive_quarantine import retroactive_quarantine
 
     # Create an upload row in the test DB
     upload = Upload(
@@ -399,9 +392,7 @@ async def test_retroactive_quarantine_marks_upload_malicious(
 
     # Re-fetch from DB
     async with session_factory() as session:
-        row = await session.scalar(
-            select(Upload).where(Upload.upload_id == "upload-rq-001")
-        )
+        row = await session.scalar(select(Upload).where(Upload.upload_id == "upload-rq-001"))
     assert row is not None
     assert row.status == "malicious"
     assert "Mirai.Botnet" in (row.error_detail or "")
@@ -414,8 +405,9 @@ async def test_retroactive_quarantine_idempotent(
     mock_redis: AsyncMock,
 ) -> None:
     """Calling retroactive_quarantine twice must not double-delete S3."""
-    from app.workers.retroactive_quarantine import retroactive_quarantine
     from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.workers.retroactive_quarantine import retroactive_quarantine
 
     upload = Upload(
         upload_id="upload-rq-idem",
@@ -441,12 +433,20 @@ async def test_retroactive_quarantine_idempotent(
 
         # Call twice — second must be a no-op
         await retroactive_quarantine(
-            ctx, upload_id="upload-rq-idem", sha256=sha256,
-            cas_s3_key="cas/abc123", user_id=str(upload.user_id), threat="Mirai",
+            ctx,
+            upload_id="upload-rq-idem",
+            sha256=sha256,
+            cas_s3_key="cas/abc123",
+            user_id=str(upload.user_id),
+            threat="Mirai",
         )
         await retroactive_quarantine(
-            ctx, upload_id="upload-rq-idem", sha256=sha256,
-            cas_s3_key="cas/abc123", user_id=str(upload.user_id), threat="Mirai",
+            ctx,
+            upload_id="upload-rq-idem",
+            sha256=sha256,
+            cas_s3_key="cas/abc123",
+            user_id=str(upload.user_id),
+            threat="Mirai",
         )
 
     # delete_object must not be called at all (row was already terminal on first call)
@@ -460,9 +460,11 @@ async def test_retroactive_quarantine_preserves_s3_when_cas_ref_gt_0(
     mock_redis: AsyncMock,
 ) -> None:
     """S3 object must not be deleted if ref_count > 1 (other uploads share the file)."""
-    from app.workers.retroactive_quarantine import retroactive_quarantine
-    from sqlalchemy.ext.asyncio import async_sessionmaker
     import json as _json
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.workers.retroactive_quarantine import retroactive_quarantine
 
     upload = Upload(
         upload_id="upload-rq-shared",
@@ -491,8 +493,12 @@ async def test_retroactive_quarantine_preserves_s3_when_cas_ref_gt_0(
         mock_settings.bazaar_retroactive_check_materials = False
 
         await retroactive_quarantine(
-            ctx, upload_id="upload-rq-shared", sha256=sha256,
-            cas_s3_key="cas/abc123", user_id=str(upload.user_id), threat="Mirai",
+            ctx,
+            upload_id="upload-rq-shared",
+            sha256=sha256,
+            cas_s3_key="cas/abc123",
+            user_id=str(upload.user_id),
+            threat="Mirai",
         )
 
     # ref went from 2 → 1 so S3 must NOT be deleted
@@ -506,9 +512,11 @@ async def test_retroactive_quarantine_deletes_s3_when_ref_zero(
     mock_redis: AsyncMock,
 ) -> None:
     """S3 object must be deleted when CAS ref_count drops to 0."""
-    from app.workers.retroactive_quarantine import retroactive_quarantine
-    from sqlalchemy.ext.asyncio import async_sessionmaker
     import json as _json
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.workers.retroactive_quarantine import retroactive_quarantine
 
     upload = Upload(
         upload_id="upload-rq-delete",
@@ -537,8 +545,12 @@ async def test_retroactive_quarantine_deletes_s3_when_ref_zero(
         mock_settings.bazaar_retroactive_check_materials = False
 
         await retroactive_quarantine(
-            ctx, upload_id="upload-rq-delete", sha256=sha256,
-            cas_s3_key="cas/abc123", user_id=str(upload.user_id), threat="Mirai",
+            ctx,
+            upload_id="upload-rq-delete",
+            sha256=sha256,
+            cas_s3_key="cas/abc123",
+            user_id=str(upload.user_id),
+            threat="Mirai",
         )
 
     delete_mock.assert_awaited_once_with("cas/abc123")
@@ -551,8 +563,9 @@ async def test_retroactive_quarantine_soft_deletes_material_version(
     mock_redis: AsyncMock,
 ) -> None:
     """retroactive_quarantine must soft-delete MaterialVersion rows when enabled."""
-    from app.workers.retroactive_quarantine import retroactive_quarantine
     from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.workers.retroactive_quarantine import retroactive_quarantine
 
     sha256 = "aabbccdd" * 8
     cas_s3_key = "cas/abc123"
@@ -595,8 +608,12 @@ async def test_retroactive_quarantine_soft_deletes_material_version(
         mock_settings.bazaar_retroactive_check_materials = True
 
         await retroactive_quarantine(
-            ctx, upload_id="upload-rq-mat", sha256=sha256,
-            cas_s3_key=cas_s3_key, user_id=str(upload.user_id), threat="Mirai",
+            ctx,
+            upload_id="upload-rq-mat",
+            sha256=sha256,
+            cas_s3_key=cas_s3_key,
+            user_id=str(upload.user_id),
+            threat="Mirai",
         )
 
     # Verify the MaterialVersion was soft-deleted

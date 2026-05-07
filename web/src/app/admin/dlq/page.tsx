@@ -59,7 +59,7 @@ export default function AdminDLQPage() {
         }
     };
 
-    useEffect(() => { fetchJobs(1); }, [showResolved]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { fetchJobs(1); }, [showResolved]);  
 
     const handleRetry = async (job: FailedJob) => {
         show(

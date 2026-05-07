@@ -151,7 +151,6 @@ ALLOWED_EXTENSIONS: Final[frozenset[str]] = frozenset(
         ".cljc",
         ".edn",
         ".elm",
-        ".ml",
         # Dart / Flutter
         ".dart",
         # Database / Query
@@ -357,7 +356,6 @@ ALLOWED_MIME_TYPES: Final[frozenset[str]] = frozenset(
         "text/x-erlang",
         "text/x-julia",
         "text/x-dart",
-        "text/x-swift",
         "text/x-nim",
         "text/x-zig",
         "text/x-powershell",

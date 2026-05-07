@@ -7,6 +7,8 @@ from datetime import UTC
 
 logger = logging.getLogger("wikint")
 
+import contextlib
+
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -108,7 +110,10 @@ def get_pr_all_file_keys(pr: PullRequest) -> list[str]:
 
 
 async def _release_pr_upload_quota(
-    db: AsyncSession, pr: PullRequest, redis: Redis, approved: bool = False
+    db: AsyncSession,
+    pr: PullRequest,
+    redis: Redis,
+    approved: bool = False,  # type: ignore[type-arg]
 ) -> None:
     """Find all uploads associated with the PR and remove them from the user's Redis quota.
 
@@ -119,9 +124,7 @@ async def _release_pr_upload_quota(
         return
 
     # Find uploads by their quarantine or final keys
-    stmt = select(Upload).where(
-        (Upload.quarantine_key.in_(keys)) | (Upload.final_key.in_(keys))
-    )
+    stmt = select(Upload).where((Upload.quarantine_key.in_(keys)) | (Upload.final_key.in_(keys)))
     result = await db.execute(stmt)
     uploads = list(result.scalars().all())
 
@@ -145,13 +148,14 @@ async def _release_pr_upload_quota(
         try:
             await redis.zrem(quota_key, *keys_to_remove)
         except Exception as exc:
-            logger.warning(
-                "Failed to release upload quota for PR %s: %s", pr.id, exc
-            )
+            logger.warning("Failed to release upload quota for PR %s: %s", pr.id, exc)
 
 
 async def _cleanup_pr_resources(
-    db: AsyncSession, pr: PullRequest, delete_staging: bool = False, redis: Redis | None = None
+    db: AsyncSession,
+    pr: PullRequest,
+    delete_staging: bool = False,
+    redis: Redis | None = None,  # type: ignore[type-arg]
 ) -> None:
     """Release file claims and optionally schedule deletion of staging files."""
     await db.execute(delete(PRFileClaim).where(PRFileClaim.pr_id == pr.id))
@@ -159,9 +163,10 @@ async def _cleanup_pr_resources(
     # Release upload quota slots immediately
     if redis is None:
         from app.core.redis import redis_client
+
         redis = redis_client
 
-    if redis:
+    if redis:  # type: ignore[truthy-bool]
         # If delete_staging is False, it's likely an approval
         await _release_pr_upload_quota(db, pr, redis, approved=not delete_staging)
 
@@ -507,7 +512,9 @@ async def _exec_create_material(
             )
 
         # Resolve thumbnail_key from the upload record (CAS V2: keyed by final_key)
-        thumbnail_key_val = await _resolve_thumbnail_key(db, file_key) if file_key.startswith("cas/") else None
+        thumbnail_key_val = (
+            await _resolve_thumbnail_key(db, file_key) if file_key.startswith("cas/") else None
+        )
 
         mv = MaterialVersion(
             id=uuid.uuid4(),
@@ -591,7 +598,9 @@ async def _exec_create_material(
                     att_fk = new_att_fk
 
                 # Resolve thumbnail_key from the upload record
-                att_thumb_key = await _resolve_thumbnail_key(db, att_fk) if att_fk.startswith("cas/") else None
+                att_thumb_key = (
+                    await _resolve_thumbnail_key(db, att_fk) if att_fk.startswith("cas/") else None
+                )
 
                 v = MaterialVersion(
                     id=uuid.uuid4(),
@@ -692,7 +701,9 @@ async def _exec_edit_material(
         _next_version_lock = (_latest_mv.version_lock + 1) if _latest_mv is not None else 0
 
         # Resolve thumbnail_key from the upload record (CAS V2: keyed by final_key)
-        edit_thumbnail_key = await _resolve_thumbnail_key(db, file_key) if file_key.startswith("cas/") else None
+        edit_thumbnail_key = (
+            await _resolve_thumbnail_key(db, file_key) if file_key.startswith("cas/") else None
+        )
 
         mv = MaterialVersion(
             id=uuid.uuid4(),
@@ -1097,7 +1108,7 @@ async def create_pull_request_service(
     db: AsyncSession,
     data: PullRequestCreate,
     current_user: User,
-    redis: Redis | None = None,
+    redis: Redis | None = None,  # type: ignore[type-arg]
 ) -> PullRequest:
     """Validate and create a new batch pull request."""
     is_privileged = current_user.is_moderator
@@ -1180,14 +1191,13 @@ async def create_pull_request_service(
             pmid = getattr(op, "parent_material_id", None)
             if pmid:
                 import uuid as uuid_pkg
+
                 actual_pmid: uuid_pkg.UUID | None = None
                 if isinstance(pmid, uuid_pkg.UUID):
                     actual_pmid = pmid
                 elif isinstance(pmid, str) and not pmid.startswith("$"):
-                    try:
+                    with contextlib.suppress(ValueError):
                         actual_pmid = uuid_pkg.UUID(pmid)
-                    except ValueError:
-                        pass
 
                 if actual_pmid:
                     parent_mat = await db.scalar(select(Material).where(Material.id == actual_pmid))
@@ -1198,7 +1208,7 @@ async def create_pull_request_service(
         import asyncio
 
         existence_results = await asyncio.gather(*(object_exists(k) for k in keys_to_check))
-        for key, exists in zip(keys_to_check, existence_results):
+        for key, exists in zip(keys_to_check, existence_results, strict=False):
             if not exists:
                 raise BadRequestError(
                     "One or more uploaded files could not be found. "
@@ -1262,7 +1272,7 @@ async def create_pull_request_service(
     if current_user.is_moderator and current_user.auto_approve:
         pr.status = PRStatus.APPROVED
         pr.reviewed_by = current_user.id
-        await apply_pr(db, pr, current_user.id)
+        await apply_pr(db, pr)
         # Release claims immediately — PR is already approved
         await db.execute(delete(PRFileClaim).where(PRFileClaim.pr_id == pr.id))
         await db.flush()
@@ -1271,7 +1281,7 @@ async def create_pull_request_service(
     return pr
 
 
-async def apply_pr(db: AsyncSession, pr: PullRequest, apply_user_id: uuid.UUID) -> None:
+async def apply_pr(db: AsyncSession, pr: PullRequest) -> None:
     """
     Execute all operations in a batch PR.  Operations are topologically sorted
     so that temp_id producers run before consumers, then executed sequentially
@@ -1360,9 +1370,7 @@ async def _exec_undelete_material(
     """Restore a soft-deleted material and its attachment subtree."""
     mat_id = _resolve(str(p["material_id"]), id_map)
     mat = await db.scalar(
-        select(Material)
-        .where(Material.id == mat_id)
-        .execution_options(include_deleted=True)
+        select(Material).where(Material.id == mat_id).execution_options(include_deleted=True)
     )
     if not mat:
         raise NotFoundError("Material not found (even among deleted)")
@@ -1429,9 +1437,7 @@ async def _exec_undelete_directory(
         .execution_options(include_deleted=True)
     )
     all_dir_ids = (
-        await db.scalars(
-            select(dir_cte.c.id).execution_options(include_deleted=True)
-        )
+        await db.scalars(select(dir_cte.c.id).execution_options(include_deleted=True))
     ).all()
 
     for did in all_dir_ids:
@@ -1493,8 +1499,7 @@ async def _exec_revert_edit_material(
 
     if pre.get("prev_version_number") is not None:
         versions_to_drop = await db.scalars(
-            select(MaterialVersion)
-            .where(
+            select(MaterialVersion).where(
                 MaterialVersion.material_id == mat.id,
                 MaterialVersion.version_number > pre["prev_version_number"],
             )
@@ -1627,28 +1632,34 @@ def _build_reverse_ops(applied_result: list[dict[str, typing.Any]]) -> list[dict
         elif op_type == "create_directory":
             reverse_ops.append({"op": "delete_directory", "directory_id": result_id})
         elif op_type == "edit_material":
-            reverse_ops.append({
-                "op": "edit_material",
-                "material_id": result_id,
-                "pre_state": pre_state,
-            })
+            reverse_ops.append(
+                {
+                    "op": "edit_material",
+                    "material_id": result_id,
+                    "pre_state": pre_state,
+                }
+            )
         elif op_type == "edit_directory":
-            reverse_ops.append({
-                "op": "edit_directory",
-                "directory_id": result_id,
-                "pre_state": pre_state,
-            })
+            reverse_ops.append(
+                {
+                    "op": "edit_directory",
+                    "directory_id": result_id,
+                    "pre_state": pre_state,
+                }
+            )
         elif op_type == "delete_material":
             reverse_ops.append({"op": "undelete_material", "material_id": result_id})
         elif op_type == "delete_directory":
             reverse_ops.append({"op": "undelete_directory", "directory_id": result_id})
         elif op_type == "move_item":
-            reverse_ops.append({
-                "op": "move_item",
-                "target_id": result_id,
-                "target_type": enriched.get("target_type"),
-                "pre_state": pre_state,
-            })
+            reverse_ops.append(
+                {
+                    "op": "move_item",
+                    "target_id": result_id,
+                    "target_type": enriched.get("target_type"),
+                    "pre_state": pre_state,
+                }
+            )
 
     return reverse_ops
 
@@ -1683,12 +1694,16 @@ async def revert_pr(
     from datetime import datetime
 
     if original_pr.applied_result is None:
-        raise BadRequestError("PR has no applied_result — cannot revert (legacy PR without pre-state snapshot)")
+        raise BadRequestError(
+            "PR has no applied_result — cannot revert (legacy PR without pre-state snapshot)"
+        )
 
     # Check that all edit/move ops have pre_state
     for enriched in original_pr.applied_result:
         op_type = str(enriched.get("op", ""))
-        if op_type in ("edit_material", "edit_directory", "move_item") and not enriched.get("pre_state"):
+        if op_type in ("edit_material", "edit_directory", "move_item") and not enriched.get(
+            "pre_state"
+        ):
             raise BadRequestError(
                 f"Operation '{op_type}' in PR is missing pre_state snapshot — "
                 "cannot revert (legacy PR approved before revert support was added)"
@@ -1701,7 +1716,7 @@ async def revert_pr(
         type="revert",
         status=PRStatus.APPROVED,
         title=f"Revert: {original_pr.title}",
-        description=f"Automatic revert of PR \"{original_pr.title}\" (id: {original_pr.id})",
+        description=f'Automatic revert of PR "{original_pr.title}" (id: {original_pr.id})',
         payload=reverse_ops,
         summary_types=list({op["op"] for op in reverse_ops}),
         author_id=admin_user_id,
@@ -1788,8 +1803,10 @@ async def list_prs_for_item_service(
     """Search for open PRs referencing a specific material or directory."""
     from sqlalchemy import text
 
-    base_stmt = select(PullRequest).options(selectinload(PullRequest.author)).where(
-        PullRequest.status == PRStatus.OPEN
+    base_stmt = (
+        select(PullRequest)
+        .options(selectinload(PullRequest.author))
+        .where(PullRequest.status == PRStatus.OPEN)
     )
 
     if db.bind.dialect.name == "sqlite":
@@ -1863,9 +1880,7 @@ async def list_prs_for_item_service(
         total_count = await db.scalar(count_stmt) or 0
 
         paginated_stmt = (
-            stmt.order_by(PullRequest.created_at.desc())
-            .offset((page - 1) * limit)
-            .limit(limit)
+            stmt.order_by(PullRequest.created_at.desc()).offset((page - 1) * limit).limit(limit)
         )
         result = await db.execute(paginated_stmt)
         prs = list(result.scalars().all())
@@ -1885,7 +1900,7 @@ async def approve_pr_service(db: AsyncSession, pr_id: uuid.UUID, reviewer: User)
     pr.status = PRStatus.APPROVED
     pr.reviewed_by = reviewer.id
 
-    await apply_pr(db, pr, reviewer.id)
+    await apply_pr(db, pr)
     await _cleanup_pr_resources(db, pr)
 
     await db.commit()

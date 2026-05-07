@@ -11,7 +11,7 @@ try:
 except Exception:
     pass
 
-setattr(threading, "_shutdown", lambda: None)
+threading._shutdown = lambda: None
 
 
 # Set required env vars before any app module is imported (settings are built at import time).

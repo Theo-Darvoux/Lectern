@@ -20,7 +20,7 @@ function MagicLinkVerifier() {
     useEffect(() => {
         if (!token && !isAuthenticated && !attempted.current) {
             attempted.current = true;
-            // eslint-disable-next-line react-hooks/set-state-in-effect
+             
             setError(t("invalidMagicLink"));
         }
     }, [token, isAuthenticated, t]);

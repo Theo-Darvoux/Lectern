@@ -40,7 +40,6 @@ from app.schemas.common import HealthResponse
 logger = logging.getLogger("wikint")
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("WikINT API starting up")
@@ -67,6 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Ensure backup directory exists
     from pathlib import Path
+
     Path(settings.backup_dir).mkdir(parents=True, exist_ok=True)
 
     # Hard-fail: storage and scanner are required for safe operation
@@ -121,6 +121,7 @@ async def add_security_headers(
     # Dynamic CSP fetching from DB/Redis
     try:
         from app.core.database import async_session_factory
+
         async with async_session_factory() as db:
             config = await get_full_auth_config(db, redis_client)
             s3_domain = config.get("s3_public_endpoint") or settings.s3_public_endpoint or ""
@@ -141,15 +142,15 @@ async def add_security_headers(
 
     img_src = "img-src 'self' data: blob: https:;"
     if s3_domain:
-         img_src = f"img-src 'self' data: blob: https: https://{s3_domain};"
+        img_src = f"img-src 'self' data: blob: https: https://{s3_domain};"
 
     csp = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client https://unpkg.com https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style https://cdn.jsdelivr.net; "
-        + img_src + " "
-        "font-src 'self'; "
-        + connect_src + " "
+        + img_src
+        + " "
+        "font-src 'self'; " + connect_src + " "
         "frame-src https://accounts.google.com/gsi/; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
@@ -265,7 +266,6 @@ async def metrics(request: Request) -> Response:
 
     data = generate_latest(REGISTRY)
     return Response(content=data, media_type=CONTENT_TYPE_LATEST)
-
 
 
 app.include_router(admin_router)

@@ -26,7 +26,7 @@ export default function PublicProfilePage({
                 toast.error(t("notFound"));
             });
         }
-    }, [id]);
+    }, [id, t]);
 
     useEffect(() => {
         setTimeout(fetchProfile, 0);

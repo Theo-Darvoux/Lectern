@@ -18,7 +18,7 @@ async def rate_limit_downloads(
     request: Request,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> None:
     minute_limit = 100 if settings.is_dev else 10
     daily_limit = 2000 if settings.is_dev else 200
@@ -66,7 +66,7 @@ async def rate_limit_uploads(
     request: Request,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> None:
     tier = "privileged" if user.role in PRIVILEGED_ROLES else "default"
     minute_limit, daily_limit = _UPLOAD_LIMITS[tier]
@@ -103,7 +103,7 @@ async def rate_limit_uploads(
 
 async def rate_limit_search(
     request: Request,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     user: Annotated[User | None, Depends(get_optional_user)] = None,
 ) -> None:
     """Rate limit for the public search endpoint: 30/min anonymous, 120/min authenticated."""

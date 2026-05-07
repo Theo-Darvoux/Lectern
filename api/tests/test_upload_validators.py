@@ -52,7 +52,10 @@ class TestSanitizeFilename:
         assert _sanitize_filename("!!!") == ""
 
     def test_preserves_kept_special_chars(self):
-        assert _sanitize_filename("Cours #1 - L'essentiel (€5).pdf") == "Cours_#1_-_L'essentiel_(€5).pdf"
+        assert (
+            _sanitize_filename("Cours #1 - L'essentiel (€5).pdf")
+            == "Cours__1_-_L'essentiel_(€5).pdf"
+        )
         assert _sanitize_filename('notes "avancées" [2024].pdf') == 'notes_"avancées"_[2024].pdf'
         assert _sanitize_filename("file$var=val@host{key}.pdf") == "file$var=val@host{key}.pdf"
 

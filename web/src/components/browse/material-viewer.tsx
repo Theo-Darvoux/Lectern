@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { useRouter, useParams, useSearchParams, usePathname } from "next/navigation";
 import {
   ArrowLeft,
   Download,
@@ -157,6 +157,7 @@ export function MaterialViewer({
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
+  const pathname = usePathname();
 
   const isRestricted = (material.id as string)?.startsWith("$") || !!searchParams.get("preview_pr");
 
@@ -256,6 +257,11 @@ export function MaterialViewer({
     const docPage =
       typeof positionData.page === "number" ? positionData.page : undefined;
     await createAnnotation(body, selectionText, positionData, docPage);
+    openSidebar("annotations", {
+      type: "material",
+      id: materialId,
+      data: material,
+    });
   };
 
   const handleHighlightClick = useCallback(() => {
@@ -267,14 +273,19 @@ export function MaterialViewer({
   }, [openSidebar, materialId, material]);
 
   useEffect(() => {
-    if (isDesktop) {
-      setSidebarTarget("details", {
-        type: "material",
-        id: materialId,
-        data: { ...material, __viewerType: viewerType },
-      });
-    }
-  }, [materialId, isDesktop, material, setSidebarTarget, viewerType]);
+    // Seed the sidebar target with the current material so any updates
+    // (likes, favourites) flow through the shared store and stay in sync
+    // across surfaces (FAB, Details tab). Runs on both desktop and mobile.
+    setSidebarTarget({
+      type: "material",
+      id: materialId,
+      data: { ...material, __viewerType: viewerType },
+    });
+    // Depend on materialId/viewerType only — `material` is a fresh object each
+    // render, so including it would re-fire the effect on unrelated parent
+    // re-renders and override the user's currently-selected sidebar tab.
+     
+  }, [materialId, viewerType, setSidebarTarget]);
 
   return (
     <AnnotationsContext.Provider value={annotationsData}>
@@ -333,6 +344,7 @@ export function MaterialViewer({
                     type: "material",
                     data: material,
                   } as ItemData}
+                  itemPath={pathname}
                 >
                     <div className="flex items-center gap-2">
                       <ItemActionsDropdownTrigger />
@@ -381,7 +393,7 @@ export function MaterialViewer({
                       openSidebar("details", {
                         type: "material",
                         id: materialId,
-                        data: { ...material, __viewerType: viewerType },
+                        data: { ...material, __viewerType: viewerType, __path: pathname },
                       });
                     }
                   }}

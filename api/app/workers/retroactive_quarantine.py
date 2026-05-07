@@ -25,7 +25,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func as sa_func, select, update
+from sqlalchemy import func as sa_func
+from sqlalchemy import select, update
 
 from app.config import settings
 from app.core.cas import decrement_cas_ref, hmac_cas_key
@@ -125,13 +126,9 @@ async def retroactive_quarantine(
     try:
         await redis.zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", staging_key)
     except Exception as exc:
-        logger.warning(
-            "retroactive_quarantine: quota cleanup failed for %s: %s", upload_id, exc
-        )
+        logger.warning("retroactive_quarantine: quota cleanup failed for %s: %s", upload_id, exc)
 
-    logger.info(
-        "retroactive_quarantine: completed for upload %s (threat=%s).", upload_id, threat
-    )
+    logger.info("retroactive_quarantine: completed for upload %s (threat=%s).", upload_id, threat)
 
 
 async def _decrement_and_maybe_delete(redis: Any, sha256: str, cas_s3_key: str) -> None:
@@ -229,12 +226,16 @@ async def _quarantine_material_versions(
                     mid = uuid.UUID(mid_str)
                 except ValueError:
                     continue
-                live_count: int = (await session.scalar(
-                    select(sa_func.count()).select_from(MaterialVersion).where(
-                        MaterialVersion.material_id == mid,
-                        MaterialVersion.deleted_at.is_(None),
+                live_count: int = (
+                    await session.scalar(
+                        select(sa_func.count())
+                        .select_from(MaterialVersion)
+                        .where(
+                            MaterialVersion.material_id == mid,
+                            MaterialVersion.deleted_at.is_(None),
+                        )
                     )
-                )) or 0
+                ) or 0
                 if live_count == 0:
                     # No surviving versions — soft-delete the material itself.
                     await session.execute(
@@ -289,6 +290,4 @@ async def _emit_malicious_sse(
             await redis.ltrim(event_log_key, -200, -1)
         await redis.publish(event_channel, payload_json)
     except Exception as exc:
-        logger.warning(
-            "retroactive_quarantine: SSE emit failed for upload %s: %s", upload_id, exc
-        )
+        logger.warning("retroactive_quarantine: SSE emit failed for upload %s: %s", upload_id, exc)

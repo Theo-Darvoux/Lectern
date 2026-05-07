@@ -77,7 +77,9 @@ async def get_user_stats(db: AsyncSession, user_id: str) -> dict[str, int]:
     }
 
 
-async def get_recently_viewed(db: AsyncSession, user_id: str, limit: int = 10) -> list[dict[str, typing.Any]]:
+async def get_recently_viewed(
+    db: AsyncSession, user_id: str, limit: int = 10
+) -> list[dict[str, typing.Any]]:
     uid = uuid.UUID(str(user_id))
     from sqlalchemy.orm import selectinload
 
@@ -374,5 +376,7 @@ async def hard_delete_user(db: AsyncSession, user: User) -> None:
     await db.execute(delete(Upload).where(Upload.user_id == user.id))
 
     # 3. Delete the user record (cascades to notifications, comments, annotations, etc. due to model configuration)
-    await db.delete(user)
+    from sqlalchemy import delete
+
+    await db.execute(delete(User).where(User.id == user.id))
     await db.flush()

@@ -40,10 +40,3 @@ export async function sha256File(
     return hasher.digest();
 }
 
-/**
- * Compute SHA-256 of an ArrayBuffer.
- */
-export async function sha256Buffer(buffer: ArrayBuffer): Promise<string> {
-    const hasher = await createSHA256();
-    return hasher.init().update(new Uint8Array(buffer)).digest();
-}

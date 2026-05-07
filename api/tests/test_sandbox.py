@@ -124,10 +124,12 @@ def test_sandboxed_run_timeout_propagates(
     _reset_bwrap_cache()
     import pytest
 
-    with patch(
-        "app.core.sandbox.subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd=["sleep"], timeout=1),
+    with (
+        patch(
+            "app.core.sandbox.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["sleep"], timeout=1),
+        ),
+        pytest.raises(subprocess.TimeoutExpired),
     ):
-        with pytest.raises(subprocess.TimeoutExpired):
-            sandboxed_run(["sleep", "999"], timeout=1)
+        sandboxed_run(["sleep", "999"], timeout=1)
     _reset_bwrap_cache()

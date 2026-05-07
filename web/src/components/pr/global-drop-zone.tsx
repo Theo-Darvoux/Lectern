@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { UploadDrawer } from "@/components/pr/upload-drawer";
 import { usePathname } from "next/navigation";
 import { apiFetch } from "@/lib/api-client";
-import { collectDroppedItems, type ScannedFile, type DroppedItems } from "@/lib/drop-utils";
+import { collectDroppedItems, type DroppedItems } from "@/lib/drop-utils";
 import { useTranslations } from "next-intl";
 
 

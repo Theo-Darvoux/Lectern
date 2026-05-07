@@ -14,6 +14,7 @@ from app.services.pr import apply_pr
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _user(db: AsyncSession) -> User:
     u = User(
         id=uuid.uuid4(),
@@ -26,6 +27,7 @@ async def _user(db: AsyncSession) -> User:
     db.add(u)
     await db.flush()
     return u
+
 
 async def _directory(
     db: AsyncSession,
@@ -44,6 +46,7 @@ async def _directory(
     db.add(d)
     await db.flush()
     return d
+
 
 async def _material(
     db: AsyncSession,
@@ -66,6 +69,7 @@ async def _material(
     await db.flush()
     return m
 
+
 async def _pr(db: AsyncSession, author: User, ops: list) -> PullRequest:
     pr = PullRequest(
         id=uuid.uuid4(),
@@ -78,17 +82,25 @@ async def _pr(db: AsyncSession, author: User, ops: list) -> PullRequest:
     await db.flush()
     return pr
 
+
 def _deindex_jobs(db: AsyncSession) -> list[tuple]:
     """Extract de-indexing jobs from session info."""
     return [j for j in db.info.get("post_commit_jobs", []) if j[0] == "delete_indexed_item"]
 
+
 def _index_jobs(db: AsyncSession) -> list[tuple]:
     """Extract indexing jobs from session info."""
-    return [j for j in db.info.get("post_commit_jobs", []) if j[0] in ("index_material", "index_directory")]
+    return [
+        j
+        for j in db.info.get("post_commit_jobs", [])
+        if j[0] in ("index_material", "index_directory")
+    ]
+
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_material_deletion_order_correctness(db_session: AsyncSession):
@@ -105,12 +117,13 @@ async def test_material_deletion_order_correctness(db_session: AsyncSession):
 
     # We apply the PR. If de-indexing happened after hard delete,
     # it might find 0 materials to de-index if the query logic is affected.
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _deindex_jobs(db_session)
     # Should have enqueued the material itself
     mat_deindex_ids = {j[2] for j in jobs if j[1] == "materials"}
     assert str(mat.id) in mat_deindex_ids
+
 
 @pytest.mark.asyncio
 async def test_recursive_attachment_deindexing(db_session: AsyncSession):
@@ -122,12 +135,16 @@ async def test_recursive_attachment_deindexing(db_session: AsyncSession):
     d = await _directory(db_session, "Root", user_id=u.id)
 
     parent = await _material(db_session, "Parent", directory_id=d.id, author_id=u.id)
-    child = await _material(db_session, "Child Attachment", author_id=u.id, parent_material_id=parent.id)
-    grandchild = await _material(db_session, "Grandchild", author_id=u.id, parent_material_id=child.id)
+    child = await _material(
+        db_session, "Child Attachment", author_id=u.id, parent_material_id=parent.id
+    )
+    grandchild = await _material(
+        db_session, "Grandchild", author_id=u.id, parent_material_id=child.id
+    )
 
     pr = await _pr(db_session, u, [{"op": "delete_material", "material_id": str(parent.id)}])
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _deindex_jobs(db_session)
     mat_deindex_ids = {j[2] for j in jobs if j[1] == "materials"}
@@ -135,6 +152,7 @@ async def test_recursive_attachment_deindexing(db_session: AsyncSession):
     assert str(parent.id) in mat_deindex_ids
     assert str(child.id) in mat_deindex_ids
     assert str(grandchild.id) in mat_deindex_ids
+
 
 @pytest.mark.asyncio
 async def test_directory_deletion_recursive_sync(db_session: AsyncSession):
@@ -146,11 +164,13 @@ async def test_directory_deletion_recursive_sync(db_session: AsyncSession):
     root = await _directory(db_session, "Root", user_id=u.id)
     sub = await _directory(db_session, "Sub", parent_id=root.id, user_id=u.id)
     mat_in_sub = await _material(db_session, "MatInSub", directory_id=sub.id, author_id=u.id)
-    att_of_mat = await _material(db_session, "Att", author_id=u.id, parent_material_id=mat_in_sub.id)
+    att_of_mat = await _material(
+        db_session, "Att", author_id=u.id, parent_material_id=mat_in_sub.id
+    )
 
     pr = await _pr(db_session, u, [{"op": "delete_directory", "directory_id": str(root.id)}])
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _deindex_jobs(db_session)
     mat_deindex_ids = {j[2] for j in jobs if j[1] == "materials"}
@@ -160,6 +180,7 @@ async def test_directory_deletion_recursive_sync(db_session: AsyncSession):
     assert str(sub.id) in dir_deindex_ids
     assert str(mat_in_sub.id) in mat_deindex_ids
     assert str(att_of_mat.id) in mat_deindex_ids
+
 
 @pytest.mark.asyncio
 async def test_multi_op_pr_resilience(db_session: AsyncSession):
@@ -174,12 +195,16 @@ async def test_multi_op_pr_resilience(db_session: AsyncSession):
 
     # 1. Delete material (explicitly)
     # 2. Delete parent directory
-    pr = await _pr(db_session, u, [
-        {"op": "delete_material", "material_id": str(mat.id)},
-        {"op": "delete_directory", "directory_id": str(root.id)}
-    ])
+    pr = await _pr(
+        db_session,
+        u,
+        [
+            {"op": "delete_material", "material_id": str(mat.id)},
+            {"op": "delete_directory", "directory_id": str(root.id)},
+        ],
+    )
 
-    await apply_pr(db_session, pr, u.id)
+    await apply_pr(db_session, pr)
 
     jobs = _deindex_jobs(db_session)
     mat_deindex_ids = {j[2] for j in jobs if j[1] == "materials"}
@@ -187,6 +212,7 @@ async def test_multi_op_pr_resilience(db_session: AsyncSession):
 
     assert str(mat.id) in mat_deindex_ids
     assert str(root.id) in dir_deindex_ids
+
 
 @pytest.mark.asyncio
 async def test_indexing_on_create_edit(db_session: AsyncSession):
@@ -197,8 +223,10 @@ async def test_indexing_on_create_edit(db_session: AsyncSession):
     u = await _user(db_session)
 
     # Create Dir
-    pr_create_dir = await _pr(db_session, u, [{"op": "create_directory", "name": "NewDir", "type": "folder"}])
-    await apply_pr(db_session, pr_create_dir, u.id)
+    pr_create_dir = await _pr(
+        db_session, u, [{"op": "create_directory", "name": "NewDir", "type": "folder"}]
+    )
+    await apply_pr(db_session, pr_create_dir)
 
     # Resolve the new ID (it's random in create_directory but we can find it)
     new_dir = await db_session.scalar(select(Directory).where(Directory.name == "NewDir"))
@@ -207,34 +235,51 @@ async def test_indexing_on_create_edit(db_session: AsyncSession):
     jobs = _index_jobs(db_session)
     assert any(j[0] == "index_directory" and j[1] == new_dir.id for j in jobs)
 
-    db_session.info["post_commit_jobs"] = [] # Clear
-    db_session.info["post_commit_job_keys"] = set() # Clear deduct keys
+    db_session.info["post_commit_jobs"] = []  # Clear
+    db_session.info["post_commit_job_keys"] = set()  # Clear deduct keys
 
     # Create Mat in Dir
-    pr_create_mat = await _pr(db_session, u, [{
-        "op": "create_material", "title": "NewMat", "type": "document", "directory_id": str(new_dir.id)
-    }])
-    await apply_pr(db_session, pr_create_mat, u.id)
+    pr_create_mat = await _pr(
+        db_session,
+        u,
+        [
+            {
+                "op": "create_material",
+                "title": "NewMat",
+                "type": "document",
+                "directory_id": str(new_dir.id),
+            }
+        ],
+    )
+    await apply_pr(db_session, pr_create_mat)
     new_mat = await db_session.scalar(select(Material).where(Material.title == "NewMat"))
     assert new_mat is not None
 
     jobs = _index_jobs(db_session)
     assert any(j[0] == "index_material" and j[1] == new_mat.id for j in jobs)
 
-    db_session.info["post_commit_jobs"] = [] # Clear
-    db_session.info["post_commit_job_keys"] = set() # Clear deduct keys
+    db_session.info["post_commit_jobs"] = []  # Clear
+    db_session.info["post_commit_job_keys"] = set()  # Clear deduct keys
 
     # Edit Dir
-    pr_edit_dir = await _pr(db_session, u, [{"op": "edit_directory", "directory_id": str(new_dir.id), "description": "Updated"}])
-    await apply_pr(db_session, pr_edit_dir, u.id)
+    pr_edit_dir = await _pr(
+        db_session,
+        u,
+        [{"op": "edit_directory", "directory_id": str(new_dir.id), "description": "Updated"}],
+    )
+    await apply_pr(db_session, pr_edit_dir)
     jobs = _index_jobs(db_session)
     assert any(j[0] == "index_directory" and j[1] == new_dir.id for j in jobs)
 
-    db_session.info["post_commit_jobs"] = [] # Clear
-    db_session.info["post_commit_job_keys"] = set() # Clear deduct keys
+    db_session.info["post_commit_jobs"] = []  # Clear
+    db_session.info["post_commit_job_keys"] = set()  # Clear deduct keys
 
     # Edit Mat
-    pr_edit_mat = await _pr(db_session, u, [{"op": "edit_material", "material_id": str(new_mat.id), "title": "UpdatedMat"}])
-    await apply_pr(db_session, pr_edit_mat, u.id)
+    pr_edit_mat = await _pr(
+        db_session,
+        u,
+        [{"op": "edit_material", "material_id": str(new_mat.id), "title": "UpdatedMat"}],
+    )
+    await apply_pr(db_session, pr_edit_mat)
     jobs = _index_jobs(db_session)
     assert any(j[0] == "index_material" and j[1] == new_mat.id for j in jobs)

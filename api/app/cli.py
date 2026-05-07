@@ -71,7 +71,7 @@ async def _reindex() -> None:
             select(Material).options(
                 selectinload(Material.tags),
                 selectinload(Material.author),
-                selectinload(Material.versions)
+                selectinload(Material.versions),
             )
         )
         materials = m_result.scalars().all()
@@ -109,7 +109,9 @@ async def _reindex() -> None:
                     "tags": [t.name for t in mat.tags] if mat.tags else [],
                     "authorName": mat.author.display_name if mat.author else None,
                     "directory_id": str(mat.directory_id) if mat.directory_id else None,
-                    "created_at": mat.created_at.isoformat() if mat.created_at is not None else None,
+                    "created_at": mat.created_at.isoformat()
+                    if mat.created_at is not None  # type: ignore[redundant-expr]
+                    else None,
                     "ancestor_path": ancestor_path,
                     "extra_searchable": extra,
                     "browse_path": browse_path,
@@ -142,7 +144,7 @@ async def _reindex() -> None:
             code = metadata.get("code") or ""
 
             # Build extra searchable fields (identifiers)
-            extra = f"{split_identifiers(dir_obj.name)} {split_identifiers(code)} {split_identifiers(ancestor_path)}"
+            extra = f"{split_identifiers(dir_obj.name)} {split_identifiers(code)} {split_identifiers(ancestor_path)}"  # type: ignore[arg-type]
 
             d_docs.append(
                 {
@@ -154,7 +156,9 @@ async def _reindex() -> None:
                     "tags": [t.name for t in dir_obj.tags] if dir_obj.tags else [],
                     "code": code,
                     "parent_id": str(dir_obj.parent_id) if dir_obj.parent_id else None,
-                    "created_at": dir_obj.created_at.isoformat() if dir_obj.created_at is not None else None,
+                    "created_at": dir_obj.created_at.isoformat()
+                    if dir_obj.created_at is not None  # type: ignore[redundant-expr]
+                    else None,
                     "ancestor_path": ancestor_path,
                     "extra_searchable": extra,
                     "browse_path": browse_path,
@@ -227,11 +231,14 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
     await init_s3_client()
 
     async with async_session_factory() as db:
-        total = await db.scalar(
-            select(func.count())
-            .select_from(MaterialVersion)
-            .where(MaterialVersion.file_key.like("materials/%"))
-        ) or 0
+        total = (
+            await db.scalar(
+                select(func.count())
+                .select_from(MaterialVersion)
+                .where(MaterialVersion.file_key.like("materials/%"))
+            )
+            or 0
+        )
 
     typer.echo(f"Found {total} MaterialVersion(s) with materials/ file_keys")
     if total == 0:
@@ -247,14 +254,18 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
     while offset < total:
         async with async_session_factory() as db:
             rows = (
-                await db.execute(
-                    select(MaterialVersion)
-                    .where(MaterialVersion.file_key.like("materials/%"))
-                    .order_by(MaterialVersion.id)
-                    .offset(offset)
-                    .limit(batch_size)
+                (
+                    await db.execute(
+                        select(MaterialVersion)
+                        .where(MaterialVersion.file_key.like("materials/%"))
+                        .order_by(MaterialVersion.id)
+                        .offset(offset)
+                        .limit(batch_size)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
             if not rows:
                 break
@@ -264,7 +275,7 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
                     # Find the Upload row that produced this file.
                     # Strategy: match by upload_id embedded in the materials/ key path.
                     # Key format: materials/{user_id}/{upload_id}/{filename}
-                    parts = mv.file_key.split("/")
+                    parts = mv.file_key.split("/")  # type: ignore[union-attr]
                     if len(parts) < 4:
                         typer.echo(f"  SKIP {mv.id}: unexpected key format {mv.file_key}")
                         skipped += 1
@@ -283,9 +294,7 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
                         sha256 = upload.content_sha256
 
                     if not sha256:
-                        typer.echo(
-                            f"  SKIP {mv.id}: no SHA-256 found for upload {upload_id_str}"
-                        )
+                        typer.echo(f"  SKIP {mv.id}: no SHA-256 found for upload {upload_id_str}")
                         skipped += 1
                         continue
 
@@ -295,15 +304,14 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
                     if dry_run:
                         exists = await object_exists(cas_s3_key)
                         typer.echo(
-                            f"  [DRY] {mv.id}: {mv.file_key} -> {cas_s3_key} "
-                            f"(CAS exists: {exists})"
+                            f"  [DRY] {mv.id}: {mv.file_key} -> {cas_s3_key} (CAS exists: {exists})"
                         )
                         migrated += 1
                         continue
 
                     # Ensure CAS object exists
                     if not await object_exists(cas_s3_key):
-                        await copy_object(mv.file_key, cas_s3_key)
+                        await copy_object(mv.file_key, cas_s3_key)  # type: ignore[arg-type]
                         copied += 1
 
                     # Update DB
@@ -365,7 +373,9 @@ async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -
 
         total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
 
-        typer.echo(f"Found {total} material(s) {'missing' if not force else 'queued for'} thumbnails.")
+        typer.echo(
+            f"Found {total} material(s) {'missing' if not force else 'queued for'} thumbnails."
+        )
         if total == 0:
             return
 
@@ -384,18 +394,14 @@ async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -
         tmp_dir = Path(tempfile.mkdtemp())
         try:
             # 1. Download source
-            local_path = tmp_dir / mv.file_name
-            await download_file(mv.file_key, local_path)
+            local_path = tmp_dir / mv.file_name  # type: ignore[operator]
+            await download_file(mv.file_key, local_path)  # type: ignore[arg-type]
 
             # 2. Setup processing file
             pf = ProcessingFile(local_path, local_path.stat().st_size)
 
             # 3. Generate thumbnail
-            thumb_path_str = await run_thumbnail_stage(
-                pf,
-                mv.file_mime_type,
-                mv.file_name
-            )
+            thumb_path_str = await run_thumbnail_stage(pf, mv.file_mime_type, mv.file_name)  # type: ignore[arg-type]
 
             if thumb_path_str:
                 thumb_path = Path(thumb_path_str)
@@ -404,11 +410,7 @@ async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -
                 s3_thumb_key = f"thumbnails/{mv.id}.webp"
 
                 with open(thumb_path, "rb") as f:
-                    await upload_file(
-                        f.read(),
-                        s3_thumb_key,
-                        content_type="image/webp"
-                    )
+                    await upload_file(f.read(), s3_thumb_key, content_type="image/webp")
 
                 # 5. Update DB
                 async with async_session_factory() as db:

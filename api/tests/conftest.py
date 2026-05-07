@@ -1,11 +1,13 @@
+import asyncio
 from collections.abc import AsyncGenerator
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import JSON, event
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import get_db
@@ -17,14 +19,15 @@ from app.models.base import Base
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
-@pytest.fixture
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
+@pytest.fixture(scope="session")
+def engine():
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=StaticPool, echo=False)
 
     @event.listens_for(engine.sync_engine, "connect")
     def _set_sqlite_pragma(dbapi_conn, connection_record) -> None:  # type: ignore[no-untyped-def]
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()
 
     for table in Base.metadata.tables.values():
@@ -32,34 +35,53 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
             if isinstance(col.type, JSONB):
                 col.type = JSON()
 
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    return engine
 
+
+@pytest.fixture
+async def db_connection(engine) -> AsyncGenerator[Any, None]:
+    async with engine.connect() as conn:
+        yield conn
+
+
+@pytest.fixture
+async def db_session(db_connection, engine) -> AsyncGenerator[AsyncSession, None]:
     import app.core.database as c_db
 
     orig_factory = c_db.async_session_factory
-    c_db.async_session_factory = session_factory
-    # also patch in helpers where it might have been imported already
+    c_db.engine = engine
+
+    async with db_connection.begin():
+        await db_connection.run_sync(Base.metadata.create_all)
+
+    # Define a factory that always uses the shared connection
+    def shared_session_factory(**kwargs: Any) -> AsyncSession:
+        kwargs.pop("bind", None)
+        return AsyncSession(db_connection, expire_on_commit=False, **kwargs)
+
+    c_db.async_session_factory = shared_session_factory
+
+    session = shared_session_factory()
+    session.info["post_commit_jobs"] = []
+
     from app.routers.upload import helpers as u_helpers
 
     orig_helpers_factory = u_helpers.async_session_factory
-    u_helpers.async_session_factory = session_factory
+    u_helpers.async_session_factory = shared_session_factory
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    yield session
 
-    async with session_factory() as session:
-        yield session
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-
-    await engine.dispose()
-    await c_db.engine.dispose()
-    c_db.async_session_factory = orig_factory
-    u_helpers.async_session_factory = orig_helpers_factory
+    await session.close()
+    async with db_connection.begin():
+        await db_connection.run_sync(Base.metadata.drop_all)
 
     c_db.async_session_factory = orig_factory
     u_helpers.async_session_factory = orig_helpers_factory
+
+
+@pytest.fixture(scope="session")
+def db_lock():
+    return asyncio.Lock()
 
 
 @pytest.fixture
@@ -183,10 +205,7 @@ class FakeRedis:
         d = self.data.get(name, {})
         # Sort by value (score)
         sorted_keys = sorted(d.keys(), key=lambda k: d[k])
-        if end == -1:
-            res = sorted_keys[start:]
-        else:
-            res = sorted_keys[start : end + 1]
+        res = sorted_keys[start:] if end == -1 else sorted_keys[start : end + 1]
 
         if withscores:
             return [(k, d[k]) for k in res]
@@ -284,7 +303,7 @@ class FakeRedis:
         return None
 
     async def scan(self, cursor, match=None, count=None):
-        keys = [k for k in self.data.keys()]
+        keys = list(self.data.keys())
         if match:
             import fnmatch
 
@@ -294,7 +313,7 @@ class FakeRedis:
     async def keys(self, pattern):
         import fnmatch
 
-        return [k for k in self.data.keys() if fnmatch.fnmatch(k, pattern)]
+        return [k for k in self.data if fnmatch.fnmatch(k, pattern)]
 
     async def sadd(self, name, *members):
         if name not in self.data:
@@ -372,11 +391,34 @@ def mock_arq_pool() -> AsyncMock:
 
 @pytest.fixture
 async def client(
-    db_session: AsyncSession, mock_redis: AsyncMock, mock_arq_pool: AsyncMock
+    db_connection,
+    db_session: AsyncSession,
+    mock_redis: AsyncMock,
+    mock_arq_pool: AsyncMock,
+    db_lock: asyncio.Lock,
 ) -> AsyncGenerator[AsyncClient, None]:
+
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        db_session.info["post_commit_jobs"] = []
-        yield db_session
+        import app.core.redis as redis_core
+        from app.core.database import _coalesce_index_jobs
+
+        # Serialize access to the shared connection to prevent SQLite transaction conflicts
+        async with db_lock, AsyncSession(db_connection, expire_on_commit=False) as session:
+            session.info["post_commit_jobs"] = []
+            try:
+                yield session
+                await session.commit()
+
+                jobs = session.info.get("post_commit_jobs", [])
+                if jobs:
+                    db_session.info.setdefault("post_commit_jobs", []).extend(jobs)
+                    if redis_core.arq_pool:
+                        coalesced = _coalesce_index_jobs(jobs)
+                        for job in coalesced:
+                            await redis_core.arq_pool.enqueue_job(*job)
+            except Exception:
+                await session.rollback()
+                raise
 
     async def override_get_redis() -> AsyncGenerator[AsyncMock, None]:
         yield mock_redis
@@ -388,7 +430,10 @@ async def client(
         app.state.scanner = MalwareScanner()
 
     transport = ASGITransport(app=app)
-    with patch("app.core.redis.arq_pool", mock_arq_pool):
+    with (
+        patch("app.core.redis.arq_pool", mock_arq_pool),
+        patch("app.core.redis.redis_client", mock_redis),
+    ):
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
 

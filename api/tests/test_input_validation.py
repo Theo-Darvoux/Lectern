@@ -36,24 +36,24 @@ XSS_PAYLOADS = [
 ]
 # Chars that must be stripped by SanitizedStr / clean_text
 CONTROL_CHARS = [
-    "\x00",       # null
-    "\x01",       # SOH
-    "\x07",       # BEL
-    "\x08",       # BS
-    "\x0b",       # VT
-    "\x0c",       # FF
-    "\x0e",       # SO
-    "\x1f",       # US
-    "\x7f",       # DEL
-    "\x80",       # C1
-    "\x9f",       # C1
+    "\x00",  # null
+    "\x01",  # SOH
+    "\x07",  # BEL
+    "\x08",  # BS
+    "\x0b",  # VT
+    "\x0c",  # FF
+    "\x0e",  # SO
+    "\x1f",  # US
+    "\x7f",  # DEL
+    "\x80",  # C1
+    "\x9f",  # C1
 ]
 BIDI_CHARS = [
-    "\u200b",     # zero-width space
-    "\u202e",     # right-to-left override
-    "\ufeff",     # BOM
-    "\u2028",     # line separator
-    "\u2029",     # paragraph separator
+    "\u200b",  # zero-width space
+    "\u202e",  # right-to-left override
+    "\ufeff",  # BOM
+    "\u2028",  # line separator
+    "\u2029",  # paragraph separator
 ]
 
 
@@ -67,6 +67,7 @@ class TestCleanText:
 
     def setup_method(self):
         from app.core.sanitization import clean_text
+
         self.clean = clean_text
 
     def test_strips_null_byte(self):
@@ -114,6 +115,7 @@ class TestCleanText:
 class TestRequestCodeIn:
     def _make(self, email: str):
         from app.schemas.auth import RequestCodeIn
+
         return RequestCodeIn(email=email)
 
     def test_valid_telecom(self):
@@ -152,6 +154,7 @@ class TestRequestCodeIn:
 class TestVerifyCodeIn:
     def _make(self, email: str, code: str):
         from app.schemas.auth import VerifyCodeIn
+
         return VerifyCodeIn(email=email, code=code)
 
     def test_valid(self):
@@ -193,6 +196,7 @@ class TestVerifyCodeIn:
 class TestVerifyMagicLinkIn:
     def _make(self, token: str):
         from app.schemas.auth import VerifyMagicLinkIn
+
         return VerifyMagicLinkIn(token=token)
 
     def test_valid_token(self):
@@ -217,7 +221,8 @@ class TestVerifyMagicLinkIn:
 class TestOnboardIn:
     def _make(self, **kw):
         from app.schemas.user import OnboardIn
-        defaults = dict(display_name="Alice", academic_year="1A", gdpr_consent=True)
+
+        defaults = {"display_name": "Alice", "academic_year": "1A", "gdpr_consent": True}
         return OnboardIn(**{**defaults, **kw})
 
     def test_valid(self):
@@ -257,6 +262,7 @@ class TestOnboardIn:
 class TestUserUpdateIn:
     def _make(self, **kw):
         from app.schemas.user import UserUpdateIn
+
         return UserUpdateIn(**kw)
 
     def test_all_none_is_valid(self):
@@ -337,7 +343,8 @@ class TestUserUpdateIn:
 class TestAnnotationCreateIn:
     def _make(self, **kw):
         from app.schemas.annotation import AnnotationCreateIn
-        defaults = dict(body="Hello")
+
+        defaults = {"body": "Hello"}
         return AnnotationCreateIn(**{**defaults, **kw})
 
     def test_valid(self):
@@ -378,6 +385,7 @@ class TestAnnotationCreateIn:
 
     def test_valid_uuid_reply_to(self):
         import uuid
+
         uid = str(uuid.uuid4())
         m = self._make(reply_to_id=uid)
         assert m.reply_to_id == uid
@@ -422,6 +430,7 @@ class TestAnnotationCreateIn:
 class TestAnnotationUpdateIn:
     def _make(self, body: str):
         from app.schemas.annotation import AnnotationUpdateIn
+
         return AnnotationUpdateIn(body=body)
 
     def test_valid(self):
@@ -451,11 +460,12 @@ class TestFlagCreateIn:
         import uuid
 
         from app.schemas.flag import FlagCreateIn
-        defaults = dict(
-            target_type="material",
-            target_id=uuid.uuid4(),
-            reason="spam",
-        )
+
+        defaults = {
+            "target_type": "material",
+            "target_id": uuid.uuid4(),
+            "reason": "spam",
+        }
         return FlagCreateIn(**{**defaults, **kw})
 
     def test_valid(self):
@@ -486,7 +496,9 @@ class TestFlagCreateIn:
         m = self._make(description=None)
         assert m.description is None
 
-    @pytest.mark.parametrize("target_type", ["material", "annotation", "pull_request", "comment", "pr_comment"])
+    @pytest.mark.parametrize(
+        "target_type", ["material", "annotation", "pull_request", "comment", "pr_comment"]
+    )
     def test_all_valid_target_types(self, target_type):
         m = self._make(target_type=target_type)
         assert m.target_type == target_type
@@ -505,11 +517,12 @@ class TestFlagCreateIn:
 class TestPullRequestCreate:
     def _make(self, **kw):
         from app.schemas.pull_request import CreateMaterialOp, PullRequestCreate
+
         op = CreateMaterialOp(
             title="My Doc",
             type="document",
         )
-        defaults = dict(title="My PR", operations=[op])
+        defaults = {"title": "My PR", "operations": [op]}
         return PullRequestCreate(**{**defaults, **kw})
 
     def test_valid(self):
@@ -543,6 +556,7 @@ class TestPullRequestCreate:
     def test_rejects_empty_operations(self):
         with pytest.raises(ValidationError):
             from app.schemas.pull_request import PullRequestCreate
+
             PullRequestCreate(title="Valid Title", operations=[])
 
     def test_description_max_length_ok(self):
@@ -568,6 +582,7 @@ class TestPullRequestCreate:
 class TestRejectRequest:
     def _make(self, reason: str):
         from app.schemas.pull_request import RejectRequest
+
         return RejectRequest(reason=reason)
 
     def test_valid(self):
@@ -596,11 +611,12 @@ class TestMoveItemOp:
         import uuid
 
         from app.schemas.pull_request import MoveItemOp
-        defaults = dict(
-            target_type="material",
-            target_id=uuid.uuid4(),
-            new_parent_id=None,
-        )
+
+        defaults = {
+            "target_type": "material",
+            "target_id": uuid.uuid4(),
+            "new_parent_id": None,
+        }
         return MoveItemOp(**{**defaults, **kw})
 
     def test_valid(self):
@@ -625,6 +641,7 @@ class TestMoveItemOp:
 
     def test_valid_material_types(self):
         from app.schemas.pull_request import ALLOWED_MATERIAL_TYPES
+
         for t in ALLOWED_MATERIAL_TYPES:
             m = self._make(target_material_type=t)
             assert m.target_material_type == t
@@ -642,7 +659,8 @@ class TestMoveItemOp:
 class TestCreateMaterialOp:
     def _make(self, **kw):
         from app.schemas.pull_request import CreateMaterialOp
-        defaults = dict(title="My Doc", type="document")
+
+        defaults = {"title": "My Doc", "type": "document"}
         return CreateMaterialOp(**{**defaults, **kw})
 
     def test_valid(self):
@@ -667,6 +685,7 @@ class TestCreateMaterialOp:
 
     def test_valid_types(self):
         from app.schemas.pull_request import ALLOWED_MATERIAL_TYPES
+
         for t in ALLOWED_MATERIAL_TYPES:
             m = self._make(type=t)
             assert m.type == t
@@ -743,7 +762,8 @@ class TestCreateMaterialOp:
 class TestCreateDirectoryOp:
     def _make(self, **kw):
         from app.schemas.pull_request import CreateDirectoryOp
-        defaults = dict(name="My Folder")
+
+        defaults = {"name": "My Folder"}
         return CreateDirectoryOp(**{**defaults, **kw})
 
     def test_valid(self):
@@ -768,6 +788,7 @@ class TestCreateDirectoryOp:
 
     def test_valid_directory_types(self):
         from app.schemas.pull_request import ALLOWED_DIRECTORY_TYPES
+
         for t in ALLOWED_DIRECTORY_TYPES:
             m = self._make(type=t)
             assert m.type == t
@@ -789,7 +810,8 @@ class TestCreateDirectoryOp:
 class TestUploadInitRequest:
     def _make(self, **kw):
         from app.schemas.material import UploadInitRequest
-        defaults = dict(filename="report.pdf", size=1024)
+
+        defaults = {"filename": "report.pdf", "size": 1024}
         return UploadInitRequest(**{**defaults, **kw})
 
     def test_valid(self):
@@ -849,7 +871,8 @@ class TestUploadInitRequest:
 class TestCheckExistsRequest:
     def _make(self, **kw):
         from app.schemas.material import CheckExistsRequest
-        defaults = dict(sha256="a" * 64, size=1024)
+
+        defaults = {"sha256": "a" * 64, "size": 1024}
         return CheckExistsRequest(**{**defaults, **kw})
 
     def test_valid(self):
@@ -880,6 +903,7 @@ class TestCheckExistsRequest:
 class TestBatchStatusRequest:
     def _make(self, file_keys: list):
         from app.schemas.material import BatchStatusRequest
+
         return BatchStatusRequest(file_keys=file_keys)
 
     def test_valid(self):
@@ -919,7 +943,8 @@ class TestBatchStatusRequest:
 class TestCommentCreateIn:
     def _make(self, **kw):
         from app.schemas.comment import CommentCreateIn
-        defaults = dict(target_type="material", target_id="some-id", body="Hello!")
+
+        defaults = {"target_type": "material", "target_id": "some-id", "body": "Hello!"}
         return CommentCreateIn(**{**defaults, **kw})
 
     def test_valid(self):
@@ -965,6 +990,7 @@ class TestCommentCreateIn:
 class TestCommentUpdateIn:
     def _make(self, body: str):
         from app.schemas.comment import CommentUpdateIn
+
         return CommentUpdateIn(body=body)
 
     def test_valid(self):
@@ -992,7 +1018,8 @@ class TestCommentUpdateIn:
 class TestPRCommentCreate:
     def _make(self, **kw):
         from app.schemas.pull_request import PRCommentCreate
-        defaults = dict(body="A comment")
+
+        defaults = {"body": "A comment"}
         return PRCommentCreate(**{**defaults, **kw})
 
     def test_valid(self):
@@ -1032,6 +1059,7 @@ class TestPRCommentCreate:
 class TestStripNullChars:
     def setup_method(self):
         from app.core.sanitization import strip_null_chars
+
         self.fn = strip_null_chars
 
     def test_string_null(self):
@@ -1080,22 +1108,26 @@ class TestBoundaryMatrix:
                 lambda kw: __import__("app.schemas.user", fromlist=["OnboardIn"]).OnboardIn(**kw),
                 "display_name",
                 64,
-                dict(academic_year="1A", gdpr_consent=True),
+                {"academic_year": "1A", "gdpr_consent": True},
             ),
             # bio: max 500
             (
-                lambda kw: __import__("app.schemas.user", fromlist=["UserUpdateIn"]).UserUpdateIn(**kw),
+                lambda kw: __import__("app.schemas.user", fromlist=["UserUpdateIn"]).UserUpdateIn(
+                    **kw
+                ),
                 "bio",
                 500,
                 {},
             ),
             # PR title: max 300 (min 3)
             (
-                lambda kw: __import__("app.schemas.pull_request", fromlist=["PullRequestCreate"]).PullRequestCreate(
+                lambda kw: __import__(
+                    "app.schemas.pull_request", fromlist=["PullRequestCreate"]
+                ).PullRequestCreate(
                     operations=[
-                        __import__("app.schemas.pull_request", fromlist=["CreateMaterialOp"]).CreateMaterialOp(
-                            title="Doc", type="document"
-                        )
+                        __import__(
+                            "app.schemas.pull_request", fromlist=["CreateMaterialOp"]
+                        ).CreateMaterialOp(title="Doc", type="document")
                     ],
                     **kw,
                 ),
@@ -1117,10 +1149,12 @@ class TestBoundaryMatrix:
                 lambda kw: __import__("app.schemas.user", fromlist=["OnboardIn"]).OnboardIn(**kw),
                 "display_name",
                 64,
-                dict(academic_year="1A", gdpr_consent=True),
+                {"academic_year": "1A", "gdpr_consent": True},
             ),
             (
-                lambda kw: __import__("app.schemas.user", fromlist=["UserUpdateIn"]).UserUpdateIn(**kw),
+                lambda kw: __import__("app.schemas.user", fromlist=["UserUpdateIn"]).UserUpdateIn(
+                    **kw
+                ),
                 "bio",
                 500,
                 {},

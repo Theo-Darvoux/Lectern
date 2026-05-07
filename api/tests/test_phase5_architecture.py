@@ -377,6 +377,6 @@ async def test_edit_material_conflict_raises_on_version_lock_mismatch(
         patch("app.services.pr._get_file_info", AsyncMock(return_value={"size": 1024})),
         patch("app.services.pr._resolve_mime_type", AsyncMock(return_value="application/pdf")),
         patch("app.core.storage.copy_object", AsyncMock()),
+        pytest.raises(ConflictError),
     ):
-        with pytest.raises(ConflictError):
-            await _exec_edit_material(db_session, op, pr, {})
+        await _exec_edit_material(db_session, op, pr, {})

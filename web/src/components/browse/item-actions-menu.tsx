@@ -64,13 +64,19 @@ interface ActionsContextValue {
   item: ItemData;
   actions: ReturnType<typeof useItemActions>;
   onAddAttachment?: () => void;
+  itemPath?: string;
+}
+
+interface VersionInfo {
+  file_name?: string;
+  file_mime_type?: string;
 }
 
 const ActionsContext = createContext<ActionsContextValue | null>(null);
 
 // ─── Logic Hook ───────────────────────────────────────────────────────────────
 
-function useItemActions(item: ItemData) {
+function useItemActions(item: ItemData, itemPath?: string) {
   const t = useTranslations("Browse");
   const tAuto = useTranslations("AutoTitle");
   const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
@@ -93,7 +99,7 @@ function useItemActions(item: ItemData) {
 
   if (isMaterial) {
     // Check if we have current version info (typical for materials from API)
-    const vi = item.data.current_version_info as Record<string, unknown> | undefined;
+    const vi = item.data.current_version_info as VersionInfo | undefined;
     if (vi) {
       mimeType = String(vi.file_mime_type || mimeType);
       const fileName = String(vi.file_name || "");
@@ -171,7 +177,9 @@ function useItemActions(item: ItemData) {
   });
 
   const handleShare = () => {
-    const url = window.location.href; // In real app, we might want a specific item link
+    const url = itemPath 
+      ? `${window.location.origin}${itemPath}`
+      : window.location.href;
     navigator.clipboard.writeText(url);
     toast.success(t("linkCopied"));
   };
@@ -297,18 +305,20 @@ export function ItemActionsMenu({
   item,
   children,
   onAddAttachment,
+  itemPath,
 }: {
   item: ItemData;
   children: React.ReactNode;
   onAddAttachment?: () => void;
+  itemPath?: string;
 }) {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+   
   const { staged, isExternal, ...rest } = item;
-  const actions = useItemActions(item);
+  const actions = useItemActions(item, itemPath);
   const { t } = actions;
 
   return (
-    <ActionsContext.Provider value={{ item, actions, onAddAttachment }}>
+    <ActionsContext.Provider value={{ item, actions, onAddAttachment, itemPath }}>
       <ContextMenu>
         <ContextMenuTrigger asChild>
           {children}

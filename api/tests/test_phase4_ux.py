@@ -200,5 +200,3 @@ async def test_sse_rate_limit_blocks_at_11th_connection(
         headers=_auth_headers(user),
     )
     assert response.status_code == 429
-
-

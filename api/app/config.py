@@ -26,8 +26,9 @@ class Settings(BaseSettings):
     contact_email: str | None = None
     dpo_email: str | None = None
     dpo_address: str | None = None
-    data_transfers: str | None = "Vos données sont hébergées et traitées exclusivement au sein de l'Union européenne. Aucun transfert vers un pays tiers n'est effectué."
-
+    data_transfers: str | None = (
+        "Vos données sont hébergées et traitées exclusivement au sein de l'Union européenne. Aucun transfert vers un pays tiers n'est effectué."
+    )
 
     database_url: str = "postgresql+asyncpg://wikint:wikint@localhost:5432/wikint"
 

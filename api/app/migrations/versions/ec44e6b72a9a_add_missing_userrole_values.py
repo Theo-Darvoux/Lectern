@@ -5,12 +5,13 @@ Revises: 0848234829d9
 Create Date: 2026-04-10 14:25:38.231264
 
 """
+
 from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = 'ec44e6b72a9a'
-down_revision: str | None = '0848234829d9'
+revision: str = "ec44e6b72a9a"
+down_revision: str | None = "0848234829d9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

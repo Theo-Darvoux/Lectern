@@ -9,6 +9,7 @@ logger = logging.getLogger("wikint")
 # Guard against decompression bombs
 Image.MAX_IMAGE_PIXELS = 10_000_000  # 10MP is plenty for an avatar
 
+
 def process_avatar(input_path: Path, size: int = 256, quality: int = 60) -> Path:
     """
     Process an image into a secure, heavily compressed square avatar.
@@ -42,7 +43,12 @@ def process_avatar(input_path: Path, size: int = 256, quality: int = 60) -> Path
             # Save as WebP
             img.save(out_path, format="WEBP", quality=quality, method=6)
 
-            logger.info("Avatar processed: %s -> %s (%d bytes)", input_path.name, out_path.name, out_path.stat().st_size)
+            logger.info(
+                "Avatar processed: %s -> %s (%d bytes)",
+                input_path.name,
+                out_path.name,
+                out_path.stat().st_size,
+            )
             return out_path
 
     except Exception as exc:

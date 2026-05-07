@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.annotation import Annotation
@@ -74,7 +74,7 @@ async def create_flag(
     await db.flush()
 
     result = await db.execute(
-        select(Flag).options(joinedload(Flag.reporter)).where(Flag.id == flag.id)
+        select(Flag).options(selectinload(Flag.reporter)).where(Flag.id == flag.id)
     )
     return result.scalar_one()
 
@@ -96,7 +96,7 @@ async def list_flags(
     total = count_result.scalar_one()
 
     result = await db.execute(
-        base.options(joinedload(Flag.reporter))
+        base.options(selectinload(Flag.reporter), selectinload(Flag.resolver))
         .order_by(Flag.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -114,7 +114,11 @@ async def update_flag(
         raise ForbiddenError("Only moderators can update flags")
 
     fid = _to_uuid(flag_id)
-    result = await db.execute(select(Flag).options(joinedload(Flag.reporter)).where(Flag.id == fid))
+    result = await db.execute(
+        select(Flag)
+        .options(selectinload(Flag.reporter), selectinload(Flag.resolver))
+        .where(Flag.id == fid)
+    )
     flag = result.scalar_one_or_none()
     if not flag:
         raise NotFoundError("Flag not found")

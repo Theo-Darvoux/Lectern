@@ -49,9 +49,8 @@ async def run_download_and_validate(
         tmp_path,
     )
 
-    is_zip_family = (
-        mime_type in ZIP_MIME_TYPES
-        or original_filename.lower().endswith((".docx", ".xlsx", ".pptx", ".zip", ".epub"))
+    is_zip_family = mime_type in ZIP_MIME_TYPES or original_filename.lower().endswith(
+        (".docx", ".xlsx", ".pptx", ".zip", ".epub")
     )
     if is_zip_family:
         uncompressed_size = await asyncio.to_thread(get_uncompressed_size, tmp_path)

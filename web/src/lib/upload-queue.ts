@@ -42,6 +42,9 @@ export interface QueueItem {
     // Optional tus URL for resumability across sessions
     tusUrl?: string;
 
+    /** SHA-256 hash computed before upload. Used to verify re-attached files. */
+    contentSha256?: string;
+
     // Result (set once status === "done")
     fileKey?: string;
     correctedName?: string;
@@ -136,17 +139,3 @@ if (typeof window !== "undefined") {
 
 // ── Selectors (A11) ──────────────────────────────────────────────────────────
 
-export const selectPendingItems = (state: UploadQueueState) =>
-    state.items.filter((i) => i.status === "pending");
-
-export const selectUploadingItems = (state: UploadQueueState) =>
-    state.items.filter((i) => i.status === "uploading");
-
-export const selectDoneItems = (state: UploadQueueState) =>
-    state.items.filter((i) => i.status === "done");
-
-export const selectErrorItems = (state: UploadQueueState) =>
-    state.items.filter((i) => i.status === "error" || i.status === "virus");
-
-export const selectInFlightCount = (state: UploadQueueState) =>
-    state.items.filter((i) => i.status === "uploading" || i.status === "pending").length;

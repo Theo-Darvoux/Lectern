@@ -17,6 +17,9 @@ _session = aioboto3.Session()
 _s3_config = BotocoreConfig(
     signature_version="s3v4",
     s3={"use_accelerate_endpoint": settings.s3_use_accelerate_endpoint},
+    # R2 returns incorrect CRC checksums; skip validation to avoid false failures
+    request_checksum_calculation="when_required",
+    response_checksum_validation="when_required",
 )
 
 _s3: S3Client | None = None  # persistent client, set by init_s3_client()
@@ -37,7 +40,9 @@ async def _get_s3_settings() -> dict[str, Any]:
                 "secret_key": config.get("s3_secret_key") or settings.s3_secret_key,
                 "bucket": config.get("s3_bucket") or settings.s3_bucket,
                 "region": config.get("s3_region") or settings.s3_region,
-                "use_ssl": config.get("s3_use_ssl") if config.get("s3_use_ssl") is not None else settings.s3_use_ssl,
+                "use_ssl": config.get("s3_use_ssl")
+                if config.get("s3_use_ssl") is not None
+                else settings.s3_use_ssl,
                 "public_endpoint": config.get("s3_public_endpoint") or settings.s3_public_endpoint,
             }
     except Exception:
@@ -56,7 +61,7 @@ async def _get_s3_settings() -> dict[str, Any]:
 async def init_s3_client() -> None:
     global _s3
     cfg = await _get_s3_settings()
-    _s3 = await _session.client(
+    _s3 = await _session.client(  # type: ignore[call-overload]
         "s3",
         endpoint_url=f"{'https' if cfg['use_ssl'] else 'http'}://{cfg['endpoint']}",
         aws_access_key_id=cfg["access_key"],
@@ -85,17 +90,17 @@ async def get_s3_client(cfg: dict[str, Any] | None = None) -> AsyncGenerator[S3C
 
     # In development or if using exactly settings, we can reuse the global _s3
     is_default = (
-        cfg["endpoint"] == settings.s3_endpoint and
-        cfg["access_key"] == settings.s3_access_key and
-        cfg["secret_key"] == settings.s3_secret_key and
-        cfg["use_ssl"] == settings.s3_use_ssl
+        cfg["endpoint"] == settings.s3_endpoint
+        and cfg["access_key"] == settings.s3_access_key
+        and cfg["secret_key"] == settings.s3_secret_key
+        and cfg["use_ssl"] == settings.s3_use_ssl
     )
 
     if is_default and _s3:
         yield _s3
         return
 
-    async with _session.client(
+    async with _session.client(  # type: ignore[call-overload]
         "s3",
         endpoint_url=f"{'https' if cfg['use_ssl'] else 'http'}://{cfg['endpoint']}",
         aws_access_key_id=cfg["access_key"],
@@ -179,7 +184,7 @@ async def upload_part(
     """Upload one part of a multipart upload. Returns the ETag."""
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        resp = await client.upload_part(
+        resp = await client.upload_part(  # type: ignore[call-arg]
             Bucket=cfg["bucket"],
             Key=file_key,
             UploadId=s3_upload_id,
@@ -197,7 +202,7 @@ async def complete_multipart_upload(
     """Complete a multipart upload. ``parts`` is a list of ``{PartNumber, ETag}`` dicts."""
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        await client.complete_multipart_upload(
+        await client.complete_multipart_upload(  # type: ignore[call-arg]
             Bucket=cfg["bucket"],
             Key=file_key,
             UploadId=s3_upload_id,
@@ -210,7 +215,7 @@ async def abort_multipart_upload(file_key: str, s3_upload_id: str) -> None:
     cfg = await _get_s3_settings()
     try:
         async with get_s3_client(cfg) as client:
-            await client.abort_multipart_upload(
+            await client.abort_multipart_upload(  # type: ignore[call-arg]
                 Bucket=cfg["bucket"],
                 Key=file_key,
                 UploadId=s3_upload_id,
@@ -310,7 +315,7 @@ async def download_file(file_key: str, dest_path: str | Path) -> None:
     """Download an object from storage to a local path."""
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)
+        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
         body: Any = response["Body"]
         try:
             with open(dest_path, "wb") as f:
@@ -331,7 +336,7 @@ async def download_file_with_hash(file_key: str, dest_path: str | Path) -> str:
     hasher = hashlib.sha256()
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)
+        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
         body: Any = response["Body"]
         try:
             with open(dest_path, "wb") as f:
@@ -387,7 +392,7 @@ async def generate_presigned_put(
             import base64
 
             params["ChecksumSHA256"] = base64.b64encode(bytes.fromhex(checksum_sha256)).decode()
-        url: str = await client.generate_presigned_url(
+        url: str = await client.generate_presigned_url(  # type: ignore[call-arg]
             "put_object",
             Params=params,
             ExpiresIn=ttl,
@@ -433,8 +438,7 @@ async def generate_presigned_get(
         utf8_encoded = quote(filename)
         disposition = "attachment" if force_download else "inline"
         params["ResponseContentDisposition"] = (
-            f'{disposition}; filename="{ascii_safe}"; '
-            f"filename*=UTF-8''{utf8_encoded}"
+            f"{disposition}; filename=\"{ascii_safe}\"; filename*=UTF-8''{utf8_encoded}"
         )
     elif force_download:
         params["ResponseContentDisposition"] = "attachment"
@@ -443,7 +447,7 @@ async def generate_presigned_get(
         params["ResponseContentType"] = content_type
 
     async with get_s3_client(cfg) as client:
-        url: str = await client.generate_presigned_url(
+        url: str = await client.generate_presigned_url(  # type: ignore[call-arg]
             "get_object",
             Params=params,
             ExpiresIn=ttl,
@@ -455,7 +459,7 @@ async def object_exists(file_key: str) -> bool:
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
         try:
-            await client.head_object(Bucket=cfg["bucket"], Key=file_key)
+            await client.head_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
             return True
         except client.exceptions.ClientError:
             return False
@@ -473,7 +477,7 @@ async def cas_object_exists(sha256: str) -> bool:
 async def get_object_info(file_key: str) -> dict[str, Any]:
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        response = await client.head_object(Bucket=cfg["bucket"], Key=file_key)
+        response = await client.head_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
         return {
             "size": response["ContentLength"],
             "content_type": response["ContentType"],
@@ -483,7 +487,7 @@ async def get_object_info(file_key: str) -> dict[str, Any]:
 async def move_object(source_key: str, dest_key: str) -> None:
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        await client.copy_object(
+        await client.copy_object(  # type: ignore[call-arg]
             Bucket=cfg["bucket"],
             CopySource={"Bucket": cfg["bucket"], "Key": source_key},
             Key=dest_key,
@@ -494,7 +498,7 @@ async def move_object(source_key: str, dest_key: str) -> None:
 async def copy_object(source_key: str, dest_key: str) -> None:
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        await client.copy_object(
+        await client.copy_object(  # type: ignore[call-arg]
             Bucket=cfg["bucket"],
             CopySource={"Bucket": cfg["bucket"], "Key": source_key},
             Key=dest_key,
@@ -504,7 +508,7 @@ async def copy_object(source_key: str, dest_key: str) -> None:
 async def delete_object(file_key: str) -> None:
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        await client.delete_object(Bucket=cfg["bucket"], Key=file_key)
+        await client.delete_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
 
     # Remove from quota sorted set for both staging prefixes.
     # quarantine/ keys are added on upload; uploads/ keys are added after clean processing.
@@ -535,7 +539,7 @@ async def read_full_object(file_key: str) -> bytes:
     """
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)
+        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
         content_length = int(cast(Any, response.get("ContentLength")) or 0)
         if content_length > _READ_FULL_OBJECT_MAX_BYTES:
             raise ValueError(
@@ -544,18 +548,18 @@ async def read_full_object(file_key: str) -> bytes:
                 "read_full_object. Use download_file_with_hash for large files."
             )
         body: Any = response["Body"]
-        return await body.read()
+        return await body.read()  # type: ignore[no-any-return]
 
 
 async def read_object_bytes(file_key: str, byte_count: int = MAGIC_HEADER_SIZE) -> bytes:
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
         try:
-            response = await client.get_object(
+            response = await client.get_object(  # type: ignore[call-arg]
                 Bucket=cfg["bucket"], Key=file_key, Range=f"bytes=0-{byte_count - 1}"
             )
             body: Any = response["Body"]
-            return await body.read()
+            return await body.read()  # type: ignore[no-any-return]
         except client.exceptions.ClientError:
             return b""
 
@@ -563,7 +567,7 @@ async def read_object_bytes(file_key: str, byte_count: int = MAGIC_HEADER_SIZE) 
 async def update_object_content_type(file_key: str, content_type: str) -> None:
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
-        await client.copy_object(
+        await client.copy_object(  # type: ignore[call-arg]
             Bucket=cfg["bucket"],
             CopySource={"Bucket": cfg["bucket"], "Key": file_key},
             Key=file_key,
@@ -577,7 +581,7 @@ async def stream_object(file_key: str) -> AsyncGenerator[Any, None]:
     """Yield S3 response body for chunked reading via ``await body.read(size)``."""
     cfg = await _get_s3_settings()
     if _s3:
-        response = await _s3.get_object(Bucket=cfg["bucket"], Key=file_key)
+        response = await _s3.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
         body: Any = response["Body"]
         try:
             yield body
@@ -586,8 +590,8 @@ async def stream_object(file_key: str) -> AsyncGenerator[Any, None]:
         return
 
     async with get_s3_client(cfg) as client:
-        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)
-        body: Any = response["Body"]
+        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+        body: Any = response["Body"]  # type: ignore[no-redef]
         yield body
 
 
@@ -628,7 +632,7 @@ async def generate_presigned_upload_part(
     """Generate a presigned URL for uploading one part of a multipart upload."""
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as s3:
-        url = await s3.generate_presigned_url(
+        url = await s3.generate_presigned_url(  # type: ignore[call-arg]
             "upload_part",
             Params={
                 "Bucket": cfg["bucket"],

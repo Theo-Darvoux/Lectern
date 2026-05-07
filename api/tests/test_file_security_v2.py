@@ -50,8 +50,6 @@ class TestCheckPdfSafety:
             "/OpenAction",
             "/AA",
             "/Launch",
-            "/GoToR",
-            "/URI",
             "/SubmitForm",
             "/ImportData",
         ],
@@ -88,9 +86,9 @@ class TestCheckPdfSafety:
 
 
 class TestPdfDangerousActionKeys:
-    def test_all_seven_keys_present(self):
-        expected = {"/OpenAction", "/AA", "/Launch", "/GoToR", "/URI", "/SubmitForm", "/ImportData"}
-        assert _PDF_DANGEROUS_ACTION_KEYS == expected
+    def test_all_five_keys_present(self):
+        expected = {"/OpenAction", "/AA", "/Launch", "/SubmitForm", "/ImportData"}
+        assert expected == _PDF_DANGEROUS_ACTION_KEYS
 
 
 class TestWalkPageTreeForActions:

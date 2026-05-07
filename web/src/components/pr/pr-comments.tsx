@@ -50,7 +50,7 @@ export function PRComments({ prId }: { prId: string }) {
 
     useEffect(() => {
         fetchComments();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+         
     }, [prId]);
 
     const handleSubmit = async () => {

@@ -2,8 +2,9 @@ import * as tus from "tus-js-client";
 import { API_BASE, ApiError, apiRequest, getClientId } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { compressImageIfNeeded } from "@/lib/file-utils";
+import { sha256File } from "@/lib/crypto-utils";
 
-export type UploadStatus = "pending" | "processing" | "clean" | "malicious" | "failed";
+type UploadStatus = "pending" | "processing" | "clean" | "malicious" | "failed";
 
 export interface TusUploadHandle {
     pause(): void;
@@ -11,10 +12,10 @@ export interface TusUploadHandle {
     abort(sendDelete?: boolean): void;
 }
 
-export interface UploadFileOptions {
+interface UploadFileOptions {
     /**
      * Progress callback. Values:
-     *   0–5    Initialisation
+     *   0–5    Initialisation (Hashing + Dedup check)
      *   5–80   Transfer to S3 (XHR PUT for small files, tus chunks for large)
      *   80–99  Server-side processing (via SSE overall_percent)
      *   100    Complete
@@ -28,6 +29,8 @@ export interface UploadFileOptions {
     onTusReady?: (handle: TusUploadHandle) => void;
     /** Called when the tus Location URL is available (for persistence). */
     onTusUrlAvailable?: (url: string) => void;
+    /** Called when the client-side SHA-256 hash is computed. */
+    onHashComputed?: (hash: string) => void;
     signal?: AbortSignal;
     /** Stable UUID for this upload attempt — enables server-side idempotency on retry. */
     uploadId?: string;
@@ -48,7 +51,7 @@ export function logicalFileSize(result: Pick<UploadResult, "size" | "original_si
     return result.content_encoding === "gzip" ? result.original_size : result.size;
 }
 
-export interface UploadResult {
+interface UploadResult {
     file_key: string;
     size: number;
     /** Size before server-side compression/optimisation. Equals size if unchanged. */
@@ -60,6 +63,8 @@ export interface UploadResult {
     correctedName: string;
     /** True when client-side image compression was applied before upload. */
     wasCompressed: boolean;
+    /** The client-computed SHA-256 hash. */
+    content_sha256?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -92,6 +97,11 @@ interface InitMultipartResponse {
         part_number: number;
         url: string;
     }>;
+}
+
+interface CheckExistsResponse {
+    exists: boolean;
+    file_key: string | null;
 }
 
 interface UploadEventPayload {
@@ -504,14 +514,67 @@ export async function uploadFile(
 ): Promise<UploadResult> {
     const { onProgress, signal } = options;
 
-    // ── Phase 1: Auth headers (0–5%) ─────────────────────────────────────────
+    // ── Phase 1: Client-side SHA-256 computation + dedup check (0–5%) ────────
     onProgress?.(0);
+    _onStatusUpdate(options.onStatusUpdate, "hashing", options.t);
 
     const token = getAccessToken();
     const baseHeaders: Record<string, string> = {
         "X-Client-ID": getClientId(),
     };
     if (token) baseHeaders["Authorization"] = `Bearer ${token}`;
+
+    // Compute hash for deduplication
+    const sha256 = await sha256File(file, (pct) => onProgress?.(Math.round(pct * 0.04)), signal);
+    onProgress?.(4);
+    options.onHashComputed?.(sha256);
+
+    // Check if file already exists in user's namespace or globally
+    _onStatusUpdate(options.onStatusUpdate, "checkingDedup", options.t);
+    const checkResp = await apiRequest("/upload/check-exists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...baseHeaders },
+        body: JSON.stringify({ sha256, size: file.size }),
+        signal,
+    }).then(r => r.json() as Promise<CheckExistsResponse>);
+
+    if (checkResp.exists && checkResp.file_key) {
+        // Hit in user's personal cache — we can skip upload and processing entirely
+        onProgress?.(100);
+        _onStatusUpdate(options.onStatusUpdate, "completed", options.t);
+        
+        // Fetch full metadata to satisfy UploadResult
+        const statusResp = await apiRequest("/upload/status/batch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...baseHeaders },
+            body: JSON.stringify({ file_keys: [checkResp.file_key] }),
+        }).then(r => r.json() as Promise<{ statuses: Record<string, UploadEventPayload> }>);
+
+        const s = statusResp.statuses[checkResp.file_key];
+        if (s?.status === "clean" && s.result) {
+            return {
+                file_key: s.result.file_key,
+                size: s.result.size,
+                original_size: s.result.original_size,
+                mime_type: s.result.mime_type,
+                content_encoding: s.result.content_encoding ?? null,
+                correctedName: s.result.file_name ?? s.result.file_key.split("/").pop() ?? file.name,
+                wasCompressed: false,
+                content_sha256: sha256,
+            };
+        }
+        // Fallback if status metadata is missing
+        return {
+            file_key: checkResp.file_key,
+            size: file.size,
+            original_size: file.size,
+            mime_type: file.type || "application/octet-stream",
+            content_encoding: null,
+            correctedName: file.name,
+            wasCompressed: false,
+            content_sha256: sha256,
+        };
+    }
 
     onProgress?.(5);
 
@@ -554,6 +617,7 @@ export async function uploadFile(
                 filename: fileToUpload.name,
                 size: fileToUpload.size,
                 mime_type: fileToUpload.type || "application/octet-stream",
+                sha256, // Pass expected hash for server-side verification
             }),
             signal,
         }).then((r) => r.json() as Promise<InitUploadResponse>);
@@ -610,6 +674,7 @@ export async function uploadFile(
         content_encoding: result.content_encoding ?? null,
         correctedName: result.file_name ?? result.file_key.split("/").pop() ?? file.name,
         wasCompressed: compressed,
+        content_sha256: sha256,
     };
 }
 
@@ -638,7 +703,7 @@ class UploadTerminalError extends Error {
 }
 
 /** Maximum wall-clock time (ms) to wait for SSE processing before giving up. */
-const SSE_TOTAL_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const SSE_TOTAL_TIMEOUT = 15 * 60 * 1000;
 
 async function _waitForUploadCompletion(
     fileKey: string,
@@ -817,7 +882,7 @@ function _handleUploadEvent(
 
 // ── Batch-zip types and helpers ───────────────────────────────────────────────
 
-export interface BatchZipEntry {
+interface BatchZipEntry {
     filename: string;
     relative_path: string;
     quarantine_key: string;
@@ -826,7 +891,7 @@ export interface BatchZipEntry {
     mime_type: string;
 }
 
-export interface BatchZipResponse {
+interface BatchZipResponse {
     files: BatchZipEntry[];
     skipped: number;
     errors: string[];
@@ -935,7 +1000,7 @@ export async function uploadBatchZip(
  * Poll /upload/status/{fileKey} once. Used as a reconnect fallback when SSE
  * is unavailable (e.g. corporate proxies that buffer SSE).
  */
-export async function pollUploadStatus(fileKey: string): Promise<UploadEventPayload | null> {
+async function pollUploadStatus(fileKey: string): Promise<UploadEventPayload | null> {
     try {
         const r = await apiRequest(`/upload/status/${encodeURIComponent(fileKey)}`);
         return (await r.json()) as UploadEventPayload;

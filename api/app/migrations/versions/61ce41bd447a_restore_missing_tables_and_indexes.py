@@ -5,12 +5,13 @@ Revises: 1cc078641ac3
 Create Date: 2026-04-20 23:22:37.855364
 
 """
+
 from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = '61ce41bd447a'
-down_revision: str | None = '1cc078641ac3'
+revision: str = "61ce41bd447a"
+down_revision: str | None = "1cc078641ac3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -59,24 +60,38 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS idx_directories_parent ON directories (parent_id)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_directories_slug ON directories (slug)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_directories_type ON directories (type)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_directories_deleted_at ON directories (deleted_at) WHERE deleted_at IS NOT NULL")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_directories_deleted_at ON directories (deleted_at) WHERE deleted_at IS NOT NULL"
+    )
 
     # Featured items
     op.execute("CREATE INDEX IF NOT EXISTS ix_featured_items_priority ON featured_items (priority)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_featured_items_window ON featured_items (start_at, end_at)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_featured_items_window ON featured_items (start_at, end_at)"
+    )
 
     # Material versions
-    op.execute("CREATE INDEX IF NOT EXISTS idx_material_versions_author ON material_versions (author_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_material_versions_material ON material_versions (material_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_material_versions_deleted_at ON material_versions (deleted_at) WHERE deleted_at IS NOT NULL")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_material_versions_author ON material_versions (author_id)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_material_versions_material ON material_versions (material_id)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_material_versions_deleted_at ON material_versions (deleted_at) WHERE deleted_at IS NOT NULL"
+    )
 
     # Materials
     op.execute("CREATE INDEX IF NOT EXISTS idx_materials_author ON materials (author_id)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_materials_directory ON materials (directory_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_materials_parent_material ON materials (parent_material_id)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_materials_parent_material ON materials (parent_material_id)"
+    )
     op.execute("CREATE INDEX IF NOT EXISTS idx_materials_slug ON materials (slug)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_materials_type ON materials (type)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_materials_deleted_at ON materials (deleted_at) WHERE deleted_at IS NOT NULL")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_materials_deleted_at ON materials (deleted_at) WHERE deleted_at IS NOT NULL"
+    )
 
     # PR Comments
     op.execute("CREATE INDEX IF NOT EXISTS idx_pr_comments_parent ON pr_comments (parent_id)")
@@ -85,8 +100,12 @@ def upgrade() -> None:
     # Pull Requests
     op.execute("CREATE INDEX IF NOT EXISTS idx_pull_requests_author ON pull_requests (author_id)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_pull_requests_status ON pull_requests (status)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_pull_requests_payload_gin ON pull_requests USING GIN (payload)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_pull_requests_reverts_pr_id ON pull_requests (reverts_pr_id) WHERE reverts_pr_id IS NOT NULL")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_pull_requests_payload_gin ON pull_requests USING GIN (payload)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_pull_requests_reverts_pr_id ON pull_requests (reverts_pr_id) WHERE reverts_pr_id IS NOT NULL"
+    )
 
     # Tags
     op.execute("CREATE INDEX IF NOT EXISTS idx_tags_name ON tags (name)")

@@ -34,7 +34,7 @@ from app.services.notification import notify_admins_pending_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-async def require_client_id(request: Request):
+async def require_client_id(request: Request):  # type: ignore[no-untyped-def]
     if not request.headers.get("x-client-id"):
         raise UnauthorizedError("Missing Client-ID header (CSRF Protection)")
 
@@ -52,7 +52,7 @@ limiter = Limiter(key_func=get_client_id, enabled=not settings.is_dev)
 @router.get("/methods")
 async def get_auth_methods(
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> dict[str, Any]:
     auth_config = await auth_service.get_full_auth_config(db, redis)
     return {
@@ -68,6 +68,7 @@ async def get_auth_methods(
         "primary_color": auth_config.get("primary_color"),
         "footer_text": auth_config.get("footer_text"),
         "organization_url": auth_config.get("organization_url"),
+        "og_image_url": auth_config.get("og_image_url"),
         "legal_name": auth_config.get("legal_name"),
         "legal_address": auth_config.get("legal_address"),
         "legal_siret": auth_config.get("legal_siret"),
@@ -84,7 +85,7 @@ async def request_code(
     request: Request,
     data: RequestCodeIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> dict[str, str]:
     email = data.email
 
@@ -126,7 +127,7 @@ async def request_code(
 async def verify_code(
     data: VerifyCodeIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     response: Response,
 ) -> TokenResponse:
     email = data.email.strip().lower()
@@ -154,7 +155,7 @@ async def verify_code(
     access_token, refresh_token, _ = auth_service.issue_tokens(
         user,
         jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days")
+        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
     )
 
     response.set_cookie(
@@ -187,7 +188,7 @@ async def verify_magic_link(
     request: Request,
     data: VerifyMagicLinkIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     response: Response,
 ) -> TokenResponse:
     email = await auth_service.verify_magic_token(redis, data.token)
@@ -206,7 +207,7 @@ async def verify_magic_link(
     access_token, refresh_token, _ = auth_service.issue_tokens(
         user,
         jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days")
+        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
     )
 
     response.set_cookie(
@@ -237,7 +238,7 @@ async def verify_magic_link(
 async def verify_google_oauth(
     data: GoogleLoginIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     response: Response,
 ) -> TokenResponse:
     auth_config = await auth_service.get_full_auth_config(db, redis)
@@ -304,7 +305,7 @@ async def verify_google_oauth(
     access_token, refresh_token, _ = auth_service.issue_tokens(
         user,
         jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days")
+        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
     )
 
     response.set_cookie(
@@ -335,7 +336,7 @@ async def verify_google_oauth(
 async def login(
     data: LoginIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     response: Response,
 ) -> TokenResponse:
     auth_config = await auth_service.get_full_auth_config(db, redis)
@@ -352,7 +353,7 @@ async def login(
     access_token, refresh_token, _ = auth_service.issue_tokens(
         user,
         jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days")
+        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
     )
 
     response.set_cookie(
@@ -384,7 +385,7 @@ async def refresh_token(
     request: Request,
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> RefreshResponse:
     token = request.cookies.get("refresh_token")
     if not token:
@@ -423,7 +424,7 @@ async def refresh_token(
     new_access_token, new_refresh_token, _ = auth_service.issue_tokens(
         user,
         jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days")
+        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
     )
 
     response.set_cookie(
@@ -442,7 +443,7 @@ async def refresh_token(
 @router.post("/logout", dependencies=[Depends(require_client_id)])
 async def logout(
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     request: Request,
     response: Response,
 ) -> dict[str, str]:

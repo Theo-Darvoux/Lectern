@@ -33,11 +33,7 @@ _PER_TYPE_LIMITS: dict[str, int] = {
 _MAX_FILENAME_LENGTH = 255
 
 
-def _check_per_type_size(
-    mime_type: str,
-    size: int,
-    config: dict[str, Any] | None = None
-) -> None:
+def _check_per_type_size(mime_type: str, size: int, config: dict[str, Any] | None = None) -> None:
     """Raise BadRequestError if ``size`` exceeds the applicable limit for ``mime_type``.
 
     Category-specific limits (e.g. 500MB for video) take precedence over the
@@ -45,19 +41,93 @@ def _check_per_type_size(
     """
     if config:
         limits = {
-            "image/svg+xml": (config.get("max_svg_size_mb") if config.get("max_svg_size_mb") is not None else settings.max_svg_size_mb) * 1024 * 1024,
-            "image/": (config.get("max_image_size_mb") if config.get("max_image_size_mb") is not None else settings.max_image_size_mb) * 1024 * 1024,
-            "audio/": (config.get("max_audio_size_mb") if config.get("max_audio_size_mb") is not None else settings.max_audio_size_mb) * 1024 * 1024,
-            "video/": (config.get("max_video_size_mb") if config.get("max_video_size_mb") is not None else settings.max_video_size_mb) * 1024 * 1024,
-            "application/pdf": (config.get("max_document_size_mb") if config.get("max_document_size_mb") is not None else settings.max_document_size_mb) * 1024 * 1024,
-            "application/epub+zip": (config.get("max_document_size_mb") if config.get("max_document_size_mb") is not None else settings.max_document_size_mb) * 1024 * 1024,
-            "image/vnd.djvu": (config.get("max_document_size_mb") if config.get("max_document_size_mb") is not None else settings.max_document_size_mb) * 1024 * 1024,
-            "text/": (config.get("max_text_size_mb") if config.get("max_text_size_mb") is not None else settings.max_text_size_mb) * 1024 * 1024,
-            "application/vnd.openxmlformats": (config.get("max_office_size_mb") if config.get("max_office_size_mb") is not None else settings.max_office_size_mb) * 1024 * 1024,
-            "application/msword": (config.get("max_office_size_mb") if config.get("max_office_size_mb") is not None else settings.max_office_size_mb) * 1024 * 1024,
-            "application/vnd.ms-": (config.get("max_office_size_mb") if config.get("max_office_size_mb") is not None else settings.max_office_size_mb) * 1024 * 1024,
+            "image/svg+xml": (  # type: ignore[operator]
+                config.get("max_svg_size_mb")
+                if config.get("max_svg_size_mb") is not None
+                else settings.max_svg_size_mb
+            )
+            * 1024
+            * 1024,
+            "image/": (  # type: ignore[operator]
+                config.get("max_image_size_mb")
+                if config.get("max_image_size_mb") is not None
+                else settings.max_image_size_mb
+            )
+            * 1024
+            * 1024,
+            "audio/": (  # type: ignore[operator]
+                config.get("max_audio_size_mb")
+                if config.get("max_audio_size_mb") is not None
+                else settings.max_audio_size_mb
+            )
+            * 1024
+            * 1024,
+            "video/": (  # type: ignore[operator]
+                config.get("max_video_size_mb")
+                if config.get("max_video_size_mb") is not None
+                else settings.max_video_size_mb
+            )
+            * 1024
+            * 1024,
+            "application/pdf": (  # type: ignore[operator]
+                config.get("max_document_size_mb")
+                if config.get("max_document_size_mb") is not None
+                else settings.max_document_size_mb
+            )
+            * 1024
+            * 1024,
+            "application/epub+zip": (  # type: ignore[operator]
+                config.get("max_document_size_mb")
+                if config.get("max_document_size_mb") is not None
+                else settings.max_document_size_mb
+            )
+            * 1024
+            * 1024,
+            "image/vnd.djvu": (  # type: ignore[operator]
+                config.get("max_document_size_mb")
+                if config.get("max_document_size_mb") is not None
+                else settings.max_document_size_mb
+            )
+            * 1024
+            * 1024,
+            "text/": (  # type: ignore[operator]
+                config.get("max_text_size_mb")
+                if config.get("max_text_size_mb") is not None
+                else settings.max_text_size_mb
+            )
+            * 1024
+            * 1024,
+            "application/vnd.openxmlformats": (  # type: ignore[operator]
+                config.get("max_office_size_mb")
+                if config.get("max_office_size_mb") is not None
+                else settings.max_office_size_mb
+            )
+            * 1024
+            * 1024,
+            "application/msword": (  # type: ignore[operator]
+                config.get("max_office_size_mb")
+                if config.get("max_office_size_mb") is not None
+                else settings.max_office_size_mb
+            )
+            * 1024
+            * 1024,
+            "application/vnd.ms-": (  # type: ignore[operator]
+                config.get("max_office_size_mb")
+                if config.get("max_office_size_mb") is not None
+                else settings.max_office_size_mb
+            )
+            * 1024
+            * 1024,
         }
-        global_limit = (config.get("max_file_size_mb") if config.get("max_file_size_mb") is not None else settings.max_file_size_mb) * 1024 * 1024
+        global_limit = (
+            (  # type: ignore[operator]
+                config.get("max_file_size_mb")
+                if config.get("max_file_size_mb") is not None
+                else settings.max_file_size_mb
+            )
+            * 1024
+            * 1024
+        )
     else:
         limits = _PER_TYPE_LIMITS
         global_limit = settings.max_file_size_mb * 1024 * 1024
@@ -98,14 +168,13 @@ def _sanitize_filename(raw: str) -> str:
     name = os.path.basename(raw)
     name = re.sub(r"[\x00-\x1f\x7f]", "", name)
     name = re.sub(r"[\u200b-\u200f\u2028-\u202f\u2060\ufeff]", "", name)
-    name = re.sub(r"[\s%&\\<>?/!:+`|^~]", "_", name)
-    name = re.sub(r"_+", "_", name).strip("_.")
+    name = re.sub(r"[\s%&\\<>?/!:+`|^~#*]", "_", name)
+    name = re.sub(r"_{3,}", "_", name).strip("_.")
     return name
 
 
 def _validate_filename(
-    raw: str,
-    allowed_extensions: set[str] | frozenset[str] | None = None
+    raw: str, allowed_extensions: set[str] | frozenset[str] | None = None
 ) -> tuple[str, str]:
     """Return (safe_name, ext) or raise BadRequestError with structured code."""
     safe_name = _sanitize_filename(raw or "unnamed")
@@ -129,7 +198,7 @@ def _apply_mime_correction(
     safe_name: str,
     detected_mime: str,
     ext: str,
-    allowed_mimes: set[str] | frozenset[str] | None = None
+    allowed_mimes: set[str] | frozenset[str] | None = None,
 ) -> tuple[str, str]:
     """Reject uploads where magic bytes conflict with a known extension's accepted MIME types."""
     if not MimeRegistry.is_allowed_mime(detected_mime, allowed=allowed_mimes):
@@ -138,7 +207,7 @@ def _apply_mime_correction(
             code=ERR_TYPE_NOT_ALLOWED,
         )
 
-    allowed_mimes = MimeRegistry.get_allowed_mimes_for_extension(ext)
+    allowed_mimes = MimeRegistry.get_allowed_mimes_for_extension(ext)  # type: ignore[assignment]
 
     if allowed_mimes and detected_mime not in allowed_mimes:
         raise BadRequestError(

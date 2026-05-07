@@ -54,7 +54,12 @@ _DIRECTORIES_RANKING_RULES = [
 def _settings_changed(current: MeilisearchSettings, desired: MeilisearchSettings) -> list[str]:
     """Return list of field names that differ between current and desired settings."""
     changed: list[str] = []
-    for field in ("searchable_attributes", "filterable_attributes", "sortable_attributes", "ranking_rules"):
+    for field in (
+        "searchable_attributes",
+        "filterable_attributes",
+        "sortable_attributes",
+        "ranking_rules",
+    ):
         if getattr(current, field) != getattr(desired, field):
             changed.append(field)
 
@@ -64,7 +69,10 @@ def _settings_changed(current: MeilisearchSettings, desired: MeilisearchSettings
     if dt is not None:
         if ct is None or ct.enabled != dt.enabled:
             changed.append("typo_tolerance.enabled")
-        elif dt.min_word_size_for_typos is not None and ct.min_word_size_for_typos != dt.min_word_size_for_typos:
+        elif (
+            dt.min_word_size_for_typos is not None
+            and ct.min_word_size_for_typos != dt.min_word_size_for_typos
+        ):
             changed.append("typo_tolerance.min_word_size_for_typos")
 
     return changed
@@ -75,7 +83,9 @@ async def _apply_settings_if_changed(index_uid: str, desired: MeilisearchSetting
     try:
         current = await meili_admin_client.index(index_uid).get_settings()
     except Exception as e:
-        logger.warning("Could not fetch settings for '%s': %s — applying unconditionally", index_uid, e)
+        logger.warning(
+            "Could not fetch settings for '%s': %s — applying unconditionally", index_uid, e
+        )
         await meili_admin_client.index(index_uid).update_settings(desired)
         return
 

@@ -4,7 +4,7 @@ x-common-env: &common-env
   REDIS_URL: ${REDIS_URL}
   MEILI_URL: ${MEILI_URL}
   MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
-  MEILI_SEARCH_KEY: ${MEILI_SEARCH_KEY}
+  # MEILI_SEARCH_KEY: ${MEILI_SEARCH_KEY}
   SECRET_KEY: ${SECRET_KEY}
   MALWAREBAZAAR_API_KEY: ${MALWAREBAZAAR_API_KEY}
   ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
@@ -126,7 +126,7 @@ services:
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/"]
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 30s
       retries: 5
@@ -171,7 +171,7 @@ services:
       - api
       - web
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3

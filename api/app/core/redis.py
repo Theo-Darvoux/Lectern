@@ -12,11 +12,11 @@ from app.config import settings
 
 logger = logging.getLogger("wikint")
 
-redis_client: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
+redis_client: Redis = Redis.from_url(settings.redis_url, decode_responses=True)  # type: ignore[type-arg]
 arq_pool: ArqRedis | None = None
 
 
-async def get_redis() -> AsyncGenerator[Redis, None]:
+async def get_redis() -> AsyncGenerator[Redis, None]:  # type: ignore[type-arg]
     yield redis_client
 
 
@@ -32,7 +32,7 @@ async def close_arq_pool() -> None:
 
 @asynccontextmanager
 async def redis_lock(
-    redis: Redis,
+    redis: Redis,  # type: ignore[type-arg]
     lock_name: str,
     timeout: float = 10.0,
     retry_interval: float = 0.1,
@@ -67,7 +67,7 @@ async def redis_lock(
 
 @asynccontextmanager
 async def redis_semaphore(
-    redis: Redis,
+    redis: Redis,  # type: ignore[type-arg]
     sem_name: str,
     limit: int,
     timeout: float = 60.0,

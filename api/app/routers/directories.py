@@ -1,16 +1,76 @@
+import asyncio
 import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user
+from app.models.material import Material
 from app.models.user import User
 from app.schemas.directory import DirectoryBreadcrumb, DirectoryOut
 from app.services import directory as directory_service
 
 router = APIRouter(prefix="/api/directories", tags=["directories"])
+
+
+class ResolvePathsRequest(BaseModel):
+    directory_ids: list[uuid.UUID] = []
+    material_ids: list[uuid.UUID] = []
+
+
+class MaterialResolveOut(BaseModel):
+    directory_id: str | None
+    title: str
+
+
+class ResolvePathsResponse(BaseModel):
+    directories: dict[uuid.UUID, list[DirectoryBreadcrumb]] = {}
+    materials: dict[uuid.UUID, MaterialResolveOut] = {}
+
+
+@router.post("/resolve-paths", response_model=ResolvePathsResponse)
+async def resolve_paths(
+    req: ResolvePathsRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> ResolvePathsResponse:
+    resp = ResolvePathsResponse()
+
+    if req.material_ids:
+        mat_stmt = select(Material.id, Material.directory_id, Material.title).where(
+            Material.id.in_(req.material_ids)
+        )
+        mat_res = await db.execute(mat_stmt)
+        dir_ids_from_mat = []
+        for row in mat_res.all():
+            resp.materials[row.id] = MaterialResolveOut(
+                directory_id=str(row.directory_id) if row.directory_id else None,
+                title=row.title,
+            )
+            if row.directory_id:
+                dir_ids_from_mat.append(row.directory_id)
+        req.directory_ids.extend(dir_ids_from_mat)
+
+    if req.directory_ids:
+
+        async def fetch_dir_path(did: uuid.UUID) -> tuple[uuid.UUID, list[DirectoryBreadcrumb]]:
+            try:
+                p = await directory_service.get_directory_path(db, did)
+                return did, [DirectoryBreadcrumb.model_validate(x) for x in p]
+            except Exception:
+                return did, []
+
+        unique_dir_ids = set(req.directory_ids)
+        dir_paths = await asyncio.gather(*(fetch_dir_path(did) for did in unique_dir_ids))
+        for did, p in dir_paths:
+            if p:
+                resp.directories[did] = p
+
+    return resp
 
 
 @router.get("/{id}", response_model=DirectoryOut)
@@ -28,7 +88,7 @@ async def get_directory_children(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> dict:
+) -> dict:  # type: ignore[type-arg]
     return await directory_service.get_directory_children(db, id)
 
 

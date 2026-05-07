@@ -137,14 +137,14 @@ export function scheduleRefreshTimer(token: string) {
     }, delay);
 }
 
-export function clearRefreshTimer() {
+function clearRefreshTimer() {
     if (refreshTimer) {
         clearTimeout(refreshTimer);
         refreshTimer = null;
     }
 }
 
-export function broadcastTokenRefreshed(token: string) {
+function broadcastTokenRefreshed(token: string) {
     if (channel) {
         channel.postMessage({ type: "TOKEN_REFRESHED", token });
     }
@@ -156,7 +156,7 @@ export function broadcastTokenAcquired(token: string) {
     }
 }
 
-export function broadcastLogout() {
+function broadcastLogout() {
     if (channel) {
         channel.postMessage({ type: "LOGOUT" });
     }

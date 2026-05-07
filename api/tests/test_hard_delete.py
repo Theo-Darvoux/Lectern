@@ -24,10 +24,13 @@ async def _create_user(db: AsyncSession, email_prefix: str = "test") -> User:
     await db.flush()
     return user
 
+
 async def _auth_headers(user: User) -> dict[str, str]:
     from app.core.security import create_access_token
+
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
+
 
 async def test_hard_delete_self(client: AsyncClient, db_session: AsyncSession) -> None:
     # 1. Setup user with associated data
@@ -46,34 +49,19 @@ async def test_hard_delete_self(client: AsyncClient, db_session: AsyncSession) -
         title="Test Material",
         slug="test-material",
         type="pdf",
-        author_id=user.id
+        author_id=user.id,
     )
     db_session.add(material)
     await db_session.flush()
 
-    annotation = Annotation(
-        material_id=material.id,
-        author_id=user.id,
-        body="Test Annotation"
-    )
+    annotation = Annotation(material_id=material.id, author_id=user.id, body="Test Annotation")
     comment = Comment(
-        target_type="material",
-        target_id=material.id,
-        author_id=user.id,
-        body="Test Comment"
+        target_type="material", target_id=material.id, author_id=user.id, body="Test Comment"
     )
     upload = Upload(
-        upload_id=str(uuid.uuid4()),
-        user_id=user.id,
-        filename="test.pdf",
-        status="completed"
+        upload_id=str(uuid.uuid4()), user_id=user.id, filename="test.pdf", status="completed"
     )
-    pr = PullRequest(
-        title="Test PR",
-        type="batch",
-        payload=[],
-        author_id=user.id
-    )
+    pr = PullRequest(title="Test PR", type="batch", payload=[], author_id=user.id)
 
     db_session.add_all([annotation, comment, upload, pr])
     await db_session.commit()
@@ -115,6 +103,7 @@ async def test_hard_delete_self(client: AsyncClient, db_session: AsyncSession) -
     pr_after = res.scalar_one()
     assert pr_after.author_id is None
 
+
 async def test_admin_hard_delete_user(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _create_user(db_session, "admin")
     admin.role = UserRole.BUREAU
@@ -122,9 +111,10 @@ async def test_admin_hard_delete_user(client: AsyncClient, db_session: AsyncSess
     await db_session.commit()
 
     headers = await _auth_headers(admin)
-    response = await client.delete(f"/api/admin/users/{target.id}", headers=headers)
+    target_id = target.id
+    response = await client.delete(f"/api/admin/users/{target_id}", headers=headers)
     assert response.status_code == 200
 
-    db_session.expire_all()
-    res = await db_session.execute(select(User).where(User.id == target.id))
+    await db_session.commit()
+    res = await db_session.execute(select(User).where(User.id == target_id))
     assert res.scalar_one_or_none() is None

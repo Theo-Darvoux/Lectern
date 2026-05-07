@@ -1,8 +1,9 @@
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any, TypeVar
+from typing import Any
 
 from sqlalchemy import select, update
 
@@ -13,8 +14,6 @@ from app.services.auth import get_full_auth_config
 from app.workers.upload.context import WorkerContext
 
 logger = logging.getLogger("wikint")
-
-T = TypeVar("T")
 
 
 async def _retry_db[T](
@@ -32,7 +31,9 @@ async def _retry_db[T](
                 logger.error("%s failed after %d attempts: %s", context, max_attempts, exc)
                 raise
             delay = base_delay * (2**attempt)
-            logger.warning("%s retry %d/%d in %.1fs: %s", context, attempt + 1, max_attempts, delay, exc)
+            logger.warning(
+                "%s retry %d/%d in %.1fs: %s", context, attempt + 1, max_attempts, delay, exc
+            )
             await asyncio.sleep(delay)
     raise RuntimeError("Unreachable")
 
@@ -108,10 +109,8 @@ class UploadWorkerRepository:
                 )
                 await session.commit()
 
-        try:
+        with contextlib.suppress(Exception):
             await _retry_db(_do_checkpoint, context=f"checkpoint_pipeline_stage for {upload_id}")
-        except Exception:
-            pass
 
     async def get_pipeline_stage(self, upload_id: str) -> int:
         """Read the last completed pipeline stage from the DB."""
@@ -137,7 +136,7 @@ class UploadWorkerRepository:
 
         async def _do_get() -> dict[str, Any]:
             async with session_factory() as session:
-                return await get_full_auth_config(session, self._ctx.redis)
+                return await get_full_auth_config(session, self._ctx.redis)  # type: ignore[arg-type]
 
         try:
             return await _retry_db(_do_get, context="get_auth_config in worker")
@@ -196,7 +195,9 @@ class UploadWorkerRepository:
                 return row.webhook_url if row else None
 
         try:
-            webhook_url = await _retry_db(_check_webhook, context=f"maybe_dispatch_webhook for {upload_id}")
+            webhook_url = await _retry_db(
+                _check_webhook, context=f"maybe_dispatch_webhook for {upload_id}"
+            )
             if not webhook_url:
                 return
 

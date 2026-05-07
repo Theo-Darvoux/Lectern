@@ -1,11 +1,9 @@
 import asyncio
 import logging
 from collections.abc import Awaitable
-from typing import Any, TypeVar
+from typing import Any
 
 logger = logging.getLogger("wikint")
-
-T = TypeVar("T")
 
 
 async def parallel_tasks[T](
@@ -26,9 +24,6 @@ def check_task_exceptions(
     if not exceptions:
         return
 
-    for res, name in zip(results, task_names):
+    for res, name in zip(results, task_names, strict=False):
         if isinstance(res, BaseException):
-            logger.error(
-                "Task '%s' failed for upload %s: %r",
-                name, upload_id, res, exc_info=res
-            )
+            logger.error("Task '%s' failed for upload %s: %r", name, upload_id, res, exc_info=res)

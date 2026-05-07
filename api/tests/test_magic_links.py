@@ -57,6 +57,7 @@ async def test_magic_link_flow_success(
     assert response.status_code == 400
     assert "Invalid or expired magic link" in response.json()["detail"]
 
+
 async def test_magic_link_new_user_signup(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any
 ) -> None:
@@ -82,6 +83,7 @@ async def test_magic_link_new_user_signup(
     assert data["is_new_user"] is True
     assert data["user"]["onboarded"] is False
 
+
 async def test_magic_link_invalid_token(client: AsyncClient) -> None:
     response = await client.post(
         "/api/auth/verify-magic-link",
@@ -89,6 +91,7 @@ async def test_magic_link_invalid_token(client: AsyncClient) -> None:
     )
     assert response.status_code == 400
     assert "Invalid or expired magic link" in response.json()["detail"]
+
 
 async def test_magic_link_pending_approval(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any
@@ -113,6 +116,7 @@ async def test_magic_link_pending_approval(
     )
     assert response.status_code == 200
     assert response.json()["user"]["role"] == "pending"
+
 
 async def test_magic_link_expired(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any

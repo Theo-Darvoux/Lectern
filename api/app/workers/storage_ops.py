@@ -5,7 +5,7 @@ from app.core.storage import delete_object
 logger = logging.getLogger("wikint")
 
 
-async def delete_storage_objects(ctx: dict, keys: list[str]) -> None:
+async def delete_storage_objects(ctx: dict, keys: list[str]) -> None:  # type: ignore[type-arg]
     """Delete a list of object keys from S3-compatible storage.
 
     For keys in the cas/ prefix, this decrements the reference count in Redis

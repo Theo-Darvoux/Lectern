@@ -177,12 +177,14 @@ class TestStripMetadataFile:
         img_path = tmp_path / "img.png"
         img_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
 
-        with patch(
-            "app.core.file_security.strip._strip_image_from_path",
-            side_effect=RuntimeError("Pillow crashed"),
+        with (
+            patch(
+                "app.core.file_security.strip._strip_image_from_path",
+                side_effect=RuntimeError("Pillow crashed"),
+            ),
+            pytest.raises(ValueError, match="sanitize"),
         ):
-            with pytest.raises(ValueError, match="sanitize"):
-                await strip_metadata_file(img_path, "image/png")
+            await strip_metadata_file(img_path, "image/png")
 
     @pytest.mark.asyncio
     async def test_value_error_propagates(self, tmp_path):
@@ -190,13 +192,15 @@ class TestStripMetadataFile:
         doc_path = tmp_path / "macro.doc"
         doc_path.write_bytes(b"\xd0\xcf\x11\xe0" + b"\x00" * 100)
 
-        with patch(
-            "app.core.file_security.strip._strip_ole2_from_path",
-            new_callable=AsyncMock,
-            side_effect=ValueError("Auto-exec macro"),
+        with (
+            patch(
+                "app.core.file_security.strip._strip_ole2_from_path",
+                new_callable=AsyncMock,
+                side_effect=ValueError("Auto-exec macro"),
+            ),
+            pytest.raises(ValueError, match="Auto-exec macro"),
         ):
-            with pytest.raises(ValueError, match="Auto-exec macro"):
-                await strip_metadata_file(doc_path, "application/msword")
+            await strip_metadata_file(doc_path, "application/msword")
 
 
 # ── _strip_pdf_from_path (real pikepdf) ──────────────────────────────────────
@@ -297,9 +301,8 @@ class TestGzipCompressPath:
         src = tmp_path / "src.txt"
         src.write_bytes(b"data " * 100)
 
-        with patch("gzip.open", side_effect=OSError("disk full")):
-            with pytest.raises(OSError):
-                _gzip_compress_path(src)
+        with patch("gzip.open", side_effect=OSError("disk full")), pytest.raises(OSError):
+            _gzip_compress_path(src)
 
 
 # ── _recompress_zip_path ─────────────────────────────────────────────────────

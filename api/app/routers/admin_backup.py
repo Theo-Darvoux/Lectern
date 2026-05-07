@@ -112,7 +112,7 @@ async def export_backup(
         path=str(tmp_path),
         filename=f"{filename}.zip",
         media_type="application/zip",
-        background=_cleanup_task(tmp_path),
+        background=_cleanup_task(tmp_path),  # type: ignore[arg-type]
     )
 
 

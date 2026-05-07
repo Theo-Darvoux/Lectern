@@ -679,7 +679,9 @@ class TestEditOperations:
 
 class TestModeratorAutoApprove:
     @pytest.mark.asyncio
-    async def test_moderator_auto_approve(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_moderator_auto_approve(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         """Test that moderators get auto-approved if auto_approve is True."""
         # Create a moderator user with auto_approve enabled (default is True)
         user = await _create_user(db_session, UserRole.MODERATOR)

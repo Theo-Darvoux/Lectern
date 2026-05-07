@@ -1,4 +1,5 @@
 """Comprehensive tests for the admin backup/restore feature."""
+
 from __future__ import annotations
 
 import json
@@ -17,15 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token
 from app.models.directory import Directory, DirectoryType
-from app.models.material import Material, MaterialVersion
-from app.models.pull_request import PRComment, PRFileClaim, PullRequest, PRStatus
+from app.models.material import Material
+from app.models.pull_request import PRStatus, PullRequest
 from app.models.tag import Tag
 from app.models.user import User, UserRole
 from app.services.backup import (
+    _TABLE_INSERT_ORDER,
     BACKUP_VERSION,
     MAX_LOCAL_BACKUPS,
-    _TABLE_DELETE_ORDER,
-    _TABLE_INSERT_ORDER,
     _deserialize_row,
     _deserialize_value,
     _serialize_row,
@@ -36,7 +36,6 @@ from app.services.backup import (
     list_local_backups,
     restore_from_zip_path,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -74,7 +73,9 @@ def _auth(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _make_directory(db: AsyncSession, user: User, parent: Directory | None = None) -> Directory:
+async def _make_directory(
+    db: AsyncSession, user: User, parent: Directory | None = None
+) -> Directory:
     d = Directory(
         id=uuid.uuid4(),
         name="Test Dir",
@@ -88,7 +89,9 @@ async def _make_directory(db: AsyncSession, user: User, parent: Directory | None
     return d
 
 
-async def _make_material(db: AsyncSession, user: User, directory: Directory | None = None) -> Material:
+async def _make_material(
+    db: AsyncSession, user: User, directory: Directory | None = None
+) -> Material:
     m = Material(
         id=uuid.uuid4(),
         title="Test Material",
@@ -117,6 +120,7 @@ async def _make_pull_request(db: AsyncSession, user: User) -> PullRequest:
 
 def _make_mock_s3() -> tuple[AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
     """Return (mock_list_objects, mock_download, mock_delete, mock_upload) mocks."""
+
     async def _empty_gen(*args, **kwargs):
         return
         yield  # make it an async generator
@@ -199,6 +203,7 @@ def test_topological_sort_deep_chain() -> None:
         {"id": ids[0], "parent_id": ids[1]},
     ]
     import random
+
     random.shuffle(rows)
     sorted_rows = _topological_sort(rows, pk_col="id", fk_col="parent_id")
     positions = {r["id"]: i for i, r in enumerate(sorted_rows)}
@@ -247,7 +252,11 @@ def test_list_local_backups_empty(tmp_path: Path) -> None:
 
 
 def test_list_local_backups_returns_sorted(tmp_path: Path) -> None:
-    names = ["backup_20260101_000000.zip", "backup_20260103_000000.zip", "backup_20260102_000000.zip"]
+    names = [
+        "backup_20260101_000000.zip",
+        "backup_20260103_000000.zip",
+        "backup_20260102_000000.zip",
+    ]
     for name in names:
         (tmp_path / name).write_bytes(b"x")
     result = list_local_backups(tmp_path)
@@ -295,9 +304,7 @@ def test_enforce_rotation_respects_max_local_backups(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_backup_zip_structure(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_create_backup_zip_structure(db_session: AsyncSession, tmp_path: Path) -> None:
     """The ZIP must contain manifest.json and db/*.json for all tables."""
     dest = tmp_path / "backup.zip"
 
@@ -324,9 +331,7 @@ async def test_create_backup_zip_structure(
 
 
 @pytest.mark.asyncio
-async def test_create_backup_zip_includes_db_rows(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_create_backup_zip_includes_db_rows(db_session: AsyncSession, tmp_path: Path) -> None:
     """Rows present in DB at backup time must appear in the ZIP."""
     user = await _make_admin(db_session)
     tag = Tag(id=uuid.uuid4(), name=f"tag-{uuid.uuid4().hex[:6]}")
@@ -404,7 +409,7 @@ def _make_minimal_zip(tmp_path: Path, rows: dict[str, list[dict]] | None = None)
         "version": BACKUP_VERSION,
         "created_at": datetime.now(UTC).isoformat(),
         "tables": _TABLE_INSERT_ORDER,
-        "s3_prefixes": list(("cas/", "uploads/", "thumbnails/")),
+        "s3_prefixes": ["cas/", "uploads/", "thumbnails/"],
         "s3_object_count": 0,
         "db_row_counts": {t: len(db_data.get(t, [])) for t in _TABLE_INSERT_ORDER},
     }
@@ -416,9 +421,7 @@ def _make_minimal_zip(tmp_path: Path, rows: dict[str, list[dict]] | None = None)
 
 
 @pytest.mark.asyncio
-async def test_restore_clears_existing_data(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_restore_clears_existing_data(db_session: AsyncSession, tmp_path: Path) -> None:
     """After restore, rows not in the backup must be gone."""
     # Pre-existing tag that is NOT in the backup
     pre_tag = Tag(id=uuid.uuid4(), name=f"pre-existing-{uuid.uuid4().hex[:6]}")
@@ -438,16 +441,15 @@ async def test_restore_clears_existing_data(
     ):
         await restore_from_zip_path(db_session, zip_path)
 
-    from sqlalchemy import select, text as sa_text
+    from sqlalchemy import text as sa_text
+
     result = await db_session.execute(sa_text("SELECT COUNT(*) FROM tags"))
     count = result.scalar_one()
     assert count == 0
 
 
 @pytest.mark.asyncio
-async def test_restore_inserts_backup_rows(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_restore_inserts_backup_rows(db_session: AsyncSession, tmp_path: Path) -> None:
     """Rows in the backup ZIP must be present in the DB after restore."""
     user_id = uuid.uuid4()
     tag_id = uuid.uuid4()
@@ -494,12 +496,17 @@ async def test_restore_inserts_backup_rows(
         await restore_from_zip_path(db_session, zip_path)
 
     from sqlalchemy import text as sa_text
-    result = await db_session.execute(sa_text("SELECT email FROM users WHERE id = :id"), {"id": str(user_id)})
+
+    result = await db_session.execute(
+        sa_text("SELECT email FROM users WHERE id = :id"), {"id": str(user_id)}
+    )
     row = result.first()
     assert row is not None
     assert row[0] == "restored@test.com"
 
-    result = await db_session.execute(sa_text("SELECT name FROM tags WHERE id = :id"), {"id": str(tag_id)})
+    result = await db_session.execute(
+        sa_text("SELECT name FROM tags WHERE id = :id"), {"id": str(tag_id)}
+    )
     tag_row = result.first()
     assert tag_row is not None
     assert tag_row[0] == "restored-tag"
@@ -516,23 +523,54 @@ async def test_restore_directories_topological_order(
     now = datetime.now(UTC).isoformat()
 
     user_row: dict[str, Any] = {
-        "id": user_id, "email": "u@test.com", "display_name": "U", "role": "bureau",
-        "onboarded": True, "gdpr_consent": True, "gdpr_consent_at": None,
-        "avatar_url": None, "bio": None, "academic_year": None,
-        "password_hash": None, "is_flagged": False, "auto_approve": False,
-        "created_at": now, "deleted_at": None, "last_login_at": None,
+        "id": user_id,
+        "email": "u@test.com",
+        "display_name": "U",
+        "role": "bureau",
+        "onboarded": True,
+        "gdpr_consent": True,
+        "gdpr_consent_at": None,
+        "avatar_url": None,
+        "bio": None,
+        "academic_year": None,
+        "password_hash": None,
+        "is_flagged": False,
+        "auto_approve": False,
+        "created_at": now,
+        "deleted_at": None,
+        "last_login_at": None,
     }
     dir_row_root: dict[str, Any] = {
-        "id": root_id, "parent_id": None, "name": "Root", "slug": "root",
-        "type": "folder", "description": None, "metadata": {}, "sort_order": 0,
-        "is_system": False, "like_count": 0, "created_by": user_id,
-        "created_at": now, "updated_at": now, "deleted_at": None,
+        "id": root_id,
+        "parent_id": None,
+        "name": "Root",
+        "slug": "root",
+        "type": "folder",
+        "description": None,
+        "metadata": {},
+        "sort_order": 0,
+        "is_system": False,
+        "like_count": 0,
+        "created_by": user_id,
+        "created_at": now,
+        "updated_at": now,
+        "deleted_at": None,
     }
     dir_row_child: dict[str, Any] = {
-        "id": child_id, "parent_id": root_id, "name": "Child", "slug": "child",
-        "type": "folder", "description": None, "metadata": {}, "sort_order": 0,
-        "is_system": False, "like_count": 0, "created_by": user_id,
-        "created_at": now, "updated_at": now, "deleted_at": None,
+        "id": child_id,
+        "parent_id": root_id,
+        "name": "Child",
+        "slug": "child",
+        "type": "folder",
+        "description": None,
+        "metadata": {},
+        "sort_order": 0,
+        "is_system": False,
+        "like_count": 0,
+        "created_by": user_id,
+        "created_at": now,
+        "updated_at": now,
+        "deleted_at": None,
     }
     # Deliberately put child before root to test topological sort
     rows: dict[str, list[dict]] = {
@@ -550,17 +588,16 @@ async def test_restore_directories_topological_order(
         patch("app.services.backup.delete_object", new_callable=AsyncMock),
         patch("app.services.backup.upload_file", new_callable=AsyncMock),
     ):
-        manifest = await restore_from_zip_path(db_session, zip_path)
+        await restore_from_zip_path(db_session, zip_path)
 
     from sqlalchemy import text as sa_text
+
     result = await db_session.execute(sa_text("SELECT COUNT(*) FROM directories"))
     assert result.scalar_one() == 2
 
 
 @pytest.mark.asyncio
-async def test_restore_pr_deferred_self_refs(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_restore_pr_deferred_self_refs(db_session: AsyncSession, tmp_path: Path) -> None:
     """PR reverts_pr_id/reverted_by_pr_id cross-refs must be restored after insert."""
     now = datetime.now(UTC).isoformat()
     user_id = str(uuid.uuid4())
@@ -568,22 +605,43 @@ async def test_restore_pr_deferred_self_refs(
     pr2_id = str(uuid.uuid4())
 
     user_row: dict[str, Any] = {
-        "id": user_id, "email": "u@test.com", "display_name": "U", "role": "bureau",
-        "onboarded": True, "gdpr_consent": True, "gdpr_consent_at": None,
-        "avatar_url": None, "bio": None, "academic_year": None,
-        "password_hash": None, "is_flagged": False, "auto_approve": False,
-        "created_at": now, "deleted_at": None, "last_login_at": None,
+        "id": user_id,
+        "email": "u@test.com",
+        "display_name": "U",
+        "role": "bureau",
+        "onboarded": True,
+        "gdpr_consent": True,
+        "gdpr_consent_at": None,
+        "avatar_url": None,
+        "bio": None,
+        "academic_year": None,
+        "password_hash": None,
+        "is_flagged": False,
+        "auto_approve": False,
+        "created_at": now,
+        "deleted_at": None,
+        "last_login_at": None,
     }
 
     def _pr_row(pr_id: str, revert_id: str | None = None) -> dict[str, Any]:
         return {
-            "id": pr_id, "type": "batch", "status": "approved", "title": "PR",
-            "description": None, "payload": [], "applied_result": None,
-            "summary_types": [], "author_id": user_id, "reviewed_by": None,
-            "virus_scan_result": "clean", "rejection_reason": None,
-            "approved_at": now, "reverts_pr_id": revert_id,
+            "id": pr_id,
+            "type": "batch",
+            "status": "approved",
+            "title": "PR",
+            "description": None,
+            "payload": [],
+            "applied_result": None,
+            "summary_types": [],
+            "author_id": user_id,
+            "reviewed_by": None,
+            "virus_scan_result": "clean",
+            "rejection_reason": None,
+            "approved_at": now,
+            "reverts_pr_id": revert_id,
             "reverted_by_pr_id": pr2_id if pr_id == pr1_id else None,
-            "created_at": now, "updated_at": now,
+            "created_at": now,
+            "updated_at": now,
         }
 
     rows: dict[str, list[dict]] = {
@@ -604,6 +662,7 @@ async def test_restore_pr_deferred_self_refs(
         await restore_from_zip_path(db_session, zip_path)
 
     from sqlalchemy import text as sa_text
+
     result = await db_session.execute(
         sa_text("SELECT reverts_pr_id FROM pull_requests WHERE id = :id"),
         {"id": pr1_id},
@@ -614,9 +673,7 @@ async def test_restore_pr_deferred_self_refs(
 
 
 @pytest.mark.asyncio
-async def test_restore_invalid_version(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_restore_invalid_version(db_session: AsyncSession, tmp_path: Path) -> None:
     dest = tmp_path / "bad.zip"
     manifest = {"version": "99.0", "created_at": datetime.now(UTC).isoformat()}
     with zipfile.ZipFile(dest, "w") as zf:
@@ -629,9 +686,7 @@ async def test_restore_invalid_version(
 
 
 @pytest.mark.asyncio
-async def test_restore_wipes_s3_and_reuploads(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_restore_wipes_s3_and_reuploads(db_session: AsyncSession, tmp_path: Path) -> None:
     """Existing S3 objects must be deleted and backup S3 objects re-uploaded."""
     zip_path = tmp_path / "backup.zip"
     s3_content = b"hello s3"
@@ -674,9 +729,7 @@ async def test_restore_wipes_s3_and_reuploads(
 
 
 @pytest.mark.asyncio
-async def test_restore_returns_manifest(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_restore_returns_manifest(db_session: AsyncSession, tmp_path: Path) -> None:
     zip_path = _make_minimal_zip(tmp_path)
 
     async def _empty_gen(*a, **kw):
@@ -724,9 +777,7 @@ async def test_list_backups_unauthenticated(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_save_backup_creates_file(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_save_backup_creates_file(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -752,9 +803,7 @@ async def test_save_backup_creates_file(
 
 
 @pytest.mark.asyncio
-async def test_save_backup_enforces_rotation(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_save_backup_enforces_rotation(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -783,9 +832,7 @@ async def test_save_backup_enforces_rotation(
 
 
 @pytest.mark.asyncio
-async def test_save_backup_requires_admin(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_save_backup_requires_admin(client: AsyncClient, db_session: AsyncSession) -> None:
     student = await _make_student(db_session)
     await db_session.commit()
     r = await client.post("/api/admin/backup/save", headers=_auth(student))
@@ -793,9 +840,7 @@ async def test_save_backup_requires_admin(
 
 
 @pytest.mark.asyncio
-async def test_export_backup_streams_zip(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_export_backup_streams_zip(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -818,9 +863,7 @@ async def test_export_backup_streams_zip(
 
 
 @pytest.mark.asyncio
-async def test_export_backup_requires_admin(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_export_backup_requires_admin(client: AsyncClient, db_session: AsyncSession) -> None:
     student = await _make_student(db_session)
     await db_session.commit()
     r = await client.get("/api/admin/backup/export", headers=_auth(student))
@@ -828,9 +871,7 @@ async def test_export_backup_requires_admin(
 
 
 @pytest.mark.asyncio
-async def test_download_local_backup(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_download_local_backup(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -850,9 +891,7 @@ async def test_download_local_backup(
 
 
 @pytest.mark.asyncio
-async def test_download_nonexistent_backup(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_download_nonexistent_backup(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -868,9 +907,7 @@ async def test_download_nonexistent_backup(
 
 
 @pytest.mark.asyncio
-async def test_delete_local_backup(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_delete_local_backup(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -891,9 +928,7 @@ async def test_delete_local_backup(
 
 
 @pytest.mark.asyncio
-async def test_delete_nonexistent_backup(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_delete_nonexistent_backup(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -909,9 +944,7 @@ async def test_delete_nonexistent_backup(
 
 
 @pytest.mark.asyncio
-async def test_delete_backup_requires_admin(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_delete_backup_requires_admin(client: AsyncClient, db_session: AsyncSession) -> None:
     student = await _make_student(db_session)
     await db_session.commit()
     r = await client.delete("/api/admin/backup/some_id", headers=_auth(student))
@@ -919,9 +952,7 @@ async def test_delete_backup_requires_admin(
 
 
 @pytest.mark.asyncio
-async def test_restore_local_backup(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_restore_local_backup(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -990,9 +1021,7 @@ async def test_restore_local_backup_requires_admin(
 
 
 @pytest.mark.asyncio
-async def test_restore_upload(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_restore_upload(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -1067,9 +1096,7 @@ async def test_restore_upload_rejects_incompatible_version(
 
 
 @pytest.mark.asyncio
-async def test_restore_upload_requires_admin(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_restore_upload_requires_admin(client: AsyncClient, db_session: AsyncSession) -> None:
     student = await _make_student(db_session)
     await db_session.commit()
     r = await client.post(
@@ -1084,9 +1111,7 @@ async def test_restore_upload_requires_admin(
 
 
 @pytest.mark.asyncio
-async def test_path_traversal_rejected(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_path_traversal_rejected(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_admin(db_session)
     await db_session.commit()
 
@@ -1105,9 +1130,7 @@ async def test_path_traversal_rejected(
 
 
 @pytest.mark.asyncio
-async def test_roundtrip_backup_and_restore(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_roundtrip_backup_and_restore(db_session: AsyncSession, tmp_path: Path) -> None:
     """Full round-trip: create data → backup → wipe → restore → verify data."""
     user = await _make_admin(db_session)
     tag = Tag(id=uuid.uuid4(), name=f"roundtrip-tag-{uuid.uuid4().hex[:6]}")
@@ -1132,7 +1155,7 @@ async def test_roundtrip_backup_and_restore(
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
         patch("app.services.backup.download_file", new_callable=AsyncMock),
     ):
-        manifest = await create_backup_zip(db_session, dest)
+        await create_backup_zip(db_session, dest)
 
     # Step 2: Restore (full replacement)
     with (
@@ -1146,6 +1169,7 @@ async def test_roundtrip_backup_and_restore(
 
     # Step 3: Verify data is back
     from sqlalchemy import text as sa_text
+
     result = await db_session.execute(
         sa_text("SELECT id FROM users WHERE id = :id"), {"id": original_user_id}
     )

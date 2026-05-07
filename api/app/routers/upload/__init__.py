@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.routers.upload.batch_zip import router as batch_zip_router
 from app.routers.upload.direct import upload_file
 from app.routers.upload.helpers import (
     _FAST_QUEUE_NAME,
@@ -17,7 +18,6 @@ from app.routers.upload.helpers import (
     _create_upload_row,
     _enqueue_processing,
 )
-from app.routers.upload.batch_zip import router as batch_zip_router
 from app.routers.upload.presigned import router as presigned_router
 from app.routers.upload.sse import router as sse_router
 from app.routers.upload.sse import upload_events

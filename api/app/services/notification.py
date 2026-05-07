@@ -97,7 +97,7 @@ async def mark_all_read(db: AsyncSession, user_id: uuid.UUID) -> int:
     await db.flush()
     from typing import Any, cast
 
-    return cast(Any, result).rowcount
+    return cast(Any, result).rowcount  # type: ignore[no-any-return]
 
 
 async def notify_user(
@@ -115,9 +115,7 @@ async def notify_admins_pending_user(db: AsyncSession, user: "User") -> None:  #
     """Notify all BUREAU/VIEUX admins when a new user is awaiting approval."""
     from app.models.user import User as UserModel
 
-    result = await db.execute(
-        select(UserModel.id).where(UserModel.role.in_(ADMIN_ROLES))
-    )
+    result = await db.execute(select(UserModel.id).where(UserModel.role.in_(ADMIN_ROLES)))
     admin_ids = list(result.scalars().all())
     notifications = [
         Notification(

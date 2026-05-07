@@ -77,7 +77,7 @@ export default function AdminUsersPage() {
     useEffect(() => {
         const timer = setTimeout(() => fetchUsers(1), 300);
         return () => clearTimeout(timer);
-    }, [search, roleFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [search, roleFilter]);  
 
     const handleRoleChange = async (userId: string, newRole: string) => {
         try {

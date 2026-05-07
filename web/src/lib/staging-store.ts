@@ -6,24 +6,16 @@ import { safeLocalStorage } from "./safe-storage";
 // Upload expiry — files in MinIO are cleaned up after 24h
 // ---------------------------------------------------------------------------
 
-/** Uploads are deleted after this many milliseconds (72 hours). */
-export const UPLOAD_EXPIRY_MS = 72 * 60 * 60 * 1000;
+/** Uploads are deleted after this many milliseconds (24 hours). */
+const UPLOAD_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 /** Warning threshold — show a warning when less than this time remains. */
-export const UPLOAD_WARNING_MS = 6 * 60 * 60 * 1000;
+const UPLOAD_WARNING_MS = 6 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Operation types (mirrors backend schemas)
 // ---------------------------------------------------------------------------
 
-export type OpType =
-    | "create_material"
-    | "edit_material"
-    | "delete_material"
-    | "create_directory"
-    | "edit_directory"
-    | "delete_directory"
-    | "move_item";
 
 export interface CreateMaterialOp {
     op: "create_material";
@@ -158,36 +150,12 @@ export function isExpiringSoon(staged: StagedOperation): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Upload tracking for staged files
-// ---------------------------------------------------------------------------
-
-export type UploadStatus = "pending" | "uploading" | "done" | "error";
-
-export interface StagedUpload {
-    /** Client-side identifier for this upload */
-    clientId: string;
-    file?: File;
-    fileName: string;
-    fileSize: number;
-    fileMimeType: string;
-    /** Upload progress 0-100 */
-    progress: number;
-    status: UploadStatus;
-    /** Set once upload completes */
-    fileKey?: string;
-    /** Error message if status === "error" */
-    error?: string;
-}
-
-// ---------------------------------------------------------------------------
 // Staging store
 // ---------------------------------------------------------------------------
 
 interface StagingState {
     /** All staged operations with timestamps */
     operations: StagedOperation[];
-    /** Tracked file uploads (not persisted) */
-    uploads: StagedUpload[];
     /** Whether the review drawer is open */
     reviewOpen: boolean;
     /** Auto-incrementing counter for temp IDs */
@@ -202,12 +170,6 @@ interface StagingState {
     /** Remove all operations whose uploads have expired */
     purgeExpired: () => number;
 
-    // Upload tracking
-    addUpload: (upload: StagedUpload) => void;
-    updateUpload: (clientId: string, patch: Partial<StagedUpload>) => void;
-    removeUpload: (clientId: string) => void;
-    clearUploads: () => void;
-
     // Temp ID generation
     nextTempId: (prefix: string) => string;
 
@@ -217,7 +179,6 @@ interface StagingState {
     // Computed-like
     operationCount: () => number;
     hasOperations: () => boolean;
-    pendingUploads: () => StagedUpload[];
     expiredCount: () => number;
     expiringSoonCount: () => number;
 }
@@ -226,7 +187,6 @@ export const useStagingStore = create<StagingState>()(
     persist(
         (set, get) => ({
             operations: [],
-            uploads: [],
             reviewOpen: false,
             _tempCounter: 0,
 
@@ -341,23 +301,6 @@ export const useStagingStore = create<StagingState>()(
                 return removed;
             },
 
-            addUpload: (upload) =>
-                set((s) => ({ uploads: [...s.uploads, upload] })),
-
-            updateUpload: (clientId, patch) =>
-                set((s) => ({
-                    uploads: s.uploads.map((u) =>
-                        u.clientId === clientId ? { ...u, ...patch } : u,
-                    ),
-                })),
-
-            removeUpload: (clientId) =>
-                set((s) => ({
-                    uploads: s.uploads.filter((u) => u.clientId !== clientId),
-                })),
-
-            clearUploads: () => set({ uploads: [] }),
-
             nextTempId: (prefix) => {
                 const count = get()._tempCounter + 1;
                 set({ _tempCounter: count });
@@ -368,10 +311,6 @@ export const useStagingStore = create<StagingState>()(
 
             operationCount: () => get().operations.length,
             hasOperations: () => get().operations.length > 0,
-            pendingUploads: () =>
-                get().uploads.filter(
-                    (u) => u.status === "pending" || u.status === "uploading",
-                ),
             expiredCount: () =>
                 get().operations.filter((s) => isExpired(s)).length,
             expiringSoonCount: () =>
@@ -380,8 +319,7 @@ export const useStagingStore = create<StagingState>()(
         {
             name: "wikint-staging",
             storage: createJSONStorage(() => safeLocalStorage),
-            // Don't persist uploads (they contain File objects which can't be serialized)
-            // or the review drawer state
+            // Persist operations and temp ID counter
             partialize: (state) => ({
                 operations: state.operations,
                 _tempCounter: state._tempCounter,
@@ -401,25 +339,12 @@ if (typeof window !== "undefined") {
 }
 
 // ---------------------------------------------------------------------------
-// Post-hydration: migrate legacy operations and purge expired
+// Post-hydration: purge expired
 // ---------------------------------------------------------------------------
 
 if (typeof window !== "undefined") {
     // Run once after the store hydrates from localStorage
     const unsub = useStagingStore.persist.onFinishHydration(() => {
-        const state = useStagingStore.getState();
-        // Migrate legacy operations that lack the StagedOperation wrapper
-        const migrated = state.operations.map((item: StagedOperation) => {
-            if (!("stagedAt" in item) || !("operation" in item)) {
-                // Legacy format: the item IS the operation itself
-                return {
-                    operation: item as unknown as Operation,
-                    stagedAt: Date.now(),
-                } satisfies StagedOperation;
-            }
-            return item;
-        });
-        useStagingStore.setState({ operations: migrated });
         useStagingStore.getState().purgeExpired();
         unsub();
     });
@@ -429,43 +354,7 @@ if (typeof window !== "undefined") {
 // Helper: human-readable label for an operation
 // ---------------------------------------------------------------------------
 
-export function opLabel(op: Operation): string {
-    switch (op.op) {
-        case "create_material":
-            return `Add "${op.title}"`;
-        case "edit_material":
-            return `Edit material${op.title ? ` "${op.title}"` : ""}`;
-        case "delete_material":
-            return "Delete material";
-        case "create_directory":
-            return `Create folder "${op.name}"`;
-        case "edit_directory":
-            return `Edit folder${op.name ? ` "${op.name}"` : ""}`;
-        case "delete_directory":
-            return "Delete folder";
-        case "move_item":
-            return `Move ${op.target_type}`;
-    }
-}
 
-export function opIcon(op: Operation): string {
-    switch (op.op) {
-        case "create_material":
-            return "file-plus";
-        case "edit_material":
-            return "file-pen";
-        case "delete_material":
-            return "file-x";
-        case "create_directory":
-            return "folder-plus";
-        case "edit_directory":
-            return "folder-pen";
-        case "delete_directory":
-            return "folder-x";
-        case "move_item":
-            return "move";
-    }
-}
 
 /** Human-readable time remaining, e.g. "5h 23m" or "12m". */
 export function formatTimeRemaining(ms: number, t: any): string {

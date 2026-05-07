@@ -59,7 +59,7 @@ async def get_onlyoffice_config(
     material_id: uuid.UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> dict:
+) -> dict:  # type: ignore[type-arg]
     """
     Return a signed ONLYOFFICE editor configuration for the given material.
     Called by the frontend (authenticated with user JWT).
@@ -69,7 +69,7 @@ async def get_onlyoffice_config(
 
     material_id_str = str(material_id)
     data = await get_material_with_version(db, material_id_str)
-    if data is not None and user is not None:
+    if data is not None and user is not None:  # type: ignore[redundant-expr]
         check_material_access(user.id, data)
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
@@ -88,7 +88,7 @@ async def get_onlyoffice_config(
 
     # Cache key: version_number invalidates on new uploads.
     doc_key = f"{material_id_str}-v{version['version_number']}"
-    config: dict = {
+    config: dict = {  # type: ignore[type-arg]
         "documentType": doc_type,
         "document": {
             "fileType": ext,
@@ -97,7 +97,7 @@ async def get_onlyoffice_config(
             "url": file_url,
             "permissions": {
                 "edit": False,
-                "download": True, # Needed internally for some editor features
+                "download": True,  # Needed internally for some editor features
                 "print": True,
                 "comment": False,
                 "review": False,
@@ -136,7 +136,7 @@ async def get_onlyoffice_config(
                         "file": False,
                         "collaboration": False,
                     }
-                }
+                },
             },
         },
     }
@@ -175,7 +175,7 @@ async def serve_file_to_onlyoffice(
         raise UnauthorizedError()
 
     version = await get_material_file_info(db, material_id)
-    if version is None or version.file_key is None:
+    if version is None or version.file_key is None:  # type: ignore[redundant-expr]
         raise NotFoundError("No file available")
 
     file_name: str = version.file_name or "document"

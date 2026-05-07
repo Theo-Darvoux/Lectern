@@ -126,9 +126,7 @@ async def _dump_table(db: AsyncSession, table_name: str) -> list[dict[str, Any]]
 # ── DB restore helpers ────────────────────────────────────────────────────────
 
 
-def _topological_sort(
-    rows: list[dict[str, Any]], pk_col: str, fk_col: str
-) -> list[dict[str, Any]]:
+def _topological_sort(rows: list[dict[str, Any]], pk_col: str, fk_col: str) -> list[dict[str, Any]]:
     """Sort rows so parents precede children (handles self-referential FKs)."""
     by_id: dict[str, dict[str, Any]] = {str(r[pk_col]): r for r in rows}
     visited: set[str] = set()
@@ -172,9 +170,7 @@ def _build_insert(table_name: str, row: dict[str, Any]) -> tuple[str, dict[str, 
     return f'INSERT INTO "{table_name}" ({cols}) VALUES ({placeholders})', params
 
 
-async def _restore_table(
-    db: AsyncSession, table_name: str, rows: list[dict[str, Any]]
-) -> None:
+async def _restore_table(db: AsyncSession, table_name: str, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
 
@@ -276,8 +272,7 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
 
     if manifest.get("version") != BACKUP_VERSION:
         raise ValueError(
-            f"Incompatible backup version {manifest.get('version')!r} "
-            f"(expected {BACKUP_VERSION!r})"
+            f"Incompatible backup version {manifest.get('version')!r} (expected {BACKUP_VERSION!r})"
         )
 
     # Wipe existing DB rows (reverse FK order)
@@ -297,13 +292,19 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
 
     # Restore S3 objects one at a time to keep memory bounded
     for entry_name in s3_entry_names:
+
         def _read_s3_entry(name: str = entry_name) -> bytes:
             with zipfile.ZipFile(zip_path, "r") as zf:
                 return zf.read(name)
 
         data = await asyncio.to_thread(_read_s3_entry)
         key = entry_name[3:]  # strip leading "s3/"
-        await upload_file(data, key, content_type="application/octet-stream", content_disposition=None)
+        await upload_file(
+            data,
+            key,
+            content_type="application/octet-stream",
+            content_disposition=None,  # type: ignore[arg-type]
+        )
 
     return manifest
 
@@ -327,9 +328,7 @@ def list_local_backups(backup_dir: Path) -> list[dict[str, Any]]:
     return sorted(backups, key=lambda x: x["filename"])
 
 
-def enforce_backup_rotation(
-    backup_dir: Path, max_count: int = MAX_LOCAL_BACKUPS
-) -> list[str]:
+def enforce_backup_rotation(backup_dir: Path, max_count: int = MAX_LOCAL_BACKUPS) -> list[str]:
     """Delete oldest local backups until at most max_count remain."""
     backups = list_local_backups(backup_dir)
     deleted: list[str] = []

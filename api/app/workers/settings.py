@@ -1,8 +1,9 @@
+from typing import Any
+
 from arq.connections import RedisSettings
 from arq.cron import cron
 
 from app.config import settings
-from typing import Any
 from app.workers.check_bazaar import check_bazaar
 from app.workers.cleanup_uploads import cleanup_uploads
 from app.workers.gdpr_cleanup import gdpr_cleanup

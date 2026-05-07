@@ -45,7 +45,7 @@ router = APIRouter()
 async def upload_file(
     file: UploadFile,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
     request: Request,
     _: Annotated[None, Depends(rate_limit_uploads)],
@@ -78,20 +78,32 @@ async def upload_file(
     # Process allowed lists
     allowed_exts: set[str] | None = None
     if config.get("allowed_extensions"):
-        allowed_exts = {e.strip().lower() for e in config["allowed_extensions"].split(",") if e.strip()}
+        allowed_exts = {
+            e.strip().lower() for e in config["allowed_extensions"].split(",") if e.strip()
+        }
         if not all(e.startswith(".") for e in allowed_exts):
-             # Ensure dots
-             allowed_exts = {e if e.startswith(".") else f".{e}" for e in allowed_exts}
+            # Ensure dots
+            allowed_exts = {e if e.startswith(".") else f".{e}" for e in allowed_exts}
 
     allowed_mimes: set[str] | None = None
     if config.get("allowed_mime_types"):
-        allowed_mimes = {m.strip().lower() for m in config["allowed_mime_types"].split(",") if m.strip()}
+        allowed_mimes = {
+            m.strip().lower() for m in config["allowed_mime_types"].split(",") if m.strip()
+        }
 
     # Validate filename / extension
     safe_name, ext = _validate_filename(file.filename or "unnamed", allowed_extensions=allowed_exts)
 
     # Stream to a temp file (no full-body read into RAM)
-    max_bytes = (config.get("max_file_size_mb") if config.get("max_file_size_mb") is not None else settings.max_file_size_mb) * 1024 * 1024
+    max_bytes = (
+        (  # type: ignore[operator]
+            config.get("max_file_size_mb")
+            if config.get("max_file_size_mb") is not None
+            else settings.max_file_size_mb
+        )
+        * 1024
+        * 1024
+    )
     pf = await ProcessingFile.from_upload(file, max_bytes)
 
     try:
@@ -108,7 +120,9 @@ async def upload_file(
         real_mime = guess_mime_from_bytes(head)
 
         if real_mime != "application/octet-stream":
-            safe_name, ext = _apply_mime_correction(safe_name, real_mime, ext, allowed_mimes=allowed_mimes)
+            safe_name, ext = _apply_mime_correction(
+                safe_name, real_mime, ext, allowed_mimes=allowed_mimes
+            )
 
         mime_type: str = real_mime
         if mime_type == "application/octet-stream":
@@ -118,6 +132,7 @@ async def upload_file(
         _check_per_type_size(mime_type, pf.size, config=config)
 
         from app.routers.upload.helpers import _check_storage_limit
+
         await _check_storage_limit(pf.size, config=config)
 
         # SVG safety check
@@ -150,7 +165,7 @@ async def upload_file(
 
         # Stream file to quarantine
         async with get_s3_client() as s3:
-            await s3.upload_file(
+            await s3.upload_file(  # type: ignore[call-arg]
                 Filename=str(pf.path),
                 Bucket=config.get("s3_bucket") or settings.s3_bucket,
                 Key=quarantine_key,

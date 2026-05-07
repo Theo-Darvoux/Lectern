@@ -186,5 +186,3 @@ async def test_scan_failure_discards_strip_result(tmp_path: Path):
     assert isinstance(scan_exc, BadRequestError)
     # The caller should gate on scan_exc and ignore strip_result
     assert scan_exc is not None  # would trigger malicious path in worker
-
-

@@ -41,13 +41,13 @@ def get_tracer() -> trace.Tracer:
     return _tracer or trace.get_tracer("wikint")
 
 
-def inject_trace_context() -> dict:
+def inject_trace_context() -> dict:  # type: ignore[type-arg]
     """Return W3C traceparent/tracestate for ARQ job propagation."""
     carrier: dict[str, str] = {}
     propagate.inject(carrier)
     return carrier
 
 
-def extract_trace_context(carrier: dict) -> Any:
+def extract_trace_context(carrier: dict) -> Any:  # type: ignore[type-arg]
     """Extract and return an OTel context from an ARQ job kwargs dict."""
     return propagate.extract(carrier)

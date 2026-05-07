@@ -10,10 +10,7 @@ ALGORITHM = "HS256"
 
 
 def create_access_token(
-    user_id: str,
-    role: str,
-    email: str,
-    expire_days: int | None = None
+    user_id: str, role: str, email: str, expire_days: int | None = None
 ) -> tuple[str, str]:
     jti = str(uuid4())
     days = expire_days if expire_days is not None else settings.jwt_access_token_expire_days

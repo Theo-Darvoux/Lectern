@@ -1,11 +1,9 @@
 import time
 from abc import ABC, abstractmethod
-from typing import Any, TypeVar
+from typing import Any
 
 from app.schemas.material import UploadStatus
 from app.workers.upload.context import WorkerContext
-
-T = TypeVar("T")
 
 
 class BaseStage[T](ABC):
@@ -36,14 +34,14 @@ class BaseStage[T](ABC):
                     UploadStatus.PROCESSING,
                     detail=self.label,
                     stage_name_or_label=self.name,
-                    stage_percent=0.0
+                    stage_percent=0.0,
                 )
                 result = await self.execute()
                 await self.pipeline.emit_status(
                     UploadStatus.PROCESSING,
                     detail=self.label,
                     stage_name_or_label=self.name,
-                    stage_percent=1.0
+                    stage_percent=1.0,
                 )
                 return result
             finally:

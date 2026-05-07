@@ -187,8 +187,9 @@ async def test_mime_mismatch_rejected(
 # ── Redis quota enforcement ───────────────────────────────────────────────────
 
 
+@patch("app.routers.upload.direct.get_s3_client")
 async def test_quota_exceeded_rejected(
-    client: AsyncClient, db_session: AsyncSession, mock_redis: AsyncMock
+    mock_s3_cm, client: AsyncClient, db_session: AsyncSession, mock_redis: AsyncMock
 ) -> None:
     """Upload is rejected when the user's pending upload count hits the cap."""
     from app.routers.upload.helpers import MAX_PENDING_UPLOADS
@@ -196,10 +197,13 @@ async def test_quota_exceeded_rejected(
     user = await _create_user(db_session)
     await db_session.commit()
 
-    mock_redis.zcard.return_value = MAX_PENDING_UPLOADS
-    mock_redis.pipeline.return_value.__aenter__.return_value.execute.side_effect = [
-        [1, True, 1, True],  # rate limit pipeline
-        [1, MAX_PENDING_UPLOADS + 1],  # quota pipeline
+    # Mock quota full
+    mock_redis.zcard.return_value = MAX_PENDING_UPLOADS + 1
+    mock_redis.pipeline.return_value.__aenter__.return_value.execute.return_value = [
+        1,
+        True,
+        1,
+        True,
     ]
 
     files = _pdf_file()
@@ -228,7 +232,9 @@ async def test_privileged_user_no_quota_cap(
         ms3.return_value.__aenter__.return_value = s3
 
         resp = await client.post("/api/upload", files=_pdf_file(), headers=_auth_headers(user))
-    assert resp.status_code == 202, "Privileged user should never be blocked by pending-upload count"
+    assert resp.status_code == 202, (
+        "Privileged user should never be blocked by pending-upload count"
+    )
 
 
 async def test_quota_redis_failure_is_permissive(

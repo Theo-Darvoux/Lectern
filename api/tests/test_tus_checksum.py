@@ -79,7 +79,9 @@ async def test_tus_patch_valid_checksum():
 
         import uuid
 
-        response = await tus_patch(uuid.UUID(tus_id), mock_request, mock_user, mock_redis, AsyncMock())
+        response = await tus_patch(
+            uuid.UUID(tus_id), mock_request, mock_user, mock_redis, AsyncMock()
+        )
         assert response.status_code == 204
         assert response.headers["Upload-Offset"] == str(len(content))
 

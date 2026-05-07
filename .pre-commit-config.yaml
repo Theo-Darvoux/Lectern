@@ -1,0 +1,46 @@
+repos:
+  - repo: local
+    hooks:
+      # --- Python (API) ---
+      - id: ruff-check
+        name: ruff lint
+        language: system
+        entry: bash -c 'cd api && uv run ruff check --fix .'
+        pass_filenames: false
+        files: ^api/.*\.py$
+
+      - id: ruff-format
+        name: ruff format
+        language: system
+        entry: bash -c 'cd api && uv run ruff format .'
+        pass_filenames: false
+        files: ^api/.*\.py$
+
+      - id: mypy
+        name: mypy
+        language: system
+        entry: bash -c 'cd api && uv run mypy app/'
+        pass_filenames: false
+        files: ^api/app/.*\.py$
+
+      # --- Frontend (web) ---
+      - id: eslint
+        name: eslint
+        language: system
+        entry: bash -c 'cd web && pnpm lint'
+        pass_filenames: false
+        files: ^web/src/.*\.(ts|tsx)$
+
+      - id: tsc
+        name: typescript check
+        language: system
+        entry: bash -c 'cd web && pnpm tsc --noEmit'
+        pass_filenames: false
+        files: ^web/src/.*\.(ts|tsx)$
+
+      - id: i18n-check
+        name: i18n key check
+        language: system
+        entry: bash -c 'cd web && pnpm i18n:check'
+        pass_filenames: false
+        files: ^web/(src/.*\.(ts|tsx)|messages/.*\.json)$

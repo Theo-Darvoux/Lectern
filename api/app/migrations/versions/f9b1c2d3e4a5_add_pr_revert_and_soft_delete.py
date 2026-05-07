@@ -31,6 +31,7 @@ def index_exists(table_name: str, index_name: str) -> bool:
     indexes = insp.get_indexes(table_name)
     return any(idx["name"] == index_name for idx in indexes)
 
+
 revision: str = "f9b1c2d3e4a5"
 down_revision: str | None = "a7b3c9d2e4f5"
 branch_labels: str | Sequence[str] | None = None
@@ -49,9 +50,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "pull_requests",
-        sa.Column(
-            "reverted_by_pr_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True
-        ),
+        sa.Column("reverted_by_pr_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
     )
     op.create_foreign_key(
         "fk_pull_requests_reverts_pr_id",
@@ -79,9 +78,7 @@ def upgrade() -> None:
     # Backfill approved_at for existing APPROVED rows. They will all be past
     # the 7-day grace window by design (legacy PRs are non-revertable anyway
     # because they lack pre_state snapshots, enforced at the service layer).
-    op.execute(
-        "UPDATE pull_requests SET approved_at = updated_at WHERE status = 'approved'"
-    )
+    op.execute("UPDATE pull_requests SET approved_at = updated_at WHERE status = 'approved'")
 
     # --- soft-delete columns ---
     for table in ("materials", "directories", "material_versions"):
@@ -131,17 +128,13 @@ def upgrade() -> None:
 def downgrade() -> None:
     # directories: revert to plain unique constraint.
     op.drop_index("uq_directory_parent_slug", table_name="directories")
-    op.create_unique_constraint(
-        "uq_directory_parent_slug", "directories", ["parent_id", "slug"]
-    )
+    op.create_unique_constraint("uq_directory_parent_slug", "directories", ["parent_id", "slug"])
 
     # materials: revert to plain unique + original root-slug partial index.
     if index_exists("materials", "uq_material_root_slug"):
         op.drop_index("uq_material_root_slug", table_name="materials")
     op.drop_index("uq_material_directory_slug", table_name="materials")
-    op.create_unique_constraint(
-        "uq_material_directory_slug", "materials", ["directory_id", "slug"]
-    )
+    op.create_unique_constraint("uq_material_directory_slug", "materials", ["directory_id", "slug"])
     op.create_index(
         "uq_material_root_slug",
         "materials",
@@ -157,12 +150,8 @@ def downgrade() -> None:
 
     # Drop PR revert columns.
     op.drop_index("ix_pull_requests_reverts_pr_id", table_name="pull_requests")
-    op.drop_constraint(
-        "fk_pull_requests_reverted_by_pr_id", "pull_requests", type_="foreignkey"
-    )
-    op.drop_constraint(
-        "fk_pull_requests_reverts_pr_id", "pull_requests", type_="foreignkey"
-    )
+    op.drop_constraint("fk_pull_requests_reverted_by_pr_id", "pull_requests", type_="foreignkey")
+    op.drop_constraint("fk_pull_requests_reverts_pr_id", "pull_requests", type_="foreignkey")
     op.drop_column("pull_requests", "reverted_by_pr_id")
     op.drop_column("pull_requests", "reverts_pr_id")
     op.drop_column("pull_requests", "approved_at")

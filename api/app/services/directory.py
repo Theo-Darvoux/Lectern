@@ -128,16 +128,27 @@ async def get_root_directories(
         is_liked = False
         is_favourited = False
         if current_user_id:
-            is_liked = (await db.scalar(
-                select(func.count())
-                .select_from(DirectoryLike)
-                .where(DirectoryLike.directory_id == d.id, DirectoryLike.user_id == current_user_id)
-            ) or 0) > 0
-            is_favourited = (await db.scalar(
-                select(func.count())
-                .select_from(DirectoryFavourite)
-                .where(DirectoryFavourite.directory_id == d.id, DirectoryFavourite.user_id == current_user_id)
-            ) or 0) > 0
+            is_liked = (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(DirectoryLike)
+                    .where(
+                        DirectoryLike.directory_id == d.id, DirectoryLike.user_id == current_user_id
+                    )
+                )
+                or 0
+            ) > 0
+            is_favourited = (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(DirectoryFavourite)
+                    .where(
+                        DirectoryFavourite.directory_id == d.id,
+                        DirectoryFavourite.user_id == current_user_id,
+                    )
+                )
+                or 0
+            ) > 0
 
         item = {
             "id": str(d.id),
@@ -263,16 +274,27 @@ async def get_directory_children(
         is_liked = False
         is_favourited = False
         if current_user_id:
-            is_liked = (await db.scalar(
-                select(func.count())
-                .select_from(DirectoryLike)
-                .where(DirectoryLike.directory_id == d.id, DirectoryLike.user_id == current_user_id)
-            ) or 0) > 0
-            is_favourited = (await db.scalar(
-                select(func.count())
-                .select_from(DirectoryFavourite)
-                .where(DirectoryFavourite.directory_id == d.id, DirectoryFavourite.user_id == current_user_id)
-            ) or 0) > 0
+            is_liked = (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(DirectoryLike)
+                    .where(
+                        DirectoryLike.directory_id == d.id, DirectoryLike.user_id == current_user_id
+                    )
+                )
+                or 0
+            ) > 0
+            is_favourited = (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(DirectoryFavourite)
+                    .where(
+                        DirectoryFavourite.directory_id == d.id,
+                        DirectoryFavourite.user_id == current_user_id,
+                    )
+                )
+                or 0
+            ) > 0
 
         dirs_with_counts.append(
             {
@@ -342,7 +364,9 @@ async def get_directory_children(
     return {"directories": dirs_with_counts, "materials": materials_out}
 
 
-async def get_directory_path(db: AsyncSession, directory_id: str | uuid.UUID) -> list[dict[str, typing.Any]]:
+async def get_directory_path(
+    db: AsyncSession, directory_id: str | uuid.UUID
+) -> list[dict[str, typing.Any]]:
 
     if isinstance(directory_id, str):
         import uuid
@@ -402,7 +426,9 @@ async def resolve_browse_path(
                     raise NotFoundError(f"Attachment '{att_slug}' not found")
                 from app.services.material import get_material_with_version
 
-                detail = await get_material_with_version(db, str(attachment.id), current_user_id=current_user_id)
+                detail = await get_material_with_version(
+                    db, str(attachment.id), current_user_id=current_user_id
+                )
                 return {"type": "material", "material": detail}
 
             # No more segments — return the attachment listing
@@ -434,7 +460,9 @@ async def resolve_browse_path(
             return {
                 "type": "attachment_listing",
                 "materials": materials_out,
-                "parent_material": material_orm_to_dict(last_material, current_user_id=current_user_id),
+                "parent_material": material_orm_to_dict(
+                    last_material, current_user_id=current_user_id
+                ),
             }
 
         if current_dir is None:
@@ -484,7 +512,9 @@ async def resolve_browse_path(
             if i == len(segments) - 1:
                 from app.services.material import get_material_with_version
 
-                detail = await get_material_with_version(db, str(mat_row.id), current_user_id=current_user_id)
+                detail = await get_material_with_version(
+                    db, str(mat_row.id), current_user_id=current_user_id
+                )
                 return {"type": "material", "material": detail}
             continue
 
@@ -498,18 +528,32 @@ async def resolve_browse_path(
         is_liked = False
         is_favourited = False
         if current_user_id:
-            is_liked = (await db.scalar(
-                select(func.count())
-                .select_from(DirectoryLike)
-                .where(DirectoryLike.directory_id == current_dir.id, DirectoryLike.user_id == current_user_id)
-            ) or 0) > 0
-            is_favourited = (await db.scalar(
-                select(func.count())
-                .select_from(DirectoryFavourite)
-                .where(DirectoryFavourite.directory_id == current_dir.id, DirectoryFavourite.user_id == current_user_id)
-            ) or 0) > 0
+            is_liked = (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(DirectoryLike)
+                    .where(
+                        DirectoryLike.directory_id == current_dir.id,
+                        DirectoryLike.user_id == current_user_id,
+                    )
+                )
+                or 0
+            ) > 0
+            is_favourited = (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(DirectoryFavourite)
+                    .where(
+                        DirectoryFavourite.directory_id == current_dir.id,
+                        DirectoryFavourite.user_id == current_user_id,
+                    )
+                )
+                or 0
+            ) > 0
 
-        children = await get_directory_children(db, str(current_dir.id), current_user_id=current_user_id)
+        children = await get_directory_children(
+            db, str(current_dir.id), current_user_id=current_user_id
+        )
         return {
             "type": "directory_listing",
             "directory": {
@@ -517,7 +561,9 @@ async def resolve_browse_path(
                 "parent_id": str(current_dir.parent_id) if current_dir.parent_id else None,
                 "name": current_dir.name,
                 "slug": current_dir.slug,
-                "type": current_dir.type.value if hasattr(current_dir.type, "value") else current_dir.type,
+                "type": current_dir.type.value
+                if hasattr(current_dir.type, "value")
+                else current_dir.type,
                 "description": current_dir.description,
                 "metadata": current_dir.metadata_,
                 "sort_order": current_dir.sort_order,
@@ -536,12 +582,13 @@ async def resolve_browse_path(
     raise NotFoundError("Path not found")
 
 
-async def toggle_directory_like(db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID) -> bool:
+async def toggle_directory_like(
+    db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID
+) -> bool:
     """Toggle a like for a directory. Returns True if liked, False if unliked."""
     result = await db.execute(
         select(DirectoryLike).where(
-            DirectoryLike.user_id == user_id,
-            DirectoryLike.directory_id == directory_id
+            DirectoryLike.user_id == user_id, DirectoryLike.directory_id == directory_id
         )
     )
     like = result.scalar_one_or_none()
@@ -555,11 +602,7 @@ async def toggle_directory_like(db: AsyncSession, user_id: uuid.UUID, directory_
         )
         liked = False
     else:
-        new_like = DirectoryLike(
-            id=uuid.uuid4(),
-            user_id=user_id,
-            directory_id=directory_id
-        )
+        new_like = DirectoryLike(id=uuid.uuid4(), user_id=user_id, directory_id=directory_id)
         db.add(new_like)
         await db.execute(
             update(Directory)
@@ -572,12 +615,13 @@ async def toggle_directory_like(db: AsyncSession, user_id: uuid.UUID, directory_
     return liked
 
 
-async def toggle_directory_favourite(db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID) -> bool:
+async def toggle_directory_favourite(
+    db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID
+) -> bool:
     """Toggle a favourite for a directory. Returns True if favourited, False if removed."""
     result = await db.execute(
         select(DirectoryFavourite).where(
-            DirectoryFavourite.user_id == user_id,
-            DirectoryFavourite.directory_id == directory_id
+            DirectoryFavourite.user_id == user_id, DirectoryFavourite.directory_id == directory_id
         )
     )
     favourite = result.scalar_one_or_none()
@@ -587,9 +631,7 @@ async def toggle_directory_favourite(db: AsyncSession, user_id: uuid.UUID, direc
         favourited = False
     else:
         new_favourite = DirectoryFavourite(
-            id=uuid.uuid4(),
-            user_id=user_id,
-            directory_id=directory_id
+            id=uuid.uuid4(), user_id=user_id, directory_id=directory_id
         )
         db.add(new_favourite)
         favourited = True

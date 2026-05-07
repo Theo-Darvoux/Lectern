@@ -1,5 +1,6 @@
 """Upload status endpoints: config, check-exists, batch-status, history, cancel."""
 
+import contextlib
 import json
 import logging
 from typing import Annotated, Any
@@ -44,7 +45,7 @@ class UploadConfigOut(BaseModel):
 @router.get("/config", response_model=UploadConfigOut)
 async def get_upload_config(
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> UploadConfigOut:
     """Return the current upload configuration (allowed types, size limits, recommended path).
 
@@ -60,15 +61,15 @@ async def get_upload_config(
     allowed_exts = ALLOWED_EXTENSIONS
     if config.get("allowed_extensions"):
         # Convert comma-separated string back to list
-        allowed_exts = [e.strip() for e in config["allowed_extensions"].split(",") if e.strip()]
+        allowed_exts = [e.strip() for e in config["allowed_extensions"].split(",") if e.strip()]  # type: ignore[assignment]
 
     allowed_mimes = ALLOWED_MIME_TYPES
     if config.get("allowed_mime_types"):
-        allowed_mimes = [m.strip() for m in config["allowed_mime_types"].split(",") if m.strip()]
+        allowed_mimes = [m.strip() for m in config["allowed_mime_types"].split(",") if m.strip()]  # type: ignore[assignment]
 
     return UploadConfigOut(
-        allowed_extensions=sorted(list(allowed_exts)),
-        allowed_mimetypes=sorted(list(allowed_mimes)),
+        allowed_extensions=sorted(allowed_exts),
+        allowed_mimetypes=sorted(allowed_mimes),
         max_file_size_mb=config.get("max_file_size_mb") or settings.max_file_size_mb,
         recommended_path="direct",
         direct_threshold_mb=settings.direct_upload_threshold_mb,
@@ -82,7 +83,7 @@ async def get_upload_config(
 async def cancel_upload(
     upload_id: str,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> None:
     """Cancel a pending or in-progress upload.
 
@@ -105,7 +106,7 @@ async def cancel_upload(
     members: list[bytes] = await redis.zrange(quota_key, 0, -1)
     target_key: str | None = None
     for raw in members:
-        key = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore
+        key = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[ignore-without-code]
         if key.startswith(quarantine_prefix) or key.startswith(uploads_prefix):
             target_key = key
             break
@@ -128,16 +129,12 @@ async def cancel_upload(
         async with async_session_factory() as session:
             from sqlalchemy import select
 
-            row = await session.scalar(
-                select(Upload).where(Upload.upload_id == upload_id)
-            )
+            row = await session.scalar(select(Upload).where(Upload.upload_id == upload_id))
             if row and row.sha256:
                 await decrement_cas_ref(redis, row.sha256)
     else:
-        try:
+        with contextlib.suppress(Exception):
             await delete_object(target_key)
-        except Exception:
-            pass
 
     await redis.zrem(quota_key, target_key)
 
@@ -149,7 +146,7 @@ async def cancel_upload(
 async def check_file_exists(
     data: CheckExistsRequest,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> CheckExistsOut:
     """Check whether an identical file (by SHA-256) has already been processed."""
     user_id = str(user.id)
@@ -193,8 +190,8 @@ async def check_file_exists(
 async def batch_upload_status(
     data: BatchStatusRequest,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
-) -> dict:
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+) -> dict:  # type: ignore[type-arg]
     """Poll the processing status for up to 50 file keys in a single request."""
     user_id_str = str(user.id)
 
@@ -220,15 +217,17 @@ async def batch_upload_status(
         from app.models.upload import Upload
 
         async with async_session_factory() as _db:
-            verified = set(await _db.scalars(
-                _sel(Upload.final_key).where(
-                    Upload.final_key.in_(cas_keys_to_verify),
-                    Upload.user_id == user.id,
+            verified = set(
+                await _db.scalars(
+                    _sel(Upload.final_key).where(
+                        Upload.final_key.in_(cas_keys_to_verify),
+                        Upload.user_id == user.id,
+                    )
                 )
-            ))
+            )
         owned_keys.extend(k for k in cas_keys_to_verify if k in verified)
 
-    results: dict[str, dict] = {}
+    results: dict[str, dict] = {}  # type: ignore[type-arg]
     if not owned_keys:
         return {"statuses": results}
 
@@ -237,13 +236,13 @@ async def batch_upload_status(
     values = await redis.mget(*cache_keys)
 
     # Secondary lookup for data if missing from cache (e.g. for CAS hits or older entries)
-    missing_keys = [k for k, v in zip(owned_keys, values) if not v]
+    missing_keys = [k for k, v in zip(owned_keys, values, strict=False) if not v]
 
     # Also include keys that have a result but are missing file_name or original_size
     fallback_data: dict[str, dict[str, Any]] = {}
 
     keys_needing_fallback = set(missing_keys)
-    for file_key, cached in zip(owned_keys, values):
+    for file_key, cached in zip(owned_keys, values, strict=False):
         if cached:
             try:
                 d = json.loads(cached)
@@ -262,10 +261,7 @@ async def batch_upload_status(
         async with async_session_factory() as _db:
             db_res = await _db.execute(
                 _sel(Upload)
-                .where(
-                    Upload.final_key.in_(list(keys_needing_fallback)),
-                    Upload.user_id == user.id
-                )
+                .where(Upload.final_key.in_(list(keys_needing_fallback)), Upload.user_id == user.id)
                 .order_by(Upload.created_at.desc())
             )
             for row in db_res.scalars().all():
@@ -274,24 +270,29 @@ async def batch_upload_status(
                         "upload_id": row.upload_id,
                         "file_key": row.final_key,
                         "status": row.status,
-                        "detail": row.error_detail or ("Success" if row.status == "clean" else "Failed"),
+                        "detail": row.error_detail
+                        or ("Success" if row.status == "clean" else "Failed"),
                         "result": {
                             "file_key": row.final_key,
                             "size": row.size_bytes,
                             "original_size": row.size_bytes,
                             "mime_type": row.mime_type,
                             "file_name": row.filename,
-                        } if row.status == "clean" else None,
-                        "overall_percent": 1.0
+                        }
+                        if row.status == "clean"
+                        else None,
+                        "overall_percent": 1.0,
                     }
 
-    for file_key, cached in zip(owned_keys, values):
+    for file_key, cached in zip(owned_keys, values, strict=False):
         if cached:
             try:
                 cached_data = json.loads(cached)
                 # Apply fallback fields if needed
                 if cached_data.get("status") == "clean" and cached_data.get("result"):
-                    if not cached_data["result"].get("file_name") or not cached_data["result"].get("original_size"):
+                    if not cached_data["result"].get("file_name") or not cached_data["result"].get(
+                        "original_size"
+                    ):
                         if file_key in fallback_data:
                             fb = fallback_data[file_key]["result"]
                             if not cached_data["result"].get("file_name"):
@@ -300,11 +301,18 @@ async def batch_upload_status(
                                 cached_data["result"]["original_size"] = fb["original_size"]
                 results[file_key] = cached_data
             except Exception:
-                results[file_key] = fallback_data.get(file_key) or {"file_key": file_key, "status": UploadStatus.PENDING}
+                results[file_key] = fallback_data.get(file_key) or {
+                    "file_key": file_key,
+                    "status": UploadStatus.PENDING,
+                }
         else:
-            results[file_key] = fallback_data.get(file_key) or {"file_key": file_key, "status": UploadStatus.PENDING}
+            results[file_key] = fallback_data.get(file_key) or {
+                "file_key": file_key,
+                "status": UploadStatus.PENDING,
+            }
 
     return {"statuses": results}
+
 
 # ── GET /api/upload/mine ─────────────────────────────────────────────────────
 
@@ -362,6 +370,7 @@ async def list_my_uploads(
 
 # ── GET /api/upload/preview ──────────────────────────────────────────────────
 
+
 @router.get("/preview")
 async def get_upload_preview(
     user: CurrentUser,
@@ -379,17 +388,18 @@ async def get_upload_preview(
 
         row = await db.scalar(
             select(Upload.id).where(
-                Upload.final_key == file_key,
-                Upload.user_id == user.id,
-                Upload.status == "clean"
+                Upload.final_key == file_key, Upload.user_id == user.id, Upload.status == "clean"
             )
         )
         if not row:
             raise BadRequestError("File could not be found or verified.")
-    elif file_key.startswith(f"quarantine/{user_id_str}/") or file_key.startswith(f"uploads/{user_id_str}/"):
+    elif file_key.startswith(f"quarantine/{user_id_str}/") or file_key.startswith(
+        f"uploads/{user_id_str}/"
+    ):
         pass  # Owned by user namespace
     else:
         from app.core.exceptions import ForbiddenError
+
         raise ForbiddenError("You are not authorized to preview this file.")
 
     # Refuse to serve unscanned quarantine files
@@ -414,7 +424,6 @@ async def get_upload_preview(
     url = await generate_presigned_get(file_key, filename=filename, content_type=content_type)
 
     return {"url": url}
-
 
 
 # ── Deprecated stubs ─────────────────────────────────────────────────────────

@@ -297,7 +297,7 @@ function EditProfileForm({
   onCancel,
 }: {
   profile: UserProfile;
-  onSave: () => void;
+  onSave: (updated: UserProfile) => void;
   onCancel: () => void;
 }) {
   const t = useTranslations("Profile");
@@ -310,7 +310,7 @@ function EditProfileForm({
     e.preventDefault();
     setSaving(true);
     try {
-      await apiFetch("/users/me", {
+      const updated = await apiFetch<UserProfile>("/users/me", {
         method: "PATCH",
         body: JSON.stringify({
           display_name: name || undefined,
@@ -319,7 +319,7 @@ function EditProfileForm({
         }),
       });
       toast.success(t("profileUpdated"));
-      onSave();
+      onSave(updated);
     } catch {
       toast.error(t("profileUpdateFailed"));
     } finally {
@@ -428,7 +428,7 @@ interface ProfileViewProps {
   profile: UserProfile;
   isOwn: boolean;
   onAvatarUpload?: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onProfileUpdated?: () => void;
+  onProfileUpdated?: (updated: UserProfile) => void;
   showRecentlyViewed?: boolean;
   isUploadingAvatar?: boolean;
 }
@@ -677,9 +677,9 @@ export function ProfileView({
         {editing && (
           <EditProfileForm
             profile={profile}
-            onSave={() => {
+            onSave={(updated) => {
               setEditing(false);
-              onProfileUpdated?.();
+              onProfileUpdated?.(updated);
             }}
             onCancel={() => setEditing(false)}
           />

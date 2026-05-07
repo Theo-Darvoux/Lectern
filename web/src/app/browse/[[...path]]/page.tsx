@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api-client";
@@ -94,7 +94,7 @@ let previousPath: string | null = null;
 function BrowseContent() {
   const params = useParams();
   const isDesktop = useIsDesktop();
-  const { sidebarOpen, setSidebarTarget } = useUIStore();
+  const { sidebarOpen, sidebarTarget, setSidebarTarget } = useUIStore();
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
 
   const t = useTranslations("Browse");
@@ -167,35 +167,85 @@ function BrowseContent() {
     fetchData(false);
   }, [path, fetchData]);
 
+  // Sync the sidebar target with the current directory context.
+  //
+  // Key rule: seed only when the path (i.e. the directory the user is
+  // browsing) changes. Background refetches on the same path — e.g. a like or
+  // favourite triggering triggerBrowseRefresh — must NOT reset a child target
+  // the user explicitly opened. That was the source of the "sidebar jumps
+  // back to the parent directory after liking a material" bug.
+  const isDirectoryListing = data?.type === "directory_listing";
+  const seededPathRef = useRef<string | null>(null);
+
   useEffect(() => {
-    // Synchronize sidebar target with current directory context
-    if (data && data.type === "directory_listing") {
-      const dir = data.directory;
-      if (dir) {
-        setSidebarTarget("details", {
-          type: "directory",
-          id: String(dir.id),
-          data: {
-            ...dir,
-            child_directory_count: data.directories?.length ?? 0,
-            child_material_count: data.materials?.length ?? 0,
-          },
-        });
-      } else if (path === "") {
-        // Root state
-        setSidebarTarget("details", {
-          type: "directory",
-          id: "root",
-          data: {
-            name: t("home"),
-            type: "folder",
-            child_directory_count: data.directories?.length ?? 0,
-            child_material_count: data.materials?.length ?? 0,
-          },
-        });
-      }
+    if (!isDirectoryListing) return;
+
+    const dir = data?.directory;
+    const currentDirId = dir ? String(dir.id) : path === "" ? "root" : null;
+    if (!currentDirId) return;
+
+    // Only seed once per path. Subsequent refetches on the same path leave
+    // the user-selected target alone.
+    if (seededPathRef.current === path) return;
+    seededPathRef.current = path;
+
+    if (dir) {
+      setSidebarTarget({
+        type: "directory",
+        id: currentDirId,
+        data: {
+          ...dir,
+          child_directory_count: data?.directories?.length ?? 0,
+          child_material_count: data?.materials?.length ?? 0,
+        },
+      });
+    } else {
+      setSidebarTarget({
+        type: "directory",
+        id: "root",
+        data: {
+          name: t("home"),
+          type: "folder",
+          child_directory_count: data?.directories?.length ?? 0,
+          child_material_count: data?.materials?.length ?? 0,
+        },
+      });
     }
-  }, [data, path, setSidebarTarget]);
+  }, [isDirectoryListing, path, data, setSidebarTarget, t]);
+
+  // If the directory data refreshes on the same path AND the sidebar is still
+  // showing this directory, refresh its data in place (counts, like state)
+  // without disturbing a child target.
+  useEffect(() => {
+    if (!isDirectoryListing || !data) return;
+    const dir = data.directory;
+    const currentDirId = dir ? String(dir.id) : path === "" ? "root" : null;
+    if (!currentDirId) return;
+    if (
+      sidebarTarget?.type === "directory" &&
+      sidebarTarget.id === currentDirId
+    ) {
+      setSidebarTarget({
+        type: "directory",
+        id: currentDirId,
+        data: dir
+          ? {
+              ...dir,
+              child_directory_count: data.directories?.length ?? 0,
+              child_material_count: data.materials?.length ?? 0,
+            }
+          : {
+              name: t("home"),
+              type: "folder",
+              child_directory_count: data.directories?.length ?? 0,
+              child_material_count: data.materials?.length ?? 0,
+            },
+      });
+    }
+    // sidebarTarget intentionally omitted to avoid re-firing on every store
+    // update — we only want to react to data refreshes.
+     
+  }, [isDirectoryListing, data, path, setSidebarTarget, t]);
 
   useEffect(() => {
     if (data) {
@@ -209,10 +259,13 @@ function BrowseContent() {
     }
   }, [data, path]);
 
+  const prevRefreshCountRef = useRef(refreshCount);
   useEffect(() => {
-    // If refreshCount changed but path didn't, it's a background refresh
-    if (refreshCount > 0) {
+    if (refreshCount > prevRefreshCountRef.current) {
+      prevRefreshCountRef.current = refreshCount;
       browseCache.delete(path);
+      // Use background fetch (isBackground=true) to avoid dimming/opacity flicker
+      // when liking/starring from the sidebar.
       fetchData(true);
     }
   }, [path, refreshCount, fetchData]);

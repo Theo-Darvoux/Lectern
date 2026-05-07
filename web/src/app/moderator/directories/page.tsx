@@ -30,7 +30,7 @@ export default function ModeratorDirectoriesPage() {
 
     useEffect(() => {
         fetchDirectories();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+         
     }, []);
 
     const buildTree = (items: DirectoryItem[], parentId: string | null = null): React.ReactNode[] => {

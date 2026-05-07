@@ -78,66 +78,41 @@ export async function collectDroppedItems(items: DataTransferItemList): Promise<
     const files: ScannedFile[] = [];
     const folders: Array<{ entry: FileSystemDirectoryEntry; name: string }> = [];
 
+    // Capture items/entries SYNCHRONOUSLY before any await
+    const entries: Array<{ entry: FileSystemEntry | null; file: File | null }> = [];
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
         if (item.kind !== "file") continue;
 
         const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntry | null }).webkitGetAsEntry?.();
         if (!entry) {
-            const f = item.getAsFile();
-            if (f) {
-                if (f.name.startsWith(".")) continue;
-                files.push({ file: f, relativePath: f.name });
-            }
-            continue;
+            entries.push({ entry: null, file: item.getAsFile() });
+        } else {
+            entries.push({ entry, file: null });
         }
+    }
 
-        // Skip hidden files/folders
-        if (entry.name.startsWith(".")) continue;
-
-        if (entry.isFile) {
-            const f = await new Promise<File>((res, rej) =>
-                (entry as FileSystemFileEntry).file(res, rej),
-            );
-            files.push({ file: f, relativePath: f.name });
-        } else if (entry.isDirectory) {
-            folders.push({ entry: entry as FileSystemDirectoryEntry, name: entry.name });
+    // Now we can await safely
+    for (const { entry, file } of entries) {
+        if (entry) {
+            if (entry.name.startsWith(".")) continue;
+            if (entry.isFile) {
+                const f = await new Promise<File>((res, rej) =>
+                    (entry as FileSystemFileEntry).file(res, rej),
+                );
+                files.push({ file: f, relativePath: f.name });
+            } else if (entry.isDirectory) {
+                folders.push({ entry: entry as FileSystemDirectoryEntry, name: entry.name });
+            }
+        } else if (file) {
+            if (file.name.startsWith(".")) continue;
+            files.push({ file, relativePath: file.name });
         }
     }
 
     return { files, folders };
 }
 
-/**
- * Collect all files from a DataTransferItemList, preserving folder structure.
- * Folders are traversed recursively and their files included with relative paths.
- */
-export async function collectDroppedFiles(items: DataTransferItemList): Promise<ScannedFile[]> {
-    const out: ScannedFile[] = [];
-    const visited = new Set<string>(); // shared across all top-level entries
-    const promises: Promise<void>[] = [];
-    for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.kind !== "file") continue;
-
-        // Use webkitGetAsEntry to get FileSystemEntry (supported by most modern browsers)
-        const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntry }).webkitGetAsEntry?.();
-        if (entry) {
-            // Skip hidden files/folders
-            if (entry.name.startsWith(".")) continue;
-            promises.push(traverseEntry(entry, "", out, visited, 0));
-        } else {
-            // Fallback: no FileSystem API support
-            const f = item.getAsFile();
-            if (f) {
-                if (f.name.startsWith(".")) continue;
-                out.push({ file: f, relativePath: f.name });
-            }
-        }
-    }
-    await Promise.all(promises);
-    return out;
-}
 
 /**
  * Derive all unique directory paths from a list of file paths (excluding root "").
@@ -167,30 +142,37 @@ export function extractDirPaths(scanned: ScannedFile[]): string[] {
  *   - Faster to create on the client (no CPU-intensive deflation)
  *   - The individual files are already compressed at the content level (PDF, etc.)
  *
- * The onProgress callback receives 0.0–1.0 as files are read and added.
+ * The onProgress callback receives 0.0–1.0 as files are processed.
  */
 export async function zipScannedFiles(
     files: ScannedFile[],
     onProgress?: (ratio: number) => void,
 ): Promise<Blob> {
     const fflate = await import("fflate");
-    type Zippable = Record<string, [Uint8Array, { level: 0 }]>;
-    const fileData: Zippable = {};
+    const chunks: Uint8Array[] = [];
+    
+    // Create a Zip stream that collects chunks into an array
+    const zip = new fflate.Zip((err, chunk, final) => {
+        if (err) {
+            console.error("Zip error:", err);
+            return;
+        }
+        chunks.push(chunk);
+    });
+
     for (let i = 0; i < files.length; i++) {
         const { file, relativePath } = files[i];
         const buffer = await file.arrayBuffer();
-        fileData[relativePath] = [new Uint8Array(buffer), { level: 0 }];
-        onProgress?.((i + 1) / files.length * 0.5); // reading phase: 0–50%
+        
+        // Add file to zip (level 0 = store)
+        const zipFile = new fflate.ZipPassThrough(relativePath);
+        zip.add(zipFile);
+        zipFile.push(new Uint8Array(buffer), true);
+        
+        onProgress?.((i + 1) / files.length);
     }
 
-    return new Promise((resolve, reject) => {
-        fflate.zip(fileData as Parameters<typeof fflate.zip>[0], (err: Error | null, data: Uint8Array) => {
-            if (err) {
-                reject(err);
-            } else {
-                onProgress?.(1.0);
-                resolve(new Blob([data.buffer as ArrayBuffer], { type: "application/zip" }));
-            }
-        });
-    });
+    zip.end();
+
+    return new Blob(chunks as any[], { type: "application/zip" });
 }

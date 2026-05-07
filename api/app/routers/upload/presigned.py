@@ -96,7 +96,7 @@ async def init_upload(
 
     await _check_pending_cap(
         user_id,
-        redis,
+        redis,  # type: ignore[arg-type]
         privileged=user.role in PRIVILEGED_ROLES,
         reserve_key=quarantine_key,
     )
@@ -118,7 +118,7 @@ async def init_upload(
             "sha256": getattr(data, "sha256", None),
         }
     )
-    await redis.set(f"{_UPLOAD_INTENT_PREFIX}{upload_id}", intent, ex=_UPLOAD_INTENT_TTL)
+    await redis.set(f"{_UPLOAD_INTENT_PREFIX}{upload_id}", intent, ex=_UPLOAD_INTENT_TTL)  # type: ignore[call-arg]
 
     await _create_upload_row(
         upload_id=upload_id,
@@ -228,7 +228,7 @@ async def complete_upload(
 async def presigned_multipart_init(
     data: UploadInitRequest,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     _: Annotated[None, Depends(rate_limit_uploads)],
 ) -> PresignedMultipartInitOut:
     """Initialise a direct-to-S3 multipart upload."""
@@ -382,7 +382,7 @@ async def presigned_multipart_complete(
 async def presigned_multipart_abort(
     upload_id: str,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> None:
     """Abort an in-progress multipart upload."""
     user_id = str(user.id)

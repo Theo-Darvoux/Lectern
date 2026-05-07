@@ -77,6 +77,11 @@ function OwnProfileContent() {
         }
     };
 
+    const handleProfileUpdated = useCallback((updated: UserProfile) => {
+        setProfile(prev => prev ? { ...prev, ...updated } : updated);
+        setUser(updated);
+    }, [setUser]);
+
     if (!profile) return <ProfileSkeleton />;
 
     return (
@@ -85,7 +90,7 @@ function OwnProfileContent() {
             isOwn
             onAvatarUpload={handleAvatarUpload}
             isUploadingAvatar={isUploading}
-            onProfileUpdated={fetchProfile}
+            onProfileUpdated={handleProfileUpdated}
             showRecentlyViewed
         />
     );

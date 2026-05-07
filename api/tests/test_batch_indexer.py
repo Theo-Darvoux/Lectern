@@ -159,21 +159,24 @@ async def test_index_materials_batch_single_add_documents_call(db_session: Async
     """Batch indexer issues exactly one add_documents call regardless of batch size."""
     u = await _user(db_session)
     parent = await _dir(db_session, "Course", "course")
-    mats = [await _mat(db_session, f"Mat{i}", directory_id=parent.id, author_id=u.id) for i in range(5)]
+    mats = [
+        await _mat(db_session, f"Mat{i}", directory_id=parent.id, author_id=u.id) for i in range(5)
+    ]
     await db_session.commit()
 
     mock_index = AsyncMock()
     mock_index.add_documents = AsyncMock()
 
     import app.core.database as c_db
-    orig = c_db.async_session_factory
 
+    orig = c_db.async_session_factory
 
     # Patch the session factory used by the worker to use the test DB
     engine = db_session.bind
 
     def _make_test_factory():
         from sqlalchemy.ext.asyncio import async_sessionmaker as asm
+
         return asm(engine, expire_on_commit=False)
 
     test_factory = _make_test_factory()
@@ -183,6 +186,7 @@ async def test_index_materials_batch_single_add_documents_call(db_session: Async
         with patch("app.workers.index_content.meili_admin_client") as mock_admin:
             mock_admin.index = MagicMock(return_value=mock_index)
             from app.workers.index_content import index_materials_batch
+
             await index_materials_batch({}, [m.id for m in mats])
 
         mock_index.add_documents.assert_called_once()
@@ -204,9 +208,11 @@ async def test_index_materials_batch_ancestor_path_correct(db_session: AsyncSess
     await db_session.commit()
 
     import app.core.database as c_db
+
     orig = c_db.async_session_factory
     engine = db_session.bind
     from sqlalchemy.ext.asyncio import async_sessionmaker as asm
+
     c_db.async_session_factory = asm(engine, expire_on_commit=False)
 
     captured_docs = []
@@ -217,6 +223,7 @@ async def test_index_materials_batch_ancestor_path_correct(db_session: AsyncSess
             mock_idx.add_documents = AsyncMock(side_effect=lambda docs: captured_docs.extend(docs))
             mock_admin.index = MagicMock(return_value=mock_idx)
             from app.workers.index_content import index_materials_batch
+
             await index_materials_batch({}, [mat.id])
     finally:
         c_db.async_session_factory = orig
@@ -232,6 +239,7 @@ async def test_index_materials_batch_empty_list(db_session: AsyncSession):
     """Empty list → no DB query, no Meili call."""
     with patch("app.workers.index_content.meili_admin_client") as mock_admin:
         from app.workers.index_content import index_materials_batch
+
         await index_materials_batch({}, [])
         mock_admin.index.assert_not_called()
 
@@ -245,13 +253,17 @@ async def test_index_materials_batch_empty_list(db_session: AsyncSession):
 async def test_index_directories_batch_single_add_documents_call(db_session: AsyncSession):
     """Batch dir indexer issues exactly one add_documents call."""
     root = await _dir(db_session, "Root", "root")
-    children = [await _dir(db_session, f"Child{i}", f"child-{i}", parent_id=root.id) for i in range(4)]
+    children = [
+        await _dir(db_session, f"Child{i}", f"child-{i}", parent_id=root.id) for i in range(4)
+    ]
     await db_session.commit()
 
     import app.core.database as c_db
+
     orig = c_db.async_session_factory
     engine = db_session.bind
     from sqlalchemy.ext.asyncio import async_sessionmaker as asm
+
     c_db.async_session_factory = asm(engine, expire_on_commit=False)
 
     mock_idx = AsyncMock()
@@ -261,6 +273,7 @@ async def test_index_directories_batch_single_add_documents_call(db_session: Asy
         with patch("app.workers.index_content.meili_admin_client") as mock_admin:
             mock_admin.index = MagicMock(return_value=mock_idx)
             from app.workers.index_content import index_directories_batch
+
             await index_directories_batch({}, [c.id for c in children])
 
         mock_idx.add_documents.assert_called_once()
@@ -278,9 +291,11 @@ async def test_index_directories_batch_ancestor_path_uses_parent(db_session: Asy
     await db_session.commit()
 
     import app.core.database as c_db
+
     orig = c_db.async_session_factory
     engine = db_session.bind
     from sqlalchemy.ext.asyncio import async_sessionmaker as asm
+
     c_db.async_session_factory = asm(engine, expire_on_commit=False)
 
     captured = []
@@ -291,6 +306,7 @@ async def test_index_directories_batch_ancestor_path_uses_parent(db_session: Asy
             mock_idx.add_documents = AsyncMock(side_effect=lambda docs: captured.extend(docs))
             mock_admin.index = MagicMock(return_value=mock_idx)
             from app.workers.index_content import index_directories_batch
+
             await index_directories_batch({}, [child.id])
     finally:
         c_db.async_session_factory = orig
@@ -309,9 +325,11 @@ async def test_index_directories_batch_root_has_empty_ancestor_path(db_session: 
     await db_session.commit()
 
     import app.core.database as c_db
+
     orig = c_db.async_session_factory
     engine = db_session.bind
     from sqlalchemy.ext.asyncio import async_sessionmaker as asm
+
     c_db.async_session_factory = asm(engine, expire_on_commit=False)
 
     captured = []
@@ -322,6 +340,7 @@ async def test_index_directories_batch_root_has_empty_ancestor_path(db_session: 
             mock_idx.add_documents = AsyncMock(side_effect=lambda docs: captured.extend(docs))
             mock_admin.index = MagicMock(return_value=mock_idx)
             from app.workers.index_content import index_directories_batch
+
             await index_directories_batch({}, [root.id])
     finally:
         c_db.async_session_factory = orig
@@ -334,6 +353,7 @@ async def test_index_directories_batch_root_has_empty_ancestor_path(db_session: 
 async def test_index_directories_batch_empty_list():
     with patch("app.workers.index_content.meili_admin_client") as mock_admin:
         from app.workers.index_content import index_directories_batch
+
         await index_directories_batch({}, [])
         mock_admin.index.assert_not_called()
 
@@ -491,4 +511,5 @@ def test_split_identifiers_module_scope():
     assert hasattr(mod, "_ALPHA_NUM")
     assert hasattr(mod, "_NUM_ALPHA")
     import re
+
     assert isinstance(mod._ALPHA_NUM, type(re.compile("")))

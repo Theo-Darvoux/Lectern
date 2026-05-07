@@ -114,7 +114,7 @@ async def create_annotation(
     author_id: uuid.UUID,
     body: str,
     selection_text: str | None = None,
-    position_data: dict | None = None,
+    position_data: dict | None = None,  # type: ignore[type-arg]
     page: int | None = None,
     reply_to_id: str | None = None,
 ) -> Annotation:

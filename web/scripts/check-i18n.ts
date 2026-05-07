@@ -7,7 +7,7 @@ const EN_PATH = path.join(MESSAGES_DIR, "en.json");
 const FR_PATH = path.join(MESSAGES_DIR, "fr.json");
 
 function getFlatKeys(obj: Record<string, unknown>, prefix = ""): Map<string, string> {
-  let keys = new Map<string, string>();
+  const keys = new Map<string, string>();
   for (const key in obj) {
     const fullKey = prefix ? `${prefix}.${key}` : key;
     if (typeof obj[key] === "object" && obj[key] !== null && !Array.isArray(obj[key])) {
@@ -195,8 +195,19 @@ for (const file of files) {
             }
         }
     }
+
+    // 3. Special case for _onStatusUpdate wrapper in upload-client.ts
+    if (Node.isCallExpression(node) && node.getExpression().getText() === "_onStatusUpdate") {
+        const args = node.getArguments();
+        if (args.length >= 2 && Node.isStringLiteral(args[1])) {
+            usedKeys.add(`Upload.${args[1].getLiteralValue()}`);
+        }
+    }
   });
 }
+
+// 4. Hardcoded exceptions for dynamically passed t() functions
+protectNamespace("AutoTitle");
 
 const trulyUnused = enKeys.filter(k => !usedKeys.has(k));
 if (trulyUnused.length > 0) {

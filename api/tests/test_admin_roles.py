@@ -1,4 +1,5 @@
 """Tests for role-based access control on /api/moderator and /api/admin routes."""
+
 from __future__ import annotations
 
 import uuid
@@ -164,9 +165,7 @@ async def test_admin_update_role_invalid_role(
     assert r.status_code == 400
 
 
-async def test_admin_update_role_not_found(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_admin_update_role_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     fake_id = uuid.uuid4()
     r = await client.patch(
@@ -187,34 +186,26 @@ async def test_admin_dlq_list_allowed(
     assert "items" in data
 
 
-async def test_admin_dlq_moderator_forbidden(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_admin_dlq_moderator_forbidden(client: AsyncClient, db_session: AsyncSession) -> None:
     mod = await _make_user(db_session, UserRole.MODERATOR)
     r = await client.get("/api/admin/dlq", headers=_auth(mod))
     assert r.status_code == 403
 
 
-async def test_admin_dlq_student_forbidden(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_admin_dlq_student_forbidden(client: AsyncClient, db_session: AsyncSession) -> None:
     student = await _make_user(db_session, UserRole.STUDENT)
     r = await client.get("/api/admin/dlq", headers=_auth(student))
     assert r.status_code == 403
 
 
-async def test_admin_dlq_retry_not_found(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_admin_dlq_retry_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     fake_id = uuid.uuid4()
     r = await client.post(f"/api/admin/dlq/{fake_id}/retry", headers=_auth(admin))
     assert r.status_code == 404
 
 
-async def test_admin_dlq_dismiss_not_found(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_admin_dlq_dismiss_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
     admin = await _make_user(db_session, UserRole.BUREAU)
     fake_id = uuid.uuid4()
     r = await client.post(f"/api/admin/dlq/{fake_id}/dismiss", headers=_auth(admin))
@@ -224,18 +215,14 @@ async def test_admin_dlq_dismiss_not_found(
 # ── Old /api/admin endpoints now return 404 (removed) ────────────────────────
 
 
-async def test_old_admin_stats_gone(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_old_admin_stats_gone(client: AsyncClient, db_session: AsyncSession) -> None:
     """GET /api/admin/stats was moved to /api/moderator/stats."""
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.get("/api/admin/stats", headers=_auth(admin))
     assert r.status_code == 404
 
 
-async def test_old_admin_directories_gone(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_old_admin_directories_gone(client: AsyncClient, db_session: AsyncSession) -> None:
     """GET /api/admin/directories was moved to /api/moderator/directories."""
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.get("/api/admin/directories", headers=_auth(admin))

@@ -19,6 +19,7 @@ process_upload ARQ job is enqueued (same worker as the presigned path).
 
 import asyncio
 import base64
+import contextlib
 import hashlib as _hashlib
 import json
 import logging
@@ -93,10 +94,8 @@ def _decode_upload_metadata(header: str | None) -> dict[str, str]:
         parts = item.split(" ", 1)
         key = parts[0].strip()
         if len(parts) == 2:
-            try:
+            with contextlib.suppress(Exception):
                 result[key] = base64.b64decode(parts[1].strip()).decode("utf-8", errors="replace")
-            except Exception:
-                pass
         else:
             result[key] = ""
     return result
@@ -105,7 +104,7 @@ def _decode_upload_metadata(header: str | None) -> dict[str, str]:
 @router.options("", include_in_schema=False)
 @router.options("/", include_in_schema=False)
 async def tus_options(
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> Response:
     # Read max_file_size_mb from Redis cache only — no DB round-trip for OPTIONS.
     # This endpoint is hit on every CORS preflight; opening a DB session here
@@ -144,7 +143,7 @@ async def tus_options(
 async def tus_create(
     request: Request,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
     _rl: Annotated[None, Depends(rate_limit_uploads)],
 ) -> Response:
@@ -165,12 +164,21 @@ async def tus_create(
 
     # Fetch dynamic config
     from app.services.auth import get_full_auth_config
+
     config = await get_full_auth_config(db, redis)
 
-    max_bytes = (config.get("max_file_size_mb") if config.get("max_file_size_mb") is not None else settings.max_file_size_mb) * 1024 * 1024
+    max_bytes = (
+        (  # type: ignore[operator]
+            config.get("max_file_size_mb")
+            if config.get("max_file_size_mb") is not None
+            else settings.max_file_size_mb
+        )
+        * 1024
+        * 1024
+    )
     if upload_length > max_bytes:
         raise BadRequestError(
-            f"Upload-Length {upload_length // (1024*1024)} MiB exceeds server maximum of {max_bytes // (1024*1024)} MiB.",
+            f"Upload-Length {upload_length // (1024 * 1024)} MiB exceeds server maximum of {max_bytes // (1024 * 1024)} MiB.",
             code=ERR_FILE_TOO_LARGE,
         )
 
@@ -183,13 +191,17 @@ async def tus_create(
     # Process allowed lists
     allowed_exts: set[str] | None = None
     if config.get("allowed_extensions"):
-        allowed_exts = {e.strip().lower() for e in config["allowed_extensions"].split(",") if e.strip()}
+        allowed_exts = {
+            e.strip().lower() for e in config["allowed_extensions"].split(",") if e.strip()
+        }
         if not all(e.startswith(".") for e in allowed_exts):
-             allowed_exts = {e if e.startswith(".") else f".{e}" for e in allowed_exts}
+            allowed_exts = {e if e.startswith(".") else f".{e}" for e in allowed_exts}
 
     allowed_mimes: set[str] | None = None
     if config.get("allowed_mime_types"):
-        allowed_mimes = {m.strip().lower() for m in config["allowed_mime_types"].split(",") if m.strip()}
+        allowed_mimes = {
+            m.strip().lower() for m in config["allowed_mime_types"].split(",") if m.strip()
+        }
 
     safe_name, _ext = _validate_filename(raw_filename, allowed_extensions=allowed_exts)
 
@@ -200,6 +212,7 @@ async def tus_create(
         )
 
     from app.routers.upload.helpers import _check_storage_limit
+
     await _check_storage_limit(upload_length, config=config)
 
     _check_per_type_size(raw_mime, upload_length, config=config)
@@ -231,7 +244,7 @@ async def tus_create(
         "length": str(upload_length),
         "parts": "[]",
     }
-    await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id}", mapping=state)
+    await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id}", mapping=state)  # type: ignore[arg-type]
     await redis.expire(f"{_TUS_STATE_PREFIX}{tus_id}", _TUS_STATE_TTL)
     await redis.sadd(_TUS_ACTIVE_SESSIONS, tus_id)
 
@@ -255,7 +268,7 @@ async def tus_create(
 async def tus_head(
     tus_id: uuid.UUID,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> Response:
     """Return current Upload-Offset for a pending upload."""
     state = await _load_state(str(tus_id), user, redis)
@@ -276,7 +289,7 @@ async def tus_patch(
     tus_id: uuid.UUID,
     request: Request,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Append a chunk to the upload at Upload-Offset.
@@ -292,9 +305,12 @@ async def tus_patch(
 
     # Fetch dynamic config
     from app.services.auth import get_full_auth_config
+
     config = await get_full_auth_config(db, redis)
 
-    max_concurrent = config.get("tus_max_concurrent_per_user") or settings.tus_max_concurrent_per_user
+    max_concurrent = (
+        config.get("tus_max_concurrent_per_user") or settings.tus_max_concurrent_per_user
+    )
     if inflight > max_concurrent:
         await redis.decr(_inflight_key)
         return Response(
@@ -324,9 +340,7 @@ async def tus_patch(
 
         chunk_max = config.get("tus_chunk_max_bytes") or settings.tus_chunk_max_bytes
         if chunk_size > chunk_max:
-            raise BadRequestError(
-                f"Chunk too large: maximum {chunk_max} bytes, got {chunk_size}"
-            )
+            raise BadRequestError(f"Chunk too large: maximum {chunk_max} bytes, got {chunk_size}")
 
         tmp = tempfile.NamedTemporaryFile(delete=False)
         tmp_path = Path(tmp.name)
@@ -532,7 +546,7 @@ async def tus_patch(
 async def tus_delete(
     tus_id: uuid.UUID,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> Response:
     """Terminate a pending upload.  Aborts the S3 multipart upload."""
     state = await _load_state(str(tus_id), user, redis)
@@ -545,10 +559,10 @@ async def tus_delete(
     return Response(status_code=204, headers=_TUS_HEADERS)
 
 
-async def _load_state(tus_id: str, user: CurrentUser, redis: Redis) -> dict[str, str]:
+async def _load_state(tus_id: str, user: CurrentUser, redis: Redis) -> dict[str, str]:  # type: ignore[type-arg]
     """Load tus state from Redis, enforcing ownership."""
     state_key = f"{_TUS_STATE_PREFIX}{tus_id}"
-    state: dict = await redis.hgetall(state_key)
+    state: dict = await redis.hgetall(state_key)  # type: ignore[type-arg]
     if not state:
         raise NotFoundError("Upload not found or expired.", code=ERR_TUS_UPLOAD_NOT_FOUND)
 

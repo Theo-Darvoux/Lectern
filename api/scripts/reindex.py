@@ -22,7 +22,9 @@ try:
     from app.models.material import Material
     from app.workers.index_content import index_directory, index_material
 except ImportError as e:
-    logger.error(f"Failed to import app modules. Ensure you run this script from the project root. Error: {e}")
+    logger.error(
+        f"Failed to import app modules. Ensure you run this script from the project root. Error: {e}"
+    )
     sys.exit(1)
 
 
@@ -56,10 +58,7 @@ async def audit_index(index_name: str, model_class: type, batch_size: int = 100)
         doc_ids = []
         for doc in docs.results:
             raw_id = None
-            if isinstance(doc, dict):
-                raw_id = doc.get("id")
-            else:
-                raw_id = getattr(doc, "id", None)
+            raw_id = doc.get("id") if isinstance(doc, dict) else getattr(doc, "id", None)
 
             if raw_id:
                 try:
@@ -75,9 +74,7 @@ async def audit_index(index_name: str, model_class: type, batch_size: int = 100)
             continue
 
         async with async_session_factory() as db:
-            result = await db.execute(
-                select(model_class.id).where(model_class.id.in_(doc_ids))
-            )
+            result = await db.execute(select(model_class.id).where(model_class.id.in_(doc_ids)))
             existing_ids = result.scalars().all()
 
             existing_set = set(existing_ids)
@@ -105,30 +102,43 @@ async def perform_cleanup(dry_run: bool, batch_size: int = 100):
 
         logger.info(f"!!! Found {len(orphans)} orphans in '{index_name}'.")
         if dry_run:
-            logger.info(f"[Dry Run] Would delete these IDs: {orphans[:20]}{'...' if len(orphans) > 20 else ''}")
+            logger.info(
+                f"[Dry Run] Would delete these IDs: {orphans[:20]}{'...' if len(orphans) > 20 else ''}"
+            )
         else:
             logger.info(f"Deleting {len(orphans)} orphans from '{index_name}'...")
             await meili_admin_client.index(index_name).delete_documents(orphans)
             logger.info(f"Successfully cleaned up '{index_name}'.")
 
 
-async def _index_batch(worker_fn, ids: list, semaphore: asyncio.Semaphore, label: str, batch_num: int, total_batches: int) -> int:
+async def _index_batch(
+    worker_fn,
+    ids: list,
+    semaphore: asyncio.Semaphore,
+    label: str,
+    batch_num: int,
+    total_batches: int,
+) -> int:
     """Run worker_fn for each id in the batch under the given semaphore. Returns error count."""
     errors = 0
     async with semaphore:
         tasks = [worker_fn({}, item_id) for item_id in ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        for item_id, result in zip(ids, results):
+        for item_id, result in zip(ids, results, strict=False):
             if isinstance(result, Exception):
                 logger.error(f"Failed to index {label} {item_id}: {result}")
                 errors += 1
-    logger.info(f"Completed batch {batch_num}/{total_batches} ({len(ids)} {label}s, {errors} errors)")
+    logger.info(
+        f"Completed batch {batch_num}/{total_batches} ({len(ids)} {label}s, {errors} errors)"
+    )
     return errors
 
 
 async def perform_full_reindex(batch_size: int = 100):
     """Wipe indices and re-index everything from the database in parallel batches."""
-    logger.warning("Performing FULL re-index. This will clear the existing indices and re-populate them.")
+    logger.warning(
+        "Performing FULL re-index. This will clear the existing indices and re-populate them."
+    )
 
     for index_name in ["materials", "directories"]:
         logger.info(f"Clearing index: '{index_name}'...")
@@ -141,7 +151,7 @@ async def perform_full_reindex(batch_size: int = 100):
         mat_ids = list((await db.scalars(select(Material.id))).all())
 
     logger.info(f"Found {len(mat_ids)} materials in DB. Starting parallel re-indexing...")
-    mat_batches = [mat_ids[i:i + batch_size] for i in range(0, len(mat_ids), batch_size)]
+    mat_batches = [mat_ids[i : i + batch_size] for i in range(0, len(mat_ids), batch_size)]
     total_batches = len(mat_batches)
     mat_tasks = [
         _index_batch(index_material, batch, semaphore, "material", i + 1, total_batches)
@@ -155,23 +165,31 @@ async def perform_full_reindex(batch_size: int = 100):
         dir_ids = list((await db.scalars(select(Directory.id))).all())
 
     logger.info(f"Found {len(dir_ids)} directories in DB. Starting parallel re-indexing...")
-    dir_batches = [dir_ids[i:i + batch_size] for i in range(0, len(dir_ids), batch_size)]
+    dir_batches = [dir_ids[i : i + batch_size] for i in range(0, len(dir_ids), batch_size)]
     total_batches = len(dir_batches)
     dir_tasks = [
         _index_batch(index_directory, batch, semaphore, "directory", i + 1, total_batches)
         for i, batch in enumerate(dir_batches)
     ]
     dir_errors = sum(await asyncio.gather(*dir_tasks))
-    logger.info(f"Directories done: {len(dir_ids) - dir_errors}/{len(dir_ids)} indexed successfully.")
+    logger.info(
+        f"Directories done: {len(dir_ids) - dir_errors}/{len(dir_ids)} indexed successfully."
+    )
 
     logger.info("Full re-index complete!")
 
 
 async def main():
     parser = argparse.ArgumentParser(description="WikINT Meilisearch Management Script")
-    parser.add_argument("mode", choices=["audit", "cleanup", "prune", "full"], help="Mode of operation")
-    parser.add_argument("--dry-run", action="store_true", help="Only for cleanup/prune mode: don't actually delete")
-    parser.add_argument("--batch-size", type=int, default=100, help="Batch size for processing (default: 100)")
+    parser.add_argument(
+        "mode", choices=["audit", "cleanup", "prune", "full"], help="Mode of operation"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Only for cleanup/prune mode: don't actually delete"
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=100, help="Batch size for processing (default: 100)"
+    )
     parser.add_argument("--force", action="store_true", help="Skip confirmation for full re-index")
 
     args = parser.parse_args()
@@ -180,7 +198,9 @@ async def main():
         for index_name, model in [("materials", Material), ("directories", Directory)]:
             orphans = await audit_index(index_name, model, batch_size=args.batch_size)
             if orphans:
-                logger.info(f"!!! FOUND {len(orphans)} orphans in '{index_name}': {orphans[:20]}{'...' if len(orphans) > 20 else ''}")
+                logger.info(
+                    f"!!! FOUND {len(orphans)} orphans in '{index_name}': {orphans[:20]}{'...' if len(orphans) > 20 else ''}"
+                )
             else:
                 logger.info(f"Index '{index_name}' is CLEAN.")
 
@@ -190,7 +210,7 @@ async def main():
     elif args.mode == "full":
         if not args.force:
             confirm = input("Are you sure you want to WIPE and REBUILD the entire index? (y/N): ")
-            if confirm.lower() != 'y':
+            if confirm.lower() != "y":
                 logger.info("Aborted.")
                 return
         await perform_full_reindex(batch_size=args.batch_size)

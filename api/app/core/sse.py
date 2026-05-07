@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import uuid
 from collections.abc import AsyncGenerator, Callable
@@ -21,10 +22,8 @@ def register_user_queue(user_id: uuid.UUID) -> asyncio.Queue[dict[str, Any]]:
 def unregister_user_queue(user_id: uuid.UUID, q: asyncio.Queue[dict[str, Any]]) -> None:
     """Unregister a specific SSE queue for a user."""
     queues = _user_queues.get(user_id, [])
-    try:
+    with contextlib.suppress(ValueError):
         queues.remove(q)
-    except ValueError:
-        pass
     if not queues:
         _user_queues.pop(user_id, None)
 
@@ -47,10 +46,8 @@ def register_topic_queue(topic: str) -> asyncio.Queue[dict[str, Any]]:
 
 def unregister_topic_queue(topic: str, q: asyncio.Queue[dict[str, Any]]) -> None:
     queues = _topic_queues.get(topic, [])
-    try:
+    with contextlib.suppress(ValueError):
         queues.remove(q)
-    except ValueError:
-        pass
     if not queues:
         _topic_queues.pop(topic, None)
 
