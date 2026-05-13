@@ -393,11 +393,15 @@ def _build_rasterized_pdf(jpeg_paths: list[str], out_path: str, dpi: int) -> boo
         img_stream.BitsPerComponent = 8
         img_stream.Filter = pikepdf.Name("/DCTDecode")
 
+        # Use pikepdf.Name as key — **{"/Im1": ...} produces "//Im1" (double slash)
+        xobj = pikepdf.Dictionary()
+        xobj[pikepdf.Name("/Im1")] = img_stream
+
         content = f"q {pts_w} 0 0 {pts_h} 0 0 cm /Im1 Do Q".encode()
         page_dict = pikepdf.Dictionary(
             Type=pikepdf.Name("/Page"),
             MediaBox=[0, 0, pts_w, pts_h],
-            Resources=pikepdf.Dictionary(XObject=pikepdf.Dictionary(**{"/Im1": img_stream})),  # type: ignore[arg-type]
+            Resources=pikepdf.Dictionary(XObject=xobj),
             Contents=pdf.make_stream(content),
         )
         pdf.pages.append(pikepdf.Page(pdf.make_indirect(page_dict)))
@@ -406,12 +410,12 @@ def _build_rasterized_pdf(jpeg_paths: list[str], out_path: str, dpi: int) -> boo
     return True
 
 
-async def _rasterize_pdf_path(file_path: Path, dpi: int = 150) -> Path:
+async def _rasterize_pdf_path(file_path: Path, dpi: int = 400) -> Path:
     """Rasterize vector-heavy PDF pages to JPEG and repack as a new PDF.
 
-    Uses Ghostscript's jpeg device to render each page at ``dpi`` DPI (quality 85),
+    Uses Ghostscript's jpeg device to render each page at ``dpi`` DPI (quality 90),
     then uses pikepdf to reassemble them into a compact PDF. This reduces file size
-    by 10–20× for PDFs dominated by SVG-derived bezier paths that resist normal
+    by 5–15× for PDFs dominated by SVG-derived bezier paths that resist normal
     font-subsetting / stream-packing compression.
 
     Returns a new temp path when the result is smaller; original path otherwise.
@@ -427,7 +431,7 @@ async def _rasterize_pdf_path(file_path: Path, dpi: int = 150) -> Path:
             "-dSAFER",
             "-sDEVICE=jpeg",
             f"-r{dpi}",
-            "-dJPEGQ=85",
+            "-dJPEGQ=90",
             f"-sOutputFile={page_prefix}-%03d.jpg",
             str(file_path),
             stdout=asyncio.subprocess.DEVNULL,
