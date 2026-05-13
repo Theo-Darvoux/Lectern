@@ -43,7 +43,8 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 # ── 1.2: content_length in presigned PUT ────────────────────────────────────
 
 
-def test_generate_presigned_put_includes_content_length():
+@pytest.mark.asyncio
+async def test_generate_presigned_put_includes_content_length():
     """generate_presigned_put must pass ContentLength to boto3 for exact-size enforcement."""
     from unittest.mock import AsyncMock, patch
 
@@ -59,17 +60,13 @@ def test_generate_presigned_put_includes_content_length():
 
     mock_client.generate_presigned_url.side_effect = mock_generate
 
-    import asyncio
-
     from app.core.storage import generate_presigned_put
 
     with patch("app.core.storage.get_s3_client") as mock_ctx:
         mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-        asyncio.get_event_loop().run_until_complete(
-            generate_presigned_put(
-                "quarantine/test/file.pdf", "application/pdf", content_length=1024
-            )
+        await generate_presigned_put(
+            "quarantine/test/file.pdf", "application/pdf", content_length=1024
         )
 
     assert "ContentLength" in captured_params

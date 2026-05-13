@@ -336,41 +336,41 @@ if settings.is_dev:
         from app.models.user import User
         from app.models.view_history import ViewHistory
 
-        class UserAdmin(ModelView, model=User):
+        class UserAdmin(ModelView, model=User):  # type: ignore[call-arg]
             column_list = [User.id, User.email, User.display_name, User.role, User.onboarded]
 
-        class DirectoryAdmin(ModelView, model=Directory):
+        class DirectoryAdmin(ModelView, model=Directory):  # type: ignore[call-arg]
             column_list = [Directory.id, Directory.name, Directory.slug, Directory.type]
 
-        class MaterialAdmin(ModelView, model=Material):
+        class MaterialAdmin(ModelView, model=Material):  # type: ignore[call-arg]
             column_list = [Material.id, Material.title, Material.type, Material.slug]
 
-        class MaterialVersionAdmin(ModelView, model=MaterialVersion):
+        class MaterialVersionAdmin(ModelView, model=MaterialVersion):  # type: ignore[call-arg]
             column_list = [
                 MaterialVersion.id,
                 MaterialVersion.material_id,
                 MaterialVersion.version_number,
             ]
 
-        class TagAdmin(ModelView, model=Tag):
+        class TagAdmin(ModelView, model=Tag):  # type: ignore[call-arg]
             column_list = [Tag.id, Tag.name, Tag.category]
 
-        class PullRequestAdmin(ModelView, model=PullRequest):
+        class PullRequestAdmin(ModelView, model=PullRequest):  # type: ignore[call-arg]
             column_list = [PullRequest.id, PullRequest.title, PullRequest.type, PullRequest.status]
 
-        class PRCommentAdmin(ModelView, model=PRComment):
+        class PRCommentAdmin(ModelView, model=PRComment):  # type: ignore[call-arg]
             column_list = [PRComment.id, PRComment.pr_id, PRComment.body]
 
-        class CommentAdmin(ModelView, model=Comment):
+        class CommentAdmin(ModelView, model=Comment):  # type: ignore[call-arg]
             column_list = [Comment.id, Comment.target_type, Comment.target_id, Comment.body]
 
-        class AnnotationAdmin(ModelView, model=Annotation):
+        class AnnotationAdmin(ModelView, model=Annotation):  # type: ignore[call-arg]
             column_list = [Annotation.id, Annotation.material_id, Annotation.body]
 
-        class FlagAdmin(ModelView, model=Flag):
+        class FlagAdmin(ModelView, model=Flag):  # type: ignore[call-arg]
             column_list = [Flag.id, Flag.target_type, Flag.reason, Flag.status]
 
-        class NotificationAdmin(ModelView, model=Notification):
+        class NotificationAdmin(ModelView, model=Notification):  # type: ignore[call-arg]
             column_list = [
                 Notification.id,
                 Notification.user_id,
@@ -378,7 +378,7 @@ if settings.is_dev:
                 Notification.title,
             ]
 
-        class ViewHistoryAdmin(ModelView, model=ViewHistory):
+        class ViewHistoryAdmin(ModelView, model=ViewHistory):  # type: ignore[call-arg]
             column_list = [ViewHistory.id, ViewHistory.user_id, ViewHistory.material_id]
 
         admin.add_view(UserAdmin)

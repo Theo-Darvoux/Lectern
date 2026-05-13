@@ -3,6 +3,6 @@
   "entry": ["src/app/**/{page,layout,loading,error,not-found}.tsx", "src/app/**/*.ts"],
   "project": ["src/**/*.{ts,tsx}"],
   "ignore": ["src/lib/api-types.ts", "src/components/ui/**/*.{ts,tsx}"],
-  "ignoreDependencies": ["tw-animate-css", "shadcn", "tailwindcss", "postcss"],
+  "ignoreDependencies": ["tw-animate-css", "shadcn", "tailwindcss", "postcss", "@tailwindcss/typography"],
   "ignoreExportsUsedInFile": true
 }
