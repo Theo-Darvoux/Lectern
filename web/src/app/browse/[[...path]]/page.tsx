@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api-client";
 import { AuthGuard } from "@/components/auth-guard";
@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
 import { Eye, X } from "lucide-react";
+import { createSSEConnection } from "@/lib/sse-client";
 import type { Operation } from "@/lib/staging-store";
 
 interface BrowseResponse {
@@ -93,6 +94,7 @@ let previousPath: string | null = null;
 
 function BrowseContent() {
   const params = useParams();
+  const router = useRouter();
   const isDesktop = useIsDesktop();
   const { sidebarOpen, sidebarTarget, setSidebarTarget } = useUIStore();
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
@@ -269,6 +271,56 @@ function BrowseContent() {
       fetchData(true);
     }
   }, [path, refreshCount, fetchData]);
+
+  // Redirect on deletion / refresh on child creation via SSE
+  useEffect(() => {
+    if (!data) return;
+
+    let sseUrl: string | null = null;
+    const listeners: Record<string, () => void> = {};
+    const breadcrumbSlugs = data.breadcrumbs?.map((b) => b.slug) ?? [];
+
+    if (data.type === "material" && data.material) {
+      sseUrl = `/materials/${data.material.id}/sse`;
+      const parentPath = breadcrumbSlugs.length > 0 ? `/browse/${breadcrumbSlugs.join("/")}` : "/browse";
+      listeners["material_deleted"] = () => {
+        browseCache.delete(path);
+        router.replace(parentPath);
+      };
+    } else if (data.type === "directory_listing") {
+      const dirId = data.directory ? String(data.directory.id) : "root";
+      sseUrl = `/directories/${dirId}/sse`;
+      if (data.directory) {
+        const parentSlugs = breadcrumbSlugs.slice(0, -1);
+        const parentPath = parentSlugs.length > 0 ? `/browse/${parentSlugs.join("/")}` : "/browse";
+        listeners["directory_deleted"] = () => {
+          browseCache.delete(path);
+          router.replace(parentPath);
+        };
+      }
+      listeners["child_added"] = () => {
+        browseCache.delete(path);
+        fetchData(true);
+      };
+    } else if (data.type === "attachment_listing" && data.parent_material) {
+      sseUrl = `/materials/${(data.parent_material as Record<string, unknown>).id}/sse`;
+      const parentPath = breadcrumbSlugs.length > 0 ? `/browse/${breadcrumbSlugs.join("/")}` : "/browse";
+      listeners["material_deleted"] = () => {
+        browseCache.delete(path);
+        router.replace(parentPath);
+      };
+    }
+
+    if (!sseUrl || Object.keys(listeners).length === 0) return;
+
+    const connection = createSSEConnection({
+      url: sseUrl,
+      listeners,
+      startupDelay: 50,
+    });
+
+    return () => connection.close();
+  }, [data, path, router, fetchData]);
 
   const isLikelyMaterial = Boolean(
     params.path && Array.isArray(params.path) && params.path.length >= 3,

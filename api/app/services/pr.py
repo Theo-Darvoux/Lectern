@@ -488,6 +488,10 @@ async def _exec_create_material(
     db.add(m)
     await db.flush()
 
+    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    parent_topic = str(m.directory_id) if m.directory_id else "root"
+    broadcasts.append((parent_topic, {"type": "child_added", "kind": "material", "id": str(m.id)}))
+
     if p.get("file_key"):
         file_key = str(p["file_key"])
 
@@ -747,6 +751,9 @@ async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
     now = datetime.now(UTC)
     mat.deleted_at = now
 
+    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts.append((str(mat.id), {"type": "material_deleted"}))
+
     versions = await db.scalars(
         select(MaterialVersion)
         .where(MaterialVersion.material_id == mat.id)
@@ -763,6 +770,7 @@ async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
         ).all()
         for att in att_mats:
             att.deleted_at = now
+            broadcasts.append((str(att.id), {"type": "material_deleted"}))
             att_versions = await db.scalars(
                 select(MaterialVersion)
                 .where(MaterialVersion.material_id == att.id)
@@ -815,6 +823,10 @@ async def _exec_create_directory(
     )
     db.add(d)
     await db.flush()
+
+    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    parent_topic = str(d.parent_id) if d.parent_id else "root"
+    broadcasts.append((parent_topic, {"type": "child_added", "kind": "directory", "id": str(d.id)}))
 
     seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
     key = ("index_directory", str(d.id))
@@ -885,10 +897,12 @@ async def _soft_delete_directory_tree(db: AsyncSession, directory_id: uuid.UUID)
     )
     all_dir_ids = (await db.scalars(select(dir_cte.c.id))).all()
 
+    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
     for did in all_dir_ids:
         d = await db.get(Directory, did)
         if d:
             d.deleted_at = now
+            broadcasts.append((str(did), {"type": "directory_deleted"}))
 
     mat_rows = (
         await db.scalars(select(Material).where(Material.directory_id.in_(all_dir_ids)))

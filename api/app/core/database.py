@@ -84,6 +84,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
             await session.commit()
 
+            sse_broadcasts = session.info.pop("post_commit_sse_broadcasts", [])
+            if sse_broadcasts:
+                from app.core.sse import broadcast_to_topic
+
+                for topic, event in sse_broadcasts:
+                    broadcast_to_topic(topic, event)
+
             if jobs:
                 import logging
 

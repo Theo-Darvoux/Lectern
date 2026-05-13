@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from app.core.database import get_db
+from app.core.sse import register_topic_queue, sse_event_stream, unregister_topic_queue
 from app.dependencies.auth import get_current_user
 from app.models.material import Material
 from app.models.user import User
@@ -100,6 +102,15 @@ async def get_directory_path(
 ) -> list[DirectoryBreadcrumb]:
     path = await directory_service.get_directory_path(db, id)
     return [DirectoryBreadcrumb.model_validate(p) for p in path]
+
+
+@router.get("/{id}/sse")
+async def directory_event_stream(id: str) -> EventSourceResponse:
+    queue = register_topic_queue(id)
+    return EventSourceResponse(
+        sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(id, queue)),
+        headers={"X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{id}/like")
