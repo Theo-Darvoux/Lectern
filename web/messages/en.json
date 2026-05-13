@@ -466,6 +466,7 @@
   "Upload": {
     "uploading": "Uploading",
     "processing": "Processing…",
+    "compressing": "Compressing…",
     "chooseDifferent": "Choose Different File",
     "preparingMultipart": "Preparing multipart upload...",
     "uploadingChunks": "Uploading chunks...",
@@ -524,15 +525,15 @@
       "mb": "{count} MB",
       "gb": "{count} GB"
     },
-    "hashing": "hashing",
-    "checkingDedup": "checkingDedup",
-    "completed": "completed",
-    "verifyingFile": "verifyingFile",
-    "hashMismatch": "hashMismatch",
-    "concurrencyLimitReached": "concurrencyLimitReached",
-    "waits": "waits",
-    "untitled": "untitled",
-    "reAttach": "reAttach"
+    "hashing": "Hashing file...",
+    "checkingDedup": "Checking for duplicates...",
+    "completed": "Upload complete",
+    "verifyingFile": "Verifying file integrity...",
+    "hashMismatch": "Integrity check failed (hash mismatch)",
+    "concurrencyLimitReached": "Upload limit reached",
+    "waits": "Waiting...",
+    "untitled": "Untitled",
+    "reAttach": "Re-attach file"
   },
   "PRWizard": {
     "createDirectory": "Create Folder",

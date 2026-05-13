@@ -1,4 +1,5 @@
 import React from "react";
+import Image from "next/image";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -79,10 +80,13 @@ export function UploadQueueItem({
                                 <span className="text-[8px] font-bold uppercase text-red-500">PDF</span>
                             </div>
                         ) : (
-                            <img
+                            <Image
                                 src={previewUrl}
                                 alt={t("previewAlt")}
                                 className="h-full w-full object-cover"
+                                width={36}
+                                height={36}
+                                unoptimized
                             />
                         )
                     ) : (

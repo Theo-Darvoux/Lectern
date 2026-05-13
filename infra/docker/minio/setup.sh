@@ -16,6 +16,6 @@ mc anonymous set none local/wikint
 # Apply GLOBAL CORS configuration (Required for open-source MinIO)
 echo "Applying Global CORS configuration via Admin API..."
 # Allow specific origins for development
-mc admin config set local/ api cors_allow_origin="http://localhost:3000,http://localhost:8000"
+mc admin config set local/ api cors_allow_origin="http://localhost,http://localhost:3000,http://localhost:8000"
 
 echo "MinIO setup successful."

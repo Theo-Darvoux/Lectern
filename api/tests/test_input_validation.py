@@ -625,15 +625,15 @@ class TestMoveItemOp:
 
     def test_rejects_target_name_too_long(self):
         with pytest.raises(ValidationError):
-            self._make(target_name="n" * 101)
+            self._make(target_name="n" * 129)
 
     def test_target_name_max_length_ok(self):
-        m = self._make(target_name="n" * 100)
-        assert len(m.target_name) == 100
+        m = self._make(target_name="n" * 128)
+        assert len(m.target_name) == 128
 
     def test_rejects_target_title_too_long(self):
         with pytest.raises(ValidationError):
-            self._make(target_title="t" * 101)
+            self._make(target_title="t" * 129)
 
     def test_rejects_invalid_material_type(self):
         with pytest.raises(ValidationError):
@@ -673,11 +673,11 @@ class TestCreateMaterialOp:
 
     def test_rejects_title_too_long(self):
         with pytest.raises(ValidationError):
-            self._make(title="a" * 101)
+            self._make(title="a" * 129)
 
     def test_title_max_ok(self):
-        m = self._make(title="a" * 100)
-        assert len(m.title) == 100
+        m = self._make(title="a" * 128)
+        assert len(m.title) == 128
 
     def test_rejects_invalid_type(self):
         with pytest.raises(ValidationError):
@@ -776,11 +776,11 @@ class TestCreateDirectoryOp:
 
     def test_rejects_name_too_long(self):
         with pytest.raises(ValidationError):
-            self._make(name="n" * 101)
+            self._make(name="n" * 129)
 
     def test_name_max_length_ok(self):
-        m = self._make(name="n" * 100)
-        assert len(m.name) == 100
+        m = self._make(name="n" * 128)
+        assert len(m.name) == 128
 
     def test_rejects_invalid_directory_type(self):
         with pytest.raises(ValidationError):

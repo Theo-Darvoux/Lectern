@@ -244,9 +244,9 @@ async def tus_create(
         "length": str(upload_length),
         "parts": "[]",
     }
-    await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id}", mapping=state)  # type: ignore[arg-type]
+    await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id}", mapping=state)  # type: ignore[arg-type, misc]
     await redis.expire(f"{_TUS_STATE_PREFIX}{tus_id}", _TUS_STATE_TTL)
-    await redis.sadd(_TUS_ACTIVE_SESSIONS, tus_id)
+    await redis.sadd(_TUS_ACTIVE_SESSIONS, tus_id)  # type: ignore[misc]
 
     await _create_upload_row(
         upload_id=upload_id,
@@ -412,7 +412,7 @@ async def tus_patch(
                                     f"File content ({detected_mime}) does not match declared type ({state['mime_type']}).",
                                     code=ERR_TUS_CONTENT_TYPE,
                                 )
-                            await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id_str}", "sniffed", "1")
+                            await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id_str}", "sniffed", "1")  # type: ignore[misc]
                         elif (
                             current_offset == 0 and chunk_size < MAGIC_HEADER_SIZE and not is_final
                         ):
@@ -462,11 +462,11 @@ async def tus_patch(
                 new_offset = current_offset + chunk_size
 
                 state_key = f"{_TUS_STATE_PREFIX}{tus_id_str}"
-                await redis.hset(
+                await redis.hset(  # type: ignore[misc]
                     state_key,
                     mapping={"offset": str(new_offset), "parts": json.dumps(parts)},
                 )
-                await redis.expire(state_key, _TUS_STATE_TTL)
+                await redis.expire(state_key, _TUS_STATE_TTL)  # type: ignore[misc]
 
                 if is_final:
                     quarantine_key = state["quarantine_key"]
@@ -520,7 +520,7 @@ async def tus_patch(
                     )
 
                     await redis.delete(state_key)
-                    await redis.srem(_TUS_ACTIVE_SESSIONS, tus_id_str)
+                    await redis.srem(_TUS_ACTIVE_SESSIONS, tus_id_str)  # type: ignore[misc]
 
                     return Response(
                         status_code=204,
@@ -554,7 +554,7 @@ async def tus_delete(
     await abort_multipart_upload(state["quarantine_key"], state["s3_upload_id"])
 
     await redis.delete(f"{_TUS_STATE_PREFIX}{str(tus_id)}")
-    await redis.srem(_TUS_ACTIVE_SESSIONS, str(tus_id))
+    await redis.srem(_TUS_ACTIVE_SESSIONS, str(tus_id))  # type: ignore[misc]
 
     return Response(status_code=204, headers=_TUS_HEADERS)
 
@@ -562,7 +562,7 @@ async def tus_delete(
 async def _load_state(tus_id: str, user: CurrentUser, redis: Redis) -> dict[str, str]:  # type: ignore[type-arg]
     """Load tus state from Redis, enforcing ownership."""
     state_key = f"{_TUS_STATE_PREFIX}{tus_id}"
-    state: dict = await redis.hgetall(state_key)  # type: ignore[type-arg]
+    state: dict = await redis.hgetall(state_key)  # type: ignore[type-arg, misc]
     if not state:
         raise NotFoundError("Upload not found or expired.", code=ERR_TUS_UPLOAD_NOT_FOUND)
 

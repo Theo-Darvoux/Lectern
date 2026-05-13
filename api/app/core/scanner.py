@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Annotated, cast
 
 import httpx
-import yara
 from fastapi import Depends, Request
 
+import yara
 from app.config import settings
 from app.core.exceptions import BadRequestError, ServiceUnavailableError
 
@@ -19,7 +19,7 @@ class MalwareScanner:
     """Dependency-injectable malware scanner (YARA + MalwareBazaar)."""
 
     def __init__(self) -> None:
-        self.rules: yara.Rules | None = None
+        self.rules: yara.Rules | None = None  # type: ignore[name-defined]
         self.client: httpx.AsyncClient | None = None
 
     @property

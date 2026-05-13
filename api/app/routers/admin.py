@@ -376,7 +376,7 @@ async def get_detailed_health(
             hc = await redis.get(f"{q}:health-check")
             heartbeats[q] = hc is not None
             # ARQ uses a Redis list for the queue
-            count = await redis.llen(q)
+            count = await redis.llen(q)  # type: ignore[misc]
             queue_counts[q] = count
 
         active_queues = [q for q, alive in heartbeats.items() if alive]

@@ -4,9 +4,8 @@ Provides:
 - check_pdf_safety: structural validation with pikepdf (OpenAction, JavaScript, etc.)
 - _apply_pdf_security_strip: strip XMP, /Info, and active content from an open PDF
 - _strip_pdf_from_path: path-based strip producing a new temp file
-- _compress_pdf_path: two-stage compression: Ghostscript (font subsetting) then pikepdf
-  (object-stream packing). Ghostscript handles the dominant source of PDF bloat
-  (unsubsetted fonts); pikepdf tightens stream encoding on the result.
+- _compress_pdf_path: three-stage compression: Ghostscript (font subsetting), pikepdf
+  (object-stream packing), and optional rasterization for vector-heavy PDFs.
 """
 
 import asyncio
@@ -326,8 +325,159 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
     return Path(out_name).stat().st_size < file_path.stat().st_size
 
 
+# Per-page compressed content stream size above which a PDF is considered vector-heavy.
+# A typical A4 page of text compresses to ~5–50 KB; SVG-derived pages with thousands
+# of bezier curves compress to 500 KB–5 MB. We use 400 KB/page as the threshold.
+_VECTOR_HEAVY_BYTES_PER_PAGE = 400 * 1024
+
+# If average raster image coverage is below this pixel count per page, the document
+# has little raster content and the bulk of the data is vector paths.
+_VECTOR_HEAVY_MAX_IMAGE_PIXELS = 500_000
+
+
+def _is_vector_heavy_pdf(file_path: Path) -> bool:
+    """Return True if this PDF is dominated by vector paths rather than raster images.
+
+    Vector-heavy PDFs (e.g. SVG-derived diagrams exported from macOS) contain thousands
+    of bezier curves per page that compress poorly with the normal GS font-subsetting
+    pipeline. Rasterization is a better strategy for these files.
+    """
+    try:
+        with pikepdf.open(str(file_path), suppress_warnings=True) as pdf:
+            n_pages = len(pdf.pages)
+            if n_pages == 0:
+                return False
+
+            file_size = file_path.stat().st_size
+            if file_size / n_pages < _VECTOR_HEAVY_BYTES_PER_PAGE:
+                return False
+
+            # Count raster pixel coverage; vector-heavy PDFs have few or no embedded images
+            total_pixels = 0
+            for page in pdf.pages:
+                for _, img in page.images.items():
+                    try:
+                        w = int(img.get("/Width", 0))
+                        h = int(img.get("/Height", 0))
+                        total_pixels += w * h
+                    except Exception:
+                        pass
+
+            avg_pixels_per_page = total_pixels / n_pages
+            return avg_pixels_per_page < _VECTOR_HEAVY_MAX_IMAGE_PIXELS
+    except Exception:
+        return False
+
+
+def _build_rasterized_pdf(jpeg_paths: list[str], out_path: str, dpi: int) -> bool:
+    """Pack JPEG page images into a PDF using pikepdf. Returns True on success."""
+    pts_per_pixel = 72.0 / dpi
+    pdf = pikepdf.new()
+
+    for jpg_path in jpeg_paths:
+        with Image.open(jpg_path) as img:
+            w, h = img.size
+
+        pts_w = w * pts_per_pixel
+        pts_h = h * pts_per_pixel
+
+        with open(jpg_path, "rb") as f:
+            jpeg_data = f.read()
+
+        img_stream = pdf.make_stream(jpeg_data)
+        img_stream.Type = pikepdf.Name("/XObject")
+        img_stream.Subtype = pikepdf.Name("/Image")
+        img_stream.Width = w
+        img_stream.Height = h
+        img_stream.ColorSpace = pikepdf.Name("/DeviceRGB")
+        img_stream.BitsPerComponent = 8
+        img_stream.Filter = pikepdf.Name("/DCTDecode")
+
+        content = f"q {pts_w} 0 0 {pts_h} 0 0 cm /Im1 Do Q".encode()
+        page_dict = pikepdf.Dictionary(
+            Type=pikepdf.Name("/Page"),
+            MediaBox=[0, 0, pts_w, pts_h],
+            Resources=pikepdf.Dictionary(XObject=pikepdf.Dictionary(**{"/Im1": img_stream})),  # type: ignore[arg-type]
+            Contents=pdf.make_stream(content),
+        )
+        pdf.pages.append(pikepdf.Page(pdf.make_indirect(page_dict)))
+
+    pdf.save(out_path, compress_streams=True)
+    return True
+
+
+async def _rasterize_pdf_path(file_path: Path, dpi: int = 150) -> Path:
+    """Rasterize vector-heavy PDF pages to JPEG and repack as a new PDF.
+
+    Uses Ghostscript's jpeg device to render each page at ``dpi`` DPI (quality 85),
+    then uses pikepdf to reassemble them into a compact PDF. This reduces file size
+    by 10–20× for PDFs dominated by SVG-derived bezier paths that resist normal
+    font-subsetting / stream-packing compression.
+
+    Returns a new temp path when the result is smaller; original path otherwise.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        page_prefix = str(Path(tmpdir) / "page")
+
+        proc = await asyncio.create_subprocess_exec(
+            "gs",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dSAFER",
+            "-sDEVICE=jpeg",
+            f"-r{dpi}",
+            "-dJPEGQ=85",
+            f"-sOutputFile={page_prefix}-%03d.jpg",
+            str(file_path),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+
+        if proc.returncode != 0:
+            logger.warning(
+                "GS rasterize failed (rc=%d): %s",
+                proc.returncode,
+                stderr.decode(errors="replace")[:200],
+            )
+            return file_path
+
+        jpeg_paths = sorted(str(p) for p in Path(tmpdir).glob("page-*.jpg"))
+        if not jpeg_paths:
+            return file_path
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as _f:
+            out_name = _f.name
+
+        try:
+            ok = await asyncio.to_thread(_build_rasterized_pdf, jpeg_paths, out_name, dpi)
+            if not ok:
+                Path(out_name).unlink(missing_ok=True)
+                return file_path
+
+            out_size = Path(out_name).stat().st_size
+            orig_size = file_path.stat().st_size
+            if out_size < orig_size:
+                logger.debug(
+                    "PDF rasterize: %d → %d bytes (%.0f%%)",
+                    orig_size,
+                    out_size,
+                    100 * out_size / orig_size,
+                )
+                return Path(out_name)
+
+            Path(out_name).unlink(missing_ok=True)
+            return file_path
+
+        except Exception as exc:
+            Path(out_name).unlink(missing_ok=True)
+            logger.warning("PDF rasterize reassembly failed: %s", exc)
+            return file_path
+
+
 async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Path:  # type: ignore[type-arg]
-    """Two-stage PDF compression: Ghostscript font subsetting, then pikepdf stream packing.
+    """Three-stage PDF compression: Ghostscript, pikepdf, and optional rasterization.
 
     Stage 1 — Ghostscript:
       Subsets embedded fonts and resamples images. This is the dominant compression
@@ -339,6 +489,12 @@ async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Pat
       Packs objects into cross-reference streams (PDF 1.5) and recompresses
       FlateDecode streams. When GS already ran, image processing is skipped to
       avoid generation loss. When GS was skipped, full image downsampling runs here.
+
+    Stage 3 — rasterization (vector-heavy PDFs only):
+      When stages 1+2 achieve no meaningful gain and the PDF is vector-heavy
+      (large compressed content streams, few raster images — typical of SVG-derived
+      diagrams exported from macOS), each page is rendered to JPEG via Ghostscript
+      and repacked. Reduces file size by 10–20× for these files.
 
     Returns the smallest result ≤ the original, or the original if no stage helped.
     """
@@ -354,6 +510,7 @@ async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Pat
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as _f:
         out_name = _f.name
 
+    best_path = file_path
     try:
         work_path = gs_result  # GS output, or original if GS produced no gain
 
@@ -369,13 +526,30 @@ async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Pat
             gs_result.unlink(missing_ok=True)
 
         if smaller:
-            return Path(out_name)
-
-        Path(out_name).unlink(missing_ok=True)
-        return gs_result  # GS result alone (may equal file_path if GS also failed)
+            best_path = Path(out_name)
+        else:
+            Path(out_name).unlink(missing_ok=True)
+            best_path = gs_result  # GS result alone (may equal file_path if GS also failed)
 
     except Exception:
         Path(out_name).unlink(missing_ok=True)
         if gs_improved:
-            return gs_result
-        raise
+            best_path = gs_result
+        else:
+            raise
+
+    # Stage 3: rasterization for vector-heavy PDFs that resisted stages 1+2.
+    # Only triggered when the best result so far is still ≥80% of original size.
+    best_size = best_path.stat().st_size
+    orig_size = file_path.stat().st_size
+    if best_size >= orig_size * 0.8 and await asyncio.to_thread(_is_vector_heavy_pdf, file_path):
+        raster_result = await _rasterize_pdf_path(file_path)
+        if raster_result != file_path:
+            raster_size = raster_result.stat().st_size
+            if raster_size < best_size:
+                if best_path != file_path:
+                    best_path.unlink(missing_ok=True)
+                return raster_result
+            raster_result.unlink(missing_ok=True)
+
+    return best_path

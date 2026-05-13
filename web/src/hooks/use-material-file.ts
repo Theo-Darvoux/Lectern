@@ -6,7 +6,7 @@ import { fetchMaterialFile } from "@/lib/api-client";
 interface UseMaterialFileOptions {
     materialId: string;
     fileKey: string;
-    mode?: "text" | "blob" | "arrayBuffer";
+    mode?: "text" | "blob" | "arrayBuffer" | "url";
     maxBytes?: number;
 }
 
@@ -49,6 +49,15 @@ export function useMaterialFile({
             });
 
             try {
+                if (mode === "url") {
+                    const { getMaterialFileUrl } = await import("@/lib/api-client");
+                    const url = await getMaterialFileUrl(materialId);
+                    if (!cancelled) {
+                        setBlobUrl(url);
+                    }
+                    return;
+                }
+
                 const res = await fetchMaterialFile(materialId);
                 
                 if (mode === "blob") {

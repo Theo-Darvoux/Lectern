@@ -7,7 +7,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { LayoutShell } from "@/components/layout-shell";
 import { ConfigProvider } from "@/components/config-provider";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 
 export const viewport: Viewport = {
   width: "device-width",

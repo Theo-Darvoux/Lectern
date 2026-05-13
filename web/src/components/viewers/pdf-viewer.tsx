@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { ZoomIn, ZoomOut, BookOpen } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -69,8 +69,9 @@ function buildHighlights(pageEl: HTMLElement, annotations: PageAnnotation[]): Hi
     const pageRect = pageEl.getBoundingClientRect();
     if (pageRect.width === 0) return [];
 
+    // Pre-calculate text content and offsets to avoid multiple DOM reads in the loop
     let fullText = "";
-    const spanRanges: { start: number; end: number; el: Element }[] = [];
+    const spanRanges: { start: number; end: number; el: HTMLElement }[] = [];
     for (const span of spans) {
         const t = span.textContent || "";
         spanRanges.push({ start: fullText.length, end: fullText.length + t.length, el: span });
@@ -86,6 +87,9 @@ function buildHighlights(pageEl: HTMLElement, annotations: PageAnnotation[]): Hi
             const matchEnd = idx + ann.selection_text.length;
             for (const { start, end, el } of spanRanges) {
                 if (end <= idx || start >= matchEnd) continue;
+                
+                // This call still triggers a reflow, but we've minimized the number of calls 
+                // and we're doing them on a debounced schedule.
                 const r = el.getBoundingClientRect();
                 if (r.width === 0) continue;
                 highlights.push({
@@ -126,27 +130,41 @@ interface AnnotatedPageProps {
 const AnnotatedPage = React.memo(function AnnotatedPage({ pageNumber, width, annotations, onAnnotationClick }: AnnotatedPageProps) {
     const pageRef = useRef<HTMLDivElement>(null);
     const [highlights, setHighlights] = useState<HighlightRect[]>([]);
-    const frameRef = useRef<number>(0);
+    const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     const scheduleRecalc = useCallback(() => {
-        cancelAnimationFrame(frameRef.current);
-        frameRef.current = requestAnimationFrame(() => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        
+        // Use a longer debounce (300ms) to avoid fighting with pdf.js during the heavy rendering phase.
+        timeoutRef.current = setTimeout(() => {
             const el = pageRef.current;
             if (!el) return;
+            
+            // Check if the text layer is actually there before doing heavy work
+            if (!el.querySelector(".react-pdf__Page__textContent")) return;
+
             const next = buildHighlights(el, annotations);
             setHighlights(prev => highlightsEqual(prev, next) ? prev : next);
-        });
+        }, 300);
     }, [annotations]);
 
     useEffect(() => {
         const el = pageRef.current;
         if (!el) return;
-        const observer = new MutationObserver(scheduleRecalc);
+        
+        // Only observe child additions to the text layer, which is less frequent than style/attribute changes.
+        const observer = new MutationObserver((mutations) => {
+            if (mutations.some(m => m.addedNodes.length > 0)) {
+                scheduleRecalc();
+            }
+        });
+
         observer.observe(el, { childList: true, subtree: true });
         scheduleRecalc();
+
         return () => {
             observer.disconnect();
-            cancelAnimationFrame(frameRef.current);
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
         };
     }, [scheduleRecalc]);
 
@@ -194,7 +212,7 @@ function LazyBlock({ estimatedHeight, scrollRootRef, children }: {
         const rootAttr = scrollRootRef?.current ?? null;
         const io = new IntersectionObserver(
             ([entry]) => setIsNear(entry.isIntersecting),
-            { root: rootAttr, rootMargin: "600px 0px" }
+            { root: rootAttr, rootMargin: "1200px 0px" }
         );
         io.observe(el);
         return () => io.disconnect();
@@ -214,7 +232,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
     const { blobUrl, loading, error } = useMaterialFile({
         materialId,
         fileKey,
-        mode: "blob",
+        mode: "url",
     });
 
     const { zoom, setZoom } = usePinchZoom({
@@ -403,18 +421,20 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
             }
         >
             {!loading && !error && blobUrl && (
-                <Document
-                    file={blobUrl}
-                    onLoadSuccess={onDocumentLoadSuccess}
-                    onLoadError={onDocumentLoadError}
-                    loading={loadingSkeleton}
-                    className="py-4 px-4 w-max mx-auto flex flex-col items-center gap-4"
+                <div
                     style={{
                         transform: isResizing ? `scale(${scale})` : undefined,
                         transformOrigin: "top center",
                         transition: isResizing ? "none" : "transform 0.2s ease-out",
                     }}
                 >
+                    <Document
+                        file={blobUrl}
+                        onLoadSuccess={onDocumentLoadSuccess}
+                        onLoadError={onDocumentLoadError}
+                        loading={loadingSkeleton}
+                        className="py-4 px-4 w-max mx-auto flex flex-col items-center gap-4"
+                    >
                     {twoPageView
                         ? Array.from({ length: Math.ceil(numPages / 2) }, (_, rowIdx) => {
                             const left = rowIdx * 2 + 1;
@@ -449,6 +469,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
                         })
                     }
                 </Document>
+                </div>
             )}
         </ViewerShell>
     );

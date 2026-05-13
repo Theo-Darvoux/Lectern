@@ -42,17 +42,11 @@ async def _check_storage_limit(size_bytes: int, config: dict[str, Any]) -> None:
         else:
             # 2. Fallback to DB: Sum unique CAS blobs only (Physical Storage)
             async with async_session_factory() as session:
-                # We subquery to get the first version of each unique CAS blob
-                # and sum their sizes.
-                subq = select(func.min(MaterialVersion.id)).group_by(MaterialVersion.cas_sha256)
-                usage = (
-                    await session.scalar(
-                        select(func.sum(MaterialVersion.file_size)).where(
-                            MaterialVersion.id.in_(subq)
-                        )
-                    )
-                    or 0
-                )
+                # We subquery to get the size of each unique CAS blob
+                # and sum them up to get the physical storage usage.
+                from sqlalchemy import select
+                inner_q = select(func.max(MaterialVersion.file_size).label("size")).group_by(MaterialVersion.cas_sha256).subquery()
+                usage = await session.scalar(select(func.sum(inner_q.c.size))) or 0
 
             # Cache the result for 1 hour
             await redis.set(_STORAGE_USAGE_KEY, usage, ex=3600)

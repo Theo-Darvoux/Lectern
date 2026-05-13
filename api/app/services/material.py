@@ -287,11 +287,11 @@ async def record_view(db: AsyncSession, user_id: str, material_id: str) -> None:
         from app.core.redis import redis_client
 
         # We use a hash for all material totals to keep it clean
-        await redis_client.hincrby("material:views:total", str(mid), 1)
+        await redis_client.hincrby("material:views:total", str(mid), 1)  # type: ignore[misc]
         # For "today", we use a daily key that can be easily expired
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         daily_key = f"material:views:today:{today}"
-        await redis_client.hincrby(daily_key, str(mid), 1)
+        await redis_client.hincrby(daily_key, str(mid), 1)  # type: ignore[misc]
         await redis_client.expire(daily_key, 86400 * 2)  # Keep for 2 days just in case
     except Exception:
         # Don't fail the request if Redis is down

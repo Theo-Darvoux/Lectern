@@ -203,7 +203,7 @@ async def upload_events(
             data = json.loads(cached_status)
             if data.get("status") in ("clean", "malicious", "failed"):
                 event_log_key = f"upload:eventlog:{file_key}"
-                log_entries: list[bytes] = await redis.lrange(event_log_key, 0, -1)
+                log_entries: list[bytes] = await redis.lrange(event_log_key, 0, -1)  # type: ignore[misc]
                 events: list[dict[str, str]] = []
                 for i, raw in enumerate(log_entries):
                     entry = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[redundant-expr]
@@ -272,7 +272,7 @@ async def upload_events(
             # in BOTH the replay list and the pub/sub queue.  We track how
             # many events we replayed so we can skip that many from pub/sub.
             event_log_key = f"upload:eventlog:{file_key}"
-            replayed: list[str] = await redis.lrange(event_log_key, last_event_id, -1)
+            replayed: list[str] = await redis.lrange(event_log_key, last_event_id, -1)  # type: ignore[misc]
 
             yielded_count = last_event_id
 
@@ -294,7 +294,7 @@ async def upload_events(
             # Snapshot the log length right after replay.  Pub/sub events
             # whose log index falls within [0, replay_log_len) were already
             # replayed above and must be skipped to avoid duplicates.
-            replay_log_len: int = await redis.llen(event_log_key)
+            replay_log_len: int = await redis.llen(event_log_key)  # type: ignore[misc]
             pubsub_seq = 0  # counts pub/sub messages received
 
             # Stream from Pub/Sub queue

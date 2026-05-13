@@ -126,8 +126,13 @@ async def _rewrite_host(url: str, is_put: bool = False, cfg: dict[str, Any] | No
     if is_put and "localhost" not in public_endpoint:
         return url
 
+    # Robustly handle protocols in public_endpoint if accidentally included
+    if "://" in public_endpoint:
+        public_endpoint = public_endpoint.split("://")[-1]
+
     parsed = urlparse(url)
-    scheme = "https" if "localhost" not in public_endpoint else "http"
+    # If the public endpoint contains "localhost", we assume HTTP; otherwise HTTPS.
+    scheme = "http" if "localhost" in public_endpoint else "https"
 
     # If the user absolutely wants to use the custom domain for GETs, we must ensure the bucket name is stripped
     # from the path, because Cloudflare custom domains map directly to the bucket root.

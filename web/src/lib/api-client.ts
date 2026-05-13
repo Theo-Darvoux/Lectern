@@ -156,8 +156,13 @@ export async function apiFetchBlob(
  * Step 2: plain fetch (no Authorization header) to the presigned URL.
  * This avoids the S3 400 caused by forwarding auth headers on same-origin redirects.
  */
-export async function fetchMaterialFile(materialId: string): Promise<Response> {
+export async function getMaterialFileUrl(materialId: string): Promise<string> {
     const { url } = await apiFetch<{ url: string }>(`/materials/${materialId}/inline`);
+    return url;
+}
+
+export async function fetchMaterialFile(materialId: string): Promise<Response> {
+    const url = await getMaterialFileUrl(materialId);
     const res = await fetch(url);
     if (!res.ok) throw new ApiError(res.status, `Failed to fetch file: ${res.statusText}`);
     return res;

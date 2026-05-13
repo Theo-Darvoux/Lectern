@@ -122,11 +122,11 @@ async def increment_cas_ref(
     cas_key = hmac_cas_key(sha256)
     try:
         if initial_data:
-            count = await redis.eval(
+            count = await redis.eval(  # type: ignore[no-untyped-call, misc]
                 _LUA_CAS_INCR, 2, cas_key, _STORAGE_USAGE_KEY, json.dumps(initial_data)
-            )  # type: ignore[no-untyped-call]
+            )
         else:
-            count = await redis.eval(_LUA_CAS_INCR, 2, cas_key, _STORAGE_USAGE_KEY)  # type: ignore[no-untyped-call]
+            count = await redis.eval(_LUA_CAS_INCR, 2, cas_key, _STORAGE_USAGE_KEY)  # type: ignore[no-untyped-call, misc]
         return int(count) if count is not None else 1
     except Exception as exc:
         logger.warning("CAS ref increment failed for %s: %s", sha256, exc)
@@ -136,6 +136,6 @@ async def increment_cas_ref(
 async def decrement_cas_ref(redis: Redis, sha256: str) -> None:  # type: ignore[type-arg]
     cas_key = hmac_cas_key(sha256)
     try:
-        await redis.eval(_LUA_CAS_DECR, 2, cas_key, _STORAGE_USAGE_KEY)  # type: ignore[no-untyped-call]
+        await redis.eval(_LUA_CAS_DECR, 2, cas_key, _STORAGE_USAGE_KEY)  # type: ignore[no-untyped-call, misc]
     except Exception as exc:
         logger.warning("CAS ref decrement failed for %s: %s", sha256, exc)

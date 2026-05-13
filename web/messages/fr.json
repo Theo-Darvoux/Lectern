@@ -466,6 +466,7 @@
   "Upload": {
     "uploading": "Téléversement",
     "processing": "Traitement…",
+    "compressing": "Compression…",
     "chooseDifferent": "Choisir un autre fichier",
     "preparingMultipart": "Préparation de l'envoi fractionné...",
     "uploadingChunks": "Envoi des segments...",
@@ -524,15 +525,15 @@
       "mb": "{count} Mo",
       "gb": "{count} Go"
     },
-    "hashing": "hashing",
-    "checkingDedup": "checkingDedup",
-    "completed": "completed",
-    "verifyingFile": "verifyingFile",
-    "hashMismatch": "hashMismatch",
-    "concurrencyLimitReached": "concurrencyLimitReached",
-    "waits": "waits",
-    "untitled": "untitled",
-    "reAttach": "reAttach"
+    "hashing": "Calcul de l'empreinte...",
+    "checkingDedup": "Vérification des doublons...",
+    "completed": "Téléchargement terminé",
+    "verifyingFile": "Vérification de l'intégrité...",
+    "hashMismatch": "Échec de l'intégrité (empreinte incorrecte)",
+    "concurrencyLimitReached": "Limite de téléversements atteinte",
+    "waits": "En attente...",
+    "untitled": "Sans titre",
+    "reAttach": "Ré-attacher le fichier"
   },
   "PRWizard": {
     "createDirectory": "Créer un dossier",

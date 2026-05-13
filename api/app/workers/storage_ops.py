@@ -28,7 +28,7 @@ async def delete_storage_objects(ctx: dict, keys: list[str]) -> None:  # type: i
                 cas_key = f"upload:cas:{cas_id}"
 
                 # Atomically decrement and check count via Lua
-                new_count = await redis.eval(_LUA_CAS_DECR, 1, cas_key)
+                new_count = await redis.eval(_LUA_CAS_DECR, 1, cas_key)  # type: ignore[misc]
 
                 if new_count == 0:
                     await delete_object(key)
