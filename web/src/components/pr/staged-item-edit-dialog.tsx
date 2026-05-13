@@ -67,7 +67,7 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
         }
     }
 
-    const NAME_MAX = 32;
+    const NAME_MAX = 128;
 
     const handleSave = () => {
         if (index === null || !op) return;

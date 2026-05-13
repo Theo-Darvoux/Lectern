@@ -123,7 +123,7 @@ interface AnnotatedPageProps {
     onAnnotationClick?: () => void;
 }
 
-function AnnotatedPage({ pageNumber, width, annotations, onAnnotationClick }: AnnotatedPageProps) {
+const AnnotatedPage = React.memo(function AnnotatedPage({ pageNumber, width, annotations, onAnnotationClick }: AnnotatedPageProps) {
     const pageRef = useRef<HTMLDivElement>(null);
     const [highlights, setHighlights] = useState<HighlightRect[]>([]);
     const frameRef = useRef<number>(0);
@@ -178,7 +178,7 @@ function AnnotatedPage({ pageNumber, width, annotations, onAnnotationClick }: An
             ))}
         </div>
     );
-}
+});
 
 function LazyBlock({ estimatedHeight, scrollRootRef, children }: {
     estimatedHeight: number;
@@ -229,8 +229,17 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
     const [numPages, setNumPages] = useState<number>(0);
     const [currentPage, setCurrentPage] = useState(1);
     const [containerWidth, setContainerWidth] = useState<number>(800);
+    const [stableWidth, setStableWidth] = useState<number>(800);
     const [twoPageView, setTwoPageView] = useState(false);
     const [parseError, setParseError] = useState<string | null>(null);
+
+    // Debounce containerWidth into stableWidth
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setStableWidth(containerWidth);
+        }, 150);
+        return () => clearTimeout(timer);
+    }, [containerWidth]);
 
     useEffect(() => {
         const el = scrollRef.current;
@@ -240,7 +249,9 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
             cancelAnimationFrame(rafId);
             rafId = requestAnimationFrame(() => {
                 const width = entries[0]?.contentRect.width;
-                if (width) setContainerWidth(prev => Math.abs(width - prev) > 1 ? width : prev);
+                if (width && Math.abs(width - containerWidth) > 1) {
+                    setContainerWidth(width);
+                }
             });
         });
         ro.observe(el);
@@ -248,7 +259,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
             ro.disconnect();
             cancelAnimationFrame(rafId);
         };
-    }, []);
+    }, [containerWidth]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -309,13 +320,21 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
         return () => io.disconnect();
     }, [numPages, zoom, twoPageView]);
 
-    const baseWidth = twoPageView ? (containerWidth - 32 - 16) / 2 : containerWidth - 32;
-    const pageWidth = (baseWidth * zoom) / 100;
+    // We use stableWidth for the actual PDF rendering to avoid heavy rerenders during transitions.
+    // If stableWidth !== containerWidth, we apply a CSS transform to scale the pages visually.
+    const baseWidthStable = twoPageView ? (stableWidth - 32 - 16) / 2 : stableWidth - 32;
+    const pageWidthStable = (baseWidthStable * zoom) / 100;
 
-    const allAnnotations: PageAnnotation[] = annotations.map(t => ({
+    const baseWidthActual = twoPageView ? (containerWidth - 32 - 16) / 2 : containerWidth - 32;
+    const pageWidthActual = (baseWidthActual * zoom) / 100;
+
+    const scale = pageWidthStable > 0 ? pageWidthActual / pageWidthStable : 1;
+    const isResizing = Math.abs(scale - 1) > 0.001;
+
+    const allAnnotations = React.useMemo(() => annotations.map(t => ({
         selection_text: t.root.selection_text,
         page: t.root.page,
-    }));
+    })), [annotations]);
 
     const loadingSkeleton = (
         <div className="flex w-full flex-col items-center justify-start p-4 md:py-8">
@@ -390,6 +409,11 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
                     onLoadError={onDocumentLoadError}
                     loading={loadingSkeleton}
                     className="py-4 px-4 w-max mx-auto flex flex-col items-center gap-4"
+                    style={{
+                        transform: isResizing ? `scale(${scale})` : undefined,
+                        transformOrigin: "top center",
+                        transition: isResizing ? "none" : "transform 0.2s ease-out",
+                    }}
                 >
                     {twoPageView
                         ? Array.from({ length: Math.ceil(numPages / 2) }, (_, rowIdx) => {
@@ -398,14 +422,14 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
                             const leftAnns = allAnnotations.filter(a => a.page === left || a.page == null);
                             const rightAnns = allAnnotations.filter(a => a.page === right || a.page == null);
                             return (
-                                <LazyBlock key={rowIdx} estimatedHeight={pageWidth * 1.414} scrollRootRef={scrollRef}>
+                                <LazyBlock key={rowIdx} estimatedHeight={pageWidthStable * 1.414} scrollRootRef={scrollRef}>
                                     <div className="grid grid-cols-2 gap-4 place-items-center">
                                         <div data-page={left}>
-                                            <AnnotatedPage pageNumber={left} width={pageWidth} annotations={leftAnns} onAnnotationClick={onAnnotationClick} />
+                                            <AnnotatedPage pageNumber={left} width={pageWidthStable} annotations={leftAnns} onAnnotationClick={onAnnotationClick} />
                                         </div>
                                         {right <= numPages && (
                                             <div data-page={right}>
-                                                <AnnotatedPage pageNumber={right} width={pageWidth} annotations={rightAnns} onAnnotationClick={onAnnotationClick} />
+                                                <AnnotatedPage pageNumber={right} width={pageWidthStable} annotations={rightAnns} onAnnotationClick={onAnnotationClick} />
                                             </div>
                                         )}
                                     </div>
@@ -417,8 +441,8 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
                             const pageAnnotations = allAnnotations.filter(a => a.page === pageNum || a.page == null);
                             return (
                                 <div key={pageNum} data-page={pageNum}>
-                                    <LazyBlock estimatedHeight={pageWidth * 1.414} scrollRootRef={scrollRef}>
-                                        <AnnotatedPage pageNumber={pageNum} width={pageWidth} annotations={pageAnnotations} onAnnotationClick={onAnnotationClick} />
+                                    <LazyBlock estimatedHeight={pageWidthStable * 1.414} scrollRootRef={scrollRef}>
+                                        <AnnotatedPage pageNumber={pageNum} width={pageWidthStable} annotations={pageAnnotations} onAnnotationClick={onAnnotationClick} />
                                     </LazyBlock>
                                 </div>
                             );

@@ -579,7 +579,16 @@ export async function uploadFile(
     onProgress?.(5);
 
     // ── Client-side image compression (U8: AFTER hashing original) ───────────
+    _onStatusUpdate(options.onStatusUpdate, "compressing", options.t);
     const { file: fileToUpload, compressed } = await compressImageIfNeeded(file, options.skipCompression);
+
+    let finalSha256 = sha256;
+    if (compressed) {
+        // Re-calculate hash for the compressed bytes so server-side integrity check passes.
+        // We use a simplified progress update here as re-hashing is usually fast for compressed images.
+        finalSha256 = await sha256File(fileToUpload, undefined, signal);
+        options.onHashComputed?.(finalSha256);
+    }
 
     // ── Phase 2: Transfer to S3 (5–80%) ──────────────────────────────────────
     let quarantineKey: string;
@@ -617,7 +626,7 @@ export async function uploadFile(
                 filename: fileToUpload.name,
                 size: fileToUpload.size,
                 mime_type: fileToUpload.type || "application/octet-stream",
-                sha256, // Pass expected hash for server-side verification
+                sha256: finalSha256, // Pass expected hash for server-side verification
             }),
             signal,
         }).then((r) => r.json() as Promise<InitUploadResponse>);
@@ -674,7 +683,7 @@ export async function uploadFile(
         content_encoding: result.content_encoding ?? null,
         correctedName: result.file_name ?? result.file_key.split("/").pop() ?? file.name,
         wasCompressed: compressed,
-        content_sha256: sha256,
+        content_sha256: finalSha256,
     };
 }
 

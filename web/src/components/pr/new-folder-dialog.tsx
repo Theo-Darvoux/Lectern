@@ -45,7 +45,7 @@ export function NewFolderDialog({
     const [submitting, setSubmitting] = useState(false);
     const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
-    const NAME_MAX = 32;
+    const NAME_MAX = 128;
     const canSubmit = name.trim().length >= 1 && name.length <= NAME_MAX && !submitting;
     const isDraftParent = parentId?.startsWith("$") ?? false;
 

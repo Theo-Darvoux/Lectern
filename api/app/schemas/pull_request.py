@@ -83,7 +83,7 @@ def _validate_file_name(file_name: str | None) -> str | None:
 
 
 class AttachmentOp(BaseModel):
-    title: NameStr = Field(..., min_length=1, max_length=100, pattern=r"^\s*\S.*$")
+    title: NameStr = Field(..., min_length=1, max_length=128, pattern=r"^\s*\S.*$")
     type: str
     file_key: str | None = None
     file_name: str | None = None
@@ -133,7 +133,7 @@ class CreateMaterialOp(BaseModel):
         None,
         description="Real UUID or $temp-id of a directory created in this batch (None for root)",
     )
-    title: NameStr = Field(..., min_length=1, max_length=100, pattern=r"^\s*\S.*$")
+    title: NameStr = Field(..., min_length=1, max_length=128, pattern=r"^\s*\S.*$")
     type: str
     description: SanitizedStr | None = Field(None, max_length=1000)
     tags: list[str] = Field(default_factory=list)
@@ -177,7 +177,7 @@ class CreateMaterialOp(BaseModel):
 class EditMaterialOp(BaseModel):
     op: Literal["edit_material"] = "edit_material"
     material_id: uuid.UUID | str
-    title: NameStr | None = Field(None, min_length=1, max_length=32, pattern=r"^\s*\S.*$")
+    title: NameStr | None = Field(None, min_length=1, max_length=128, pattern=r"^\s*\S.*$")
     type: str | None = None
     description: SanitizedStr | None = Field(None, max_length=1000)
     tags: list[str] | None = None
@@ -232,7 +232,7 @@ class CreateDirectoryOp(BaseModel):
         description="Client-assigned temp ID starting with $ for inter-op references",
     )
     parent_id: uuid.UUID | str | None = None
-    name: NameStr = Field(..., min_length=1, max_length=100, pattern=r"^\s*\S.*$")
+    name: NameStr = Field(..., min_length=1, max_length=128, pattern=r"^\s*\S.*$")
     type: str = "folder"
     description: SanitizedStr | None = Field(None, max_length=1000)
     tags: list[str] = Field(default_factory=list)
@@ -259,7 +259,7 @@ class CreateDirectoryOp(BaseModel):
 class EditDirectoryOp(BaseModel):
     op: Literal["edit_directory"] = "edit_directory"
     directory_id: uuid.UUID | str
-    name: NameStr | None = Field(None, min_length=1, max_length=100, pattern=r"^\s*\S.*$")
+    name: NameStr | None = Field(None, min_length=1, max_length=128, pattern=r"^\s*\S.*$")
     type: str | None = None
     description: SanitizedStr | None = Field(None, max_length=1000)
     tags: list[str] | None = None
@@ -294,8 +294,8 @@ class MoveItemOp(BaseModel):
     target_id: uuid.UUID | str
     new_parent_id: uuid.UUID | str | None
     # Enrichment for ghost rendering in PR previews
-    target_name: str | None = Field(None, max_length=100)
-    target_title: str | None = Field(None, max_length=100)
+    target_name: str | None = Field(None, max_length=128)
+    target_title: str | None = Field(None, max_length=128)
     target_material_type: str | None = None
     version_lock: int | None = None
 
