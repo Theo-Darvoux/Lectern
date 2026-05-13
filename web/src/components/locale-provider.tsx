@@ -65,7 +65,7 @@ export function LocaleProvider({
 
   return (
     <LocaleContext.Provider value={{ locale, changeLocale, isPending }}>
-      <NextIntlClientProvider locale={locale} messages={messages}>
+      <NextIntlClientProvider locale={locale} messages={messages} timeZone="UTC">
         {children}
       </NextIntlClientProvider>
     </LocaleContext.Provider>

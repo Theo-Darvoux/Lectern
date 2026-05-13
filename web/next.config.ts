@@ -11,7 +11,7 @@ const nextConfig: NextConfig = {
     // API_INTERNAL_URL must be set to the backend URL reachable from this server:
     //   - local dev (outside Docker): http://localhost:8000
     //   - Docker dev:                 http://api:8000
-    const apiUrl = process.env.API_INTERNAL_URL;
+    const apiUrl = process.env.API_INTERNAL_URL ?? "http://api:8000";
     if (!apiUrl) return [];
     return [
       {
