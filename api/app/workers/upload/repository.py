@@ -59,6 +59,9 @@ class UploadWorkerRepository:
         error_detail: str | None = None,
         cas_key: str | None = None,
         cas_ref_count: int | None = None,
+        processing_status: str | None = None,
+        mime_type: str | None = None,
+        size_bytes: int | None = None,
     ) -> None:
         """Best-effort DB status update with retry for transient failures."""
         session_factory = self._session_factory()
@@ -85,6 +88,12 @@ class UploadWorkerRepository:
                     values["cas_key"] = cas_key
                 if cas_ref_count is not None:
                     values["cas_ref_count"] = cas_ref_count
+                if processing_status is not None:
+                    values["processing_status"] = processing_status
+                if mime_type is not None:
+                    values["mime_type"] = mime_type
+                if size_bytes is not None:
+                    values["size_bytes"] = size_bytes
 
                 await session.execute(
                     update(Upload).where(Upload.upload_id == upload_id).values(**values)
@@ -95,6 +104,26 @@ class UploadWorkerRepository:
             await _retry_db(_do_update, context=f"update_upload_status for {upload_id}")
         except Exception:
             pass  # Already logged in _retry_db
+
+    async def update_processing_status(self, upload_id: str, processing_status: str) -> None:
+        """Best-effort update of processing_status only (does not touch status)."""
+        session_factory = self._session_factory()
+        if session_factory is None:
+            return
+
+        async def _do_update() -> None:
+            async with session_factory() as session:
+                await session.execute(
+                    update(Upload)
+                    .where(Upload.upload_id == upload_id)
+                    .values(processing_status=processing_status, updated_at=datetime.now(UTC))
+                )
+                await session.commit()
+
+        with contextlib.suppress(Exception):
+            await _retry_db(
+                _do_update, context=f"update_processing_status for {upload_id}"
+            )
 
     async def checkpoint_pipeline_stage(self, upload_id: str, stage: int) -> None:
         """Persist a completed pipeline stage for resume-on-retry behavior."""

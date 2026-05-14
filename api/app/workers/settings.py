@@ -15,6 +15,7 @@ from app.workers.index_content import (
     index_materials_batch,
 )
 from app.workers.process_upload import process_upload
+from app.workers.process_upload_post_scan import process_upload_post_scan
 from app.workers.reconcile_multipart import reconcile_multipart_uploads
 from app.workers.storage_ops import delete_storage_objects
 from app.workers.view_reset import reset_14d_views, reset_daily_views
@@ -97,6 +98,7 @@ class WorkerSettings:
         delete_indexed_item,
         delete_storage_objects,
         process_upload,
+        process_upload_post_scan,
         dispatch_webhook,
         reset_14d_views,
         check_bazaar,
@@ -118,7 +120,8 @@ class UploadFastWorkerSettings:
 
     redis_settings = build_redis_settings()
     queue_name = UPLOAD_FAST_QUEUE
-    functions = [process_upload, check_bazaar]
+    max_jobs = settings.worker_fast_max_jobs
+    functions = [process_upload, process_upload_post_scan, check_bazaar]
     on_startup = startup
     on_shutdown = shutdown
 
@@ -128,6 +131,7 @@ class UploadSlowWorkerSettings:
 
     redis_settings = build_redis_settings()
     queue_name = UPLOAD_SLOW_QUEUE
-    functions = [process_upload, check_bazaar]
+    max_jobs = settings.worker_slow_max_jobs
+    functions = [process_upload, process_upload_post_scan, check_bazaar]
     on_startup = startup
     on_shutdown = shutdown

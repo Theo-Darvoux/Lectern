@@ -17,7 +17,7 @@ def _reset_bwrap_cache() -> None:
 @patch("app.core.sandbox.subprocess.run")
 @patch("app.core.sandbox.shutil.which", return_value="/usr/bin/bwrap")
 def test_sandboxed_run_with_bwrap(
-    mock_which: MagicMock,
+    _mock_which: MagicMock,
     mock_run: MagicMock,
 ) -> None:
     """When bwrap is available, commands should be wrapped with bwrap."""
@@ -47,7 +47,7 @@ def test_sandboxed_run_with_bwrap(
 @patch("app.core.sandbox.subprocess.run")
 @patch("app.core.sandbox.shutil.which", return_value=None)
 def test_sandboxed_run_raises_without_bwrap(
-    mock_which: MagicMock,
+    _mock_which: MagicMock,
     mock_run: MagicMock,
 ) -> None:
     """When bwrap is not found, sandboxed_run must raise RuntimeError (no fallback)."""
@@ -66,7 +66,7 @@ def test_sandboxed_run_raises_without_bwrap(
 @patch("app.core.sandbox.subprocess.run")
 @patch("app.core.sandbox.shutil.which", return_value="/usr/bin/bwrap")
 def test_sandboxed_run_rw_paths(
-    mock_which: MagicMock,
+    _mock_which: MagicMock,
     mock_run: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -93,7 +93,7 @@ def test_sandboxed_run_rw_paths(
 @patch("app.core.sandbox.subprocess.run")
 @patch("app.core.sandbox.shutil.which", return_value="/usr/bin/bwrap")
 def test_sandboxed_run_ro_paths(
-    mock_which: MagicMock,
+    _mock_which: MagicMock,
     mock_run: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -118,7 +118,7 @@ def test_sandboxed_run_ro_paths(
 
 @patch("app.core.sandbox.shutil.which", return_value="/usr/bin/bwrap")
 def test_sandboxed_run_timeout_propagates(
-    mock_which: MagicMock,
+    _mock_which: MagicMock,
 ) -> None:
     """TimeoutExpired from subprocess should propagate through sandboxed_run."""
     _reset_bwrap_cache()

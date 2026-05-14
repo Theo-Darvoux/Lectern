@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import {
     Sheet,
     SheetContent,
@@ -176,7 +175,6 @@ export function ReviewDrawer() {
     const t = useTranslations("Staging");
     const tCommon = useTranslations("Common");
     const tAuto = useTranslations("AutoTitle");
-    const router = useRouter();
     const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
     const operations = useStagingStore((s) => s.operations) ?? [];
     const reviewOpen = useStagingStore((s) => s.reviewOpen);
@@ -350,8 +348,6 @@ export function ReviewDrawer() {
             setReviewOpen(false);
             if (result.status === "approved") {
                 triggerBrowseRefresh();
-            } else {
-                router.push(`/pull-requests/${result.id}`);
             }
         }
     };

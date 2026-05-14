@@ -123,6 +123,7 @@ services:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
       - NEXT_PUBLIC_ONLYOFFICE_URL=${NEXT_PUBLIC_ONLYOFFICE_URL}
       - API_INTERNAL_URL=http://api:8000
+      - NODE_OPTIONS=--max-old-space-size=4096
     depends_on:
       - api
     healthcheck:

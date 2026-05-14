@@ -182,12 +182,14 @@ class TestOptimisticLocking:
             virus_scan_result="clean",
         )
         db_session.add(mv)
-        # We need an Upload row for the admin to use this file_key
+        # We need an Upload row for the admin to use this file_key.
+        # processing_status='complete' so the auto-approve path is not deferred.
         u_row = Upload(
             upload_id=str(uuid.uuid4()),
             user_id=vieux.id,
             final_key="cas/abc",
             status="clean",
+            processing_status="complete",
             filename="test.txt",
         )
         db_session.add(u_row)
@@ -236,6 +238,7 @@ class TestOptimisticLocking:
             user_id=vieux.id,
             final_key="cas/xyz",
             status="clean",
+            processing_status="complete",
             filename="test.txt",
         )
         db_session.add(u_row)
@@ -303,6 +306,7 @@ class TestOptimisticLocking:
             user_id=vieux.id,
             final_key="cas/ok",
             status="clean",
+            processing_status="complete",
             filename="ok.txt",
         )
         db_session.add(u_row)

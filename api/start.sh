@@ -2,6 +2,8 @@
 
 set -e
 
+export PYTHONPATH="${PYTHONPATH:-/app}"
+
 # Wait for postgres to be ready
 echo "Waiting for database..."
 python wait_for_db.py

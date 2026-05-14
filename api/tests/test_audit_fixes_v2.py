@@ -576,8 +576,9 @@ async def test_tus_options_does_not_open_db_session(client: AsyncClient):
 
     async def fail_on_db_open():
         db_was_opened.append(True)
+        if False:
+            yield
         raise RuntimeError("DB must not be opened during OPTIONS")
-        yield  # make it an async generator
 
     # Verify the options handler signature has no db dependency
     import inspect

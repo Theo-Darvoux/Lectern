@@ -124,7 +124,15 @@ console.log(`\n\x1b[1m--- 4. Code Usage Scan ---\x1b[0m`);
 
 const files = project.getSourceFiles(["src/**/*.tsx", "src/**/*.ts"]);
 const usedKeys = new Set<string>();
+const missingKeys = new Set<{ key: string, file: string, line: number }>();
 const dynamicUsages: { file: string, line: number, text: string }[] = [];
+
+function addUsedKey(key: string, file: string, line: number) {
+    usedKeys.add(key);
+    if (!enMap.has(key)) {
+        missingKeys.add({ key, file, line });
+    }
+}
 
 function protectNamespace(prefix: string) {
     if (!prefix) return;
@@ -157,16 +165,17 @@ for (const file of files) {
                             const tArgs = child.getArguments();
                             if (tArgs.length > 0) {
                                 const arg = tArgs[0];
+                                const line = child.getStartLineNumber();
                                 if (Node.isStringLiteral(arg) || Node.isNoSubstitutionTemplateLiteral(arg)) {
                                     const subKey = arg.getLiteralValue();
-                                    usedKeys.add(namespace ? `${namespace}.${subKey}` : subKey);
+                                    addUsedKey(namespace ? `${namespace}.${subKey}` : subKey, filePath, line);
                                 } else if (Node.isTemplateExpression(arg)) {
                                     const head = arg.getHead().getLiteralText();
                                     protectNamespace(namespace ? `${namespace}.${head}` : head);
-                                    dynamicUsages.push({ file: filePath, line: child.getStartLineNumber(), text: child.getText() });
+                                    dynamicUsages.push({ file: filePath, line: line, text: child.getText() });
                                 } else {
                                     if (namespace) protectNamespace(namespace);
-                                    dynamicUsages.push({ file: filePath, line: child.getStartLineNumber(), text: child.getText() });
+                                    dynamicUsages.push({ file: filePath, line: line, text: child.getText() });
                                 }
                             }
                         }
@@ -176,31 +185,14 @@ for (const file of files) {
         }
     }
     
-    // 2. Check for global t() calls (rare but possible)
-    if (Node.isCallExpression(node) && node.getExpression().getText() === "t") {
-        const args = node.getArguments();
-        if (args.length > 0) {
-            const arg = args[0];
-            if (Node.isStringLiteral(arg) || Node.isNoSubstitutionTemplateLiteral(arg)) {
-                usedKeys.add(arg.getLiteralValue());
-            } else if (Node.isTemplateExpression(arg)) {
-                protectNamespace(arg.getHead().getLiteralText());
-                dynamicUsages.push({ file: filePath, line: node.getStartLineNumber(), text: node.getText() });
-            } else if (Node.isBinaryExpression(arg)) {
-                const left = arg.getLeft();
-                if (Node.isStringLiteral(left)) protectNamespace(left.getLiteralValue());
-                dynamicUsages.push({ file: filePath, line: node.getStartLineNumber(), text: node.getText() });
-            } else {
-                dynamicUsages.push({ file: filePath, line: node.getStartLineNumber(), text: node.getText() });
-            }
-        }
-    }
+    /* Global t() check removed to avoid false positives with local translators */
+
 
     // 3. Special case for _onStatusUpdate wrapper in upload-client.ts
     if (Node.isCallExpression(node) && node.getExpression().getText() === "_onStatusUpdate") {
         const args = node.getArguments();
         if (args.length >= 2 && Node.isStringLiteral(args[1])) {
-            usedKeys.add(`Upload.${args[1].getLiteralValue()}`);
+            addUsedKey(`Upload.${args[1].getLiteralValue()}`, filePath, node.getStartLineNumber());
         }
     }
   });
@@ -218,9 +210,18 @@ if (trulyUnused.length > 0) {
     console.log(`\x1b[32m✅ All keys in en.json are used (based on static analysis)\x1b[0m`);
 }
 
+if (missingKeys.size > 0) {
+    console.error(`\n❌ Missing translations found (${missingKeys.size}):`);
+    Array.from(missingKeys).slice(0, 20).forEach(m => console.error(`  - ${m.file}:${m.line} -> Missing "${m.key}"`));
+    if (missingKeys.size > 20) console.error(`  ... and ${missingKeys.size - 20} more`);
+} else {
+    console.log(`\x1b[32m✅ No missing static translations detected\x1b[0m`);
+}
+
 if (dynamicUsages.length > 0) {
     console.log(`\nℹ️ Found ${dynamicUsages.length} dynamic usages that couldn't be statically analyzed:`);
     dynamicUsages.slice(0, 5).forEach(u => console.log(`  - ${u.file}:${u.line} -> ${u.text}`));
 }
+
 
 console.log(`\nScan complete.`);

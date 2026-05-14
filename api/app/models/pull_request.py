@@ -63,6 +63,9 @@ class PullRequest(UUIDMixin, TimestampMixin, Base):
         server_default="pending",
     )
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auto_merge_pending: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reverts_pr_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pull_requests.id", ondelete="SET NULL"), nullable=True

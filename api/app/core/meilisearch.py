@@ -118,7 +118,7 @@ async def _ensure_search_key() -> str:
 
     # 2. Reuse an existing auto-provisioned key.
     keys_result = await meili_admin_client.get_keys()
-    existing = keys_result.results if keys_result else []
+    existing = keys_result.results if keys_result is not None else []
     for key in existing:
         if key.name == _SEARCH_KEY_NAME:
             logger.info("Reusing existing auto-provisioned Meilisearch search key.")

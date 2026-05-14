@@ -135,8 +135,6 @@ export function getFileBadgeLabel(fileName: string, mimeType?: string): string {
 // Client-side image compression
 // ────────────────────────────────────────────────────────────────────────────────
 
-import imageCompression from "browser-image-compression";
-
 const COMPRESSIBLE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MIN_COMPRESSION_SIZE = 512 * 1024; // 512 KB — skip small files to avoid overhead
 
@@ -170,6 +168,7 @@ export async function compressImageIfNeeded(file: File, skip = false): Promise<C
     }
 
     try {
+        const { default: imageCompression } = await import("browser-image-compression");
         const compressedFile = await imageCompression(file, {
             maxSizeMB: 4, // Increased from 2 MB
             maxWidthOrHeight: 4096, // Increased from 1920 to preserve 4K (U10)

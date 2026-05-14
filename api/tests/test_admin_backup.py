@@ -122,8 +122,8 @@ def _make_mock_s3() -> tuple[AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
     """Return (mock_list_objects, mock_download, mock_delete, mock_upload) mocks."""
 
     async def _empty_gen(*args, **kwargs):
-        return
-        yield  # make it an async generator
+        if False:
+            yield  # make it an async generator
 
     list_mock = MagicMock(return_value=_empty_gen())
     download_mock = AsyncMock()
@@ -309,8 +309,8 @@ async def test_create_backup_zip_structure(db_session: AsyncSession, tmp_path: P
     dest = tmp_path / "backup.zip"
 
     async def _empty_gen(*a, **kw):
-        return
-        yield
+        if False:
+            yield
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
@@ -341,8 +341,8 @@ async def test_create_backup_zip_includes_db_rows(db_session: AsyncSession, tmp_
     dest = tmp_path / "backup.zip"
 
     async def _empty_gen(*a, **kw):
-        return
-        yield
+        if False:
+            yield
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
@@ -379,8 +379,8 @@ async def test_create_backup_zip_includes_s3_objects(
             call_count["n"] += 1
             yield {"Key": "cas/abc123", "Size": len(s3_file_content)}
         else:
-            return
-            yield
+            if False:
+                yield
 
     async def _fake_download(key: str, dest_path: str | Path) -> None:
         Path(dest_path).write_bytes(s3_file_content)
@@ -431,8 +431,8 @@ async def test_restore_clears_existing_data(db_session: AsyncSession, tmp_path: 
     zip_path = _make_minimal_zip(tmp_path)
 
     async def _empty_gen(*a, **kw):
-        return
-        yield
+        if False:
+            yield
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
@@ -485,8 +485,8 @@ async def test_restore_inserts_backup_rows(db_session: AsyncSession, tmp_path: P
     zip_path = _make_minimal_zip(tmp_path, rows=rows)
 
     async def _empty_gen(*a, **kw):
-        return
-        yield
+        if False:
+            yield
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
@@ -651,8 +651,8 @@ async def test_restore_pr_deferred_self_refs(db_session: AsyncSession, tmp_path:
     zip_path = _make_minimal_zip(tmp_path, rows=rows)
 
     async def _empty_gen(*a, **kw):
-        return
-        yield
+        if False:
+            yield
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
@@ -733,8 +733,8 @@ async def test_restore_returns_manifest(db_session: AsyncSession, tmp_path: Path
     zip_path = _make_minimal_zip(tmp_path)
 
     async def _empty_gen(*a, **kw):
-        return
-        yield
+        if False:
+            yield
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
@@ -782,8 +782,8 @@ async def test_save_backup_creates_file(client: AsyncClient, db_session: AsyncSe
     await db_session.commit()
 
     async def _empty_gen(*a, **kw):
-        return
-        yield
+        if False:
+            yield
 
     with tempfile.TemporaryDirectory() as tmp:
         with (
@@ -808,8 +808,8 @@ async def test_save_backup_enforces_rotation(client: AsyncClient, db_session: As
     await db_session.commit()
 
     async def _empty_gen(*a, **kw):
-        return
-        yield
+        if False:
+            yield
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -845,8 +845,8 @@ async def test_export_backup_streams_zip(client: AsyncClient, db_session: AsyncS
     await db_session.commit()
 
     async def _empty_gen(*a, **kw):
-        return
-        yield
+        if False:
+            yield
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),

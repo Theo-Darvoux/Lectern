@@ -95,7 +95,9 @@ async def test_scan_file_path_skips_bazaar_when_async_enabled(
 
 @pytest.mark.asyncio
 async def test_pipeline_enqueues_check_bazaar_on_clean(mock_redis: AsyncMock) -> None:
-    """_complete_pipeline must enqueue check_bazaar when bazaar_async_enabled=True."""
+    """_fast_finalize_and_enqueue_post_scan must enqueue check_bazaar when bazaar_async_enabled=True."""
+    from pathlib import Path
+
     from app.workers.upload.pipeline import UploadPipeline
 
     arq_pool_mock = AsyncMock()
@@ -116,50 +118,54 @@ async def test_pipeline_enqueues_check_bazaar_on_clean(mock_redis: AsyncMock) ->
         mime_type="application/pdf",
         expected_sha256=None,
     )
+    import time
+
     pipeline.original_sha256 = "deadbeef" * 8  # 64-char sha256
     pipeline.initial_size = 1024
-    pipeline.final_mime = "application/pdf"
-    pipeline.content_encoding = None
     pipeline.mime_category = "document"
-    pipeline.pipeline_start = 0.0
+    pipeline.pipeline_start = time.monotonic()
+    pipeline.cas_key = "upload:cas:abc"
+    pipeline.pf = MagicMock()
+    pipeline.tmp_path = Path("/tmp/t")
 
     final_res_mock = MagicMock()
     final_res_mock.final_key = "cas/abc123"
     final_res_mock.safe_name = "file.pdf"
     final_res_mock.final_size = 900
     final_res_mock.content_sha256 = "content_sha"
-    final_res_mock.thumbnail_key = None
     final_res_mock.db_cas_key = "upload:cas:abc"
     final_res_mock.new_cas_ref = 1
 
     with (
         patch("app.workers.upload.pipeline.settings") as mock_settings,
-        patch("app.workers.upload.pipeline.delete_object", new_callable=AsyncMock),
+        patch("app.workers.upload.pipeline.run_finalize_storage", AsyncMock(return_value=final_res_mock)),
         patch("app.core.redis.arq_pool", arq_pool_mock),
     ):
         mock_settings.bazaar_async_enabled = True
         mock_settings.upload_pipeline_max_seconds = 600
-        # Provide dummy metric labels
         pipeline.cache = MagicMock()
         pipeline.cache.emit_event = AsyncMock()
         pipeline.repo = MagicMock()
         pipeline.repo.update_upload_status = AsyncMock()
-        pipeline.repo.maybe_dispatch_webhook = AsyncMock()
+        pipeline.repo.update_processing_status = AsyncMock()
 
-        await pipeline._complete_pipeline(final_res_mock)
+        await pipeline._fast_finalize_and_enqueue_post_scan()
 
-    arq_pool_mock.enqueue_job.assert_awaited_once_with(
-        "check_bazaar",
-        upload_id="upload-abc",
-        sha256="deadbeef" * 8,
-        cas_s3_key="cas/abc123",
-        user_id="user-123",
+    enqueued_job_names = [call.args[0] for call in arq_pool_mock.enqueue_job.call_args_list]
+    assert "check_bazaar" in enqueued_job_names, (
+        f"check_bazaar must be enqueued when bazaar_async_enabled=True; got {enqueued_job_names}"
     )
+    bazaar_call = next(c for c in arq_pool_mock.enqueue_job.call_args_list if c.args[0] == "check_bazaar")
+    assert bazaar_call.kwargs["sha256"] == "deadbeef" * 8
+    assert bazaar_call.kwargs["cas_s3_key"] == "cas/abc123"
+    assert bazaar_call.kwargs["upload_id"] == "upload-abc"
 
 
 @pytest.mark.asyncio
 async def test_pipeline_no_enqueue_when_bazaar_async_disabled(mock_redis: AsyncMock) -> None:
     """When bazaar_async_enabled=False, no check_bazaar job must be enqueued."""
+    from pathlib import Path
+
     from app.workers.upload.pipeline import UploadPipeline
 
     arq_pool_mock = AsyncMock()
@@ -175,25 +181,27 @@ async def test_pipeline_no_enqueue_when_bazaar_async_disabled(mock_redis: AsyncM
         mime_type="application/pdf",
         expected_sha256=None,
     )
+    import time
+
     pipeline.original_sha256 = "deadbeef" * 8
     pipeline.initial_size = 1024
-    pipeline.final_mime = "application/pdf"
-    pipeline.content_encoding = None
     pipeline.mime_category = "document"
-    pipeline.pipeline_start = 0.0
+    pipeline.pipeline_start = time.monotonic()
+    pipeline.cas_key = "upload:cas:abc"
+    pipeline.pf = MagicMock()
+    pipeline.tmp_path = Path("/tmp/t")
 
     final_res_mock = MagicMock()
     final_res_mock.final_key = "cas/abc123"
     final_res_mock.safe_name = "file.pdf"
     final_res_mock.final_size = 900
     final_res_mock.content_sha256 = "content_sha"
-    final_res_mock.thumbnail_key = None
     final_res_mock.db_cas_key = "upload:cas:abc"
     final_res_mock.new_cas_ref = 1
 
     with (
         patch("app.workers.upload.pipeline.settings") as mock_settings,
-        patch("app.workers.upload.pipeline.delete_object", new_callable=AsyncMock),
+        patch("app.workers.upload.pipeline.run_finalize_storage", AsyncMock(return_value=final_res_mock)),
         patch("app.core.redis.arq_pool", arq_pool_mock),
     ):
         mock_settings.bazaar_async_enabled = False
@@ -202,11 +210,14 @@ async def test_pipeline_no_enqueue_when_bazaar_async_disabled(mock_redis: AsyncM
         pipeline.cache.emit_event = AsyncMock()
         pipeline.repo = MagicMock()
         pipeline.repo.update_upload_status = AsyncMock()
-        pipeline.repo.maybe_dispatch_webhook = AsyncMock()
+        pipeline.repo.update_processing_status = AsyncMock()
 
-        await pipeline._complete_pipeline(final_res_mock)
+        await pipeline._fast_finalize_and_enqueue_post_scan()
 
-    arq_pool_mock.enqueue_job.assert_not_called()
+    enqueued_job_names = [call.args[0] for call in arq_pool_mock.enqueue_job.call_args_list]
+    assert "check_bazaar" not in enqueued_job_names, (
+        f"check_bazaar must NOT be enqueued when bazaar_async_enabled=False; got {enqueued_job_names}"
+    )
 
 
 # ── check_bazaar worker ───────────────────────────────────────────────────────

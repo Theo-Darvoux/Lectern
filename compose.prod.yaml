@@ -62,7 +62,11 @@ services:
     command: arq app.workers.settings.UploadFastWorkerSettings
     environment:
       - ENVIRONMENT=production
+      # Each replica runs WORKER_FAST_MAX_JOBS concurrent jobs (default 4).
+      # Total fast-upload concurrency = WORKER_FAST_REPLICAS × WORKER_FAST_MAX_JOBS.
+      - WORKER_FAST_MAX_JOBS=${WORKER_FAST_MAX_JOBS:-4}
     deploy:
+      replicas: ${WORKER_FAST_REPLICAS:-2}
       resources:
         limits:
           cpus: "1.0"
@@ -76,7 +80,11 @@ services:
     command: arq app.workers.settings.UploadSlowWorkerSettings
     environment:
       - ENVIRONMENT=production
+      # Each replica runs WORKER_SLOW_MAX_JOBS concurrent jobs (default 2).
+      # Total slow-upload concurrency = WORKER_SLOW_REPLICAS × WORKER_SLOW_MAX_JOBS.
+      - WORKER_SLOW_MAX_JOBS=${WORKER_SLOW_MAX_JOBS:-2}
     deploy:
+      replicas: ${WORKER_SLOW_REPLICAS:-2}
       resources:
         limits:
           cpus: "2.0"
@@ -91,10 +99,10 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1G
+          memory: 8G
         reservations:
           cpus: "0.25"
-          memory: 256M
+          memory: 512M
 
   nginx:
     ports:

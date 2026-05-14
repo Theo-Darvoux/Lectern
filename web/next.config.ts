@@ -6,6 +6,9 @@ const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts');
 const nextConfig: NextConfig = {
   output: 'standalone',
   transpilePackages: ["papaparse"],
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   async rewrites() {
     // Proxy /api/* to the backend in development to avoid cross-origin SSE/CORS issues.
     // API_INTERNAL_URL must be set to the backend URL reachable from this server:

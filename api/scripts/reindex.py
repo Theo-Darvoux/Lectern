@@ -32,6 +32,7 @@ async def audit_index(index_name: str, model_class: type, batch_size: int = 100)
     """Audit an index and return list of orphan IDs."""
     logger.info(f"--- Auditing index: '{index_name}' ---")
 
+    total_docs: int | str = 0
     try:
         stats = await meili_admin_client.index(index_name).get_stats()
         total_docs = stats.number_of_documents
@@ -74,7 +75,9 @@ async def audit_index(index_name: str, model_class: type, batch_size: int = 100)
             continue
 
         async with async_session_factory() as db:
-            result = await db.execute(select(model_class.id).where(model_class.id.in_(doc_ids)))
+            result = await db.execute(
+                select(model_class.id).where(model_class.id.in_(doc_ids))  # type: ignore[attr-defined]
+            )
             existing_ids = result.scalars().all()
 
             existing_set = set(existing_ids)

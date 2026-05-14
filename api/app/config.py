@@ -125,6 +125,11 @@ class Settings(BaseSettings):
     global_max_subprocesses: int = 0  # 0 = auto (os.cpu_count())
     max_concurrent_image_ops: int = 0  # 0 = auto (cpu_count // 2)
 
+    # Upload worker concurrency — how many jobs each worker process runs in parallel.
+    # Tune alongside WORKER_FAST_REPLICAS / WORKER_SLOW_REPLICAS in compose.prod.yaml.
+    worker_fast_max_jobs: int = 4  # small files: I/O-bound, safe to over-subscribe
+    worker_slow_max_jobs: int = 2  # large files: heavier compression, keep lower
+
     # Video compression profile (controls ffmpeg resolution capping and CRF limits)
     video_compression_profile: Literal[
         "none", "light", "medium", "aggressive", "heavy", "extreme"

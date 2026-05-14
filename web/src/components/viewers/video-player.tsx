@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { API_BASE } from "@/lib/api-client";
@@ -18,15 +18,28 @@ export function VideoPlayer({ materialId, material, fileKey }: VideoPlayerProps)
     const t = useTranslations("Viewers");
     const isMobile = useIsMobile();
     const [loading, setLoading] = useState(true);
- 
+    const videoRef = useRef<HTMLVideoElement>(null);
+
     const metadata = material.metadata as Record<string, unknown> | null;
     const embedUrl = metadata?.video_url as string | undefined;
- 
+
     const token = getAccessToken();
-    const streamUrl = token 
+    const streamUrl = token
         ? `${API_BASE}/materials/${materialId}/file?token=${encodeURIComponent(token)}&v=${fileKey}`
         : `${API_BASE}/materials/${materialId}/file?v=${fileKey}`;
- 
+
+    // If the browser already has data ready by the time the component mounts
+    // (e.g. served from cache or a very fast local server), the loadeddata /
+    // canplay events fire before React attaches synthetic listeners.  Check
+    // readyState synchronously after the first paint to catch that case.
+    useEffect(() => {
+        if (videoRef.current && videoRef.current.readyState >= 2) {
+            setLoading(false);
+        }
+    }, []);
+
+    const hideSpinner = () => setLoading(false);
+
     return (
         <ViewerShell loading={false} error={null}>
             <div className="flex h-full w-full items-center justify-center">
@@ -48,11 +61,13 @@ export function VideoPlayer({ materialId, material, fileKey }: VideoPlayerProps)
                             </div>
                         )}
                         <video
+                            ref={videoRef}
                             src={streamUrl}
                             controls
                             className="h-full w-full"
-                            onLoadedData={() => setLoading(false)}
-                            onError={() => setLoading(false)}
+                            onLoadedData={hideSpinner}
+                            onCanPlay={hideSpinner}
+                            onError={hideSpinner}
                             playsInline={isMobile}
                         >
                             {t("videoNotSupported")}

@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiFetch, apiFetchWithResponse } from "@/lib/api-client";
+import { getAccessToken } from "@/lib/auth-tokens";
+import { createSSEConnection } from "@/lib/sse-client";
 import { PRCard } from "./pr-card";
 import { type PullRequestOut } from "@/components/home/types";
 import {
@@ -35,7 +37,7 @@ export function PRList() {
   const [page, setPage] = useState(1);
   const [filterStatus, setFilterStatus] = useState<StatusFilter>("open");
 
-  // Lightweight counts for the tab badges (fetched once on mount)
+  // Lightweight counts for the tab badges
   const [counts, setCounts] = useState<Record<string, number | null>>({
     open: null,
     approved: null,
@@ -43,8 +45,10 @@ export function PRList() {
     cancelled: null,
   });
 
-  useEffect(() => {
-    let active = true;
+  // Bumped by SSE events to trigger refetches without changing page/filter.
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const fetchCounts = useCallback(() => {
     const statuses = ["open", "approved", "rejected", "cancelled"] as const;
     Promise.allSettled(
       statuses.map((s) =>
@@ -56,7 +60,6 @@ export function PRList() {
         }),
       ),
     ).then((results) => {
-      if (!active) return;
       const next: Record<string, number | null> = {};
       statuses.forEach((s, i) => {
         const r = results[i];
@@ -64,15 +67,14 @@ export function PRList() {
       });
       setCounts(next);
     });
-    return () => {
-      active = false;
-    };
   }, []);
 
   useEffect(() => {
+    fetchCounts();
+  }, [fetchCounts, refreshKey]);
+
+  useEffect(() => {
     let active = true;
-    // Reset loading state via a microtask so the effect body itself
-    // does not synchronously call setState (satisfies react-hooks/set-state-in-effect).
     Promise.resolve().then(() => {
       if (active) setLoading(true);
     });
@@ -96,7 +98,22 @@ export function PRList() {
     return () => {
       active = false;
     };
-  }, [page, filterStatus]);
+  }, [page, filterStatus, refreshKey]);
+
+  // Subscribe to per-user SSE for live PR list updates.
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token) return;
+    const connection = createSSEConnection({
+      url: `/pull-requests/sse?token=${encodeURIComponent(token)}`,
+      listeners: {
+        pr_opened: () => setRefreshKey((k) => k + 1),
+        pr_closed: () => setRefreshKey((k) => k + 1),
+      },
+      startupDelay: 50,
+    });
+    return () => connection.close();
+  }, []);
 
   const switchTab = (status: StatusFilter) => {
     setFilterStatus(status);

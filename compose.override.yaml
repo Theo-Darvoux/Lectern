@@ -98,7 +98,7 @@ services:
       context: ./web
       dockerfile: Dockerfile
       target: deps
-    command: sh -c "CI=true pnpm install && pnpm dev"
+    command: sh -c "CI=true pnpm install && node_modules/.bin/next dev --turbopack"
     environment:
       # Route browser API calls through nginx (port 80) so SSE works correctly.
       # Next.js dev-server rewrites buffer streaming responses and break SSE.
@@ -108,7 +108,7 @@ services:
       # ONLYOFFICE Document Server URL (browser-facing, routed through nginx)
       - NEXT_PUBLIC_ONLYOFFICE_URL=http://localhost/onlyoffice
       # Ensure Node.js has enough heap space for large page compilation
-      - NODE_OPTIONS=--max-old-space-size=5120
+      - NODE_OPTIONS=--max-old-space-size=3584
       - WATCHPACK_POLLING=true
     volumes:
       - ./web:/app
@@ -118,9 +118,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
-        reservations:
           memory: 4G
+        reservations:
+          memory: 1G
 
   # Nginx handles CORS in Docker dev (strips backend headers, injects its own).
   # FastAPI's CORSMiddleware is authoritative in production and bare-uvicorn local dev.

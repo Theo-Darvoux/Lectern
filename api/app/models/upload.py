@@ -40,6 +40,9 @@ class Upload(UUIDMixin, Base):
     pipeline_stage: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     cas_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     cas_ref_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    processing_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default="pending"
+    )
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 

@@ -11,12 +11,10 @@ Bug 6 – arq RedisSettings conn_timeout=1s causes worker crash on BGSAVE spike
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ── Bug 1: CAS Lua script key count ──────────────────────────────────────────
 
@@ -241,7 +239,6 @@ async def test_cleanup_uploads_uses_scan_iter_not_keys() -> None:
 @pytest.mark.asyncio
 async def test_cleanup_uploads_scan_iter_collects_all_cas_ids() -> None:
     """The scan_iter loop must collect the same CAS IDs as the old redis.keys call."""
-    import uuid
 
     sha256_a = "a" * 64
     sha256_b = "b" * 64

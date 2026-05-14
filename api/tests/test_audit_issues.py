@@ -243,7 +243,7 @@ async def test_medium1_check_exists_does_not_expose_raw_cas_key(
 
 
 @pytest.mark.asyncio
-async def test_medium4_multipart_abort_logs_db_errors(caplog):
+async def test_medium4_multipart_abort_logs_db_errors():
     """presigned_multipart_abort must log DB update failures, not silently
     swallow them.
     """

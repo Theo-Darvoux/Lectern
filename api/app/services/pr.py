@@ -42,6 +42,24 @@ def _is_temp_id(value: str | None) -> bool:
     return isinstance(value, str) and value.startswith("$")
 
 
+def _pr_directory_topics(payload: list[dict[str, typing.Any]]) -> set[str]:
+    """Return the set of SSE topic strings for all real directories targeted by a PR payload.
+
+    create_material ops use ``directory_id``; create_directory ops use ``parent_id``.
+    Null → "root".  $temp-id strings are skipped (directory not yet resolved).
+    """
+    topics: set[str] = set()
+    for op in payload:
+        raw = op.get("directory_id") or op.get("parent_id")
+        if raw is None:
+            topics.add("root")
+        elif isinstance(raw, str) and not raw.startswith("$"):
+            topics.add(raw)
+        elif not isinstance(raw, str):
+            topics.add(str(raw))
+    return topics
+
+
 def _resolve(value: str | None, id_map: dict[str, uuid.UUID]) -> uuid.UUID | None:
     """Resolve a value that may be a temp ID, a real UUID string, or None."""
     if value is None:
@@ -499,7 +517,14 @@ async def _exec_create_material(
         # Get size/mime from the payload (populated by the upload flow)
         # with S3 HEAD fallback for legacy uploads/ keys.
         if file_key.startswith("cas/"):
-            real_size = p.get("file_size") or 0
+            # Try to get the actual size from the upload record (updated by compression)
+            upload_size = await db.scalar(
+                select(Upload.size_bytes)
+                .where(Upload.final_key == file_key)
+                .order_by(Upload.updated_at.desc())
+                .limit(1)
+            )
+            real_size = upload_size if upload_size is not None else (p.get("file_size") or 0)
             mime_type = p.get("file_mime_type") or "application/octet-stream"
         else:
             # Legacy V1 path: uploads/ key — copy to materials/
@@ -584,7 +609,14 @@ async def _exec_create_material(
                 att_fk = str(att["file_key"])
 
                 if att_fk.startswith("cas/"):
-                    att_real_size = att.get("file_size") or 0
+                    # Try to get actual size from upload record
+                    att_upload_size = await db.scalar(
+                        select(Upload.size_bytes)
+                        .where(Upload.final_key == att_fk)
+                        .order_by(Upload.updated_at.desc())
+                        .limit(1)
+                    )
+                    att_real_size = att_upload_size if att_upload_size is not None else (att.get("file_size") or 0)
                     att_mime = att.get("file_mime_type") or "application/octet-stream"
                 else:
                     att_info = await _get_file_info(att_fk)
@@ -668,7 +700,14 @@ async def _exec_edit_material(
 
         # CAS V2: file_key is already a cas/ key — no copy needed.
         if file_key.startswith("cas/"):
-            real_size = p.get("file_size") or 0
+            # Try to get actual size from upload record
+            upload_size = await db.scalar(
+                select(Upload.size_bytes)
+                .where(Upload.final_key == file_key)
+                .order_by(Upload.updated_at.desc())
+                .limit(1)
+            )
+            real_size = upload_size if upload_size is not None else (p.get("file_size") or 0)
             mime_type = p.get("file_mime_type") or "application/octet-stream"
         else:
             info = await _get_file_info(file_key)
@@ -1282,16 +1321,46 @@ async def create_pull_request_service(
                 "Please wait for that contribution to be reviewed first."
             )
 
-    # Auto-approve for privileged users if their setting is enabled
+    # Auto-approve for privileged users if their setting is enabled.
+    # If any uploaded file is still being post-processed (processing_status not settled),
+    # defer the merge: create the PR as OPEN with auto_merge_pending=True.
+    # process_upload_post_scan will trigger the merge once all files settle.
     if current_user.is_moderator and current_user.auto_approve:
-        pr.status = PRStatus.APPROVED
-        pr.reviewed_by = current_user.id
-        await apply_pr(db, pr)
-        # Release claims immediately — PR is already approved
-        await db.execute(delete(PRFileClaim).where(PRFileClaim.pr_id == pr.id))
-        await db.flush()
+        cas_keys = [k for k in keys_to_check if k.startswith("cas/")]
+        all_settled = True
+        if cas_keys:
+            unsettled = await db.scalar(
+                select(func.count())
+                .select_from(Upload)
+                .where(
+                    Upload.final_key.in_(cas_keys),
+                    Upload.processing_status.not_in(["complete", "degraded"]),
+                )
+            )
+            if unsettled:
+                all_settled = False
+
+        if all_settled:
+            pr.status = PRStatus.APPROVED
+            pr.reviewed_by = current_user.id
+            await apply_pr(db, pr)
+            # Release claims immediately — PR is already approved
+            await db.execute(delete(PRFileClaim).where(PRFileClaim.pr_id == pr.id))
+            await db.flush()
+        else:
+            # Files still processing — hold the PR open and merge once they settle.
+            pr.auto_merge_pending = True
 
     await db.refresh(pr, ["author", "created_at", "updated_at"])
+
+    if pr.status == PRStatus.OPEN:
+        broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+        event = {"type": "pr_opened", "id": str(pr.id)}
+        for topic in _pr_directory_topics(list(pr.payload)):
+            broadcasts.append((topic, event))
+        if pr.author_id is not None:
+            broadcasts.append((f"pr_updates:{pr.author_id}", event))
+
     return pr
 
 
@@ -1917,9 +1986,16 @@ async def approve_pr_service(db: AsyncSession, pr_id: uuid.UUID, reviewer: User)
     await apply_pr(db, pr)
     await _cleanup_pr_resources(db, pr)
 
+    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    event = {"type": "pr_closed", "id": str(pr.id)}
+    for topic in _pr_directory_topics(list(pr.payload)):
+        broadcasts.append((topic, event))
+    if pr.author_id is not None:
+        broadcasts.append((f"pr_updates:{pr.author_id}", event))
+
     await db.commit()
 
-    if pr.author_id:
+    if pr.author_id is not None:
         await notify_user(
             db,
             pr.author_id,
@@ -1947,9 +2023,16 @@ async def reject_pr_service(
 
     await _cleanup_pr_resources(db, pr, delete_staging=True)
 
+    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    event = {"type": "pr_closed", "id": str(pr.id)}
+    for topic in _pr_directory_topics(list(pr.payload)):
+        broadcasts.append((topic, event))
+    if pr.author_id is not None:
+        broadcasts.append((f"pr_updates:{pr.author_id}", event))
+
     await db.commit()
 
-    if pr.author_id:
+    if pr.author_id is not None:
         await notify_user(
             db,
             pr.author_id,
@@ -1974,6 +2057,13 @@ async def cancel_pr_service(db: AsyncSession, pr_id: uuid.UUID, current_user: Us
 
     pr.status = PRStatus.CANCELLED
     await _cleanup_pr_resources(db, pr, delete_staging=True)
+
+    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    event = {"type": "pr_closed", "id": str(pr.id)}
+    for topic in _pr_directory_topics(list(pr.payload)):
+        broadcasts.append((topic, event))
+    if pr.author_id is not None:
+        broadcasts.append((f"pr_updates:{pr.author_id}", event))
 
     await db.commit()
     return pr

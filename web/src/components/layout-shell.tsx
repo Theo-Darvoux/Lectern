@@ -2,14 +2,22 @@
 
 import { useEffect, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { Navbar } from "@/components/navbar";
 import { MobileBottomBar } from "@/components/mobile-bottom-bar";
 import { Footer } from "@/components/footer";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CookieBanner } from "@/components/cookie-banner";
 import { StagingFab } from "@/components/pr/staging-fab";
-import { ReviewDrawer } from "@/components/pr/review-drawer";
-import { GlobalDropZone } from "@/components/pr/global-drop-zone";
+
+const ReviewDrawer = dynamic(
+  () => import("@/components/pr/review-drawer").then((m) => m.ReviewDrawer),
+  { ssr: false }
+);
+const GlobalDropZone = dynamic(
+  () => import("@/components/pr/global-drop-zone").then((m) => m.GlobalDropZone),
+  { ssr: false }
+);
 import { useAuth } from "@/hooks/use-auth";
 import { useOffline } from "@/hooks/use-offline";
 import { getAccessToken, hasAuthHint } from "@/lib/auth-tokens";

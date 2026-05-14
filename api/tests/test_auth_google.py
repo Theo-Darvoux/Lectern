@@ -42,9 +42,9 @@ async def test_google_login_disabled(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("enable_google_oauth")
 async def test_google_login_invalid_token(
     client: AsyncClient,
-    enable_google_oauth,
     mock_google_verify,
 ):
     mock_google_verify.side_effect = ValueError("Invalid token")
@@ -58,9 +58,9 @@ async def test_google_login_invalid_token(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("enable_google_oauth")
 async def test_google_login_invalid_issuer(
     client: AsyncClient,
-    enable_google_oauth,
     mock_google_verify,
 ):
     mock_google_verify.return_value = {
@@ -77,10 +77,10 @@ async def test_google_login_invalid_issuer(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("enable_google_oauth")
 async def test_google_login_success_new_user(
     client: AsyncClient,
     db_session: AsyncSession,
-    enable_google_oauth,
     mock_google_verify,
 ):
     mock_google_verify.return_value = {
@@ -109,10 +109,10 @@ async def test_google_login_success_new_user(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("enable_google_oauth")
 async def test_google_login_success_existing_user(
     client: AsyncClient,
     db_session: AsyncSession,
-    enable_google_oauth,
     mock_google_verify,
 ):
     # Create an existing user

@@ -355,7 +355,7 @@ async def test_check_exists_not_found(
 
 @patch("app.core.storage.object_exists", new_callable=AsyncMock, return_value=True)
 async def test_check_exists_found(
-    mock_obj_exists: AsyncMock,
+    _mock_obj_exists: AsyncMock,
     client: AsyncClient,
     db_session: AsyncSession,
     mock_redis: AsyncMock,
