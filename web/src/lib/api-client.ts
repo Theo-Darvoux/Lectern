@@ -105,6 +105,9 @@ export async function apiRequest(
         }
     } catch (err) {
         // Network error (not a 4xx/5xx response)
+        if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("wikint-api-unreachable"));
+        }
         throw err;
     }
 
