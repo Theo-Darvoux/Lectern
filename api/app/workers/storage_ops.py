@@ -8,8 +8,9 @@ logger = logging.getLogger("wikint")
 async def delete_storage_objects(ctx: dict, keys: list[str]) -> None:  # type: ignore[type-arg]
     """Delete a list of object keys from S3-compatible storage.
 
-    For keys in the cas/ prefix, this decrements the reference count in Redis
-    and only performs the actual S3 DELETE if the count reaches zero.
+    For keys in the cas/ prefix, this decrements the reference count via
+    decrement_cas_ref() (which runs the correct two-key Lua script) and only
+    performs the actual S3 DELETE if the count reaches zero.
     """
     redis = ctx.get("redis")
     if redis is None:
@@ -17,24 +18,20 @@ async def delete_storage_objects(ctx: dict, keys: list[str]) -> None:  # type: i
 
         redis = redis_client
 
-    from app.core.cas import _LUA_CAS_DECR
-
     for key in keys:
         try:
             # 1. Handle shared CAS objects (managed via reference counting)
             if key.startswith("cas/"):
-                # The cas_id is the last segment of the key
-                cas_id = key.split("/")[-1]
-                cas_key = f"upload:cas:{cas_id}"
+                from app.core.cas import decrement_cas_ref
 
-                # Atomically decrement and check count via Lua
-                new_count = await redis.eval(_LUA_CAS_DECR, 1, cas_key)  # type: ignore[misc]
-
+                sha256 = key.split("/")[-1]
+                new_count = await decrement_cas_ref(redis, sha256)
                 if new_count == 0:
                     await delete_object(key)
                     logger.info("Deleted CAS object (ref_count reached 0): %s", key)
-                else:
+                elif new_count > 0:
                     logger.info("Decremented CAS ref_count for %s (new_count=%d)", key, new_count)
+                # new_count == -1 means error already logged in decrement_cas_ref; skip S3 delete
 
             # 2. Handle standard user-owned objects (simple delete)
             else:

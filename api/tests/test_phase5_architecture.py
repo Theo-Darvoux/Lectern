@@ -261,6 +261,8 @@ async def test_webhook_inserts_dlq_after_max_attempts():
     ctx = {
         "db_sessionmaker": lambda: mock_session,
         "arq": mock_arq,
+        # WorkerContext.from_arq_ctx requires "redis" to be present in the ctx dict.
+        "redis": AsyncMock(),
     }
 
     mock_response = MagicMock()

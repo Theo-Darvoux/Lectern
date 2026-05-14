@@ -315,6 +315,13 @@ class FakeRedis:
 
         return [k for k in self.data if fnmatch.fnmatch(k, pattern)]
 
+    async def scan_iter(self, pattern):
+        import fnmatch
+
+        for k in list(self.data.keys()):
+            if fnmatch.fnmatch(k, pattern):
+                yield k
+
     async def sadd(self, name, *members):
         if name not in self.data:
             self.data[name] = set()

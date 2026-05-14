@@ -4,6 +4,7 @@ from arq.connections import RedisSettings
 from arq.cron import cron
 
 from app.config import settings
+from app.core.redis import close_arq_pool, init_arq_pool
 from app.workers.check_bazaar import check_bazaar
 from app.workers.cleanup_uploads import cleanup_uploads
 from app.workers.gdpr_cleanup import gdpr_cleanup
@@ -23,7 +24,10 @@ from app.workers.year_rollover import year_rollover
 
 
 async def startup(ctx: dict[str, Any]) -> None:
+    import logging
     import shutil
+
+    logger = logging.getLogger("wikint")
 
     if not shutil.which("bwrap"):
         raise RuntimeError(
@@ -43,6 +47,12 @@ async def startup(ctx: dict[str, Any]) -> None:
 
     from app.core.scanner import MalwareScanner
 
+    # Workers need their own arq pool to enqueue follow-up jobs (e.g. check_bazaar).
+    try:
+        await init_arq_pool()
+    except Exception as exc:
+        logger.warning("ARQ pool init failed in worker (check_bazaar will be skipped): %s", exc)
+
     scanner = MalwareScanner()
     scanner.initialize()
     ctx["scanner"] = scanner
@@ -59,6 +69,8 @@ async def startup(ctx: dict[str, Any]) -> None:
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
+    await close_arq_pool()
+
     scanner = ctx.get("scanner")
     if scanner is not None:
         await scanner.close()

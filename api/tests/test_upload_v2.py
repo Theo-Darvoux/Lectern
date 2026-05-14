@@ -132,11 +132,47 @@ async def test_worker_startup_initialises_scanner() -> None:
         patch("shutil.which", return_value="/usr/bin/bwrap"),
         patch.dict("sys.modules", {"oletools": MagicMock(), "oletools.olevba": MagicMock()}),
         patch.object(MalwareScanner, "initialize"),
+        patch("app.workers.settings.init_arq_pool", new_callable=AsyncMock),
     ):
         await startup(ctx)
 
     assert "scanner" in ctx
     assert isinstance(ctx["scanner"], MalwareScanner)
+
+
+@pytest.mark.asyncio
+async def test_worker_startup_initialises_arq_pool() -> None:
+    """startup() must call init_arq_pool so workers can enqueue follow-up jobs."""
+    from app.workers.settings import startup
+
+    ctx: dict = {}
+    mock_init_arq = AsyncMock()
+    with (
+        patch("shutil.which", return_value="/usr/bin/bwrap"),
+        patch.dict("sys.modules", {"oletools": MagicMock(), "oletools.olevba": MagicMock()}),
+        patch.object(MalwareScanner, "initialize"),
+        patch("app.workers.settings.init_arq_pool", mock_init_arq),
+    ):
+        await startup(ctx)
+
+    mock_init_arq.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_worker_startup_arq_pool_failure_is_soft() -> None:
+    """startup() must not raise when init_arq_pool fails (degraded mode)."""
+    from app.workers.settings import startup
+
+    ctx: dict = {}
+    with (
+        patch("shutil.which", return_value="/usr/bin/bwrap"),
+        patch.dict("sys.modules", {"oletools": MagicMock(), "oletools.olevba": MagicMock()}),
+        patch.object(MalwareScanner, "initialize"),
+        patch("app.workers.settings.init_arq_pool", side_effect=ConnectionError("redis down")),
+    ):
+        await startup(ctx)  # must not raise
+
+    assert "scanner" in ctx
 
 
 @pytest.mark.asyncio
@@ -146,8 +182,21 @@ async def test_worker_shutdown_closes_scanner() -> None:
 
     mock_scanner = AsyncMock(spec=MalwareScanner)
     ctx = {"scanner": mock_scanner}
-    await shutdown(ctx)
+    with patch("app.workers.settings.close_arq_pool", new_callable=AsyncMock):
+        await shutdown(ctx)
     mock_scanner.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_worker_shutdown_closes_arq_pool() -> None:
+    """shutdown() must call close_arq_pool to release the worker's Redis connection."""
+    from app.workers.settings import shutdown
+
+    mock_close_arq = AsyncMock()
+    with patch("app.workers.settings.close_arq_pool", mock_close_arq):
+        await shutdown({})
+
+    mock_close_arq.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -155,7 +204,8 @@ async def test_worker_shutdown_noop_without_scanner() -> None:
     """shutdown() must not raise when ctx has no scanner key."""
     from app.workers.settings import shutdown
 
-    await shutdown({})  # should not raise
+    with patch("app.workers.settings.close_arq_pool", new_callable=AsyncMock):
+        await shutdown({})  # should not raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -169,10 +169,10 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     async with get_s3_client() as client:
         paginator = client.get_paginator("list_objects_v2")
 
-        cas_keys_raw = await redis.keys("upload:cas:*")
-        valid_cas_ids = {
-            (k.decode() if isinstance(k, bytes) else k).split(":")[-1] for k in cas_keys_raw
-        }
+        valid_cas_ids: set[str] = set()
+        async for cas_key in redis.scan_iter("upload:cas:*"):
+            k = cas_key.decode() if isinstance(cas_key, bytes) else cas_key
+            valid_cas_ids.add(k.split(":")[-1])
 
         async for page in paginator.paginate(Bucket=settings.s3_bucket, Prefix="cas/"):
             for obj in page.get("Contents", []):

@@ -195,9 +195,10 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
     upload_webhook_total.labels(outcome="network_error").inc()
 
     try:
+        from app.workers.upload.context import WorkerContext
         from app.workers.upload.repository import UploadWorkerRepository
 
-        repo = UploadWorkerRepository(ctx)  # type: ignore[arg-type]
+        repo = UploadWorkerRepository(WorkerContext.from_arq_ctx(ctx))
         await repo.insert_dead_letter(
             upload_id=upload_id,
             job_name="dispatch_webhook",

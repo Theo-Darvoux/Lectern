@@ -149,8 +149,10 @@ async def _thumbnail_video(
     # Convert JPG to WebP for consistency
     temp_jpg = output_path.with_suffix(".jpg")
     if temp_jpg.exists():
-        await _thumbnail_image(temp_jpg, output_path, size, quality)
-        temp_jpg.unlink()
+        try:
+            await _thumbnail_image(temp_jpg, output_path, size, quality)
+        finally:
+            temp_jpg.unlink(missing_ok=True)
 
 
 async def _thumbnail_pdf(
@@ -180,8 +182,10 @@ async def _thumbnail_pdf(
     await process.communicate()
 
     if temp_png.exists():
-        await _thumbnail_image(temp_png, output_path, size, quality)
-        temp_png.unlink()
+        try:
+            await _thumbnail_image(temp_png, output_path, size, quality)
+        finally:
+            temp_png.unlink(missing_ok=True)
 
 
 async def _thumbnail_office(

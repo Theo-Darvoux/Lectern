@@ -39,6 +39,34 @@ from app.schemas.common import HealthResponse
 
 logger = logging.getLogger("wikint")
 
+# In-process cache for the S3 domain used in CSP headers.
+# Refreshed at most once per minute; avoids a DB query on every HTTP request.
+_s3_csp_domain: str | None = None
+_s3_csp_domain_fetched_at: float = 0.0
+_S3_CSP_DOMAIN_TTL = 60.0
+
+
+async def _get_s3_csp_domain() -> str:
+    global _s3_csp_domain, _s3_csp_domain_fetched_at
+    now = time.monotonic()
+    if _s3_csp_domain is not None and now - _s3_csp_domain_fetched_at < _S3_CSP_DOMAIN_TTL:
+        return _s3_csp_domain
+    try:
+        from app.core.database import async_session_factory
+        from app.core.redis import redis_client
+        from app.services.auth import get_full_auth_config
+
+        async with async_session_factory() as db:
+            config = await get_full_auth_config(db, redis_client)
+        domain = config.get("s3_public_endpoint") or settings.s3_public_endpoint or ""
+    except Exception:
+        domain = settings.s3_public_endpoint or ""
+    if "://" in domain:
+        domain = domain.split("://")[1]
+    _s3_csp_domain = domain
+    _s3_csp_domain_fetched_at = now
+    return domain
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -113,23 +141,9 @@ app = FastAPI(
 async def add_security_headers(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    from app.core.redis import redis_client
-    from app.services.auth import get_full_auth_config
-
     response = await call_next(request)
 
-    # Dynamic CSP fetching from DB/Redis
-    try:
-        from app.core.database import async_session_factory
-
-        async with async_session_factory() as db:
-            config = await get_full_auth_config(db, redis_client)
-            s3_domain = config.get("s3_public_endpoint") or settings.s3_public_endpoint or ""
-            # Strip protocol if present for CSP
-            if "://" in s3_domain:
-                s3_domain = s3_domain.split("://")[1]
-    except Exception:
-        s3_domain = ""
+    s3_domain = await _get_s3_csp_domain()
 
     # Build dynamic CSP
     connect_src = (

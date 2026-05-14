@@ -133,9 +133,17 @@ async def increment_cas_ref(
         return 0
 
 
-async def decrement_cas_ref(redis: Redis, sha256: str) -> None:  # type: ignore[type-arg]
+async def decrement_cas_ref(redis: Redis, sha256: str) -> int:  # type: ignore[type-arg]
+    """Atomically decrement the CAS ref count.
+
+    Returns the new ref count (0 means the entry was removed from Redis and
+    the caller should delete the corresponding S3 object).
+    Returns -1 on error (caller should treat the object as still live).
+    """
     cas_key = hmac_cas_key(sha256)
     try:
-        await redis.eval(_LUA_CAS_DECR, 2, cas_key, _STORAGE_USAGE_KEY)  # type: ignore[no-untyped-call, misc]
+        count = await redis.eval(_LUA_CAS_DECR, 2, cas_key, _STORAGE_USAGE_KEY)  # type: ignore[no-untyped-call, misc]
+        return int(count) if count is not None else 0
     except Exception as exc:
         logger.warning("CAS ref decrement failed for %s: %s", sha256, exc)
+        return -1

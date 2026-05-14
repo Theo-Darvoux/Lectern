@@ -31,7 +31,7 @@ services:
 
   api:
     image: ghcr.io/theo-darvoux/wikint/api:latest
-    command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+    command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 120
     environment:
       - ENVIRONMENT=production
     deploy:

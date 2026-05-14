@@ -5,7 +5,7 @@ import typing
 from datetime import UTC, datetime
 
 from sqlalchemy import update
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from app.config import settings
 
@@ -22,32 +22,37 @@ async def reset_daily_views(ctx: dict[typing.Any, typing.Any]) -> None:
     """
     from app.models.material import Material
 
-    engine = create_async_engine(settings.database_url)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    session_factory = ctx.get("db_sessionmaker")
+    owned_engine: AsyncEngine | None = None
+    if session_factory is None:
+        owned_engine = create_async_engine(settings.database_url)
+        session_factory = async_sessionmaker(owned_engine, expire_on_commit=False)
 
-    async with session_factory() as db:
-        now = datetime.now(UTC)
+    try:
+        async with session_factory() as db:
+            now = datetime.now(UTC)
 
-        # Accumulate today's views into the 14-day counter, then zero out the
-        # daily counter.  Only rows with activity are touched to keep the UPDATE
-        # as narrow as possible.
-        result = await db.execute(
-            update(Material)
-            .where(Material.views_today > 0)
-            .values(
-                views_14d=Material.views_14d + Material.views_today,
-                views_today=0,
-                last_view_reset=now,
+            # Accumulate today's views into the 14-day counter, then zero out the
+            # daily counter.  Only rows with activity are touched to keep the UPDATE
+            # as narrow as possible.
+            result = await db.execute(
+                update(Material)
+                .where(Material.views_today > 0)
+                .values(
+                    views_14d=Material.views_14d + Material.views_today,
+                    views_today=0,
+                    last_view_reset=now,
+                )
             )
-        )
-        await db.commit()
+            await db.commit()
 
-        rowcount = getattr(result, "rowcount", 0)
-        logger.info(
-            "Daily view reset: accumulated and cleared views_today on %d materials", rowcount
-        )
-
-    await engine.dispose()
+            rowcount = getattr(result, "rowcount", 0)
+            logger.info(
+                "Daily view reset: accumulated and cleared views_today on %d materials", rowcount
+            )
+    finally:
+        if owned_engine is not None:
+            await owned_engine.dispose()
 
 
 async def reset_14d_views(ctx: dict[typing.Any, typing.Any]) -> None:
@@ -59,16 +64,21 @@ async def reset_14d_views(ctx: dict[typing.Any, typing.Any]) -> None:
     """
     from app.models.material import Material
 
-    engine = create_async_engine(settings.database_url)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    session_factory = ctx.get("db_sessionmaker")
+    owned_engine: AsyncEngine | None = None
+    if session_factory is None:
+        owned_engine = create_async_engine(settings.database_url)
+        session_factory = async_sessionmaker(owned_engine, expire_on_commit=False)
 
-    async with session_factory() as db:
-        result = await db.execute(
-            update(Material).where(Material.views_14d > 0).values(views_14d=0)
-        )
-        await db.commit()
+    try:
+        async with session_factory() as db:
+            result = await db.execute(
+                update(Material).where(Material.views_14d > 0).values(views_14d=0)
+            )
+            await db.commit()
 
-        rowcount = getattr(result, "rowcount", 0)
-        logger.info("14-day view reset: cleared views_14d on %d materials", rowcount)
-
-    await engine.dispose()
+            rowcount = getattr(result, "rowcount", 0)
+            logger.info("14-day view reset: cleared views_14d on %d materials", rowcount)
+    finally:
+        if owned_engine is not None:
+            await owned_engine.dispose()
