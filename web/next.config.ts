@@ -12,13 +12,14 @@ const nextConfig: NextConfig = {
     //   - local dev (outside Docker): http://localhost:8000
     //   - Docker dev:                 http://api:8000
     const apiUrl = process.env.API_INTERNAL_URL ?? "http://api:8000";
-    if (!apiUrl) return [];
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${apiUrl}/api/:path*`,
-      },
-    ];
+    return {
+      fallback: [
+        {
+          source: "/api/:path*",
+          destination: `${apiUrl}/api/:path*`,
+        },
+      ],
+    };
   },
 };
 
