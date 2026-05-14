@@ -17,11 +17,10 @@ RUN uv sync --frozen --no-dev
 
 # Strip unnecessary files and pre-compile bytecode
 RUN find /venv -name "*.pyi" -delete && \
-    find /venv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; \
-    find /venv -path "*/tests/__init__.py" -prune -o -path "*/tests/*.py" -delete 2>/dev/null; \
-    find /venv -path "*/test/__init__.py" -prune -o -path "*/test/*.py" -delete 2>/dev/null; \
+    find /venv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    find /venv -type d \( -name "tests" -o -name "test" \) -exec rm -rf {} + 2>/dev/null || true && \
     rm -rf /venv/include && \
-    python -m compileall -q /venv/lib
+    python -m compileall -q /venv/lib || true
 
 # Stage 2: Runtime environment
 FROM python:3.12-slim
