@@ -4,6 +4,16 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 .env
 .git/
 tests/
+scratch/
+*.md
+*.txt
+*.patch
+analyze_pdf*.py
+test_pikepdf_images.py
+test_pdf_strip.py
+test_user_pdf.py
+yara.py

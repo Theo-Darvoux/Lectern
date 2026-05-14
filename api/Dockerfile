@@ -15,10 +15,16 @@ COPY pyproject.toml uv.lock ./
 ENV UV_PROJECT_ENVIRONMENT=/venv
 RUN uv sync --frozen --no-dev
 
+# Strip unnecessary files and pre-compile bytecode
+RUN find /venv -name "*.pyi" -delete && \
+    find /venv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; \
+    find /venv -path "*/tests/__init__.py" -prune -o -path "*/tests/*.py" -delete 2>/dev/null; \
+    find /venv -path "*/test/__init__.py" -prune -o -path "*/test/*.py" -delete 2>/dev/null; \
+    rm -rf /venv/include && \
+    python -m compileall -q /venv/lib
+
 # Stage 2: Runtime environment
 FROM python:3.12-slim
-
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
@@ -38,7 +44,8 @@ RUN groupadd -r appuser && useradd -r -g appuser -m appuser && \
     mkdir -p /var/lib/wikint && chown appuser:appuser /var/lib/wikint
 
 COPY --from=builder --chown=appuser:appuser /venv /venv
-ENV UV_PROJECT_ENVIRONMENT=/venv
+ENV PATH="/venv/bin:$PATH"
+ENV PYTHONDONTWRITEBYTECODE=1
 
 USER appuser
 
@@ -48,4 +55,4 @@ RUN chmod +x start.sh worker-start.sh
 EXPOSE 8000
 
 ENTRYPOINT ["./start.sh"]
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
