@@ -40,6 +40,8 @@ interface UploadFileOptions {
     skipCompression?: boolean;
     /** Translation function for status messages (keys from Upload namespace). */
     t?: (key: string) => string;
+    /** Force the file through the entire pipeline (no deduplication skipping). */
+    forcePipeline?: boolean;
 }
 
 /**
@@ -512,7 +514,7 @@ export async function uploadFile(
     file: File,
     options: UploadFileOptions = {},
 ): Promise<UploadResult> {
-    const { onProgress, signal } = options;
+    const { onProgress, signal, forcePipeline = true } = options;
 
     // ── Phase 1: Client-side SHA-256 computation + dedup check (0–5%) ────────
     onProgress?.(0);
@@ -530,13 +532,16 @@ export async function uploadFile(
     options.onHashComputed?.(sha256);
 
     // Check if file already exists in user's namespace or globally
-    _onStatusUpdate(options.onStatusUpdate, "checkingDedup", options.t);
-    const checkResp = await apiRequest("/upload/check-exists", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...baseHeaders },
-        body: JSON.stringify({ sha256, size: file.size }),
-        signal,
-    }).then(r => r.json() as Promise<CheckExistsResponse>);
+    let checkResp: CheckExistsResponse = { exists: false, file_key: null };
+    if (!forcePipeline) {
+        _onStatusUpdate(options.onStatusUpdate, "checkingDedup", options.t);
+        checkResp = await apiRequest("/upload/check-exists", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...baseHeaders },
+            body: JSON.stringify({ sha256, size: file.size }),
+            signal,
+        }).then(r => r.json() as Promise<CheckExistsResponse>);
+    }
 
     if (checkResp.exists && checkResp.file_key) {
         // Hit in user's personal cache — we can skip upload and processing entirely
