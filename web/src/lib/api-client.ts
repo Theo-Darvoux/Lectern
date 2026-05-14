@@ -96,16 +96,32 @@ export async function apiRequest(
     }
 
     const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
-    let res = await fetch(url, { ...fetchOptions, headers, credentials: "include" });
+    let res: Response;
+    try {
+        res = await fetch(url, { ...fetchOptions, headers, credentials: "include" });
+        // If we got a response (any response), the API is reachable.
+        if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("wikint-api-reachable"));
+        }
+    } catch (err) {
+        // Network error (not a 4xx/5xx response)
+        throw err;
+    }
 
     if (res.status === 401 && !skipAuth) {
+        console.debug("[api-client] 401 Unauthorized, attempting token refresh...");
         const newToken = await refreshTokenOnce();
         if (newToken) {
+            console.debug("[api-client] Token refreshed successfully, retrying request.");
             setAccessToken(newToken);
             _onTokenRefreshed?.(newToken);
             headers.set("Authorization", `Bearer ${newToken}`);
             res = await fetch(url, { ...fetchOptions, headers, credentials: "include" });
+            if (typeof window !== "undefined") {
+                window.dispatchEvent(new CustomEvent("wikint-api-reachable"));
+            }
         } else {
+            console.warn("[api-client] Token refresh failed (no new token). Clearing session.");
             clearAccessToken();
             throw new ApiError(401, "Session expired");
         }

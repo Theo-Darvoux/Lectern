@@ -12,14 +12,23 @@ export function useOffline() {
 
     useEffect(() => {
         const handleOnline = () => setIsOffline(false);
-        const handleOffline = () => setIsOffline(true);
+        const handleOffline = () => {
+            // Only set to offline if navigator also says so,
+            // to avoid transient glitches from other tabs.
+            if (typeof navigator !== "undefined" && !navigator.onLine) {
+                setIsOffline(true);
+            }
+        };
+        const handleReachable = () => setIsOffline(false);
 
         window.addEventListener("online", handleOnline);
         window.addEventListener("offline", handleOffline);
+        window.addEventListener("wikint-api-reachable", handleReachable);
 
         return () => {
             window.removeEventListener("online", handleOnline);
             window.removeEventListener("offline", handleOffline);
+            window.removeEventListener("wikint-api-reachable", handleReachable);
         };
     }, []);
 

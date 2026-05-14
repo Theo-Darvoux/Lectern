@@ -175,14 +175,21 @@ async def thumbnail_material(
     #    (images, videos, PDFs). Audio, Office, and generic blobs are excluded
     #    because the browser cannot render them in an <img> / <video> thumbnail.
     if not target_key:
-        file_mime = version.get("file_mime_type") or ""
-        if (
-            file_mime.startswith("image/")
-            or file_mime.startswith("video/")
-            or file_mime == "application/pdf"
-        ):
+        file_mime = (version.get("file_mime_type") or "").lower()
+        file_name = (version.get("file_name") or "").lower()
+        is_pdf = file_mime == "application/pdf" or file_name.endswith(".pdf")
+        is_image = file_mime.startswith("image/") or file_name.endswith(
+            (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
+        )
+        is_video = file_mime.startswith("video/") or file_name.endswith(
+            (".mp4", ".webm", ".avi", ".mkv", ".mov")
+        )
+
+        if is_pdf or is_image or is_video:
             target_key = version["file_key"]
-            content_type = file_mime
+            content_type = file_mime if file_mime and "/" in file_mime else "application/octet-stream"
+            if is_pdf and not file_mime:
+                content_type = "application/pdf"
         else:
             raise AppError(404, "Thumbnail not available for this file type")
 
