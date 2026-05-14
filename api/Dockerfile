@@ -45,6 +45,7 @@ RUN groupadd -r appuser && useradd -r -g appuser -m appuser && \
 COPY --from=builder --chown=appuser:appuser /venv /venv
 ENV PATH="/venv/bin:$PATH"
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH="/app"
 
 USER appuser
 

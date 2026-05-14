@@ -31,7 +31,7 @@ services:
 
   api:
     image: ghcr.io/theo-darvoux/wikint/api:latest
-    command: uv run --no-sync --no-dev gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+    command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
     environment:
       - ENVIRONMENT=production
     deploy:
@@ -45,7 +45,7 @@ services:
 
   worker:
     image: ghcr.io/theo-darvoux/wikint/api:latest
-    command: uv run --no-sync --no-dev arq app.workers.settings.WorkerSettings
+    command: arq app.workers.settings.WorkerSettings
     environment:
       - ENVIRONMENT=production
     deploy:
@@ -59,7 +59,7 @@ services:
 
   worker-fast:
     image: ghcr.io/theo-darvoux/wikint/api:latest
-    command: uv run --no-sync --no-dev arq app.workers.settings.UploadFastWorkerSettings
+    command: arq app.workers.settings.UploadFastWorkerSettings
     environment:
       - ENVIRONMENT=production
     deploy:
@@ -73,7 +73,7 @@ services:
 
   worker-slow:
     image: ghcr.io/theo-darvoux/wikint/api:latest
-    command: uv run --no-sync --no-dev arq app.workers.settings.UploadSlowWorkerSettings
+    command: arq app.workers.settings.UploadSlowWorkerSettings
     environment:
       - ENVIRONMENT=production
     deploy:

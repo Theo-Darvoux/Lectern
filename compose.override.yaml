@@ -55,7 +55,7 @@ services:
       - ./api:/app
     ports:
       - "8000:8000"
-    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   worker:
     networks:
@@ -65,7 +65,7 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env
-    command: ["uv", "run", "--no-dev", "arq", "app.workers.settings.WorkerSettings"]
+    command: ["arq", "app.workers.settings.WorkerSettings"]
     volumes:
       - ./api:/app
 
@@ -77,7 +77,7 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env
-    command: ["uv", "run", "--no-dev", "arq", "app.workers.settings.UploadFastWorkerSettings"]
+    command: ["arq", "app.workers.settings.UploadFastWorkerSettings"]
     volumes:
       - ./api:/app
 
@@ -89,7 +89,7 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env
-    command: ["uv", "run", "--no-dev", "arq", "app.workers.settings.UploadSlowWorkerSettings"]
+    command: ["arq", "app.workers.settings.UploadSlowWorkerSettings"]
     volumes:
       - ./api:/app
 
