@@ -2,6 +2,7 @@ import logging
 
 from meilisearch_python_sdk import AsyncClient
 from meilisearch_python_sdk.errors import MeilisearchApiError
+from meilisearch_python_sdk.models.client import KeyCreate
 from meilisearch_python_sdk.models.settings import (
     MeilisearchSettings,
     MinWordSizeForTypos,
@@ -12,20 +13,14 @@ from app.config import settings
 
 logger = logging.getLogger("wikint.meilisearch")
 
+_SEARCH_KEY_NAME = "wikint-search-key"
+
 # Admin client — used by setup_meilisearch, index workers, and reindex scripts.
 meili_admin_client = AsyncClient(settings.meili_url, settings.meili_master_key)
 
-# Search-only client — used by the public search route.
-# Falls back to master key in dev when MEILI_SEARCH_KEY is not set.
-if settings.meili_search_key:
-    meili_search_client = AsyncClient(settings.meili_url, settings.meili_search_key)
-else:
-    if not settings.is_dev:
-        logger.warning(
-            "MEILI_SEARCH_KEY is not set; falling back to master key for search. "
-            "Provision a search-only key and set MEILI_SEARCH_KEY in production."
-        )
-    meili_search_client = meili_admin_client
+# Search-only client — starts as admin; replaced during setup_meilisearch() once
+# the auto-provisioned key is confirmed valid.
+meili_search_client: AsyncClient = meili_admin_client
 
 # Backward-compat alias — workers imported `meili_client` before the split.
 meili_client = meili_admin_client
@@ -97,6 +92,52 @@ async def _apply_settings_if_changed(index_uid: str, desired: MeilisearchSetting
         logger.debug("'%s' settings up-to-date — skipping update_settings", index_uid)
 
 
+async def _ensure_search_key() -> str:
+    """Return a valid search-only API key, auto-provisioning one if needed.
+
+    Meilisearch stores provisioned keys in its own data volume. When the
+    container is recreated or the volume is reset, previously provisioned keys
+    are lost and any MEILI_SEARCH_KEY env value becomes stale. This function
+    always resolves a working key:
+
+    1. If MEILI_SEARCH_KEY is set and valid, use it as-is.
+    2. If a key named _SEARCH_KEY_NAME already exists in Meilisearch, reuse it.
+    3. Otherwise create a new search-only key and return it.
+    """
+    # 1. Validate the env-configured key if present.
+    if settings.meili_search_key:
+        try:
+            async with AsyncClient(settings.meili_url, settings.meili_search_key) as probe:
+                await probe.health()
+            return settings.meili_search_key
+        except MeilisearchApiError:
+            logger.warning(
+                "MEILI_SEARCH_KEY is invalid (key may have been lost after a volume reset) "
+                "— auto-provisioning a replacement."
+            )
+
+    # 2. Reuse an existing auto-provisioned key.
+    keys_result = await meili_admin_client.get_keys()
+    existing = keys_result.results if keys_result else []
+    for key in existing:
+        if key.name == _SEARCH_KEY_NAME:
+            logger.info("Reusing existing auto-provisioned Meilisearch search key.")
+            return key.key
+
+    # 3. Create a new search-only key scoped to our two indexes.
+    new_key = await meili_admin_client.create_key(
+        KeyCreate(
+            name=_SEARCH_KEY_NAME,
+            description="Auto-provisioned search-only key for WikINT API",
+            actions=["search"],
+            indexes=["materials", "directories"],
+            expires_at=None,
+        )
+    )
+    logger.info("Auto-provisioned new Meilisearch search key.")
+    return new_key.key
+
+
 async def setup_meilisearch() -> None:
     """Ensure Meilisearch indexes and settings are configured correctly."""
 
@@ -163,5 +204,11 @@ async def setup_meilisearch() -> None:
         typo_tolerance=typo_config,
     )
     await _apply_settings_if_changed("directories", directories_settings)
+
+    # Ensure the search client uses a valid, search-only key.  We do this after
+    # index setup so the key can always be scoped to indexes that exist.
+    global meili_search_client
+    search_key = await _ensure_search_key()
+    meili_search_client = AsyncClient(settings.meili_url, search_key)
 
     logger.info("Meilisearch setup complete.")

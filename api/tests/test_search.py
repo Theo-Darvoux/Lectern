@@ -550,7 +550,11 @@ async def test_settings_idempotency_no_update_when_unchanged():
     )
     mock_admin.index = MagicMock(side_effect=_index_side_effect)
 
-    with patch("app.core.meilisearch.meili_admin_client", mock_admin):
+    with (
+        patch("app.core.meilisearch.meili_admin_client", mock_admin),
+        patch("app.core.meilisearch._ensure_search_key", AsyncMock(return_value="test-key")),
+        patch("app.core.meilisearch.AsyncClient"),
+    ):
         from app.core.meilisearch import setup_meilisearch
 
         await setup_meilisearch()  # Must not raise
@@ -579,7 +583,11 @@ async def test_settings_update_called_when_changed():
     )
     mock_admin.index = MagicMock(side_effect=_index_side_effect)
 
-    with patch("app.core.meilisearch.meili_admin_client", mock_admin):
+    with (
+        patch("app.core.meilisearch.meili_admin_client", mock_admin),
+        patch("app.core.meilisearch._ensure_search_key", AsyncMock(return_value="test-key")),
+        patch("app.core.meilisearch.AsyncClient"),
+    ):
         from app.core.meilisearch import setup_meilisearch
 
         await setup_meilisearch()
@@ -593,43 +601,45 @@ async def test_settings_update_called_when_changed():
 # ---------------------------------------------------------------------------
 
 
-def test_search_client_uses_search_key_when_configured():
-    """meili_search_client is a separate object when MEILI_SEARCH_KEY is set."""
+def test_search_client_starts_as_admin_at_module_load():
+    """At module load, meili_search_client is meili_admin_client (setup_meilisearch replaces it)."""
     import importlib
-    from unittest.mock import patch
 
     import app.core.meilisearch as meili_mod
 
-    with patch("app.config.settings") as mock_settings:
-        mock_settings.meili_url = "http://localhost:7700"
-        mock_settings.meili_master_key = "master-key"
-        mock_settings.meili_search_key = "search-only-key"
-        mock_settings.is_dev = False
-
-        # Reload the module to trigger the client creation logic with patched settings
-        importlib.reload(meili_mod)
-
-        assert meili_mod.meili_search_client is not meili_mod.meili_admin_client
-
-    # Restore original state
+    importlib.reload(meili_mod)
+    # Before setup_meilisearch() runs, both point to the same admin client.
+    assert meili_mod.meili_search_client is meili_mod.meili_admin_client
+    # Restore
     importlib.reload(meili_mod)
 
 
-def test_search_client_falls_back_to_admin_when_no_key():
-    """When MEILI_SEARCH_KEY is unset, meili_search_client is meili_admin_client."""
-    import importlib
-    from unittest.mock import patch
+@pytest.mark.asyncio
+async def test_search_client_replaced_after_setup_meilisearch():
+    """After setup_meilisearch(), meili_search_client is a distinct search-only client."""
+    import app.core.meilisearch as ms_module
+    from app.core.meilisearch import setup_meilisearch
 
-    import app.core.meilisearch as meili_mod
+    original_admin = ms_module.meili_admin_client
+    new_search_client = MagicMock()
 
-    with patch("app.config.settings") as mock_settings:
-        mock_settings.meili_url = "http://localhost:7700"
-        mock_settings.meili_master_key = "master-key"
-        mock_settings.meili_search_key = None
-        mock_settings.is_dev = True
+    mock_admin = AsyncMock()
+    mock_admin.get_indexes = AsyncMock(return_value=[])
+    mock_admin.index = MagicMock(
+        return_value=MagicMock(
+            get_settings=AsyncMock(side_effect=Exception("no settings")),
+            update_settings=AsyncMock(),
+        )
+    )
 
-        importlib.reload(meili_mod)
-        assert meili_mod.meili_search_client is meili_mod.meili_admin_client
+    with (
+        patch.object(ms_module, "meili_admin_client", mock_admin),
+        patch.object(ms_module, "_ensure_search_key", AsyncMock(return_value="auto-key")),
+        patch("app.core.meilisearch.AsyncClient", return_value=new_search_client),
+    ):
+        await setup_meilisearch()
+        assert ms_module.meili_search_client is new_search_client
+        assert ms_module.meili_search_client is not original_admin
 
 
 # ---------------------------------------------------------------------------
@@ -717,3 +727,120 @@ async def test_rate_limit_search_authenticated_blocked_at_121(mock_redis):
 
     with pytest.raises(RateLimitError):
         await rate_limit_search(request=request, redis=mock_redis, user=user)
+
+
+# ---------------------------------------------------------------------------
+# _ensure_search_key — auto-provisioning
+# ---------------------------------------------------------------------------
+
+
+def _make_key(name: str, key_value: str) -> MagicMock:
+    k = MagicMock()
+    k.name = name
+    k.key = key_value
+    return k
+
+
+def _make_keys_result(keys: list) -> MagicMock:
+    r = MagicMock()
+    r.results = keys
+    return r
+
+
+@pytest.mark.asyncio
+async def test_ensure_search_key_uses_valid_env_key():
+    """If MEILI_SEARCH_KEY is set and valid, _ensure_search_key returns it as-is."""
+    from app.core import meilisearch as ms_module
+    from app.core.meilisearch import _ensure_search_key
+
+    probe = AsyncMock()
+    probe.__aenter__ = AsyncMock(return_value=probe)
+    probe.__aexit__ = AsyncMock(return_value=None)
+    probe.health = AsyncMock(return_value=None)
+
+    with (
+        patch.object(ms_module.settings, "meili_search_key", "valid-key-abc"),
+        patch("app.core.meilisearch.AsyncClient", return_value=probe),
+    ):
+        result = await _ensure_search_key()
+
+    assert result == "valid-key-abc"
+
+
+@pytest.mark.asyncio
+async def test_ensure_search_key_reuses_existing_provisioned_key():
+    """If the env key is invalid but a named key already exists, reuse it."""
+    from meilisearch_python_sdk.errors import MeilisearchApiError
+
+    from app.core import meilisearch as ms_module
+    from app.core.meilisearch import _SEARCH_KEY_NAME, _ensure_search_key
+
+    # Probe client raises 403
+    probe = AsyncMock()
+    probe.__aenter__ = AsyncMock(return_value=probe)
+    probe.__aexit__ = AsyncMock(return_value=None)
+    probe.health = AsyncMock(
+        side_effect=MeilisearchApiError("invalid_api_key", MagicMock(status_code=403))
+    )
+
+    existing_key = _make_key(_SEARCH_KEY_NAME, "existing-search-key")
+    mock_admin = AsyncMock()
+    mock_admin.get_keys = AsyncMock(return_value=_make_keys_result([existing_key]))
+
+    with (
+        patch.object(ms_module.settings, "meili_search_key", "stale-key"),
+        patch("app.core.meilisearch.AsyncClient", return_value=probe),
+        patch.object(ms_module, "meili_admin_client", mock_admin),
+    ):
+        result = await _ensure_search_key()
+
+    assert result == "existing-search-key"
+    mock_admin.create_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_search_key_creates_key_when_none_exists():
+    """If no valid key exists, _ensure_search_key creates and returns a new one."""
+    from app.core import meilisearch as ms_module
+    from app.core.meilisearch import _ensure_search_key
+
+    new_key = _make_key("wikint-search-key", "brand-new-key")
+
+    mock_admin = AsyncMock()
+    mock_admin.get_keys = AsyncMock(return_value=_make_keys_result([]))
+    mock_admin.create_key = AsyncMock(return_value=new_key)
+
+    with (
+        patch.object(ms_module.settings, "meili_search_key", None),
+        patch.object(ms_module, "meili_admin_client", mock_admin),
+    ):
+        result = await _ensure_search_key()
+
+    assert result == "brand-new-key"
+    mock_admin.create_key.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_setup_meilisearch_updates_search_client():
+    """setup_meilisearch must replace meili_search_client with a valid-key client."""
+    from app.core import meilisearch as ms_module
+    from app.core.meilisearch import setup_meilisearch
+
+    mock_admin = AsyncMock()
+    mock_admin.get_indexes = AsyncMock(return_value=[])
+    mock_admin.index = MagicMock(
+        return_value=MagicMock(
+            get_settings=AsyncMock(side_effect=Exception("no settings")),
+            update_settings=AsyncMock(),
+        )
+    )
+
+    new_client = MagicMock()
+    with (
+        patch.object(ms_module, "meili_admin_client", mock_admin),
+        patch.object(ms_module, "_ensure_search_key", AsyncMock(return_value="auto-key")),
+        patch("app.core.meilisearch.AsyncClient", return_value=new_client),
+    ):
+        await setup_meilisearch()
+
+    assert ms_module.meili_search_client is new_client
