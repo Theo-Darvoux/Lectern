@@ -98,7 +98,7 @@ services:
 
   nginx:
     ports:
-      - "127.0.0.1:9080:80"
+      - "0.0.0.0:9080:80"
     environment:
       - S3_PUBLIC_DOMAIN=${S3_PUBLIC_DOMAIN:-files.wikint.hypnos2026.fr}
     command: >
