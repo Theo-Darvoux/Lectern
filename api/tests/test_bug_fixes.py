@@ -1,10 +1,12 @@
-"""Tests for the five confirmed bugs fixed in the worker / file-processing layer.
+"""Tests for the five confirmed bugs fixed in the worker / file-processing layer,
+plus the Redis resilience fix (Bug 6).
 
 Bug 1 – CAS Lua script called with only 1 key in storage_ops (storage leak)
 Bug 2 – Webhook dead-letter UploadWorkerRepository receives raw dict (records lost)
 Bug 3 – Thumbnail temp files not cleaned in finally block (disk leak)
 Bug 4 – cleanup_uploads uses redis.KEYS instead of SCAN (Redis block)
 Bug 5 – Cron jobs create a new AsyncEngine per run instead of reusing ctx one
+Bug 6 – arq RedisSettings conn_timeout=1s causes worker crash on BGSAVE spike
 """
 
 from __future__ import annotations
@@ -357,3 +359,57 @@ async def test_reset_daily_views_creates_engine_when_ctx_missing() -> None:
 
     mock_ce.assert_called_once()
     mock_engine.dispose.assert_awaited_once()
+
+
+# ── Bug 6: arq conn_timeout too tight ────────────────────────────────────────
+
+
+def test_build_redis_settings_has_resilient_timeouts() -> None:
+    """build_redis_settings must set conn_timeout >= 10 and retry_on_timeout=True."""
+    from app.core.redis import build_redis_settings
+
+    rs = build_redis_settings()
+    assert rs.conn_timeout >= 10, "conn_timeout must be >= 10s to survive BGSAVE latency spikes"
+    assert rs.retry_on_timeout is True, "retry_on_timeout must be True"
+    assert rs.conn_retries >= 10, "conn_retries must be >= 10 for startup resilience"
+
+
+def test_build_redis_settings_retry_on_error_includes_transient() -> None:
+    """retry_on_error must include ConnectionError, TimeoutError, and BusyLoadingError."""
+    from redis.exceptions import BusyLoadingError
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from app.core.redis import build_redis_settings
+
+    rs = build_redis_settings()
+    assert rs.retry_on_error is not None
+    error_types = set(rs.retry_on_error)
+    assert RedisConnectionError in error_types
+    assert RedisTimeoutError in error_types
+    assert BusyLoadingError in error_types
+
+
+def test_worker_settings_use_resilient_redis_settings() -> None:
+    """All three WorkerSettings classes must use build_redis_settings() (not bare from_dsn)."""
+    from app.core.redis import build_redis_settings
+    from app.workers.settings import (
+        UploadFastWorkerSettings,
+        UploadSlowWorkerSettings,
+        WorkerSettings,
+    )
+
+    reference = build_redis_settings()
+    for cls in (WorkerSettings, UploadFastWorkerSettings, UploadSlowWorkerSettings):
+        rs = cls.redis_settings
+        assert rs.conn_timeout == reference.conn_timeout, f"{cls.__name__} conn_timeout mismatch"
+        assert rs.retry_on_timeout == reference.retry_on_timeout, f"{cls.__name__} retry_on_timeout mismatch"
+
+
+def test_redis_client_has_retry_on_timeout() -> None:
+    """The global redis_client must be created with retry_on_timeout=True."""
+    from app.core.redis import redis_client
+
+    # redis-py exposes retry_on_timeout via the connection pool's connection_kwargs
+    kwargs = redis_client.connection_pool.connection_kwargs
+    assert kwargs.get("retry_on_timeout") is True

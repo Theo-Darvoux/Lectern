@@ -1,10 +1,9 @@
 from typing import Any
 
-from arq.connections import RedisSettings
 from arq.cron import cron
 
 from app.config import settings
-from app.core.redis import close_arq_pool, init_arq_pool
+from app.core.redis import build_redis_settings, close_arq_pool, init_arq_pool
 from app.workers.check_bazaar import check_bazaar
 from app.workers.cleanup_uploads import cleanup_uploads
 from app.workers.gdpr_cleanup import gdpr_cleanup
@@ -89,7 +88,7 @@ UPLOAD_SLOW_QUEUE = "upload-slow"  # ≥ 5 MiB files — dedicated slow workers
 class WorkerSettings:
     """Main worker: handles all non-upload background tasks + fallback upload queue."""
 
-    redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    redis_settings = build_redis_settings()
     functions = [
         index_material,
         index_materials_batch,
@@ -117,7 +116,7 @@ class WorkerSettings:
 class UploadFastWorkerSettings:
     """Dedicated worker for small uploads (< 5 MiB). Deploy separately for priority isolation."""
 
-    redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    redis_settings = build_redis_settings()
     queue_name = UPLOAD_FAST_QUEUE
     functions = [process_upload, check_bazaar]
     on_startup = startup
@@ -127,7 +126,7 @@ class UploadFastWorkerSettings:
 class UploadSlowWorkerSettings:
     """Dedicated worker for large uploads (≥ 5 MiB). Deploy separately to avoid starving fast queue."""
 
-    redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    redis_settings = build_redis_settings()
     queue_name = UPLOAD_SLOW_QUEUE
     functions = [process_upload, check_bazaar]
     on_startup = startup

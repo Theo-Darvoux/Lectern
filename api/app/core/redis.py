@@ -1,18 +1,58 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from arq.connections import ArqRedis, RedisSettings, create_pool
 from redis.asyncio import Redis
+from redis.asyncio.retry import Retry
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import BusyLoadingError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from app.config import settings
 
 logger = logging.getLogger("wikint")
 
-redis_client: Redis = Redis.from_url(settings.redis_url, decode_responses=True)  # type: ignore[type-arg]
+# Retry policy for transient Redis errors (BGSAVE latency spikes, brief network
+# blips). Six attempts with exponential backoff capped at 10s covers ~60s of
+# sustained unavailability before giving up.
+_REDIS_RETRY = Retry(ExponentialBackoff(cap=10, base=1.0), retries=6)
+_REDIS_RETRY_ERRORS: list[type[Exception]] = [
+    RedisConnectionError,
+    RedisTimeoutError,
+    BusyLoadingError,
+]
+
+
+def build_redis_settings() -> RedisSettings:
+    """Return arq RedisSettings with resilient connection and retry config."""
+    base = RedisSettings.from_dsn(settings.redis_url)
+    return dataclasses.replace(
+        base,
+        # 10s socket-connect timeout (default is 1s — too tight for BGSAVE spikes)
+        conn_timeout=10,
+        # Retry pool creation up to 10 times on startup (e.g. Redis not ready yet)
+        conn_retries=10,
+        conn_retry_delay=2,
+        # Retry individual commands that time out instead of propagating the error
+        retry_on_timeout=True,
+        retry_on_error=_REDIS_RETRY_ERRORS,
+        retry=_REDIS_RETRY,
+    )
+
+
+redis_client: Redis = Redis.from_url(  # type: ignore[type-arg]
+    settings.redis_url,
+    decode_responses=True,
+    retry_on_timeout=True,
+    retry_on_error=_REDIS_RETRY_ERRORS,
+    retry=_REDIS_RETRY,
+)
 arq_pool: ArqRedis | None = None
 
 
@@ -22,7 +62,7 @@ async def get_redis() -> AsyncGenerator[Redis, None]:  # type: ignore[type-arg]
 
 async def init_arq_pool() -> None:
     global arq_pool
-    arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    arq_pool = await create_pool(build_redis_settings())
 
 
 async def close_arq_pool() -> None:
