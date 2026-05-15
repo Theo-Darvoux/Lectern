@@ -60,6 +60,8 @@ interface QCMViewerProps {
   materialId?: string;
   /** Skip the /inline presigned-URL step and fetch directly from this URL. */
   directUrl?: string;
+  /** Skip all fetching and render from this pre-loaded data directly. */
+  initialData?: QCMFile;
 }
 
 interface QuestionState {
@@ -279,7 +281,7 @@ function ResultsView({ qcm, questionStates, onRetry }: ResultsViewProps) {
 // Main viewer
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function QCMViewer({ fileKey, materialId, directUrl }: QCMViewerProps) {
+export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMViewerProps) {
   const t = useTranslations("QCM.viewer");
 
   const [qcm, setQcm] = useState<QCMFile | null>(null);
@@ -292,6 +294,22 @@ export function QCMViewer({ fileKey, materialId, directUrl }: QCMViewerProps) {
   const [finished, setFinished] = useState(false);
 
   useEffect(() => {
+    if (initialData) {
+      setQcm(initialData);
+      const states: Record<string, QuestionState> = {};
+      for (const ch of initialData.chapters) {
+        for (const q of ch.questions) {
+          states[q.id] = { selected: new Set(), revealed: false };
+        }
+      }
+      setQuestionStates(states);
+      setPage(0);
+      setFinished(false);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -327,7 +345,7 @@ export function QCMViewer({ fileKey, materialId, directUrl }: QCMViewerProps) {
     return () => {
       cancelled = true;
     };
-  }, [materialId, fileKey, directUrl]);
+  }, [materialId, fileKey, directUrl, initialData]);
 
   const handleToggleAnswer = useCallback(
     (questionId: string, answerId: string) => {

@@ -15,6 +15,7 @@ import {
   EyeOff,
   Loader2,
   Upload,
+  MonitorPlay,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { QCMViewer } from "@/components/viewers/qcm-viewer";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { QCMFile, QCMChapter, QCMQuestion, QCMAnswer, QCMMeta } from "@/lib/qcm-types";
@@ -66,6 +68,8 @@ export interface QCMEditorProps {
   targetDirectoryId?: string;
   onSubmit: (qcm: QCMFile, meta: QCMMeta) => Promise<void>;
   isSubmitting?: boolean;
+  onSaveDraft?: (qcm: QCMFile, meta: QCMMeta) => Promise<void>;
+  isSavingDraft?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -522,6 +526,8 @@ export function QCMEditor({
   initialMeta,
   onSubmit,
   isSubmitting = false,
+  onSaveDraft,
+  isSavingDraft = false,
 }: QCMEditorProps) {
   const t = useTranslations("QCM.editor");
   const { setHideFooter } = useUIStore();
@@ -541,6 +547,8 @@ export function QCMEditor({
     description: initialMeta?.description ?? "",
     tags: initialMeta?.tags ?? [],
   });
+
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   // Moodle import state
   const [importConfirmData, setImportConfirmData] = useState<QCMFile | null>(null);
@@ -636,6 +644,14 @@ export function QCMEditor({
       return;
     }
     await onSubmit(qcm, meta);
+  };
+
+  const handleSaveDraft = async () => {
+    if (!meta.title.trim()) {
+      toast.error("Veuillez saisir un titre");
+      return;
+    }
+    await onSaveDraft!(qcm, meta);
   };
 
   const totalQuestions = countQCMQuestions(qcm);
@@ -749,20 +765,42 @@ export function QCMEditor({
 
       {/* ── Bottom toolbar ── */}
       {/* Desktop: full-width bar. Mobile: compact floating pill above the nav bar. */}
-      <div className="fixed bottom-0 max-sm:bottom-[72px] left-0 right-0 z-10 max-sm:flex max-sm:justify-end max-sm:px-4 max-sm:pointer-events-none sm:flex sm:items-center sm:justify-end sm:gap-3 sm:border-t sm:bg-background/95 sm:backdrop-blur sm:px-6 sm:py-3 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]">
+      <div className="fixed bottom-0 max-sm:bottom-[72px] left-0 right-0 z-[60] max-sm:flex max-sm:justify-center max-sm:px-4 max-sm:pointer-events-none sm:flex sm:items-center sm:justify-end sm:gap-3 sm:border-t sm:bg-background/95 sm:backdrop-blur sm:px-6 sm:py-3 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]">
         <div className="max-sm:pointer-events-auto max-sm:flex max-sm:items-center max-sm:gap-2 max-sm:rounded-2xl max-sm:bg-background/90 max-sm:backdrop-blur-xl max-sm:shadow-lg max-sm:shadow-black/10 max-sm:border max-sm:border-border/30 max-sm:px-3 max-sm:py-2 sm:contents">
           <Button
             type="button"
             variant="ghost"
-            disabled={isSubmitting}
+            disabled={isSubmitting || isSavingDraft}
             onClick={() => window.history.back()}
           >
             Annuler
           </Button>
           <Button
             type="button"
+            variant="outline"
+            className="gap-2"
+            disabled={totalQuestions === 0}
+            onClick={() => setPreviewOpen(true)}
+          >
+            <MonitorPlay className="h-4 w-4" />
+            {t("preview")}
+          </Button>
+          {onSaveDraft && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleSaveDraft}
+              disabled={isSavingDraft || isSubmitting || !meta.title.trim()}
+              className="gap-2"
+            >
+              {isSavingDraft && <Loader2 className="h-4 w-4 animate-spin" />}
+              {t("saveToDraft")}
+            </Button>
+          )}
+          <Button
+            type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting || !meta.title.trim()}
+            disabled={isSubmitting || isSavingDraft || !meta.title.trim()}
             className="gap-2"
           >
             {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -770,6 +808,18 @@ export function QCMEditor({
           </Button>
         </div>
       </div>
+
+      {/* ── Live preview dialog ── */}
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="max-w-2xl h-[85vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="shrink-0 px-6 pt-5 pb-3 border-b">
+            <DialogTitle>{meta.title || t("preview")}</DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 min-h-0 overflow-hidden">
+            {previewOpen && <QCMViewer initialData={qcm} />}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Moodle import confirmation dialog ── */}
       <Dialog

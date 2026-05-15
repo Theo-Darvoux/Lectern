@@ -6,6 +6,7 @@ import { useStagingStore, isExpired } from "@/lib/staging-store";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
+import { usePathname } from "next/navigation";
 
 export function StagingFab() {
   const t = useTranslations("Staging");
@@ -13,8 +14,12 @@ export function StagingFab() {
   const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
   const count = operations.length;
   const expiredCount = operations.filter((s) => isExpired(s)).length;
+  const pathname = usePathname();
 
-  if (count === 0) return null;
+  // Hide on QCM editor pages — the editor has its own fixed toolbar that conflicts.
+  const isQcmEditor = /^\/qcm\/(new|[^/]+\/edit)/.test(pathname);
+
+  if (count === 0 || isQcmEditor) return null;
 
   return (
     <Button

@@ -191,12 +191,36 @@ export const useStagingStore = create<StagingState>()(
             _tempCounter: 0,
 
             addOperation: (op) =>
-                set((s) => ({
-                    operations: [
-                        ...s.operations,
-                        { operation: op, stagedAt: Date.now() },
-                    ],
-                })),
+                set((s) => {
+                    // For edit ops, replace the existing entry for the same target
+                    // rather than accumulating duplicates. Two edit_material ops for
+                    // the same material_id are split into two "slots": one without a
+                    // file_key (metadata-only) and one with a file_key (content).
+                    // Each slot replaces itself; the two slots can coexist.
+                    if (op.op === "edit_material" || op.op === "edit_directory") {
+                        const targetId = op.op === "edit_material" ? op.material_id : op.directory_id;
+                        const incomingHasFile = op.op === "edit_material" && !!op.file_key;
+                        const idx = s.operations.reduce<number>((found, _, i) => {
+                            const o = unwrapOp(s.operations[i]);
+                            if (o.op !== op.op) return found;
+                            const oId = o.op === "edit_material" ? o.material_id : (o as EditDirectoryOp).directory_id;
+                            if (oId !== targetId) return found;
+                            const existingHasFile = o.op === "edit_material" && !!o.file_key;
+                            return existingHasFile === incomingHasFile ? i : found;
+                        }, -1);
+                        if (idx !== -1) {
+                            const ops = [...s.operations];
+                            ops[idx] = { operation: op, stagedAt: ops[idx].stagedAt };
+                            return { operations: ops };
+                        }
+                    }
+                    return {
+                        operations: [
+                            ...s.operations,
+                            { operation: op, stagedAt: Date.now() },
+                        ],
+                    };
+                }),
 
             addOperations: (ops) =>
                 set((s) => ({

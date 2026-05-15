@@ -39,6 +39,8 @@ export interface GhostDirEntry {
 export type AugmentedOp = Operation & {
   isExternal: boolean;
   _previewIdx: number | undefined;
+  /** Index into the staging store's `operations` array (undefined for external PR ops). */
+  _storeIndex: number | undefined;
 };
 
 export type NavItem =
@@ -101,12 +103,13 @@ export function useAugmentedListing({
       .map(({ op, idx }) => ({ ...op, isExternal: true, _previewIdx: idx }));
 
     return [
-      ...local.map((op) => ({
+      ...local.map((op, idx) => ({
         ...op,
         isExternal: false,
         _previewIdx: undefined as number | undefined,
+        _storeIndex: idx,
       })),
-      ...external,
+      ...external.map((op) => ({ ...op, _storeIndex: undefined as number | undefined })),
     ];
   }, [operations, previewOperations]);
 

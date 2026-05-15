@@ -1,13 +1,15 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Home, ChevronRight } from "lucide-react";
+import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { QCMEditor } from "@/components/qcm/qcm-editor";
 import type { QCMFile, QCMMeta } from "@/lib/qcm-types";
 import { validateQCMFile } from "@/lib/qcm-utils";
 import { apiFetch, getMaterialFileUrl } from "@/lib/api-client";
+import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { toast } from "sonner";
 
 function slugify(title: string): string {
@@ -23,7 +25,10 @@ function slugify(title: string): string {
 function EditQCMPageInner() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const materialId = String(params.materialId ?? "");
+  const draftIndexParam = searchParams.get("draftIndex");
+  const draftIndex = draftIndexParam !== null ? parseInt(draftIndexParam, 10) : null;
 
   const [qcmData, setQcmData] = useState<QCMFile | null>(null);
   const [initialMeta, setInitialMeta] = useState<Partial<QCMMeta> | null>(null);
@@ -31,13 +36,39 @@ function EditQCMPageInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const addOperation = useStagingStore((s) => s.addOperation);
+  const updateOperation = useStagingStore((s) => s.updateOperation);
 
   useEffect(() => {
+    // If editing a draft, load the staged QCM data instead of the live version.
+    if (draftIndex !== null) {
+      const ops = useStagingStore.getState().operations;
+      const staged = ops[draftIndex];
+      if (staged) {
+        const op = unwrapOp(staged);
+        if (op.op === "edit_material") {
+          const qcmDraft = (op.metadata as Record<string, unknown> | undefined)?.qcm_draft as QCMFile | undefined;
+          if (qcmDraft && validateQCMFile(qcmDraft)) {
+            setQcmData(qcmDraft);
+            setVersionLock(op.version_lock);
+            setInitialMeta({
+              title: op.title || "",
+              description: op.description || "",
+              tags: op.tags || [],
+            });
+            setLoading(false);
+            return;
+          }
+        }
+      }
+      // Draft index was provided but data is missing/invalid — fall through to API load.
+    }
+
     let cancelled = false;
 
     (async () => {
       try {
-        // Fetch material metadata and QCM file in parallel
         const [materialData, fileUrl] = await Promise.all([
           apiFetch<Record<string, unknown>>(`/materials/${materialId}`),
           getMaterialFileUrl(materialId),
@@ -71,7 +102,7 @@ function EditQCMPageInner() {
     return () => {
       cancelled = true;
     };
-  }, [materialId]);
+  }, [materialId, draftIndex]);
 
   const handleSubmit = async (qcm: QCMFile, meta: QCMMeta) => {
     setIsSubmitting(true);
@@ -117,6 +148,46 @@ function EditQCMPageInner() {
     }
   };
 
+  const handleSaveDraft = async (qcm: QCMFile, meta: QCMMeta) => {
+    setIsSavingDraft(true);
+    try {
+      const staged = await apiFetch<{
+        file_key: string;
+        sha256: string;
+        file_size: number;
+      }>("/qcm/stage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: qcm }),
+      });
+      const fileName = `${slugify(meta.title) || "qcm"}.qcm`;
+      const op = {
+        op: "edit_material" as const,
+        material_id: materialId,
+        title: meta.title,
+        description: meta.description || null,
+        tags: meta.tags ?? [],
+        file_key: staged.file_key,
+        file_name: fileName,
+        file_size: staged.file_size,
+        file_mime_type: "application/vnd.wikint.qcm+json",
+        diff_summary: "QCM modifié via l'éditeur",
+        version_lock: versionLock,
+        metadata: { qcm_draft: qcm },
+      };
+      if (draftIndex !== null) {
+        updateOperation(draftIndex, op);
+      } else {
+        addOperation(op);
+      }
+      toast.success("QCM enregistré dans le brouillon");
+      router.back();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erreur lors de l'enregistrement");
+      setIsSavingDraft(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center p-12">
@@ -134,7 +205,16 @@ function EditQCMPageInner() {
   }
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-6 max-sm:pb-36 sm:pb-28">
+    <div className="container mx-auto max-w-5xl px-4 py-6 max-sm:pb-36 sm:pb-28">
+      <nav className="flex items-center gap-1 text-sm text-muted-foreground mb-4">
+        <Link href="/browse" className="flex items-center gap-1 hover:text-foreground transition-colors">
+          <Home className="h-4 w-4" />
+        </Link>
+        <ChevronRight className="h-3.5 w-3.5" />
+        <span className="truncate max-w-[160px] text-muted-foreground">{initialMeta?.title}</span>
+        <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+        <span className="text-foreground font-medium shrink-0">Modifier</span>
+      </nav>
       <h1 className="text-xl font-bold mb-6">Modifier le QCM</h1>
       <QCMEditor
         initialData={qcmData}
@@ -142,6 +222,8 @@ function EditQCMPageInner() {
         materialId={materialId}
         onSubmit={handleSubmit}
         isSubmitting={isSubmitting}
+        onSaveDraft={handleSaveDraft}
+        isSavingDraft={isSavingDraft}
       />
     </div>
   );

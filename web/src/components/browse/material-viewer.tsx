@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useRouter, useParams, useSearchParams, usePathname } from "next/navigation";
 import {
   ArrowLeft,
@@ -21,6 +21,8 @@ import {
 import { useUIStore } from "@/lib/stores";
 // useUIStore provides: sidebarOpen, openSidebar, closeSidebar
 import { apiFetch } from "@/lib/api-client";
+import { useStagingStore, unwrapOp } from "@/lib/staging-store";
+import type { QCMFile } from "@/lib/qcm-types";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -207,7 +209,35 @@ export function MaterialViewer({
     };
   }, [setHideFooter]);
 
-  const title = String(material.title ?? "");
+  const materialId = String(material.id ?? "");
+
+  // Overlay any staged (draft) edits for this material so the viewer reflects
+  // the drafted version rather than the live one.
+  const stagingOps = useStagingStore((s) => s.operations);
+  const stagedEdit = useMemo(() => {
+    const op = stagingOps.map(unwrapOp).find(
+      (o) => o.op === "edit_material" && o.material_id === materialId,
+    );
+    return op?.op === "edit_material" ? op : null;
+  }, [stagingOps, materialId]);
+
+  const displayMaterial = useMemo(() => {
+    if (!stagedEdit) return material;
+    return {
+      ...material,
+      ...(stagedEdit.title != null ? { title: stagedEdit.title } : {}),
+      ...(stagedEdit.description != null ? { description: stagedEdit.description } : {}),
+      ...(stagedEdit.tags != null ? { tags: stagedEdit.tags } : {}),
+    };
+  }, [material, stagedEdit]);
+
+  // For QCM: pass the staged draft data directly to QCMViewer to bypass fetch.
+  const stagedQcmDraft = useMemo(() => {
+    if (!stagedEdit) return null;
+    return (stagedEdit.metadata as Record<string, unknown> | undefined)?.qcm_draft ?? null;
+  }, [stagedEdit]);
+
+  const title = String(displayMaterial.title ?? "");
   const directoryId = String(material.directory_id ?? "");
   const parentMaterialId = material.parent_material_id
     ? String(material.parent_material_id)
@@ -223,7 +253,6 @@ export function MaterialViewer({
     versionInfo?.file_mime_type ?? "application/octet-stream",
   );
   const fileKey = String(versionInfo?.file_key ?? "");
-  const materialId = String(material.id ?? "");
 
   // Record view in background
   useEffect(() => {
@@ -288,7 +317,7 @@ export function MaterialViewer({
     setSidebarTarget({
       type: "material",
       id: materialId,
-      data: { ...material, __viewerType: viewerType },
+      data: { ...displayMaterial, __viewerType: viewerType },
     });
     // Depend on materialId/viewerType only — `material` is a fresh object each
     // render, so including it would re-fire the effect on unrelated parent
@@ -351,7 +380,7 @@ export function MaterialViewer({
                   item={{
                     id: materialId,
                     type: "material",
-                    data: material,
+                    data: displayMaterial,
                   } as ItemData}
                   itemPath={pathname}
                 >
@@ -402,7 +431,7 @@ export function MaterialViewer({
                       openSidebar("details", {
                         type: "material",
                         id: materialId,
-                        data: { ...material, __viewerType: viewerType, __path: pathname },
+                        data: { ...displayMaterial, __viewerType: viewerType, __path: pathname },
                       });
                     }
                   }}
@@ -480,7 +509,7 @@ export function MaterialViewer({
               <DjvuViewer fileKey={fileKey} materialId={materialId} />
             )}
             {viewerType === "qcm" && (
-              <QCMViewer fileKey={fileKey} materialId={materialId} />
+              <QCMViewer fileKey={fileKey} materialId={materialId} initialData={stagedQcmDraft as QCMFile ?? undefined} />
             )}
             {viewerType === "generic" && (
               <GenericViewer

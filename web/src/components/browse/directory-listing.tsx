@@ -829,7 +829,7 @@ export function DirectoryListing({
               const draftAttachmentCount =
                 op.op === "create_material" && op.temp_id
                   ? allOps.filter(
-                      (o): o is typeof op =>
+                      (o) =>
                         o.op === "create_material" &&
                         o.parent_material_id === op.temp_id,
                     ).length
@@ -863,7 +863,15 @@ export function DirectoryListing({
                         router.push(`/pull-requests/${previewPrId}/preview/${op._previewIdx}`);
                       }
                     } else {
-                      setReviewOpen(true);
+                      if (
+                        op.op === "create_material" &&
+                        op.metadata?.qcm_draft &&
+                        op._storeIndex !== undefined
+                      ) {
+                        router.push(`/qcm/preview?draftIndex=${op._storeIndex}`);
+                      } else {
+                        setReviewOpen(true);
+                      }
                     }
                   }}
                   onAddAttachment={() => handleAddAttachment(tempId!, title!)}

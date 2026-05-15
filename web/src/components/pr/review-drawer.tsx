@@ -36,7 +36,9 @@ import {
     AlertTriangle,
     Clock,
     Eye,
+    ListChecks,
 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
     useStagingStore,
@@ -110,11 +112,19 @@ function OperationCard({
         type: (op as any).target_type === "directory" ? t("labels.folder") : t("labels.material")
     });
 
+    const isQcm = (op as any).file_mime_type === "application/vnd.wikint.qcm+json";
+    const hasQcmDraft = isQcm && !!(op as any).metadata?.qcm_draft;
+    const qcmEditHref = isQcm && op.op === "edit_material"
+        ? `/qcm/${op.material_id}/edit?draftIndex=${index}`
+        : isQcm && op.op === "create_material"
+        ? `/qcm/new?${(op as any).directory_id ? `directoryId=${encodeURIComponent((op as any).directory_id)}&` : ""}draftIndex=${index}`
+        : null;
+
     return (
         <div className={`rounded-lg border transition-colors ${expired ? "border-red-300 bg-red-50/50 dark:border-red-800 dark:bg-red-950/20" : expiringSoon ? "border-amber-300 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20" : ""}`}>
             <div className="flex items-center gap-3 p-3">
-                <div className={`shrink-0 ${expired ? "text-red-400" : color}`}>
-                    <Icon className="h-4 w-4" />
+                <div className={`shrink-0 ${expired ? "text-red-400" : isQcm ? "text-violet-500" : color}`}>
+                    {isQcm ? <ListChecks className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
                 </div>
                 <div className="min-w-0 flex-1">
                     <p className={`text-sm font-medium leading-tight ${expired ? "line-through text-muted-foreground" : ""}`}>
@@ -134,7 +144,8 @@ function OperationCard({
                     )}
                 </div>
                 <div className="flex items-center shrink-0">
-                    { !expired && hasFileKey(op) && (
+                    {/* Preview: for QCMs use blob URL from metadata; for others use /upload/preview */}
+                    { !expired && hasFileKey(op) && (!isQcm || hasQcmDraft) && (
                         <Button
                             variant="ghost"
                             size="icon"
@@ -145,7 +156,20 @@ function OperationCard({
                             <Eye className="h-3.5 w-3.5" />
                         </Button>
                     )}
-                    { (op.op === "create_material" || op.op === "edit_material" || op.op === "create_directory" || op.op === "edit_directory") && (
+                    {/* Edit: for QCM edit ops, link to QCM editor; otherwise open metadata dialog */}
+                    { qcmEditHref ? (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary"
+                            asChild
+                            aria-label={tCommon("edit")}
+                        >
+                            <Link href={qcmEditHref}>
+                                <FilePenLine className="h-3.5 w-3.5" />
+                            </Link>
+                        </Button>
+                    ) : !isQcm && (op.op === "create_material" || op.op === "edit_material" || op.op === "create_directory" || op.op === "edit_directory") ? (
                         <Button
                             variant="ghost"
                             size="icon"
@@ -155,7 +179,7 @@ function OperationCard({
                         >
                             <FilePenLine className="h-3.5 w-3.5" />
                         </Button>
-                    )}
+                    ) : null}
                     <Button
                         variant="ghost"
                         size="icon"
@@ -193,15 +217,43 @@ export function ReviewDrawer() {
     const [previewMime, setPreviewMime] = useState<string | undefined>();
     const [previewName, setPreviewName] = useState<string | undefined>();
 
+    const closePreview = () => {
+        if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
+        setPreviewUrl(null);
+    };
+
     const handlePreview = async (index: number) => {
         const op = unwrapOp(operations[index]);
         if (!hasFileKey(op) || !op.file_key) return;
+
+        // Prefer the drafted title over the raw file name for the preview header.
+        // If this is a content-only op (no title), look for a sibling metadata op
+        // for the same material that carries the new title.
+        const siblingTitle = !(op as any).title && op.op === "edit_material"
+            ? operations.map(unwrapOp).find(
+                (o) => o.op === "edit_material" && o.material_id === op.material_id && !(o as any).file_key
+              ) as any
+            : null;
+        const displayName = (op as any).title || siblingTitle?.title || op.file_name || undefined;
+        const isQcm = (op as any).file_mime_type === "application/vnd.wikint.qcm+json";
+
+        if (isQcm) {
+            const qcmDraft = (op as any).metadata?.qcm_draft;
+            if (qcmDraft) {
+                const blob = new Blob([JSON.stringify(qcmDraft)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                setPreviewUrl(url);
+                setPreviewName(displayName);
+                setPreviewMime("application/vnd.wikint.qcm+json");
+            }
+            return;
+        }
 
         try {
             const res = await apiFetch<{ url: string }>(`/upload/preview?file_key=${encodeURIComponent(op.file_key)}`);
             if (res.url) {
                 setPreviewUrl(res.url);
-                setPreviewName(op.file_name || undefined);
+                setPreviewName(displayName);
                 setPreviewMime(op.file_mime_type || undefined);
             }
         } catch (e) {
@@ -378,7 +430,7 @@ export function ReviewDrawer() {
                     url={previewUrl}
                     fileName={previewName}
                     mimeType={previewMime}
-                    onClose={() => setPreviewUrl(null)}
+                    onClose={closePreview}
                 />
             )}
             <StagedItemEditDialog index={editingIndex} onClose={() => setEditingIndex(null)} />
