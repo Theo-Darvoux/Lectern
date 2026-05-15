@@ -27,6 +27,7 @@ interface AuthConfig {
     dpo_email: string | null;
     dpo_address: string | null;
     data_transfers: string | null;
+    legal_version: string | null;
 }
 
 interface BrandingConfigTabProps {
@@ -58,6 +59,7 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
             dpo_email: config.dpo_email,
             dpo_address: config.dpo_address,
             data_transfers: config.data_transfers,
+            legal_version: config.legal_version,
         });
         setIsBrandingModified(false);
     }, [config]);
@@ -85,6 +87,7 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
             dpo_email: config.dpo_email,
             dpo_address: config.dpo_address,
             data_transfers: config.data_transfers,
+            legal_version: config.legal_version,
         });
         setIsBrandingModified(false);
         // Revert global config preview
@@ -360,6 +363,19 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
                             value={brandingForm.data_transfers || ""}
                             onChange={(e) => {
                                 setBrandingForm(prev => ({ ...prev, data_transfers: e.target.value }));
+                                setIsBrandingModified(true);
+                            }}
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label htmlFor="legal_version">{t("legal.legalVersion")}</Label>
+                        <Input
+                            id="legal_version"
+                            placeholder={t("legal.placeholders.legalVersion")}
+                            value={brandingForm.legal_version || ""}
+                            onChange={(e) => {
+                                setBrandingForm(prev => ({ ...prev, legal_version: e.target.value }));
                                 setIsBrandingModified(true);
                             }}
                         />

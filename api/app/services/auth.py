@@ -128,6 +128,7 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "dpo_email": settings.dpo_email,
             "dpo_address": settings.dpo_address,
             "data_transfers": settings.data_transfers,
+            "legal_version": settings.legal_version,
             "domains": _FALLBACK_DOMAINS,
         }
     else:
@@ -268,6 +269,9 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "data_transfers": config_row.data_transfers
             if config_row.data_transfers is not None
             else settings.data_transfers,
+            "legal_version": config_row.legal_version
+            if config_row.legal_version is not None
+            else settings.legal_version,
             "domains": domains if domains else _FALLBACK_DOMAINS,
         }
 

@@ -102,7 +102,7 @@
   },
   "Privacy": {
     "title": "Privacy Policy of WikINT",
-    "version": "Version 1.0 — Effective as of {date}",
+    "version": "Version {version} : Effective as of {date}",
     "sections": {
       "controller": {
         "title": "Data Controller",
@@ -1153,6 +1153,7 @@
           "dpoEmail": "DPO Email",
           "dpoAddress": "DPO Address",
           "dataTransfers": "Data Transfers (GDPR)",
+          "legalVersion": "Documents version",
           "placeholders": {
             "legalName": "Legal Entity Name",
             "contactEmail": "contact@example.com",
@@ -1160,7 +1161,8 @@
             "legalSiret": "SIRET or equivalent",
             "dpoEmail": "dpo@example.com",
             "dpoAddress": "DPO physical address (if different)",
-            "dataTransfers": "Description of data transfers outside EU"
+            "dataTransfers": "Description of data transfers outside EU",
+            "legalVersion": "e.g. 1.0"
           }
         },
         "save": "Save Branding Changes",
@@ -1897,7 +1899,7 @@
   },
   "Terms": {
     "title": "WIKINT TERMS OF USE",
-    "version": "Version 1.0 — Effective {date}",
+    "version": "Version {version} — Effective {date}",
     "sections": {
       "presentation": {
         "title": "Service Presentation",
@@ -1908,7 +1910,7 @@
         "text": "Access to WikINT is restricted to individuals with a valid academic email address issued by a partner institution. Registration constitutes acceptance of these terms of use. Each user is responsible for the confidentiality of their login credentials."
       },
       "content": {
-        "title": "User-Contributed Content — License",
+        "title": "User-Contributed Content : License",
         "text1": "By depositing materials on WikINT (documents, files, media, comments, annotations), you retain all your copyrights to these contents, in accordance with articles L111-1 and L121-1 of the French Intellectual Property Code. The moral right to your work, inalienable and imprescriptible under French law, cannot be transferred.",
         "text2": "By depositing content, you grant {legalName}, for the legal duration of copyright protection as defined by article L123-1 of the Intellectual Property Code, a non-exclusive, worldwide, free, and non-transferable license to third parties, covering the following economic rights and within the limits below:",
         "scope": "Scope: reproduction, representation, making available, hosting, and distribution of the contributed content.",

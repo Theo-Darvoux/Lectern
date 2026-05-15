@@ -102,7 +102,7 @@
   },
   "Privacy": {
     "title": "Politique de Confidentialité de WikINT",
-    "version": "Version 1.0 — Entrée en vigueur le {date}",
+    "version": "Version {version} : Entrée en vigueur le {date}",
     "sections": {
       "controller": {
         "title": "Responsable du traitement",
@@ -1153,6 +1153,7 @@
           "dpoEmail": "Email du DPO",
           "dpoAddress": "Adresse du DPO",
           "dataTransfers": "Transferts de données (RGPD)",
+          "legalVersion": "Version des documents",
           "placeholders": {
             "legalName": "Nom de l'entité légale",
             "contactEmail": "contact@example.com",
@@ -1160,7 +1161,8 @@
             "legalSiret": "SIRET ou équivalent",
             "dpoEmail": "dpo@example.com",
             "dpoAddress": "Adresse physique du DPO (si différente)",
-            "dataTransfers": "Description des transferts de données hors UE"
+            "dataTransfers": "Description des transferts de données hors UE",
+            "legalVersion": "ex: 1.0"
           }
         },
         "save": "Enregistrer les modifications",
@@ -1897,7 +1899,7 @@
   },
   "Terms": {
     "title": "TERMES D'UTILISATION DE WIKINT",
-    "version": "Version 1.0 — Entrée en vigueur le {date}",
+    "version": "Version {version} : Entrée en vigueur le {date}",
     "sections": {
       "presentation": {
         "title": "Présentation du service",
@@ -1908,7 +1910,7 @@
         "text": "L'accès à WikINT est réservé aux personnes disposant d'une adresse email académique valide délivrée par un établissement partenaire. L'inscription vaut acceptation des présents termes d'utilisation. Chaque utilisateur est responsable de la confidentialité de ses identifiants de connexion."
       },
       "content": {
-        "title": "Contenu contribué par les utilisateurs — Licence d'utilisation",
+        "title": "Contenu contribué par les utilisateurs : Licence d'utilisation",
         "text1": "En déposant des matériels sur WikINT (documents, fichiers, médias, commentaires, annotations), vous conservez l'intégralité de vos droits d'auteur sur ces contenus, conformément aux articles L111-1 et L121-1 du Code de la Propriété Intellectuelle. Le droit moral sur votre œuvre, inaliénable et imprescriptible en droit français, ne saurait faire l'objet d'aucun transfert.",
         "text2": "En déposant un contenu, vous accordez à {legalName}, pour la durée légale de protection des droits d'auteur telle que définie par l'article L123-1 du Code de la Propriété Intellectuelle, une licence non exclusive, mondiale, gratuite et non transférable à des tiers, portant sur les droits patrimoniaux suivants et dans les limites ci-après :",
         "scope": "Étendue : reproduction, représentation, mise à disposition, hébergement et distribution du contenu contribué.",

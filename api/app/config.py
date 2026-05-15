@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     data_transfers: str | None = (
         "Vos données sont hébergées et traitées exclusivement au sein de l'Union européenne. Aucun transfert vers un pays tiers n'est effectué."
     )
+    legal_version: str = "1.0"
 
     database_url: str = "postgresql+asyncpg://wikint:wikint@localhost:5432/wikint"
 

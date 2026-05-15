@@ -508,6 +508,7 @@ class AuthConfigPatch(BaseModel):
     dpo_email: str | None = None
     dpo_address: str | None = None
     data_transfers: str | None = None
+    legal_version: str | None = None
 
 
 class DomainCreate(BaseModel):

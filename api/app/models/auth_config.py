@@ -80,6 +80,7 @@ class AuthConfig(UUIDMixin, Base):
     dpo_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     dpo_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     data_transfers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    legal_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

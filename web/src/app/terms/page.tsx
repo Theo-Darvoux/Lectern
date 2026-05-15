@@ -21,7 +21,10 @@ export default function TermsPage() {
             <header className="space-y-2 border-b pb-6">
                 <h1 className="text-3xl font-bold tracking-tight">{t("title")}</h1>
                 <p className="text-sm text-muted-foreground">
-                    {t("version", { date: configValues.date })}
+                    {t("version", { 
+                        version: config.legal_version || "1.0",
+                        date: configValues.date 
+                    })}
                 </p>
             </header>
 

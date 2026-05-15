@@ -76,6 +76,7 @@ async def get_auth_methods(
         "dpo_email": auth_config.get("dpo_email"),
         "dpo_address": auth_config.get("dpo_address"),
         "data_transfers": auth_config.get("data_transfers"),
+        "legal_version": auth_config.get("legal_version"),
     }
 
 
