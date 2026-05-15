@@ -89,6 +89,7 @@ export default function PrivacyPage() {
                             <li>{t("sections.rights.items.access")}</li>
                             <li>{t("sections.rights.items.erasure")}</li>
                             <li>{t("sections.rights.items.restriction")}</li>
+                            <li>{t("sections.rights.items.opposition")}</li>
                             <li>{t("sections.rights.items.portability")}</li>
                         </ul>
                         <p>{t("sections.rights.exercise", configValues)}</p>
