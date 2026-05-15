@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
     FileText, MessageSquare, Info, Eye, ThumbsUp,
     FileImage, FileVideo, FileAudio, FileArchive, FileSpreadsheet, FileCode, File, Lightbulb, ClipboardCheck, Video,
-    Paperclip
+    Paperclip, ListChecks
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
@@ -22,6 +22,7 @@ const TYPE_COLORS: Record<string, string> = {
     review: "bg-purple-100 text-purple-800",
     discussion: "bg-pink-100 text-pink-800",
     video: "bg-red-100 text-red-800",
+    qcm: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
     other: "bg-gray-100 text-gray-800",
 };
 
@@ -34,11 +35,13 @@ export const TYPE_ICONS: Record<string, React.ElementType> = {
     review: ClipboardCheck,
     discussion: MessageSquare,
     video: Video,
+    qcm: ListChecks,
     other: File,
     document: FileText,
 };
 
 export const EXT_ICONS: Record<string, React.ElementType> = {
+    qcm: ListChecks,
     pdf: FileText,
     doc: FileText,
     docx: FileText,
@@ -157,6 +160,8 @@ export function MaterialLineItem({
         const ext = getFileExtension(fileName);
         if (ext && EXT_ICONS[ext]) {
             Icon = EXT_ICONS[ext];
+        } else if (mimeType === "application/vnd.wikint.qcm+json") {
+            Icon = ListChecks;
         } else if (mimeType && mimeType.includes("pdf")) {
             Icon = FileText;
         }

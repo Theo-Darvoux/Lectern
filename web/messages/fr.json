@@ -594,6 +594,7 @@
     "discussion": "Discussion",
     "video": "Vidéo",
     "other": "Autre",
+    "qcm": "QCM",
     "folder": "Dossier",
     "file": "Fichier",
     "statusOpen": "statusOpen",
@@ -1931,6 +1932,54 @@
         "title": "Droit applicable et juridiction compétente",
         "text": "Les présents termes sont régis par le droit français. En cas de litige, et à défaut de résolution amiable, les tribunaux compétents seront ceux du ressort du siège social de {legalName}."
       }
+    }
+  },
+  "QCM": {
+    "createQCM": "Créer un QCM",
+    "importFile": "Importer un fichier",
+    "newContent": "Nouveau contenu",
+    "editor": {
+      "title": "Titre du QCM",
+      "addChapter": "Ajouter un chapitre",
+      "addQuestion": "Ajouter une question",
+      "addAnswer": "Ajouter une réponse",
+      "chapterTitle": "Titre du chapitre",
+      "questionText": "Texte de la question",
+      "answerText": "Texte de la réponse",
+      "explanation": "Explication (optionnelle)",
+      "correct": "Correcte",
+      "preview": "Aperçu",
+      "importMoodle": "Importer depuis Moodle XML",
+      "importMoodleConfirm": "Remplacer le contenu actuel par l'import Moodle ?",
+      "submit": "Soumettre la PR",
+      "publish": "Publier",
+      "submitting": "Envoi en cours...",
+      "editQCM": "Modifier le QCM",
+      "deleteChapter": "Supprimer le chapitre",
+      "deleteQuestion": "Supprimer la question",
+      "deleteAnswer": "Supprimer la réponse",
+      "maxAnswers": "Maximum 4 réponses par question",
+      "maxQuestions": "Maximum 100 questions",
+      "maxChapters": "Maximum 20 chapitres"
+    },
+    "viewer": {
+      "revealAll": "Révéler toutes les réponses",
+      "hideAll": "Masquer les réponses",
+      "score": "Score",
+      "chapter": "Chapitre",
+      "question": "Question",
+      "questions": "Questions",
+      "explanation": "Explication",
+      "noChapters": "Ce QCM ne contient pas de chapitres.",
+      "correct": "Correct",
+      "incorrect": "Incorrect",
+      "validate": "Valider",
+      "reveal": "Révéler",
+      "previous": "Précédent",
+      "next": "Suivant",
+      "finishQcm": "Terminer le QCM",
+      "results": "Résultats",
+      "retry": "Réessayer"
     }
   }
 }

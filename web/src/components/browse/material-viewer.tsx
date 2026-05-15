@@ -131,6 +131,15 @@ const GenericViewer = dynamic(
   },
 );
 
+const QCMViewer = dynamic(
+  () =>
+    import("@/components/viewers/qcm-viewer").then((mod) => mod.QCMViewer),
+  {
+    loading: () => <Skeleton className="h-full w-full rounded-none" />,
+    ssr: false,
+  },
+);
+
 
 import { SharedSidebar } from "@/components/sidebar/shared-sidebar";
 import { ViewerFab } from "@/components/browse/viewer-fab";
@@ -228,7 +237,7 @@ export function MaterialViewer({
 
   const annotationsData = useAnnotations(materialId);
   const { createAnnotation, threads } = annotationsData;
-  const { downloadMaterial, isDownloading } = useDownload();
+  const { downloadMaterial, downloadQcmAsXml, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId,
@@ -290,7 +299,7 @@ export function MaterialViewer({
   return (
     <AnnotationsContext.Provider value={annotationsData}>
       <div className="flex h-full w-full overflow-hidden gap-0">
-        <div className="flex-1 flex flex-col min-w-0 min-h-0 p-2 sm:p-4 md:p-6 gap-3">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 p-2 max-sm:pb-20 sm:p-4 md:p-6 gap-3">
           {/* Breadcrumbs */}
           <div>
             <Breadcrumbs items={breadcrumbs} linkLast={true} />
@@ -368,7 +377,7 @@ export function MaterialViewer({
                         variant="outline"
                         size="icon"
                         className="h-8 w-8 shrink-0"
-                        onClick={() => downloadMaterial(materialId)}
+                        onClick={() => viewerType === "qcm" ? downloadQcmAsXml(materialId) : downloadMaterial(materialId)}
                         disabled={isDownloading}
                         title={t("downloadDocument")}
                       >
@@ -469,6 +478,9 @@ export function MaterialViewer({
             )}
             {viewerType === "djvu" && (
               <DjvuViewer fileKey={fileKey} materialId={materialId} />
+            )}
+            {viewerType === "qcm" && (
+              <QCMViewer fileKey={fileKey} materialId={materialId} />
             )}
             {viewerType === "generic" && (
               <GenericViewer

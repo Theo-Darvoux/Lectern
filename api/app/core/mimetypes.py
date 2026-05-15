@@ -176,6 +176,8 @@ ALLOWED_EXTENSIONS: Final[frozenset[str]] = frozenset(
         ".s",
         ".wat",
         ".wasm",
+        # WikINT QCM
+        ".qcm",
     }
 )
 
@@ -209,6 +211,7 @@ EXTENSION_MAPPING: Final[dict[str, list[str]]] = {
     ".ods": ["application/vnd.oasis.opendocument.spreadsheet"],
     ".odp": ["application/vnd.oasis.opendocument.presentation"],
     ".tex": ["application/x-tex", "text/x-tex"],
+    ".qcm": ["application/vnd.wikint.qcm+json"],
 }
 
 # Reverse mapping: MIME type -> canonical extension
@@ -238,6 +241,7 @@ MIME_TO_EXTENSION: Final[dict[str, str]] = {
     "application/vnd.oasis.opendocument.text": ".odt",
     "application/vnd.oasis.opendocument.spreadsheet": ".ods",
     "application/vnd.oasis.opendocument.presentation": ".odp",
+    "application/vnd.wikint.qcm+json": ".qcm",
 }
 
 # MIME types safe for gzip with Content-Encoding header
@@ -277,7 +281,7 @@ OLE2_MIME_TYPES: Final[frozenset[str]] = frozenset(
 # Includes both binary formats and common text/code types.
 ALLOWED_MIME_TYPES: Final[frozenset[str]] = frozenset(
     {
-        # Flattened from EXTENSION_MAPPING
+        # Flattened from EXTENSION_MAPPING (includes application/vnd.wikint.qcm+json)
         *[mime for mimes in EXTENSION_MAPPING.values() for mime in mimes],
         # Plain text (catch-all for many code files)
         "text/plain",

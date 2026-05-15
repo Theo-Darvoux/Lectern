@@ -31,6 +31,7 @@ from app.routers.notifications import router as notifications_router
 from app.routers.onlyoffice import router as onlyoffice_router
 from app.routers.pr_comments import router as pr_comments_router
 from app.routers.pull_requests import router as pull_requests_router
+from app.routers.qcm import router as qcm_router
 from app.routers.search import router as search_router
 from app.routers.tus import router as tus_router
 from app.routers.upload import router as upload_api_router
@@ -302,6 +303,7 @@ app.include_router(onlyoffice_router)
 app.include_router(tus_router)
 app.include_router(upload_api_router)
 app.include_router(home_router)
+app.include_router(qcm_router)
 app.include_router(users_router)
 
 if settings.is_dev:

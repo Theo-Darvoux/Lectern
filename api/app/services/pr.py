@@ -1268,19 +1268,23 @@ async def create_pull_request_service(
                     "They may have expired — try uploading again."
                 )
 
-        # Verify scan results via DB
-        stmt = select(Upload.final_key).where(
-            Upload.final_key.in_(list(keys_to_check)),
-            Upload.status == "clean",
-            Upload.user_id == current_user.id,
-        )
-        clean_keys = set(await db.scalars(stmt))
-        for key in keys_to_check:
-            if key not in clean_keys:
-                raise BadRequestError(
-                    "One or more files are still being processed or could not be verified. "
-                    "Please wait a moment and try again."
-                )
+        # Verify scan results via DB — only for user-uploaded files (uploads/ prefix).
+        # CAS-staged files (cas/ prefix) are programmatically generated and already
+        # verified at stage time; they have no Upload row.
+        upload_keys_to_check = {k for k in keys_to_check if k.startswith("uploads/")}
+        if upload_keys_to_check:
+            stmt = select(Upload.final_key).where(
+                Upload.final_key.in_(list(upload_keys_to_check)),
+                Upload.status == "clean",
+                Upload.user_id == current_user.id,
+            )
+            clean_keys = set(await db.scalars(stmt))
+            for key in upload_keys_to_check:
+                if key not in clean_keys:
+                    raise BadRequestError(
+                        "One or more files are still being processed or could not be verified. "
+                        "Please wait a moment and try again."
+                    )
 
     # Serialize operations to list[dict]
     ops_payload = [op.model_dump(mode="json") for op in data.operations]

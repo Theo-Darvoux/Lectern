@@ -1,8 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, apiFetchBlob } from "@/lib/api-client";
 import { toast } from "sonner";
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
 
 export function useDownload() {
     const [isDownloading, setIsDownloading] = useState(false);
@@ -16,13 +27,8 @@ export function useDownload() {
 
             const { url, filename } = await apiFetch<{ url: string; filename?: string }>(endpoint);
 
-            // Trigger the download in-place by creating a hidden anchor element.
-            // Since the backend returns a URL with ResponseContentDisposition set to attachment, 
-            // the browser will stay on the current page and initiate the download.
             const link = document.createElement("a");
             link.href = url;
-            // Explicitly setting the download attribute with the filename ensures 
-            // browsers prioritize the human-readable name over the obfuscated S3 hash.
             link.setAttribute("download", filename || "");
             document.body.appendChild(link);
             link.click();
@@ -35,5 +41,18 @@ export function useDownload() {
         }
     };
 
-    return { downloadMaterial, isDownloading };
+    const downloadQcmAsXml = async (materialId: string) => {
+        setIsDownloading(true);
+        try {
+            const blob = await apiFetchBlob(`/qcm/export-moodle/${materialId}`);
+            triggerBlobDownload(blob, `qcm-${materialId}.xml`);
+        } catch (error) {
+            console.error("QCM export failed:", error);
+            toast.error("Failed to export QCM. Please try again.");
+        } finally {
+            setIsDownloading(false);
+        }
+    };
+
+    return { downloadMaterial, downloadQcmAsXml, isDownloading };
 }

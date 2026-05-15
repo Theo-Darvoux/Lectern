@@ -45,6 +45,8 @@ export const ACCEPTED_FILE_TYPES = [
     ".dart", ".sql", ".graphql", ".gql",
     // Config / Build
     ".tf", ".hcl", ".nix", ".proto", ".diff", ".patch", ".asm", ".s",
+    // WikINT QCM
+    ".qcm",
 ].join(",");
 
 export function formatFileSize(bytes: number): string {
@@ -97,6 +99,7 @@ export const EXT_BADGE_COLORS: Record<string, string> = {
     html: "bg-orange-100 text-orange-800 dark:bg-orange-950/40 dark:text-orange-300",
     css: "bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300",
     json: "bg-zinc-100 text-zinc-800 dark:bg-zinc-800/40 dark:text-zinc-300",
+    qcm: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
 };
 
 const DEFAULT_BADGE_COLOR = "bg-gray-100 text-gray-800 dark:bg-gray-800/40 dark:text-gray-300";
@@ -367,6 +370,9 @@ const EXT_TO_VIEWER: Record<string, string> = {
  */
 export function getViewerType(mimeType: string, fileName: string): string {
     const ext = getFileExtension(fileName);
+
+    // QCM check before other lookups
+    if (mimeType === "application/vnd.wikint.qcm+json" || ext === "qcm") return "qcm";
 
     // 1. Exact MIME match
     if (MIME_TO_VIEWER[mimeType]) return MIME_TO_VIEWER[mimeType];

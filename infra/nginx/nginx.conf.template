@@ -14,6 +14,13 @@ http {
         ''      close;
     }
 
+    map $request_uri $loggable {
+        /api/health 0;
+        default 1;
+    }
+
+    access_log /var/log/nginx/access.log combined if=$loggable;
+
     sendfile on;
     tcp_nopush on;
     keepalive_timeout 65;

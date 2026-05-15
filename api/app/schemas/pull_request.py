@@ -22,6 +22,7 @@ ALLOWED_MATERIAL_TYPES = {
     "video",
     "document",
     "other",
+    "qcm",
 }
 ALLOWED_DIRECTORY_TYPES = {"folder", "course", "year", "semester", "other"}
 MAX_TAGS = 20

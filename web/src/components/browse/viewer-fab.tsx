@@ -145,7 +145,7 @@ export function ViewerFab({
   const isRestricted = isPreview || isDraft;
 
   const { openSidebar, updateSidebarData, sidebarTarget } = useUIStore();
-  const { downloadMaterial, isDownloading } = useDownload();
+  const { downloadMaterial, downloadQcmAsXml, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId,
@@ -251,7 +251,11 @@ export function ViewerFab({
             disabled={isDownloading}
             onClick={() => {
               close();
-              downloadMaterial(materialId);
+              if (viewerType === "qcm") {
+                downloadQcmAsXml(materialId);
+              } else {
+                downloadMaterial(materialId);
+              }
             }}
           />
 
@@ -344,14 +348,22 @@ export function ViewerFab({
           />
 
           {/* ── Edit (Metadata & Content) ── */}
-          <ActionCell
-            icon={<Edit className="h-5 w-5" />}
-            label={t("edit")}
-            onClick={() => {
-              close();
-              setEditDialogOpen(true);
-            }}
-          />
+          {viewerType === "qcm" ? (
+            <ActionCell
+              icon={<Edit className="h-5 w-5" />}
+              label={t("edit")}
+              href={`/qcm/${materialId}/edit`}
+            />
+          ) : (
+            <ActionCell
+              icon={<Edit className="h-5 w-5" />}
+              label={t("edit")}
+              onClick={() => {
+                close();
+                setEditDialogOpen(true);
+              }}
+            />
+          )}
 
           {/* ── Like ── */}
           <ActionCell

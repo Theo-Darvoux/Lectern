@@ -5,6 +5,7 @@ import {
   MoreVertical,
   Download,
   Edit2,
+  PencilLine,
   Link as LinkIcon,
   Paperclip,
   Printer,
@@ -15,6 +16,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -168,7 +170,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
     }
   };
 
-  const { downloadMaterial, isDownloading } = useDownload();
+  const { downloadMaterial, downloadQcmAsXml, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId: item.id,
@@ -199,6 +201,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
     handleDirectDelete,
     handleShare,
     downloadMaterial,
+    downloadQcmAsXml,
     isDownloading,
     print,
     isPrinting,
@@ -210,16 +213,19 @@ function useItemActions(item: ItemData, itemPath?: string) {
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
+  const router = useRouter();
   const context = useContext(ActionsContext);
   if (!context) return null;
   const { item, actions } = context;
   const { t } = actions;
 
+
+
   const Item = isContextMenu ? ContextMenuItem : DropdownMenuItem;
   const Separator = isContextMenu ? ContextMenuSeparator : DropdownMenuSeparator;
   const Label = isContextMenu ? ContextMenuLabel : DropdownMenuLabel;
 
-  const { downloadMaterial, isDownloading, print, isPrinting, canPrint } = actions;
+  const { downloadMaterial, downloadQcmAsXml, isDownloading, print, isPrinting, canPrint } = actions;
 
   const isStaged = !!item.staged;
   const isCreated = item.staged === "created";
@@ -233,7 +239,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
       {actions.isMaterial && !actions.isRestricted && (
         <>
           <Item
-            onClick={() => downloadMaterial(item.id)}
+            onClick={() => actions.viewerType === "qcm" ? downloadQcmAsXml(item.id) : downloadMaterial(item.id)}
             disabled={isDownloading}
             className="cursor-pointer"
           >
@@ -262,10 +268,17 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
       {!actions.isRestricted && (
         <>
-          <Item onClick={() => actions.setEditDialogOpen(true)} className="cursor-pointer">
-            <Edit2 className="mr-2 h-4 w-4" />
-            <span>{t("edit")}</span>
-          </Item>
+          {actions.viewerType === "qcm" ? (
+            <Item onClick={() => router.push(`/qcm/${item.id}/edit`)} className="cursor-pointer">
+              <PencilLine className="mr-2 h-4 w-4" />
+              <span>{t("edit")}</span>
+            </Item>
+          ) : (
+            <Item onClick={() => actions.setEditDialogOpen(true)} className="cursor-pointer">
+              <Edit2 className="mr-2 h-4 w-4" />
+              <span>{t("edit")}</span>
+            </Item>
+          )}
           <Item onClick={actions.handleShare} className="cursor-pointer">
             <LinkIcon className="mr-2 h-4 w-4" />
             <span>{t("copyLink")}</span>

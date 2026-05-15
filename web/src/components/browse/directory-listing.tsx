@@ -38,7 +38,15 @@ import {
   Loader2,
   Send,
   Info,
+  ChevronDown,
+  LayoutList,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { useStagingStore } from "@/lib/staging-store";
 import { useDropZoneStore } from "@/components/pr/global-drop-zone";
@@ -71,6 +79,7 @@ export function DirectoryListing({
 }: DirectoryListingProps) {
   const t = useTranslations("Browse");
   const tAutoTitle = useTranslations("AutoTitle");
+  const tQCM = useTranslations("QCM");
   const router = useRouter();
   const pathname = usePathname();
   const triggerBrowseRefresh = useBrowseRefreshStore(
@@ -471,16 +480,36 @@ export function DirectoryListing({
                   </div>
                 )}
 
-                <Button
-                  key="upload-btn"
-                  size="sm"
-                  variant="outline"
-                  className="gap-2 shadow-xs"
-                  onClick={() => setUploadOpen(true)}
-                >
-                  <Upload className="w-4 h-4" />
-                  <span>{t("upload")}</span>
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      key="create-btn"
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5 shadow-xs"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>{tQCM("newContent")}</span>
+                      <ChevronDown className="w-3 h-3 ml-0.5 opacity-60" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuItem onClick={() => setUploadOpen(true)}>
+                      <Upload className="w-4 h-4 mr-2" />
+                      {tQCM("importFile")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        const params = new URLSearchParams();
+                        if (dirId) params.set("directoryId", dirId);
+                        router.push(`/qcm/new?${params.toString()}`);
+                      }}
+                    >
+                      <LayoutList className="w-4 h-4 mr-2" />
+                      {tQCM("createQCM")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <Button
                   key="new-folder-btn"
                   size="sm"

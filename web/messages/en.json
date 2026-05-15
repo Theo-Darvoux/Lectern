@@ -594,6 +594,7 @@
     "discussion": "Discussion",
     "video": "Video",
     "other": "Other",
+    "qcm": "QCM",
     "folder": "Folder",
     "file": "File",
     "statusOpen": "statusOpen",
@@ -1931,6 +1932,54 @@
         "title": "Applicable Law and Jurisdiction",
         "text": "These terms are governed by French law. In the event of a dispute, and failing an amicable resolution, the competent courts shall be those within the jurisdiction of the registered office of {legalName}."
       }
+    }
+  },
+  "QCM": {
+    "createQCM": "Create a QCM",
+    "importFile": "Import a file",
+    "newContent": "New content",
+    "editor": {
+      "title": "QCM title",
+      "addChapter": "Add chapter",
+      "addQuestion": "Add question",
+      "addAnswer": "Add answer",
+      "chapterTitle": "Chapter title",
+      "questionText": "Question text",
+      "answerText": "Answer text",
+      "explanation": "Explanation (optional)",
+      "correct": "Correct",
+      "preview": "Preview",
+      "importMoodle": "Import from Moodle XML",
+      "importMoodleConfirm": "Replace current content with Moodle import?",
+      "submit": "Submit PR",
+      "publish": "Publish",
+      "submitting": "Submitting...",
+      "editQCM": "Edit QCM",
+      "deleteChapter": "Delete chapter",
+      "deleteQuestion": "Delete question",
+      "deleteAnswer": "Delete answer",
+      "maxAnswers": "Maximum 4 answers per question",
+      "maxQuestions": "Maximum 100 questions",
+      "maxChapters": "Maximum 20 chapters"
+    },
+    "viewer": {
+      "revealAll": "Reveal all answers",
+      "hideAll": "Hide answers",
+      "score": "Score",
+      "chapter": "Chapter",
+      "question": "Question",
+      "questions": "Questions",
+      "explanation": "Explanation",
+      "noChapters": "This QCM has no chapters.",
+      "correct": "Correct",
+      "incorrect": "Incorrect",
+      "validate": "Validate",
+      "reveal": "Reveal",
+      "previous": "Previous",
+      "next": "Next",
+      "finishQcm": "Finish QCM",
+      "results": "Results",
+      "retry": "Retry"
     }
   }
 }

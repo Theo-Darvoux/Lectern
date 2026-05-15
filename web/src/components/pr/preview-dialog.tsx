@@ -19,11 +19,24 @@ import {
     Loader2,
     Download,
     ExternalLink,
+    ListChecks,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getFileExtension } from "@/lib/file-utils";
 import { useTranslations } from "next-intl";
+
+const QCMViewerPreview = dynamic(
+    () => import("@/components/viewers/qcm-viewer").then((m) => m.QCMViewer),
+    {
+        ssr: false,
+        loading: () => (
+            <div className="flex h-full items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+        ),
+    },
+);
 
 // Loaded client-only: pdfjs calls Promise.withResolvers() at module-eval time,
 // which doesn't exist in the Node.js version used by Next.js SSR.
@@ -42,6 +55,7 @@ const PdfPreview = dynamic(
 /* ── Viewer type resolution ────────────────────────────────────────────────── */
 
 const MIME_TO_VIEWER: Record<string, string> = {
+    "application/vnd.wikint.qcm+json": "qcm",
     "application/pdf": "pdf",
     "text/markdown": "markdown",
     "text/x-markdown": "markdown",
@@ -64,6 +78,7 @@ const MIME_TO_VIEWER: Record<string, string> = {
 };
 
 const EXT_TO_VIEWER: Record<string, string> = {
+    qcm: "qcm",
     pdf: "pdf",
     md: "markdown",
     markdown: "markdown",
@@ -189,6 +204,7 @@ const VIEWER_ICONS: Record<string, React.ElementType> = {
     markdown: Code2,
     code: Code2,
     csv: Code2,
+    qcm: ListChecks,
     generic: Eye,
 };
 
@@ -200,6 +216,7 @@ const VIEWER_ICON_COLORS: Record<string, string> = {
     markdown: "text-green-600",
     code: "text-amber-500",
     csv: "text-teal-500",
+    qcm: "text-violet-500",
     generic: "text-muted-foreground",
 };
 
@@ -220,7 +237,7 @@ export function PreviewDialog({
     const Icon = VIEWER_ICONS[viewerType] ?? Eye;
     const iconColor = VIEWER_ICON_COLORS[viewerType] ?? "";
 
-    const isLarge = viewerType === "pdf" || viewerType === "code" || viewerType === "markdown" || viewerType === "csv";
+    const isLarge = viewerType === "pdf" || viewerType === "code" || viewerType === "markdown" || viewerType === "csv" || viewerType === "qcm";
 
     return (
         <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -262,6 +279,10 @@ export function PreviewDialog({
 
                     {(viewerType === "markdown" || viewerType === "code" || viewerType === "csv") && (
                         <TextPreview key={url} url={url} type={viewerType} />
+                    )}
+
+                    {viewerType === "qcm" && (
+                        <QCMViewerPreview directUrl={url} />
                     )}
 
                     {viewerType === "generic" && (

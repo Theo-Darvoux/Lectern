@@ -471,3 +471,12 @@
 .callout summary::marker {
     display: none;
 }
+
+/* KaTeX display math must remain block-centered even inside Tailwind prose */
+.katex-display {
+    display: flex !important;
+    justify-content: center !important;
+    margin: 0.75em 0 !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+}

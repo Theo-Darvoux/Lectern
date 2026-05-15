@@ -29,5 +29,18 @@ describe("file-utils", () => {
     it("falls back to extension if mimetype is ambiguous", () => {
       expect(getViewerType("application/octet-stream", "test.md")).toBe("markdown");
     });
+
+    it("returns qcm for QCM mime type", () => {
+      expect(getViewerType("application/vnd.wikint.qcm+json", "quiz.qcm")).toBe("qcm");
+    });
+
+    it("returns qcm for .qcm extension with octet-stream", () => {
+      expect(getViewerType("application/octet-stream", "quiz.qcm")).toBe("qcm");
+    });
+
+    it("returns qcm mime type before other checks", () => {
+      // Even with a generic filename, the mime type should win
+      expect(getViewerType("application/vnd.wikint.qcm+json", "data")).toBe("qcm");
+    });
   });
 });
