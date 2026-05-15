@@ -132,7 +132,7 @@
         "title": "Durée de conservation",
         "account": "Données de compte : conservées tant que votre compte est actif. En cas de suppression, les données personnelles sont effacées ou anonymisées sous 30 jours.",
         "content": "Contributions et contenus : les contributions aux matériels (PR, annotations) sont conservées de manière permanente pour maintenir l'intégrité de la base de connaissances, mais sont anonymisées si le compte auteur est supprimé.",
-        "logs": "Logs techniques : conservés 6 mois maximum."
+        "logs": "Logs techniques et données d'identification (adresses IP de création de contenu) : conservés pendant 1 an pour répondre à nos obligations légales en tant qu'hébergeur (Loi LCEN). Les autres logs de diagnostic sont conservés 6 mois."
       },
       "recipients": {
         "title": "Destinataires des données",
@@ -146,6 +146,7 @@
           "access": "Droit d'accès et de rectification ;",
           "erasure": "Droit à l'effacement (droit à l'oubli) ;",
           "restriction": "Droit à la limitation du traitement ;",
+          "opposition": "Droit d'opposition (pour les traitements fondés sur l'intérêt légitime) ;",
           "portability": "Droit à la portabilité de vos données (disponible via l'onglet paramètres)."
         },
         "exercise": "Pour exercer ces droits, vous pouvez nous contacter à l'adresse : {contactEmail}.",
@@ -1930,7 +1931,7 @@
       },
       "law": {
         "title": "Droit applicable et juridiction compétente",
-        "text": "Les présents termes sont régis par le droit français. En cas de litige, et à défaut de résolution amiable, les tribunaux compétents seront ceux du ressort du siège social de {legalName}."
+        "text": "Les présents termes sont régis par le droit français. En cas de litige, et à défaut de résolution amiable, les tribunaux français seront compétents. Conformément aux règles applicables aux consommateurs (article R631-3 du Code de la consommation), l'utilisateur pourra saisir à son choix : soit la juridiction du lieu du siège social de Club Code (MiNET), soit la juridiction du lieu où il demeurait au moment de l'acceptation de ces termes ou de la survenance du fait dommageable."
       }
     }
   },

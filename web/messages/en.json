@@ -132,7 +132,7 @@
         "title": "Retention Period",
         "account": "Account data: kept as long as your account is active. If deleted, personal data is erased or anonymized within 30 days.",
         "content": "Contributions and content: contributions to materials (PRs, annotations) are kept permanently to maintain the integrity of the knowledge base, but are anonymized if the author's account is deleted.",
-        "logs": "Technical logs: kept for a maximum of 6 months."
+        "logs": "Technical logs and identification data (content creation IP addresses): kept for 1 year to meet our legal obligations as a hosting provider (LCEN Law). Other diagnostic logs are kept for 6 months."
       },
       "recipients": {
         "title": "Data Recipients",
@@ -146,6 +146,7 @@
           "access": "Right of access and rectification;",
           "erasure": "Right to erasure (right to be forgotten);",
           "restriction": "Right to limitation of processing;",
+          "opposition": "Right to object (for processing based on legitimate interest);",
           "portability": "Right to data portability (available via the settings tab)."
         },
         "exercise": "To exercise these rights, contact us at: {contactEmail}.",
@@ -1930,7 +1931,7 @@
       },
       "law": {
         "title": "Applicable Law and Jurisdiction",
-        "text": "These terms are governed by French law. In the event of a dispute, and failing an amicable resolution, the competent courts shall be those within the jurisdiction of the registered office of {legalName}."
+        "text": "These terms are governed by French law. In the event of a dispute, and failing an amicable resolution, the French courts shall have jurisdiction. In accordance with the rules applicable to consumers (Article R631-3 of the French Consumer Code), the user may, at their choice, bring the matter before: either the jurisdiction of the place of Club Code's (MiNET) registered office, or the jurisdiction of the place where they resided at the time of acceptance of these terms or the occurrence of the harmful event."
       }
     }
   },
