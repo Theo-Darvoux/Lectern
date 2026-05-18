@@ -772,6 +772,7 @@ export function QCMEditor({
             variant="ghost"
             disabled={isSubmitting || isSavingDraft}
             onClick={() => window.history.back()}
+            className="max-sm:hidden"
           >
             Annuler
           </Button>
@@ -783,7 +784,7 @@ export function QCMEditor({
             onClick={() => setPreviewOpen(true)}
           >
             <MonitorPlay className="h-4 w-4" />
-            {t("preview")}
+            <span className="max-sm:hidden">{t("preview")}</span>
           </Button>
           {onSaveDraft && (
             <Button

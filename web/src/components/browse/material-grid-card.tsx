@@ -317,7 +317,7 @@ function MaterialGridCardImpl({
           {/* Action overlay on hover — uses translate instead of opacity so the
               animation runs on the compositor thread (zero paint cost during scroll). */}
           {!selectMode && (
-            <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-end gap-0.5 p-1.5 translate-y-full group-hover:translate-y-0 transition-transform duration-150 bg-black/40">
+            <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-end gap-0.5 p-1.5 translate-y-full group-hover:translate-y-0 has-[[data-state=open]]:translate-y-0 transition-transform duration-150 bg-black/40">
               {!isRestricted && (
                 <button
                   onClick={handleChat}
