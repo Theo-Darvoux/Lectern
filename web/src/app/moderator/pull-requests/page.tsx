@@ -12,7 +12,7 @@ import { toast } from "sonner";
 interface PRItem {
     id: string;
     title: string;
-    type: "new" | "update" | "delete";
+    type: "new" | "update" | "delete" | "batch" | "revert";
     status: "open" | "approved" | "rejected";
     created_at: string;
     author: {

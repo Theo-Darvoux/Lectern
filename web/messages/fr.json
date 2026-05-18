@@ -988,7 +988,9 @@
       "types": {
         "new": "Nouveau",
         "update": "Mise à jour",
-        "delete": "Suppression"
+        "delete": "Suppression",
+        "batch": "Lot",
+        "revert": "Annulation"
       }
     },
     "featured": {

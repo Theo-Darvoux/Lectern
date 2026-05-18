@@ -513,11 +513,15 @@ export function DirectoryListing({
                       className="gap-1.5 shadow-xs"
                     >
                       <Plus className="w-4 h-4" />
-                      <span>{tQCM("newContent")}</span>
-                      <ChevronDown className="w-3 h-3 ml-0.5 opacity-60" />
+                      <span className="hidden sm:inline">{tQCM("newContent")}</span>
+                      <ChevronDown className="w-3 h-3 sm:ml-0.5 opacity-60" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuItem onClick={() => setNewFolderOpen(true)}>
+                      <FolderPlus className="w-4 h-4 mr-2" />
+                      {t("newFolder")}
+                    </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => setUploadOpen(true)}>
                       <Upload className="w-4 h-4 mr-2" />
                       {tQCM("importFile")}
@@ -534,16 +538,6 @@ export function DirectoryListing({
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <Button
-                  key="new-folder-btn"
-                  size="sm"
-                  variant="outline"
-                  className="gap-2 shadow-xs"
-                onClick={() => setNewFolderOpen(true)}
-              >
-                <FolderPlus className="w-4 h-4" />
-                <span>{t("newFolder")}</span>
-              </Button>
             </div>
           </div>
         ) : (

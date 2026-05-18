@@ -4,7 +4,7 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { ArrowLeft, Loader2, AlertCircle, FileText, Image as ImageIcon, Video as VideoIcon, Music, Code2, Eye, Download, ExternalLink } from "lucide-react";
+import { ArrowLeft, Loader2, AlertCircle, FileText, Image as ImageIcon, Video as VideoIcon, Music, Code2, Eye, Download, ExternalLink, ListChecks } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/lib/api-client";
@@ -25,9 +25,22 @@ const PdfPreview = dynamic(
     },
 );
 
+const QCMViewerPreview = dynamic(
+    () => import("@/components/viewers/qcm-viewer").then((m) => m.QCMViewer),
+    {
+        ssr: false,
+        loading: () => (
+            <div className="flex h-full items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+        ),
+    },
+);
+
 /* ── Viewer type resolution (mirrors material-viewer.tsx) ──────────────────── */
 
 const MIME_TO_VIEWER: Record<string, string> = {
+    "application/vnd.wikint.qcm+json": "qcm",
     "application/pdf": "pdf",
     "text/markdown": "markdown",
     "text/x-markdown": "markdown",
@@ -50,6 +63,7 @@ const MIME_TO_VIEWER: Record<string, string> = {
 };
 
 const EXT_TO_VIEWER: Record<string, string> = {
+    qcm: "qcm",
     pdf: "pdf", md: "markdown", markdown: "markdown",
     png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", svg: "image",
     mp4: "video", webm: "video", mov: "video",
@@ -149,12 +163,12 @@ function GenericFallback({ url, fileName, mimeType }: { url: string; fileName: s
 
 const VIEWER_ICONS: Record<string, React.ElementType> = {
     pdf: FileText, image: ImageIcon, video: VideoIcon, audio: Music,
-    markdown: Code2, code: Code2, csv: Code2, generic: Eye,
+    markdown: Code2, code: Code2, csv: Code2, qcm: ListChecks, generic: Eye,
 };
 const VIEWER_ICON_COLORS: Record<string, string> = {
     pdf: "text-red-500", image: "text-blue-500", video: "text-purple-500",
     audio: "text-pink-500", markdown: "text-green-600", code: "text-amber-500",
-    csv: "text-teal-500", generic: "text-muted-foreground",
+    csv: "text-teal-500", qcm: "text-violet-500", generic: "text-muted-foreground",
 };
 
 /* ── Page ──────────────────────────────────────────────────────────────────── */
@@ -296,6 +310,9 @@ export default function PRPreviewPage({ params }: PageProps) {
                         )}
                         {(viewerType === "markdown" || viewerType === "code" || viewerType === "csv") && (
                             <TextPreview key={presignedUrl} url={presignedUrl} type={viewerType} />
+                        )}
+                        {viewerType === "qcm" && (
+                            <QCMViewerPreview directUrl={presignedUrl} />
                         )}
                         {viewerType === "generic" && (
                             <GenericFallback url={presignedUrl} fileName={fileName} mimeType={mimeType} />

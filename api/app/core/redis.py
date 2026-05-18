@@ -152,15 +152,15 @@ async def redis_semaphore(
         expires_at = now_ms + (expire * 1000)
 
         # Run Lua script: keys=[sem_key], args=[limit, expire_ms, holder_id, now_ms, expires_at]
-        res = await redis.eval(  # type: ignore[no-untyped-call, misc, arg-type]
+        res = await redis.eval(  # type: ignore[no-untyped-call, misc]
             acquire_script,
             1,
             sem_key,
-            limit,
-            expire * 1000,
+            str(limit),
+            str(expire * 1000),
             holder_id,
-            now_ms,
-            expires_at,  # type: ignore[arg-type]
+            str(now_ms),
+            str(expires_at),
         )
 
         if res == 1:

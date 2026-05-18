@@ -67,6 +67,62 @@ function extractPlaceholders(text: string): string[] {
   return Array.from(placeholders).sort();
 }
 
+function unwrapAssertions(node: Node): Node {
+  if (Node.isAsExpression(node) || Node.isTypeAssertion(node)) {
+    return unwrapAssertions(node.getExpression());
+  }
+  if (Node.isParenthesizedExpression(node)) {
+    return unwrapAssertions(node.getExpression());
+  }
+  return node;
+}
+
+function getPossibleStringValues(node: Node): string[] | null {
+  const unwrapped = unwrapAssertions(node);
+  if (Node.isStringLiteral(unwrapped) || Node.isNoSubstitutionTemplateLiteral(unwrapped)) {
+    return [unwrapped.getLiteralValue()];
+  }
+  
+  if (Node.isBinaryExpression(unwrapped)) {
+    const left = unwrapAssertions(unwrapped.getLeft());
+    const right = unwrapAssertions(unwrapped.getRight());
+    const op = unwrapped.getOperatorToken().getText();
+    if (op === "+") {
+      const leftVals = getPossibleStringValues(left);
+      const rightVals = getPossibleStringValuesFromType(right.getType());
+      if (leftVals && rightVals) {
+        const result: string[] = [];
+        for (const l of leftVals) {
+          for (const r of rightVals) {
+            result.push(l + r);
+          }
+        }
+        return result;
+      }
+    }
+  }
+
+  return getPossibleStringValuesFromType(unwrapped.getType());
+}
+
+function getPossibleStringValuesFromType(type: any): string[] | null {
+  if (type.isStringLiteral()) {
+    return [type.getLiteralValue()];
+  }
+  if (type.isUnion()) {
+    const values: string[] = [];
+    for (const subType of type.getUnionTypes()) {
+      if (subType.isStringLiteral()) {
+        values.push(subType.getLiteralValue());
+      } else {
+        return null;
+      }
+    }
+    return values;
+  }
+  return null;
+}
+
 const project = new Project({
   tsConfigFilePath: "tsconfig.json",
 });
@@ -166,11 +222,18 @@ for (const file of files) {
                             if (tArgs.length > 0) {
                                 const arg = tArgs[0];
                                 const line = child.getStartLineNumber();
-                                if (Node.isStringLiteral(arg) || Node.isNoSubstitutionTemplateLiteral(arg)) {
-                                    const subKey = arg.getLiteralValue();
+                                const unwrapped = unwrapAssertions(arg);
+                                const resolvedValues = getPossibleStringValues(unwrapped);
+                                
+                                if (Node.isStringLiteral(unwrapped) || Node.isNoSubstitutionTemplateLiteral(unwrapped)) {
+                                    const subKey = unwrapped.getLiteralValue();
                                     addUsedKey(namespace ? `${namespace}.${subKey}` : subKey, filePath, line);
-                                } else if (Node.isTemplateExpression(arg)) {
-                                    const head = arg.getHead().getLiteralText();
+                                } else if (resolvedValues && resolvedValues.length > 0) {
+                                    resolvedValues.forEach((val) => {
+                                        addUsedKey(namespace ? `${namespace}.${val}` : val, filePath, line);
+                                    });
+                                } else if (Node.isTemplateExpression(unwrapped)) {
+                                    const head = unwrapped.getHead().getLiteralText();
                                     protectNamespace(namespace ? `${namespace}.${head}` : head);
                                     dynamicUsages.push({ file: filePath, line: line, text: child.getText() });
                                 } else {
