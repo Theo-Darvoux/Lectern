@@ -165,14 +165,17 @@ async def test_thumbnail_pdf_cleans_temp_png_on_image_error(tmp_path: Path) -> N
     input_pdf = tmp_path / "in.pdf"
     input_pdf.write_bytes(b"%PDF-1.4 fake")
     output_webp = tmp_path / "out.webp"
-    temp_png = output_webp.with_suffix(".png")
+    actual_temp_png: Path | None = None
 
     # Ghostscript creates the temp_png file
     async def fake_gs(*args, **kwargs):
+        nonlocal actual_temp_png
+        output_arg = next(a for a in args if a.startswith("-sOutputFile="))
+        actual_temp_png = Path(output_arg.split("=", 1)[1])
         proc = MagicMock()
         proc.communicate = AsyncMock(return_value=(b"", b""))
         proc.returncode = 0
-        temp_png.write_bytes(b"fakepng")
+        actual_temp_png.write_bytes(b"fakepng")
         return proc
 
     with (
@@ -185,7 +188,10 @@ async def test_thumbnail_pdf_cleans_temp_png_on_image_error(tmp_path: Path) -> N
     ):
         await _thumbnail_pdf(input_pdf, output_webp, (320, 240), 80)
 
-    assert not temp_png.exists(), "temp_png must be cleaned up even after _thumbnail_image error"
+    assert actual_temp_png is not None
+    assert not actual_temp_png.exists(), (
+        "temp_png must be cleaned up even after _thumbnail_image error"
+    )
 
 
 @pytest.mark.asyncio
@@ -319,7 +325,11 @@ async def test_year_rollover_uses_ctx_session_factory() -> None:
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
-    mock_session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))))
+    mock_session.execute = AsyncMock(
+        return_value=MagicMock(
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        )
+    )
     mock_session.commit = AsyncMock()
 
     mock_factory = MagicMock(return_value=mock_session)
@@ -400,7 +410,9 @@ def test_worker_settings_use_resilient_redis_settings() -> None:
     for cls in (WorkerSettings, UploadFastWorkerSettings, UploadSlowWorkerSettings):
         rs = cls.redis_settings
         assert rs.conn_timeout == reference.conn_timeout, f"{cls.__name__} conn_timeout mismatch"
-        assert rs.retry_on_timeout == reference.retry_on_timeout, f"{cls.__name__} retry_on_timeout mismatch"
+        assert rs.retry_on_timeout == reference.retry_on_timeout, (
+            f"{cls.__name__} retry_on_timeout mismatch"
+        )
 
 
 def test_redis_client_has_retry_on_timeout() -> None:

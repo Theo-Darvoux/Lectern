@@ -1064,14 +1064,28 @@ export default function PRDetailPage({ params }: PRDetailPageProps) {
 
                     {/* Author + date */}
                     <div className="flex items-center gap-2 text-sm flex-wrap">
-                        <Avatar size="sm">
-                            <AvatarFallback className="text-[10px]">
-                                {initials}
-                            </AvatarFallback>
-                        </Avatar>
-                        <span className="font-medium">
-                            {pr.author?.display_name || tCommon("deletedAccount")}
-                        </span>
+                        {pr.author?.id ? (
+                            <Link href={`/profile/${pr.author.id}`}>
+                                <Avatar size="sm" className="hover:ring-2 hover:ring-primary/40 transition-all">
+                                    <AvatarFallback className="text-[10px]">
+                                        {initials}
+                                    </AvatarFallback>
+                                </Avatar>
+                            </Link>
+                        ) : (
+                            <Avatar size="sm">
+                                <AvatarFallback className="text-[10px]">
+                                    {initials}
+                                </AvatarFallback>
+                            </Avatar>
+                        )}
+                        {pr.author?.id ? (
+                            <Link href={`/profile/${pr.author.id}`} className="font-medium hover:underline">
+                                {pr.author.display_name}
+                            </Link>
+                        ) : (
+                            <span className="font-medium">{tCommon("deletedAccount")}</span>
+                        )}
                         <span className="text-muted-foreground">
                             {t("submitted", {
                                 time: formatDistanceToNow(new Date(pr.created_at), {

@@ -34,9 +34,7 @@ def upgrade() -> None:
         ),
     )
     # Existing clean uploads are fully processed — mark them complete.
-    op.execute(
-        "UPDATE uploads SET processing_status = 'complete' WHERE status = 'clean'"
-    )
+    op.execute("UPDATE uploads SET processing_status = 'complete' WHERE status = 'clean'")
 
     op.add_column(
         "pull_requests",

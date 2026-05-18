@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
     Inbox,
     CheckCircle2,
@@ -40,6 +41,7 @@ export function PRCard({ pr }: PullRequestProps) {
     const t = useTranslations("PRs");
     const locale = useLocale();
     const dateLocale = locale === "fr" ? fr : enUS;
+    const router = useRouter();
     const isApproved = pr.status === "approved";
     const isOpen = pr.status === "open";
     const isCancelled = pr.status === "cancelled";
@@ -125,7 +127,12 @@ export function PRCard({ pr }: PullRequestProps) {
 
 
             {/* Author avatar */}
-            <Avatar size="sm">
+            <Avatar
+                size="sm"
+                title={pr.author?.display_name ?? undefined}
+                onClick={pr.author?.id ? (e) => { e.preventDefault(); router.push(`/profile/${pr.author!.id}`); } : undefined}
+                className={pr.author?.id ? "cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all" : undefined}
+            >
                 <AvatarFallback className="text-[10px]">
                     {initials}
                 </AvatarFallback>

@@ -14,7 +14,7 @@ import { useUIStore } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
 import { useTranslations } from "next-intl";
 
-const TYPE_COLORS: Record<string, string> = {
+export const TYPE_COLORS: Record<string, string> = {
     polycopie: "bg-blue-100 text-blue-800",
     annal: "bg-orange-100 text-orange-800",
     cheatsheet: "bg-green-100 text-green-800",

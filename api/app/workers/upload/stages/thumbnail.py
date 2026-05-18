@@ -62,6 +62,13 @@ async def run_thumbnail_stage(
                 return None
 
             if thumb_path.exists():
+                if _is_blank_thumbnail(thumb_path):
+                    logger.info(
+                        "Thumbnail for %s is nearly blank — discarding to allow native fallback",
+                        original_filename,
+                    )
+                    thumb_path.unlink()
+                    return None
                 logger.info("Generated thumbnail for %s: %s", original_filename, thumb_path)
                 return str(thumb_path)
         except Exception as e:
@@ -70,6 +77,31 @@ async def run_thumbnail_stage(
                 thumb_path.unlink()
 
         return None
+
+
+def _is_blank_thumbnail(
+    path: Path, brightness_threshold: float = 250.0, stddev_threshold: float = 8.0
+) -> bool:
+    """Return True if the thumbnail is nearly all white (blank document page).
+
+    A thumbnail is considered blank when both:
+    - mean grayscale brightness ≥ brightness_threshold (very bright)
+    - pixel stddev ≤ stddev_threshold (very little contrast)
+
+    Using both guards prevents discarding legitimately bright images like
+    snow photos or pale-background slides that still have visible content.
+    """
+    try:
+        from PIL import ImageStat
+
+        with Image.open(path) as img:
+            gray = img.convert("L")
+            stat = ImageStat.Stat(gray)
+            mean = stat.mean[0]
+            stddev = stat.stddev[0]
+            return mean >= brightness_threshold and stddev <= stddev_threshold
+    except Exception:
+        return False
 
 
 # ── Office MIME type helpers ─────────────────────────────────────────────────
@@ -158,34 +190,59 @@ async def _thumbnail_video(
 async def _thumbnail_pdf(
     input_path: Path, output_path: Path, size: tuple[int, int], quality: int
 ) -> None:
-    """Render first page of PDF using Ghostscript."""
-    # We render to a temporary PNG first then convert
-    temp_png = output_path.with_suffix(".png")
+    """Render the first non-blank page of a PDF using Ghostscript.
 
-    cmd = [
-        "gs",
-        "-dSAFER",
-        "-dBATCH",
-        "-dNOPAUSE",
-        "-sDEVICE=png16m",
-        "-dFirstPage=1",
-        "-dLastPage=1",
-        # Set resolution to match thumbnail size roughly (72dpi is standard, 150dpi for better quality)
-        "-r150",
-        f"-sOutputFile={temp_png}",
-        str(input_path),
-    ]
+    Tries page 1 first. If the resulting thumbnail is nearly blank (common for
+    attestation covers or title pages with minimal content), falls back to page 2.
+    """
+    for page_num in (1, 2):
+        temp_png = output_path.with_suffix(f".p{page_num}.png")
+        cmd = [
+            "gs",
+            "-dSAFER",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-sDEVICE=png16m",
+            f"-dFirstPage={page_num}",
+            f"-dLastPage={page_num}",
+            "-r150",
+            f"-sOutputFile={temp_png}",
+            str(input_path),
+        ]
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    await process.communicate()
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr_bytes = await process.communicate()
 
-    if temp_png.exists():
+        if not temp_png.exists():
+            logger.warning(
+                "Ghostscript produced no output for page %d of %s (rc=%d): %s",
+                page_num,
+                input_path.name,
+                process.returncode,
+                stderr_bytes.decode(errors="replace")[:300],
+            )
+            break  # If Ghostscript fails, subsequent pages are unlikely to succeed either
+
         try:
             await _thumbnail_image(temp_png, output_path, size, quality)
         finally:
             temp_png.unlink(missing_ok=True)
+
+        if not output_path.exists():
+            break
+
+        # Page 1 blank → try page 2 for a more representative thumbnail.
+        if page_num == 1 and _is_blank_thumbnail(output_path):
+            logger.info(
+                "Page 1 of %s is blank — trying page 2 for a better thumbnail",
+                input_path.name,
+            )
+            output_path.unlink(missing_ok=True)
+            continue
+
+        return  # success
 
 
 async def _thumbnail_office(

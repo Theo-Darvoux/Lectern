@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { apiFetch } from "@/lib/api-client";
 import { formatDistanceToNow } from "date-fns";
 import { Button } from "@/components/ui/button";
@@ -180,18 +181,30 @@ export function PRComments({ prId }: { prId: string }) {
 
                 return (
                     <div key={c.id} className="group flex gap-3">
-                        <Avatar size="sm" className="mt-0.5 shrink-0">
-                            <AvatarFallback className="text-[10px]">
-                                {c.author?.display_name
-                                    ? getInitials(c.author.display_name)
-                                    : "?"}
-                            </AvatarFallback>
-                        </Avatar>
+                        {c.author?.id ? (
+                            <Link href={`/profile/${c.author.id}`} className="mt-0.5 shrink-0">
+                                <Avatar size="sm" className="hover:ring-2 hover:ring-primary/40 transition-all">
+                                    <AvatarFallback className="text-[10px]">
+                                        {getInitials(c.author.display_name)}
+                                    </AvatarFallback>
+                                </Avatar>
+                            </Link>
+                        ) : (
+                            <Avatar size="sm" className="mt-0.5 shrink-0">
+                                <AvatarFallback className="text-[10px]">?</AvatarFallback>
+                            </Avatar>
+                        )}
                         <div className="min-w-0 flex-1">
                             <div className="flex items-baseline gap-2">
-                                <span className="text-sm font-medium">
-                                    {c.author?.display_name || tCommon("deletedUser")}
-                                </span>
+                                {c.author?.id ? (
+                                    <Link href={`/profile/${c.author.id}`} className="text-sm font-medium hover:underline">
+                                        {c.author.display_name}
+                                    </Link>
+                                ) : (
+                                    <span className="text-sm font-medium text-muted-foreground">
+                                        {tCommon("deletedUser")}
+                                    </span>
+                                )}
                                 <span className="text-xs text-muted-foreground">
                                     {formatDistanceToNow(new Date(c.created_at), {
                                         addSuffix: true,

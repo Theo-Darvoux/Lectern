@@ -45,7 +45,12 @@ async def _check_storage_limit(size_bytes: int, config: dict[str, Any]) -> None:
                 # We subquery to get the size of each unique CAS blob
                 # and sum them up to get the physical storage usage.
                 from sqlalchemy import select
-                inner_q = select(func.max(MaterialVersion.file_size).label("size")).group_by(MaterialVersion.cas_sha256).subquery()
+
+                inner_q = (
+                    select(func.max(MaterialVersion.file_size).label("size"))
+                    .group_by(MaterialVersion.cas_sha256)
+                    .subquery()
+                )
                 usage = await session.scalar(select(func.sum(inner_q.c.size))) or 0
 
             # Cache the result for 1 hour

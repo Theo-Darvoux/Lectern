@@ -75,6 +75,7 @@ interface AuthConfig {
     dpo_email: string | null;
     dpo_address: string | null;
     data_transfers: string | null;
+    legal_version: string | null;
 }
 
 export default function AdminConfigPage() {

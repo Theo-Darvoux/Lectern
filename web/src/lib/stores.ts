@@ -135,6 +135,7 @@ export interface PublicConfig {
     dpo_email: string | null;
     dpo_address: string | null;
     data_transfers: string | null;
+    legal_version: string | null;
     totp_enabled: boolean;
     google_enabled: boolean;
     google_client_id: string | null;

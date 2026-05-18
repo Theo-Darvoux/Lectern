@@ -70,9 +70,16 @@ def _moodle_xml(questions: list[dict[str, str]]) -> bytes:
         q_type = q.get("type", "multichoice")
         name = q.get("name", "Question: text")
         text = q.get("text", "What is this?")
-        answers = q.get("answers", '<answer fraction="100"><text>Correct</text></answer><answer fraction="0"><text>Wrong</text></answer>')
+        answers = q.get(
+            "answers",
+            '<answer fraction="100"><text>Correct</text></answer><answer fraction="0"><text>Wrong</text></answer>',
+        )
         feedback = q.get("feedback", "")
-        feedback_block = f"<generalfeedback format='html'><text>{feedback}</text></generalfeedback>" if feedback else ""
+        feedback_block = (
+            f"<generalfeedback format='html'><text>{feedback}</text></generalfeedback>"
+            if feedback
+            else ""
+        )
         q_blocks.append(
             f"""<question type="{q_type}">
   <name><text>{name}</text></name>
@@ -81,9 +88,7 @@ def _moodle_xml(questions: list[dict[str, str]]) -> bytes:
   {answers}
 </question>"""
         )
-    return (
-        "<?xml version='1.0' encoding='UTF-8'?><quiz>" + "".join(q_blocks) + "</quiz>"
-    ).encode()
+    return ("<?xml version='1.0' encoding='UTF-8'?><quiz>" + "".join(q_blocks) + "</quiz>").encode()
 
 
 # ── _validate_qcm_structure unit tests ───────────────────────────────────────
@@ -259,7 +264,9 @@ class TestParseMoodleXML:
         assert q["text"] == "What is 2+2?"
 
     def test_truefalse_question_type(self):
-        xml = _moodle_xml([{"type": "truefalse", "name": "Q: Is sky blue?", "text": "Is the sky blue?"}])
+        xml = _moodle_xml(
+            [{"type": "truefalse", "name": "Q: Is sky blue?", "text": "Is the sky blue?"}]
+        )
         result = _parse_moodle_xml(xml)
         assert len(result["chapters"]) == 1
 
@@ -338,9 +345,7 @@ class TestParseMoodleXML:
         assert answers[0]["text"] == "Valid answer"
 
     def test_explanation_extracted_from_feedback(self):
-        xml = _moodle_xml(
-            [{"name": "Test: Q", "text": "Q?", "feedback": "This is why."}]
-        )
+        xml = _moodle_xml([{"name": "Test: Q", "text": "Q?", "feedback": "This is why."}])
         result = _parse_moodle_xml(xml)
         q = result["chapters"][0]["questions"][0]
         assert q.get("explanation") == "This is why."
@@ -353,8 +358,7 @@ class TestParseMoodleXML:
 
     def test_max_4_answers_per_question(self):
         answers_xml = "".join(
-            f'<answer fraction="0"><text>Answer {i}</text></answer>'
-            for i in range(10)
+            f'<answer fraction="0"><text>Answer {i}</text></answer>' for i in range(10)
         )
         xml = _moodle_xml([{"name": "Test: Q", "text": "Q?", "answers": answers_xml}])
         result = _parse_moodle_xml(xml)
@@ -404,7 +408,9 @@ def user() -> User:
 
 @pytest.mark.asyncio
 class TestStageEndpoint:
-    async def test_stage_valid_qcm(self, client: AsyncClient, db_session: AsyncSession, fake_redis_setup):
+    async def test_stage_valid_qcm(
+        self, client: AsyncClient, db_session: AsyncSession, fake_redis_setup
+    ):
         user = _make_user()
         db_session.add(user)
         await db_session.flush()
@@ -486,9 +492,7 @@ class TestStageEndpoint:
         assert r1.json()["sha256"] != r2.json()["sha256"]
         assert r1.json()["file_key"] != r2.json()["file_key"]
 
-    async def test_stage_too_many_questions(
-        self, client: AsyncClient, db_session: AsyncSession
-    ):
+    async def test_stage_too_many_questions(self, client: AsyncClient, db_session: AsyncSession):
         user = _make_user()
         db_session.add(user)
         await db_session.flush()

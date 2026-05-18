@@ -616,7 +616,11 @@ async def _exec_create_material(
                         .order_by(Upload.updated_at.desc())
                         .limit(1)
                     )
-                    att_real_size = att_upload_size if att_upload_size is not None else (att.get("file_size") or 0)
+                    att_real_size = (
+                        att_upload_size
+                        if att_upload_size is not None
+                        else (att.get("file_size") or 0)
+                    )
                     att_mime = att.get("file_mime_type") or "application/octet-stream"
                 else:
                     att_info = await _get_file_info(att_fk)

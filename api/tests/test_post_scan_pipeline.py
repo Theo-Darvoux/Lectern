@@ -155,7 +155,10 @@ async def test_pipeline_enqueues_post_scan_job_after_scan() -> None:
 
     with (
         patch("app.workers.upload.pipeline.run_post_strip_pdf_check", AsyncMock()),
-        patch("app.workers.upload.pipeline.run_finalize_storage", AsyncMock(return_value=finalize_result)),
+        patch(
+            "app.workers.upload.pipeline.run_finalize_storage",
+            AsyncMock(return_value=finalize_result),
+        ),
         patch("app.workers.upload.pipeline.UploadWorkerRepository") as mock_repo,
         patch("app.core.redis.arq_pool", mock_pool),
         patch("app.config.settings.bazaar_async_enabled", False),
@@ -192,9 +195,13 @@ async def test_pipeline_emits_clean_status_after_scan() -> None:
     ctx = WorkerContext(redis=mock_redis, db_sessionmaker=None, job_try=1)
 
     pipeline = UploadPipeline(
-        ctx, user_id="u", upload_id="uid-1",
+        ctx,
+        user_id="u",
+        upload_id="uid-1",
         quarantine_key="q/u/uid-1/f.pdf",
-        original_filename="f.pdf", mime_type="image/png", expected_sha256=None,
+        original_filename="f.pdf",
+        mime_type="image/png",
+        expected_sha256=None,
     )
 
     mock_pf = _make_pf()
@@ -212,14 +219,20 @@ async def test_pipeline_emits_clean_status_after_scan() -> None:
         emitted_statuses.append(data.get("status", ""))
 
     finalize_result = MagicMock(
-        final_key="cas/" + "c" * 64, safe_name="f.pdf",
-        final_size=512, content_sha256="d" * 64,
-        db_cas_key=f"upload:cas:{'c' * 64}", new_cas_ref=1,
+        final_key="cas/" + "c" * 64,
+        safe_name="f.pdf",
+        final_size=512,
+        content_sha256="d" * 64,
+        db_cas_key=f"upload:cas:{'c' * 64}",
+        new_cas_ref=1,
     )
 
     with (
         patch("app.workers.upload.pipeline.run_post_strip_pdf_check", AsyncMock()),
-        patch("app.workers.upload.pipeline.run_finalize_storage", AsyncMock(return_value=finalize_result)),
+        patch(
+            "app.workers.upload.pipeline.run_finalize_storage",
+            AsyncMock(return_value=finalize_result),
+        ),
         patch("app.workers.upload.pipeline.UploadWorkerRepository") as mock_repo,
         patch("app.core.redis.arq_pool", AsyncMock()),
         patch("app.config.settings.bazaar_async_enabled", False),
@@ -250,9 +263,13 @@ async def test_pipeline_does_not_compress_or_thumbnail_in_job1() -> None:
 
     ctx = WorkerContext(redis=AsyncMock(), db_sessionmaker=None, job_try=1)
     pipeline = UploadPipeline(
-        ctx, user_id="u", upload_id="uid-1",
+        ctx,
+        user_id="u",
+        upload_id="uid-1",
         quarantine_key="q/u/uid-1/f.pdf",
-        original_filename="f.pdf", mime_type="application/pdf", expected_sha256=None,
+        original_filename="f.pdf",
+        mime_type="application/pdf",
+        expected_sha256=None,
     )
     pipeline.pf = _make_pf()
     pipeline.tmp_path = Path("/tmp/t")
@@ -262,15 +279,22 @@ async def test_pipeline_does_not_compress_or_thumbnail_in_job1() -> None:
     pipeline.completed_stage = 2
 
     finalize_result = MagicMock(
-        final_key="cas/" + "c" * 64, safe_name="f.pdf", final_size=1024,
-        content_sha256="d" * 64, db_cas_key=f"upload:cas:{'c' * 64}", new_cas_ref=1,
+        final_key="cas/" + "c" * 64,
+        safe_name="f.pdf",
+        final_size=1024,
+        content_sha256="d" * 64,
+        db_cas_key=f"upload:cas:{'c' * 64}",
+        new_cas_ref=1,
     )
     mock_compress = AsyncMock()
     mock_thumbnail = AsyncMock()
 
     with (
         patch("app.workers.upload.pipeline.run_post_strip_pdf_check", AsyncMock()),
-        patch("app.workers.upload.pipeline.run_finalize_storage", AsyncMock(return_value=finalize_result)),
+        patch(
+            "app.workers.upload.pipeline.run_finalize_storage",
+            AsyncMock(return_value=finalize_result),
+        ),
         patch("app.workers.upload.pipeline.UploadWorkerRepository") as mock_repo,
         patch("app.core.redis.arq_pool", AsyncMock()),
         patch("app.config.settings.bazaar_async_enabled", False),
@@ -301,9 +325,13 @@ async def test_pipeline_sets_processing_status_pending_in_db() -> None:
 
     ctx = WorkerContext(redis=AsyncMock(), db_sessionmaker=None, job_try=1)
     pipeline = UploadPipeline(
-        ctx, user_id="u", upload_id="uid-1",
+        ctx,
+        user_id="u",
+        upload_id="uid-1",
         quarantine_key="q/u/uid-1/f.pdf",
-        original_filename="f.pdf", mime_type="application/pdf", expected_sha256=None,
+        original_filename="f.pdf",
+        mime_type="application/pdf",
+        expected_sha256=None,
     )
     pipeline.pf = _make_pf()
     pipeline.tmp_path = Path("/tmp/t")
@@ -313,12 +341,19 @@ async def test_pipeline_sets_processing_status_pending_in_db() -> None:
     pipeline.completed_stage = 2
 
     finalize_result = MagicMock(
-        final_key="cas/" + "c" * 64, safe_name="f.pdf", final_size=1024,
-        content_sha256="d" * 64, db_cas_key=f"upload:cas:{'c' * 64}", new_cas_ref=1,
+        final_key="cas/" + "c" * 64,
+        safe_name="f.pdf",
+        final_size=1024,
+        content_sha256="d" * 64,
+        db_cas_key=f"upload:cas:{'c' * 64}",
+        new_cas_ref=1,
     )
     with (
         patch("app.workers.upload.pipeline.run_post_strip_pdf_check", AsyncMock()),
-        patch("app.workers.upload.pipeline.run_finalize_storage", AsyncMock(return_value=finalize_result)),
+        patch(
+            "app.workers.upload.pipeline.run_finalize_storage",
+            AsyncMock(return_value=finalize_result),
+        ),
         patch("app.workers.upload.pipeline.UploadWorkerRepository") as mock_repo,
         patch("app.core.redis.arq_pool", AsyncMock()),
         patch("app.config.settings.bazaar_async_enabled", False),
@@ -337,8 +372,7 @@ async def test_pipeline_sets_processing_status_pending_in_db() -> None:
     # Verify that update_upload_status was called with processing_status='pending'
     calls = repo_instance.update_upload_status.call_args_list
     assert any(
-        kw.get("processing_status") == "pending"
-        for _, kw in ((c.args, c.kwargs) for c in calls)
+        kw.get("processing_status") == "pending" for _, kw in ((c.args, c.kwargs) for c in calls)
     ), "update_upload_status must include processing_status='pending'"
 
 
@@ -357,10 +391,19 @@ async def test_post_scan_happy_path_marks_complete() -> None:
     comp_res = MagicMock(final_mime="application/pdf", content_encoding=None)
 
     with (
-        patch("app.workers.process_upload_post_scan.run_download_and_validate", AsyncMock(return_value=dr)),
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=dr),
+        ),
         patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
-        patch("app.workers.process_upload_post_scan.run_compress_stage", AsyncMock(return_value=comp_res)),
-        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value="/tmp/thumb.webp")),
+        patch(
+            "app.workers.process_upload_post_scan.run_compress_stage",
+            AsyncMock(return_value=comp_res),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage",
+            AsyncMock(return_value="/tmp/thumb.webp"),
+        ),
         patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock()),
         patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
@@ -382,9 +425,7 @@ async def test_post_scan_happy_path_marks_complete() -> None:
     # update_upload_status must include processing_status=complete
     update_calls = repo.update_upload_status.call_args_list
     assert any(
-        kw.get("processing_status") == "complete"
-        for c in update_calls
-        for kw in [c.kwargs]
+        kw.get("processing_status") == "complete" for c in update_calls for kw in [c.kwargs]
     ), "processing_status must be set to 'complete' on success"
 
 
@@ -398,10 +439,18 @@ async def test_post_scan_compress_failure_degrades_gracefully() -> None:
     dr = _make_download_result(pf=pf)
 
     with (
-        patch("app.workers.process_upload_post_scan.run_download_and_validate", AsyncMock(return_value=dr)),
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=dr),
+        ),
         patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
-        patch("app.workers.process_upload_post_scan.run_compress_stage", AsyncMock(side_effect=RuntimeError("ffmpeg died"))),
-        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)),
+        patch(
+            "app.workers.process_upload_post_scan.run_compress_stage",
+            AsyncMock(side_effect=RuntimeError("ffmpeg died")),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)
+        ),
         patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock()),
         patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
@@ -436,10 +485,19 @@ async def test_post_scan_thumbnail_failure_yields_no_thumbnail() -> None:
     comp_res = MagicMock(final_mime="image/png", content_encoding=None)
 
     with (
-        patch("app.workers.process_upload_post_scan.run_download_and_validate", AsyncMock(return_value=dr)),
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=dr),
+        ),
         patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
-        patch("app.workers.process_upload_post_scan.run_compress_stage", AsyncMock(return_value=comp_res)),
-        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(side_effect=OSError("Pillow exploded"))),
+        patch(
+            "app.workers.process_upload_post_scan.run_compress_stage",
+            AsyncMock(return_value=comp_res),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage",
+            AsyncMock(side_effect=OSError("Pillow exploded")),
+        ),
         patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock()),
         patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
@@ -472,7 +530,10 @@ async def test_post_scan_quarantine_missing_marks_degraded() -> None:
     mock_trigger = AsyncMock()
 
     with (
-        patch("app.workers.process_upload_post_scan.run_download_and_validate", AsyncMock(side_effect=FileNotFoundError("S3 404"))),
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(side_effect=FileNotFoundError("S3 404")),
+        ),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", mock_trigger),
         patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
     ):
@@ -499,11 +560,22 @@ async def test_post_scan_retries_on_cas_upload_failure() -> None:
     comp_res = MagicMock(final_mime="application/pdf", content_encoding=None)
 
     with (
-        patch("app.workers.process_upload_post_scan.run_download_and_validate", AsyncMock(return_value=dr)),
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=dr),
+        ),
         patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
-        patch("app.workers.process_upload_post_scan.run_compress_stage", AsyncMock(return_value=comp_res)),
-        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)),
-        patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock(side_effect=ConnectionError("S3 timeout"))),
+        patch(
+            "app.workers.process_upload_post_scan.run_compress_stage",
+            AsyncMock(return_value=comp_res),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.upload_file_multipart",
+            AsyncMock(side_effect=ConnectionError("S3 timeout")),
+        ),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
         patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
     ):
@@ -535,11 +607,22 @@ async def test_post_scan_dead_letters_after_max_retries() -> None:
     mock_trigger = AsyncMock()
 
     with (
-        patch("app.workers.process_upload_post_scan.run_download_and_validate", AsyncMock(return_value=dr)),
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=dr),
+        ),
         patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
-        patch("app.workers.process_upload_post_scan.run_compress_stage", AsyncMock(return_value=comp_res)),
-        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)),
-        patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock(side_effect=OSError("disk full"))),
+        patch(
+            "app.workers.process_upload_post_scan.run_compress_stage",
+            AsyncMock(return_value=comp_res),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.upload_file_multipart",
+            AsyncMock(side_effect=OSError("disk full")),
+        ),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", mock_trigger),
         patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
     ):
@@ -571,10 +654,18 @@ async def test_post_scan_deletes_quarantine_on_success() -> None:
     mock_delete = AsyncMock()
 
     with (
-        patch("app.workers.process_upload_post_scan.run_download_and_validate", AsyncMock(return_value=dr)),
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=dr),
+        ),
         patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
-        patch("app.workers.process_upload_post_scan.run_compress_stage", AsyncMock(return_value=comp_res)),
-        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)),
+        patch(
+            "app.workers.process_upload_post_scan.run_compress_stage",
+            AsyncMock(return_value=comp_res),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)
+        ),
         patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock()),
         patch("app.workers.process_upload_post_scan.delete_object", mock_delete),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
@@ -604,10 +695,18 @@ async def test_post_scan_dispatches_webhook_on_success() -> None:
     comp_res = MagicMock(final_mime="application/pdf", content_encoding=None)
 
     with (
-        patch("app.workers.process_upload_post_scan.run_download_and_validate", AsyncMock(return_value=dr)),
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=dr),
+        ),
         patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
-        patch("app.workers.process_upload_post_scan.run_compress_stage", AsyncMock(return_value=comp_res)),
-        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)),
+        patch(
+            "app.workers.process_upload_post_scan.run_compress_stage",
+            AsyncMock(return_value=comp_res),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)
+        ),
         patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock()),
         patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
@@ -668,7 +767,9 @@ async def test_trigger_auto_merge_when_all_files_settled() -> None:
         patch("app.workers.process_upload_post_scan.apply_pr", mock_apply),
         patch("app.workers.process_upload_post_scan._cleanup_pr_resources", mock_cleanup),
         patch("app.workers.process_upload_post_scan._dispatch_post_commit_jobs", AsyncMock()),
-        patch("app.workers.process_upload_post_scan.get_pr_all_file_keys", return_value=[cas_s3_key]),
+        patch(
+            "app.workers.process_upload_post_scan.get_pr_all_file_keys", return_value=[cas_s3_key]
+        ),
         patch("app.workers.process_upload_post_scan.notify_user", AsyncMock()),
     ):
         await _trigger_pending_auto_merges(ctx, cas_s3_key)
@@ -708,7 +809,10 @@ async def test_trigger_no_auto_merge_when_files_still_pending() -> None:
     mock_apply = AsyncMock()
     with (
         patch("app.workers.process_upload_post_scan.apply_pr", mock_apply),
-        patch("app.workers.process_upload_post_scan.get_pr_all_file_keys", return_value=[cas_s3_key, other_key]),
+        patch(
+            "app.workers.process_upload_post_scan.get_pr_all_file_keys",
+            return_value=[cas_s3_key, other_key],
+        ),
     ):
         await _trigger_pending_auto_merges(ctx, cas_s3_key)
 
@@ -747,14 +851,20 @@ async def test_pr_creation_defers_auto_merge_when_files_pending() -> None:
     """When files have processing_status=pending, auto-approve must be deferred."""
 
     mock_db = AsyncMock()
-    mock_db.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))))
-    mock_db.scalar = AsyncMock(side_effect=[
-        0,  # open PR count
-        None,  # no auth config
-        {"cas/abc": "cas/abc"},  # existence check (will be skipped via object_exists mock)
-        # For the auto-approve check: unsettled_count = 1
-        1,
-    ])
+    mock_db.execute = AsyncMock(
+        return_value=MagicMock(
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        )
+    )
+    mock_db.scalar = AsyncMock(
+        side_effect=[
+            0,  # open PR count
+            None,  # no auth config
+            {"cas/abc": "cas/abc"},  # existence check (will be skipped via object_exists mock)
+            # For the auto-approve check: unsettled_count = 1
+            1,
+        ]
+    )
     mock_db.scalars = AsyncMock(return_value=MagicMock(return_value={"cas/abc"}))
     mock_db.flush = AsyncMock()
     mock_db.add = MagicMock()
@@ -793,6 +903,7 @@ async def test_pr_creation_defers_auto_merge_when_files_pending() -> None:
     import inspect
 
     from app.services import pr as pr_module
+
     source = inspect.getsource(pr_module.create_pull_request_service)
     assert "processing_status" in source, (
         "create_pull_request_service must check processing_status for auto-merge deferral"

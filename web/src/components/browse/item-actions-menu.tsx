@@ -82,7 +82,11 @@ function useItemActions(item: ItemData, itemPath?: string) {
   const t = useTranslations("Browse");
   const tAuto = useTranslations("AutoTitle");
   const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
-  const { addOperation, operations, removeOperation } = useStagingStore();
+  const addOperation = useStagingStore((s) => s.addOperation);
+  const removeOperation = useStagingStore((s) => s.removeOperation);
+  // Read operations lazily (inside handlers only) so this component doesn't
+  // re-render every time any staging op is added — avoid 50× card re-renders.
+  const getOperations = () => useStagingStore.getState().operations;
   const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
   const isPreview = searchParams?.has("preview_pr");
   const isDraft = item.id.startsWith("$");
@@ -119,7 +123,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
     // If this is already a staged creation, "deleting" it means just removing the creation op
     if (item.staged === "created" && !item.isExternal) {
       // Find index of the creation op for this temp id
-      const idx = operations.findIndex(o => {
+      const idx = getOperations().findIndex(o => {
         const unwrapped = unwrapOp(o);
         if (item.type === "directory") {
           return unwrapped.op === "create_directory" && unwrapped.temp_id === item.id;

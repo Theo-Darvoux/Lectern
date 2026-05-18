@@ -21,6 +21,7 @@ from app.services.audit import record_download
 from app.services.material import (
     check_material_access,
     get_material_attachments,
+    get_material_thumbnail_info,
     get_material_version,
     get_material_versions,
     get_material_with_version,
@@ -145,6 +146,7 @@ async def thumbnail_material(
     material_id: str,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
     """
     Generate a presigned URL for a material version's thumbnail.
@@ -155,12 +157,8 @@ async def thumbnail_material(
       <img> for images).
     Raises 404 for types without any renderable fallback (Office, audio, etc.).
     """
-    from app.services.material import check_material_access, get_material_with_version
-
-    data = await get_material_with_version(db, material_id)
-    check_material_access(user.id, data)
-
-    version = data["current_version_info"]
+    mid = uuid.UUID(material_id)
+    version = await get_material_thumbnail_info(db, mid, redis)
     if not version:
         raise AppError(404, "Material version not found")
 
@@ -187,7 +185,9 @@ async def thumbnail_material(
 
         if is_pdf or is_image or is_video:
             target_key = version["file_key"]
-            content_type = file_mime if file_mime and "/" in file_mime else "application/octet-stream"
+            content_type = (
+                file_mime if file_mime and "/" in file_mime else "application/octet-stream"
+            )
             if is_pdf and not file_mime:
                 content_type = "application/pdf"
         else:

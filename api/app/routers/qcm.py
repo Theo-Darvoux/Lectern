@@ -4,6 +4,7 @@ Provides two endpoints:
   POST /api/qcm/stage        – Validate + store a QCM JSON file in the CAS.
   POST /api/qcm/parse-moodle – Convert a Moodle XML quiz file into QCM JSON.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -14,6 +15,7 @@ import re
 import uuid
 from html.parser import HTMLParser
 from typing import Annotated, Any
+from xml.etree.ElementTree import Element
 
 from defusedxml import ElementTree
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -184,7 +186,9 @@ async def stage_qcm(
         },
     )
 
-    logger.info("QCM staged: key=%s sha256=%s size=%d user=%s", file_key, sha256, file_size, user.id)
+    logger.info(
+        "QCM staged: key=%s sha256=%s size=%d user=%s", file_key, sha256, file_size, user.id
+    )
 
     return QCMStageResponse(file_key=file_key, sha256=sha256, file_size=file_size)
 
@@ -218,7 +222,7 @@ def _strip_html(html: str) -> str:
     return s.get_text()
 
 
-def _get_text(element: ElementTree.Element | None, path: str) -> str:
+def _get_text(element: Element | None, path: str) -> str:
     """Extract text from an XML sub-element, stripping HTML."""
     if element is None:
         return ""
@@ -352,10 +356,7 @@ def _parse_moodle_xml(xml_bytes: bytes) -> dict[str, Any]:
 def _escape_xml(text: str) -> str:
     """Escape characters that are special in XML text content."""
     return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 
@@ -370,7 +371,7 @@ def _generate_moodle_xml(qcm_data: dict[str, Any]) -> bytes:
         lines.append(
             f"    <category><text>$course$/top/{_escape_xml(chapter_title)}</text></category>"
         )
-        lines.append('  </question>')
+        lines.append("  </question>")
 
         for question in chapter.get("questions", []):
             q_text = _escape_xml(question.get("text", ""))
@@ -379,9 +380,7 @@ def _generate_moodle_xml(qcm_data: dict[str, Any]) -> bytes:
 
             lines.append('  <question type="multichoice">')
             lines.append(f"    <name><text>{name_text}</text></name>")
-            lines.append(
-                f'    <questiontext format="html"><text>{q_text}</text></questiontext>'
-            )
+            lines.append(f'    <questiontext format="html"><text>{q_text}</text></questiontext>')
             if explanation:
                 lines.append(
                     f'    <generalfeedback format="html"><text>{explanation}</text></generalfeedback>'

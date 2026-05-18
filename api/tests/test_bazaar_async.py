@@ -138,7 +138,10 @@ async def test_pipeline_enqueues_check_bazaar_on_clean(mock_redis: AsyncMock) ->
 
     with (
         patch("app.workers.upload.pipeline.settings") as mock_settings,
-        patch("app.workers.upload.pipeline.run_finalize_storage", AsyncMock(return_value=final_res_mock)),
+        patch(
+            "app.workers.upload.pipeline.run_finalize_storage",
+            AsyncMock(return_value=final_res_mock),
+        ),
         patch("app.core.redis.arq_pool", arq_pool_mock),
     ):
         mock_settings.bazaar_async_enabled = True
@@ -155,7 +158,9 @@ async def test_pipeline_enqueues_check_bazaar_on_clean(mock_redis: AsyncMock) ->
     assert "check_bazaar" in enqueued_job_names, (
         f"check_bazaar must be enqueued when bazaar_async_enabled=True; got {enqueued_job_names}"
     )
-    bazaar_call = next(c for c in arq_pool_mock.enqueue_job.call_args_list if c.args[0] == "check_bazaar")
+    bazaar_call = next(
+        c for c in arq_pool_mock.enqueue_job.call_args_list if c.args[0] == "check_bazaar"
+    )
     assert bazaar_call.kwargs["sha256"] == "deadbeef" * 8
     assert bazaar_call.kwargs["cas_s3_key"] == "cas/abc123"
     assert bazaar_call.kwargs["upload_id"] == "upload-abc"
@@ -201,7 +206,10 @@ async def test_pipeline_no_enqueue_when_bazaar_async_disabled(mock_redis: AsyncM
 
     with (
         patch("app.workers.upload.pipeline.settings") as mock_settings,
-        patch("app.workers.upload.pipeline.run_finalize_storage", AsyncMock(return_value=final_res_mock)),
+        patch(
+            "app.workers.upload.pipeline.run_finalize_storage",
+            AsyncMock(return_value=final_res_mock),
+        ),
         patch("app.core.redis.arq_pool", arq_pool_mock),
     ):
         mock_settings.bazaar_async_enabled = False

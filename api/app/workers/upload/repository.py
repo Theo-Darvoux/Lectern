@@ -121,9 +121,7 @@ class UploadWorkerRepository:
                 await session.commit()
 
         with contextlib.suppress(Exception):
-            await _retry_db(
-                _do_update, context=f"update_processing_status for {upload_id}"
-            )
+            await _retry_db(_do_update, context=f"update_processing_status for {upload_id}")
 
     async def checkpoint_pipeline_stage(self, upload_id: str, stage: int) -> None:
         """Persist a completed pipeline stage for resume-on-retry behavior."""

@@ -46,7 +46,7 @@ def build_redis_settings() -> RedisSettings:
     )
 
 
-redis_client: Redis = Redis.from_url(  # type: ignore[type-arg]
+redis_client: Redis = Redis.from_url(  # type: ignore[type-arg, call-overload]
     settings.redis_url,
     decode_responses=True,
     retry_on_timeout=True,
@@ -153,7 +153,14 @@ async def redis_semaphore(
 
         # Run Lua script: keys=[sem_key], args=[limit, expire_ms, holder_id, now_ms, expires_at]
         res = await redis.eval(  # type: ignore[no-untyped-call, misc, arg-type]
-            acquire_script, 1, sem_key, limit, expire * 1000, holder_id, now_ms, expires_at  # type: ignore[arg-type]
+            acquire_script,
+            1,
+            sem_key,
+            limit,
+            expire * 1000,
+            holder_id,
+            now_ms,
+            expires_at,  # type: ignore[arg-type]
         )
 
         if res == 1:

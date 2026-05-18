@@ -1,3 +1,4 @@
+import json
 import typing
 import uuid
 from datetime import UTC, datetime
@@ -81,7 +82,61 @@ def version_orm_to_dict(v: MaterialVersion) -> dict[str, typing.Any]:
         else v.virus_scan_result,
         "version_lock": v.version_lock,
         "created_at": v.created_at,
+        "thumbnail_key": v.thumbnail_key,
     }
+
+
+async def get_material_thumbnail_info(
+    db: AsyncSession,
+    material_id: uuid.UUID,
+    redis: typing.Any = None,
+) -> dict[str, typing.Any] | None:
+    """Single JOIN query returning only the fields needed to serve a thumbnail.
+
+    Results are cached in Redis for 120 s to avoid hitting the DB on every
+    card render when a directory listing has many materials.
+    """
+    cache_key = f"thumbnail:v1:{material_id}"
+
+    if redis is not None:
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                return json.loads(cached)
+        except Exception:
+            pass
+
+    result = await db.execute(
+        select(
+            MaterialVersion.thumbnail_key,
+            MaterialVersion.file_key,
+            MaterialVersion.file_mime_type,
+            MaterialVersion.file_name,
+        )
+        .join(Material, Material.id == MaterialVersion.material_id)
+        .where(
+            Material.id == material_id,
+            MaterialVersion.version_number == Material.current_version,
+        )
+    )
+    row = result.one_or_none()
+    if not row:
+        return None
+
+    data: dict[str, typing.Any] = {
+        "thumbnail_key": row.thumbnail_key,
+        "file_key": row.file_key,
+        "file_mime_type": row.file_mime_type,
+        "file_name": row.file_name,
+    }
+
+    if redis is not None:
+        try:
+            await redis.set(cache_key, json.dumps(data, default=str), ex=120)
+        except Exception:
+            pass
+
+    return data
 
 
 async def get_material_by_id(db: AsyncSession, material_id: str | uuid.UUID) -> Material:

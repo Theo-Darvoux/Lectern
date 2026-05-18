@@ -40,6 +40,7 @@ import {
   Info,
   ChevronDown,
   LayoutList,
+  LayoutGrid,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -55,6 +56,9 @@ import type { Operation } from "@/lib/staging-store";
 import type { SelectedItem } from "@/lib/selection-store";
 import { useTranslations } from "next-intl";
 import { useAugmentedListing, stagedStatus, type NavItem } from "@/hooks/use-augmented-listing";
+import { useViewMode } from "@/hooks/use-view-mode";
+import { MaterialGridCard } from "@/components/browse/material-grid-card";
+import { DirectoryGridCard } from "@/components/browse/directory-grid-card";
 
 interface DirectoryListingProps {
   directory: Record<string, unknown> | null;
@@ -119,6 +123,8 @@ export function DirectoryListing({
     parentMaterial,
     previewOperations,
   });
+
+  const { mode: viewMode, setMode: setViewMode } = useViewMode();
 
   const addOperations = useStagingStore((s) => s.addOperations);
   const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
@@ -440,7 +446,7 @@ export function DirectoryListing({
         <div className="mt-2">
           {!selectMode ? (
             <div className="flex items-center justify-between h-11">
-              <div className="flex items-center">
+              <div className="flex items-center gap-2">
                 {allSelectableItems.length > 0 && (
                   <Button
                     key="select-btn"
@@ -453,6 +459,24 @@ export function DirectoryListing({
                     <span className="text-xs font-medium uppercase tracking-wider">{t("select")}</span>
                   </Button>
                 )}
+                <div className="flex items-center border rounded-md overflow-hidden h-8">
+                  <button
+                    onClick={() => setViewMode("list")}
+                    className={`px-2 h-full flex items-center transition-colors ${viewMode === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted/50"}`}
+                    title={t("listView")}
+                    aria-label={t("listView")}
+                  >
+                    <LayoutList className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setViewMode("grid")}
+                    className={`px-2 h-full flex items-center border-l transition-colors ${viewMode === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted/50"}`}
+                    title={t("gridView")}
+                    aria-label={t("gridView")}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
@@ -596,6 +620,24 @@ export function DirectoryListing({
               {t("supplementaryFiles")}
             </p>
           </div>
+          <div className="flex items-center border rounded-md overflow-hidden h-8">
+            <button
+              onClick={() => setViewMode("list")}
+              className={`px-2 h-full flex items-center transition-colors ${viewMode === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted/50"}`}
+              title={t("listView")}
+              aria-label={t("listView")}
+            >
+              <LayoutList className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setViewMode("grid")}
+              className={`px-2 h-full flex items-center border-l transition-colors ${viewMode === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted/50"}`}
+              title={t("gridView")}
+              aria-label={t("gridView")}
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </button>
+          </div>
           <Button
             size="sm"
             className="gap-2 bg-violet-600 text-white hover:bg-violet-700 dark:bg-violet-700 dark:hover:bg-violet-600"
@@ -683,203 +725,379 @@ export function DirectoryListing({
         )
       ) : (
         !isEmpty && (
-          <div className={`divide-y rounded-lg border ${selectMode ? "select-none" : ""}`}>
-            {sortedDirs.map((dir, i) => {
-              const id = String(dir.id);
-              const op = allOps.find(
-                (o) =>
-                  ((o.op === "edit_directory" || o.op === "delete_directory") &&
-                    o.directory_id === id) ||
-                  (o.op === "move_item" &&
-                    o.target_type === "directory" &&
-                    o.target_id === id),
-              );
+          viewMode === "list" ? (
+            <div className={`divide-y rounded-lg border ${selectMode ? "select-none" : ""}`}>
+              {sortedDirs.map((dir, i) => {
+                const id = String(dir.id);
+                const op = allOps.find(
+                  (o) =>
+                    ((o.op === "edit_directory" || o.op === "delete_directory") &&
+                      o.directory_id === id) ||
+                    (o.op === "move_item" &&
+                      o.target_type === "directory" &&
+                      o.target_id === id),
+                );
 
-              const staged = op
-                ? op.op === "delete_directory"
-                  ? "deleted"
-                  : op.op === "edit_directory"
-                    ? "edited"
-                    : "moved"
-                : null;
+                const staged = op
+                  ? op.op === "delete_directory"
+                    ? "deleted"
+                    : op.op === "edit_directory"
+                      ? "edited"
+                      : "moved"
+                  : null;
 
-              let displayDir = dir;
-              if (op?.op === "edit_directory") {
-                displayDir = {
-                  ...dir,
-                  ...(op.name != null ? { name: op.name } : {}),
-                  ...(op.type != null ? { type: op.type } : {}),
-                  ...(op.description != null
-                    ? { description: op.description }
-                    : {}),
-                  ...(op.tags != null ? { tags: op.tags } : {}),
+                let displayDir = dir;
+                if (op?.op === "edit_directory") {
+                  displayDir = {
+                    ...dir,
+                    ...(op.name != null ? { name: op.name } : {}),
+                    ...(op.type != null ? { type: op.type } : {}),
+                    ...(op.description != null ? { description: op.description } : {}),
+                    ...(op.tags != null ? { tags: op.tags } : {}),
+                  };
+                }
+
+                return (
+                  <DirectoryLineItem
+                    key={id}
+                    directory={displayDir}
+                    staged={staged}
+                    selectMode={selectMode}
+                    selected={selected.has(id)}
+                    onToggleSelect={(e) => handleToggleItem(i, e)}
+                    previewPrId={previewPrId}
+                    navIndex={i}
+                    focused={focusedIndex === i}
+                  />
+                );
+              })}
+
+              {ghostDirs.map((op, i) => {
+                const tempId =
+                  (op.op === "create_directory" ? op.temp_id : op.target_id) ||
+                  `ghost-${i}`;
+                const isExternal = op.isExternal;
+                const name = op.op === "create_directory" ? op.name : op.target_name;
+                const ghostDirNavIndex = sortedDirs.length + i;
+                const ghostDir = {
+                  id: tempId,
+                  name: name || "Unnamed",
+                  child_directory_count: allOps.filter(o => o.op === "create_directory" && o.parent_id === tempId).length,
+                  child_material_count: allOps.filter(o => o.op === "create_material" && o.directory_id === tempId).length,
                 };
-              }
 
-              return (
-                <DirectoryLineItem
-                  key={id}
-                  directory={displayDir}
-                  staged={staged}
-                  selectMode={selectMode}
-                  selected={selected.has(id)}
-                  onToggleSelect={(e) => handleToggleItem(i, e)}
-                  previewPrId={previewPrId}
-                  navIndex={i}
-                  focused={focusedIndex === i}
-                />
-              );
-            })}
+                return (
+                  <DirectoryLineItem
+                    key={`ghost-dir-${tempId}`}
+                    directory={ghostDir}
+                    staged="created"
+                    isExternal={isExternal}
+                    selectMode={selectMode}
+                    selected={selected.has(tempId)}
+                    onToggleSelect={(e) => handleToggleItem(ghostDirNavIndex, e)}
+                    navIndex={ghostDirNavIndex}
+                    focused={focusedIndex === ghostDirNavIndex}
+                    onNavigate={() => enterGhostDir(tempId, name || "Unnamed")}
+                  />
+                );
+              })}
 
-            {ghostDirs.map((op, i) => {
-              const tempId =
-                (op.op === "create_directory" ? op.temp_id : op.target_id) ||
-                `ghost-${i}`;
-              const isExternal = op.isExternal;
-              const name =
-                op.op === "create_directory" ? op.name : op.target_name;
-              
-              const ghostDirNavIndex = sortedDirs.length + i;
-              
-              const ghostDir = {
-                id: tempId,
-                name: name || "Unnamed",
-                child_directory_count: allOps.filter(o => o.op === "create_directory" && o.parent_id === tempId).length,
-                child_material_count: allOps.filter(o => o.op === "create_material" && o.directory_id === tempId).length,
-              };
+              {sortedMats.map((mat, i) => {
+                const id = String(mat.id);
+                const op = allOps.find(
+                  (o) =>
+                    ((o.op === "edit_material" || o.op === "delete_material") &&
+                      o.material_id === id) ||
+                    (o.op === "move_item" &&
+                      o.target_type === "material" &&
+                      o.target_id === id),
+                );
 
-              return (
-                <DirectoryLineItem
-                  key={`ghost-dir-${tempId}`}
-                  directory={ghostDir}
-                  staged="created"
-                  isExternal={isExternal}
-                  selectMode={selectMode}
-                  selected={selected.has(tempId)}
-                  onToggleSelect={(e) => handleToggleItem(ghostDirNavIndex, e)}
-                  navIndex={ghostDirNavIndex}
-                  focused={focusedIndex === ghostDirNavIndex}
-                  onNavigate={() => enterGhostDir(tempId, name || "Unnamed")}
-                />
-              );
-            })}
+                const staged = op
+                  ? op.op === "delete_material"
+                    ? "deleted"
+                    : op.op === "edit_material"
+                      ? "edited"
+                      : "moved"
+                  : null;
 
-            {sortedMats.map((mat, i) => {
-              const id = String(mat.id);
-              const op = allOps.find(
-                (o) =>
-                  ((o.op === "edit_material" || o.op === "delete_material") &&
-                    o.material_id === id) ||
-                  (o.op === "move_item" &&
-                    o.target_type === "material" &&
-                    o.target_id === id),
-              );
+                const previewOpIndex =
+                  op?.isExternal && op.op === "edit_material" ? op._previewIdx : undefined;
 
-              const staged = op
-                ? op.op === "delete_material"
-                  ? "deleted"
-                  : op.op === "edit_material"
-                    ? "edited"
-                    : "moved"
-                : null;
+                let displayMat = mat;
+                if (op?.op === "edit_material") {
+                  displayMat = {
+                    ...mat,
+                    ...(op.title != null ? { title: op.title } : {}),
+                    ...(op.type != null ? { type: op.type } : {}),
+                    ...(op.description != null ? { description: op.description } : {}),
+                    ...(op.tags != null ? { tags: op.tags } : {}),
+                  };
+                }
 
-              const previewOpIndex =
-                op?.isExternal && op.op === "edit_material"
-                  ? op._previewIdx
-                  : undefined;
+                const matNavIndex = sortedDirs.length + ghostDirs.length + i;
+                return (
+                  <MaterialLineItem
+                    key={id}
+                    material={displayMat}
+                    staged={staged}
+                    previewOpIndex={previewOpIndex}
+                    selectMode={selectMode}
+                    selected={selected.has(id)}
+                    onToggleSelect={(e) => handleToggleItem(matNavIndex, e)}
+                    previewPrId={previewPrId}
+                    navIndex={matNavIndex}
+                    focused={focusedIndex === matNavIndex}
+                    onAddAttachment={() => handleAddAttachment(id, String(displayMat.title ?? ""))}
+                  />
+                );
+              })}
 
-              let displayMat = mat;
-              if (op?.op === "edit_material") {
-                displayMat = {
-                  ...mat,
-                  ...(op.title != null ? { title: op.title } : {}),
-                  ...(op.type != null ? { type: op.type } : {}),
-                  ...(op.description != null
-                    ? { description: op.description }
-                    : {}),
-                  ...(op.tags != null ? { tags: op.tags } : {}),
+              {ghostMaterials.map((op, i) => {
+                const isExternal = op.isExternal;
+                const title = op.op === "create_material" ? op.title : op.target_title;
+                const tempId = op.op === "create_material" ? op.temp_id : op.target_id;
+                const draftAttachmentCount =
+                  op.op === "create_material" && op.temp_id
+                    ? allOps.filter(
+                        (o) => o.op === "create_material" && o.parent_material_id === op.temp_id,
+                      ).length
+                    : 0;
+                const ghostMatNavIndex =
+                  sortedDirs.length + ghostDirs.length + sortedMats.length + i;
+                const ghostMat = {
+                  id: tempId || `ghost-mat-${i}`,
+                  title: title || "Unnamed",
+                  type: op.op === "create_material" ? op.type : op.target_material_type,
+                  current_version_info: op.op === "create_material" ? { file_name: op.file_name } : undefined,
                 };
-              }
 
-              const matNavIndex = sortedDirs.length + ghostDirs.length + i;
-              return (
-                <MaterialLineItem
-                  key={id}
-                  material={displayMat}
-                  staged={staged}
-                  previewOpIndex={previewOpIndex}
-                  selectMode={selectMode}
-                  selected={selected.has(id)}
-                  onToggleSelect={(e) => handleToggleItem(matNavIndex, e)}
-                  previewPrId={previewPrId}
-                  navIndex={matNavIndex}
-                  focused={focusedIndex === matNavIndex}
-                  onAddAttachment={() => handleAddAttachment(id, String(displayMat.title ?? ""))}
-                />
-              );
-            })}
-
-            {ghostMaterials.map((op, i) => {
-              const isExternal = op.isExternal;
-              const title =
-                op.op === "create_material" ? op.title : op.target_title;
-              const tempId =
-                op.op === "create_material" ? op.temp_id : op.target_id;
-
-              const draftAttachmentCount =
-                op.op === "create_material" && op.temp_id
-                  ? allOps.filter(
-                      (o) =>
-                        o.op === "create_material" &&
-                        o.parent_material_id === op.temp_id,
-                    ).length
-                  : 0;
-
-              const ghostMatNavIndex =
-                sortedDirs.length + ghostDirs.length + sortedMats.length + i;
-
-              const ghostMat = {
-                id: tempId || `ghost-mat-${i}`,
-                title: title || "Unnamed",
-                type: op.op === "create_material" ? op.type : op.target_material_type,
-                current_version_info: op.op === "create_material" ? { file_name: op.file_name } : undefined,
-              };
-
-              return (
-                <MaterialLineItem
-                  key={`ghost-mat-${tempId ?? i}`}
-                  material={ghostMat}
-                  staged="created"
-                  isExternal={isExternal}
-                  selectMode={selectMode}
-                  selected={selected.has(tempId || "")}
-                  onToggleSelect={(e) => handleToggleItem(ghostMatNavIndex, e)}
-                  navIndex={ghostMatNavIndex}
-                  focused={focusedIndex === ghostMatNavIndex}
-                  previewOpIndex={op._previewIdx}
-                  onNavigate={() => {
-                    if (isExternal) {
-                      if (previewPrId && op._previewIdx !== undefined) {
-                        router.push(`/pull-requests/${previewPrId}/preview/${op._previewIdx}`);
-                      }
-                    } else {
-                      if (
-                        op.op === "create_material" &&
-                        op.metadata?.qcm_draft &&
-                        op._storeIndex !== undefined
-                      ) {
-                        router.push(`/qcm/preview?draftIndex=${op._storeIndex}`);
+                return (
+                  <MaterialLineItem
+                    key={`ghost-mat-${tempId ?? i}`}
+                    material={ghostMat}
+                    staged="created"
+                    isExternal={isExternal}
+                    selectMode={selectMode}
+                    selected={selected.has(tempId || "")}
+                    onToggleSelect={(e) => handleToggleItem(ghostMatNavIndex, e)}
+                    navIndex={ghostMatNavIndex}
+                    focused={focusedIndex === ghostMatNavIndex}
+                    previewOpIndex={op._previewIdx}
+                    onNavigate={() => {
+                      if (isExternal) {
+                        if (previewPrId && op._previewIdx !== undefined) {
+                          router.push(`/pull-requests/${previewPrId}/preview/${op._previewIdx}`);
+                        }
                       } else {
-                        setReviewOpen(true);
+                        if (
+                          op.op === "create_material" &&
+                          op.metadata?.qcm_draft &&
+                          op._storeIndex !== undefined
+                        ) {
+                          router.push(`/qcm/preview?draftIndex=${op._storeIndex}`);
+                        } else {
+                          setReviewOpen(true);
+                        }
                       }
-                    }
-                  }}
-                  onAddAttachment={() => handleAddAttachment(tempId!, title!)}
-                  draftAttachmentCount={draftAttachmentCount}
-                />
-              );
-            })}
-          </div>
+                    }}
+                    onAddAttachment={() => handleAddAttachment(tempId!, title!)}
+                    draftAttachmentCount={draftAttachmentCount}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            /* ── Grid view ──────────────────────────────────────────────────── */
+            <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 ${selectMode ? "select-none" : ""}`}>
+              {sortedDirs.map((dir, i) => {
+                const id = String(dir.id);
+                const op = allOps.find(
+                  (o) =>
+                    ((o.op === "edit_directory" || o.op === "delete_directory") &&
+                      o.directory_id === id) ||
+                    (o.op === "move_item" &&
+                      o.target_type === "directory" &&
+                      o.target_id === id),
+                );
+
+                const staged = op
+                  ? op.op === "delete_directory"
+                    ? "deleted"
+                    : op.op === "edit_directory"
+                      ? "edited"
+                      : "moved"
+                  : null;
+
+                let displayDir = dir;
+                if (op?.op === "edit_directory") {
+                  displayDir = {
+                    ...dir,
+                    ...(op.name != null ? { name: op.name } : {}),
+                    ...(op.type != null ? { type: op.type } : {}),
+                    ...(op.description != null ? { description: op.description } : {}),
+                    ...(op.tags != null ? { tags: op.tags } : {}),
+                  };
+                }
+
+                return (
+                  <DirectoryGridCard
+                    key={id}
+                    directory={displayDir}
+                    staged={staged}
+                    selectMode={selectMode}
+                    selected={selected.has(id)}
+                    onToggleSelect={handleToggleItem}
+                    previewPrId={previewPrId}
+                    navIndex={i}
+                    focused={focusedIndex === i}
+                  />
+                );
+              })}
+
+              {ghostDirs.map((op, i) => {
+                const tempId =
+                  (op.op === "create_directory" ? op.temp_id : op.target_id) ||
+                  `ghost-${i}`;
+                const isExternal = op.isExternal;
+                const name = op.op === "create_directory" ? op.name : op.target_name;
+                const ghostDirNavIndex = sortedDirs.length + i;
+                const ghostDir = {
+                  id: tempId,
+                  name: name || "Unnamed",
+                  child_directory_count: allOps.filter(o => o.op === "create_directory" && o.parent_id === tempId).length,
+                  child_material_count: allOps.filter(o => o.op === "create_material" && o.directory_id === tempId).length,
+                };
+
+                return (
+                  <DirectoryGridCard
+                    key={`ghost-dir-${tempId}`}
+                    directory={ghostDir}
+                    staged="created"
+                    isExternal={isExternal}
+                    selectMode={selectMode}
+                    selected={selected.has(tempId)}
+                    onToggleSelect={handleToggleItem}
+                    navIndex={ghostDirNavIndex}
+                    focused={focusedIndex === ghostDirNavIndex}
+                    onNavigate={() => enterGhostDir(tempId, name || "Unnamed")}
+                  />
+                );
+              })}
+
+              {sortedMats.map((mat, i) => {
+                const id = String(mat.id);
+                const op = allOps.find(
+                  (o) =>
+                    ((o.op === "edit_material" || o.op === "delete_material") &&
+                      o.material_id === id) ||
+                    (o.op === "move_item" &&
+                      o.target_type === "material" &&
+                      o.target_id === id),
+                );
+
+                const staged = op
+                  ? op.op === "delete_material"
+                    ? "deleted"
+                    : op.op === "edit_material"
+                      ? "edited"
+                      : "moved"
+                  : null;
+
+                const previewOpIndex =
+                  op?.isExternal && op.op === "edit_material" ? op._previewIdx : undefined;
+
+                let displayMat = mat;
+                if (op?.op === "edit_material") {
+                  displayMat = {
+                    ...mat,
+                    ...(op.title != null ? { title: op.title } : {}),
+                    ...(op.type != null ? { type: op.type } : {}),
+                    ...(op.description != null ? { description: op.description } : {}),
+                    ...(op.tags != null ? { tags: op.tags } : {}),
+                  };
+                }
+
+                const matNavIndex = sortedDirs.length + ghostDirs.length + i;
+                return (
+                  <MaterialGridCard
+                    key={id}
+                    material={displayMat}
+                    staged={staged}
+                    previewOpIndex={previewOpIndex}
+                    selectMode={selectMode}
+                    selected={selected.has(id)}
+                    onToggleSelect={handleToggleItem}
+                    previewPrId={previewPrId}
+                    navIndex={matNavIndex}
+                    focused={focusedIndex === matNavIndex}
+                    onAddAttachment={() => handleAddAttachment(id, String(displayMat.title ?? ""))}
+                  />
+                );
+              })}
+
+              {ghostMaterials.map((op, i) => {
+                const isExternal = op.isExternal;
+                const title = op.op === "create_material" ? op.title : op.target_title;
+                const tempId = op.op === "create_material" ? op.temp_id : op.target_id;
+                const ghostFileKey = op.op === "create_material" ? (op.file_key ?? null) : null;
+                const ghostFileMimeType = op.op === "create_material" ? (op.file_mime_type ?? null) : null;
+                const draftAttachmentCount =
+                  op.op === "create_material" && op.temp_id
+                    ? allOps.filter(
+                        (o) => o.op === "create_material" && o.parent_material_id === op.temp_id,
+                      ).length
+                    : 0;
+                const ghostMatNavIndex =
+                  sortedDirs.length + ghostDirs.length + sortedMats.length + i;
+                const ghostMat = {
+                  id: tempId || `ghost-mat-${i}`,
+                  title: title || "Unnamed",
+                  type: op.op === "create_material" ? op.type : op.target_material_type,
+                  current_version_info:
+                    op.op === "create_material"
+                      ? { file_name: op.file_name, file_mime_type: op.file_mime_type }
+                      : undefined,
+                };
+
+                return (
+                  <MaterialGridCard
+                    key={`ghost-mat-${tempId ?? i}`}
+                    material={ghostMat}
+                    staged="created"
+                    isExternal={isExternal}
+                    selectMode={selectMode}
+                    selected={selected.has(tempId || "")}
+                    onToggleSelect={handleToggleItem}
+                    navIndex={ghostMatNavIndex}
+                    focused={focusedIndex === ghostMatNavIndex}
+                    previewOpIndex={op._previewIdx}
+                    ghostFileKey={ghostFileKey}
+                    ghostFileMimeType={ghostFileMimeType}
+                    onNavigate={() => {
+                      if (isExternal) {
+                        if (previewPrId && op._previewIdx !== undefined) {
+                          router.push(`/pull-requests/${previewPrId}/preview/${op._previewIdx}`);
+                        }
+                      } else {
+                        if (
+                          op.op === "create_material" &&
+                          op.metadata?.qcm_draft &&
+                          op._storeIndex !== undefined
+                        ) {
+                          router.push(`/qcm/preview?draftIndex=${op._storeIndex}`);
+                        } else {
+                          setReviewOpen(true);
+                        }
+                      }
+                    }}
+                    onAddAttachment={() => handleAddAttachment(tempId!, title!)}
+                    draftAttachmentCount={draftAttachmentCount}
+                  />
+                );
+              })}
+            </div>
+          )
         )
       )}
 

@@ -1,28 +1,67 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import dynamic from "next/dynamic";
 import { apiFetch } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { getFileTypeStyle } from "./file-type-display";
 import type { MaterialDetail } from "./types";
 import { Loader2 } from "lucide-react";
 import { MarkdownRenderer } from "../viewers/markdown-renderer";
-import { Document, Page, pdfjs } from "react-pdf";
+import { useInView } from "@/hooks/use-in-view";
+// CSS for react-pdf: tiny side-effect import, kept static (handled at build by
+// Next's CSS pipeline — doesn't pull the pdfjs JS bundle into this chunk).
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-// Reuse the same worker as pdf-viewer.tsx
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// react-pdf pulls in pdfjs (~1MB of JS to parse). Static-importing it here used
+// to cost every page that mounts a MaterialPreview, even though grid/lazy mode
+// never renders a <Document>. Defer the JS to first PDF-fallback render.
+const Document = dynamic(
+  () =>
+    import("react-pdf").then((mod) => {
+      mod.pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${mod.pdfjs.version}/build/pdf.worker.min.mjs`;
+      return mod.Document;
+    }),
+  { ssr: false },
+);
+const Page = dynamic(() => import("react-pdf").then((mod) => mod.Page), { ssr: false });
+
+// Concurrency-limited thumbnail fetcher. On first paint of a grid view, every
+// visible card hits /thumbnail simultaneously — 20-30 parallel requests + image
+// decode storms cause severe FPS drops. Queue to a small parallelism cap.
+const MAX_CONCURRENT_THUMBNAILS = 4;
+let inflightThumbnails = 0;
+const thumbnailQueue: Array<() => void> = [];
+
+function withThumbnailSlot<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = () => {
+      inflightThumbnails++;
+      task()
+        .then(resolve, reject)
+        .finally(() => {
+          inflightThumbnails--;
+          const next = thumbnailQueue.shift();
+          if (next) next();
+        });
+    };
+    if (inflightThumbnails < MAX_CONCURRENT_THUMBNAILS) run();
+    else thumbnailQueue.push(run);
+  });
+}
 
 interface MaterialPreviewProps {
   material: MaterialDetail;
   className?: string;
+  /** When true, defers loading until the card scrolls near the viewport. */
+  lazy?: boolean;
 }
 
 /** Whether the thumbnail API returned a real generated WebP or a raw-file fallback. */
 type ThumbnailType = "webp" | "fallback" | null;
 
-export function MaterialPreview({ material, className }: MaterialPreviewProps) {
+export function MaterialPreview({ material, className, lazy }: MaterialPreviewProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [thumbnailType, setThumbnailType] = useState<ThumbnailType>(null);
   const [loading, setLoading] = useState(false);
@@ -32,6 +71,8 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(300);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  const inView = useInView(containerRef);
 
   const versionInfo = material.current_version_info;
   const fileName = versionInfo?.file_name ?? "";
@@ -44,8 +85,9 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
   const isPDF = mimeType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf");
   const isOffice = mimeType.includes("ms-") || mimeType.includes("officedocument") || /\.(docx|xlsx|pptx)$/i.test(fileName);
 
-  // Track container width for react-pdf Page sizing
+  // Track container width for react-pdf Page sizing — only needed when react-pdf will render.
   useEffect(() => {
+    if (!isPDF || lazy) return;
     const el = containerRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
@@ -54,9 +96,12 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
     ro.observe(el);
     setContainerWidth(el.clientWidth || 300);
     return () => ro.disconnect();
-  }, []);
+  }, [isPDF, lazy]);
 
   useEffect(() => {
+    // In lazy mode, wait until the card is near the viewport before fetching.
+    if (lazy && !inView) return;
+
     let mounted = true;
     setLoading(true);
     setPdfReady(false);
@@ -66,8 +111,10 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
         // 1. Try the /thumbnail endpoint first.
         //    It returns { url, thumbnail_type: "webp" | "fallback" }.
         try {
-          const thumbData = await apiFetch<{ url: string; thumbnail_type: ThumbnailType }>(
-            `/materials/${material.id}/thumbnail`
+          const thumbData = await withThumbnailSlot(() =>
+            apiFetch<{ url: string; thumbnail_type: ThumbnailType }>(
+              `/materials/${material.id}/thumbnail`
+            )
           );
           if (mounted && thumbData.url) {
             setUrl(thumbData.url);
@@ -89,7 +136,9 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
           return;
         }
 
-        const data = await apiFetch<{ url: string }>(`/materials/${material.id}/inline`);
+        const data = await withThumbnailSlot(() =>
+          apiFetch<{ url: string }>(`/materials/${material.id}/inline`)
+        );
         if (!mounted) return;
 
         setUrl(data.url);
@@ -117,7 +166,7 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
       mounted = false;
       clearTimeout(timer);
     };
-  }, [material.id, isText, isImage, isVideo, isMarkdown, isPDF]);
+  }, [material.id, isText, isImage, isVideo, isMarkdown, isPDF, lazy, inView]);
 
   const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName, mimeType);
 
@@ -131,18 +180,17 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
   };
 
   // An image URL that should render as <img>:
-  //   - "webp"     → real generated WebP thumbnail
-  //   - "fallback" → raw image file returned by the server (no WebP generated yet)
+  //   - "webp"     → real generated WebP thumbnail (always render as <img>, even for videos/PDFs)
+  //   - "fallback" → raw file returned by the server; only renderable for non-video, non-PDF types
   //   - null       → came from the /inline fallback path (isImage must be true)
-  // Excludes videos (always <video>) and PDFs (react-pdf or <img> for WebP).
   const showAsImg =
     url &&
-    !isVideo &&
-    !isPDF &&
-    (thumbnailType === "webp" || thumbnailType === "fallback" || (thumbnailType === null && isImage));
+    (thumbnailType === "webp" ||
+      (!isVideo && !isPDF && (thumbnailType === "fallback" || (thumbnailType === null && isImage))));
 
-  // PDF fallback: raw PDF file returned by server → render first page with react-pdf
-  const showAsPdf = url && isPDF && thumbnailType === "fallback";
+  // PDF fallback: raw PDF file returned by server → render first page with react-pdf.
+  // Disabled in lazy/grid mode — instantiating react-pdf per card is too expensive.
+  const showAsPdf = url && isPDF && thumbnailType === "fallback" && !lazy;
 
   // PDF with a real generated WebP thumbnail → just use <img>
   const showPdfWebp = url && isPDF && thumbnailType === "webp";
@@ -159,7 +207,7 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
     <div
       ref={containerRef}
       className={cn(
-        "relative w-full h-full flex items-center justify-center overflow-hidden transition-all duration-700 bg-linear-to-br",
+        "relative w-full h-full flex items-center justify-center overflow-hidden bg-linear-to-br",
         gradient,
         className
       )}
@@ -175,9 +223,17 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
       {/* ── Background Icon ─────────────────────────────────────────────── */}
       <Icon
         className={cn(
-          "h-12 w-12 transition-all duration-500 drop-shadow-xl z-10",
+          "h-12 w-12 z-10",
+          // In lazy/grid mode skip all CSS filters (drop-shadow) and transitions:
+          // each filter forces its own compositor layer, and animating filter/opacity
+          // on 50+ simultaneously visible cards is what tanks scroll/hover FPS.
+          lazy
+            ? ""
+            : "transition-[opacity,transform,filter] duration-500 drop-shadow-xl",
           iconColorClass,
-          showContent ? "opacity-0 scale-75 blur-sm" : "opacity-90 scale-100"
+          showContent
+            ? lazy ? "opacity-0 scale-75" : "opacity-0 scale-75 blur-sm"
+            : "opacity-90 scale-100",
         )}
       />
 
@@ -187,8 +243,12 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
         <img
           src={url!}
           alt={material.title}
-          className="absolute inset-0 h-full w-full object-cover animate-in fade-in zoom-in-95 duration-700"
+          className={cn(
+            "absolute inset-0 h-full w-full object-cover",
+            lazy ? "animate-in fade-in duration-300" : "animate-in fade-in zoom-in-95 duration-700",
+          )}
           loading="lazy"
+          decoding="async"
         />
       )}
 
@@ -257,10 +317,10 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
         </div>
       )}
 
-      {/* ── Hifi Markdown Preview Card ───────────────────────────────────── */}
-      {thumbnailType === null && isMarkdown && textPreview && (
+      {/* ── Hifi Markdown Preview Card (full viewer only) ───────────────── */}
+      {thumbnailType === null && isMarkdown && textPreview && !lazy && (
         <div className="absolute inset-0 p-3 overflow-hidden select-none animate-in fade-in slide-in-from-bottom-2 duration-700 origin-top">
-          <div className="scale-[0.55] origin-top opacity-60 group-hover:opacity-100 group-hover:scale-[0.58] transition-all duration-500">
+          <div className="scale-[0.55] origin-top opacity-60 group-hover:opacity-100 group-hover:scale-[0.58] transition-[opacity,transform] duration-500">
             <MarkdownRenderer
               content={textPreview}
               previewMode={true}
@@ -270,15 +330,28 @@ export function MaterialPreview({ material, className }: MaterialPreviewProps) {
         </div>
       )}
 
+      {/* ── Markdown grid card: plain text snippet (avoids rehype pipeline) ─ */}
+      {thumbnailType === null && isMarkdown && textPreview && lazy && (
+        <div className="absolute inset-0 p-4 font-mono text-[10px] leading-relaxed text-white/80 overflow-hidden select-none animate-in fade-in slide-in-from-bottom-2 duration-700 bg-black/5">
+          <div className="line-clamp-10 whitespace-pre-wrap opacity-60">
+            {textPreview}
+          </div>
+          <div className="absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-black/20 to-transparent" />
+        </div>
+      )}
+
       {/* ── Loading Overlay ──────────────────────────────────────────────── */}
       {loading && !url && !textPreview && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/5 backdrop-blur-[1px]">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/5">
           <Loader2 className="h-6 w-6 animate-spin text-white/40" />
         </div>
       )}
 
-      {/* ── Hover Shine Effect ───────────────────────────────────────────── */}
-      <div className="absolute inset-0 bg-linear-to-tr from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+      {/* Hover shine effect removed in lazy/grid mode — animating an opacity layer
+          over a gradient on every card during hover transitions caused paint storms. */}
+      {!lazy && (
+        <div className="absolute inset-0 bg-linear-to-tr from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+      )}
     </div>
   );
 }

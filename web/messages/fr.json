@@ -331,7 +331,9 @@
     "cannotMoveFolderIntoItself": "Impossible de déplacer un dossier dans lui-même ou dans l'un de ses sous-dossiers",
     "itemsAddedToDraft": "{count, plural, =1 {1 élément ajouté} other {# éléments ajoutés}} au brouillon",
     "_": "_",
-    "failedToUpdateLike": "failedToUpdateLike"
+    "failedToUpdateLike": "failedToUpdateLike",
+    "listView": "Vue liste",
+    "gridView": "Vue grille"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",

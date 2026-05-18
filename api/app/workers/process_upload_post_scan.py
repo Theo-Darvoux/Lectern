@@ -99,7 +99,8 @@ async def process_upload_post_scan(
             logger.error(
                 "Post-scan download from quarantine failed for upload %s: %s — "
                 "file remains uncompressed (already in CAS from scan job).",
-                upload_id, exc,
+                upload_id,
+                exc,
             )
             await repo.update_processing_status(upload_id, "degraded")
             await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
@@ -123,9 +124,7 @@ async def process_upload_post_scan(
         compress_ok = False
         try:
             comp_timeout = _compression_timeout(actual_mime)
-            comp_heartbeat = asyncio.create_task(
-                _compress_heartbeat(comp_timeout)
-            )
+            comp_heartbeat = asyncio.create_task(_compress_heartbeat(comp_timeout))
             try:
                 comp_res = await run_compress_stage(
                     pf, actual_mime, original_filename, tracer, config=auth_config
@@ -140,7 +139,8 @@ async def process_upload_post_scan(
         except Exception as exc:
             logger.warning(
                 "Post-scan compression failed for upload %s: %s — serving uncompressed original.",
-                upload_id, exc,
+                upload_id,
+                exc,
             )
 
         # ── 4. Generate thumbnail (soft failure — no thumbnail is acceptable) ─
@@ -151,7 +151,8 @@ async def process_upload_post_scan(
         except Exception as exc:
             logger.warning(
                 "Post-scan thumbnail generation failed for upload %s: %s — no thumbnail.",
-                upload_id, exc,
+                upload_id,
+                exc,
             )
 
         # ── 5. Overwrite CAS object with compressed file (may raise → retry) ─
@@ -183,7 +184,8 @@ async def process_upload_post_scan(
             except Exception as exc:
                 logger.warning(
                     "Thumbnail upload failed for upload %s: %s — skipping thumbnail.",
-                    upload_id, exc,
+                    upload_id,
+                    exc,
                 )
                 thumbnail_key = None
             finally:
@@ -223,7 +225,8 @@ async def process_upload_post_scan(
             except Exception as exc:
                 logger.warning(
                     "Failed to backfill MaterialVersion.file_size for %s: %s",
-                    cas_s3_key, exc,
+                    cas_s3_key,
+                    exc,
                 )
 
         # Update Redis status cache so frontend sees the compressed size
@@ -273,18 +276,20 @@ async def process_upload_post_scan(
         mime_cat = _mime_cat(final_mime)
         upload_file_size.labels(mime_category=mime_cat).observe(initial_size)
         if compress_ok and initial_size > 0 and pf.size > 0:
-            upload_compression_ratio.labels(mime_category=mime_cat).observe(
-                initial_size / pf.size
-            )
+            upload_compression_ratio.labels(mime_category=mime_cat).observe(initial_size / pf.size)
 
         logger.info(
             "Post-scan processing complete for upload %s (compressed=%s, thumbnail=%s).",
-            upload_id, compress_ok, thumbnail_key is not None,
+            upload_id,
+            compress_ok,
+            thumbnail_key is not None,
         )
 
     except Exception as exc:
         # Hard failure — will be retried by arq unless we've hit the limit.
-        logger.exception("Post-scan processing failed for upload %s (attempt %d)", upload_id, job_try)
+        logger.exception(
+            "Post-scan processing failed for upload %s (attempt %d)", upload_id, job_try
+        )
 
         if job_try >= _POST_MAX_RETRIES:
             await _handle_permanent_failure(repo, upload_id, cas_s3_key, exc, job_try)
@@ -337,7 +342,8 @@ async def _handle_permanent_failure(
     logger.error(
         "Post-scan processing permanently failed for upload %s after %d attempts — "
         "serving uncompressed original.  Dead-letter record inserted.",
-        upload_id, attempts,
+        upload_id,
+        attempts,
     )
 
 
@@ -426,9 +432,7 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
             logger.info("Auto-merged PR %s after all uploads settled.", pr.id)
 
     except Exception as exc:
-        logger.error(
-            "Failed to trigger auto-merge for cas_s3_key=%s: %s", cas_s3_key, exc
-        )
+        logger.error("Failed to trigger auto-merge for cas_s3_key=%s: %s", cas_s3_key, exc)
 
 
 async def _dispatch_post_commit_jobs(jobs: list[Any]) -> None:

@@ -99,9 +99,7 @@ def _broadcasts(db: AsyncSession) -> list[tuple[str, dict]]:
 
 
 class TestSoftDeleteMaterialBroadcasts:
-    async def test_broadcasts_material_deleted_for_material(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_broadcasts_material_deleted_for_material(self, db_session: AsyncSession) -> None:
         user = await _make_user(db_session)
         directory = await _make_directory(db_session, user)
         mat = await _make_material(db_session, user, directory)
@@ -153,9 +151,7 @@ class TestSoftDeleteMaterialBroadcasts:
         assert str(att_mat.id) in topics
         assert all(b[1]["type"] == "material_deleted" for b in broadcasts)
 
-    async def test_no_attachment_broadcasts_without_sys_dir(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_no_attachment_broadcasts_without_sys_dir(self, db_session: AsyncSession) -> None:
         user = await _make_user(db_session)
         directory = await _make_directory(db_session, user)
         mat = await _make_material(db_session, user, directory)
