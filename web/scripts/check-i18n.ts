@@ -211,39 +211,49 @@ for (const file of files) {
                     ? args[0].getLiteralValue() 
                     : null;
                 
-                const tVarName = node.getName();
-                
-                // Track usages of this 't' variable
-                file.forEachDescendant((child) => {
-                    if (Node.isCallExpression(child)) {
-                        const expr = child.getExpression();
-                        if (expr.getText() === tVarName || (Node.isPropertyAccessExpression(expr) && expr.getExpression().getText() === tVarName)) {
-                            const tArgs = child.getArguments();
-                            if (tArgs.length > 0) {
-                                const arg = tArgs[0];
-                                const line = child.getStartLineNumber();
-                                const unwrapped = unwrapAssertions(arg);
-                                const resolvedValues = getPossibleStringValues(unwrapped);
-                                
-                                if (Node.isStringLiteral(unwrapped) || Node.isNoSubstitutionTemplateLiteral(unwrapped)) {
-                                    const subKey = unwrapped.getLiteralValue();
-                                    addUsedKey(namespace ? `${namespace}.${subKey}` : subKey, filePath, line);
-                                } else if (resolvedValues && resolvedValues.length > 0) {
-                                    resolvedValues.forEach((val) => {
-                                        addUsedKey(namespace ? `${namespace}.${val}` : val, filePath, line);
-                                    });
-                                } else if (Node.isTemplateExpression(unwrapped)) {
-                                    const head = unwrapped.getHead().getLiteralText();
-                                    protectNamespace(namespace ? `${namespace}.${head}` : head);
-                                    dynamicUsages.push({ file: filePath, line: line, text: child.getText() });
-                                } else {
-                                    if (namespace) protectNamespace(namespace);
-                                    dynamicUsages.push({ file: filePath, line: line, text: child.getText() });
+                const nameNode = node.getNameNode();
+                if (Node.isIdentifier(nameNode)) {
+                    const references = nameNode.findReferencesAsNodes();
+                    for (const ref of references) {
+                        // Ensure the reference is in the same file
+                        if (ref.getSourceFile() !== file) continue;
+
+                        let child: Node | undefined = ref;
+                        while (child && !Node.isCallExpression(child)) {
+                            child = child.getParent();
+                        }
+                        if (child) {
+                            const expr = child.getExpression();
+                            const isDirectCall = expr === ref;
+                            const isPropertyCall = Node.isPropertyAccessExpression(expr) && expr.getExpression() === ref;
+                            if (isDirectCall || isPropertyCall) {
+                                const tArgs = child.getArguments();
+                                if (tArgs.length > 0) {
+                                    const arg = tArgs[0];
+                                    const line = child.getStartLineNumber();
+                                    const unwrapped = unwrapAssertions(arg);
+                                    const resolvedValues = getPossibleStringValues(unwrapped);
+                                    
+                                    if (Node.isStringLiteral(unwrapped) || Node.isNoSubstitutionTemplateLiteral(unwrapped)) {
+                                        const subKey = unwrapped.getLiteralValue();
+                                        addUsedKey(namespace ? `${namespace}.${subKey}` : subKey, filePath, line);
+                                    } else if (resolvedValues && resolvedValues.length > 0) {
+                                        resolvedValues.forEach((val) => {
+                                            addUsedKey(namespace ? `${namespace}.${val}` : val, filePath, line);
+                                        });
+                                    } else if (Node.isTemplateExpression(unwrapped)) {
+                                        const head = unwrapped.getHead().getLiteralText();
+                                        protectNamespace(namespace ? `${namespace}.${head}` : head);
+                                        dynamicUsages.push({ file: filePath, line: line, text: child.getText() });
+                                    } else {
+                                        if (namespace) protectNamespace(namespace);
+                                        dynamicUsages.push({ file: filePath, line: line, text: child.getText() });
+                                    }
                                 }
                             }
                         }
                     }
-                });
+                }
             }
         }
     }

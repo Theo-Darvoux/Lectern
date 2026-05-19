@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { SiteName } from "@/components/site-name";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import {
@@ -135,9 +136,11 @@ export function Navbar() {
                 unoptimized
               />
             )}
-            <span className="bg-linear-to-br from-foreground to-foreground/70 bg-clip-text text-transparent">
-              {config?.site_name || "WikINT"}
-            </span>
+            <SiteName
+              name={config?.site_name || "WikINT"}
+              style={config?.site_name_style}
+              gradientClassName="bg-linear-to-br from-foreground to-foreground/70 bg-clip-text text-transparent"
+            />
           </Link>
           {isAuthenticated && (
             <Link href="/browse" className="hidden sm:block">

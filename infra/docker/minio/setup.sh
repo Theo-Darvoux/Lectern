@@ -13,6 +13,9 @@ mc mb --ignore-existing local/wikint
 # Ensure it's private
 mc anonymous set none local/wikint
 
+# Allow anonymous reads for branding assets (logo, favicon)
+mc anonymous set download local/wikint/branding
+
 # Apply GLOBAL CORS configuration (Required for open-source MinIO)
 echo "Applying Global CORS configuration via Admin API..."
 # Allow specific origins for development

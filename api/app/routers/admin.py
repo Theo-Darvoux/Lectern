@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, File, Query, Request, UploadFile
 from pydantic import BaseModel, EmailStr
 from redis.asyncio import Redis
 from sqlalchemy import func, select
@@ -495,12 +495,17 @@ class AuthConfigPatch(BaseModel):
     allowed_mime_types: str | None = None
 
     site_name: str | None = None
+    site_name_style: str | None = None
     site_description: str | None = None
     site_logo_url: str | None = None
     site_favicon_url: str | None = None
     primary_color: str | None = None
     footer_text: str | None = None
     organization_url: str | None = None
+    og_image_url: str | None = None
+    bg_watermark_url: str | None = None
+    bg_watermark_opacity_light: float | None = None
+    bg_watermark_opacity_dark: float | None = None
     legal_name: str | None = None
     legal_address: str | None = None
     legal_siret: str | None = None
@@ -652,11 +657,116 @@ async def admin_test_email(
     from app.core.email import send_email
 
     config = await db.scalar(select(AuthConfig))
-    subject = "WikINT - Test Email"
-    body_text = f"This is a test email from WikINT. Current time: {datetime.now(UTC)}"
+
+    sitename = "WikINT" if config is None else config.site_name
+
+    subject = f"{sitename} - Test Email"
+    body_text = f"This is a test email from {sitename}. Current time: {datetime.now(UTC)}"
+
     try:
         await send_email(body.email, subject, body_text, config=config)
     except Exception as e:
         raise BadRequestError(f"Failed to send test email: {str(e)}")
 
     return {"status": "ok", "message": "Test email sent"}
+
+
+_LOGO_ALLOWED_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/svg+xml", "image/webp", "image/gif"}
+)
+_FAVICON_ALLOWED_TYPES = frozenset(
+    {"image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml"}
+)
+_IMAGE_ALLOWED_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"}
+)
+_BRANDING_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+async def _upload_branding_asset(
+    file: UploadFile,
+    key_prefix: str,
+    allowed_types: frozenset[str],
+    db: AsyncSession,
+    redis: Redis,  # type: ignore[type-arg]
+    config_field: str,
+) -> dict:  # type: ignore[type-arg]
+    from app.core.storage import get_public_url, upload_file
+
+    content_type = file.content_type or "application/octet-stream"
+    if content_type not in allowed_types:
+        raise BadRequestError(
+            f"Invalid file type '{content_type}'. Allowed: {', '.join(sorted(allowed_types))}"
+        )
+
+    data = await file.read()
+    if len(data) > _BRANDING_MAX_BYTES:
+        raise BadRequestError("File too large. Maximum 5 MB.")
+    if not data:
+        raise BadRequestError("Empty file.")
+
+    filename = file.filename or f"{key_prefix}.bin"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+    key = f"branding/{key_prefix}.{ext}"
+
+    await upload_file(data, key, content_type=content_type, content_disposition="inline")
+    url = await get_public_url(key)
+
+    config_row = await db.scalar(select(AuthConfig))
+    if config_row is None:
+        config_row = AuthConfig()
+        db.add(config_row)
+    setattr(config_row, config_field, url)
+    config_row.updated_at = datetime.now(UTC)
+    await db.flush()
+    await bust_auth_config_cache(redis)
+
+    return {"url": url}
+
+
+@router.post("/auth-config/upload-logo")
+async def upload_logo(
+    _user: AdminUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    file: UploadFile = File(...),
+) -> dict:  # type: ignore[type-arg]
+    return await _upload_branding_asset(
+        file, "logo", _LOGO_ALLOWED_TYPES, db, redis, "site_logo_url"
+    )
+
+
+@router.post("/auth-config/upload-favicon")
+async def upload_favicon(
+    _user: AdminUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    file: UploadFile = File(...),
+) -> dict:  # type: ignore[type-arg]
+    return await _upload_branding_asset(
+        file, "favicon", _FAVICON_ALLOWED_TYPES, db, redis, "site_favicon_url"
+    )
+
+
+@router.post("/auth-config/upload-og-image")
+async def upload_og_image(
+    _user: AdminUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    file: UploadFile = File(...),
+) -> dict:  # type: ignore[type-arg]
+    return await _upload_branding_asset(
+        file, "og-image", _IMAGE_ALLOWED_TYPES, db, redis, "og_image_url"
+    )
+
+
+@router.post("/auth-config/upload-bg-watermark")
+async def upload_bg_watermark(
+    _user: AdminUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    file: UploadFile = File(...),
+) -> dict:  # type: ignore[type-arg]
+    return await _upload_branding_asset(
+        file, "bg-watermark", _IMAGE_ALLOWED_TYPES, db, redis, "bg_watermark_url"
+    )

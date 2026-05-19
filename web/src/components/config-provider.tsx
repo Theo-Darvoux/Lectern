@@ -3,6 +3,8 @@
 import { useEffect, ReactNode } from "react";
 import { apiFetch } from "@/lib/api-client";
 import { useConfigStore, PublicConfig } from "@/lib/stores";
+import { parseSegments, buildFontsUrlForNames } from "@/lib/fonts";
+import { BackgroundWatermark } from "@/components/background-watermark";
 
 export function ConfigProvider({ children }: { children: ReactNode }) {
     const { config, setConfig } = useConfigStore();
@@ -10,7 +12,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     // Initial fetch and BroadcastChannel setup
     useEffect(() => {
         const bc = new BroadcastChannel("wikint_config_updates");
-        
+
         const fetchConfig = async () => {
             try {
                 const data = await apiFetch<PublicConfig>("/auth/methods");
@@ -37,11 +39,30 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         // Update tab title and favicon dynamically
         if (config.site_name) {
             // Only update if it's the default title pattern
-            if (document.title.includes("• WikINT")) {
-                document.title = document.title.replace(/• WikINT$/, `• ${config.site_name}`);
+            if (document.title.includes(`• ${config.site_name}`)) {
+                document.title = document.title.replace(`• ${config.site_name}`, `• ${config.site_name}`);
             }
         }
-        
+
+        // Inject Google Fonts for any fonts used in the site name style
+        if (config.site_name_style) {
+            const segments = parseSegments(config.site_name_style);
+            if (segments) {
+                const usedFonts = [...new Set(segments.map((s) => s.font).filter(Boolean))];
+                const url = buildFontsUrlForNames(usedFonts);
+                if (url && !document.querySelector(`link[data-wikint-fonts]`)) {
+                    const link = document.createElement("link");
+                    link.rel = "stylesheet";
+                    link.href = url;
+                    link.setAttribute("data-wikint-fonts", "1");
+                    document.head.appendChild(link);
+                } else if (url) {
+                    const existing = document.querySelector(`link[data-wikint-fonts]`) as HTMLLinkElement | null;
+                    if (existing && existing.href !== url) existing.href = url;
+                }
+            }
+        }
+
         if (config.site_favicon_url) {
             let link: HTMLLinkElement | null = document.querySelector("link[rel~='icon']");
             if (!link) {
@@ -55,7 +76,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         // Inject primary color if needed (custom CSS variable)
         if (config.primary_color) {
             document.documentElement.style.setProperty('--primary-custom', config.primary_color);
-            
+
             // Calculate and set a contrasting foreground color
             const hex = config.primary_color.replace('#', '');
             if (hex.length === 6) {
@@ -63,7 +84,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
                 const g = parseInt(hex.substring(2, 4), 16);
                 const b = parseInt(hex.substring(4, 6), 16);
                 const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-                
+
                 // If the background is light, use dark text; otherwise use light text
                 const foreground = brightness > 165 ? 'oklch(0.205 0 0)' : 'oklch(0.985 0 0)';
                 document.documentElement.style.setProperty('--primary-foreground-custom', foreground);
@@ -74,5 +95,10 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         }
     }, [config]);
 
-    return <>{children}</>;
+    return (
+        <>
+            <BackgroundWatermark />
+            {children}
+        </>
+    );
 }

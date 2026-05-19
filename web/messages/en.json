@@ -1128,13 +1128,11 @@
           "siteName": "Site Name",
           "primaryColor": "Primary Theme Color",
           "siteDescription": "Site Description",
-          "logoUrl": "Logo URL",
-          "faviconUrl": "Favicon URL",
+          "logo": "Logo",
+          "favicon": "Favicon",
           "placeholders": {
             "siteName": "WikINT",
-            "siteDescription": "Wiki for SudParis Intelligence",
-            "logoUrl": "https://example.com/logo.png",
-            "faviconUrl": "https://example.com/favicon.ico"
+            "siteDescription": "Wiki for SudParis Intelligence"
           }
         },
         "footerLinks": {
@@ -1173,12 +1171,18 @@
         "discard": "Discard Changes",
         "success": "Branding updated",
         "seo": {
-          "title": "title",
-          "description": "description",
-          "ogImageUrl": "ogImageUrl",
-          "placeholders": {
-            "ogImageUrl": "ogImageUrl"
-          }
+          "title": "SEO & Social Sharing",
+          "description": "Configure how your site appears when shared on social media and in link previews.",
+          "ogImageUrl": "Social Preview Image (OG Image)",
+          "ogImageUrlHint": "Shown as the thumbnail when your site is shared on social media (recommended: 1200×630 px)."
+        },
+        "watermark": {
+          "title": "Background Watermark",
+          "description": "Display a large semi-transparent image behind all page content.",
+          "image": "Watermark Image",
+          "opacityLight": "Opacity (Light mode)",
+          "opacityDark": "Opacity (Dark mode)",
+          "opacityHint": "Low values (5–15%) give a subtle watermark; higher values make it more prominent."
         }
       },
       "tabs": {

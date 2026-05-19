@@ -121,6 +121,7 @@ export const useNotificationStore = create<NotificationState>((set) => ({
 
 export interface PublicConfig {
     site_name: string;
+    site_name_style: string | null;
     site_description: string;
     site_logo_url: string | null;
     site_favicon_url: string | null;
@@ -128,6 +129,9 @@ export interface PublicConfig {
     footer_text: string;
     organization_url: string | null;
     og_image_url: string | null;
+    bg_watermark_url: string | null;
+    bg_watermark_opacity_light: number | null;
+    bg_watermark_opacity_dark: number | null;
     legal_name: string | null;
     legal_address: string | null;
     legal_siret: string | null;

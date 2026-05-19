@@ -116,12 +116,17 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "allowed_extensions": None,
             "allowed_mime_types": None,
             "site_name": settings.site_name,
+            "site_name_style": None,
             "site_description": settings.site_description,
             "site_logo_url": settings.site_logo_url,
             "site_favicon_url": settings.site_favicon_url,
             "primary_color": settings.primary_color,
             "footer_text": settings.footer_text,
             "organization_url": settings.organization_url,
+            "og_image_url": None,
+            "bg_watermark_url": None,
+            "bg_watermark_opacity_light": None,
+            "bg_watermark_opacity_dark": None,
             "legal_name": settings.legal_name,
             "legal_address": settings.legal_address,
             "contact_email": settings.contact_email,
@@ -230,6 +235,7 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "site_name": config_row.site_name
             if config_row.site_name is not None
             else settings.site_name,
+            "site_name_style": config_row.site_name_style,
             "site_description": config_row.site_description
             if config_row.site_description is not None
             else settings.site_description,
@@ -248,6 +254,10 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "organization_url": config_row.organization_url
             if config_row.organization_url is not None
             else settings.organization_url,
+            "og_image_url": config_row.og_image_url,
+            "bg_watermark_url": config_row.bg_watermark_url,
+            "bg_watermark_opacity_light": config_row.bg_watermark_opacity_light,
+            "bg_watermark_opacity_dark": config_row.bg_watermark_opacity_dark,
             "legal_name": config_row.legal_name
             if config_row.legal_name is not None
             else settings.legal_name,

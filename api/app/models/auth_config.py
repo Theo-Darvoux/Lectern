@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDMixin
@@ -66,6 +66,7 @@ class AuthConfig(UUIDMixin, Base):
 
     # Branding
     site_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    site_name_style: Mapped[str | None] = mapped_column(Text, nullable=True)
     site_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     site_logo_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     site_favicon_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -73,6 +74,9 @@ class AuthConfig(UUIDMixin, Base):
     footer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     organization_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     og_image_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bg_watermark_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bg_watermark_opacity_light: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bg_watermark_opacity_dark: Mapped[float | None] = mapped_column(Float, nullable=True)
     legal_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     legal_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     legal_siret: Mapped[str | None] = mapped_column(String(255), nullable=True)

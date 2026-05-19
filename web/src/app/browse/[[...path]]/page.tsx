@@ -247,31 +247,31 @@ function BrowseContent() {
         id: currentDirId,
         data: dir
           ? {
-              ...dir,
-              child_directory_count: data.directories?.length ?? 0,
-              child_material_count: data.materials?.length ?? 0,
-            }
+            ...dir,
+            child_directory_count: data.directories?.length ?? 0,
+            child_material_count: data.materials?.length ?? 0,
+          }
           : {
-              name: t("home"),
-              type: "folder",
-              child_directory_count: data.directories?.length ?? 0,
-              child_material_count: data.materials?.length ?? 0,
-            },
+            name: t("home"),
+            type: "folder",
+            child_directory_count: data.directories?.length ?? 0,
+            child_material_count: data.materials?.length ?? 0,
+          },
       });
     }
     // sidebarTarget intentionally omitted to avoid re-firing on every store
     // update — we only want to react to data refreshes.
-     
+
   }, [isDirectoryListing, data, path, setSidebarTarget, t]);
 
   useEffect(() => {
     if (data) {
       if (data.type === "material" && data.material) {
-        document.title = `${data.material.title} • WikINT`;
+        document.title = `${data.material.title} • ${t("siteName")}`;
       } else if (data.directory) {
-        document.title = `${data.directory.name as string} • WikINT`;
+        document.title = `${data.directory.name as string} • ${t("siteName")}`;
       } else if (path === "") {
-        document.title = `${t("courseMaterials")} • WikINT`;
+        document.title = `${t("courseMaterials")} • ${t("siteName")}`;
       }
     }
   }, [data, path]);

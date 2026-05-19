@@ -1128,13 +1128,11 @@
           "siteName": "Nom du site",
           "primaryColor": "Couleur principale du thème",
           "siteDescription": "Description du site",
-          "logoUrl": "URL du logo",
-          "faviconUrl": "URL du favicon",
+          "logo": "Logo",
+          "favicon": "Favicon",
           "placeholders": {
             "siteName": "WikINT",
-            "siteDescription": "Wiki pour SudParis Intelligence",
-            "logoUrl": "https://example.com/logo.png",
-            "faviconUrl": "https://example.com/favicon.ico"
+            "siteDescription": "Wiki pour SudParis Intelligence"
           }
         },
         "footerLinks": {
@@ -1173,12 +1171,18 @@
         "discard": "Annuler les changements",
         "success": "Branding mis à jour",
         "seo": {
-          "title": "title",
-          "description": "description",
-          "ogImageUrl": "ogImageUrl",
-          "placeholders": {
-            "ogImageUrl": "ogImageUrl"
-          }
+          "title": "SEO & Partage social",
+          "description": "Configurez l'apparence de votre site lors de partages sur les réseaux sociaux et les aperçus de liens.",
+          "ogImageUrl": "Image de prévisualisation sociale (OG Image)",
+          "ogImageUrlHint": "Affichée en miniature lors du partage de votre site sur les réseaux sociaux (recommandé : 1200×630 px)."
+        },
+        "watermark": {
+          "title": "Filigrane de fond",
+          "description": "Affiche une grande image semi-transparente derrière tout le contenu des pages.",
+          "image": "Image du filigrane",
+          "opacityLight": "Opacité (mode clair)",
+          "opacityDark": "Opacité (mode sombre)",
+          "opacityHint": "Des valeurs basses (5–15 %) donnent un filigrane discret ; des valeurs plus élevées le rendent plus visible."
         }
       },
       "tabs": {

@@ -652,3 +652,23 @@ async def generate_presigned_upload_part(
 
 generate_presigned_get_url = generate_presigned_get
 generate_presigned_put_url = generate_presigned_put
+
+
+async def get_public_url(file_key: str) -> str:
+    """Return the permanent public URL for an object that is readable without auth."""
+    cfg = await _get_s3_settings()
+    public_endpoint = cfg["public_endpoint"]
+    bucket = cfg["bucket"]
+    endpoint = cfg["endpoint"]
+    use_ssl = cfg["use_ssl"]
+
+    if public_endpoint:
+        if "://" in public_endpoint:
+            public_endpoint = public_endpoint.split("://")[-1]
+        scheme = "http" if "localhost" in public_endpoint else "https"
+        if "localhost" in public_endpoint:
+            return f"{scheme}://{public_endpoint}/{bucket}/{file_key}"
+        return f"{scheme}://{public_endpoint}/{file_key}"
+
+    scheme = "https" if use_ssl else "http"
+    return f"{scheme}://{endpoint}/{bucket}/{file_key}"
