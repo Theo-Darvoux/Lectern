@@ -333,7 +333,8 @@
     "_": "_",
     "failedToUpdateLike": "failedToUpdateLike",
     "listView": "Vue liste",
-    "gridView": "Vue grille"
+    "gridView": "Vue grille",
+    "siteName": "WikINT"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",

@@ -333,7 +333,8 @@
     "_": "_",
     "failedToUpdateLike": "failedToUpdateLike",
     "listView": "List view",
-    "gridView": "Grid view"
+    "gridView": "Grid view",
+    "siteName": "WikINT"
   },
   "Search": {
     "searchMaterials": "Search materials...",
