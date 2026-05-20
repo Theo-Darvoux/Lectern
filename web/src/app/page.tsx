@@ -68,7 +68,7 @@ export default function HomePage() {
               </span>
             </h1>
             <p className="mt-1 text-muted-foreground">
-              {t("whatsHappening", { siteName: config?.site_name || "WikINT" })}
+              {t("whatsHappening", { siteName: config?.site_name || "" })}
             </p>
           </>
         )}

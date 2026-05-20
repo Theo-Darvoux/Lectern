@@ -1,11 +1,13 @@
 from app.core.email import send_email
+from app.config import settings
 from app.models.auth_config import AuthConfig
 
 
 async def send_verification_email(
     email: str, code: str, magic_link: str, config: AuthConfig | None = None
 ) -> None:
-    subject = "WikINT - Sign in to your account"
+    site_name = (config.site_name if config else None) or settings.site_name
+    subject = f"{site_name} - Sign in to your account"
     body = f"""
     <html>
     <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f9fafb;">
@@ -15,13 +17,13 @@ async def send_verification_email(
                     <table width="480" cellpadding="0" cellspacing="0" style="background: #ffffff; border-radius: 8px; padding: 40px; border: 1px solid #e5e7eb;">
                         <tr>
                             <td align="center" style="padding-bottom: 24px;">
-                                <h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #111827;">WikINT</h2>
+                                <h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #111827;">{site_name}</h2>
                             </td>
                         </tr>
                         <tr>
                             <td align="center" style="padding-bottom: 32px;">
                                 <p style="margin: 0 0 20px; font-size: 15px; color: #374151;">Click the button below to sign in:</p>
-                                <a href="{magic_link}" style="display: inline-block; padding: 12px 32px; background-color: #111827; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: 600;">Sign in to WikINT</a>
+                                <a href="{magic_link}" style="display: inline-block; padding: 12px 32px; background-color: #111827; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 15px; font-weight: 600;">Sign in to {site_name}</a>
                             </td>
                         </tr>
                         <tr>

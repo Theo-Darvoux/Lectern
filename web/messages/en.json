@@ -1,6 +1,6 @@
 {
   "Login": {
-    "title": "WikINT",
+    "title": "",
     "descEmail": "Sign in to access course materials",
     "descCode": "Enter the verification code",
     "descPassword": "Enter your password",
@@ -72,7 +72,7 @@
     "deletedUser": "Deleted user"
   },
   "Onboarding": {
-    "welcome": "Welcome to WikINT!",
+    "welcome": "Welcome to {siteName}!",
     "completeProfile": "Complete your profile to unlock all features",
     "displayName": "Display name",
     "importedFromGoogle": "Imported from Google",
@@ -92,7 +92,7 @@
         "description": "Third year +"
       }
     },
-    "gdprAgree": "I agree to the processing of my personal data for WikINT.",
+    "gdprAgree": "I agree to the processing of my personal data for {siteName}.",
     "gdprNote": "Materials I upload become platform property. See our <privacy>privacy policy</privacy>.",
     "finalizing": "Finalizing...",
     "getStarted": "Get Started",
@@ -101,7 +101,7 @@
     "failed": "Onboarding failed"
   },
   "Privacy": {
-    "title": "Privacy Policy of WikINT",
+    "title": "Privacy Policy of {siteName}",
     "version": "Version {version} : Effective as of {date}",
     "sections": {
       "controller": {
@@ -111,7 +111,7 @@
       },
       "dataCollected": {
         "title": "Data Collected",
-        "text": "WikINT collects data strictly necessary for the platform's operation and system security:",
+        "text": "{siteName} collects data strictly necessary for the platform's operation and system security:",
         "items": {
           "account": "Account data: email (required for authentication), display name and avatar (optional).",
           "activity": "Activity data: contribution history (PRs), annotations, comments, and generated reports.",
@@ -136,7 +136,7 @@
       },
       "recipients": {
         "title": "Data Recipients",
-        "text": "Your data is intended exclusively for WikINT administration teams. It is never sold or transferred to third parties for commercial purposes.",
+        "text": "Your data is intended exclusively for {siteName} administration teams. It is never sold or transferred to third parties for commercial purposes.",
         "transfers": "Transfers outside the EU: {dataTransfers}"
       },
       "rights": {
@@ -333,8 +333,7 @@
     "_": "_",
     "failedToUpdateLike": "failedToUpdateLike",
     "listView": "List view",
-    "gridView": "Grid view",
-    "siteName": "WikINT"
+    "gridView": "Grid view"
   },
   "Search": {
     "searchMaterials": "Search materials...",
@@ -444,10 +443,13 @@
     "unknown": "Unknown",
     "directory": "folder",
     "material": "material",
-    "closePanel": "Close panel"
+    "closePanel": "Close panel",
+    "loadMore": "Load more annotations",
+    "loading": "Loading…"
   },
   "Annotations": {
     "addAnnotation": "Add your annotation...",
+    "edited": "edited",
     "shiftEnterForNewline": "Shift+Enter for newline",
     "annotate": "Annotate",
     "cancel": "Cancel",
@@ -731,7 +733,7 @@
     "download": "Download",
     "open": "Open",
     "titleDefault": "Preview",
-    "notSupported": "WikINT doesn't support direct previewing for this file type yet. You can download it to view it with your local applications.",
+    "notSupported": "{siteName} doesn't support direct previewing for this file type yet. You can download it to view it with your local applications.",
     "downloadFile": "Download File",
     "openInNewTab": "Open in new tab",
     "failedToLoadPreview": "Failed to load preview",
@@ -1068,7 +1070,7 @@
   },
   "Popular": {
     "title": "Popular Materials",
-    "subtitle": "Discover the most viewed materials on WikINT",
+    "subtitle": "Discover the most viewed materials on {siteName}",
     "loadError": "Failed to load popular materials",
     "today": "Today",
     "last14Days": "Last 14 Days",
@@ -1139,6 +1141,7 @@
         "footerLinks": {
           "title": "Footer Links",
           "description": "Configure the links and text displayed at the bottom of every page.",
+          "footerLogo": "Footer Logo",
           "footerText": "Footer Text",
           "organizationUrl": "Organization URL",
           "placeholders": {
@@ -1907,34 +1910,34 @@
     }
   },
   "Terms": {
-    "title": "WIKINT TERMS OF USE",
+    "title": "{siteName} TERMS OF USE",
     "version": "Version {version} — Effective {date}",
     "sections": {
       "presentation": {
         "title": "Service Presentation",
-        "text": "WikINT is a collaborative platform for sharing academic resources intended for students and community members of Telecom SudParis and IMT-BS. The service is published by {legalName}, headquartered at {legalAddress}, registered under number {legalSiret}."
+        "text": "{siteName} is a collaborative platform for sharing academic resources intended for students and community members of Telecom SudParis and IMT-BS. The service is published by {legalName}, headquartered at {legalAddress}, registered under number {legalSiret}."
       },
       "access": {
         "title": "Access to the Service",
-        "text": "Access to WikINT is restricted to individuals with a valid academic email address issued by a partner institution. Registration constitutes acceptance of these terms of use. Each user is responsible for the confidentiality of their login credentials."
+        "text": "Access to {siteName} is restricted to individuals with a valid academic email address issued by a partner institution. Registration constitutes acceptance of these terms of use. Each user is responsible for the confidentiality of their login credentials."
       },
       "content": {
         "title": "User-Contributed Content : License",
-        "text1": "By depositing materials on WikINT (documents, files, media, comments, annotations), you retain all your copyrights to these contents, in accordance with articles L111-1 and L121-1 of the French Intellectual Property Code. The moral right to your work, inalienable and imprescriptible under French law, cannot be transferred.",
+        "text1": "By depositing materials on {siteName} (documents, files, media, comments, annotations), you retain all your copyrights to these contents, in accordance with articles L111-1 and L121-1 of the French Intellectual Property Code. The moral right to your work, inalienable and imprescriptible under French law, cannot be transferred.",
         "text2": "By depositing content, you grant {legalName}, for the legal duration of copyright protection as defined by article L123-1 of the Intellectual Property Code, a non-exclusive, worldwide, free, and non-transferable license to third parties, covering the following economic rights and within the limits below:",
         "scope": "Scope: reproduction, representation, making available, hosting, and distribution of the contributed content.",
-        "purpose": "Purpose: operation of the WikINT platform, making it available to the academic community of partner institutions, and preserving the collective knowledge base.",
-        "location": "Location: any medium allowing access to the WikINT service, including possible future digital variations within the scope of the same service.",
+        "purpose": "Purpose: operation of the {siteName} platform, making it available to the academic community of partner institutions, and preserving the collective knowledge base.",
+        "location": "Location: any medium allowing access to the {siteName} service, including possible future digital variations within the scope of the same service.",
         "text3": "This license is granted upon the deposit of the content. It remains in effect after the deletion of your account for the sole purpose of preserving service continuity for other users, in accordance with the legitimate interest of the academic community. In the event of account deletion, your name and personal information will be dissociated from the content, which will be kept in an anonymized form. You may, before deleting your account, withdraw content you have deposited by manually deleting it from your personal space. Any content not deleted before account closure is deemed maintained for the benefit of the community under the terms of this license.",
         "text4": "This license does not in any way constitute a transfer of ownership. You remain the author of your works and may publish or distribute them elsewhere without restriction."
       },
       "prohibited": {
         "title": "Prohibited Content",
-        "text": "It is prohibited to deposit on WikINT content protected by third-party rights without authorization, counterfeit content, personal data of third parties without their consent, illicit content, or content contrary to public order. Any breach of these rules may result in the deletion of the concerned content and the suspension of the account."
+        "text": "It is prohibited to deposit on {siteName} content protected by third-party rights without authorization, counterfeit content, personal data of third parties without their consent, illicit content, or content contrary to public order. Any breach of these rules may result in the deletion of the concerned content and the suspension of the account."
       },
       "availability": {
         "title": "Service Availability",
-        "text": "WikINT is provided without any guarantee of continuous availability. {legalName} cannot be held responsible for temporary service interruptions due to maintenance operations or external causes."
+        "text": "{siteName} is provided without any guarantee of continuous availability. {legalName} cannot be held responsible for temporary service interruptions due to maintenance operations or external causes."
       },
       "modification": {
         "title": "Modification of Terms",

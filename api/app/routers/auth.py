@@ -68,6 +68,7 @@ async def get_auth_methods(
         "site_favicon_url": auth_config.get("site_favicon_url"),
         "primary_color": auth_config.get("primary_color"),
         "footer_text": auth_config.get("footer_text"),
+        "footer_logo_url": auth_config.get("footer_logo_url"),
         "organization_url": auth_config.get("organization_url"),
         "og_image_url": auth_config.get("og_image_url"),
         "bg_watermark_url": auth_config.get("bg_watermark_url"),

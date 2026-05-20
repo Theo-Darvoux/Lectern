@@ -1,11 +1,13 @@
-import math
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.database import get_db
+from app.core.exceptions import NotFoundError
 from app.core.limiter import limiter
 from app.core.sse import (
     broadcast_to_topic,
@@ -14,14 +16,14 @@ from app.core.sse import (
     unregister_topic_queue,
 )
 from app.dependencies.auth import CurrentUser, OnboardedUser
-from app.dependencies.pagination import PaginationParams
+from app.models.material import Material
 from app.schemas.annotation import (
     AnnotationCreateIn,
     AnnotationOut,
     AnnotationUpdateIn,
     ThreadOut,
 )
-from app.schemas.common import PaginatedResponse
+from app.schemas.common import CursorPaginatedResponse
 from app.services.annotation import (
     create_annotation,
     delete_annotation,
@@ -35,17 +37,18 @@ annotations_router = APIRouter(prefix="/api/annotations", tags=["annotations"])
 
 @material_annotations_router.get(
     "/{material_id}/annotations",
-    response_model=PaginatedResponse[ThreadOut],
+    response_model=CursorPaginatedResponse[ThreadOut],
 )
 async def list_annotations(
     material_id: str,
-    pagination: Annotated[PaginationParams, Depends()],
     db: Annotated[AsyncSession, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    cursor: Annotated[str | None, Query()] = None,
     version: Annotated[int | None, Query()] = None,
     doc_page: Annotated[int | None, Query(alias="docPage")] = None,
-) -> PaginatedResponse[ThreadOut]:
-    roots, total = await get_annotations(
-        db, material_id, pagination.limit, pagination.offset, version, doc_page
+) -> CursorPaginatedResponse[ThreadOut]:
+    roots, total, next_cursor = await get_annotations(
+        db, material_id, limit, cursor, version, doc_page
     )
     threads = [
         ThreadOut(
@@ -54,11 +57,10 @@ async def list_annotations(
         )
         for r in roots
     ]
-    return PaginatedResponse[ThreadOut](
+    return CursorPaginatedResponse[ThreadOut](
         items=threads,
         total=total,
-        page=pagination.page,
-        pages=max(1, math.ceil(total / pagination.limit)),
+        next_cursor=next_cursor,
     )
 
 
@@ -106,13 +108,26 @@ async def remove_annotation(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
-    annotation = await delete_annotation(db, annotation_id, user)
-    if annotation is not None:
-        broadcast_to_topic(str(annotation.material_id), {"type": "annotation_deleted"})
+    material_id = await delete_annotation(db, annotation_id, user)
+    broadcast_to_topic(str(material_id), {"type": "annotation_deleted"})
 
 
 @material_annotations_router.get("/{material_id}/sse")
-async def material_event_stream(material_id: str) -> EventSourceResponse:
+@limiter.limit("20/minute")
+async def material_event_stream(
+    request: Request,
+    material_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> EventSourceResponse:
+    try:
+        mid = uuid.UUID(material_id)
+    except ValueError:
+        raise NotFoundError("Material not found")
+
+    result = await db.execute(select(Material).where(Material.id == mid))
+    if not result.scalar_one_or_none():
+        raise NotFoundError("Material not found")
+
     queue = register_topic_queue(material_id)
     return EventSourceResponse(
         sse_event_stream(

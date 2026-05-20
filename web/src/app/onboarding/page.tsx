@@ -15,9 +15,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 
 import { useTranslations } from "next-intl";
 import Link from "next/link";
+import { useConfigStore } from "@/lib/stores";
 
 export default function OnboardingPage() {
     const t = useTranslations("Onboarding");
+    const { config } = useConfigStore();
+    const siteName = config?.site_name || "";
     const { user, isLoading } = useAuth();
     const { setUser } = useAuthStore();
     const [displayName, setDisplayName] = useState("");
@@ -82,7 +85,7 @@ export default function OnboardingPage() {
                     <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
                         <Sparkles className="h-6 w-6 text-primary animate-pulse" />
                     </div>
-                    <CardTitle className="text-3xl font-extrabold tracking-tight">{t("welcome")}</CardTitle>
+                    <CardTitle className="text-3xl font-extrabold tracking-tight">{t("welcome", { siteName })}</CardTitle>
                     <CardDescription className="text-base mt-2">
                         {t("completeProfile")}
                     </CardDescription>
@@ -164,7 +167,7 @@ export default function OnboardingPage() {
                                     htmlFor="gdpr"
                                     className="text-sm font-medium leading-normal cursor-pointer text-muted-foreground group-hover:text-foreground transition-colors"
                                 >
-                                    {t("gdprAgree")}
+                                    {t("gdprAgree", { siteName })}
                                     <span className="block mt-1 text-xs opacity-70 italic">
                                         {t.rich("gdprNote", {
                                             privacy: (chunks) => (

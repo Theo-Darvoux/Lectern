@@ -29,6 +29,7 @@ interface AuthConfig {
     site_favicon_url: string | null;
     primary_color: string;
     footer_text: string;
+    footer_logo_url: string | null;
     organization_url: string | null;
     og_image_url: string | null;
     bg_watermark_url: string | null;
@@ -404,6 +405,7 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
             site_favicon_url: config.site_favicon_url,
             primary_color: config.primary_color,
             footer_text: config.footer_text,
+            footer_logo_url: config.footer_logo_url,
             organization_url: config.organization_url,
             og_image_url: config.og_image_url,
             bg_watermark_url: config.bg_watermark_url,
@@ -436,6 +438,7 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
             site_favicon_url: config.site_favicon_url,
             primary_color: config.primary_color,
             footer_text: config.footer_text,
+            footer_logo_url: config.footer_logo_url,
             organization_url: config.organization_url,
             og_image_url: config.og_image_url,
             bg_watermark_url: config.bg_watermark_url,
@@ -541,6 +544,7 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
                             previewSize="md"
                             onUploaded={(url) => {
                                 setBrandingForm(prev => ({ ...prev, site_logo_url: url }));
+                                setIsBrandingModified(true);
                             }}
                             onClear={() => {
                                 setBrandingForm(prev => ({ ...prev, site_logo_url: null }));
@@ -555,6 +559,7 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
                             previewSize="sm"
                             onUploaded={(url) => {
                                 setBrandingForm(prev => ({ ...prev, site_favicon_url: url }));
+                                setIsBrandingModified(true);
                             }}
                             onClear={() => {
                                 setBrandingForm(prev => ({ ...prev, site_favicon_url: null }));
@@ -688,6 +693,21 @@ export function BrandingConfigTab({ config, saving, patchConfig }: BrandingConfi
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
+                    <ImageUploadField
+                        label={t("footerLinks.footerLogo")}
+                        currentUrl={brandingForm.footer_logo_url ?? null}
+                        uploadEndpoint="auth-config/upload-footer-logo"
+                        accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
+                        previewSize="sm"
+                        onUploaded={(url) => {
+                            setBrandingForm(prev => ({ ...prev, footer_logo_url: url }));
+                            setIsBrandingModified(true);
+                        }}
+                        onClear={() => {
+                            setBrandingForm(prev => ({ ...prev, footer_logo_url: null }));
+                            setIsBrandingModified(true);
+                        }}
+                    />
                     <div className="grid gap-4 md:grid-cols-2">
                         <div className="space-y-2">
                             <Label htmlFor="footer_text">{t("footerLinks.footerText")}</Label>

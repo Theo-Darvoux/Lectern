@@ -77,6 +77,7 @@ class AuthConfig(UUIDMixin, Base):
     bg_watermark_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bg_watermark_opacity_light: Mapped[float | None] = mapped_column(Float, nullable=True)
     bg_watermark_opacity_dark: Mapped[float | None] = mapped_column(Float, nullable=True)
+    footer_logo_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     legal_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     legal_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     legal_siret: Mapped[str | None] = mapped_column(String(255), nullable=True)

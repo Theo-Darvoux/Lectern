@@ -47,6 +47,8 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
   const {
     threads,
     loading,
+    hasMore,
+    loadMore,
     createAnnotation,
     editAnnotation,
     deleteAnnotation,
@@ -146,6 +148,20 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
                 )}
             </div>
           ))}
+
+          {hasMore && (
+            <div className="py-3 flex justify-center">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={loadMore}
+                disabled={loading}
+                className="text-xs text-muted-foreground"
+              >
+                {loading ? t("loading") : t("loadMore")}
+              </Button>
+            </div>
+          )}
 
           {editingId && (
             <div className="space-y-3 rounded-lg border bg-muted/30 p-3 mb-4 shadow-sm">

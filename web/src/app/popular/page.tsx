@@ -11,6 +11,7 @@ import { SectionHeader } from "@/components/home/section-header";
 import { apiFetch } from "@/lib/api-client";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
+import { useConfigStore } from "@/lib/stores";
 import type { MaterialDetail } from "@/components/home/types";
 
 type Period = "today" | "14d";
@@ -49,6 +50,7 @@ function SkeletonGrid() {
 // ─────────────────────────────────────────────
 function PopularContent() {
   const t = useTranslations("Popular");
+  const { config } = useConfigStore();
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -121,7 +123,7 @@ function PopularContent() {
       <div className="mb-6">
         <SectionHeader
           title={t("title")}
-          subtitle={t("subtitle")}
+          subtitle={t("subtitle", { siteName: config?.site_name || "" })}
         />
       </div>
 

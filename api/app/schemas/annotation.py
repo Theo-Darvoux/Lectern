@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, BeforeValidator, Field, field_validator
 
-from app.core.sanitization import SanitizedStr
+from app.core.sanitization import SanitizedStr, sanitize_json_payload
 
 StrFromUUID = Annotated[str, BeforeValidator(lambda v: str(v))]
 OptStrFromUUID = Annotated[str | None, BeforeValidator(lambda v: str(v) if v is not None else None)]
@@ -45,7 +45,7 @@ class AnnotationCreateIn(BaseModel):
             return None
         if len(v) > MAX_POSITION_DATA_KEYS:
             raise ValueError(f"position_data too large (max {MAX_POSITION_DATA_KEYS} keys)")
-        return v
+        return sanitize_json_payload(v)  # type: ignore[return-value]
 
 
 class AnnotationUpdateIn(BaseModel):

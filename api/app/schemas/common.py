@@ -14,6 +14,12 @@ class PaginatedResponse[T](BaseModel):
     pages: int
 
 
+class CursorPaginatedResponse[T](BaseModel):
+    items: list[T]
+    total: int
+    next_cursor: str | None
+
+
 class HealthResponse(BaseModel):
     status: str
     details: dict[str, str] | None = None

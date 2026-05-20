@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
 import { createSSEConnection } from "@/lib/sse-client";
 
@@ -31,43 +31,65 @@ export interface ThreadData {
     replies: AnnotationData[];
 }
 
-interface PaginatedThreads {
+interface CursorPaginatedThreads {
     items: ThreadData[];
     total: number;
-    page: number;
-    pages: number;
+    next_cursor: string | null;
 }
+
+const PAGE_LIMIT = 50;
 
 export function useAnnotations(materialId: string | null) {
     const [threads, setThreads] = useState<ThreadData[]>([]);
     const [loading, setLoading] = useState(false);
     const [total, setTotal] = useState(0);
+    const [hasMore, setHasMore] = useState(false);
+
+    const nextCursorRef = useRef<string | null>(null);
+    const loadingRef = useRef(false);
 
     const fetchAnnotations = useCallback(
-        async () => {
-            if (!materialId) return;
+        async (reset = true) => {
+            if (!materialId || loadingRef.current) return;
+            if (reset) nextCursorRef.current = null;
+
+            loadingRef.current = true;
             setLoading(true);
             try {
-                const data = await apiFetch<PaginatedThreads>(
-                    `/materials/${materialId}/annotations?page=1&limit=1000`
+                const params = new URLSearchParams({ limit: String(PAGE_LIMIT) });
+                if (!reset && nextCursorRef.current) {
+                    params.set("cursor", nextCursorRef.current);
+                }
+
+                const data = await apiFetch<CursorPaginatedThreads>(
+                    `/materials/${materialId}/annotations?${params}`
                 );
-                setThreads(data.items);
+
+                setThreads((prev) => (reset ? data.items : [...prev, ...data.items]));
                 setTotal(data.total);
+                nextCursorRef.current = data.next_cursor;
+                setHasMore(data.next_cursor !== null);
             } catch {
                 // silent
             } finally {
+                loadingRef.current = false;
                 setLoading(false);
             }
         },
         [materialId]
     );
 
+    const loadMore = useCallback(async () => {
+        if (!hasMore) return;
+        await fetchAnnotations(false);
+    }, [hasMore, fetchAnnotations]);
+
     useEffect(() => {
         setThreads([]);
-        if (materialId) fetchAnnotations();
+        setHasMore(false);
+        nextCursorRef.current = null;
+        if (materialId) fetchAnnotations(true);
     }, [materialId, fetchAnnotations]);
-
-    // Subscribe to real-time annotation events for this material
 
     useEffect(() => {
         if (!materialId) return;
@@ -75,10 +97,10 @@ export function useAnnotations(materialId: string | null) {
         const connection = createSSEConnection({
             url: `/materials/${materialId}/sse`,
             listeners: {
-                annotation_created: () => fetchAnnotations(),
-                annotation_deleted: () => fetchAnnotations(),
+                annotation_created: () => fetchAnnotations(true),
+                annotation_deleted: () => fetchAnnotations(true),
             },
-            startupDelay: 50, // React Strict Mode workaround
+            startupDelay: 50,
         });
 
         return () => connection.close();
@@ -100,7 +122,7 @@ export function useAnnotations(materialId: string | null) {
                     body: JSON.stringify(payload),
                 }
             );
-            await fetchAnnotations();
+            await fetchAnnotations(true);
             return annotation;
         },
         [materialId, fetchAnnotations]
@@ -112,7 +134,7 @@ export function useAnnotations(materialId: string | null) {
                 method: "PATCH",
                 body: JSON.stringify({ body }),
             });
-            await fetchAnnotations();
+            await fetchAnnotations(true);
         },
         [fetchAnnotations]
     );
@@ -122,7 +144,7 @@ export function useAnnotations(materialId: string | null) {
             await apiFetch<void>(`/annotations/${annotationId}`, {
                 method: "DELETE",
             });
-            await fetchAnnotations();
+            await fetchAnnotations(true);
         },
         [fetchAnnotations]
     );
@@ -131,6 +153,8 @@ export function useAnnotations(materialId: string | null) {
         threads,
         loading,
         total,
+        hasMore,
+        loadMore,
         fetchAnnotations,
         createAnnotation,
         editAnnotation,

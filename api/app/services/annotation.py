@@ -1,7 +1,8 @@
+import base64
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -15,6 +16,20 @@ def _to_uuid(value: str | uuid.UUID) -> uuid.UUID:
     if isinstance(value, uuid.UUID):
         return value
     return uuid.UUID(value)
+
+
+def _encode_cursor(created_at: datetime, id: uuid.UUID) -> str:
+    raw = f"{created_at.isoformat()}|{id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+        ts, id_str = raw.split("|", 1)
+        return datetime.fromisoformat(ts), uuid.UUID(id_str)
+    except Exception:
+        raise BadRequestError("Invalid pagination cursor")
 
 
 async def _get_material_current_version(
@@ -41,10 +56,10 @@ async def get_annotations(
     db: AsyncSession,
     material_id: str,
     limit: int,
-    offset: int,
+    cursor: str | None = None,
     version: int | None = None,
     doc_page: int | None = None,
-) -> tuple[list[Annotation], int]:
+) -> tuple[list[Annotation], int, str | None]:
     mid = _to_uuid(material_id)
 
     mat_res = await db.execute(select(Material).where(Material.id == mid))
@@ -64,8 +79,9 @@ async def get_annotations(
             )
         )
         ver = ver_result.scalar_one_or_none()
-        if ver:
-            base = base.where(Annotation.version_id == ver.id)
+        if ver is None:
+            raise NotFoundError("Version not found")
+        base = base.where(Annotation.version_id == ver.id)
 
     if doc_page is not None:
         base = base.where(Annotation.page == doc_page)
@@ -73,13 +89,32 @@ async def get_annotations(
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
     total = count_result.scalar_one()
 
+    if cursor:
+        cursor_dt, cursor_id = _decode_cursor(cursor)
+        base = base.where(
+            or_(
+                Annotation.created_at > cursor_dt,
+                and_(
+                    Annotation.created_at == cursor_dt,
+                    Annotation.id > cursor_id,
+                ),
+            )
+        )
+
     ann_result = await db.execute(
         base.options(joinedload(Annotation.author))
-        .order_by(Annotation.created_at.asc())
-        .offset(offset)
-        .limit(limit)
+        .order_by(Annotation.created_at.asc(), Annotation.id.asc())
+        .limit(limit + 1)
     )
-    root_annotations = list(ann_result.scalars().unique().all())
+    rows = list(ann_result.scalars().unique().all())
+
+    has_more = len(rows) > limit
+    root_annotations = rows[:limit]
+    next_cursor = (
+        _encode_cursor(root_annotations[-1].created_at, root_annotations[-1].id)
+        if has_more
+        else None
+    )
 
     if root_annotations:
         thread_ids = [a.id for a in root_annotations]
@@ -105,7 +140,7 @@ async def get_annotations(
         for root in root_annotations:
             root._replies = []
 
-    return root_annotations, total
+    return root_annotations, total, next_cursor
 
 
 async def create_annotation(
@@ -212,7 +247,7 @@ async def delete_annotation(
     db: AsyncSession,
     annotation_id: str,
     user: User,
-) -> Annotation:
+) -> uuid.UUID:
     aid = _to_uuid(annotation_id)
     result = await db.execute(select(Annotation).where(Annotation.id == aid))
     annotation = result.scalar_one_or_none()
@@ -223,26 +258,19 @@ async def delete_annotation(
     if annotation.author_id != user.id and not is_moderator:
         raise ForbiddenError("Only the author or a moderator can delete this annotation")
 
-    is_thread_root = annotation.thread_id == annotation.id
+    material_id = annotation.material_id
 
-    if is_thread_root:
-        replies_result = await db.execute(
-            select(Annotation).where(
+    if annotation.thread_id == annotation.id:
+        await db.execute(
+            delete(Annotation).where(
                 Annotation.thread_id == aid,
                 Annotation.id != aid,
             )
         )
-        for reply in replies_result.scalars().all():
-            await db.delete(reply)
-        await db.flush()
-
         annotation.thread_id = None
-        await db.flush()
-
-    if annotation.reply_to_id == annotation.id:
-        annotation.reply_to_id = None
         await db.flush()
 
     await db.delete(annotation)
     await db.flush()
-    return annotation
+
+    return material_id

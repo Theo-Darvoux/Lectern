@@ -67,6 +67,7 @@ interface AuthConfig {
     site_favicon_url: string | null;
     primary_color: string;
     footer_text: string;
+    footer_logo_url: string | null;
     organization_url: string | null;
     og_image_url: string | null;
     bg_watermark_url: string | null;

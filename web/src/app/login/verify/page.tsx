@@ -61,7 +61,7 @@ function MagicLinkVerifier() {
             <div className="flex min-h-screen items-center justify-center bg-background px-4">
                 <Card className="w-full max-w-md border-destructive/20 shadow-lg">
                     <CardHeader className="text-center">
-                        <CardTitle className="text-3xl font-bold tracking-tight"><SiteName name={config?.site_name || "WikINT"} style={config?.site_name_style} /></CardTitle>
+                        <CardTitle className="text-3xl font-bold tracking-tight"><SiteName name={config?.site_name || ""} style={config?.site_name_style} /></CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-6 text-center">
                         <div className="rounded-lg bg-destructive/10 p-4">
@@ -87,7 +87,7 @@ function MagicLinkVerifier() {
         <div className="flex min-h-screen items-center justify-center bg-background px-4">
             <Card className="w-full max-w-md shadow-2xl border-primary/10">
                 <CardHeader className="text-center pt-8">
-                    <CardTitle className="text-4xl font-black tracking-tighter"><SiteName name={config?.site_name || "WikINT"} style={config?.site_name_style} /></CardTitle>
+                    <CardTitle className="text-4xl font-black tracking-tighter"><SiteName name={config?.site_name || ""} style={config?.site_name_style} /></CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-8 text-center pb-12 pt-4">
                     <div className="space-y-2">
@@ -128,7 +128,7 @@ export default function MagicLinkPage() {
                 <div className="flex min-h-screen items-center justify-center bg-background px-4">
                     <Card className="w-full max-w-md">
                         <CardHeader className="text-center">
-                            <CardTitle className="text-2xl font-bold"><SiteName name={config?.site_name || "WikINT"} style={config?.site_name_style} /></CardTitle>
+                            <CardTitle className="text-2xl font-bold"><SiteName name={config?.site_name || ""} style={config?.site_name_style} /></CardTitle>
                         </CardHeader>
                         <CardContent className="text-center">
                             <p className="text-sm text-muted-foreground">{t("loading")}</p>

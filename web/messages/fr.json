@@ -1,6 +1,6 @@
 {
   "Login": {
-    "title": "WikINT",
+    "title": "",
     "descEmail": "Connectez-vous pour accéder aux matériels de cours",
     "descCode": "Entrez le code de vérification",
     "descPassword": "Entrez votre mot de passe",
@@ -72,7 +72,7 @@
     "deletedUser": "Utilisateur supprimé"
   },
   "Onboarding": {
-    "welcome": "Bienvenue sur WikINT !",
+    "welcome": "Bienvenue sur {siteName} !",
     "completeProfile": "Complétez votre profil pour débloquer toutes les fonctionnalités",
     "displayName": "Nom d'affichage",
     "importedFromGoogle": "Importé de Google",
@@ -92,7 +92,7 @@
         "description": "Troisième année +"
       }
     },
-    "gdprAgree": "J'accepte le traitement de mes données personnelles pour WikINT.",
+    "gdprAgree": "J'accepte le traitement de mes données personnelles pour {siteName}.",
     "gdprNote": "Les matériels que je télécharge deviennent propriété de la plateforme. Voir notre <privacy>politique de confidentialité</privacy>.",
     "finalizing": "Finalisation...",
     "getStarted": "Commencer",
@@ -101,7 +101,7 @@
     "failed": "Échec de l'onboarding"
   },
   "Privacy": {
-    "title": "Politique de Confidentialité de WikINT",
+    "title": "Politique de Confidentialité de {siteName}",
     "version": "Version {version} : Entrée en vigueur le {date}",
     "sections": {
       "controller": {
@@ -111,7 +111,7 @@
       },
       "dataCollected": {
         "title": "Données collectées",
-        "text": "WikINT collecte les données strictement nécessaires au fonctionnement de la plateforme et à la sécurité des systèmes :",
+        "text": "{siteName} collecte les données strictement nécessaires au fonctionnement de la plateforme et à la sécurité des systèmes :",
         "items": {
           "account": "Données de compte : email (obligatoire pour l'authentification), nom d'affichage et avatar (facultatifs).",
           "activity": "Données d'activité : historiques de contributions (PR), annotations, commentaires et rapports générés.",
@@ -136,7 +136,7 @@
       },
       "recipients": {
         "title": "Destinataires des données",
-        "text": "Vos données sont destinées exclusivement aux équipes d'administration de WikINT. Elles ne sont jamais vendues ni cédées à des tiers à des fins commerciales.",
+        "text": "Vos données sont destinées exclusivement aux équipes d'administration de {siteName}. Elles ne sont jamais vendues ni cédées à des tiers à des fins commerciales.",
         "transfers": "Transferts hors UE : {dataTransfers}"
       },
       "rights": {
@@ -333,8 +333,7 @@
     "_": "_",
     "failedToUpdateLike": "failedToUpdateLike",
     "listView": "Vue liste",
-    "gridView": "Vue grille",
-    "siteName": "WikINT"
+    "gridView": "Vue grille"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",
@@ -444,10 +443,13 @@
     "unknown": "Inconnu",
     "directory": "dossier",
     "material": "document",
-    "closePanel": "Fermer le panneau"
+    "closePanel": "Fermer le panneau",
+    "loadMore": "Charger plus d'annotations",
+    "loading": "Chargement…"
   },
   "Annotations": {
     "addAnnotation": "Ajoutez votre annotation...",
+    "edited": "modifié",
     "shiftEnterForNewline": "Maj+Entrée pour une nouvelle ligne",
     "annotate": "Annoter",
     "cancel": "Annuler",
@@ -731,7 +733,7 @@
     "download": "Télécharger",
     "open": "Ouvrir",
     "titleDefault": "Aperçu",
-    "notSupported": "WikINT ne supporte pas encore la prévisualisation directe pour ce type de fichier. Vous pouvez le télécharger pour le consulter avec vos applications locales.",
+    "notSupported": "{siteName} ne supporte pas encore la prévisualisation directe pour ce type de fichier. Vous pouvez le télécharger pour le consulter avec vos applications locales.",
     "downloadFile": "Télécharger le fichier",
     "openInNewTab": "Ouvrir dans un nouvel onglet",
     "failedToLoadPreview": "Échec du chargement de l'aperçu",
@@ -1068,7 +1070,7 @@
   },
   "Popular": {
     "title": "Matériels populaires",
-    "subtitle": "Découvrez les matériels les plus consultés sur WikINT",
+    "subtitle": "Découvrez les matériels les plus consultés sur {siteName}",
     "loadError": "Échec du chargement des matériels populaires",
     "today": "Aujourd'hui",
     "last14Days": "14 derniers jours",
@@ -1139,6 +1141,7 @@
         "footerLinks": {
           "title": "Liens du pied de page",
           "description": "Configurez les liens et textes affichés en bas de chaque page.",
+          "footerLogo": "Logo du pied de page",
           "footerText": "Texte du pied de page",
           "organizationUrl": "URL de l'organisation",
           "placeholders": {
@@ -1907,34 +1910,34 @@
     }
   },
   "Terms": {
-    "title": "TERMES D'UTILISATION DE WIKINT",
+    "title": "TERMES D'UTILISATION DE {siteName}",
     "version": "Version {version} : Entrée en vigueur le {date}",
     "sections": {
       "presentation": {
         "title": "Présentation du service",
-        "text": "WikINT est une plateforme collaborative de partage de ressources académiques destinée aux étudiants et membres de la communauté de Telecom SudParis et de l'IMT-BS. Le service est édité par {legalName}, dont le siège social est situé {legalAddress}, immatriculée sous le numéro {legalSiret}."
+        "text": "{siteName} est une plateforme collaborative de partage de ressources académiques destinée aux étudiants et membres de la communauté de Telecom SudParis et de l'IMT-BS. Le service est édité par {legalName}, dont le siège social est situé {legalAddress}, immatriculée sous le numéro {legalSiret}."
       },
       "access": {
         "title": "Accès au service",
-        "text": "L'accès à WikINT est réservé aux personnes disposant d'une adresse email académique valide délivrée par un établissement partenaire. L'inscription vaut acceptation des présents termes d'utilisation. Chaque utilisateur est responsable de la confidentialité de ses identifiants de connexion."
+        "text": "L'accès à {siteName} est réservé aux personnes disposant d'une adresse email académique valide délivrée par un établissement partenaire. L'inscription vaut acceptation des présents termes d'utilisation. Chaque utilisateur est responsable de la confidentialité de ses identifiants de connexion."
       },
       "content": {
         "title": "Contenu contribué par les utilisateurs : Licence d'utilisation",
-        "text1": "En déposant des matériels sur WikINT (documents, fichiers, médias, commentaires, annotations), vous conservez l'intégralité de vos droits d'auteur sur ces contenus, conformément aux articles L111-1 et L121-1 du Code de la Propriété Intellectuelle. Le droit moral sur votre œuvre, inaliénable et imprescriptible en droit français, ne saurait faire l'objet d'aucun transfert.",
+        "text1": "En déposant des matériels sur {siteName} (documents, fichiers, médias, commentaires, annotations), vous conservez l'intégralité de vos droits d'auteur sur ces contenus, conformément aux articles L111-1 et L121-1 du Code de la Propriété Intellectuelle. Le droit moral sur votre œuvre, inaliénable et imprescriptible en droit français, ne saurait faire l'objet d'aucun transfert.",
         "text2": "En déposant un contenu, vous accordez à {legalName}, pour la durée légale de protection des droits d'auteur telle que définie par l'article L123-1 du Code de la Propriété Intellectuelle, une licence non exclusive, mondiale, gratuite et non transférable à des tiers, portant sur les droits patrimoniaux suivants et dans les limites ci-après :",
         "scope": "Étendue : reproduction, représentation, mise à disposition, hébergement et distribution du contenu contribué.",
-        "purpose": "Destination : fonctionnement de la plateforme WikINT, mise à disposition de la communauté académique des établissements partenaires, préservation de la base de connaissances collective.",
-        "location": "Lieu : tout support permettant d'accéder au service WikINT, y compris ses éventuelles déclinaisons numériques futures dans le cadre du même service.",
+        "purpose": "Destination : fonctionnement de la plateforme {siteName}, mise à disposition de la communauté académique des établissements partenaires, préservation de la base de connaissances collective.",
+        "location": "Lieu : tout support permettant d'accéder au service {siteName}, y compris ses éventuelles déclinaisons numériques futures dans le cadre du même service.",
         "text3": "Cette licence est accordée à compter du dépôt du contenu. Elle reste en vigueur après la suppression de votre compte aux seules fins de préserver la continuité du service pour les autres utilisateurs, conformément à l'intérêt légitime de la communauté académique. En cas de suppression de votre compte, votre nom et vos informations personnelles seront dissociés du contenu, lequel sera conservé sous forme anonymisée. Vous pouvez, avant de supprimer votre compte, retirer un contenu que vous avez déposé en le supprimant manuellement depuis votre espace personnel. Tout contenu que vous n'avez pas supprimé avant la clôture de votre compte est réputé maintenu au bénéfice de la communauté dans les conditions de la présente licence.",
         "text4": "Cette licence ne constitue en aucun cas un transfert de propriété. Vous demeurez l'auteur de vos œuvres et pouvez les publier ou les diffuser par ailleurs sans restriction."
       },
       "prohibited": {
         "title": "Contenu interdit",
-        "text": "Il est interdit de déposer sur WikINT des contenus protégés par des droits de tiers sans autorisation, des contenus contrefaisants, des données à caractère personnel de tiers sans leur consentement, des contenus illicites ou contraires à l'ordre public. Tout manquement à ces règles peut entraîner la suppression du contenu concerné et la suspension du compte."
+        "text": "Il est interdit de déposer sur {siteName} des contenus protégés par des droits de tiers sans autorisation, des contenus contrefaisants, des données à caractère personnel de tiers sans leur consentement, des contenus illicites ou contraires à l'ordre public. Tout manquement à ces règles peut entraîner la suppression du contenu concerné et la suspension du compte."
       },
       "availability": {
         "title": "Disponibilité du service",
-        "text": "WikINT est fourni sans garantie de disponibilité continue. {legalName} ne saurait être tenu responsable des interruptions temporaires de service dues à des opérations de maintenance ou à des causes extérieures."
+        "text": "{siteName} est fourni sans garantie de disponibilité continue. {legalName} ne saurait être tenu responsable des interruptions temporaires de service dues à des opérations de maintenance ou à des causes extérieures."
       },
       "modification": {
         "title": "Modification des termes",

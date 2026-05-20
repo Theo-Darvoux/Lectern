@@ -19,7 +19,7 @@ export function SiteName({ name, style, gradientClassName }: SiteNameProps) {
     if (!segments) {
         return (
             <span className={gradientClassName}>
-                {name || "WikINT"}
+                {name}
             </span>
         );
     }

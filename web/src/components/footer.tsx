@@ -5,29 +5,39 @@ import { useTranslations } from "next-intl";
 export function Footer() {
     const t = useTranslations("Layout");
     const { config } = useConfigStore();
-    
+
     return (
         <footer className="border-t py-6 w-full">
-            <div className="flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-                <div className="flex items-center gap-4">
-                    <Link href="/privacy" className="hover:text-foreground transition-colors">
-                        {t("privacyPolicy")}
-                    </Link>
-                    <span>•</span>
-                    <Link href="/terms" className="hover:text-foreground transition-colors">
-                        {t("termsOfUse")}
-                    </Link>
-                    <span>•</span>
-                    <a
-                        href={config?.organization_url || "https://github.com/Theo-Darvoux/WikINT"}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:text-foreground transition-colors"
-                    >
-                        {config?.organization_url ? t("organization") : t("github")}
-                    </a>
+            <div className="relative flex items-center justify-center px-6">
+                {config?.footer_logo_url && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                        src={config.footer_logo_url}
+                        alt="Footer logo"
+                        className="absolute left-6 h-8 w-auto object-contain opacity-80"
+                    />
+                )}
+                <div className="flex flex-col items-center gap-1.5 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-4">
+                        <Link href="/privacy" className="hover:text-foreground transition-colors">
+                            {t("privacyPolicy")}
+                        </Link>
+                        <span aria-hidden>•</span>
+                        <Link href="/terms" className="hover:text-foreground transition-colors">
+                            {t("termsOfUse")}
+                        </Link>
+                        <span aria-hidden>•</span>
+                        <a
+                            href={config?.organization_url || "https://github.com/Theo-Darvoux/WikINT"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:text-foreground transition-colors"
+                        >
+                            {config?.organization_url ? t("organization") : t("github")}
+                        </a>
+                    </div>
+                    {config?.footer_text && <p className="text-xs">{config.footer_text}</p>}
                 </div>
-                <p>{config?.footer_text || "Telecom SudParis • WikINT • IMT-Business School"}</p>
             </div>
         </footer>
     );

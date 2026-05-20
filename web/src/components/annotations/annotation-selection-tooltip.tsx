@@ -5,6 +5,7 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { MessageSquarePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "sonner";
 import { useTranslations } from "next-intl";
 
 interface SelectionPosition {
@@ -166,6 +167,8 @@ export function AnnotationSelectionTooltip({
             setSelection(null);
             setShowForm(false);
             setBody("");
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : t("failedToSubmit"));
         } finally {
             setSubmitting(false);
         }

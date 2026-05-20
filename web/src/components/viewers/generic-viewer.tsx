@@ -4,6 +4,7 @@ import { FileText } from "lucide-react";
 import { useDownload } from "@/hooks/use-download";
 import { ViewerShell } from "./viewer-shell";
 import { useTranslations } from "next-intl";
+import { useConfigStore } from "@/lib/stores";
 
 interface GenericViewerProps {
     fileKey: string;
@@ -17,6 +18,7 @@ interface GenericViewerProps {
  */
 export function GenericViewer({ materialId, fileName, fileKey }: GenericViewerProps) {
     const t = useTranslations("Preview");
+    const { config } = useConfigStore();
     const { downloadMaterial, isDownloading } = useDownload();
 
     return (
@@ -28,7 +30,7 @@ export function GenericViewer({ materialId, fileName, fileKey }: GenericViewerPr
                 
                 <h3 className="mb-2 text-xl font-semibold text-foreground">{fileName}</h3>
                 <p className="mb-8 max-w-md text-sm text-muted-foreground">
-                    {t("notSupported")}
+                    {t("notSupported", { siteName: config?.site_name || "" })}
                 </p>
 
                 <button

@@ -43,9 +43,9 @@ function AnnotationItem({
     onDelete: (id: string) => void;
     replyToAnnotation?: AnnotationData | null;
 }) {
-    const isAuthor = currentUserId && annotation.author_id === currentUserId;
+    const isAuthor = !!currentUserId && annotation.author_id === currentUserId;
     const isModerator =
-        currentUserRole === "member" ||
+        currentUserRole === "moderator" ||
         currentUserRole === "bureau" ||
         currentUserRole === "vieux";
     const canEdit = isAuthor;
@@ -54,6 +54,7 @@ function AnnotationItem({
 
     const authorName = annotation.author?.display_name ?? t("deletedUser");
     const date = new Date(annotation.created_at);
+    const isEdited = annotation.updated_at !== annotation.created_at;
 
     return (
         <div className="group flex gap-2 py-3">
@@ -95,17 +96,22 @@ function AnnotationItem({
                     )}
                     <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums opacity-80">
                         {date.toLocaleDateString()}
+                        {isEdited && (
+                            <span className="ml-1 italic opacity-70">({t("edited")})</span>
+                        )}
                     </span>
                 </div>
                 <ExpandableText text={annotation.body} threshold={180} clampedLines={5} className="text-xs text-foreground/90 leading-normal" />
                 <div className="mt-1.5 flex flex-wrap gap-2 items-center">
-                    <button
-                        onClick={() => onReply(annotation.id)}
-                        className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                    >
-                        <Reply className="h-3 w-3" />
-                        {t("reply")}
-                    </button>
+                    {currentUserId && (
+                        <button
+                            onClick={() => onReply(annotation.id)}
+                            className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                        >
+                            <Reply className="h-3 w-3" />
+                            {t("reply")}
+                        </button>
+                    )}
                     {canEdit && (
                         <button
                             onClick={() => onEdit(annotation.id, annotation.body)}
@@ -115,7 +121,7 @@ function AnnotationItem({
                             {t("edit")}
                         </button>
                     )}
-                    {canDelete ? (
+                    {canDelete && (
                         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
                             <ConfirmDeleteDialog
                                 onConfirm={() => onDelete(annotation.id)}
@@ -123,7 +129,8 @@ function AnnotationItem({
                                 description={t("deleteAnnotationConfirm")}
                             />
                         </div>
-                    ) : (
+                    )}
+                    {!isAuthor && (
                         <FlagButton
                             targetType="annotation"
                             targetId={annotation.id}

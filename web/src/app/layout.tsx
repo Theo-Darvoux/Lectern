@@ -29,7 +29,7 @@ async function fetchSiteConfig() {
 
 export async function generateMetadata(): Promise<Metadata> {
   const config = await fetchSiteConfig();
-  const siteName = config?.site_name ?? "WikINT";
+  const siteName = config?.site_name ?? "";
   const description = config?.site_description ?? "Collaborative course materials platform";
   const ogImage = config?.og_image_url ?? undefined;
 

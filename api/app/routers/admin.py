@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.database import get_db
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.redis import get_redis
@@ -254,7 +255,6 @@ async def get_detailed_health(
 ) -> DetailedHealthResponse:
     from sqlalchemy import text
 
-    from app.config import settings
     from app.core.meilisearch import meili_admin_client
     from app.core.scanner import MalwareScanner
     from app.models.material import Material, MaterialVersion
@@ -501,6 +501,7 @@ class AuthConfigPatch(BaseModel):
     site_favicon_url: str | None = None
     primary_color: str | None = None
     footer_text: str | None = None
+    footer_logo_url: str | None = None
     organization_url: str | None = None
     og_image_url: str | None = None
     bg_watermark_url: str | None = None
@@ -658,7 +659,7 @@ async def admin_test_email(
 
     config = await db.scalar(select(AuthConfig))
 
-    sitename = "WikINT" if config is None else config.site_name
+    sitename = (config.site_name if config is not None else None) or settings.site_name
 
     subject = f"{sitename} - Test Email"
     body_text = f"This is a test email from {sitename}. Current time: {datetime.now(UTC)}"
@@ -769,4 +770,16 @@ async def upload_bg_watermark(
 ) -> dict:  # type: ignore[type-arg]
     return await _upload_branding_asset(
         file, "bg-watermark", _IMAGE_ALLOWED_TYPES, db, redis, "bg_watermark_url"
+    )
+
+
+@router.post("/auth-config/upload-footer-logo")
+async def upload_footer_logo(
+    _user: AdminUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    file: UploadFile = File(...),
+) -> dict:  # type: ignore[type-arg]
+    return await _upload_branding_asset(
+        file, "footer-logo", _LOGO_ALLOWED_TYPES, db, redis, "footer_logo_url"
     )

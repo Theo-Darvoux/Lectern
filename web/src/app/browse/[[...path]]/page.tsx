@@ -6,7 +6,7 @@ import Link from "next/link";
 import { apiFetch } from "@/lib/api-client";
 import { AuthGuard } from "@/components/auth-guard";
 import { useIsDesktop } from "@/hooks/use-media-query";
-import { useUIStore, useBrowseRefreshStore } from "@/lib/stores";
+import { useUIStore, useBrowseRefreshStore, useConfigStore } from "@/lib/stores";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
@@ -115,6 +115,7 @@ function BrowseContent() {
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
 
   const t = useTranslations("Browse");
+  const { config } = useConfigStore();
   const path = params.path
     ? Array.isArray(params.path)
       ? params.path.join("/")
@@ -266,12 +267,13 @@ function BrowseContent() {
 
   useEffect(() => {
     if (data) {
+      const siteName = config?.site_name || "";
       if (data.type === "material" && data.material) {
-        document.title = `${data.material.title} • ${t("siteName")}`;
+        document.title = `${data.material.title} • ${siteName}`;
       } else if (data.directory) {
-        document.title = `${data.directory.name as string} • ${t("siteName")}`;
+        document.title = `${data.directory.name as string} • ${siteName}`;
       } else if (path === "") {
-        document.title = `${t("courseMaterials")} • ${t("siteName")}`;
+        document.title = `${t("courseMaterials")} • ${siteName}`;
       }
     }
   }, [data, path]);

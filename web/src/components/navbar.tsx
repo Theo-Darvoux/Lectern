@@ -137,7 +137,7 @@ export function Navbar() {
               />
             )}
             <SiteName
-              name={config?.site_name || "WikINT"}
+              name={config?.site_name || ""}
               style={config?.site_name_style}
               gradientClassName="bg-linear-to-br from-foreground to-foreground/70 bg-clip-text text-transparent"
             />
