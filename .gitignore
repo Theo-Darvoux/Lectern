@@ -6,10 +6,17 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
 .venv/
 venv/
 .env/
 api/scratch/
+*.sqlite
+*.sqlite3
+*.db
+audit_output.txt
 
 # Node / Next.js
 node_modules/
