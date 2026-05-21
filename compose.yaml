@@ -119,19 +119,14 @@ services:
 
   web:
     restart: unless-stopped
-    environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
-      - NEXT_PUBLIC_ONLYOFFICE_URL=${NEXT_PUBLIC_ONLYOFFICE_URL}
-      - API_INTERNAL_URL=http://api:8000
-      - NODE_OPTIONS=--max-old-space-size=4096
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/api/health"]
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
       interval: 30s
-      timeout: 30s
-      retries: 5
-      start_period: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - frontend
 

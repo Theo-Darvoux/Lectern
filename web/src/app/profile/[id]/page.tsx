@@ -1,5 +1,10 @@
 "use client";
 
+// Static export: IDs are not known at build time. nginx SPA fallback serves
+// index.html; client-side routing + useParams() handles the actual render.
+export const dynamicParams = false;
+export function generateStaticParams() { return []; }
+
 import { use, useCallback, useEffect, useState } from "react";
 import { ProfileView, ProfileSkeleton, type UserProfile } from "@/components/profile/profile-view";
 import { apiFetch } from "@/lib/api-client";

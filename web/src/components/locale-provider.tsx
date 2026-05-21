@@ -46,8 +46,8 @@ export function LocaleProvider({
     // Set the cookie so server-side renders also pick up the new locale.
     document.cookie = `NEXT_LOCALE=${newLocale}; path=/; max-age=31536000; SameSite=Lax`;
 
-    // Fetch the new message bundle from the local API route.
-    const res = await fetch(`/intl/${newLocale}`);
+    // Fetch the new message bundle from public static assets.
+    const res = await fetch(`/messages/${newLocale}.json`);
     if (!res.ok) {
       console.error(`Failed to load messages for locale: ${newLocale}`);
       return;

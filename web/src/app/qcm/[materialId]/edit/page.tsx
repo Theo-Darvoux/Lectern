@@ -1,5 +1,10 @@
 "use client";
 
+// Static export: IDs are not known at build time. nginx SPA fallback serves
+// index.html; client-side routing + useParams() handles the actual render.
+export const dynamicParams = false;
+export function generateStaticParams() { return []; }
+
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
 import { Loader2, Home, ChevronRight } from "lucide-react";

@@ -1,5 +1,11 @@
 "use client";
 
+// Static export: pre-render only the base /browse/ route. Sub-paths (slugs,
+// nested dirs) are not known at build time — nginx serves index.html as an SPA
+// fallback and client-side routing renders the correct page from the URL.
+export const dynamicParams = false;
+export function generateStaticParams() { return [{}]; }
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
