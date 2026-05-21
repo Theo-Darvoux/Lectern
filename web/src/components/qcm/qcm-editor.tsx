@@ -16,6 +16,8 @@ import {
   Loader2,
   Upload,
   MonitorPlay,
+  BookmarkPlus,
+  Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -794,8 +796,8 @@ export function QCMEditor({
               disabled={isSavingDraft || isSubmitting || !meta.title.trim()}
               className="gap-2"
             >
-              {isSavingDraft && <Loader2 className="h-4 w-4 animate-spin" />}
-              {t("saveToDraft")}
+              {isSavingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookmarkPlus className="h-4 w-4" />}
+              <span className="max-sm:hidden">{t("saveToDraft")}</span>
             </Button>
           )}
           <Button
@@ -804,8 +806,8 @@ export function QCMEditor({
             disabled={isSubmitting || isSavingDraft || !meta.title.trim()}
             className="gap-2"
           >
-            {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isSubmitting ? t("submitting") : t("submit")}
+            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            <span className="max-sm:hidden">{isSubmitting ? t("submitting") : t("submit")}</span>
           </Button>
         </div>
       </div>
