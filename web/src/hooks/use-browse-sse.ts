@@ -63,6 +63,11 @@ export function useBrowseSSE(
                 browseCache.delete(path);
                 fetchData(true);
             };
+
+            listeners["pr_closed"] = () => {
+                browseCache.delete(path);
+                fetchData(true);
+            };
         } else if (data.type === "attachment_listing" && data.parent_material) {
             sseUrl = `/materials/${(data.parent_material as Record<string, unknown>).id as string}/sse`;
             const parentPath =

@@ -1352,9 +1352,14 @@ async def create_pull_request_service(
             pr.status = PRStatus.APPROVED
             pr.reviewed_by = current_user.id
             await apply_pr(db, pr)
-            # Release claims immediately — PR is already approved
-            await db.execute(delete(PRFileClaim).where(PRFileClaim.pr_id == pr.id))
-            await db.flush()
+            await _cleanup_pr_resources(db, pr, redis=redis)
+
+            broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+            closed_event = {"type": "pr_closed", "id": str(pr.id)}
+            for topic in _pr_directory_topics(list(pr.payload)):
+                broadcasts.append((topic, closed_event))
+            if pr.author_id is not None:
+                broadcasts.append((f"pr_updates:{pr.author_id}", closed_event))
         else:
             # Files still processing — hold the PR open and merge once they settle.
             pr.auto_merge_pending = True
