@@ -3,8 +3,8 @@ import { API_BASE } from "@/lib/api-client";
 export interface SSEOptions {
     /** API path relative to API_BASE, e.g. "/materials/123/sse" */
     url: string;
-    /** Map of event names to handlers */
-    listeners: Record<string, () => void>;
+    /** Map of event names to handlers. Handlers receive the raw MessageEvent so they can read event.data. */
+    listeners: Record<string, (event: MessageEvent) => void>;
     /** Reconnect delay in ms (default: 5000) */
     reconnectDelay?: number;
     /** Startup delay in ms to handle React Strict Mode (default: 0) */
@@ -38,7 +38,7 @@ export function createSSEConnection(options: SSEOptions): SSEConnection {
         es = new EventSource(fullUrl, { withCredentials: true });
 
         for (const [eventName, handler] of Object.entries(listeners)) {
-            es.addEventListener(eventName, handler);
+            es.addEventListener(eventName, handler as EventListener);
         }
 
         es.onerror = () => {

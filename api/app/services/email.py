@@ -1,5 +1,5 @@
-from app.core.email import send_email
 from app.config import settings
+from app.core.email import send_email
 from app.models.auth_config import AuthConfig
 
 

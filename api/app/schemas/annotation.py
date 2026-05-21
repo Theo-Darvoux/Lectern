@@ -20,10 +20,19 @@ class AnnotationAuthor(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AnnotationPosition(BaseModel):
+    page: int | None = Field(None, ge=0, le=100_000)
+    textContent: str | None = Field(None, max_length=1000)  # noqa: N815
+    occurrenceIndex: int | None = Field(None, ge=0)  # noqa: N815
+
+    # allow extra keys for forward-compat (future coordinate data etc.)
+    model_config = {"extra": "allow"}
+
+
 class AnnotationCreateIn(BaseModel):
     body: SanitizedStr = Field(min_length=1, max_length=1000)
     selection_text: SanitizedStr | None = Field(None, max_length=1000)
-    position_data: dict[str, object] | None = None
+    position_data: AnnotationPosition | None = None
     page: int | None = Field(None, ge=0, le=100_000)
     reply_to_id: str | None = Field(None, max_length=36)
 
@@ -38,14 +47,16 @@ class AnnotationCreateIn(BaseModel):
             raise ValueError("reply_to_id must be a valid UUID")
         return v
 
-    @field_validator("position_data")
+    @field_validator("position_data", mode="before")
     @classmethod
-    def validate_position_data(cls, v: dict[str, object] | None) -> dict[str, object] | None:
+    def validate_position_data(cls, v: object) -> object:
         if v is None:
             return None
-        if len(v) > MAX_POSITION_DATA_KEYS:
-            raise ValueError(f"position_data too large (max {MAX_POSITION_DATA_KEYS} keys)")
-        return sanitize_json_payload(v)  # type: ignore[return-value]
+        if isinstance(v, dict):
+            if len(v) > MAX_POSITION_DATA_KEYS:
+                raise ValueError(f"position_data too large (max {MAX_POSITION_DATA_KEYS} keys)")
+            return sanitize_json_payload(v)  # type: ignore[arg-type]
+        return v
 
 
 class AnnotationUpdateIn(BaseModel):
@@ -61,7 +72,7 @@ class AnnotationOut(BaseModel):
     body: str
     page: int | None
     selection_text: str | None
-    position_data: dict[str, object] | None
+    position_data: AnnotationPosition | None
     thread_id: OptStrFromUUID
     reply_to_id: OptStrFromUUID
     created_at: datetime

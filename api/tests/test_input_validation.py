@@ -404,7 +404,8 @@ class TestAnnotationCreateIn:
 
     def test_valid_position_data(self):
         m = self._make(position_data={"x": 1, "y": 2})
-        assert m.position_data == {"x": 1, "y": 2}
+        assert m.position_data is not None
+        assert m.position_data.model_extra == {"x": 1, "y": 2}
 
     def test_rejects_position_data_too_many_keys(self):
         with pytest.raises(ValidationError):
@@ -412,7 +413,8 @@ class TestAnnotationCreateIn:
 
     def test_position_data_at_limit_ok(self):
         m = self._make(position_data={f"k{i}": i for i in range(20)})
-        assert len(m.position_data) == 20
+        assert m.position_data is not None
+        assert len(m.position_data.model_extra) == 20
 
     def test_page_must_be_non_negative(self):
         with pytest.raises(ValidationError):

@@ -1,9 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { MessageCircle } from "lucide-react";
+import { MessageCircle, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AnnotationThread,
@@ -47,8 +46,10 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
   const {
     threads,
     loading,
+    error,
     hasMore,
     loadMore,
+    fetchAnnotations,
     createAnnotation,
     editAnnotation,
     deleteAnnotation,
@@ -80,6 +81,11 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
     setEditBody("");
   };
 
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditBody("");
+  };
+
   const handleDelete = async (id: string) => {
     if (disabled) return;
     await deleteAnnotation(id);
@@ -105,7 +111,23 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
             </div>
           )}
 
-          {!loading && threads.length === 0 && (
+          {error && (
+            <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
+              <AlertCircle className="h-6 w-6 text-destructive/60" />
+              <p className="text-sm text-muted-foreground">{t("failedToLoadAnnotations")}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => fetchAnnotations(true)}
+                className="gap-1.5"
+              >
+                <RefreshCw className="h-3 w-3" />
+                {t("retry")}
+              </Button>
+            </div>
+          )}
+
+          {!loading && !error && threads.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <MessageCircle className="mb-3 h-8 w-8 text-muted-foreground/50" />
               <p className="text-sm text-muted-foreground">
@@ -126,6 +148,11 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
                 onReply={handleReply}
                 onEdit={handleStartEdit}
                 onDelete={handleDelete}
+                editingId={editingId}
+                editBody={editBody}
+                onEditBodyChange={setEditBody}
+                onSaveEdit={handleSaveEdit}
+                onCancelEdit={handleCancelEdit}
               />
               {replyingTo &&
                 (thread.root.id === replyingTo ||
@@ -160,45 +187,6 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
               >
                 {loading ? t("loading") : t("loadMore")}
               </Button>
-            </div>
-          )}
-
-          {editingId && (
-            <div className="space-y-3 rounded-lg border bg-muted/30 p-3 mb-4 shadow-sm">
-              <div className="max-h-[300px] overflow-y-auto pr-1">
-                <Textarea
-                  value={editBody}
-                  onChange={(e) => setEditBody(e.target.value.slice(0, 1000))}
-                  className="min-h-[100px] text-xs focus-visible:ring-1 bg-background py-2"
-                  autoFocus
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <span
-                  className={`text-[10px] ${editBody.length >= 1000 ? "text-destructive font-bold" : "text-muted-foreground"}`}
-                >
-                  {editBody.length.toLocaleString()}/1,000
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    onClick={handleSaveEdit}
-                    disabled={!editBody.trim() || editBody.length > 1000}
-                  >
-                    {t("saveChanges")}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setEditingId(null);
-                      setEditBody("");
-                    }}
-                  >
-                    {t("cancel")}
-                  </Button>
-                </div>
-              </div>
             </div>
           )}
         </div>

@@ -10,6 +10,7 @@ import type { ThreadData } from "@/hooks/use-annotations";
 import { usePinchZoom } from "@/hooks/use-pinch-zoom";
 import { useMaterialFile } from "@/hooks/use-material-file";
 import { ViewerShell } from "./viewer-shell";
+import { AnnotationInlinePopover } from "@/components/annotations/annotation-inline-popover";
 import { useTranslations } from "next-intl";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -42,7 +43,6 @@ interface PdfViewerProps {
     fileKey: string;
     materialId: string;
     annotations?: ThreadData[];
-    onAnnotationClick?: () => void;
 }
 
 interface HighlightRect {
@@ -55,116 +55,182 @@ interface HighlightRect {
 interface PageAnnotation {
     selection_text: string | null;
     page: number | null;
+    occurrenceIndex: number | null;
+    threadId: string;
 }
 
-function buildHighlights(pageEl: HTMLElement, annotations: PageAnnotation[]): HighlightRect[] {
+function buildHighlightRanges(
+    pageEl: HTMLElement,
+    annotations: PageAnnotation[],
+): Array<{ range: Range; threadId: string }> {
     const textLayer = pageEl.querySelector(".react-pdf__Page__textContent");
     if (!textLayer) return [];
 
-    const spans = Array.from(textLayer.querySelectorAll("span")).filter(
-        s => (s.textContent || "").length > 0
-    );
-    if (spans.length === 0) return [];
-
-    const pageRect = pageEl.getBoundingClientRect();
-    if (pageRect.width === 0) return [];
-
-    // Pre-calculate text content and offsets to avoid multiple DOM reads in the loop
+    // Walk raw text nodes in DOM order — matches computeOccurrenceIndex exactly,
+    // avoiding double-counting from pdfjs markedContent wrapper spans.
+    const textNodes: { node: Text; start: number; end: number }[] = [];
     let fullText = "";
-    const spanRanges: { start: number; end: number; el: HTMLElement }[] = [];
-    for (const span of spans) {
-        const t = span.textContent || "";
-        spanRanges.push({ start: fullText.length, end: fullText.length + t.length, el: span });
-        fullText += t;
-    }
 
-    const highlights: HighlightRect[] = [];
+    function walk(node: Node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const t = node.textContent ?? "";
+            if (t.length > 0) {
+                textNodes.push({ node: node as Text, start: fullText.length, end: fullText.length + t.length });
+                fullText += t;
+            }
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            const el = node as Element;
+            if (el.tagName === "SCRIPT" || el.tagName === "STYLE") return;
+            for (const child of el.childNodes) walk(child);
+        }
+    }
+    walk(textLayer);
+
+    if (textNodes.length === 0) return [];
+
+    const results: Array<{ range: Range; threadId: string }> = [];
+
     for (const ann of annotations) {
         if (!ann.selection_text) continue;
+        const targetOcc = ann.occurrenceIndex;
+        let currentOcc = 0;
         let searchFrom = 0;
         let idx: number;
+
         while ((idx = fullText.indexOf(ann.selection_text, searchFrom)) !== -1) {
             const matchEnd = idx + ann.selection_text.length;
-            for (const { start, end, el } of spanRanges) {
-                if (end <= idx || start >= matchEnd) continue;
-                
-                // This call still triggers a reflow, but we've minimized the number of calls 
-                // and we're doing them on a debounced schedule.
-                const r = el.getBoundingClientRect();
-                if (r.width === 0) continue;
-                highlights.push({
-                    x: r.left - pageRect.left,
-                    y: r.top - pageRect.top,
-                    w: r.width,
-                    h: r.height,
-                });
+
+            if (targetOcc === null || currentOcc === targetOcc) {
+                let startEntry: typeof textNodes[0] | null = null;
+                let startOffset = 0;
+                let endEntry: typeof textNodes[0] | null = null;
+                let endOffset = 0;
+
+                for (const entry of textNodes) {
+                    if (!startEntry && entry.end > idx) {
+                        startEntry = entry;
+                        startOffset = idx - entry.start;
+                    }
+                    if (entry.end >= matchEnd) {
+                        endEntry = entry;
+                        endOffset = matchEnd - entry.start;
+                        break;
+                    }
+                }
+
+                if (startEntry && endEntry) {
+                    try {
+                        const range = document.createRange();
+                        range.setStart(startEntry.node, startOffset);
+                        range.setEnd(endEntry.node, Math.min(endOffset, endEntry.node.length));
+                        results.push({ range, threadId: ann.threadId });
+                    } catch {
+                        // ignore invalid ranges (e.g. offset out of bounds after DOM mutation)
+                    }
+                }
+
+                if (targetOcc !== null) break;
             }
+
+            currentOcc++;
             searchFrom = matchEnd;
         }
     }
-    return highlights;
-}
 
-function highlightsEqual(a: HighlightRect[], b: HighlightRect[]): boolean {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-        if (
-            Math.abs(a[i].x - b[i].x) > 0.5 ||
-            Math.abs(a[i].y - b[i].y) > 0.5 ||
-            Math.abs(a[i].w - b[i].w) > 0.5 ||
-            Math.abs(a[i].h - b[i].h) > 0.5
-        ) {
-            return false;
-        }
-    }
-    return true;
+    return results;
 }
 
 interface AnnotatedPageProps {
     pageNumber: number;
     width: number;
     annotations: PageAnnotation[];
-    onAnnotationClick?: () => void;
+    onAnnotationClick?: (threadId: string, e: React.MouseEvent) => void;
 }
+
+const OVERLAY_CLASS = "pdf-annotation-overlay";
 
 const AnnotatedPage = React.memo(function AnnotatedPage({ pageNumber, width, annotations, onAnnotationClick }: AnnotatedPageProps) {
     const pageRef = useRef<HTMLDivElement>(null);
-    const [highlights, setHighlights] = useState<HighlightRect[]>([]);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+    // Click-overlay rects (transparent divs, high z-index, pointer-events: auto)
+    const [clickRects, setClickRects] = useState<Array<HighlightRect & { threadId: string }>>([]);
+
+    const annotationsRef = useRef(annotations);
+    annotationsRef.current = annotations;
+
+    const annotationsKey = annotations
+        .map(a => `${a.selection_text ?? ""}:${a.page ?? "_"}:${a.occurrenceIndex ?? "_"}`)
+        .join("|");
+
+    const doRecalc = useCallback(() => {
+        const el = pageRef.current;
+        if (!el || !el.querySelector(".react-pdf__Page__textContent")) return;
+
+        // Remove previously injected visual highlights
+        el.querySelectorAll(`.${OVERLAY_CLASS}`).forEach(n => n.remove());
+
+        const pageInnerDiv = el.querySelector(".react-pdf__Page") as HTMLElement | null;
+        const results = buildHighlightRanges(el, annotationsRef.current);
+        const rects: Array<HighlightRect & { threadId: string }> = [];
+
+        for (const { range, threadId } of results) {
+            for (const r of range.getClientRects()) {
+                if (r.width <= 0 || r.height <= 0) continue;
+
+                // Visual highlight: injected inside .react-pdf__Page, before .textLayer
+                // (z-index: 1 < textLayer z-index: 2) so the canvas text renders on top —
+                // no colour interference with anti-aliased PDF glyphs.
+                if (pageInnerDiv) {
+                    const innerRect = pageInnerDiv.getBoundingClientRect();
+                    const div = document.createElement("div");
+                    div.className = `${OVERLAY_CLASS} annotation-highlight rounded-sm`;
+                    div.style.cssText = `position:absolute;left:${r.left - innerRect.left}px;top:${r.top - innerRect.top}px;width:${r.width}px;height:${r.height}px;z-index:1;pointer-events:none;`;
+                    const textLayer = pageInnerDiv.querySelector(".textLayer");
+                    if (textLayer) pageInnerDiv.insertBefore(div, textLayer);
+                    else pageInnerDiv.appendChild(div);
+                }
+
+                // Collect rects relative to pageRef for transparent click overlays
+                const containerRect = el.getBoundingClientRect();
+                rects.push({
+                    x: r.left - containerRect.left,
+                    y: r.top - containerRect.top,
+                    w: r.width,
+                    h: r.height,
+                    threadId,
+                });
+            }
+        }
+
+        setClickRects(rects);
+    }, []);
 
     const scheduleRecalc = useCallback(() => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        
-        // Use a longer debounce (300ms) to avoid fighting with pdf.js during the heavy rendering phase.
-        timeoutRef.current = setTimeout(() => {
-            const el = pageRef.current;
-            if (!el) return;
-            
-            // Check if the text layer is actually there before doing heavy work
-            if (!el.querySelector(".react-pdf__Page__textContent")) return;
+        timeoutRef.current = setTimeout(doRecalc, 300);
+    }, [doRecalc]);
 
-            const next = buildHighlights(el, annotations);
-            setHighlights(prev => highlightsEqual(prev, next) ? prev : next);
-        }, 300);
-    }, [annotations]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => { scheduleRecalc(); }, [annotationsKey]);
 
     useEffect(() => {
         const el = pageRef.current;
         if (!el) return;
-        
-        // Only observe child additions to the text layer, which is less frequent than style/attribute changes.
         const observer = new MutationObserver((mutations) => {
-            if (mutations.some(m => m.addedNodes.length > 0)) {
-                scheduleRecalc();
-            }
+            // Ignore mutations caused by our own injected overlay elements
+            const hasExternalChange = mutations.some(m =>
+                Array.from(m.addedNodes).some(
+                    n => !(n instanceof Element && n.classList.contains(OVERLAY_CLASS))
+                )
+            );
+            if (hasExternalChange) scheduleRecalc();
         });
-
         observer.observe(el, { childList: true, subtree: true });
         scheduleRecalc();
-
         return () => {
             observer.disconnect();
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            el.querySelectorAll(`.${OVERLAY_CLASS}`).forEach(n => n.remove());
         };
     }, [scheduleRecalc]);
 
@@ -176,21 +242,22 @@ const AnnotatedPage = React.memo(function AnnotatedPage({ pageNumber, width, ann
                 renderTextLayer
                 renderAnnotationLayer={false}
             />
-            {highlights.map((h, i) => (
+            {/* Transparent click overlays — above everything, pointer-events: auto.
+                onMouseDown preventDefault stops the browser from resetting the text
+                selection state, which would otherwise cause the highlight to flash. */}
+            {onAnnotationClick && clickRects.map((h, i) => (
                 <div
                     key={i}
-                    onClick={onAnnotationClick}
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={e => onAnnotationClick(h.threadId, e)}
                     style={{
                         position: "absolute",
                         left: h.x,
                         top: h.y,
                         width: h.w,
                         height: h.h,
-                        backgroundColor: "rgba(255, 213, 0, 0.4)",
-                        mixBlendMode: "multiply",
-                        zIndex: 4,
-                        cursor: onAnnotationClick ? "pointer" : "default",
-                        pointerEvents: onAnnotationClick ? "auto" : "none",
+                        zIndex: 10,
+                        cursor: "pointer",
                     }}
                 />
             ))}
@@ -225,7 +292,7 @@ function LazyBlock({ estimatedHeight, scrollRootRef, children }: {
     );
 }
 
-export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationClick }: PdfViewerProps) {
+export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerProps) {
     const t = useTranslations("Viewers");
     const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -250,6 +317,18 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
     const [stableWidth, setStableWidth] = useState<number>(800);
     const [twoPageView, setTwoPageView] = useState(false);
     const [parseError, setParseError] = useState<string | null>(null);
+    const [activeAnnotation, setActiveAnnotation] = useState<{
+        thread: ThreadData;
+        clientX: number;
+        clientY: number;
+    } | null>(null);
+
+    const handleAnnotationClick = useCallback((threadId: string, e: React.MouseEvent) => {
+        const thread = annotations.find((t) => t.root.id === threadId) ?? null;
+        if (thread) {
+            setActiveAnnotation({ thread, clientX: e.clientX, clientY: e.clientY });
+        }
+    }, [annotations]);
 
     // Debounce containerWidth into stableWidth
     useEffect(() => {
@@ -349,10 +428,26 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
     const scale = pageWidthStable > 0 ? pageWidthActual / pageWidthStable : 1;
     const isResizing = Math.abs(scale - 1) > 0.001;
 
-    const allAnnotations = React.useMemo(() => annotations.map(t => ({
-        selection_text: t.root.selection_text,
-        page: t.root.page,
-    })), [annotations]);
+    // key on stable fields so memo doesn't invalidate every time the threads
+    // array reference changes due to SSE/mutation state updates
+    const annotationsKey = annotations
+        .map((t) => {
+            const occ = t.root.position_data?.occurrenceIndex;
+            return `${t.root.id}:${t.root.selection_text ?? ""}:${t.root.page ?? "_"}:${typeof occ === "number" ? occ : "_"}`;
+        })
+        .join("|");
+    const allAnnotations = React.useMemo(
+        () => annotations.map((t) => ({
+            selection_text: t.root.selection_text,
+            page: t.root.page,
+            occurrenceIndex: typeof t.root.position_data?.occurrenceIndex === "number"
+                ? t.root.position_data.occurrenceIndex
+                : null,
+            threadId: t.root.id,
+        })),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [annotationsKey]
+    );
 
     const loadingSkeleton = (
         <div className="flex w-full flex-col items-center justify-start p-4 md:py-8">
@@ -370,6 +465,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
     );
 
     return (
+        <>
         <ViewerShell
             scrollRef={scrollRef}
             loading={loading}
@@ -445,11 +541,11 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
                                 <LazyBlock key={rowIdx} estimatedHeight={pageWidthStable * 1.414} scrollRootRef={scrollRef}>
                                     <div className="grid grid-cols-2 gap-4 place-items-center">
                                         <div data-page={left}>
-                                            <AnnotatedPage pageNumber={left} width={pageWidthStable} annotations={leftAnns} onAnnotationClick={onAnnotationClick} />
+                                            <AnnotatedPage pageNumber={left} width={pageWidthStable} annotations={leftAnns} onAnnotationClick={handleAnnotationClick} />
                                         </div>
                                         {right <= numPages && (
                                             <div data-page={right}>
-                                                <AnnotatedPage pageNumber={right} width={pageWidthStable} annotations={rightAnns} onAnnotationClick={onAnnotationClick} />
+                                                <AnnotatedPage pageNumber={right} width={pageWidthStable} annotations={rightAnns} onAnnotationClick={handleAnnotationClick} />
                                             </div>
                                         )}
                                     </div>
@@ -462,7 +558,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
                             return (
                                 <div key={pageNum} data-page={pageNum}>
                                     <LazyBlock estimatedHeight={pageWidthStable * 1.414} scrollRootRef={scrollRef}>
-                                        <AnnotatedPage pageNumber={pageNum} width={pageWidthStable} annotations={pageAnnotations} onAnnotationClick={onAnnotationClick} />
+                                        <AnnotatedPage pageNumber={pageNum} width={pageWidthStable} annotations={pageAnnotations} onAnnotationClick={handleAnnotationClick} />
                                     </LazyBlock>
                                 </div>
                             );
@@ -472,5 +568,14 @@ export function PdfViewer({ materialId, fileKey, annotations = [], onAnnotationC
                 </div>
             )}
         </ViewerShell>
+        {activeAnnotation && (
+            <AnnotationInlinePopover
+                thread={activeAnnotation.thread}
+                clientX={activeAnnotation.clientX}
+                clientY={activeAnnotation.clientY}
+                onClose={() => setActiveAnnotation(null)}
+            />
+        )}
+        </>
     );
 }

@@ -1,4 +1,5 @@
 import base64
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -10,6 +11,8 @@ from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.annotation import Annotation
 from app.models.material import Material, MaterialVersion
 from app.models.user import User, UserRole
+
+logger = logging.getLogger(__name__)
 
 
 def _to_uuid(value: str | uuid.UUID) -> uuid.UUID:
@@ -35,7 +38,9 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
 async def _get_material_current_version(
     db: AsyncSession, material_id: uuid.UUID
 ) -> MaterialVersion:
-    result = await db.execute(select(Material).where(Material.id == material_id))
+    result = await db.execute(
+        select(Material).where(Material.id == material_id, Material.deleted_at.is_(None))
+    )
     material = result.scalar_one_or_none()
     if not material:
         raise NotFoundError("Material not found")
@@ -62,7 +67,9 @@ async def get_annotations(
 ) -> tuple[list[Annotation], int, str | None]:
     mid = _to_uuid(material_id)
 
-    mat_res = await db.execute(select(Material).where(Material.id == mid))
+    mat_res = await db.execute(
+        select(Material).where(Material.id == mid, Material.deleted_at.is_(None))
+    )
     if not mat_res.scalar_one_or_none():
         raise NotFoundError("Material not found")
 
@@ -93,17 +100,17 @@ async def get_annotations(
         cursor_dt, cursor_id = _decode_cursor(cursor)
         base = base.where(
             or_(
-                Annotation.created_at > cursor_dt,
+                Annotation.created_at < cursor_dt,
                 and_(
                     Annotation.created_at == cursor_dt,
-                    Annotation.id > cursor_id,
+                    Annotation.id < cursor_id,
                 ),
             )
         )
 
     ann_result = await db.execute(
         base.options(joinedload(Annotation.author))
-        .order_by(Annotation.created_at.asc(), Annotation.id.asc())
+        .order_by(Annotation.created_at.desc(), Annotation.id.desc())
         .limit(limit + 1)
     )
     rows = list(ann_result.scalars().unique().all())
@@ -204,13 +211,16 @@ async def create_annotation(
     ):
         from app.services.notification import notify_user
 
-        await notify_user(
-            db,
-            reply_target.author_id,
-            "annotation_reply",
-            "Someone replied to your annotation",
-            link=f"/browse?material={material_id}",
-        )
+        try:
+            await notify_user(
+                db,
+                reply_target.author_id,
+                "annotation_reply",
+                "Someone replied to your annotation",
+                link="/browse",
+            )
+        except Exception:
+            logger.exception("Failed to send annotation_reply notification")
 
     result = await db.execute(
         select(Annotation)
@@ -247,7 +257,7 @@ async def delete_annotation(
     db: AsyncSession,
     annotation_id: str,
     user: User,
-) -> uuid.UUID:
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     aid = _to_uuid(annotation_id)
     result = await db.execute(select(Annotation).where(Annotation.id == aid))
     annotation = result.scalar_one_or_none()
@@ -259,6 +269,8 @@ async def delete_annotation(
         raise ForbiddenError("Only the author or a moderator can delete this annotation")
 
     material_id = annotation.material_id
+    # capture thread_id before deletion — root annotations have thread_id == id
+    thread_id = annotation.thread_id or annotation.id
 
     if annotation.thread_id == annotation.id:
         await db.execute(
@@ -273,4 +285,4 @@ async def delete_annotation(
     await db.delete(annotation)
     await db.flush()
 
-    return material_id
+    return material_id, aid, thread_id

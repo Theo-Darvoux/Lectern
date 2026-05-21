@@ -39,7 +39,9 @@ annotations_router = APIRouter(prefix="/api/annotations", tags=["annotations"])
     "/{material_id}/annotations",
     response_model=CursorPaginatedResponse[ThreadOut],
 )
+@limiter.limit("120/minute")
 async def list_annotations(
+    request: Request,
     material_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -83,12 +85,19 @@ async def add_annotation(
         user.id,
         data.body,
         data.selection_text,
-        data.position_data,
+        data.position_data.model_dump(mode="json") if data.position_data else None,
         data.page,
         data.reply_to_id,
     )
-    broadcast_to_topic(material_id, {"type": "annotation_created"})
-    return AnnotationOut.model_validate(annotation)
+    out = AnnotationOut.model_validate(annotation)
+    broadcast_to_topic(
+        material_id,
+        {
+            "type": "annotation_created",
+            "annotation": out.model_dump(mode="json"),
+        },
+    )
+    return out
 
 
 @annotations_router.patch("/{annotation_id}", response_model=AnnotationOut)
@@ -99,7 +108,15 @@ async def edit_annotation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AnnotationOut:
     annotation = await update_annotation(db, annotation_id, user, data.body)
-    return AnnotationOut.model_validate(annotation)
+    out = AnnotationOut.model_validate(annotation)
+    broadcast_to_topic(
+        str(annotation.material_id),
+        {
+            "type": "annotation_updated",
+            "annotation": out.model_dump(mode="json"),
+        },
+    )
+    return out
 
 
 @annotations_router.delete("/{annotation_id}", status_code=204)
@@ -108,8 +125,15 @@ async def remove_annotation(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
-    material_id = await delete_annotation(db, annotation_id, user)
-    broadcast_to_topic(str(material_id), {"type": "annotation_deleted"})
+    material_id, deleted_id, thread_id = await delete_annotation(db, annotation_id, user)
+    broadcast_to_topic(
+        str(material_id),
+        {
+            "type": "annotation_deleted",
+            "id": str(deleted_id),
+            "thread_id": str(thread_id),
+        },
+    )
 
 
 @material_annotations_router.get("/{material_id}/sse")

@@ -445,12 +445,13 @@
     "material": "material",
     "closePanel": "Close panel",
     "loadMore": "Load more annotations",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "failedToLoadAnnotations": "Failed to load annotations.",
+    "retry": "Retry"
   },
   "Annotations": {
     "addAnnotation": "Add your annotation...",
     "edited": "edited",
-    "shiftEnterForNewline": "Shift+Enter for newline",
     "annotate": "Annotate",
     "cancel": "Cancel",
     "deletedUser": "[deleted]",
@@ -462,7 +463,8 @@
     "selection": "Selection",
     "writeAnAnnotation": "Write an annotation...",
     "failedToSubmit": "Failed to submit",
-    "shiftEnterForNewLine": "Shift+Enter for new line"
+    "shiftEnterForNewLine": "Shift+Enter for new line",
+    "replyCount": "{count, plural, =1 {1 reply} other {# replies}}"
   },
   "GlobalDropZone": {
     "root": "Root",

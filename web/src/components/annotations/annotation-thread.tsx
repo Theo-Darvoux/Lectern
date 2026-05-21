@@ -34,6 +34,11 @@ function AnnotationItem({
     onEdit,
     onDelete,
     replyToAnnotation,
+    editingId,
+    editBody,
+    onEditBodyChange,
+    onSaveEdit,
+    onCancelEdit,
 }: {
     annotation: AnnotationData;
     currentUserId: string | null;
@@ -42,6 +47,11 @@ function AnnotationItem({
     onEdit: (id: string, body: string) => void;
     onDelete: (id: string) => void;
     replyToAnnotation?: AnnotationData | null;
+    editingId: string | null;
+    editBody: string;
+    onEditBodyChange: (v: string) => void;
+    onSaveEdit: () => Promise<void>;
+    onCancelEdit: () => void;
 }) {
     const isAuthor = !!currentUserId && annotation.author_id === currentUserId;
     const isModerator =
@@ -51,6 +61,9 @@ function AnnotationItem({
     const canEdit = isAuthor;
     const canDelete = isAuthor || isModerator;
     const t = useTranslations("Annotations");
+    const tSidebar = useTranslations("Sidebar");
+
+    const isEditing = editingId === annotation.id;
 
     const authorName = annotation.author?.display_name ?? t("deletedUser");
     const date = new Date(annotation.created_at);
@@ -101,45 +114,79 @@ function AnnotationItem({
                         )}
                     </span>
                 </div>
-                <ExpandableText text={annotation.body} threshold={180} clampedLines={5} className="text-xs text-foreground/90 leading-normal" />
-                <div className="mt-1.5 flex flex-wrap gap-2 items-center">
-                    {currentUserId && (
-                        <button
-                            onClick={() => onReply(annotation.id)}
-                            className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                        >
-                            <Reply className="h-3 w-3" />
-                            {t("reply")}
-                        </button>
-                    )}
-                    {canEdit && (
-                        <button
-                            onClick={() => onEdit(annotation.id, annotation.body)}
-                            className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                        >
-                            <Edit2 className="h-3 w-3" />
-                            {t("edit")}
-                        </button>
-                    )}
-                    {canDelete && (
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
-                            <ConfirmDeleteDialog
-                                onConfirm={() => onDelete(annotation.id)}
-                                title={t("deleteAnnotation")}
-                                description={t("deleteAnnotationConfirm")}
-                            />
-                        </div>
-                    )}
-                    {!isAuthor && (
-                        <FlagButton
-                            targetType="annotation"
-                            targetId={annotation.id}
-                            variant="ghost"
-                            className="h-auto p-0 px-1.5 py-1 text-[10px] font-normal text-muted-foreground hover:bg-muted hover:text-foreground gap-1 transition-colors"
-                            iconClassName="h-3 w-3"
+
+                {isEditing ? (
+                    <div className="mt-1.5 space-y-2 rounded-lg border bg-muted/30 p-2 shadow-sm">
+                        <Textarea
+                            value={editBody}
+                            onChange={(e) => onEditBodyChange(e.target.value.slice(0, 1000))}
+                            className="min-h-[80px] text-xs focus-visible:ring-1 bg-background py-2"
+                            autoFocus
                         />
-                    )}
-                </div>
+                        <div className="flex items-center justify-between">
+                            <span
+                                className={`text-[10px] ${editBody.length >= 1000 ? "text-destructive font-bold" : "text-muted-foreground"}`}
+                            >
+                                {editBody.length.toLocaleString()}/1,000
+                            </span>
+                            <div className="flex gap-2">
+                                <Button
+                                    size="sm"
+                                    onClick={onSaveEdit}
+                                    disabled={!editBody.trim() || editBody.length > 1000}
+                                >
+                                    {tSidebar("saveChanges")}
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={onCancelEdit}>
+                                    {t("cancel")}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    <ExpandableText text={annotation.body} threshold={180} clampedLines={5} className="text-xs text-foreground/90 leading-normal" />
+                )}
+
+                {!isEditing && (
+                    <div className="mt-1.5 flex flex-wrap gap-2 items-center">
+                        {currentUserId && (
+                            <button
+                                onClick={() => onReply(annotation.id)}
+                                className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                            >
+                                <Reply className="h-3 w-3" />
+                                {t("reply")}
+                            </button>
+                        )}
+                        {canEdit && (
+                            <button
+                                onClick={() => onEdit(annotation.id, annotation.body)}
+                                className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                            >
+                                <Edit2 className="h-3 w-3" />
+                                {t("edit")}
+                            </button>
+                        )}
+                        {canDelete && (
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
+                                <ConfirmDeleteDialog
+                                    onConfirm={() => onDelete(annotation.id)}
+                                    title={t("deleteAnnotation")}
+                                    description={t("deleteAnnotationConfirm")}
+                                />
+                            </div>
+                        )}
+                        {!isAuthor && (
+                            <FlagButton
+                                targetType="annotation"
+                                targetId={annotation.id}
+                                variant="ghost"
+                                className="h-auto p-0 px-1.5 py-1 text-[10px] font-normal text-muted-foreground hover:bg-muted hover:text-foreground gap-1 transition-colors"
+                                iconClassName="h-3 w-3"
+                            />
+                        )}
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -152,6 +199,11 @@ interface AnnotationThreadProps {
     onReply: (annotationId: string) => void;
     onEdit: (annotationId: string, body: string) => void;
     onDelete: (annotationId: string) => void;
+    editingId: string | null;
+    editBody: string;
+    onEditBodyChange: (v: string) => void;
+    onSaveEdit: () => Promise<void>;
+    onCancelEdit: () => void;
 }
 
 export function AnnotationThread({
@@ -161,20 +213,27 @@ export function AnnotationThread({
     onReply,
     onEdit,
     onDelete,
+    editingId,
+    editBody,
+    onEditBodyChange,
+    onSaveEdit,
+    onCancelEdit,
 }: AnnotationThreadProps) {
     const t = useTranslations("Annotations");
     const allAnnotations = [thread.root, ...thread.replies];
     const annotationMap = new Map(allAnnotations.map((a) => [a.id, a]));
+
+    const editProps = { editingId, editBody, onEditBodyChange, onSaveEdit, onCancelEdit };
 
     return (
         <div className="rounded-lg border bg-muted/10 p-3 shadow-sm hover:border-primary/20 transition-colors">
             {thread.root.selection_text && (
                 <div className="mb-2.5 border-l-2 border-yellow-400 bg-yellow-400/5 px-2 py-1 rounded-r-md">
                     <span className="block text-[9px] font-bold text-yellow-600 uppercase tracking-tight mb-0.5">{t("selection")}</span>
-                    <ExpandableText 
-                        text={thread.root.selection_text} 
-                        threshold={150} 
-                        clampedLines={3} 
+                    <ExpandableText
+                        text={thread.root.selection_text}
+                        threshold={150}
+                        clampedLines={3}
                         className="text-[10px] italic text-muted-foreground leading-relaxed"
                     />
                 </div>
@@ -186,6 +245,7 @@ export function AnnotationThread({
                 onReply={onReply}
                 onEdit={onEdit}
                 onDelete={onDelete}
+                {...editProps}
             />
             {thread.replies.length > 0 && (
                 <div className="ml-5 border-l-2 pl-3.5 space-y-1 mt-1 border-muted">
@@ -203,6 +263,7 @@ export function AnnotationThread({
                                     ? annotationMap.get(reply.reply_to_id)
                                     : undefined
                             }
+                            {...editProps}
                         />
                     ))}
                 </div>
@@ -281,4 +342,3 @@ export function AnnotationForm({
         </div>
     );
 }
-

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useRouter, useParams, useSearchParams, usePathname } from "next/navigation";
 import {
   ArrowLeft,
@@ -302,14 +302,6 @@ export function MaterialViewer({
     });
   };
 
-  const handleHighlightClick = useCallback(() => {
-    openSidebar("annotations", {
-      type: "material",
-      id: materialId,
-      data: material,
-    });
-  }, [openSidebar, materialId, material]);
-
   useEffect(() => {
     // Seed the sidebar target with the current material so any updates
     // (likes, favourites) flow through the shared store and stay in sync
@@ -452,7 +444,6 @@ export function MaterialViewer({
                 fileKey={fileKey}
                 materialId={materialId}
                 annotations={threads}
-                onAnnotationClick={handleHighlightClick}
               />
             )}
             {viewerType === "markdown" && (
@@ -461,7 +452,6 @@ export function MaterialViewer({
                 materialId={materialId}
                 material={material}
                 annotations={threads}
-                onAnnotationClick={handleHighlightClick}
               />
             )}
             {viewerType === "image" && (

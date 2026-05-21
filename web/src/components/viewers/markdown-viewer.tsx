@@ -8,6 +8,7 @@ import { MarkdownRenderer } from "./markdown-renderer";
 import { registerViewerPrint, unregisterViewerPrint } from "@/lib/viewer-print-registry";
 import { ViewerShell } from "./viewer-shell";
 import { ZoomControls } from "./zoom-controls";
+import { AnnotationInlinePopover } from "@/components/annotations/annotation-inline-popover";
 
 const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
@@ -18,7 +19,6 @@ interface MarkdownViewerProps {
     materialId: string;
     material?: Record<string, unknown>;
     annotations?: ThreadData[];
-    onAnnotationClick?: () => void;
 }
 
 interface HighlightRect {
@@ -26,6 +26,7 @@ interface HighlightRect {
     y: number;
     w: number;
     h: number;
+    threadId: string;
 }
 
 function buildHighlights(container: HTMLElement, annotations: ThreadData[]): HighlightRect[] {
@@ -59,65 +60,85 @@ function buildHighlights(container: HTMLElement, annotations: ThreadData[]): Hig
         const searchText = thread.root.selection_text;
         if (!searchText) continue;
 
+        const pd = thread.root.position_data;
+        const targetOcc = typeof pd?.occurrenceIndex === "number" ? pd.occurrenceIndex : null;
+        let currentOcc = 0;
         let searchFrom = 0;
         let idx: number;
+
         while ((idx = fullText.indexOf(searchText, searchFrom)) !== -1) {
             const matchEnd = idx + searchText.length;
-            const range = document.createRange();
 
-            let startNode: Text | null = null;
-            let startOffset = 0;
-            let endNode: Text | null = null;
-            let endOffset = 0;
+            // If occurrenceIndex is stored, render only that occurrence; otherwise render all (legacy annotations)
+            if (targetOcc === null || currentOcc === targetOcc) {
+                const range = document.createRange();
 
-            for (const { node, start, end } of textNodes) {
-                if (!startNode && end > idx) {
-                    startNode = node;
-                    startOffset = idx - start;
-                }
-                if (end >= matchEnd) {
-                    endNode = node;
-                    endOffset = matchEnd - start;
-                    break;
-                }
-            }
+                let startNode: Text | null = null;
+                let startOffset = 0;
+                let endNode: Text | null = null;
+                let endOffset = 0;
 
-            if (startNode && endNode) {
-                try {
-                    range.setStart(startNode, startOffset);
-                    range.setEnd(endNode, endOffset);
-
-                    const rects = range.getClientRects();
-                    for (let i = 0; i < rects.length; i++) {
-                        const r = rects[i];
-                        highlights.push({
-                            x: r.left - containerRect.left + container.scrollLeft,
-                            y: r.top - containerRect.top + container.scrollTop,
-                            w: r.width,
-                            h: r.height,
-                        });
+                for (const { node, start, end } of textNodes) {
+                    if (!startNode && end > idx) {
+                        startNode = node;
+                        startOffset = idx - start;
                     }
-                } catch (e) {
-                    console.error("Failed to create range for highlight", e);
+                    if (end >= matchEnd) {
+                        endNode = node;
+                        endOffset = matchEnd - start;
+                        break;
+                    }
                 }
+
+                if (startNode && endNode) {
+                    try {
+                        range.setStart(startNode, startOffset);
+                        range.setEnd(endNode, endOffset);
+
+                        const rects = range.getClientRects();
+                        for (let i = 0; i < rects.length; i++) {
+                            const r = rects[i];
+                            // skip zero-size and full-width rects produced when a
+                            // match crosses a block boundary (e.g. <li> siblings)
+                            if (r.width <= 0 || r.height <= 0 || r.width > containerRect.width * 1.1) continue;
+                            highlights.push({
+                                x: r.left - containerRect.left + container.scrollLeft,
+                                y: r.top - containerRect.top + container.scrollTop,
+                                w: r.width,
+                                h: r.height,
+                                threadId: thread.root.id,
+                            });
+                        }
+                    } catch (e) {
+                        console.error("Failed to create range for highlight", e);
+                    }
+                }
+
+                if (targetOcc !== null) break; // found the target occurrence, stop
             }
-            searchFrom = idx + 1;
+
+            currentOcc++;
+            searchFrom = matchEnd;
         }
     }
 
     return highlights;
 }
 
-export function MarkdownViewer({ 
-    materialId, 
+export function MarkdownViewer({
+    materialId,
     fileKey,
-    material, 
-    annotations = [], 
-    onAnnotationClick 
+    material,
+    annotations = [],
 }: MarkdownViewerProps) {
     const proseRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const [highlights, setHighlights] = useState<HighlightRect[]>([]);
+    const [activeAnnotation, setActiveAnnotation] = useState<{
+        thread: ThreadData;
+        clientX: number;
+        clientY: number;
+    } | null>(null);
 
     const { content, loading, error } = useMaterialFile({
         materialId,
@@ -181,7 +202,15 @@ export function MarkdownViewer({
         return () => ro.disconnect();
     }, [updateHighlights]);
 
+    const handleHighlightClick = useCallback((threadId: string, e: React.MouseEvent) => {
+        const thread = annotations.find((t) => t.root.id === threadId) ?? null;
+        if (thread) {
+            setActiveAnnotation({ thread, clientX: e.clientX, clientY: e.clientY });
+        }
+    }, [annotations]);
+
     return (
+        <>
         <ViewerShell
             scrollRef={scrollRef}
             loading={loading}
@@ -200,6 +229,7 @@ export function MarkdownViewer({
         >
             <div
                 ref={proseRef}
+                data-annotation-scope="true"
                 className={`prose prose-sm max-w-none p-6 dark:prose-invert
                     prose-img:rounded-lg prose-img:shadow-sm
                     prose-a:text-primary prose-a:no-underline hover:prose-a:underline
@@ -214,28 +244,35 @@ export function MarkdownViewer({
                 style={{ fontSize: `${zoom}%` }}
             >
                 {rendered}
-                
+
                 {/* Highlight Overlays */}
                 {highlights.map((h, i) => (
                     <div
                         key={i}
-                        onClick={onAnnotationClick}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(e) => handleHighlightClick(h.threadId, e)}
+                        className="annotation-highlight rounded-sm"
                         style={{
                             position: "absolute",
                             left: h.x,
                             top: h.y,
                             width: h.w,
                             height: h.h,
-                            backgroundColor: "rgba(255, 213, 0, 0.4)",
-                            mixBlendMode: "multiply",
                             zIndex: 4,
-                            cursor: onAnnotationClick ? "pointer" : "default",
-                            pointerEvents: onAnnotationClick ? "auto" : "none",
+                            cursor: "pointer",
                         }}
-                        className="rounded-sm"
                     />
                 ))}
             </div>
         </ViewerShell>
+        {activeAnnotation && (
+            <AnnotationInlinePopover
+                thread={activeAnnotation.thread}
+                clientX={activeAnnotation.clientX}
+                clientY={activeAnnotation.clientY}
+                onClose={() => setActiveAnnotation(null)}
+            />
+        )}
+        </>
     );
 }

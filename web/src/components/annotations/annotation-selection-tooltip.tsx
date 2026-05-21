@@ -8,6 +8,78 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
 
+/**
+ * Computes which occurrence (0-based) of `selText` within the text scope the
+ * user selected. The scope matches exactly what buildHighlights walks so that
+ * the same index finds the right match at render time.
+ *
+ * For PDF: scope = the page's .react-pdf__Page__textContent element.
+ * For other viewers: scope = the nearest [data-annotation-scope] ancestor,
+ * which must be the same element passed to buildHighlights as `container`.
+ */
+function computeOccurrenceIndex(
+    container: HTMLElement,
+    range: Range,
+    selText: string,
+    pageEl: Element | null,
+): number {
+    // Resolve the text scope
+    let scopeEl: Element;
+    if (pageEl) {
+        scopeEl = pageEl.querySelector(".react-pdf__Page__textContent") ?? pageEl;
+    } else {
+        let node: Node | null = range.startContainer;
+        let found: Element | null = null;
+        while (node && node !== container) {
+            if (node instanceof Element && node.hasAttribute("data-annotation-scope")) {
+                found = node;
+                break;
+            }
+            node = node.parentElement;
+        }
+        scopeEl = found ?? container;
+    }
+
+    // Walk text nodes in DOM order — same algorithm as buildHighlights
+    const textNodes: Array<{ node: Text; start: number }> = [];
+    let fullText = "";
+
+    function walk(node: Node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            textNodes.push({ node: node as Text, start: fullText.length });
+            fullText += node.textContent ?? "";
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            const el = node as Element;
+            if (el.tagName === "SCRIPT" || el.tagName === "STYLE") return;
+            for (const child of el.childNodes) walk(child);
+        }
+    }
+    walk(scopeEl);
+
+    // Locate range.startContainer in the text node list
+    let startNode: Node = range.startContainer;
+    let startOffset = range.startOffset;
+    if (startNode.nodeType !== Node.TEXT_NODE) {
+        const child = (startNode as Element).childNodes[startOffset];
+        if (child) { startNode = child; startOffset = 0; }
+        if (startNode.nodeType !== Node.TEXT_NODE) return 0;
+    }
+
+    const entry = textNodes.find((p) => p.node === startNode);
+    if (!entry) return 0;
+
+    const absStart = entry.start + startOffset;
+
+    // Count complete occurrences of selText that start before absStart
+    let count = 0;
+    let pos = 0;
+    while ((pos = fullText.indexOf(selText, pos)) !== -1 && pos < absStart) {
+        count++;
+        pos += selText.length;
+    }
+    return count;
+}
+
 interface SelectionPosition {
     x: number;
     y: number;
@@ -71,23 +143,26 @@ export function AnnotationSelectionTooltip({
         const rect = range.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
 
+        let pageNum: number | undefined;
+        let pageEl: Element | null = null;
+        let n: Node | null = range.commonAncestorContainer;
+        while (n && n !== container) {
+            if (n instanceof Element && n.hasAttribute("data-page-number")) {
+                pageNum = parseInt(n.getAttribute("data-page-number") || "0");
+                pageEl = n;
+                break;
+            }
+            n = n.parentElement;
+        }
+
+        const occurrenceIndex = computeOccurrenceIndex(container, range, text, pageEl);
+
         setSelection({
             x: rect.left - containerRect.left + container.scrollLeft + rect.width / 2,
             y: rect.top - containerRect.top + container.scrollTop,
             height: rect.height,
             text,
-            positionData: (() => {
-                let pageNum: number | undefined;
-                let n: Node | null = range.commonAncestorContainer;
-                while (n && n !== container) {
-                    if (n instanceof Element && n.hasAttribute("data-page-number")) {
-                        pageNum = parseInt(n.getAttribute("data-page-number") || "0");
-                        break;
-                    }
-                    n = n.parentElement;
-                }
-                return { page: pageNum, textContent: text };
-            })(),
+            positionData: { page: pageNum, textContent: text, occurrenceIndex },
         });
     }, [containerRef, showForm]);
 
@@ -95,11 +170,16 @@ export function AnnotationSelectionTooltip({
         const container = containerRef.current;
         if (!container) return;
         container.addEventListener("mouseup", handleMouseUp);
-        return () => container.removeEventListener("mouseup", handleMouseUp);
+        // touch devices fire touchend instead of mouseup after text selection
+        container.addEventListener("touchend", handleMouseUp);
+        return () => {
+            container.removeEventListener("mouseup", handleMouseUp);
+            container.removeEventListener("touchend", handleMouseUp);
+        };
     }, [containerRef, handleMouseUp]);
 
     useEffect(() => {
-        const handleClickOutside = (e: MouseEvent) => {
+        const handleClickOutside = (e: MouseEvent | TouchEvent) => {
             if (tooltipRef.current && !tooltipRef.current.contains(e.target as Node)) {
                 setSelection(null);
                 setShowForm(false);
@@ -107,7 +187,11 @@ export function AnnotationSelectionTooltip({
             }
         };
         document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
+        document.addEventListener("touchstart", handleClickOutside);
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+            document.removeEventListener("touchstart", handleClickOutside);
+        };
     }, []);
 
     useLayoutEffect(() => {
@@ -214,7 +298,7 @@ export function AnnotationSelectionTooltip({
                             </span>
                             {!isMobile && (
                                 <span className="text-[9px] text-muted-foreground italic opacity-70">
-                                    {t("shiftEnterForNewline")}
+                                    {t("shiftEnterForNewLine")}
                                 </span>
                             )}
                         </div>

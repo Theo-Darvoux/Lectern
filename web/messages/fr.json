@@ -445,12 +445,13 @@
     "material": "document",
     "closePanel": "Fermer le panneau",
     "loadMore": "Charger plus d'annotations",
-    "loading": "Chargement…"
+    "loading": "Chargement…",
+    "failedToLoadAnnotations": "Impossible de charger les annotations.",
+    "retry": "Réessayer"
   },
   "Annotations": {
     "addAnnotation": "Ajoutez votre annotation...",
     "edited": "modifié",
-    "shiftEnterForNewline": "Maj+Entrée pour une nouvelle ligne",
     "annotate": "Annoter",
     "cancel": "Annuler",
     "deletedUser": "[supprimé]",
@@ -462,7 +463,8 @@
     "selection": "Sélection",
     "writeAnAnnotation": "Écrire une annotation...",
     "failedToSubmit": "Échec de l'envoi",
-    "shiftEnterForNewLine": "Maj+Entrée pour une nouvelle ligne"
+    "shiftEnterForNewLine": "Maj+Entrée pour une nouvelle ligne",
+    "replyCount": "{count, plural, =1 {1 réponse} other {# réponses}}"
   },
   "GlobalDropZone": {
     "root": "Racine",

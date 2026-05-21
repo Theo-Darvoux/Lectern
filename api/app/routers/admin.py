@@ -491,6 +491,8 @@ class AuthConfigPatch(BaseModel):
     max_text_size_mb: int | None = None
     pdf_quality: int | None = None
     video_compression_profile: str | None = None
+    thumbnail_quality: int | None = None
+    thumbnail_size_px: int | None = None
     allowed_extensions: str | None = None
     allowed_mime_types: str | None = None
 
