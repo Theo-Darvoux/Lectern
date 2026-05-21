@@ -686,6 +686,11 @@ _IMAGE_ALLOWED_TYPES = frozenset(
 _BRANDING_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
+_WEBP_SKIP_TYPES = frozenset(
+    {"image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"}
+)
+
+
 async def _upload_branding_asset(
     file: UploadFile,
     key_prefix: str,
@@ -694,6 +699,10 @@ async def _upload_branding_asset(
     redis: Redis,  # type: ignore[type-arg]
     config_field: str,
 ) -> dict:  # type: ignore[type-arg]
+    import io
+
+    from PIL import Image
+
     from app.core.storage import get_public_url, upload_file
 
     content_type = file.content_type or "application/octet-stream"
@@ -708,8 +717,19 @@ async def _upload_branding_asset(
     if not data:
         raise BadRequestError("Empty file.")
 
-    filename = file.filename or f"{key_prefix}.bin"
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+    # Convert raster images to lossless WebP; skip SVG/ICO (not raster).
+    if content_type not in _WEBP_SKIP_TYPES:
+        img = Image.open(io.BytesIO(data))
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP", lossless=True, quality=100)
+        data = buf.getvalue()
+        content_type = "image/webp"
+
+    ext = "webp" if content_type == "image/webp" else (
+        (file.filename or f"{key_prefix}.bin").rsplit(".", 1)[-1].lower()
+        if "." in (file.filename or "")
+        else "bin"
+    )
     key = f"branding/{key_prefix}.{ext}"
 
     await upload_file(data, key, content_type=content_type, content_disposition="inline")
