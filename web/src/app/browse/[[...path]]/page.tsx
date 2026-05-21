@@ -102,6 +102,11 @@ const SharedSidebar = dynamic(() => import("@/components/sidebar/shared-sidebar"
   ssr: false
 });
 
+const DirectoryTreeSidebar = dynamic(() => import("@/components/browse/directory-tree-sidebar").then(mod => mod.DirectoryTreeSidebar), {
+  loading: () => null,
+  ssr: false
+});
+
 
 
 
@@ -113,6 +118,7 @@ function BrowseContent() {
   const isDesktop = useIsDesktop();
   const { sidebarOpen, sidebarTarget, setSidebarTarget } = useUIStore();
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
+  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const t = useTranslations("Browse");
   const { config } = useConfigStore();
@@ -289,88 +295,93 @@ function BrowseContent() {
     }
   }, [path, refreshCount, fetchData]);
 
-  useBrowseSSE(data, path, browseCache, fetchData);
+  useBrowseSSE(data, path, browseCache, fetchData, triggerBrowseRefresh);
 
   const isLikelyMaterial = Boolean(
     params.path && Array.isArray(params.path) && params.path.length >= 3,
   );
 
-  if (!data && isFetching)
-    return <BrowseSkeleton isMaterial={isLikelyMaterial} />;
+  const isDirectoryView =
+    data?.type === "directory_listing" || data?.type === "attachment_listing";
 
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 px-4 text-muted-foreground">
+  let inner: React.ReactNode;
+  if (!data && isFetching) {
+    inner = <BrowseSkeleton isMaterial={isLikelyMaterial} />;
+  } else if (error) {
+    inner = (
+      <div className="flex flex-col items-center justify-center py-20 px-4 text-muted-foreground w-full">
         <p className="text-lg font-medium">{t("notFound")}</p>
         <p className="text-sm">{error}</p>
       </div>
     );
-  }
-
-  if (!data) return null;
-
-  const isDirectoryView =
-    data.type === "directory_listing" || data.type === "attachment_listing";
-
-  if (data.type === "material" && data.material) {
-    return (
+  } else if (!data) {
+    inner = null;
+  } else if (data.type === "material" && data.material) {
+    inner = (
       <MaterialViewer material={data.material} breadcrumbs={data.breadcrumbs} />
+    );
+  } else {
+    inner = (
+      <div
+        className={`flex h-full w-full overflow-hidden gap-0 transition-opacity duration-200 ${isFetching ? "opacity-50 pointer-events-none" : "opacity-100"}`}
+      >
+        <div
+          className={`flex-1 min-h-0 overflow-y-auto px-4 py-6 pb-20 md:pb-6 ${isDesktop && sidebarOpen ? "min-w-0" : ""}`}
+        >
+          {previewPr && (
+            <div className="mb-6 flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 dark:border-blue-800/40 dark:bg-blue-950/20">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/50">
+                  <Eye className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+                    {t("contributionPreview")}
+                  </h3>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {previewPr.title}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2 text-blue-700 hover:bg-blue-100 dark:text-blue-300 dark:hover:bg-blue-900/50"
+                asChild
+              >
+                <Link href={path ? `/browse/${path}` : "/browse"}>
+                  <X className="h-4 w-4" />
+                  {t("exitPreview")}
+                </Link>
+              </Button>
+            </div>
+          )}
+
+          {isDirectoryView && (
+            <DirectoryListing
+              directory={data.directory ?? null}
+              directories={data.directories ?? []}
+              materials={data.materials ?? []}
+              breadcrumbs={data.breadcrumbs}
+              isAttachmentListing={data.type === "attachment_listing"}
+              parentMaterial={data.parent_material ?? null}
+              previewOperations={previewPr?.payload}
+              previewPrId={previewPr?.id}
+            />
+          )}
+        </div>
+        {!isDesktop && <SharedSidebar />}
+        {isDesktop && isDirectoryView && <SharedSidebar />}
+      </div>
     );
   }
 
   return (
-    <div
-      className={`flex h-full w-full overflow-hidden gap-0 transition-opacity duration-200 ${isFetching ? "opacity-50 pointer-events-none" : "opacity-100"}`}
-    >
-      <div
-        className={`flex-1 min-h-0 overflow-y-auto px-4 py-6 pb-20 md:pb-6 ${isDesktop && sidebarOpen ? "min-w-0" : ""}`}
-      >
-        {previewPr && (
-          <div className="mb-6 flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 dark:border-blue-800/40 dark:bg-blue-950/20">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/50">
-                <Eye className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-200">
-                  {t("contributionPreview")}
-                </h3>
-                <p className="text-xs text-muted-foreground truncate">
-                  {previewPr.title}
-                </p>
-              </div>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-2 text-blue-700 hover:bg-blue-100 dark:text-blue-300 dark:hover:bg-blue-900/50"
-              asChild
-            >
-              <Link href={path ? `/browse/${path}` : "/browse"}>
-                <X className="h-4 w-4" />
-                {t("exitPreview")}
-              </Link>
-            </Button>
-          </div>
-        )}
-
-        {isDirectoryView && (
-          <DirectoryListing
-            directory={data.directory ?? null}
-            directories={data.directories ?? []}
-            materials={data.materials ?? []}
-            breadcrumbs={data.breadcrumbs}
-            isAttachmentListing={data.type === "attachment_listing"}
-            parentMaterial={data.parent_material ?? null}
-            previewOperations={previewPr?.payload}
-            previewPrId={previewPr?.id}
-          />
-        )}
+    <div className="flex h-full w-full overflow-hidden">
+      <DirectoryTreeSidebar />
+      <div className="flex-1 min-w-0 min-h-0 flex overflow-hidden">
+        {inner}
       </div>
-      {!isDesktop && <SharedSidebar />}
-      {isDesktop && isDirectoryView && (
-        <SharedSidebar />
-      )}
     </div>
   );
 }

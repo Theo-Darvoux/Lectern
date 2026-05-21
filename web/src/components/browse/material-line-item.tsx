@@ -3,77 +3,22 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-    FileText, MessageSquare, Info, Eye, ThumbsUp,
-    FileImage, FileVideo, FileAudio, FileArchive, FileSpreadsheet, FileCode, File, Lightbulb, ClipboardCheck, Video,
-    Paperclip, ListChecks
+    Eye,
+    File,
+    FileText,
+    Info,
+    ListChecks,
+    MessageSquare,
+    Paperclip,
+    ThumbsUp,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useUIStore } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
+import { EXT_ICONS, TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
 import { useTranslations } from "next-intl";
-
-export const TYPE_COLORS: Record<string, string> = {
-    polycopie: "bg-blue-100 text-blue-800",
-    annal: "bg-orange-100 text-orange-800",
-    cheatsheet: "bg-green-100 text-green-800",
-    tip: "bg-yellow-100 text-yellow-800",
-    review: "bg-purple-100 text-purple-800",
-    discussion: "bg-pink-100 text-pink-800",
-    video: "bg-red-100 text-red-800",
-    qcm: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
-    other: "bg-gray-100 text-gray-800",
-};
-
-
-export const TYPE_ICONS: Record<string, React.ElementType> = {
-    polycopie: FileText,
-    annal: FileText,
-    cheatsheet: FileText,
-    tip: Lightbulb,
-    review: ClipboardCheck,
-    discussion: MessageSquare,
-    video: Video,
-    qcm: ListChecks,
-    other: File,
-    document: FileText,
-};
-
-export const EXT_ICONS: Record<string, React.ElementType> = {
-    qcm: ListChecks,
-    pdf: FileText,
-    doc: FileText,
-    docx: FileText,
-    txt: FileText,
-    xls: FileSpreadsheet,
-    xlsx: FileSpreadsheet,
-    csv: FileSpreadsheet,
-    png: FileImage,
-    jpg: FileImage,
-    jpeg: FileImage,
-    gif: FileImage,
-    webp: FileImage,
-    svg: FileImage,
-    mp4: FileVideo,
-    avi: FileVideo,
-    mkv: FileVideo,
-    webm: FileVideo,
-    mp3: FileAudio,
-    wav: FileAudio,
-    ogg: FileAudio,
-    zip: FileArchive,
-    rar: FileArchive,
-    "7z": FileArchive,
-    tar: FileArchive,
-    gz: FileArchive,
-    js: FileCode,
-    ts: FileCode,
-    py: FileCode,
-    html: FileCode,
-    css: FileCode,
-    json: FileCode,
-};
 
 
 interface MaterialLineItemProps {

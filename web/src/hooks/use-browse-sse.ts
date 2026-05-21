@@ -23,6 +23,7 @@ export function useBrowseSSE(
     path: string,
     browseCache: { delete: (key: string) => void },
     fetchData: (background: boolean) => void,
+    triggerBrowseRefresh: () => void,
 ): void {
     const router = useRouter();
 
@@ -62,11 +63,13 @@ export function useBrowseSSE(
             listeners["child_added"] = () => {
                 browseCache.delete(path);
                 fetchData(true);
+                triggerBrowseRefresh();
             };
 
             listeners["pr_closed"] = () => {
                 browseCache.delete(path);
                 fetchData(true);
+                triggerBrowseRefresh();
             };
         } else if (data.type === "attachment_listing" && data.parent_material) {
             sseUrl = `/materials/${(data.parent_material as Record<string, unknown>).id as string}/sse`;
@@ -89,5 +92,5 @@ export function useBrowseSSE(
         });
 
         return () => connection.close();
-    }, [data, path, browseCache, fetchData, router]);
+    }, [data, path, browseCache, fetchData, triggerBrowseRefresh, router]);
 }

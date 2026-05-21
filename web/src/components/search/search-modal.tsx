@@ -19,7 +19,7 @@ import {
     getFileBadgeLabel, 
     getFileExtension 
 } from "@/lib/file-utils";
-import { TYPE_ICONS, EXT_ICONS } from "@/components/browse/material-line-item";
+import { TYPE_ICONS, EXT_ICONS } from "@/lib/material-icons";
 import { useTranslations } from "next-intl";
 
 export function SearchList({ 

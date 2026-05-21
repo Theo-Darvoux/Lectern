@@ -1,5 +1,25 @@
 import { create } from "zustand";
 import { isRestrictedTarget } from "@/lib/utils";
+import { safeLocalStorage } from "@/lib/safe-storage";
+
+const TREE_SIDEBAR_STORAGE_KEY = "browse-tree-sidebar-open";
+
+function readInitialTreeSidebarOpen(): boolean {
+    if (typeof window === "undefined") return false;
+    const stored = safeLocalStorage.getItem(TREE_SIDEBAR_STORAGE_KEY);
+    if (stored === "1") return true;
+    if (stored === "0") return false;
+    // Default: open on wide viewports, closed otherwise
+    try {
+        return window.matchMedia("(min-width: 1025px)").matches;
+    } catch {
+        return false;
+    }
+}
+
+function persistTreeSidebarOpen(open: boolean): void {
+    safeLocalStorage.setItem(TREE_SIDEBAR_STORAGE_KEY, open ? "1" : "0");
+}
 
 export interface UserBrief {
     id: string;
@@ -44,6 +64,7 @@ interface UIState {
     searchOpen: boolean;
     hideFooter: boolean;
     materialActionsOpen: boolean;
+    treeSidebarOpen: boolean;
     openSidebar: (tab: SidebarTab, target: SidebarTarget) => void;
     setSidebarTarget: (target: SidebarTarget) => void;
     updateSidebarData: (data: Record<string, unknown>) => void;
@@ -54,6 +75,8 @@ interface UIState {
     setMaterialActionsOpen: (open: boolean) => void;
     setHideFooter: (hide: boolean) => void;
     toggleSidebar: () => void;
+    setTreeSidebarOpen: (open: boolean) => void;
+    toggleTreeSidebar: () => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -63,6 +86,7 @@ export const useUIStore = create<UIState>((set) => ({
     searchOpen: false,
     hideFooter: false,
     materialActionsOpen: false,
+    treeSidebarOpen: readInitialTreeSidebarOpen(),
     openSidebar: (tab, target) =>
         set({ sidebarOpen: true, sidebarTab: tab, sidebarTarget: target }),
     setSidebarTarget: (target) =>
@@ -90,6 +114,16 @@ export const useUIStore = create<UIState>((set) => ({
     setMaterialActionsOpen: (open) => set({ materialActionsOpen: open }),
     setHideFooter: (hide) => set({ hideFooter: hide }),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+    setTreeSidebarOpen: (open) => {
+        persistTreeSidebarOpen(open);
+        set({ treeSidebarOpen: open });
+    },
+    toggleTreeSidebar: () =>
+        set((state) => {
+            const next = !state.treeSidebarOpen;
+            persistTreeSidebarOpen(next);
+            return { treeSidebarOpen: next };
+        }),
 }));
 
 // ---------------------------------------------------------------------------

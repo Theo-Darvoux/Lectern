@@ -121,6 +121,87 @@ export function getFileBadgeColor(fileName: string, mimeType?: string): string {
     return DEFAULT_BADGE_COLOR;
 }
 
+/** Extension → icon foreground color classes (light + dark variants). */
+export const EXT_ICON_COLORS: Record<string, string> = {
+    pdf: "text-red-600 dark:text-red-400",
+    doc: "text-blue-600 dark:text-blue-400",
+    docx: "text-blue-600 dark:text-blue-400",
+    odt: "text-blue-600 dark:text-blue-400",
+    txt: "text-slate-600 dark:text-slate-400",
+    md: "text-slate-600 dark:text-slate-400",
+    xls: "text-emerald-600 dark:text-emerald-400",
+    xlsx: "text-emerald-600 dark:text-emerald-400",
+    ods: "text-emerald-600 dark:text-emerald-400",
+    csv: "text-emerald-600 dark:text-emerald-400",
+    ppt: "text-orange-600 dark:text-orange-400",
+    pptx: "text-orange-600 dark:text-orange-400",
+    png: "text-purple-600 dark:text-purple-400",
+    jpg: "text-purple-600 dark:text-purple-400",
+    jpeg: "text-purple-600 dark:text-purple-400",
+    gif: "text-purple-600 dark:text-purple-400",
+    webp: "text-purple-600 dark:text-purple-400",
+    svg: "text-purple-600 dark:text-purple-400",
+    mp4: "text-pink-600 dark:text-pink-400",
+    webm: "text-pink-600 dark:text-pink-400",
+    avi: "text-pink-600 dark:text-pink-400",
+    mkv: "text-pink-600 dark:text-pink-400",
+    mp3: "text-amber-600 dark:text-amber-400",
+    wav: "text-amber-600 dark:text-amber-400",
+    ogg: "text-amber-600 dark:text-amber-400",
+    flac: "text-amber-600 dark:text-amber-400",
+    aac: "text-amber-600 dark:text-amber-400",
+    m4a: "text-amber-600 dark:text-amber-400",
+    epub: "text-teal-600 dark:text-teal-400",
+    djvu: "text-teal-600 dark:text-teal-400",
+    djv: "text-teal-600 dark:text-teal-400",
+    zip: "text-orange-600 dark:text-orange-400",
+    rar: "text-orange-600 dark:text-orange-400",
+    "7z": "text-orange-600 dark:text-orange-400",
+    tar: "text-orange-600 dark:text-orange-400",
+    gz: "text-orange-600 dark:text-orange-400",
+    js: "text-yellow-600 dark:text-yellow-500",
+    ts: "text-blue-600 dark:text-blue-400",
+    py: "text-sky-600 dark:text-sky-400",
+    html: "text-orange-600 dark:text-orange-400",
+    css: "text-blue-600 dark:text-blue-400",
+    json: "text-zinc-600 dark:text-zinc-400",
+    qcm: "text-violet-600 dark:text-violet-400",
+};
+
+/** Material type → icon foreground color classes (light + dark variants). */
+export const MATERIAL_TYPE_ICON_COLORS: Record<string, string> = {
+    polycopie: "text-blue-600 dark:text-blue-400",
+    annal: "text-orange-600 dark:text-orange-400",
+    cheatsheet: "text-green-600 dark:text-green-400",
+    tip: "text-yellow-600 dark:text-yellow-500",
+    review: "text-purple-600 dark:text-purple-400",
+    discussion: "text-pink-600 dark:text-pink-400",
+    video: "text-red-600 dark:text-red-400",
+    qcm: "text-violet-600 dark:text-violet-400",
+    other: "text-muted-foreground",
+    document: "text-muted-foreground",
+};
+
+const DEFAULT_ICON_COLOR = "text-muted-foreground";
+
+/** Icon foreground color for a file, derived from extension/MIME type. */
+export function getFileIconColor(fileName: string, mimeType?: string): string {
+    const ext = getFileExtension(fileName);
+    if (ext && EXT_ICON_COLORS[ext]) return EXT_ICON_COLORS[ext];
+
+    if (mimeType) {
+        if (mimeType === "application/pdf") return EXT_ICON_COLORS["pdf"];
+        if (mimeType === "application/vnd.wikint.qcm+json") return EXT_ICON_COLORS["qcm"];
+        if (mimeType.startsWith("image/")) return EXT_ICON_COLORS["jpg"];
+        if (mimeType.startsWith("video/")) return EXT_ICON_COLORS["mp4"];
+        if (mimeType.startsWith("audio/")) return EXT_ICON_COLORS["mp3"];
+        if (mimeType.includes("document") || mimeType.includes("msword")) return EXT_ICON_COLORS["doc"];
+        if (mimeType.includes("sheet") || mimeType.includes("excel")) return EXT_ICON_COLORS["xls"];
+    }
+
+    return DEFAULT_ICON_COLOR;
+}
+
 /** Short uppercase label for a file, e.g. "PDF", "MP3". Falls back to MIME subtype. */
 export function getFileBadgeLabel(fileName: string, mimeType?: string): string {
     const ext = getFileExtension(fileName);

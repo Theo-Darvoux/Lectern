@@ -11,7 +11,7 @@ import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu
 import { useUIStore } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
 import { useTranslations } from "next-intl";
-import { TYPE_COLORS, TYPE_ICONS, EXT_ICONS } from "./material-line-item";
+import { TYPE_COLORS, TYPE_ICONS, EXT_ICONS } from "@/lib/material-icons";
 import { getFileTypeStyle } from "@/components/home/file-type-display";
 import { apiFetch } from "@/lib/api-client";
 import { cn } from "@/lib/utils";

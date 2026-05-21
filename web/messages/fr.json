@@ -333,7 +333,12 @@
     "_": "_",
     "failedToUpdateLike": "failedToUpdateLike",
     "listView": "Vue liste",
-    "gridView": "Vue grille"
+    "gridView": "Vue grille",
+    "tree": "Arborescence",
+    "showTree": "Afficher l'arborescence",
+    "hideTree": "Masquer l'arborescence",
+    "filterFolders": "Filtrer les dossiers…",
+    "clear": "Effacer"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",
