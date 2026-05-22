@@ -27,6 +27,14 @@ interface BrowseResponse {
 }
 
 function BrowseSkeleton({ isMaterial = false }: { isMaterial?: boolean }) {
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("browse-view-mode");
+      if (stored === "grid" || stored === "list") setViewMode(stored);
+    } catch {}
+  }, []);
+
   if (isMaterial) {
     return (
       <div className="flex flex-1 w-full gap-0 px-4 py-6 pb-20 md:pb-6">
@@ -70,19 +78,51 @@ function BrowseSkeleton({ isMaterial = false }: { isMaterial?: boolean }) {
   }
 
   return (
-    <div className="space-y-4 px-4 py-6 pb-20 md:pb-6">
-      <Skeleton className="h-6 w-48" />
-      <div className="divide-y rounded-lg border">
-        {Array.from({ length: 5 }, (_, i) => (
-          <div key={i} className="flex items-center gap-3 px-4 py-3">
-            <Skeleton className="h-5 w-5 rounded" />
-            <div className="flex-1 space-y-1">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-3 w-1/4" />
-            </div>
-          </div>
-        ))}
+    <div className="w-full space-y-4 px-4 py-6 pb-20 md:pb-6">
+      {/* Breadcrumb row */}
+      <div className="flex items-center gap-2">
+        <Skeleton className="h-4 w-16" />
+        <Skeleton className="h-4 w-4 rounded-full" />
+        <Skeleton className="h-4 w-24" />
+        <Skeleton className="h-4 w-4 rounded-full" />
+        <Skeleton className="h-4 w-32" />
       </div>
+      {/* Toolbar row */}
+      <div className="flex items-center justify-between h-11">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-8 w-16 rounded-md" />
+          <Skeleton className="h-8 w-8 rounded-md" />
+        </div>
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-8 w-24 rounded-md" />
+          <Skeleton className="h-8 w-24 rounded-md" />
+        </div>
+      </div>
+      {viewMode === "grid" ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+          {Array.from({ length: 10 }, (_, i) => (
+            <div key={i} className="rounded-lg border overflow-hidden">
+              <Skeleton className="aspect-[4/3] w-full rounded-none" />
+              <div className="p-2 space-y-1">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="divide-y rounded-lg border">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3">
+              <Skeleton className="h-5 w-5 shrink-0 rounded" />
+              <div className="flex-1 min-w-0 space-y-1">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-3 w-1/4" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
