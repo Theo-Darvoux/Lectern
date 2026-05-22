@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   ChevronRight,
   File,
@@ -369,11 +369,11 @@ export function DirectoryTreeSidebar() {
     useUIStore();
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
 
-  const params = useParams();
+  const pathname = usePathname();
   const currentSlugs = useMemo(() => {
-    if (!params.path) return [] as string[];
-    return Array.isArray(params.path) ? params.path : [params.path];
-  }, [params.path]);
+    const stripped = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
+    return stripped ? stripped.split("/") : [];
+  }, [pathname]);
   const pathKey = currentSlugs.join("/");
 
   const [roots, setRoots] = useState<DirNode[] | null>(rootsCache.dirs);

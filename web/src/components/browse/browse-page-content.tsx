@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api-client";
 import { AuthGuard } from "@/components/auth-guard";
@@ -110,7 +110,7 @@ const browseCache = new Map<string, BrowseResponse>();
 let previousPath: string | null = null;
 
 function BrowseContent() {
-  const params = useParams();
+  const pathname = usePathname();
   const isDesktop = useIsDesktop();
   const { sidebarOpen, sidebarTarget, setSidebarTarget } = useUIStore();
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
@@ -118,11 +118,7 @@ function BrowseContent() {
 
   const t = useTranslations("Browse");
   const { config } = useConfigStore();
-  const path = params.path
-    ? Array.isArray(params.path)
-      ? params.path.join("/")
-      : params.path
-    : "";
+  const path = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
 
   const getInitialData = () => {
     if (browseCache.has(path)) return browseCache.get(path)!;
@@ -274,9 +270,7 @@ function BrowseContent() {
 
   useBrowseSSE(data, path, browseCache, fetchData, triggerBrowseRefresh);
 
-  const isLikelyMaterial = Boolean(
-    params.path && Array.isArray(params.path) && params.path.length >= 3,
-  );
+  const isLikelyMaterial = path.split("/").filter(Boolean).length >= 3;
 
   const isDirectoryView =
     data?.type === "directory_listing" || data?.type === "attachment_listing";

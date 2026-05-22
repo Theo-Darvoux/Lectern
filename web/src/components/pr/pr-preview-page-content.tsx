@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ArrowLeft, Loader2, AlertCircle, FileText, Image as ImageIcon, Video as VideoIcon, Music, Code2, Eye, Download, ExternalLink, ListChecks } from "lucide-react";
@@ -168,9 +168,11 @@ const VIEWER_ICON_COLORS: Record<string, string> = {
 
 export function PRPreviewPageContent() {
     const t = useTranslations("Preview");
-    const routeParams = useParams();
-    const prId = String(routeParams.id ?? "");
-    const opIndex = Number(routeParams.opIndex ?? "0");
+    const pathname = usePathname();
+    // pathname: /pull-requests/{id}/preview/{opIndex}/
+    const previewMatch = pathname.match(/^\/pull-requests\/([^/]+)\/preview\/([^/]+)/);
+    const prId = previewMatch ? previewMatch[1] : "";
+    const opIndex = previewMatch ? Number(previewMatch[2]) : 0;
     const router = useRouter();
 
     const [presignedUrl, setPresignedUrl] = useState<string | null>(null);

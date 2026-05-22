@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { useRouter, useParams, useSearchParams, usePathname } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   ArrowLeft,
   Download,
@@ -166,7 +166,6 @@ export function MaterialViewer({
 }: MaterialViewerProps) {
   const t = useTranslations("Browse");
   const router = useRouter();
-  const params = useParams();
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
@@ -174,11 +173,8 @@ export function MaterialViewer({
 
   // Derive the parent folder URL by dropping the last path segment
   const parentFolderHref = (() => {
-    const segments = Array.isArray(params.path)
-      ? params.path
-      : params.path
-        ? [params.path]
-        : [];
+    const stripped = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
+    const segments = stripped ? stripped.split("/") : [];
     const parentSegments = segments.slice(0, -1);
     return parentSegments.length > 0
       ? `/browse/${parentSegments.join("/")}`

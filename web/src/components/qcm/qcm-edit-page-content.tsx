@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
 import { Loader2, Home, ChevronRight } from "lucide-react";
 import Link from "next/link";
@@ -24,9 +24,9 @@ function slugify(title: string): string {
 
 function EditQCMPageInner() {
   const router = useRouter();
-  const params = useParams();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
-  const materialId = String(params.materialId ?? "");
+  const materialId = pathname.replace(/^\/qcm\//, "").replace(/\/edit\/?$/, "").replace(/\/$/, "");
   const draftIndexParam = searchParams.get("draftIndex");
   const draftIndex = draftIndexParam !== null ? parseInt(draftIndexParam, 10) : null;
 

@@ -3,7 +3,7 @@
 
 
 import { useEffect, useState, useMemo } from "react";
-import { useParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { apiFetch } from "@/lib/api-client";
 import {
     Loader2,
@@ -726,8 +726,8 @@ function OperationRow({
 /* ── Main Page ──────────────────────────────────────── */
 
 function PRDetailContent() {
-    const routeParams = useParams();
-    const id = String(routeParams.id ?? "");
+    const pathname = usePathname();
+    const id = pathname.replace(/^\/pull-requests\//, "").replace(/\/$/, "");
     const t = useTranslations("PRDetails");
     const tPRs = useTranslations("PRs");
     const tCommon = useTranslations("Common");

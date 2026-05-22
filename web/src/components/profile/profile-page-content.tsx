@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { ProfileView, ProfileSkeleton, type UserProfile } from "@/components/profile/profile-view";
 import { apiFetch } from "@/lib/api-client";
 import { toast } from "sonner";
@@ -9,8 +9,8 @@ import { useTranslations } from "next-intl";
 
 export function ProfilePageContent() {
     const t = useTranslations("Profile");
-    const params = useParams();
-    const id = String(params.id ?? "");
+    const pathname = usePathname();
+    const id = pathname.replace(/^\/profile\//, "").replace(/\/$/, "");
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [notFound, setNotFound] = useState(false);
 
