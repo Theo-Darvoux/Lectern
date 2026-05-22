@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { DirectoryLineItem } from "@/components/browse/directory-line-item";
 import { MaterialLineItem } from "@/components/browse/material-line-item";
@@ -125,6 +125,31 @@ export function DirectoryListing({
   });
 
   const { mode: viewMode, setMode: setViewMode } = useViewMode();
+
+  // Index staged operations by target id once per render so each item is an
+  // O(1) lookup instead of scanning allOps per row (O(items × ops)). First
+  // match wins, matching the previous Array.find semantics.
+  const dirOpById = useMemo(() => {
+    const m = new Map<string, (typeof allOps)[number]>();
+    for (const o of allOps) {
+      let key: string | undefined;
+      if (o.op === "edit_directory" || o.op === "delete_directory") key = o.directory_id;
+      else if (o.op === "move_item" && o.target_type === "directory") key = o.target_id;
+      if (key !== undefined && !m.has(key)) m.set(key, o);
+    }
+    return m;
+  }, [allOps]);
+
+  const matOpById = useMemo(() => {
+    const m = new Map<string, (typeof allOps)[number]>();
+    for (const o of allOps) {
+      let key: string | undefined;
+      if (o.op === "edit_material" || o.op === "delete_material") key = o.material_id;
+      else if (o.op === "move_item" && o.target_type === "material") key = o.target_id;
+      if (key !== undefined && !m.has(key)) m.set(key, o);
+    }
+    return m;
+  }, [allOps]);
 
   const addOperations = useStagingStore((s) => s.addOperations);
   const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
@@ -723,14 +748,7 @@ export function DirectoryListing({
             <div className={`divide-y rounded-lg border ${selectMode ? "select-none" : ""}`}>
               {sortedDirs.map((dir, i) => {
                 const id = String(dir.id);
-                const op = allOps.find(
-                  (o) =>
-                    ((o.op === "edit_directory" || o.op === "delete_directory") &&
-                      o.directory_id === id) ||
-                    (o.op === "move_item" &&
-                      o.target_type === "directory" &&
-                      o.target_id === id),
-                );
+                const op = dirOpById.get(id);
 
                 const staged = op
                   ? op.op === "delete_directory"
@@ -798,14 +816,7 @@ export function DirectoryListing({
 
               {sortedMats.map((mat, i) => {
                 const id = String(mat.id);
-                const op = allOps.find(
-                  (o) =>
-                    ((o.op === "edit_material" || o.op === "delete_material") &&
-                      o.material_id === id) ||
-                    (o.op === "move_item" &&
-                      o.target_type === "material" &&
-                      o.target_id === id),
-                );
+                const op = matOpById.get(id);
 
                 const staged = op
                   ? op.op === "delete_material"
@@ -906,14 +917,7 @@ export function DirectoryListing({
             <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 ${selectMode ? "select-none" : ""}`}>
               {sortedDirs.map((dir, i) => {
                 const id = String(dir.id);
-                const op = allOps.find(
-                  (o) =>
-                    ((o.op === "edit_directory" || o.op === "delete_directory") &&
-                      o.directory_id === id) ||
-                    (o.op === "move_item" &&
-                      o.target_type === "directory" &&
-                      o.target_id === id),
-                );
+                const op = dirOpById.get(id);
 
                 const staged = op
                   ? op.op === "delete_directory"
@@ -981,14 +985,7 @@ export function DirectoryListing({
 
               {sortedMats.map((mat, i) => {
                 const id = String(mat.id);
-                const op = allOps.find(
-                  (o) =>
-                    ((o.op === "edit_material" || o.op === "delete_material") &&
-                      o.material_id === id) ||
-                    (o.op === "move_item" &&
-                      o.target_type === "material" &&
-                      o.target_id === id),
-                );
+                const op = matOpById.get(id);
 
                 const staged = op
                   ? op.op === "delete_material"

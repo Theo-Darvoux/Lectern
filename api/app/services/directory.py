@@ -3,13 +3,13 @@ import typing
 import unicodedata
 import uuid
 
-from sqlalchemy import func, literal, select, update
+from sqlalchemy import exists, func, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
 from app.core.exceptions import NotFoundError
 from app.models.directory import Directory, DirectoryFavourite, DirectoryLike
-from app.models.material import Material, MaterialVersion
+from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
 
 
 def slugify(text: str) -> str:
@@ -168,21 +168,17 @@ async def get_root_directories(
             "child_material_count": mat_counts.get(d.id, 0),
         })
 
-    # Root-level materials
+    # Root-level materials. is_liked/is_favourited are resolved in a batched
+    # query inside _attach_version_and_counts, so we don't eagerly load the
+    # full likes/favourites collections here.
     mat_stmt = (
         select(Material)
-        .options(
-            selectinload(Material.tags),
-            selectinload(Material.likes),
-            selectinload(Material.favourites),
-        )
+        .options(selectinload(Material.tags))
         .where(Material.directory_id.is_(None), Material.parent_material_id.is_(None))
         .order_by(Material.title)
     )
     mat_result = await db.execute(mat_stmt)
     root_materials = mat_result.scalars().all()
-
-    from app.services.material import material_orm_to_dict, version_orm_to_dict
 
     materials_out = await _attach_version_and_counts(db, root_materials, current_user_id, "")
     return {"directories": items, "materials": materials_out}
@@ -218,6 +214,27 @@ async def _attach_version_and_counts(
     for v in ver_rows.scalars().all():
         all_versions[(v.material_id, v.version_number)] = v
 
+    # Batch: liked / favourited sets for the current user. Avoids loading the
+    # full likes/favourites collections per material (like_count is a column).
+    liked_ids: set[uuid.UUID] = set()
+    favourited_ids: set[uuid.UUID] = set()
+    if current_user_id:
+        like_rows = await db.execute(
+            select(MaterialLike.material_id).where(
+                MaterialLike.user_id == current_user_id,
+                MaterialLike.material_id.in_(mat_ids),
+            )
+        )
+        liked_ids = {r.material_id for r in like_rows.all()}
+
+        fav_rows = await db.execute(
+            select(MaterialFavourite.material_id).where(
+                MaterialFavourite.user_id == current_user_id,
+                MaterialFavourite.material_id.in_(mat_ids),
+            )
+        )
+        favourited_ids = {r.material_id for r in fav_rows.all()}
+
     out = []
     for material in materials:
         version = all_versions.get((material.id, material.current_version))
@@ -226,6 +243,8 @@ async def _attach_version_and_counts(
             attachment_count=att_counts.get(material.id, 0),
             current_user_id=current_user_id,
             directory_path=directory_path,
+            is_liked=material.id in liked_ids,
+            is_favourited=material.id in favourited_ids,
         )
         if version:
             mat_dict["current_version_info"] = version_orm_to_dict(version)
@@ -249,14 +268,28 @@ async def get_directory_by_id(db: AsyncSession, directory_id: str | uuid.UUID) -
 
 
 async def get_directory_children(
-    db: AsyncSession, directory_id: str | uuid.UUID, current_user_id: uuid.UUID | None = None
+    db: AsyncSession,
+    directory_id: str | uuid.UUID,
+    current_user_id: uuid.UUID | None = None,
+    *,
+    directory: Directory | None = None,
+    parent_full_path: str | None = None,
 ) -> dict[str, typing.Any]:
+    """List a directory's child directories and materials.
+
+    ``directory`` and ``parent_full_path`` may be supplied by callers that have
+    already loaded the directory / resolved its full path (e.g.
+    ``resolve_browse_path``) to avoid an extra PK lookup and a redundant
+    recursive path CTE.
+    """
     if isinstance(directory_id, str):
         directory_id = uuid.UUID(directory_id)
-    directory = await get_directory_by_id(db, directory_id)
+    if directory is None or directory.id != directory_id:
+        directory = await get_directory_by_id(db, directory_id)
 
-    path_segments = await get_directory_path(db, directory.id)
-    parent_full_path = "/".join([s["slug"] for s in path_segments])
+    if parent_full_path is None:
+        path_segments = await get_directory_path(db, directory.id)
+        parent_full_path = "/".join([s["slug"] for s in path_segments])
 
     dir_stmt = (
         select(Directory)
@@ -326,11 +359,7 @@ async def get_directory_children(
 
     mat_stmt = (
         select(Material)
-        .options(
-            selectinload(Material.tags),
-            selectinload(Material.likes),
-            selectinload(Material.favourites),
-        )
+        .options(selectinload(Material.tags))
         .where(Material.directory_id == directory.id, Material.parent_material_id.is_(None))
         .order_by(Material.title)
     )
@@ -393,6 +422,20 @@ async def resolve_browse_path(
 
     from app.services.material import material_orm_to_dict, version_orm_to_dict
 
+    # Resolve the directory chain in a single query rather than one round-trip
+    # per segment: fetch every directory whose slug appears in the path, then
+    # walk the chain in-memory keyed by (parent_id, slug). Unrelated directories
+    # that happen to share a slug are simply never matched during the walk.
+    slug_set = {s for s in segments if s != "attachments"}
+    dirs_by_parent_slug: dict[tuple[uuid.UUID | None, str], Directory] = {}
+    if slug_set:
+        dir_rows = await db.execute(
+            select(Directory)
+            .options(selectinload(Directory.tags))
+            .where(Directory.slug.in_(slug_set), Directory.is_system.is_(False))
+        )
+        dirs_by_parent_slug = {(d.parent_id, d.slug): d for d in dir_rows.scalars().all()}
+
     for i, segment in enumerate(segments):
         if segment == "attachments" and last_material is not None:
             # If there are more segments after 'attachments', resolve a specific attachment
@@ -400,82 +443,66 @@ async def resolve_browse_path(
             if remaining:
                 att_slug = remaining[0]
                 att_result = await db.execute(
-                    select(Material)
-                    .options(
-                        selectinload(Material.likes),
-                        selectinload(Material.favourites),
-                    )
-                    .where(
+                    select(Material.id).where(
                         Material.slug == att_slug,
                         Material.parent_material_id == last_material.id,
                     )
                 )
-                attachment = att_result.scalar_one_or_none()
-                if not attachment:
+                attachment_id = att_result.scalar_one_or_none()
+                if not attachment_id:
                     raise NotFoundError(f"Attachment '{att_slug}' not found")
                 from app.services.material import get_material_with_version
 
                 detail = await get_material_with_version(
-                    db, str(attachment.id), current_user_id=current_user_id
+                    db, str(attachment_id), current_user_id=current_user_id
                 )
                 return {"type": "material", "material": detail}
 
             # No more segments — return the attachment listing
             att_listing_result = await db.execute(
                 select(Material)
-                .options(
-                    selectinload(Material.tags),
-                    selectinload(Material.likes),
-                    selectinload(Material.favourites),
-                )
+                .options(selectinload(Material.tags))
                 .where(Material.parent_material_id == last_material.id)
                 .order_by(Material.title)
             )
+            attachments = att_listing_result.scalars().all()
+            materials_out = await _attach_version_and_counts(
+                db, attachments, current_user_id, None
+            )
 
-            materials_out = []
-            for material in att_listing_result.scalars().all():
-                ver_stmt = select(MaterialVersion).where(
-                    MaterialVersion.material_id == material.id,
-                    MaterialVersion.version_number == material.current_version,
+            parent_liked = False
+            parent_favourited = False
+            if current_user_id:
+                parent_liked = bool(
+                    await db.scalar(
+                        select(exists().where(
+                            MaterialLike.material_id == last_material.id,
+                            MaterialLike.user_id == current_user_id,
+                        ))
+                    )
                 )
-                ver_res = await db.execute(ver_stmt)
-                version = ver_res.scalar_one_or_none()
-
-                mat_dict = material_orm_to_dict(material, current_user_id=current_user_id)
-                if version:
-                    mat_dict["current_version_info"] = version_orm_to_dict(version)
-                materials_out.append(mat_dict)
+                parent_favourited = bool(
+                    await db.scalar(
+                        select(exists().where(
+                            MaterialFavourite.material_id == last_material.id,
+                            MaterialFavourite.user_id == current_user_id,
+                        ))
+                    )
+                )
 
             return {
                 "type": "attachment_listing",
                 "materials": materials_out,
                 "parent_material": material_orm_to_dict(
-                    last_material, current_user_id=current_user_id
+                    last_material,
+                    current_user_id=current_user_id,
+                    is_liked=parent_liked,
+                    is_favourited=parent_favourited,
                 ),
             }
 
-        if current_dir is None:
-            dir_result = await db.execute(
-                select(Directory)
-                .options(selectinload(Directory.tags))
-                .where(
-                    Directory.slug == segment,
-                    Directory.parent_id.is_(None),
-                    Directory.is_system.is_(False),
-                )
-            )
-        else:
-            dir_result = await db.execute(
-                select(Directory)
-                .options(selectinload(Directory.tags))
-                .where(
-                    Directory.slug == segment,
-                    Directory.parent_id == current_dir.id,
-                    Directory.is_system.is_(False),
-                )
-            )
-
-        directory: Directory | None = dir_result.scalar_one_or_none()
+        parent_key = current_dir.id if current_dir else None
+        directory = dirs_by_parent_slug.get((parent_key, segment))
         if directory:
             current_dir = directory
             last_material = None
@@ -484,11 +511,7 @@ async def resolve_browse_path(
         # If no directory found, check for material in current_dir (or root if current_dir is None)
         mat_result = await db.execute(
             select(Material)
-            .options(
-                selectinload(Material.tags),
-                selectinload(Material.likes),
-                selectinload(Material.favourites),
-            )
+            .options(selectinload(Material.tags))
             .where(
                 Material.slug == segment,
                 Material.directory_id == (current_dir.id if current_dir else None),
@@ -510,38 +533,38 @@ async def resolve_browse_path(
         raise NotFoundError(f"Path segment '{segment}' not found")
 
     if current_dir:
-        # Populate full_path for the current directory
+        # Resolve the directory's path once and reuse it for the directory's own
+        # full_path, the children listing, and the breadcrumbs (avoids running
+        # the recursive path CTE three times per navigation).
         path_segments = await get_directory_path(db, current_dir.id)
         current_dir_full_path = "/".join([s["slug"] for s in path_segments])
 
         is_liked = False
         is_favourited = False
         if current_user_id:
-            is_liked = (
+            is_liked = bool(
                 await db.scalar(
-                    select(func.count())
-                    .select_from(DirectoryLike)
-                    .where(
+                    select(exists().where(
                         DirectoryLike.directory_id == current_dir.id,
                         DirectoryLike.user_id == current_user_id,
-                    )
+                    ))
                 )
-                or 0
-            ) > 0
-            is_favourited = (
+            )
+            is_favourited = bool(
                 await db.scalar(
-                    select(func.count())
-                    .select_from(DirectoryFavourite)
-                    .where(
+                    select(exists().where(
                         DirectoryFavourite.directory_id == current_dir.id,
                         DirectoryFavourite.user_id == current_user_id,
-                    )
+                    ))
                 )
-                or 0
-            ) > 0
+            )
 
         children = await get_directory_children(
-            db, str(current_dir.id), current_user_id=current_user_id
+            db,
+            str(current_dir.id),
+            current_user_id=current_user_id,
+            directory=current_dir,
+            parent_full_path=current_dir_full_path,
         )
         return {
             "type": "directory_listing",
@@ -566,6 +589,7 @@ async def resolve_browse_path(
             },
             "directories": children["directories"],
             "materials": children["materials"],
+            "_breadcrumbs": path_segments,
         }
 
     raise NotFoundError("Path not found")

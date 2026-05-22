@@ -43,20 +43,26 @@ async def browse_path(
 ) -> dict[str, typing.Any]:
     result = await resolve_browse_path(db, path, current_user_id=user.id if user else None)
 
-    # Determine which directory to use for breadcrumbs
-    directory_id = None
-    if result["type"] == "material":
-        directory_id = result["material"].get("directory_id")
-    elif result["type"] == "directory_listing":
-        directory_id = result.get("directory", {}).get("id") if result.get("directory") else None
-    elif result["type"] == "attachment_listing":
-        # For attachments, breadcrumbs should be relative to the parent material's directory
-        directory_id = result.get("parent_material", {}).get("directory_id")
+    # resolve_browse_path already computes the directory path for directory
+    # listings; reuse it instead of running the recursive path CTE again.
+    precomputed = result.pop("_breadcrumbs", None)
+    if precomputed is not None:
+        breadcrumbs = [DirectoryBreadcrumb(**p).model_dump() for p in precomputed]
+    else:
+        # Determine which directory to use for breadcrumbs
+        directory_id = None
+        if result["type"] == "material":
+            directory_id = result["material"].get("directory_id")
+        elif result["type"] == "directory_listing":
+            directory_id = result.get("directory", {}).get("id") if result.get("directory") else None
+        elif result["type"] == "attachment_listing":
+            # For attachments, breadcrumbs should be relative to the parent material's directory
+            directory_id = result.get("parent_material", {}).get("directory_id")
 
-    breadcrumbs = []
-    if directory_id:
-        path_data = await get_directory_path(db, directory_id)
-        breadcrumbs = [DirectoryBreadcrumb(**p).model_dump() for p in path_data]
+        breadcrumbs = []
+        if directory_id:
+            path_data = await get_directory_path(db, directory_id)
+            breadcrumbs = [DirectoryBreadcrumb(**p).model_dump() for p in path_data]
 
     return {
         **result,

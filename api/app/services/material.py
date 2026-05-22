@@ -18,25 +18,32 @@ def material_orm_to_dict(
     attachment_count: int = 0,
     directory_path: str | None = None,
     current_user_id: uuid.UUID | None = None,
+    is_liked: bool | None = None,
+    is_favourited: bool | None = None,
 ) -> dict[str, typing.Any]:
     """Convert a Material ORM instance to a plain dict safe for Pydantic validation.
 
     This avoids MissingGreenlet errors caused by SQLAlchemy lazy-loading
     relationship attributes when Pydantic inspects the object with
     ``from_attributes=True``.
+
+    ``is_liked`` / ``is_favourited`` may be supplied directly by callers that
+    have already resolved membership in a batched query (avoids loading the
+    full ``likes`` / ``favourites`` collections per material). When left as
+    ``None`` they fall back to inspecting eagerly-loaded relationships.
     """
     path = directory_path
     if not path and "directory" in m.__dict__:
         path = m.directory.slug
 
-    # Determine if current user liked/favourited this
-    is_liked = False
-    is_favourited = False
-    if current_user_id:
-        if "likes" in m.__dict__:
-            is_liked = any(like.user_id == current_user_id for like in m.likes)
-        if "favourites" in m.__dict__:
-            is_favourited = any(fav.user_id == current_user_id for fav in m.favourites)
+    # Determine if current user liked/favourited this. Prefer explicitly
+    # provided (batched) values; otherwise derive from loaded relationships.
+    if is_liked is None and current_user_id and "likes" in m.__dict__:
+        is_liked = any(like.user_id == current_user_id for like in m.likes)
+    if is_favourited is None and current_user_id and "favourites" in m.__dict__:
+        is_favourited = any(fav.user_id == current_user_id for fav in m.favourites)
+    is_liked = bool(is_liked)
+    is_favourited = bool(is_favourited)
 
     return {
         "id": m.id,

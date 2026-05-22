@@ -3,9 +3,15 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.directory import Directory, DirectoryType
-from app.models.material import Material, MaterialVersion
+from app.core.security import create_access_token
+from app.models.directory import Directory, DirectoryFavourite, DirectoryLike, DirectoryType
+from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
 from app.models.user import User, UserRole
+
+
+def _auth_headers(user: User) -> dict[str, str]:
+    token, _ = create_access_token(str(user.id), user.role.value, user.email)
+    return {"Authorization": f"Bearer {token}"}
 
 
 async def _create_user(db: AsyncSession) -> User:
@@ -294,3 +300,159 @@ async def test_browse_root_shows_child_counts(
     root_dir = data["directories"][0]
     assert root_dir["child_directory_count"] == 1
     assert root_dir["child_material_count"] == 2
+
+
+async def test_browse_deep_path_resolution_and_breadcrumbs(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user = await _create_user(db_session)
+    a = await _create_directory(db_session, user, name="A", slug="a")
+    b = await _create_directory(db_session, user, name="B", slug="b", parent_id=a.id)
+    c = await _create_directory(db_session, user, name="C", slug="c", parent_id=b.id)
+    d = await _create_directory(db_session, user, name="D", slug="d", parent_id=c.id)
+    await _create_material(db_session, d, user, title="Deep", slug="deep")
+    await db_session.commit()
+
+    response = await client.get("/api/browse/a/b/c/d")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["type"] == "directory_listing"
+    assert data["directory"]["name"] == "D"
+    assert data["directory"]["full_path"] == "a/b/c/d"
+    # Breadcrumbs are reused from the single resolved path (F2).
+    assert [bc["slug"] for bc in data["breadcrumbs"]] == ["a", "b", "c", "d"]
+    assert len(data["materials"]) == 1
+    assert data["materials"][0]["title"] == "Deep"
+
+
+async def test_browse_same_slug_under_different_parents(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The batched directory walk must follow parent links, not just slugs."""
+    user = await _create_user(db_session)
+    p1 = await _create_directory(db_session, user, name="P1", slug="p1")
+    p2 = await _create_directory(db_session, user, name="P2", slug="p2")
+    shared1 = await _create_directory(
+        db_session, user, name="Shared One", slug="shared", parent_id=p1.id
+    )
+    shared2 = await _create_directory(
+        db_session, user, name="Shared Two", slug="shared", parent_id=p2.id
+    )
+    await _create_material(db_session, shared1, user, title="In One", slug="in-one")
+    await _create_material(db_session, shared2, user, title="In Two", slug="in-two")
+    await db_session.commit()
+
+    resp1 = await client.get("/api/browse/p1/shared")
+    resp2 = await client.get("/api/browse/p2/shared")
+    assert resp1.status_code == 200
+    assert resp2.status_code == 200
+    data1 = resp1.json()
+    data2 = resp2.json()
+    assert data1["directory"]["id"] == str(shared1.id)
+    assert data1["materials"][0]["title"] == "In One"
+    assert data2["directory"]["id"] == str(shared2.id)
+    assert data2["materials"][0]["title"] == "In Two"
+
+
+async def test_browse_listing_reflects_user_likes_and_favourites(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user = await _create_user(db_session)
+    parent = await _create_directory(db_session, user, name="Parent", slug="parent")
+    liked_dir = await _create_directory(
+        db_session, user, name="Liked Dir", slug="liked-dir", parent_id=parent.id
+    )
+    await _create_directory(
+        db_session, user, name="Plain Dir", slug="plain-dir", parent_id=parent.id
+    )
+    liked_mat = await _create_material(
+        db_session, parent, user, title="Liked Mat", slug="liked-mat"
+    )
+    await _create_material(db_session, parent, user, title="Plain Mat", slug="plain-mat")
+
+    db_session.add(
+        DirectoryLike(id=uuid.uuid4(), user_id=user.id, directory_id=liked_dir.id)
+    )
+    db_session.add(
+        MaterialLike(id=uuid.uuid4(), user_id=user.id, material_id=liked_mat.id)
+    )
+    db_session.add(
+        MaterialFavourite(id=uuid.uuid4(), user_id=user.id, material_id=liked_mat.id)
+    )
+    await db_session.commit()
+
+    response = await client.get("/api/browse/parent", headers=_auth_headers(user))
+    assert response.status_code == 200
+    data = response.json()
+
+    dirs = {d["name"]: d for d in data["directories"]}
+    mats = {m["title"]: m for m in data["materials"]}
+    assert dirs["Liked Dir"]["is_liked"] is True
+    assert dirs["Plain Dir"]["is_liked"] is False
+    assert mats["Liked Mat"]["is_liked"] is True
+    assert mats["Liked Mat"]["is_favourited"] is True
+    assert mats["Plain Mat"]["is_liked"] is False
+    assert mats["Plain Mat"]["is_favourited"] is False
+
+
+async def test_browse_listing_likes_isolated_per_user(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Another user's like must not surface as the current user's like."""
+    owner = await _create_user(db_session)
+    other = await _create_user(db_session)
+    parent = await _create_directory(db_session, owner, name="Parent", slug="parent")
+    mat = await _create_material(db_session, parent, owner, title="Mat", slug="mat")
+    db_session.add(MaterialLike(id=uuid.uuid4(), user_id=other.id, material_id=mat.id))
+    await db_session.commit()
+
+    response = await client.get("/api/browse/parent", headers=_auth_headers(owner))
+    assert response.status_code == 200
+    data = response.json()
+    assert data["materials"][0]["is_liked"] is False
+
+
+async def test_browse_listing_anonymous_has_no_likes(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user = await _create_user(db_session)
+    parent = await _create_directory(db_session, user, name="Parent", slug="parent")
+    mat = await _create_material(db_session, parent, user, title="Mat", slug="mat")
+    db_session.add(MaterialLike(id=uuid.uuid4(), user_id=user.id, material_id=mat.id))
+    await db_session.commit()
+
+    response = await client.get("/api/browse/parent")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["materials"][0]["is_liked"] is False
+    assert data["materials"][0]["is_favourited"] is False
+
+
+async def test_attachment_listing_has_versions_and_parent_like(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user = await _create_user(db_session)
+    dir_ = await _create_directory(db_session, user, name="Cours", slug="cours")
+    parent_mat = await _create_material(db_session, dir_, user, title="Main", slug="main")
+    annex = await _create_material(
+        db_session, dir_, user, title="Annex", slug="annex", parent_material_id=parent_mat.id
+    )
+    await _create_version(db_session, annex)
+    db_session.add(
+        MaterialLike(id=uuid.uuid4(), user_id=user.id, material_id=parent_mat.id)
+    )
+    db_session.add(
+        DirectoryFavourite(id=uuid.uuid4(), user_id=user.id, directory_id=dir_.id)
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/browse/cours/main/attachments", headers=_auth_headers(user)
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["type"] == "attachment_listing"
+    assert len(data["materials"]) == 1
+    # Version info is now batched in (previously an N+1 per-attachment query).
+    assert data["materials"][0]["current_version_info"] is not None
+    assert data["parent_material"]["is_liked"] is True

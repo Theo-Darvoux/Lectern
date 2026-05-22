@@ -13,7 +13,7 @@ import { useTranslations } from "next-intl";
 import { Eye, X } from "lucide-react";
 import { useBrowseSSE } from "@/hooks/use-browse-sse";
 import type { Operation } from "@/lib/staging-store";
-import { browseCache, previousBrowsePath, setPreviousBrowsePath } from "@/lib/browse-prefetch";
+import { browseCache, setPreviousBrowsePath, fetchBrowsePath } from "@/lib/browse-prefetch";
 import dynamic from "next/dynamic";
 
 interface BrowseResponse {
@@ -119,16 +119,22 @@ function BrowseContent() {
   const { config } = useConfigStore();
   const path = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
 
-  const getInitialData = () => {
-    if (browseCache.has(path)) return browseCache.get(path) as BrowseResponse;
-    if (previousBrowsePath && browseCache.has(previousBrowsePath))
-      return browseCache.get(previousBrowsePath) as BrowseResponse;
-    return null;
-  };
-
-  const [data, setData] = useState<BrowseResponse | null>(getInitialData);
+  // Track the path each fetched payload belongs to so a stale payload from the
+  // previous directory is never rendered against the new path (no flash).
+  const [fetched, setFetched] = useState<{ path: string; data: BrowseResponse } | null>(
+    () => (browseCache.has(path) ? { path, data: browseCache.get(path) as BrowseResponse } : null),
+  );
   const [isFetching, setIsFetching] = useState(!browseCache.has(path));
   const [error, setError] = useState<string | null>(null);
+
+  // Cache-first: a freshly prefetched/cached path renders instantly, even on the
+  // first frame after navigation (before the effect below runs). Falls back to
+  // the fetched payload only when it matches the current path.
+  const data: BrowseResponse | null = browseCache.has(path)
+    ? (browseCache.get(path) as BrowseResponse)
+    : fetched?.path === path
+      ? fetched.data
+      : null;
 
   const searchParams = useSearchParams();
   const previewPrId = searchParams.get("preview_pr");
@@ -159,15 +165,16 @@ function BrowseContent() {
       if (!isBackground) setIsFetching(true);
       setError(null);
       try {
-        const endpoint = path ? `/browse/${path}` : "/browse";
-        const result = await apiFetch<BrowseResponse>(endpoint);
-        browseCache.set(path, result);
+        // Background fetches revalidate (bypass cache); foreground fetches join
+        // any in-flight prefetch for this path instead of duplicating it.
+        const result = (await fetchBrowsePath(path, {
+          force: isBackground,
+        })) as BrowseResponse;
         setPreviousBrowsePath(path);
-        setData(result);
+        setFetched({ path, data: result });
       } catch (err) {
         if (!isBackground) {
           setError(err instanceof Error ? err.message : t("loadError"));
-          setData(null);
         }
       } finally {
         if (!isBackground) setIsFetching(false);
@@ -176,8 +183,17 @@ function BrowseContent() {
     [path],
   );
 
+  // On path change: if the target is already cached (e.g. via hover-prefetch),
+  // render it instantly (via the cache-first `data` above) and revalidate in the
+  // background. Otherwise show a skeleton while we fetch the target.
   useEffect(() => {
-    fetchData(false);
+    if (browseCache.has(path)) {
+      setError(null);
+      setIsFetching(false);
+      fetchData(true);
+    } else {
+      fetchData(false);
+    }
   }, [path, fetchData]);
 
   const isDirectoryListing = data?.type === "directory_listing";
