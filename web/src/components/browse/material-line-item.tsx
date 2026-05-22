@@ -1,7 +1,9 @@
 "use client";
 
+import { useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import {
     Eye,
     File,
@@ -128,6 +130,21 @@ export function MaterialLineItem({
         }
     }
 
+    const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const handlePointerEnter = () => {
+        if (!slug || staged === "deleted" || onNavigate) return;
+        // Don't prefetch PR preview pages — they aren't browse routes
+        if (staged === "edited" && previewPrId && previewOpIndex !== undefined) return;
+        prefetchTimer.current = setTimeout(() => {
+            const builtPath = buildPath();
+            const browsePath = builtPath.replace(/^\/browse\/?/, "").split("?")[0].replace(/\/$/, "");
+            prefetchBrowsePath(browsePath);
+        }, 100);
+    };
+    const handlePointerLeave = () => {
+        if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+    };
+
     const handleDetails = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -190,6 +207,8 @@ export function MaterialLineItem({
         >
             <div
                 onClick={handleCardClick}
+                onPointerEnter={handlePointerEnter}
+                onPointerLeave={handlePointerLeave}
                 data-nav-index={navIndex}
                 className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 cursor-pointer ${stagedBorder} ${selectMode && selected ? "bg-primary/5 dark:bg-primary/10" : ""} ${focused ? "bg-muted ring-2 ring-inset ring-primary/40" : ""}`}
             >

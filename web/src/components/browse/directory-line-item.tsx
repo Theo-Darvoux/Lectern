@@ -1,7 +1,9 @@
 "use client";
 
+import { useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { Folder, Info, ChevronRight, ThumbsUp, MessageSquare } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
@@ -55,6 +57,19 @@ export function DirectoryLineItem({
         const base = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
         const dirPath = `${base}/${slug}`;
         return previewPrId ? `${dirPath}?preview_pr=${previewPrId}` : dirPath;
+    };
+
+    const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const handlePointerEnter = () => {
+        if (!slug || staged === "deleted" || onNavigate) return;
+        prefetchTimer.current = setTimeout(() => {
+            const builtPath = buildPath();
+            const browsePath = builtPath.replace(/^\/browse\/?/, "").split("?")[0].replace(/\/$/, "");
+            prefetchBrowsePath(browsePath);
+        }, 100);
+    };
+    const handlePointerLeave = () => {
+        if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
     };
 
     const handleDetails = (e: React.MouseEvent) => {
@@ -123,6 +138,8 @@ export function DirectoryLineItem({
         >
             <div
                 onClick={handleCardClick}
+                onPointerEnter={handlePointerEnter}
+                onPointerLeave={handlePointerLeave}
                 data-nav-index={navIndex}
                 className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 cursor-pointer ${stagedBorder} ${selectMode && selected ? "bg-primary/5 dark:bg-primary/10" : ""} ${focused ? "bg-muted ring-2 ring-inset ring-primary/40" : ""}`}
             >

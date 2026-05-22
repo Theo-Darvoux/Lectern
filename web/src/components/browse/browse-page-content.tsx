@@ -13,6 +13,7 @@ import { useTranslations } from "next-intl";
 import { Eye, X } from "lucide-react";
 import { useBrowseSSE } from "@/hooks/use-browse-sse";
 import type { Operation } from "@/lib/staging-store";
+import { browseCache, previousBrowsePath, setPreviousBrowsePath } from "@/lib/browse-prefetch";
 import dynamic from "next/dynamic";
 
 interface BrowseResponse {
@@ -106,8 +107,6 @@ const DirectoryTreeSidebar = dynamic(() => import("@/components/browse/directory
   ssr: false
 });
 
-const browseCache = new Map<string, BrowseResponse>();
-let previousPath: string | null = null;
 
 function BrowseContent() {
   const pathname = usePathname();
@@ -121,9 +120,9 @@ function BrowseContent() {
   const path = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
 
   const getInitialData = () => {
-    if (browseCache.has(path)) return browseCache.get(path)!;
-    if (previousPath && browseCache.has(previousPath))
-      return browseCache.get(previousPath)!;
+    if (browseCache.has(path)) return browseCache.get(path) as BrowseResponse;
+    if (previousBrowsePath && browseCache.has(previousBrowsePath))
+      return browseCache.get(previousBrowsePath) as BrowseResponse;
     return null;
   };
 
@@ -163,7 +162,7 @@ function BrowseContent() {
         const endpoint = path ? `/browse/${path}` : "/browse";
         const result = await apiFetch<BrowseResponse>(endpoint);
         browseCache.set(path, result);
-        previousPath = path;
+        setPreviousBrowsePath(path);
         setData(result);
       } catch (err) {
         if (!isBackground) {
