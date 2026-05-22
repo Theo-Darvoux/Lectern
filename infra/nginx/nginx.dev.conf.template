@@ -20,6 +20,24 @@ http {
         default 1;
     }
 
+    # SPA fallback (dev only). The Next pages keep `dynamicParams = false`
+    # (required by the production `output: export`), so `next dev` 404s any
+    # un-prerendered param like /browse/<id> or /profile/<real-id>. Map each
+    # deep dynamic URL to the shell route Next did prerender; location / then
+    # rewrites the upstream path to it while preserving the browser URL, so the
+    # client SPA reads the real path via usePathname. Mirrors what the
+    # production Nginx (web/nginx.conf) does with try_files. Regexes are tested
+    # top-to-bottom — most specific first.
+    map $uri $spa_shell {
+        default "";
+        "~^/pull-requests/[^/]+/preview/[^/]+"  "/pull-requests/_/preview/0/";
+        "~^/pull-requests/[^/]+"                "/pull-requests/_/";
+        "~^/qcm/[^/]+/edit"                     "/qcm/_/edit/";
+        "~^/qcm/[^/]+"                          "/qcm/_/";
+        "~^/profile/[^/]+"                      "/profile/_/";
+        "~^/browse/.+"                          "/browse/";
+    }
+
     log_format main '$remote_addr - $remote_user [$time_local] "$request" '
                     '$status $body_bytes_sent "$http_referer" '
                     '"$http_user_agent" "$http_x_forwarded_for"';
@@ -157,6 +175,11 @@ http {
 
         # Main Frontend Application
         location / {
+            # Deep dynamic routes that next dev didn't prerender: serve the
+            # matching shell upstream while keeping the browser URL intact.
+            if ($spa_shell != "") {
+                rewrite ^ $spa_shell break;
+            }
             proxy_pass http://web;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;

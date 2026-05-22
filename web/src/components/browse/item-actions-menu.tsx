@@ -345,15 +345,16 @@ export function ItemActionsMenu({
         </ContextMenuContent>
       </ContextMenu>
 
-      {!item.isExternal && (
+      {!item.isExternal && actions.editDialogOpen && (
         <FileEditDialog
-          open={actions.editDialogOpen}
+          open
           onOpenChange={actions.setEditDialogOpen}
           target={{ type: item.type, id: item.id, data: item.data }}
         />
       )}
 
-      <Dialog open={actions.deleteDialogOpen} onOpenChange={actions.setDeleteDialogOpen}>
+      {actions.deleteDialogOpen && (
+      <Dialog open onOpenChange={actions.setDeleteDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
@@ -396,6 +397,7 @@ export function ItemActionsMenu({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      )}
     </ActionsContext.Provider>
   );
 }

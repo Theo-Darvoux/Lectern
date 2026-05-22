@@ -2,20 +2,35 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 
+// Reuse one MediaQueryList per query string. Without this, every render of
+// every component that reads a media query re-parses the query via
+// window.matchMedia — and a directory listing renders this hook once per row,
+// so the allocations add up to real jank on navigation.
+const mqlCache = new Map<string, MediaQueryList>();
+
+function getMediaQueryList(query: string): MediaQueryList | null {
+    if (typeof window === "undefined") return null;
+    let mql = mqlCache.get(query);
+    if (!mql) {
+        mql = window.matchMedia(query);
+        mqlCache.set(query, mql);
+    }
+    return mql;
+}
+
 function useMediaQuery(query: string): boolean {
     const subscribe = useCallback(
         (callback: () => void) => {
-            if (typeof window === "undefined") return () => { };
-            const matchMedia = window.matchMedia(query);
-            matchMedia.addEventListener("change", callback);
-            return () => matchMedia.removeEventListener("change", callback);
+            const mql = getMediaQueryList(query);
+            if (!mql) return () => { };
+            mql.addEventListener("change", callback);
+            return () => mql.removeEventListener("change", callback);
         },
         [query]
     );
 
     const getSnapshot = useCallback(() => {
-        if (typeof window === "undefined") return false;
-        return window.matchMedia(query).matches;
+        return getMediaQueryList(query)?.matches ?? false;
     }, [query]);
 
     const getServerSnapshot = useCallback(() => false, []);
