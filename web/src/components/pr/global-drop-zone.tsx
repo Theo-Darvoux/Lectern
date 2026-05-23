@@ -8,6 +8,7 @@ import { usePathname } from "next/navigation";
 import { apiFetch } from "@/lib/api-client";
 import { collectDroppedItems, type DroppedItems } from "@/lib/drop-utils";
 import { useTranslations } from "next-intl";
+import { toast } from "sonner";
 
 
 // ---------------------------------------------------------------------------
@@ -102,7 +103,7 @@ export function GlobalDropZone() {
     const [localDrawerOpen, setLocalDrawerOpen] = useState(false);
     const [target, setTarget] = useState<UploadTarget | null>(null);
     const dragCounterRef = useRef(0);
-    const [pendingItems, setPendingItems] = useState<DroppedItems>({ files: [], folders: [] });
+    const [pendingItems, setPendingItems] = useState<DroppedItems>({ files: [], folders: [], inaccessible: [] });
 
 
     const { uploadTarget, browseContext, setDismissOverlay, clear } = useDropZoneStore();
@@ -132,7 +133,7 @@ export function GlobalDropZone() {
             setLocalDrawerOpen(open);
             if (!open) {
                 clear();
-                setPendingItems({ files: [], folders: [] });
+                setPendingItems({ files: [], folders: [], inaccessible: [] });
                 // Reset drag state — prevents the overlay from re-appearing
                 // when the drawer handled the drop internally (stopPropagation).
                 dragCounterRef.current = 0;
@@ -242,9 +243,16 @@ export function GlobalDropZone() {
             setIsDragOver(false);
 
             if (!e.dataTransfer?.items.length) return;
-            collectDroppedItems(e.dataTransfer.items).then(handleItemsDrop);
+            collectDroppedItems(e.dataTransfer.items).then((dropped) => {
+                if (dropped.inaccessible.length > 0) {
+                    toast.warning(
+                        t("foldersNotAccessible", { count: dropped.inaccessible.length }),
+                    );
+                }
+                handleItemsDrop(dropped);
+            });
         },
-        [handleItemsDrop],
+        [handleItemsDrop, t],
     );
 
 

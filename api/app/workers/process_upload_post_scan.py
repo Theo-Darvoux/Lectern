@@ -375,8 +375,11 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
             if pr is None:
                 return
 
-            # Gather every cas/ key in this PR's payload.
-            all_cas_keys = [k for k in get_pr_all_file_keys(pr) if k.startswith("cas/")]
+            # Gather every unique cas/ key in this PR's payload.
+            # Deduplicate: two materials may reference the same CAS key (identical
+            # file content deduped by hash), but there is only one Upload row, so
+            # the DB count must be compared against the number of distinct keys.
+            all_cas_keys = list({k for k in get_pr_all_file_keys(pr) if k.startswith("cas/")})
             if all_cas_keys:
                 settled_count = await db.scalar(
                     select(func.count())

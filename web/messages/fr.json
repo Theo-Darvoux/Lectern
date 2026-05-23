@@ -263,6 +263,7 @@
     "noItemsYet": "Aucun élément pour l'instant",
     "emptyDirectory": "Ce dossier est vide.",
     "download": "Télécharger",
+    "moodleXml": "Moodle XML",
     "print": "Imprimer",
     "edit": "Modifier",
     "copyLink": "Copier le lien",
@@ -475,7 +476,8 @@
   "GlobalDropZone": {
     "root": "Racine",
     "dropToUpload": "Déposez les fichiers pour les téléverser",
-    "stagedChangesHint": "Les fichiers seront ajoutés à vos changements en attente"
+    "stagedChangesHint": "Les fichiers seront ajoutés à vos changements en attente",
+    "foldersNotAccessible": "{count, plural, =1 {# dossier} other {# dossiers}} n'ont pas pu être lus. Essayez de glisser les dossiers un par un, ou utilisez le sélecteur de fichiers."
   },
   "Upload": {
     "uploading": "Téléversement",
@@ -524,6 +526,7 @@
     "maxFilesPerBatch": "Maximum {count} fichiers par lot",
     "onlyAddingCapped": "Ajout de seulement {count} fichier(s) — la limite par lot est de {limit}",
     "failedToReadDropped": "Échec de la lecture des éléments déposés",
+    "foldersNotAccessible": "{count, plural, =1 {# dossier} other {# dossiers}} n'ont pas pu être lus. Essayez de glisser les dossiers un par un, ou utilisez le sélecteur de fichiers.",
     "fileExceedsLimit": "{name} dépasse la limite de taille de {limit} MiB",
     "fileTypeNotSupported": "Le type de fichier '{type}' n'est pas supporté.",
     "errorProcessing": "Échec du traitement",
@@ -2004,7 +2007,10 @@
       "next": "Suivant",
       "finishQcm": "Terminer le QCM",
       "results": "Résultats",
-      "retry": "Réessayer"
+      "retry": "Réessayer",
+      "notes": "Notes",
+      "noNotes": "Pas encore de notes",
+      "addNote": "Ajouter une note..."
     }
   }
 }

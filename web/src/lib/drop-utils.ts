@@ -13,6 +13,12 @@ export interface DroppedItems {
     files: ScannedFile[];
     /** Top-level folder entries — each will be zipped and uploaded via batch-zip. */
     folders: Array<{ entry: FileSystemDirectoryEntry; name: string }>;
+    /**
+     * Items the browser refused to expose via the FileSystem API (no entry, no file).
+     * Typically happens when the OS blocks directory access or the API is unavailable.
+     * The caller should warn the user for each name in this list.
+     */
+    inaccessible: string[];
 }
 
 async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
@@ -52,7 +58,15 @@ async function traverseEntry(
         const fullPath = dirEntry.fullPath;
         if (visited.has(fullPath)) return; // cycle detected — skip
         visited.add(fullPath);
-        const children = await readAllEntries(dirEntry.createReader());
+        let children: FileSystemEntry[];
+        try {
+            children = await readAllEntries(dirEntry.createReader());
+        } catch (err) {
+            // OS or browser denied access to this subdirectory — skip it rather
+            // than aborting the entire traversal.
+            console.warn(`drop-utils: could not read directory "${dirEntry.fullPath}":`, err);
+            return;
+        }
         for (const child of children) {
             await traverseEntry(child, pathPrefix + dirEntry.name + "/", out, visited, depth + 1);
         }
@@ -77,8 +91,10 @@ export async function traverseFolder(entry: FileSystemDirectoryEntry): Promise<S
 export async function collectDroppedItems(items: DataTransferItemList): Promise<DroppedItems> {
     const files: ScannedFile[] = [];
     const folders: Array<{ entry: FileSystemDirectoryEntry; name: string }> = [];
+    const inaccessible: string[] = [];
 
-    // Capture items/entries SYNCHRONOUSLY before any await
+    // Capture items/entries SYNCHRONOUSLY before any await — the DataTransferItemList
+    // becomes empty after the first await.
     const entries: Array<{ entry: FileSystemEntry | null; file: File | null }> = [];
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
@@ -107,10 +123,17 @@ export async function collectDroppedItems(items: DataTransferItemList): Promise<
         } else if (file) {
             if (file.name.startsWith(".")) continue;
             files.push({ file, relativePath: file.name });
+        } else {
+            // Both entry and file are null: the browser could not expose this item
+            // via the FileSystem API and it is not a regular file. This most often
+            // means the user dropped a directory on a browser/OS combination where
+            // webkitGetAsEntry() is unavailable or denied access.
+            // We can't determine the name here, so we record a generic placeholder.
+            inaccessible.push("(unknown)");
         }
     }
 
-    return { files, folders };
+    return { files, folders, inaccessible };
 }
 
 

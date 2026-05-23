@@ -5,6 +5,7 @@ const PRINTABLE_VIEWERS = new Set([
   "code",
   "markdown",
   "office",
+  "qcm",
 ]);
 
 export function isPrintable(viewerType: string): boolean {

@@ -247,7 +247,7 @@ export function ViewerFab({
                 <Download className="h-5 w-5" />
               )
             }
-            label={t("download")}
+            label={viewerType === "qcm" ? t("moodleXml") : t("download")}
             disabled={isDownloading}
             onClick={() => {
               close();

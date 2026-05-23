@@ -239,10 +239,21 @@ function MaterialGridCardImpl({
       onToggleSelect(navIndex ?? 0, e);
       return;
     }
+    if (e.ctrlKey || e.metaKey) {
+      window.open(buildPath(), "_blank");
+      return;
+    }
     if (onNavigate) {
       onNavigate();
     } else {
       router.push(buildPath());
+    }
+  };
+
+  const handleAuxClick = (e: React.MouseEvent) => {
+    if (e.button === 1) {
+      e.preventDefault();
+      window.open(buildPath(), "_blank");
     }
   };
 
@@ -270,6 +281,7 @@ function MaterialGridCardImpl({
       <div
         ref={cardRef}
         onClick={handleCardClick}
+        onAuxClick={handleAuxClick}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
         data-nav-index={navIndex}

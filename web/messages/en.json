@@ -263,6 +263,7 @@
     "noItemsYet": "No items yet",
     "emptyDirectory": "This directory is empty.",
     "download": "Download",
+    "moodleXml": "Moodle XML",
     "print": "Print",
     "edit": "Edit",
     "copyLink": "Copy Link",
@@ -475,7 +476,8 @@
   "GlobalDropZone": {
     "root": "Root",
     "dropToUpload": "Drop files to upload",
-    "stagedChangesHint": "Files will be added to your staged changes"
+    "stagedChangesHint": "Files will be added to your staged changes",
+    "foldersNotAccessible": "{count, plural, =1 {# folder} other {# folders}} could not be read. Try dragging folders one at a time, or use the file picker instead."
   },
   "Upload": {
     "uploading": "Uploading",
@@ -524,6 +526,7 @@
     "maxFilesPerBatch": "Maximum {count} files per batch",
     "onlyAddingCapped": "Only adding {count} file(s) — batch limit is {limit}",
     "failedToReadDropped": "Failed to read dropped items",
+    "foldersNotAccessible": "{count, plural, =1 {# folder} other {# folders}} could not be read. Try dragging folders one at a time, or use the file picker instead.",
     "fileExceedsLimit": "{name} exceeds the {limit} MiB size limit",
     "fileTypeNotSupported": "File type '{type}' is not supported.",
     "errorProcessing": "Processing failed",
@@ -2004,7 +2007,10 @@
       "next": "Next",
       "finishQcm": "Finish QCM",
       "results": "Results",
-      "retry": "Retry"
+      "retry": "Retry",
+      "notes": "Notes",
+      "noNotes": "No notes yet",
+      "addNote": "Add a note..."
     }
   }
 }

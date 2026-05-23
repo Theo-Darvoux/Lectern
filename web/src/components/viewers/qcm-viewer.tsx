@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -15,6 +15,9 @@ import {
   Eye,
   Trophy,
   RotateCcw,
+  MessageSquare,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -23,6 +26,16 @@ import { validateQCMFile } from "@/lib/qcm-utils";
 import type { QCMFile, QCMQuestion } from "@/lib/qcm-types";
 import { getMaterialFileUrl } from "@/lib/api-client";
 import { useTranslations } from "next-intl";
+import {
+  useAnnotationsContext,
+  type ThreadData,
+  type AnnotationsAPI,
+} from "@/hooks/use-annotations";
+import {
+  AnnotationThread,
+  AnnotationForm,
+} from "@/components/annotations/annotation-thread";
+import { useAuthStore } from "@/lib/stores";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Markdown + KaTeX renderer
@@ -73,12 +86,138 @@ interface QuestionState {
 // Question card
 // ─────────────────────────────────────────────────────────────────────────────
 
+interface QuestionAnnotationsProps {
+  questionId: string;
+  threads: ThreadData[];
+  api: AnnotationsAPI;
+  currentUserId: string | null;
+  currentUserRole: string | null;
+}
+
+function QuestionAnnotations({
+  questionId,
+  threads,
+  api,
+  currentUserId,
+  currentUserRole,
+}: QuestionAnnotationsProps) {
+  const t = useTranslations("QCM.viewer");
+  const tAnn = useTranslations("Annotations");
+  const [open, setOpen] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editBody, setEditBody] = useState("");
+
+  const handleCreate = async (body: string) => {
+    await api.createAnnotation(body, undefined, { question_id: questionId });
+    setOpen(true);
+  };
+
+  const handleReply = (annotationId: string) => {
+    setReplyingTo(annotationId);
+    setEditingId(null);
+  };
+
+  const handleStartEdit = (id: string, body: string) => {
+    setEditingId(id);
+    setEditBody(body);
+    setReplyingTo(null);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingId || !editBody.trim()) return;
+    await api.editAnnotation(editingId, editBody.trim());
+    setEditingId(null);
+    setEditBody("");
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditBody("");
+  };
+
+  const handleSubmitReply = async (body: string) => {
+    if (!replyingTo) return;
+    await api.createAnnotation(body, undefined, { question_id: questionId }, undefined, replyingTo);
+    setReplyingTo(null);
+  };
+
+  return (
+    <div className="pl-6 mt-1">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-1"
+      >
+        <MessageSquare className="h-3.5 w-3.5" />
+        <span>{t("notes")}</span>
+        {threads.length > 0 && (
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none">
+            {threads.length}
+          </span>
+        )}
+        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-3">
+          {threads.length === 0 && (
+            <p className="text-xs text-muted-foreground italic">{t("noNotes")}</p>
+          )}
+          {threads.map((thread) => (
+            <div key={thread.root.id}>
+              <AnnotationThread
+                thread={thread}
+                currentUserId={currentUserId}
+                currentUserRole={currentUserRole}
+                onReply={handleReply}
+                onEdit={handleStartEdit}
+                onDelete={api.deleteAnnotation}
+                editingId={editingId}
+                editBody={editBody}
+                onEditBodyChange={setEditBody}
+                onSaveEdit={handleSaveEdit}
+                onCancelEdit={handleCancelEdit}
+              />
+              {replyingTo &&
+                (thread.root.id === replyingTo ||
+                  thread.replies.some((r) => r.id === replyingTo)) && (
+                  <div className="ml-4 mt-2 space-y-1">
+                    <AnnotationForm
+                      onSubmit={handleSubmitReply}
+                      placeholder={tAnn("writeAnAnnotation")}
+                      submitLabel={tAnn("reply")}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs"
+                      onClick={() => setReplyingTo(null)}
+                    >
+                      {tAnn("cancel")}
+                    </Button>
+                  </div>
+                )}
+            </div>
+          ))}
+          {currentUserId && (
+            <AnnotationForm onSubmit={handleCreate} placeholder={t("addNote")} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface QuestionCardProps {
   question: QCMQuestion;
   questionNumber: number;
   state: QuestionState;
   onToggleAnswer: (answerId: string) => void;
   onReveal: () => void;
+  annotationThreads?: ThreadData[];
+  annotationsApi?: AnnotationsAPI | null;
+  currentUserId?: string | null;
+  currentUserRole?: string | null;
 }
 
 function QuestionCard({
@@ -87,6 +226,10 @@ function QuestionCard({
   state,
   onToggleAnswer,
   onReveal,
+  annotationThreads,
+  annotationsApi,
+  currentUserId,
+  currentUserRole,
 }: QuestionCardProps) {
   const t = useTranslations("QCM.viewer");
   const { selected, revealed } = state;
@@ -197,6 +340,16 @@ function QuestionCard({
           </div>
         </div>
       )}
+
+      {revealed && annotationsApi && (
+        <QuestionAnnotations
+          questionId={question.id}
+          threads={annotationThreads ?? []}
+          api={annotationsApi}
+          currentUserId={currentUserId ?? null}
+          currentUserRole={currentUserRole ?? null}
+        />
+      )}
     </div>
   );
 }
@@ -283,6 +436,8 @@ function ResultsView({ qcm, questionStates, onRetry }: ResultsViewProps) {
 
 export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMViewerProps) {
   const t = useTranslations("QCM.viewer");
+  const annotationsApi = useAnnotationsContext();
+  const { user } = useAuthStore();
 
   const [qcm, setQcm] = useState<QCMFile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -293,8 +448,13 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
   const [page, setPage] = useState(0);
   const [finished, setFinished] = useState(false);
 
+  // Prevent external initialData changes from wiping in-progress user state.
+  const hasStartedRef = useRef(false);
+
   useEffect(() => {
     if (initialData) {
+      // If the user has already started answering, silently ignore upstream changes.
+      if (hasStartedRef.current) return;
       setQcm(initialData);
       const states: Record<string, QuestionState> = {};
       for (const ch of initialData.chapters) {
@@ -349,6 +509,7 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
 
   const handleToggleAnswer = useCallback(
     (questionId: string, answerId: string) => {
+      hasStartedRef.current = true;
       setQuestionStates((prev) => {
         const current = prev[questionId];
         if (!current || current.revealed) return prev;
@@ -362,6 +523,7 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
   );
 
   const handleRevealQuestion = useCallback((questionId: string) => {
+    hasStartedRef.current = true;
     setQuestionStates((prev) => {
       const current = prev[questionId];
       if (!current) return prev;
@@ -371,6 +533,7 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
 
   const handleRetry = useCallback(() => {
     if (!qcm) return;
+    hasStartedRef.current = false;
     const states: Record<string, QuestionState> = {};
     for (const ch of qcm.chapters) {
       for (const q of ch.questions) {
@@ -463,18 +626,27 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
 
       {/* Questions */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {currentChapter.questions.map((q, i) => (
-          <QuestionCard
-            key={q.id}
-            question={q}
-            questionNumber={questionOffset + i + 1}
-            state={
-              questionStates[q.id] ?? { selected: new Set(), revealed: false }
-            }
-            onToggleAnswer={(answerId) => handleToggleAnswer(q.id, answerId)}
-            onReveal={() => handleRevealQuestion(q.id)}
-          />
-        ))}
+        {currentChapter.questions.map((q, i) => {
+          const qThreads = annotationsApi?.threads.filter(
+            (t) => t.root.position_data?.question_id === q.id,
+          ) ?? [];
+          return (
+            <QuestionCard
+              key={q.id}
+              question={q}
+              questionNumber={questionOffset + i + 1}
+              state={
+                questionStates[q.id] ?? { selected: new Set(), revealed: false }
+              }
+              onToggleAnswer={(answerId) => handleToggleAnswer(q.id, answerId)}
+              onReveal={() => handleRevealQuestion(q.id)}
+              annotationThreads={qThreads}
+              annotationsApi={annotationsApi}
+              currentUserId={user?.id ?? null}
+              currentUserRole={user?.role ?? null}
+            />
+          );
+        })}
       </div>
 
       {/* Navigation footer */}

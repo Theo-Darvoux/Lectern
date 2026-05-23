@@ -610,12 +610,15 @@ export function useUploadEngine({
 
     const processDropItems = useCallback(
         async (items: DataTransferItemList) => {
-            let dropped: { files: ScannedFile[]; folders: Array<{ entry: FileSystemDirectoryEntry; name: string }> };
+            let dropped: Awaited<ReturnType<typeof collectDroppedItems>>;
             try {
                 dropped = await collectDroppedItems(items);
             } catch {
                 toast.error(t("failedToReadDropped"));
                 return;
+            }
+            if (dropped.inaccessible.length > 0) {
+                toast.warning(t("foldersNotAccessible", { count: dropped.inaccessible.length }));
             }
             if (dropped.files.length > 0) processScannedFiles(dropped.files);
             for (const { entry, name } of dropped.folders) {

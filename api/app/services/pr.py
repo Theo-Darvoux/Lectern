@@ -778,6 +778,11 @@ async def _exec_edit_material(
 
             await increment_cas_ref(redis_client, mv.cas_sha256)
 
+    parent_topic = str(mat.directory_id) if mat.directory_id else "root"
+    db.info.setdefault("post_commit_sse_broadcasts", []).append(
+        (parent_topic, {"type": "child_updated", "kind": "material", "id": str(mat.id)})
+    )
+
     seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
     key = ("index_material", str(mat.id))
     if key not in seen:
