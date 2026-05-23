@@ -248,7 +248,7 @@ export function ViewerFab({
         >
           {/* ── Download ── */}
           {viewerType === "qcm" ? (
-            <DropdownMenu>
+            <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild disabled={isDownloading}>
                 <button className="flex flex-col items-center gap-2">
                   <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-secondary hover:bg-secondary/80 transition-transform active:scale-90">
