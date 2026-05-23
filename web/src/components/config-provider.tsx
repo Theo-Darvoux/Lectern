@@ -36,12 +36,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         if (!config) return;
 
-        // Update tab title and favicon dynamically
-        if (config.site_name) {
-            // Only update if it's the default title pattern
-            if (document.title.includes(`• ${config.site_name}`)) {
-                document.title = document.title.replace(`• ${config.site_name}`, `• ${config.site_name}`);
-            }
+        // Update tab title if the page hasn't set a custom one (i.e. still the static default)
+        if (config.site_name && !document.title.includes(" • ")) {
+            document.title = config.site_name;
         }
 
         // Inject Google Fonts for any fonts used in the site name style
@@ -64,13 +61,16 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         }
 
         if (config.site_favicon_url) {
-            let link: HTMLLinkElement | null = document.querySelector("link[rel~='icon']");
-            if (!link) {
-                link = document.createElement('link');
+            // Update all existing icon links (Next.js injects several rel variants)
+            const iconLinks = document.querySelectorAll<HTMLLinkElement>("link[rel~='icon'], link[rel='shortcut icon']");
+            if (iconLinks.length === 0) {
+                const link = document.createElement('link');
                 link.rel = 'icon';
-                document.getElementsByTagName('head')[0].appendChild(link);
+                link.href = config.site_favicon_url;
+                document.head.appendChild(link);
+            } else {
+                iconLinks.forEach(l => { l.href = config.site_favicon_url!; });
             }
-            link.href = config.site_favicon_url;
         }
 
         // Inject primary color if needed (custom CSS variable)

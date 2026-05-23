@@ -120,10 +120,10 @@ function AnnotationItem({
                         <Textarea
                             value={editBody}
                             onChange={(e) => onEditBodyChange(e.target.value.slice(0, 1000))}
-                            className="min-h-[80px] text-xs focus-visible:ring-1 bg-background py-2"
+                            className="min-h-[80px] w-full resize-none text-xs focus-visible:ring-1 bg-background py-2"
                             autoFocus
                         />
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                             <span
                                 className={`text-[10px] ${editBody.length >= 1000 ? "text-destructive font-bold" : "text-muted-foreground"}`}
                             >
