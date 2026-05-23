@@ -145,7 +145,7 @@ function MaterialGridCardImpl({
   const tTypes = useTranslations("MaterialTypes");
   const openSidebar = useUIStore((s) => s.openSidebar);
   const router = useRouter();
-  const cardRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLAnchorElement>(null);
 
   const title = String(material.title ?? "");
   const slug = String(material.slug ?? "");
@@ -235,26 +235,23 @@ function MaterialGridCardImpl({
   };
 
   const handleCardClick = (e: React.MouseEvent) => {
+    if (staged === "deleted") {
+      e.preventDefault();
+      return;
+    }
     if (selectMode && onToggleSelect) {
+      e.preventDefault();
       onToggleSelect(navIndex ?? 0, e);
       return;
     }
     if (e.ctrlKey || e.metaKey) {
-      window.open(buildPath(), "_blank");
-      return;
+      return; // let browser open in new tab natively via <a href>
     }
     if (onNavigate) {
-      onNavigate();
-    } else {
-      router.push(buildPath());
-    }
-  };
-
-  const handleAuxClick = (e: React.MouseEvent) => {
-    if (e.button === 1) {
       e.preventDefault();
-      window.open(buildPath(), "_blank");
+      onNavigate();
     }
+    // else: let Next.js Link handle client-side navigation
   };
 
   const handleDetails = (e: React.MouseEvent) => {
@@ -278,10 +275,10 @@ function MaterialGridCardImpl({
       onAddAttachment={onAddAttachment ? () => onAddAttachment(id, title) : undefined}
       itemPath={buildPath()}
     >
-      <div
+      <Link
         ref={cardRef}
+        href={buildPath()}
         onClick={handleCardClick}
-        onAuxClick={handleAuxClick}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
         data-nav-index={navIndex}
@@ -417,7 +414,7 @@ function MaterialGridCardImpl({
             )}
           </div>
         </div>
-      </div>
+      </Link>
     </ItemActionsMenu>
   );
 }

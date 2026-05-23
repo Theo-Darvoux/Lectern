@@ -164,26 +164,23 @@ function MaterialLineItemImpl({
     };
 
     const handleCardClick = (e: React.MouseEvent) => {
+        if (staged === "deleted") {
+            e.preventDefault();
+            return;
+        }
         if (selectMode && onToggleSelect) {
+            e.preventDefault();
             onToggleSelect(navIndex ?? 0, e);
             return;
         }
         if (e.ctrlKey || e.metaKey) {
-            window.open(buildPath(), "_blank");
-            return;
+            return; // let browser open in new tab natively via <a href>
         }
         if (onNavigate) {
-            onNavigate();
-        } else {
-            router.push(buildPath());
-        }
-    };
-
-    const handleAuxClick = (e: React.MouseEvent) => {
-        if (e.button === 1) {
             e.preventDefault();
-            window.open(buildPath(), "_blank");
+            onNavigate();
         }
+        // else: let Next.js Link handle client-side navigation
     };
 
     const themeColor =
@@ -222,9 +219,9 @@ function MaterialLineItemImpl({
             onAddAttachment={onAddAttachment ? () => onAddAttachment(id, title) : undefined}
             itemPath={buildPath()}
         >
-            <div
+            <Link
+                href={buildPath()}
                 onClick={handleCardClick}
-                onAuxClick={handleAuxClick}
                 onPointerEnter={handlePointerEnter}
                 onPointerLeave={handlePointerLeave}
                 data-nav-index={navIndex}
@@ -346,7 +343,7 @@ function MaterialLineItemImpl({
                         <Eye className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
                     </Link>
                 </div>
-            </div>
+            </Link>
         </ItemActionsMenu>
     );
 }
