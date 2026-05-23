@@ -12,7 +12,7 @@ from app.core.redis import get_redis
 from app.core.security import decode_token
 from app.models.user import User, UserRole
 from app.services.auth import is_token_blacklisted
-from app.services.user import get_user_by_id
+from app.services.user import get_user_by_id_cached
 
 security = HTTPBearer(auto_error=False)
 
@@ -33,7 +33,7 @@ async def _validate_access_payload(
     if not user_id:
         raise UnauthorizedError("Invalid token payload")
 
-    user = await get_user_by_id(db, user_id)
+    user = await get_user_by_id_cached(db, redis, user_id)
     if not user:
         raise UnauthorizedError("User not found")
 

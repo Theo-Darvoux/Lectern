@@ -46,34 +46,156 @@ async def get_user_by_id(db: AsyncSession, user_id: str) -> User | None:
     return result.scalar_one_or_none()
 
 
+_USER_CACHE_TTL = 30  # seconds
+
+
+def _user_cache_key(user_id: str) -> str:
+    return f"cache:user:{user_id}"
+
+
+def _serialize_user(user: User) -> str:
+    import json
+
+    def _dt(v: object) -> str | None:
+        from datetime import datetime
+
+        return v.isoformat() if isinstance(v, datetime) else None
+
+    return json.dumps(
+        {
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "avatar_url": user.avatar_url,
+            "role": user.role.value,
+            "bio": user.bio,
+            "academic_year": user.academic_year,
+            "gdpr_consent": user.gdpr_consent,
+            "gdpr_consent_at": _dt(user.gdpr_consent_at),
+            "onboarded": user.onboarded,
+            "is_flagged": user.is_flagged,
+            "created_at": _dt(user.created_at),
+            "last_login_at": _dt(user.last_login_at),
+            "auto_approve": user.auto_approve,
+            "deleted_at": _dt(user.deleted_at),
+            # password_hash intentionally excluded
+        }
+    )
+
+
+def _deserialize_user(data: dict) -> User:  # type: ignore[type-arg]
+    def _parse_dt(s: str | None) -> datetime | None:
+        if not s:
+            return None
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+    from app.models.user import UserRole
+
+    user = User()
+    user.id = uuid.UUID(data["id"])
+    user.email = data["email"]
+    user.display_name = data.get("display_name")
+    user.avatar_url = data.get("avatar_url")
+    user.role = UserRole(data["role"])
+    user.bio = data.get("bio")
+    user.academic_year = data.get("academic_year")
+    user.gdpr_consent = data.get("gdpr_consent", False)
+    user.gdpr_consent_at = _parse_dt(data.get("gdpr_consent_at"))
+    user.onboarded = data.get("onboarded", False)
+    user.is_flagged = data.get("is_flagged", False)
+    user.created_at = _parse_dt(data.get("created_at")) or datetime.now(UTC)
+    user.last_login_at = _parse_dt(data.get("last_login_at"))
+    user.auto_approve = data.get("auto_approve", True)
+    user.deleted_at = _parse_dt(data.get("deleted_at"))
+    user.password_hash = None
+    return user
+
+
+async def get_user_by_id_cached(
+    db: AsyncSession,
+    redis: typing.Any,  # Redis | None
+    user_id: str,
+) -> User | None:
+    """Return a User, reading from a 30s Redis cache to skip the DB on the hot path.
+
+    The returned object is merged into the session with load=False so that any
+    subsequent mutations (flush, refresh) go through SQLAlchemy correctly.
+    Falls back to a direct DB query on cache miss or when redis is unavailable.
+    """
+    import json
+
+    if redis is not None:
+        try:
+            raw = await redis.get(_user_cache_key(user_id))
+            if raw:
+                cached_user = _deserialize_user(json.loads(raw))
+                # merge(load=False) places the object in the session identity map
+                # without a DB SELECT — mutations are tracked and flushed normally.
+                return await db.merge(cached_user, load=False)
+        except Exception:
+            pass  # Redis unavailable — fall through to DB
+
+    user = await get_user_by_id(db, user_id)
+    if user and redis is not None:
+        try:
+            await redis.setex(_user_cache_key(user_id), _USER_CACHE_TTL, _serialize_user(user))
+        except Exception:
+            pass
+    return user
+
+
+async def invalidate_user_cache(redis: typing.Any, user_id: str) -> None:
+    """Delete the cached user entry so the next request re-reads from DB."""
+    if redis is None:
+        return
+    try:
+        await redis.delete(_user_cache_key(str(user_id)))
+    except Exception:
+        pass
+
+
 async def get_user_stats(db: AsyncSession, user_id: str) -> dict[str, int]:
     uid = uuid.UUID(str(user_id))
     from app.models.pull_request import PRStatus
 
-    pr_approved = await db.scalar(
-        select(func.count()).where(
-            PullRequest.author_id == uid, PullRequest.status == PRStatus.APPROVED
-        )
+    # One round-trip with scalar subqueries instead of 5 sequential queries.
+    prs_approved_sq = (
+        select(func.count())
+        .where(PullRequest.author_id == uid, PullRequest.status == PRStatus.APPROVED)
+        .scalar_subquery()
     )
-    prs_total = await db.scalar(select(func.count()).where(PullRequest.author_id == uid))
-    annotations_count = await db.scalar(select(func.count()).where(Annotation.author_id == uid))
-    comments_count = await db.scalar(select(func.count()).where(Comment.author_id == uid))
-    open_pr_count = await db.scalar(
-        select(func.count()).where(
-            PullRequest.author_id == uid, PullRequest.status == PRStatus.OPEN
-        )
+    prs_total_sq = select(func.count()).where(PullRequest.author_id == uid).scalar_subquery()
+    open_pr_sq = (
+        select(func.count())
+        .where(PullRequest.author_id == uid, PullRequest.status == PRStatus.OPEN)
+        .scalar_subquery()
     )
+    annotations_sq = select(func.count()).where(Annotation.author_id == uid).scalar_subquery()
+    comments_sq = select(func.count()).where(Comment.author_id == uid).scalar_subquery()
 
-    pr_approved = pr_approved or 0
-    annotations_count = annotations_count or 0
+    row = (
+        await db.execute(
+            select(
+                prs_approved_sq.label("prs_approved"),
+                prs_total_sq.label("prs_total"),
+                open_pr_sq.label("open_pr_count"),
+                annotations_sq.label("annotations_count"),
+                comments_sq.label("comments_count"),
+            )
+        )
+    ).one()
+
+    prs_approved = row.prs_approved or 0
+    annotations_count = row.annotations_count or 0
 
     return {
-        "prs_approved": pr_approved,
-        "prs_total": prs_total or 0,
+        "prs_approved": prs_approved,
+        "prs_total": row.prs_total or 0,
         "annotations_count": annotations_count,
-        "comments_count": comments_count or 0,
-        "open_pr_count": open_pr_count or 0,
-        "reputation": pr_approved * 10 + annotations_count * 2,
+        "comments_count": row.comments_count or 0,
+        "open_pr_count": row.open_pr_count or 0,
+        "reputation": prs_approved * 10 + annotations_count * 2,
     }
 
 

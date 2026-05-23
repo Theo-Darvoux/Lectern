@@ -3,10 +3,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse, RedirectResponse
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import NotFoundError
+from app.core.redis import get_redis
 from app.core.storage import generate_presigned_get_url
 from app.dependencies.auth import CurrentUser, get_optional_user
 from app.dependencies.pagination import PaginationParams
@@ -24,6 +26,7 @@ from app.services.user import (
     get_user_contributions,
     get_user_stats,
     hard_delete_user,
+    invalidate_user_cache,
     onboard_user,
     update_user_profile,
 )
@@ -36,8 +39,10 @@ async def onboard(
     data: OnboardIn,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> UserOut:
     updated = await onboard_user(db, user, data.display_name, data.academic_year, data.gdpr_consent)
+    await invalidate_user_cache(redis, str(user.id))
     return UserOut.model_validate(updated)
 
 
@@ -56,12 +61,14 @@ async def patch_me(
     data: UserUpdateIn,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> UserOut:
     updated = await update_user_profile(
         db,
         user,
         **data.model_dump(exclude_unset=True),
     )
+    await invalidate_user_cache(redis, str(user.id))
     return UserOut.model_validate(updated)
 
 
