@@ -47,12 +47,25 @@ export function useDownload() {
             const blob = await apiFetchBlob(`/qcm/export-moodle/${materialId}`);
             triggerBlobDownload(blob, `qcm-${materialId}.xml`);
         } catch (error) {
-            console.error("QCM export failed:", error);
+            console.error("QCM XML export failed:", error);
             toast.error("Failed to export QCM. Please try again.");
         } finally {
             setIsDownloading(false);
         }
     };
 
-    return { downloadMaterial, downloadQcmAsXml, isDownloading };
+    const downloadQcmAsPdf = async (materialId: string) => {
+        setIsDownloading(true);
+        try {
+            const blob = await apiFetchBlob(`/qcm/export-pdf/${materialId}`);
+            triggerBlobDownload(blob, `qcm-${materialId}.pdf`);
+        } catch (error) {
+            console.error("QCM PDF export failed:", error);
+            toast.error("Failed to export QCM as PDF. Please try again.");
+        } finally {
+            setIsDownloading(false);
+        }
+    };
+
+    return { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading };
 }

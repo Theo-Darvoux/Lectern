@@ -16,7 +16,15 @@ import {
   Edit,
   Trash2,
   ThumbsUp,
+  FileText,
+  Code2,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { FlagButton } from "@/components/flags/flag-button";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { useDownload } from "@/hooks/use-download";
@@ -145,7 +153,7 @@ export function ViewerFab({
   const isRestricted = isPreview || isDraft;
 
   const { openSidebar, updateSidebarData, sidebarTarget } = useUIStore();
-  const { downloadMaterial, downloadQcmAsXml, isDownloading } = useDownload();
+  const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId,
@@ -239,25 +247,49 @@ export function ViewerFab({
           }}
         >
           {/* ── Download ── */}
-          <ActionCell
-            icon={
-              isDownloading ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <Download className="h-5 w-5" />
-              )
-            }
-            label={viewerType === "qcm" ? t("moodleXml") : t("download")}
-            disabled={isDownloading}
-            onClick={() => {
-              close();
-              if (viewerType === "qcm") {
-                downloadQcmAsXml(materialId);
-              } else {
-                downloadMaterial(materialId);
+          {viewerType === "qcm" ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild disabled={isDownloading}>
+                <button className="flex flex-col items-center gap-2">
+                  <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-secondary hover:bg-secondary/80 transition-transform active:scale-90">
+                    {isDownloading
+                      ? <Loader2 className="h-5 w-5 animate-spin" />
+                      : <Download className="h-5 w-5" />}
+                  </span>
+                  <span className="text-[11.5px] font-medium text-muted-foreground text-center truncate w-full px-1">
+                    {t("download")}
+                  </span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="center" className="min-w-44">
+                <DropdownMenuItem
+                  onClick={() => { close(); downloadQcmAsPdf(materialId); }}
+                >
+                  <FileText className="h-4 w-4" />
+                  {t("downloadPdf")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => { close(); downloadQcmAsXml(materialId); }}
+                >
+                  <Code2 className="h-4 w-4" />
+                  {t("downloadXml")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <ActionCell
+              icon={
+                isDownloading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Download className="h-5 w-5" />
+                )
               }
-            }}
-          />
+              label={t("download")}
+              disabled={isDownloading}
+              onClick={() => { close(); downloadMaterial(materialId); }}
+            />
+          )}
 
           {/* ── Share ── */}
           <ActionCell

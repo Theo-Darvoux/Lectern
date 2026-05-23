@@ -264,6 +264,8 @@
     "emptyDirectory": "This directory is empty.",
     "download": "Download",
     "moodleXml": "Moodle XML",
+    "downloadPdf": "Download PDF",
+    "downloadXml": "Download Moodle XML",
     "print": "Print",
     "edit": "Edit",
     "copyLink": "Copy Link",
