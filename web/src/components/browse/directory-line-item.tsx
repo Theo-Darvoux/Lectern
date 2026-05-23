@@ -91,15 +91,23 @@ function DirectoryLineItemImpl({
     };
 
     const handleCardClick = (e: React.MouseEvent) => {
+        if (staged === "deleted") {
+            e.preventDefault();
+            return;
+        }
         if (selectMode && onToggleSelect) {
+            e.preventDefault();
             onToggleSelect(navIndex ?? 0, e);
             return;
         }
-        if (onNavigate) {
-            onNavigate();
-        } else {
-            router.push(buildPath());
+        if (e.ctrlKey || e.metaKey) {
+            return; // let browser open in new tab natively via <a href>
         }
+        if (onNavigate) {
+            e.preventDefault();
+            onNavigate();
+        }
+        // else: let Next.js Link handle client-side navigation
     };
 
     const themeColor =
@@ -142,7 +150,8 @@ function DirectoryLineItemImpl({
             item={{ id, type: "directory", data: directory, staged, isExternal }}
             itemPath={buildPath()}
         >
-            <div
+            <Link
+                href={buildPath()}
                 onClick={handleCardClick}
                 onPointerEnter={handlePointerEnter}
                 onPointerLeave={handlePointerLeave}
@@ -245,7 +254,7 @@ function DirectoryLineItemImpl({
                         <ChevronRight className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
                     </Link>
                 </div>
-            </div>
+            </Link>
         </ItemActionsMenu>
     );
 }

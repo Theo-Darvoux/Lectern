@@ -118,15 +118,23 @@ function DirectoryGridCardImpl({
   };
 
   const handleCardClick = (e: React.MouseEvent) => {
+    if (staged === "deleted") {
+      e.preventDefault();
+      return;
+    }
     if (selectMode && onToggleSelect) {
+      e.preventDefault();
       onToggleSelect(navIndex ?? 0, e);
       return;
     }
-    if (onNavigate) {
-      onNavigate();
-    } else {
-      router.push(buildPath());
+    if (e.ctrlKey || e.metaKey) {
+      return; // let browser open in new tab natively via <a href>
     }
+    if (onNavigate) {
+      e.preventDefault();
+      onNavigate();
+    }
+    // else: let Next.js Link handle client-side navigation
   };
 
   const handleDetails = (e: React.MouseEvent) => {
@@ -146,7 +154,8 @@ function DirectoryGridCardImpl({
       item={{ id, type: "directory", data: directory, staged, isExternal }}
       itemPath={buildPath()}
     >
-      <div
+      <Link
+        href={buildPath()}
         onClick={handleCardClick}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
@@ -252,7 +261,7 @@ function DirectoryGridCardImpl({
             {t("itemsCount", { count: totalCount })}
           </p>
         </div>
-      </div>
+      </Link>
     </ItemActionsMenu>
   );
 }
