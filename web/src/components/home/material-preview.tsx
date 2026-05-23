@@ -224,11 +224,13 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
       <Icon
         className={cn(
           "h-12 w-12 z-10",
-          // In lazy/grid mode skip all CSS filters (drop-shadow) and transitions:
-          // each filter forces its own compositor layer, and animating filter/opacity
-          // on 50+ simultaneously visible cards is what tanks scroll/hover FPS.
+          // In lazy/grid mode skip CSS filters and transform transitions — each
+          // filter forces its own compositor layer and animating them on 50+
+          // simultaneously visible cards tanks scroll/hover FPS. Keep a plain
+          // opacity transition so the icon fades out in sync with the image
+          // fade-in; this only plays when a thumbnail loads, not on every frame.
           lazy
-            ? ""
+            ? "transition-opacity duration-300"
             : "transition-[opacity,transform,filter] duration-500 drop-shadow-xl",
           iconColorClass,
           showContent

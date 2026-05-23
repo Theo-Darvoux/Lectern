@@ -1,13 +1,12 @@
 "use client";
 
-import { useRef } from "react";
+import { memo, useRef } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { Folder, Info, ChevronRight, ThumbsUp, MessageSquare } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
-import { useIsMobile } from "@/hooks/use-media-query";
 import { useUIStore } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 
@@ -17,16 +16,20 @@ interface DirectoryLineItemProps {
     isExternal?: boolean;
     selectMode?: boolean;
     selected?: boolean;
-    onToggleSelect?: (e?: React.MouseEvent) => void;
+    onToggleSelect?: (index: number, e?: React.MouseEvent) => void;
     /** When set, appended as ?preview_pr= to preserve preview mode across navigation */
     previewPrId?: string;
     navIndex?: number;
     focused?: boolean;
     /** Special override for clicking on ghost directories (creations) */
     onNavigate?: () => void;
+    /** Current pathname base (without trailing slash), hoisted from parent to avoid per-item usePathname subscription */
+    pathBase: string;
+    /** Hoisted from parent to avoid per-item useIsMobile subscription */
+    isMobile: boolean;
 }
 
-export function DirectoryLineItem({
+function DirectoryLineItemImpl({
     directory,
     staged,
     isExternal,
@@ -37,10 +40,10 @@ export function DirectoryLineItem({
     navIndex,
     focused,
     onNavigate,
+    pathBase,
+    isMobile,
 }: DirectoryLineItemProps) {
-    const isMobile = useIsMobile();
-    const { openSidebar } = useUIStore();
-    const pathname = usePathname();
+    const openSidebar = useUIStore((s) => s.openSidebar);
     const router = useRouter();
     const t = useTranslations("Browse");
 
@@ -54,8 +57,7 @@ export function DirectoryLineItem({
     const isLiked = Boolean(directory.is_liked);
 
     const buildPath = () => {
-        const base = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
-        const dirPath = `${base}/${slug}`;
+        const dirPath = `${pathBase}/${slug}`;
         return previewPrId ? `${dirPath}?preview_pr=${previewPrId}` : dirPath;
     };
 
@@ -63,9 +65,13 @@ export function DirectoryLineItem({
     const handlePointerEnter = () => {
         if (!slug || staged === "deleted" || onNavigate) return;
         prefetchTimer.current = setTimeout(() => {
+            // Prefetch the browse API response.
             const builtPath = buildPath();
             const browsePath = builtPath.replace(/^\/browse\/?/, "").split("?")[0].replace(/\/$/, "");
             prefetchBrowsePath(browsePath);
+            // Prefetch the Next.js RSC payload so navigation doesn't block on
+            // deserializing the server component tree (250–440 ms frame gaps).
+            router.prefetch(`${pathBase}/${slug}`);
         }, 100);
     };
     const handlePointerLeave = () => {
@@ -86,7 +92,7 @@ export function DirectoryLineItem({
 
     const handleCardClick = (e: React.MouseEvent) => {
         if (selectMode && onToggleSelect) {
-            onToggleSelect(e);
+            onToggleSelect(navIndex ?? 0, e);
             return;
         }
         if (onNavigate) {
@@ -141,6 +147,7 @@ export function DirectoryLineItem({
                 onPointerEnter={handlePointerEnter}
                 onPointerLeave={handlePointerLeave}
                 data-nav-index={navIndex}
+                style={{ contentVisibility: "auto", containIntrinsicSize: "0 68px" }}
                 className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 cursor-pointer ${stagedBorder} ${selectMode && selected ? "bg-primary/5 dark:bg-primary/10" : ""} ${focused ? "bg-muted ring-2 ring-inset ring-primary/40" : ""}`}
             >
                 {selectMode && (
@@ -149,7 +156,7 @@ export function DirectoryLineItem({
                         onCheckedChange={() => {}} // Handled by onClick below
                         onClick={(e) => {
                             e.stopPropagation();
-                            onToggleSelect?.(e);
+                            onToggleSelect?.(navIndex ?? 0, e);
                         }}
                         className="shrink-0"
                     />
@@ -242,3 +249,5 @@ export function DirectoryLineItem({
         </ItemActionsMenu>
     );
 }
+
+export const DirectoryLineItem = memo(DirectoryLineItemImpl);

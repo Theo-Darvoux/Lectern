@@ -370,15 +370,9 @@ async def test_browse_listing_reflects_user_likes_and_favourites(
     )
     await _create_material(db_session, parent, user, title="Plain Mat", slug="plain-mat")
 
-    db_session.add(
-        DirectoryLike(id=uuid.uuid4(), user_id=user.id, directory_id=liked_dir.id)
-    )
-    db_session.add(
-        MaterialLike(id=uuid.uuid4(), user_id=user.id, material_id=liked_mat.id)
-    )
-    db_session.add(
-        MaterialFavourite(id=uuid.uuid4(), user_id=user.id, material_id=liked_mat.id)
-    )
+    db_session.add(DirectoryLike(id=uuid.uuid4(), user_id=user.id, directory_id=liked_dir.id))
+    db_session.add(MaterialLike(id=uuid.uuid4(), user_id=user.id, material_id=liked_mat.id))
+    db_session.add(MaterialFavourite(id=uuid.uuid4(), user_id=user.id, material_id=liked_mat.id))
     await db_session.commit()
 
     response = await client.get("/api/browse/parent", headers=_auth_headers(user))
@@ -438,17 +432,11 @@ async def test_attachment_listing_has_versions_and_parent_like(
         db_session, dir_, user, title="Annex", slug="annex", parent_material_id=parent_mat.id
     )
     await _create_version(db_session, annex)
-    db_session.add(
-        MaterialLike(id=uuid.uuid4(), user_id=user.id, material_id=parent_mat.id)
-    )
-    db_session.add(
-        DirectoryFavourite(id=uuid.uuid4(), user_id=user.id, directory_id=dir_.id)
-    )
+    db_session.add(MaterialLike(id=uuid.uuid4(), user_id=user.id, material_id=parent_mat.id))
+    db_session.add(DirectoryFavourite(id=uuid.uuid4(), user_id=user.id, directory_id=dir_.id))
     await db_session.commit()
 
-    response = await client.get(
-        "/api/browse/cours/main/attachments", headers=_auth_headers(user)
-    )
+    response = await client.get("/api/browse/cours/main/attachments", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "attachment_listing"

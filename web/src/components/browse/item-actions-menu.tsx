@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   MoreVertical,
   Download,
@@ -75,6 +75,10 @@ interface VersionInfo {
 }
 
 const ActionsContext = createContext<ActionsContextValue | null>(null);
+
+// Provided only while a row is "unarmed" (its Radix menus not yet mounted), so
+// the lightweight dropdown trigger can arm the row when it's interacted with.
+const ArmContext = createContext<(() => void) | null>(null);
 
 // ─── Logic Hook ───────────────────────────────────────────────────────────────
 
@@ -183,11 +187,11 @@ function useItemActions(item: ItemData, itemPath?: string) {
   });
 
   const handleShare = () => {
-    const url = itemPath 
+    const url = itemPath
       ? `${window.location.origin}${itemPath}`
       : window.location.href;
     navigator.clipboard.writeText(url);
-    toast.success(t("linkCopied"));
+    toast.success(t("copyLink") || "Link copied");
   };
 
   return {
@@ -231,7 +235,6 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
   const { downloadMaterial, downloadQcmAsXml, isDownloading, print, isPrinting, canPrint } = actions;
 
-  const isStaged = !!item.staged;
   const isCreated = item.staged === "created";
 
   return (
@@ -316,7 +319,96 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
   );
 }
 
-// ─── Main Components ──────────────────────────────────────────────────────────
+// ─── Armed menu body (heavy — only mounted after first hover) ─────────────────
+
+interface ArmedMenuBodyProps {
+  item: ItemData;
+  onAddAttachment?: () => void;
+  itemPath?: string;
+  // Ref that always points to the latest actions object so context consumers
+  // never read a stale snapshot without re-rendering the whole parent.
+  actionsRef: React.MutableRefObject<ReturnType<typeof useItemActions> | null>;
+  // Called once (on mount) to signal the parent that a non-null context is ready.
+  onReady: () => void;
+}
+
+function ArmedMenuBody({ item, onAddAttachment, itemPath, actionsRef, onReady }: ArmedMenuBodyProps) {
+  const actions = useItemActions(item, itemPath);
+
+  // Keep the shared ref current on every render so context consumers always
+  // read the latest state (dialog open flags, loading states, etc.) through
+  // the getter defined on the stable context value object.
+  // eslint-disable-next-line react-hooks/refs
+  actionsRef.current = actions;
+
+  // Signal the parent to flip its "ready" flag once, before the first paint,
+  // so ItemActionsDropdownTrigger renders the real dropdown on the same frame.
+  useLayoutEffect(onReady, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <>
+      <ContextMenuContent className="w-56">
+        <MenuItemsList isContextMenu />
+      </ContextMenuContent>
+
+      {!item.isExternal && actions.editDialogOpen && (
+        <FileEditDialog
+          open
+          onOpenChange={actions.setEditDialogOpen}
+          target={{ type: item.type, id: item.id, data: item.data }}
+        />
+      )}
+
+      {actions.deleteDialogOpen && (
+        <Dialog open onOpenChange={actions.setDeleteDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-destructive">
+                <ShieldAlert className="h-5 w-5" />
+                {item.staged === "created" ? actions.t("discardDraft") : actions.t("deleteTitle", { type: actions.isMaterial ? actions.t("material") : actions.t("folder") })}
+              </DialogTitle>
+              <DialogDescription>
+                {item.staged === "created"
+                  ? actions.t("discardDraftConfirm", { type: item.type === "material" ? actions.t("material") : actions.t("folder") })
+                  : <>{actions.t("deletePermanentlyConfirm")} <span className="font-semibold text-foreground">{actions.title}</span>?</>
+                }
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:gap-0 mt-6">
+              <Button variant="ghost" onClick={() => actions.setDeleteDialogOpen(false)} disabled={actions.deleting} className="sm:mr-auto">
+                {actions.t("cancel")}
+              </Button>
+
+              {item.staged !== "created" && (
+                <Button
+                  variant="outline"
+                  onClick={actions.handleDraftDelete}
+                  disabled={actions.deleting}
+                  className="gap-2 border-dashed border-destructive/40 text-destructive hover:bg-destructive/5 hover:border-destructive/60"
+                >
+                  <Plus className="h-4 w-4" />
+                  {actions.t("draft")}
+                </Button>
+              )}
+
+              <Button
+                variant="destructive"
+                onClick={item.staged === "created" ? actions.handleDraftDelete : actions.handleDirectDelete}
+                disabled={actions.deleting}
+                className="gap-2 shadow-sm"
+              >
+                {actions.deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : (item.staged === "created" ? <Trash2 className="h-4 w-4" /> : <Send className="h-4 w-4" />)}
+                {item.staged === "created" ? actions.t("discard") : actions.t("deleteNow")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export function ItemActionsMenu({
   item,
@@ -329,82 +421,121 @@ export function ItemActionsMenu({
   onAddAttachment?: () => void;
   itemPath?: string;
 }) {
-   
-  const { staged, isExternal, ...rest } = item;
-  const actions = useItemActions(item, itemPath);
-  const { t } = actions;
+  // The Radix ContextMenu + DropdownMenu trees — plus the useItemActions hook
+  // (print/download/i18n/store machinery) — are by far the heaviest part of a
+  // row's render. Defer mounting it until the row is first interacted with,
+  // so the initial paint of a freshly-navigated listing mounts zero menus.
+  const [armed, setArmed] = useState(false);
+  // Flips to true once ArmedMenuBody's useLayoutEffect fires, ensuring the
+  // context value is non-null before the first paint after arming.
+  const [contextReady, setContextReady] = useState(false);
+  const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Shared mutable ref — ArmedMenuBody writes the latest actions object here
+  // on every render, so context consumers always read current state.
+  const actionsRef = useRef<ReturnType<typeof useItemActions> | null>(null);
+
+  // Stable context-value object: its identity is fixed after arming so React
+  // never re-renders all context consumers on unrelated re-renders.
+  // The `actions` getter reads through actionsRef to avoid stale closures.
+  const stableCtxValue = useMemo<ActionsContextValue | null>(() => {
+    if (!contextReady) return null;
+    return {
+      item,
+      get actions() { return actionsRef.current!; },
+      onAddAttachment,
+      itemPath,
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextReady]); // intentionally omit item/onAddAttachment/itemPath — they're read via closure/getter
+
+  const arm = useCallback(() => {
+    if (armTimer.current) {
+      clearTimeout(armTimer.current);
+      armTimer.current = null;
+    }
+    setArmed(true);
+  }, []);
+
+  // A deliberate hover (rest ~120ms) arms the row so right-click works on the
+  // first try; a quick sweep across many rows does not, avoiding a mount storm.
+  const armSoon = useCallback(() => {
+    if (armTimer.current) return;
+    armTimer.current = setTimeout(() => {
+      armTimer.current = null;
+      setArmed(true);
+    }, 120);
+  }, []);
+
+  const cancelArm = useCallback(() => {
+    if (armTimer.current) {
+      clearTimeout(armTimer.current);
+      armTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (armTimer.current) clearTimeout(armTimer.current);
+  }, []);
+
+  const onReady = useCallback(() => setContextReady(true), []);
+
+  // Always render the same wrapper tree above {children} regardless of armed
+  // state. Switching component types here would cause React to unmount/remount
+  // the child DOM node, destroying its :hover CSS state and flashing the
+  // background. Stable types = React updates the existing DOM node in place.
   return (
-    <ActionsContext.Provider value={{ item, actions, onAddAttachment, itemPath }}>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          {children}
-        </ContextMenuTrigger>
-        <ContextMenuContent className="w-56">
-          <MenuItemsList isContextMenu />
-        </ContextMenuContent>
-      </ContextMenu>
+    <ArmContext.Provider value={contextReady ? null : arm}>
+      <ActionsContext.Provider value={stableCtxValue}>
+        <ContextMenu>
+          <ContextMenuTrigger
+            asChild
+            onPointerEnter={!armed ? armSoon : undefined}
+            onPointerLeave={!armed ? cancelArm : undefined}
+            onFocus={!armed ? arm : undefined}
+            onContextMenu={!armed ? arm : undefined}
+          >
+            {children}
+          </ContextMenuTrigger>
 
-      {!item.isExternal && actions.editDialogOpen && (
-        <FileEditDialog
-          open
-          onOpenChange={actions.setEditDialogOpen}
-          target={{ type: item.type, id: item.id, data: item.data }}
-        />
-      )}
-
-      {actions.deleteDialogOpen && (
-      <Dialog open onOpenChange={actions.setDeleteDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <ShieldAlert className="h-5 w-5" />
-              {item.staged === "created" ? t("discardDraft") : t("deleteTitle", { type: actions.isMaterial ? t("material") : t("folder") })}
-            </DialogTitle>
-            <DialogDescription>
-              {item.staged === "created"
-                ? t("discardDraftConfirm", { type: item.type === "material" ? t("material") : t("folder") })
-                : <>{t("deletePermanentlyConfirm")} <span className="font-semibold text-foreground">{actions.title}</span>?</>
-              }
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="gap-2 sm:gap-0 mt-6">
-            <Button variant="ghost" onClick={() => actions.setDeleteDialogOpen(false)} disabled={actions.deleting} className="sm:mr-auto">
-              {t("cancel")}
-            </Button>
-
-            {item.staged !== "created" && (
-              <Button
-                variant="outline"
-                onClick={actions.handleDraftDelete}
-                disabled={actions.deleting}
-                className="gap-2 border-dashed border-destructive/40 text-destructive hover:bg-destructive/5 hover:border-destructive/60"
-              >
-                <Plus className="h-4 w-4" />
-                {t("draft")}
-              </Button>
-            )}
-
-            <Button
-              variant="destructive"
-              onClick={item.staged === "created" ? actions.handleDraftDelete : actions.handleDirectDelete}
-              disabled={actions.deleting}
-              className="gap-2 shadow-sm"
-            >
-              {actions.deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : (item.staged === "created" ? <Trash2 className="h-4 w-4" /> : <Send className="h-4 w-4" />)}
-              {item.staged === "created" ? t("discard") : t("deleteNow")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      )}
-    </ActionsContext.Provider>
+          {armed && (
+            <ArmedMenuBody
+              item={item}
+              onAddAttachment={onAddAttachment}
+              itemPath={itemPath}
+              actionsRef={actionsRef}
+              onReady={onReady}
+            />
+          )}
+        </ContextMenu>
+      </ActionsContext.Provider>
+    </ArmContext.Provider>
   );
 }
 
 export function ItemActionsDropdownTrigger() {
   const context = useContext(ActionsContext);
-  if (!context) return null;
+  const arm = useContext(ArmContext);
+
+  // Unarmed row: render a cheap static trigger (no Radix). Hovering / pointer-
+  // down on it arms the row, mounting the real menu before the click resolves.
+  if (!context) {
+    return (
+      <div onClick={(e) => e.stopPropagation()}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 hover:bg-muted active:scale-95 transition-transform"
+          aria-haspopup="menu"
+          onPointerEnter={arm ?? undefined}
+          onPointerDown={arm ?? undefined}
+          onClick={arm ?? undefined}
+        >
+          <MoreVertical className="h-4 w-4 text-muted-foreground" />
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div onClick={(e) => e.stopPropagation()}>

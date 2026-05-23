@@ -98,6 +98,22 @@ describe("browse-prefetch", () => {
     expect(mockApiFetch).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves the cached object identity when a revalidation is unchanged", async () => {
+    const original = { type: "directory_listing", directories: [{ id: "1" }] };
+    // Server returns a structurally-equal but distinct object on revalidation.
+    const equalCopy = { type: "directory_listing", directories: [{ id: "1" }] };
+    mockApiFetch.mockResolvedValueOnce(original).mockResolvedValueOnce(equalCopy);
+
+    await fetchBrowsePath("svt");
+    expect(browseCache.get("svt")).toBe(original);
+
+    const revalidated = await fetchBrowsePath("svt", { force: true });
+    // Identity is kept so downstream memoized rows can bail out of re-rendering.
+    expect(revalidated).toBe(original);
+    expect(browseCache.get("svt")).toBe(original);
+    expect(mockApiFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("prefetch is a no-op when the path is already cached", async () => {
     mockApiFetch.mockResolvedValue({ ok: true });
     await fetchBrowsePath("bio");

@@ -10,8 +10,9 @@ import {
   useState,
 } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
+  ArrowRight,
   ChevronRight,
   File,
   Folder,
@@ -129,7 +130,7 @@ interface MaterialLeafProps {
   onActivate: (id: string) => void;
 }
 
-function MaterialLeaf({
+const MaterialLeaf = memo(function MaterialLeaf({
   material,
   depth,
   parentPath,
@@ -172,7 +173,15 @@ function MaterialLeaf({
       </Link>
     </li>
   );
-}
+}, (prev, next) =>
+  prev.material === next.material &&
+  prev.depth === next.depth &&
+  prev.parentPath === next.parentPath &&
+  prev.onActivate === next.onActivate &&
+  // Only re-render this leaf when its own active state flips — a sibling/route
+  // change that moves `activeId` elsewhere shouldn't repaint every leaf.
+  (prev.activeId === prev.material.id) === (next.activeId === next.material.id),
+);
 
 interface TreeNodeProps {
   node: DirNode;
@@ -184,6 +193,7 @@ interface TreeNodeProps {
   activeId: string | null;
   filter: string;
   onToggle: (node: DirNode) => void;
+  onExpand: (node: DirNode) => void;
   onActivate: (id: string) => void;
 }
 
@@ -197,9 +207,11 @@ const TreeNode = memo(function TreeNode({
   activeId,
   filter,
   onToggle,
+  onExpand,
   onActivate,
 }: TreeNodeProps) {
   const t = useTranslations("Browse");
+  const router = useRouter();
   const isExpanded = expanded.has(node.id);
   const isLoading = loadingIds.has(node.id);
   const isActive = activeId === node.id;
@@ -276,10 +288,17 @@ const TreeNode = memo(function TreeNode({
             />
           )}
         </button>
-        <Link
-          href={buildDirHref(node.full_path)}
-          onClick={() => onActivate(node.id)}
-          className="flex flex-1 items-center gap-1.5 min-w-0 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+        <button
+          type="button"
+          onClick={() => {
+            if (hasChildren) onToggle(node);
+          }}
+          onDoubleClick={() => {
+            onExpand(node);
+            onActivate(node.id);
+            router.push(buildDirHref(node.full_path));
+          }}
+          className="flex flex-1 items-center gap-1.5 min-w-0 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm text-left"
           title={node.name}
         >
           {shouldShowChildren && hasChildren ? (
@@ -300,12 +319,25 @@ const TreeNode = memo(function TreeNode({
           <span className={cn("truncate", isActive && "font-medium")}>
             {node.name}
           </span>
-        </Link>
+        </button>
         {totalItems > 0 && (
-          <span className="text-[10px] tabular-nums text-muted-foreground opacity-0 group-hover/node:opacity-100 transition-opacity pl-1">
+          <span className="text-[10px] tabular-nums text-muted-foreground opacity-0 group-hover/node:opacity-100 transition-opacity pl-1 shrink-0">
             {totalItems}
           </span>
         )}
+        <Link
+          href={buildDirHref(node.full_path)}
+          onClick={() => onActivate(node.id)}
+          className={cn(
+            "flex h-5 w-5 shrink-0 items-center justify-center rounded-sm",
+            "text-muted-foreground hover:text-foreground",
+            "opacity-0 group-hover/node:opacity-100 transition-opacity",
+          )}
+          title={node.name}
+          aria-label={t("navigateTo")}
+        >
+          <ArrowRight className="h-3 w-3" />
+        </Link>
       </div>
       {shouldShowChildren && (
         <ul className="space-y-px">
@@ -321,6 +353,7 @@ const TreeNode = memo(function TreeNode({
               activeId={activeId}
               filter={filter}
               onToggle={onToggle}
+              onExpand={onExpand}
               onActivate={onActivate}
             />
           ))}
@@ -365,8 +398,12 @@ const TreeNode = memo(function TreeNode({
 
 export function DirectoryTreeSidebar() {
   const t = useTranslations("Browse");
-  const { treeSidebarOpen, setTreeSidebarOpen, toggleTreeSidebar } =
-    useUIStore();
+  // Subscribe to individual fields, not the whole store: a bare useUIStore()
+  // re-renders this entire tree on every unrelated UI change — notably the
+  // setSidebarTarget() calls fired on each navigation.
+  const treeSidebarOpen = useUIStore((s) => s.treeSidebarOpen);
+  const setTreeSidebarOpen = useUIStore((s) => s.setTreeSidebarOpen);
+  const toggleTreeSidebar = useUIStore((s) => s.toggleTreeSidebar);
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
 
   const pathname = usePathname();
@@ -472,6 +509,33 @@ export function DirectoryTreeSidebar() {
     [],
   );
 
+  // Fetch into the module cache WITHOUT touching React state. Used by the
+  // auto-expand walk so a deep, cold path doesn't fire a full-tree re-render per
+  // level (each setLoadingIds/setChildrenMap during the staggered network walk
+  // repaints the whole tree). Children are committed to the render map in one
+  // batched update once the walk finishes.
+  const fetchChildrenQuiet = useCallback(
+    async (id: string): Promise<ChildrenPayload | null> => {
+      const cached = childrenCache.get(id);
+      if (cached) return cached;
+      try {
+        const res = await apiFetch<{
+          directories: DirNode[];
+          materials: unknown[];
+        }>(`/directories/${id}/children`);
+        const data: ChildrenPayload = {
+          directories: res.directories || [],
+          materials: normalizeMaterials(res.materials || []),
+        };
+        childrenCache.set(id, data);
+        return data;
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
+
   const handleToggle = useCallback(
     (node: DirNode) => {
       setExpanded((s) => {
@@ -486,6 +550,24 @@ export function DirectoryTreeSidebar() {
           if (!childrenCache.has(node.id) && hasKids) {
             void fetchChildren(node.id);
           }
+        }
+        return n;
+      });
+    },
+    [fetchChildren],
+  );
+
+  const handleExpand = useCallback(
+    (node: DirNode) => {
+      setExpanded((s) => {
+        if (s.has(node.id)) return s;
+        const n = new Set(s);
+        n.add(node.id);
+        const hasKids =
+          (node.child_directory_count ?? 0) > 0 ||
+          (node.child_material_count ?? 0) > 0;
+        if (!childrenCache.has(node.id) && hasKids) {
+          void fetchChildren(node.id);
         }
         return n;
       });
@@ -550,7 +632,7 @@ export function DirectoryTreeSidebar() {
           toExpand.push(dirMatch.id);
           let kids = childrenCache.get(dirMatch.id) ?? null;
           if (!kids) {
-            kids = await fetchChildren(dirMatch.id);
+            kids = await fetchChildrenQuiet(dirMatch.id);
             if (cancelled || !kids) return;
           }
           // If the next slug isn't in the cached data, the cache may be stale —
@@ -562,7 +644,7 @@ export function DirectoryTreeSidebar() {
             !kids.materials.some((m) => m.slug === nextSlug)
           ) {
             childrenCache.delete(dirMatch.id);
-            kids = await fetchChildren(dirMatch.id);
+            kids = await fetchChildrenQuiet(dirMatch.id);
             if (cancelled || !kids) return;
           }
           currentDirs = kids.directories;
@@ -571,6 +653,27 @@ export function DirectoryTreeSidebar() {
       }
 
       if (cancelled) return;
+
+      // Commit the children fetched during the walk into the render map in a
+      // single update — batched with setExpanded/setActiveId below into one
+      // re-render instead of one per traversed level.
+      if (toExpand.length > 0) {
+        setChildrenMap((m) => {
+          let n = m;
+          let changed = false;
+          for (const id of toExpand) {
+            const cached = childrenCache.get(id);
+            if (cached && m.get(id) !== cached) {
+              if (!changed) {
+                n = new Map(m);
+                changed = true;
+              }
+              n.set(id, cached);
+            }
+          }
+          return changed ? n : m;
+        });
+      }
 
       if (toExpand.length > 0) {
         setExpanded((s) => {
@@ -591,7 +694,7 @@ export function DirectoryTreeSidebar() {
     return () => {
       cancelled = true;
     };
-  }, [roots, rootMaterials, pathKey, fetchChildren, currentSlugs]);
+  }, [roots, rootMaterials, pathKey, fetchChildrenQuiet, currentSlugs]);
 
   // ---------------------------------------------------------------------
   // Render
@@ -730,6 +833,7 @@ export function DirectoryTreeSidebar() {
                 activeId={activeId}
                 filter={filter}
                 onToggle={handleToggle}
+                onExpand={handleExpand}
                 onActivate={setActiveId}
               />
             ))}

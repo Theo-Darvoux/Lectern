@@ -47,8 +47,10 @@ const TAB_CONFIG: { value: SidebarTab; labelKey: string }[] = [
 ];
 
 function SidebarContent() {
-  const { sidebarTab, setSidebarTab, sidebarTarget, closeSidebar } =
-    useUIStore();
+  const sidebarTab = useUIStore((s) => s.sidebarTab);
+  const setSidebarTab = useUIStore((s) => s.setSidebarTab);
+  const sidebarTarget = useUIStore((s) => s.sidebarTarget);
+  const closeSidebar = useUIStore((s) => s.closeSidebar);
   const isDesktop = useIsDesktop();
   const t = useTranslations("Sidebar");
   const searchParams = useSearchParams();
@@ -151,7 +153,8 @@ function SidebarContent() {
 }
 
 export function SharedSidebar() {
-  const { sidebarOpen, closeSidebar } = useUIStore();
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const closeSidebar = useUIStore((s) => s.closeSidebar);
   const isDesktop = useIsDesktop();
   const t = useTranslations("Sidebar");
   const [mounted, setMounted] = useState(false);
@@ -172,7 +175,10 @@ export function SharedSidebar() {
         )}
       >
         <div className="w-80 h-full min-h-full flex flex-col overflow-hidden">
-          <SidebarContent />
+          {/* Only do the (target-dependent) work when actually visible. The panel
+              is closed by default, so otherwise DetailsTab re-renders on every
+              navigation for a sidebar nobody is looking at. */}
+          {sidebarOpen && <SidebarContent />}
         </div>
       </aside>
     );

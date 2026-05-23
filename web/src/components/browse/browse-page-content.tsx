@@ -151,7 +151,9 @@ const DirectoryTreeSidebar = dynamic(() => import("@/components/browse/directory
 function BrowseContent() {
   const pathname = usePathname();
   const isDesktop = useIsDesktop();
-  const { sidebarOpen, sidebarTarget, setSidebarTarget } = useUIStore();
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const sidebarTarget = useUIStore((s) => s.sidebarTarget);
+  const setSidebarTarget = useUIStore((s) => s.setSidebarTarget);
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
   const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
@@ -211,7 +213,14 @@ function BrowseContent() {
           force: isBackground,
         })) as BrowseResponse;
         setPreviousBrowsePath(path);
-        setFetched({ path, data: result });
+        // Bail out of the state update when a background revalidation returned
+        // the same (identity-preserved) payload — avoids a redundant full
+        // re-render of the listing on every cache-hit navigation.
+        setFetched((prev) =>
+          prev && prev.path === path && prev.data === result
+            ? prev
+            : { path, data: result },
+        );
       } catch (err) {
         if (!isBackground) {
           setError(err instanceof Error ? err.message : t("loadError"));

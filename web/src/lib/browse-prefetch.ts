@@ -13,6 +13,19 @@ export function setPreviousBrowsePath(p: string) { previousBrowsePath = p; }
 // the active navigation fetch so a hover-then-click only hits the network once.
 const inflight = new Map<string, Promise<unknown>>();
 
+// Cheap structural equality used to decide whether a background revalidation
+// actually changed anything. When it didn't, we keep the previous object's
+// identity so React (and every memo'd row) can bail out of re-rendering.
+function payloadsEqual(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (a === undefined || b === undefined) return false;
+    try {
+        return JSON.stringify(a) === JSON.stringify(b);
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Fetch a browse path, populating browseCache and de-duplicating concurrent
  * requests for the same path.
@@ -36,6 +49,13 @@ export function fetchBrowsePath(
     const endpoint = browsePath ? `/browse/${browsePath}` : "/browse";
     const request = apiFetch<unknown>(endpoint)
         .then((result) => {
+            // Preserve the previous object identity on an unchanged revalidation
+            // so the cache-first render path doesn't trigger a second full
+            // re-render of the listing with fresh (memo-defeating) identities.
+            const prev = browseCache.get(browsePath);
+            if (prev !== undefined && payloadsEqual(prev, result)) {
+                return prev;
+            }
             browseCache.set(browsePath, result);
             return result;
         })

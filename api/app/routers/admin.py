@@ -686,9 +686,7 @@ _IMAGE_ALLOWED_TYPES = frozenset(
 _BRANDING_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
-_WEBP_SKIP_TYPES = frozenset(
-    {"image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"}
-)
+_WEBP_SKIP_TYPES = frozenset({"image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"})
 
 
 async def _upload_branding_asset(
@@ -725,10 +723,14 @@ async def _upload_branding_asset(
         data = buf.getvalue()
         content_type = "image/webp"
 
-    ext = "webp" if content_type == "image/webp" else (
-        (file.filename or f"{key_prefix}.bin").rsplit(".", 1)[-1].lower()
-        if "." in (file.filename or "")
-        else "bin"
+    ext = (
+        "webp"
+        if content_type == "image/webp"
+        else (
+            (file.filename or f"{key_prefix}.bin").rsplit(".", 1)[-1].lower()
+            if "." in (file.filename or "")
+            else "bin"
+        )
     )
     key = f"branding/{key_prefix}.{ext}"
 

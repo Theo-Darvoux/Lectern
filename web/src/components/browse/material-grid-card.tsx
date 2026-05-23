@@ -2,7 +2,8 @@
 
 import { memo, useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
+import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import {
   Info, MessageSquare, Eye, Paperclip, File,
 } from "lucide-react";
@@ -108,12 +109,14 @@ interface MaterialGridCardProps {
   focused?: boolean;
   previewOpIndex?: number;
   onNavigate?: () => void;
-  onAddAttachment?: () => void;
+  onAddAttachment?: (id: string, title: string) => void;
   draftAttachmentCount?: number;
   /** For ghost "created" materials: the staged file key */
   ghostFileKey?: string | null;
   /** For ghost "created" materials: the staged file MIME type */
   ghostFileMimeType?: string | null;
+  /** Current pathname base (without trailing slash), hoisted from parent to avoid per-item usePathname subscription */
+  pathBase: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,11 +139,11 @@ function MaterialGridCardImpl({
   draftAttachmentCount,
   ghostFileKey,
   ghostFileMimeType,
+  pathBase,
 }: MaterialGridCardProps) {
   const t = useTranslations("Browse");
   const tTypes = useTranslations("MaterialTypes");
   const openSidebar = useUIStore((s) => s.openSidebar);
-  const pathname = usePathname();
   const router = useRouter();
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -162,8 +165,7 @@ function MaterialGridCardImpl({
     if (staged === "edited" && previewPrId && previewOpIndex !== undefined) {
       return `/pull-requests/${previewPrId}/preview/${previewOpIndex}`;
     }
-    const base = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
-    const matPath = `${base}/${slug}`;
+    const matPath = `${pathBase}/${slug}`;
     return previewPrId ? `${matPath}?preview_pr=${previewPrId}` : matPath;
   };
 
@@ -215,6 +217,23 @@ function MaterialGridCardImpl({
 
   const isRestricted = !!staged || !!previewPrId;
 
+  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handlePointerEnter = () => {
+    if (!slug || staged === "deleted" || onNavigate) return;
+    if (staged === "edited" && previewPrId && previewOpIndex !== undefined) return;
+    prefetchTimer.current = setTimeout(() => {
+      const browsePath = `${pathBase}/${slug}`.replace(/^\/browse\/?/, "").replace(/\/$/, "");
+      prefetchBrowsePath(browsePath);
+      router.prefetch(`${pathBase}/${slug}`);
+    }, 100);
+  };
+  const handlePointerLeave = () => {
+    if (prefetchTimer.current) {
+      clearTimeout(prefetchTimer.current);
+      prefetchTimer.current = null;
+    }
+  };
+
   const handleCardClick = (e: React.MouseEvent) => {
     if (selectMode && onToggleSelect) {
       onToggleSelect(navIndex ?? 0, e);
@@ -245,12 +264,14 @@ function MaterialGridCardImpl({
   return (
     <ItemActionsMenu
       item={{ id, type: "material", data: material, staged, isExternal }}
-      onAddAttachment={onAddAttachment}
+      onAddAttachment={onAddAttachment ? () => onAddAttachment(id, title) : undefined}
       itemPath={buildPath()}
     >
       <div
         ref={cardRef}
         onClick={handleCardClick}
+        onPointerEnter={handlePointerEnter}
+        onPointerLeave={handlePointerLeave}
         data-nav-index={navIndex}
         style={{ contentVisibility: "auto", containIntrinsicSize: "0 280px" }}
         className={cn(
@@ -338,7 +359,7 @@ function MaterialGridCardImpl({
               </button>
               {staged === "created" && onAddAttachment && (
                 <button
-                  onClick={(e) => { e.stopPropagation(); onAddAttachment(); }}
+                  onClick={(e) => { e.stopPropagation(); onAddAttachment(id, title); }}
                   className="rounded-md p-1.5 hover:bg-white/20 active:scale-95 transition-transform"
                   title={t("addAttachment")}
                 >

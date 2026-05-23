@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef } from "react";
+import { memo, useRef } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import {
     Eye,
@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
-import { useIsMobile } from "@/hooks/use-media-query";
 import { useUIStore } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
 import { EXT_ICONS, TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
@@ -29,7 +28,7 @@ interface MaterialLineItemProps {
     isExternal?: boolean;
     selectMode?: boolean;
     selected?: boolean;
-    onToggleSelect?: (e?: React.MouseEvent) => void;
+    onToggleSelect?: (index: number, e?: React.MouseEvent) => void;
     /** When set, appended as ?preview_pr= to preserve preview mode across navigation */
     previewPrId?: string;
     navIndex?: number;
@@ -39,12 +38,16 @@ interface MaterialLineItemProps {
     /** Special override for clicking on ghost materials (creations) */
     onNavigate?: () => void;
     /** Request attachment upload for this material (draft only) */
-    onAddAttachment?: () => void;
+    onAddAttachment?: (id: string, title: string) => void;
     /** Cached attachment count for drafts */
     draftAttachmentCount?: number;
+    /** Current pathname base (without trailing slash), hoisted from parent to avoid per-item usePathname subscription */
+    pathBase: string;
+    /** Hoisted from parent to avoid per-item useIsMobile subscription */
+    isMobile: boolean;
 }
 
-export function MaterialLineItem({
+function MaterialLineItemImpl({
     material,
     staged,
     isExternal,
@@ -58,12 +61,12 @@ export function MaterialLineItem({
     onNavigate,
     onAddAttachment,
     draftAttachmentCount,
+    pathBase,
+    isMobile,
 }: MaterialLineItemProps) {
     const t = useTranslations("Browse");
     const tTypes = useTranslations("MaterialTypes");
-    const isMobile = useIsMobile();
-    const { openSidebar } = useUIStore();
-    const pathname = usePathname();
+    const openSidebar = useUIStore((s) => s.openSidebar);
     const router = useRouter();
 
     const title = String(material.title ?? "");
@@ -88,8 +91,7 @@ export function MaterialLineItem({
         if (staged === "edited" && previewPrId && previewOpIndex !== undefined) {
             return `/pull-requests/${previewPrId}/preview/${previewOpIndex}`;
         }
-        const base = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
-        const matPath = `${base}/${slug}`;
+        const matPath = `${pathBase}/${slug}`;
         return previewPrId ? `${matPath}?preview_pr=${previewPrId}` : matPath;
     };
 
@@ -136,9 +138,13 @@ export function MaterialLineItem({
         // Don't prefetch PR preview pages — they aren't browse routes
         if (staged === "edited" && previewPrId && previewOpIndex !== undefined) return;
         prefetchTimer.current = setTimeout(() => {
+            // Prefetch the browse API response.
             const builtPath = buildPath();
             const browsePath = builtPath.replace(/^\/browse\/?/, "").split("?")[0].replace(/\/$/, "");
             prefetchBrowsePath(browsePath);
+            // Prefetch the Next.js RSC payload so navigation doesn't block on
+            // deserializing the server component tree (250–440 ms frame gaps).
+            router.prefetch(`${pathBase}/${slug}`);
         }, 100);
     };
     const handlePointerLeave = () => {
@@ -159,7 +165,7 @@ export function MaterialLineItem({
 
     const handleCardClick = (e: React.MouseEvent) => {
         if (selectMode && onToggleSelect) {
-            onToggleSelect(e);
+            onToggleSelect(navIndex ?? 0, e);
             return;
         }
         if (onNavigate) {
@@ -200,9 +206,9 @@ export function MaterialLineItem({
         const isRestricted = !!staged || !!previewPrId;
 
         return (
-        <ItemActionsMenu 
+        <ItemActionsMenu
             item={{ id, type: "material", data: material, staged, isExternal }}
-            onAddAttachment={onAddAttachment}
+            onAddAttachment={onAddAttachment ? () => onAddAttachment(id, title) : undefined}
             itemPath={buildPath()}
         >
             <div
@@ -210,6 +216,7 @@ export function MaterialLineItem({
                 onPointerEnter={handlePointerEnter}
                 onPointerLeave={handlePointerLeave}
                 data-nav-index={navIndex}
+                style={{ contentVisibility: "auto", containIntrinsicSize: "0 68px" }}
                 className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 cursor-pointer ${stagedBorder} ${selectMode && selected ? "bg-primary/5 dark:bg-primary/10" : ""} ${focused ? "bg-muted ring-2 ring-inset ring-primary/40" : ""}`}
             >
                 {selectMode && (
@@ -218,7 +225,7 @@ export function MaterialLineItem({
                         onCheckedChange={() => {}}
                         onClick={(e) => {
                             e.stopPropagation();
-                            onToggleSelect?.(e);
+                            onToggleSelect?.(navIndex ?? 0, e);
                         }}
                         className="shrink-0"
                     />
@@ -300,7 +307,7 @@ export function MaterialLineItem({
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
-                                onAddAttachment();
+                                onAddAttachment(id, title);
                             }}
                             className="rounded-md p-2 hover:bg-violet-50 text-violet-600 dark:hover:bg-violet-950/40 dark:text-violet-400 active:scale-95 transition-transform"
                             title={t("addAttachment")}
@@ -331,3 +338,5 @@ export function MaterialLineItem({
         </ItemActionsMenu>
     );
 }
+
+export const MaterialLineItem = memo(MaterialLineItemImpl);

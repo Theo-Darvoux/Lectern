@@ -54,7 +54,9 @@ async def browse_path(
         if result["type"] == "material":
             directory_id = result["material"].get("directory_id")
         elif result["type"] == "directory_listing":
-            directory_id = result.get("directory", {}).get("id") if result.get("directory") else None
+            directory_id = (
+                result.get("directory", {}).get("id") if result.get("directory") else None
+            )
         elif result["type"] == "attachment_listing":
             # For attachments, breadcrumbs should be relative to the parent material's directory
             directory_id = result.get("parent_material", {}).get("directory_id")

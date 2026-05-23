@@ -338,7 +338,8 @@
     "showTree": "Show directory tree",
     "hideTree": "Hide directory tree",
     "filterFolders": "Filter folders…",
-    "clear": "Clear"
+    "clear": "Clear",
+    "navigateTo": "Navigate to folder"
   },
   "Search": {
     "searchMaterials": "Search materials...",

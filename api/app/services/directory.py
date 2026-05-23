@@ -3,7 +3,7 @@ import typing
 import unicodedata
 import uuid
 
-from sqlalchemy import exists, func, literal, select, update
+from sqlalchemy import exists, func, literal, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -135,38 +135,43 @@ async def get_root_directories(
     favourited_ids: set[uuid.UUID] = set()
     if current_user_id and dir_ids:
         like_rows = await db.execute(
-            select(DirectoryLike.directory_id)
-            .where(DirectoryLike.user_id == current_user_id, DirectoryLike.directory_id.in_(dir_ids))
+            select(DirectoryLike.directory_id).where(
+                DirectoryLike.user_id == current_user_id, DirectoryLike.directory_id.in_(dir_ids)
+            )
         )
         liked_ids = {r.directory_id for r in like_rows.all()}
 
         fav_rows = await db.execute(
-            select(DirectoryFavourite.directory_id)
-            .where(DirectoryFavourite.user_id == current_user_id, DirectoryFavourite.directory_id.in_(dir_ids))
+            select(DirectoryFavourite.directory_id).where(
+                DirectoryFavourite.user_id == current_user_id,
+                DirectoryFavourite.directory_id.in_(dir_ids),
+            )
         )
         favourited_ids = {r.directory_id for r in fav_rows.all()}
 
     items = []
     for d in directories:
-        items.append({
-            "id": str(d.id),
-            "parent_id": str(d.parent_id) if d.parent_id else None,
-            "name": d.name,
-            "slug": d.slug,
-            "type": d.type.value if hasattr(d.type, "value") else d.type,
-            "description": d.description,
-            "metadata": d.metadata_,
-            "sort_order": d.sort_order,
-            "is_system": d.is_system,
-            "tags": [t.name for t in d.tags],
-            "full_path": d.slug,
-            "like_count": d.like_count,
-            "is_liked": d.id in liked_ids,
-            "is_favourited": d.id in favourited_ids,
-            "created_at": d.created_at,
-            "child_directory_count": dir_counts.get(d.id, 0),
-            "child_material_count": mat_counts.get(d.id, 0),
-        })
+        items.append(
+            {
+                "id": str(d.id),
+                "parent_id": str(d.parent_id) if d.parent_id else None,
+                "name": d.name,
+                "slug": d.slug,
+                "type": d.type.value if hasattr(d.type, "value") else d.type,
+                "description": d.description,
+                "metadata": d.metadata_,
+                "sort_order": d.sort_order,
+                "is_system": d.is_system,
+                "tags": [t.name for t in d.tags],
+                "full_path": d.slug,
+                "like_count": d.like_count,
+                "is_liked": d.id in liked_ids,
+                "is_favourited": d.id in favourited_ids,
+                "created_at": d.created_at,
+                "child_directory_count": dir_counts.get(d.id, 0),
+                "child_material_count": mat_counts.get(d.id, 0),
+            }
+        )
 
     # Root-level materials. is_liked/is_favourited are resolved in a batched
     # query inside _attach_version_and_counts, so we don't eagerly load the
@@ -186,9 +191,9 @@ async def get_root_directories(
 
 async def _attach_version_and_counts(
     db: AsyncSession,
-    materials: list[Material],
+    materials: list[Material] | typing.Sequence[Material],
     current_user_id: uuid.UUID | None,
-    directory_path: str,
+    directory_path: str | None,
 ) -> list[dict[str, typing.Any]]:
     """Batch-fetch attachment counts and current versions for a list of materials."""
     from app.services.material import material_orm_to_dict, version_orm_to_dict
@@ -206,9 +211,15 @@ async def _attach_version_and_counts(
     )
     att_counts: dict[uuid.UUID, int] = {r.parent_material_id: r.cnt for r in att_rows.all()}
 
-    # Batch version fetch — one query for all materials
+    # Batch version fetch — one query for all materials, restricted to the
+    # current version of each material so historical rows are never loaded.
+    current_version_pairs = [(m.id, m.current_version) for m in materials]
     ver_rows = await db.execute(
-        select(MaterialVersion).where(MaterialVersion.material_id.in_(mat_ids))
+        select(MaterialVersion).where(
+            tuple_(MaterialVersion.material_id, MaterialVersion.version_number).in_(
+                current_version_pairs
+            )
+        )
     )
     all_versions: dict[tuple[uuid.UUID, int], MaterialVersion] = {}
     for v in ver_rows.scalars().all():
@@ -323,14 +334,18 @@ async def get_directory_children(
     favourited_dir_ids: set[uuid.UUID] = set()
     if current_user_id and child_dir_ids:
         like_rows = await db.execute(
-            select(DirectoryLike.directory_id)
-            .where(DirectoryLike.user_id == current_user_id, DirectoryLike.directory_id.in_(child_dir_ids))
+            select(DirectoryLike.directory_id).where(
+                DirectoryLike.user_id == current_user_id,
+                DirectoryLike.directory_id.in_(child_dir_ids),
+            )
         )
         liked_dir_ids = {r.directory_id for r in like_rows.all()}
 
         fav_rows = await db.execute(
-            select(DirectoryFavourite.directory_id)
-            .where(DirectoryFavourite.user_id == current_user_id, DirectoryFavourite.directory_id.in_(child_dir_ids))
+            select(DirectoryFavourite.directory_id).where(
+                DirectoryFavourite.user_id == current_user_id,
+                DirectoryFavourite.directory_id.in_(child_dir_ids),
+            )
         )
         favourited_dir_ids = {r.directory_id for r in fav_rows.all()}
 
@@ -402,9 +417,7 @@ async def get_directory_path(
     ).join(base_alias, dir_alias.id == base_alias.c.parent_id)
 
     cte = base_case.union_all(recursive_case)
-    result = await db.execute(
-        select(cte.c.id, cte.c.name, cte.c.slug).order_by(cte.c.depth.desc())
-    )
+    result = await db.execute(select(cte.c.id, cte.c.name, cte.c.slug).order_by(cte.c.depth.desc()))
     return [{"id": str(row.id), "name": row.name, "slug": row.slug} for row in result.all()]
 
 
@@ -415,12 +428,12 @@ async def resolve_browse_path(
 
     if not segments:
         roots = await get_root_directories(db, current_user_id=current_user_id)
-        return {"type": "directory_listing", "directories": roots, "materials": []}
+        return {"type": "directory_listing", **roots}
 
     current_dir: Directory | None = None
     last_material: Material | None = None
 
-    from app.services.material import material_orm_to_dict, version_orm_to_dict
+    from app.services.material import material_orm_to_dict
 
     # Resolve the directory chain in a single query rather than one round-trip
     # per segment: fetch every directory whose slug appears in the path, then
@@ -466,27 +479,29 @@ async def resolve_browse_path(
                 .order_by(Material.title)
             )
             attachments = att_listing_result.scalars().all()
-            materials_out = await _attach_version_and_counts(
-                db, attachments, current_user_id, None
-            )
+            materials_out = await _attach_version_and_counts(db, attachments, current_user_id, None)
 
             parent_liked = False
             parent_favourited = False
             if current_user_id:
                 parent_liked = bool(
                     await db.scalar(
-                        select(exists().where(
-                            MaterialLike.material_id == last_material.id,
-                            MaterialLike.user_id == current_user_id,
-                        ))
+                        select(
+                            exists().where(
+                                MaterialLike.material_id == last_material.id,
+                                MaterialLike.user_id == current_user_id,
+                            )
+                        )
                     )
                 )
                 parent_favourited = bool(
                     await db.scalar(
-                        select(exists().where(
-                            MaterialFavourite.material_id == last_material.id,
-                            MaterialFavourite.user_id == current_user_id,
-                        ))
+                        select(
+                            exists().where(
+                                MaterialFavourite.material_id == last_material.id,
+                                MaterialFavourite.user_id == current_user_id,
+                            )
+                        )
                     )
                 )
 
@@ -544,18 +559,22 @@ async def resolve_browse_path(
         if current_user_id:
             is_liked = bool(
                 await db.scalar(
-                    select(exists().where(
-                        DirectoryLike.directory_id == current_dir.id,
-                        DirectoryLike.user_id == current_user_id,
-                    ))
+                    select(
+                        exists().where(
+                            DirectoryLike.directory_id == current_dir.id,
+                            DirectoryLike.user_id == current_user_id,
+                        )
+                    )
                 )
             )
             is_favourited = bool(
                 await db.scalar(
-                    select(exists().where(
-                        DirectoryFavourite.directory_id == current_dir.id,
-                        DirectoryFavourite.user_id == current_user_id,
-                    ))
+                    select(
+                        exists().where(
+                            DirectoryFavourite.directory_id == current_dir.id,
+                            DirectoryFavourite.user_id == current_user_id,
+                        )
+                    )
                 )
             )
 

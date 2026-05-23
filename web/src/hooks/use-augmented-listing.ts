@@ -206,7 +206,7 @@ export function useAugmentedListing({
     [sortedDirs, ghostDirs, sortedMats, ghostMaterials],
   );
 
-  const allSelectableItems: SelectedItem[] = [
+  const allSelectableItems = useMemo<SelectedItem[]>(() => [
     ...effectiveDirs.map((d) => ({
       id: String(d.id),
       type: "directory" as const,
@@ -233,7 +233,7 @@ export function useAugmentedListing({
       parentId: dirId || null,
       material_type: (op.op === "create_material" ? op.type : op.target_material_type) || "other",
     })),
-  ];
+  ], [effectiveDirs, ghostDirs, effectiveMats, ghostMaterials, dirId]);
 
   return {
     operations,

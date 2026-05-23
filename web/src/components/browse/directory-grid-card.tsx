@@ -1,7 +1,8 @@
 "use client";
 
-import { memo } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { memo, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { Folder, Info, MessageSquare, ChevronRight } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
@@ -21,6 +22,8 @@ interface DirectoryGridCardProps {
   navIndex?: number;
   focused?: boolean;
   onNavigate?: () => void;
+  /** Current pathname base (without trailing slash), hoisted from parent to avoid per-item usePathname subscription */
+  pathBase: string;
 }
 
 function DirectoryGridCardImpl({
@@ -34,10 +37,10 @@ function DirectoryGridCardImpl({
   navIndex,
   focused,
   onNavigate,
+  pathBase,
 }: DirectoryGridCardProps) {
   const t = useTranslations("Browse");
   const openSidebar = useUIStore((s) => s.openSidebar);
-  const pathname = usePathname();
   const router = useRouter();
 
   const name = String(directory.name ?? "");
@@ -48,8 +51,7 @@ function DirectoryGridCardImpl({
   const totalCount = childDirCount + childMatCount;
 
   const buildPath = () => {
-    const base = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
-    const dirPath = `${base}/${slug}`;
+    const dirPath = `${pathBase}/${slug}`;
     return previewPrId ? `${dirPath}?preview_pr=${previewPrId}` : dirPath;
   };
 
@@ -99,6 +101,22 @@ function DirectoryGridCardImpl({
 
   const isRestricted = !!staged || !!previewPrId;
 
+  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handlePointerEnter = () => {
+    if (!slug || staged === "deleted" || onNavigate) return;
+    prefetchTimer.current = setTimeout(() => {
+      const browsePath = `${pathBase}/${slug}`.replace(/^\/browse\/?/, "").replace(/\/$/, "");
+      prefetchBrowsePath(browsePath);
+      router.prefetch(`${pathBase}/${slug}`);
+    }, 100);
+  };
+  const handlePointerLeave = () => {
+    if (prefetchTimer.current) {
+      clearTimeout(prefetchTimer.current);
+      prefetchTimer.current = null;
+    }
+  };
+
   const handleCardClick = (e: React.MouseEvent) => {
     if (selectMode && onToggleSelect) {
       onToggleSelect(navIndex ?? 0, e);
@@ -130,6 +148,8 @@ function DirectoryGridCardImpl({
     >
       <div
         onClick={handleCardClick}
+        onPointerEnter={handlePointerEnter}
+        onPointerLeave={handlePointerLeave}
         data-nav-index={navIndex}
         style={{ contentVisibility: "auto", containIntrinsicSize: "0 240px" }}
         className={cn(

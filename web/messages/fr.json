@@ -338,7 +338,8 @@
     "showTree": "Afficher l'arborescence",
     "hideTree": "Masquer l'arborescence",
     "filterFolders": "Filtrer les dossiers…",
-    "clear": "Effacer"
+    "clear": "Effacer",
+    "navigateTo": "Accéder au dossier"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",

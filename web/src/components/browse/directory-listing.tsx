@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, startTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { DirectoryLineItem } from "@/components/browse/directory-line-item";
 import { MaterialLineItem } from "@/components/browse/material-line-item";
@@ -57,6 +57,7 @@ import type { SelectedItem } from "@/lib/selection-store";
 import { useTranslations } from "next-intl";
 import { useAugmentedListing, stagedStatus, type NavItem } from "@/hooks/use-augmented-listing";
 import { useViewMode } from "@/hooks/use-view-mode";
+import { useIsMobile } from "@/hooks/use-media-query";
 import { MaterialGridCard } from "@/components/browse/material-grid-card";
 import { DirectoryGridCard } from "@/components/browse/directory-grid-card";
 
@@ -86,10 +87,11 @@ export function DirectoryListing({
   const tQCM = useTranslations("QCM");
   const router = useRouter();
   const pathname = usePathname();
+  const isMobile = useIsMobile();
   const triggerBrowseRefresh = useBrowseRefreshStore(
     (s) => s.triggerBrowseRefresh,
   );
-  const { openSidebar } = useUIStore();
+  const openSidebar = useUIStore((s) => s.openSidebar);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadParentMat, setUploadParentMat] = useState<{ id: string; name: string } | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
@@ -125,6 +127,51 @@ export function DirectoryListing({
   });
 
   const { mode: viewMode, setMode: setViewMode } = useViewMode();
+
+  // Progressive rendering: mounting every row/card in one synchronous pass is a
+  // single long task (each item carries a context menu, dropdown and—in grid
+  // mode—a preview), which tanks FPS the moment the listing replaces the
+  // skeleton. Render a viewport-worth immediately, then stream the rest across
+  // animation frames so no single frame mounts the whole directory.
+  const INITIAL_RENDER = 12;
+  const RENDER_CHUNK = 16;
+  const totalItems =
+    sortedDirs.length + ghostDirs.length + sortedMats.length + ghostMaterials.length;
+  const [renderLimit, setRenderLimit] = useState(INITIAL_RENDER);
+  // Reset the budget synchronously when the listing changes so the first paint
+  // of a freshly-navigated directory never mounts the previous (larger) count.
+  // (Official React "adjust state on prop change" pattern — previous value in
+  // state, compared during render.)
+  const [renderedDir, setRenderedDir] = useState(dirId);
+  if (renderedDir !== dirId) {
+    setRenderedDir(dirId);
+    setRenderLimit(INITIAL_RENDER);
+  }
+  useEffect(() => {
+    if (renderLimit >= totalItems) return;
+    const raf = requestAnimationFrame(() =>
+      startTransition(() =>
+        setRenderLimit((n) => Math.min(totalItems, n + RENDER_CHUNK)),
+      )
+    );
+    return () => cancelAnimationFrame(raf);
+  }, [renderLimit, totalItems]);
+
+  // Per-group caps derived from the global budget (groups render in order:
+  // dirs → ghost dirs → materials → ghost materials).
+  const showDirs = Math.min(sortedDirs.length, renderLimit);
+  const showGhostDirs = Math.min(
+    ghostDirs.length,
+    Math.max(0, renderLimit - sortedDirs.length),
+  );
+  const showMats = Math.min(
+    sortedMats.length,
+    Math.max(0, renderLimit - sortedDirs.length - ghostDirs.length),
+  );
+  const showGhostMats = Math.max(
+    0,
+    renderLimit - sortedDirs.length - ghostDirs.length - sortedMats.length,
+  );
 
   // Index staged operations by target id once per render so each item is an
   // O(1) lookup instead of scanning allOps per row (O(items × ops)). First
@@ -746,7 +793,7 @@ export function DirectoryListing({
         !isEmpty && (
           viewMode === "list" ? (
             <div className={`divide-y rounded-lg border ${selectMode ? "select-none" : ""}`}>
-              {sortedDirs.map((dir, i) => {
+              {sortedDirs.slice(0, showDirs).map((dir, i) => {
                 const id = String(dir.id);
                 const op = dirOpById.get(id);
 
@@ -776,15 +823,17 @@ export function DirectoryListing({
                     staged={staged}
                     selectMode={selectMode}
                     selected={selected.has(id)}
-                    onToggleSelect={(e) => handleToggleItem(i, e)}
+                    onToggleSelect={handleToggleItem}
                     previewPrId={previewPrId}
                     navIndex={i}
                     focused={focusedIndex === i}
+                    pathBase={pathBase}
+                    isMobile={isMobile}
                   />
                 );
               })}
 
-              {ghostDirs.map((op, i) => {
+              {ghostDirs.slice(0, showGhostDirs).map((op, i) => {
                 const tempId =
                   (op.op === "create_directory" ? op.temp_id : op.target_id) ||
                   `ghost-${i}`;
@@ -806,15 +855,17 @@ export function DirectoryListing({
                     isExternal={isExternal}
                     selectMode={selectMode}
                     selected={selected.has(tempId)}
-                    onToggleSelect={(e) => handleToggleItem(ghostDirNavIndex, e)}
+                    onToggleSelect={handleToggleItem}
                     navIndex={ghostDirNavIndex}
                     focused={focusedIndex === ghostDirNavIndex}
                     onNavigate={() => enterGhostDir(tempId, name || "Unnamed")}
+                    pathBase={pathBase}
+                    isMobile={isMobile}
                   />
                 );
               })}
 
-              {sortedMats.map((mat, i) => {
+              {sortedMats.slice(0, showMats).map((mat, i) => {
                 const id = String(mat.id);
                 const op = matOpById.get(id);
 
@@ -849,16 +900,18 @@ export function DirectoryListing({
                     previewOpIndex={previewOpIndex}
                     selectMode={selectMode}
                     selected={selected.has(id)}
-                    onToggleSelect={(e) => handleToggleItem(matNavIndex, e)}
+                    onToggleSelect={handleToggleItem}
                     previewPrId={previewPrId}
                     navIndex={matNavIndex}
                     focused={focusedIndex === matNavIndex}
-                    onAddAttachment={() => handleAddAttachment(id, String(displayMat.title ?? ""))}
+                    onAddAttachment={handleAddAttachment}
+                    pathBase={pathBase}
+                    isMobile={isMobile}
                   />
                 );
               })}
 
-              {ghostMaterials.map((op, i) => {
+              {ghostMaterials.slice(0, showGhostMats).map((op, i) => {
                 const isExternal = op.isExternal;
                 const title = op.op === "create_material" ? op.title : op.target_title;
                 const tempId = op.op === "create_material" ? op.temp_id : op.target_id;
@@ -885,7 +938,7 @@ export function DirectoryListing({
                     isExternal={isExternal}
                     selectMode={selectMode}
                     selected={selected.has(tempId || "")}
-                    onToggleSelect={(e) => handleToggleItem(ghostMatNavIndex, e)}
+                    onToggleSelect={handleToggleItem}
                     navIndex={ghostMatNavIndex}
                     focused={focusedIndex === ghostMatNavIndex}
                     previewOpIndex={op._previewIdx}
@@ -906,8 +959,10 @@ export function DirectoryListing({
                         }
                       }
                     }}
-                    onAddAttachment={() => handleAddAttachment(tempId!, title!)}
+                    onAddAttachment={handleAddAttachment}
                     draftAttachmentCount={draftAttachmentCount}
+                    pathBase={pathBase}
+                    isMobile={isMobile}
                   />
                 );
               })}
@@ -915,7 +970,7 @@ export function DirectoryListing({
           ) : (
             /* ── Grid view ──────────────────────────────────────────────────── */
             <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 ${selectMode ? "select-none" : ""}`}>
-              {sortedDirs.map((dir, i) => {
+              {sortedDirs.slice(0, showDirs).map((dir, i) => {
                 const id = String(dir.id);
                 const op = dirOpById.get(id);
 
@@ -949,11 +1004,12 @@ export function DirectoryListing({
                     previewPrId={previewPrId}
                     navIndex={i}
                     focused={focusedIndex === i}
+                    pathBase={pathBase}
                   />
                 );
               })}
 
-              {ghostDirs.map((op, i) => {
+              {ghostDirs.slice(0, showGhostDirs).map((op, i) => {
                 const tempId =
                   (op.op === "create_directory" ? op.temp_id : op.target_id) ||
                   `ghost-${i}`;
@@ -979,11 +1035,12 @@ export function DirectoryListing({
                     navIndex={ghostDirNavIndex}
                     focused={focusedIndex === ghostDirNavIndex}
                     onNavigate={() => enterGhostDir(tempId, name || "Unnamed")}
+                    pathBase={pathBase}
                   />
                 );
               })}
 
-              {sortedMats.map((mat, i) => {
+              {sortedMats.slice(0, showMats).map((mat, i) => {
                 const id = String(mat.id);
                 const op = matOpById.get(id);
 
@@ -1022,12 +1079,13 @@ export function DirectoryListing({
                     previewPrId={previewPrId}
                     navIndex={matNavIndex}
                     focused={focusedIndex === matNavIndex}
-                    onAddAttachment={() => handleAddAttachment(id, String(displayMat.title ?? ""))}
+                    onAddAttachment={handleAddAttachment}
+                    pathBase={pathBase}
                   />
                 );
               })}
 
-              {ghostMaterials.map((op, i) => {
+              {ghostMaterials.slice(0, showGhostMats).map((op, i) => {
                 const isExternal = op.isExternal;
                 const title = op.op === "create_material" ? op.title : op.target_title;
                 const tempId = op.op === "create_material" ? op.temp_id : op.target_id;
@@ -1082,8 +1140,9 @@ export function DirectoryListing({
                         }
                       }
                     }}
-                    onAddAttachment={() => handleAddAttachment(tempId!, title!)}
+                    onAddAttachment={handleAddAttachment}
                     draftAttachmentCount={draftAttachmentCount}
+                    pathBase={pathBase}
                   />
                 );
               })}
