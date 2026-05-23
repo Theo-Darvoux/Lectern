@@ -154,7 +154,7 @@ function QuestionCard({
                     )}
                   />
                 )}
-                <div className="prose prose-sm dark:prose-invert max-w-none flex-1">
+                <div className="prose prose-sm dark:prose-invert max-w-none flex-1 select-text">
                   <MathMarkdown content={answer.text} />
                 </div>
               </div>

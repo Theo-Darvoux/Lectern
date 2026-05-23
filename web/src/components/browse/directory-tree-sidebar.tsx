@@ -29,6 +29,7 @@ import {
 import { apiFetch } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { useBrowseRefreshStore, useUIStore } from "@/lib/stores";
+import { createSSEConnection, SSEConnection } from "@/lib/sse-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -536,6 +537,102 @@ export function DirectoryTreeSidebar() {
     [],
   );
 
+  // Silent refetches for SSE-triggered updates — no loading spinners.
+  const refetchRootSilent = useCallback(async () => {
+    try {
+      const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>("/browse");
+      const dirs = res.directories || [];
+      const mats = normalizeMaterials(res.materials || []);
+      rootsCache.dirs = dirs;
+      rootsCache.mats = mats;
+      setRoots(dirs);
+      setRootMaterials(mats);
+    } catch { }
+  }, []);
+
+  const refetchChildSilent = useCallback(async (id: string) => {
+    childrenCache.delete(id);
+    try {
+      const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>(
+        `/directories/${id}/children`,
+      );
+      const data: ChildrenPayload = {
+        directories: res.directories || [],
+        materials: normalizeMaterials(res.materials || []),
+      };
+      childrenCache.set(id, data);
+      setChildrenMap((m) => {
+        if (!m.has(id)) return m;
+        const n = new Map(m);
+        n.set(id, data);
+        return n;
+      });
+    } catch { }
+  }, []);
+
+  // Maintain one SSE connection per expanded directory (plus root).
+  // Each connection listens for child_added / child_removed and silently
+  // refetches only the affected directory — no full-tree reload, no spinners.
+  const treeConnectionsRef = useRef<Map<string, SSEConnection>>(new Map());
+
+  useEffect(() => {
+    const watched = new Set(["root", ...Array.from(expanded)]);
+    const existing = treeConnectionsRef.current;
+
+    // Close connections for directories no longer watched.
+    for (const id of Array.from(existing.keys())) {
+      if (!watched.has(id)) {
+        existing.get(id)!.close();
+        existing.delete(id);
+      }
+    }
+
+    // Open connections for newly watched directories.
+    for (const id of watched) {
+      if (!existing.has(id)) {
+        const handleChange = () => {
+          if (id === "root") void refetchRootSilent();
+          else void refetchChildSilent(id);
+        };
+        const conn = createSSEConnection({
+          url: `/directories/${id}/sse`,
+          listeners: { child_added: handleChange, child_removed: handleChange },
+          startupDelay: 50,
+        });
+        existing.set(id, conn);
+      }
+    }
+  }, [expanded, refetchRootSilent, refetchChildSilent]);
+
+  // Close all tree SSE connections on unmount.
+  useEffect(() => {
+    const connections = treeConnectionsRef.current;
+    return () => {
+      for (const conn of connections.values()) conn.close();
+      connections.clear();
+    };
+  }, []);
+
+  // Background revalidation for cached-but-stale directories (no loading spinner).
+  // Unlike refetchChildSilent, the old cache is kept until fresh data arrives.
+  const revalidateChildSilent = useCallback(async (id: string) => {
+    try {
+      const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>(
+        `/directories/${id}/children`,
+      );
+      const data: ChildrenPayload = {
+        directories: res.directories || [],
+        materials: normalizeMaterials(res.materials || []),
+      };
+      childrenCache.set(id, data);
+      setChildrenMap((m) => {
+        const n = new Map(m);
+        n.set(id, data);
+        return n;
+      });
+    } catch { }
+  }, []);
+
   const handleToggle = useCallback(
     (node: DirNode) => {
       setExpanded((s) => {
@@ -549,12 +646,14 @@ export function DirectoryTreeSidebar() {
             (node.child_material_count ?? 0) > 0;
           if (!childrenCache.has(node.id) && hasKids) {
             void fetchChildren(node.id);
+          } else if (childrenCache.has(node.id) && hasKids) {
+            void revalidateChildSilent(node.id);
           }
         }
         return n;
       });
     },
-    [fetchChildren],
+    [fetchChildren, revalidateChildSilent],
   );
 
   const handleExpand = useCallback(
@@ -568,11 +667,13 @@ export function DirectoryTreeSidebar() {
           (node.child_material_count ?? 0) > 0;
         if (!childrenCache.has(node.id) && hasKids) {
           void fetchChildren(node.id);
+        } else if (childrenCache.has(node.id) && hasKids) {
+          void revalidateChildSilent(node.id);
         }
         return n;
       });
     },
-    [fetchChildren],
+    [fetchChildren, revalidateChildSilent],
   );
 
   // Invalidate caches whenever the browse data changes elsewhere (e.g. a PR

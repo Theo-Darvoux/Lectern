@@ -796,6 +796,10 @@ async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
 
     broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
     broadcasts.append((str(mat.id), {"type": "material_deleted"}))
+    parent_topic = str(mat.directory_id) if mat.directory_id else "root"
+    broadcasts.append(
+        (parent_topic, {"type": "child_removed", "kind": "material", "id": str(mat.id)})
+    )
 
     versions = await db.scalars(
         select(MaterialVersion)
@@ -963,9 +967,15 @@ async def _exec_delete_directory(
         raise NotFoundError("Directory not found")
 
     deleted_id = dir_obj.id
+    parent_id = dir_obj.parent_id
 
     await _enqueue_deindex_directory_recursive(db, deleted_id)
     await _soft_delete_directory_tree(db, deleted_id)
+
+    parent_topic = str(parent_id) if parent_id else "root"
+    db.info.setdefault("post_commit_sse_broadcasts", []).append(
+        (parent_topic, {"type": "child_removed", "kind": "directory", "id": str(deleted_id)})
+    )
 
     return deleted_id
 

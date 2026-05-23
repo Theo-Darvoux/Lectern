@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback } from "react";
-import { apiFetch, ApiError, lockedRefresh } from "@/lib/api-client";
-import { setAccessToken, getAccessToken, hasAuthHint } from "@/lib/auth-tokens";
+import { apiFetch, ApiError } from "@/lib/api-client";
+import { setAccessToken, getAccessToken } from "@/lib/auth-tokens";
 import { useAuthStore, UserBrief } from "@/lib/stores";
 import { broadcastTokenAcquired, performLogout, scheduleRefreshTimer } from "@/lib/auth-sync";
 
@@ -65,19 +65,6 @@ export function useAuth() {
     const fetchMe = useCallback(async () => {
         setLoading(true);
         try {
-            // Proactively refresh when we have an auth hint but no in-memory token
-            // (e.g. fresh tab, page reload). This avoids the extra round-trip of:
-            //   GET /users/me (no token) → 401 → POST /auth/refresh → GET /users/me
-            // and instead does: POST /auth/refresh → GET /users/me
-            if (!getAccessToken() && hasAuthHint()) {
-                const newToken = await lockedRefresh();
-                if (newToken) {
-                    setAccessToken(newToken);
-                    scheduleRefreshTimer(newToken);
-                }
-                // If refresh fails, the /users/me call below will 401 → performLogout()
-            }
-
             const me = await apiFetch<UserBrief>("/users/me");
             setUser(me);
             const token = getAccessToken();

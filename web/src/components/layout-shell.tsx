@@ -22,7 +22,6 @@ import { useAuth } from "@/hooks/use-auth";
 import { useOffline } from "@/hooks/use-offline";
 import { getAccessToken, hasAuthHint } from "@/lib/auth-tokens";
 import { initAuthSync } from "@/lib/auth-sync";
-import { useAuthStore } from "@/lib/stores";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -32,15 +31,13 @@ import { useTranslations } from "next-intl";
 export function LayoutShell({ children }: { children: ReactNode }) {
   const t = useTranslations("Layout");
   const { user, isAuthenticated, isLoading, fetchMe } = useAuth();
-  const { setLoading } = useAuthStore();
   const { hideFooter } = useUIStore();
   const pathname = usePathname();
   const router = useRouter();
 
-  const path = pathname.replace(/\/$/, "") || "/";
-  const isPublicPage = path === "/login" || path === "/login/verify" || path === "/privacy" || path === "/terms";
-  const isOnboardingPage = path === "/onboarding";
-  const isPendingPage = path === "/pending-approval";
+  const isPublicPage = pathname === "/login" || pathname === "/login/verify" || pathname === "/privacy" || pathname === "/terms";
+  const isOnboardingPage = pathname === "/onboarding";
+  const isPendingPage = pathname === "/pending-approval";
 
   useEffect(() => {
     const cleanup = initAuthSync();
@@ -53,18 +50,17 @@ export function LayoutShell({ children }: { children: ReactNode }) {
     if ((token || hint) && !isAuthenticated && isLoading) {
       fetchMe();
     } else if (!token && !hint && isLoading) {
-      // No token and no hint — user is definitely not logged in; skip the
-      // network round-trip and clear the loading state directly.
-      setLoading(false);
+      // No token and no hint — clear loading state so navbar renders correctly
+      fetchMe();
     }
   }, []);  
 
   useEffect(() => {
     if (isLoading) return;
 
-    const isPublic = path === "/login" || path === "/login/verify" || path === "/privacy" || path === "/terms";
-    const isOnboarding = path === "/onboarding";
-    const isPending = path === "/pending-approval";
+    const isPublic = pathname === "/login" || pathname === "/login/verify" || pathname === "/privacy" || pathname === "/terms";
+    const isOnboarding = pathname === "/onboarding";
+    const isPending = pathname === "/pending-approval";
 
     if (!isAuthenticated) {
       if (!isPublic) router.push("/login");

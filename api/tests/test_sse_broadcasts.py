@@ -149,7 +149,9 @@ class TestSoftDeleteMaterialBroadcasts:
 
         assert str(parent_mat.id) in topics
         assert str(att_mat.id) in topics
-        assert all(b[1]["type"] == "material_deleted" for b in broadcasts)
+
+        deleted_broadcasts = [b for b in broadcasts if b[1]["type"] == "material_deleted"]
+        assert len(deleted_broadcasts) == 2
 
     async def test_no_attachment_broadcasts_without_sys_dir(self, db_session: AsyncSession) -> None:
         user = await _make_user(db_session)
@@ -160,9 +162,13 @@ class TestSoftDeleteMaterialBroadcasts:
         await _soft_delete_material_tree(db_session, mat)
 
         broadcasts = _broadcasts(db_session)
-        # Only the material itself — no attachment
-        assert len(broadcasts) == 1
-        assert broadcasts[0] == (str(mat.id), {"type": "material_deleted"})
+        # The material itself is deleted, and its removal is broadcast to the parent directory
+        assert len(broadcasts) == 2
+        assert (str(mat.id), {"type": "material_deleted"}) in broadcasts
+        assert (
+            str(directory.id),
+            {"type": "child_removed", "kind": "material", "id": str(mat.id)},
+        ) in broadcasts
 
 
 # ---------------------------------------------------------------------------

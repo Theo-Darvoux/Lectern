@@ -89,21 +89,20 @@ export function useBrowseSSE(
                             ? `/browse/${parentSlugs.join("/")}`
                             : "/browse";
                     browseCacheRef.current.delete(pathRef.current);
+                    triggerRefreshRef.current();
                     routerRef.current.replace(parentPath);
                 };
             }
 
-            listeners["child_added"] = () => {
+            const refreshDir = () => {
                 browseCacheRef.current.delete(pathRef.current);
                 fetchDataRef.current(true);
                 triggerRefreshRef.current();
             };
 
-            listeners["pr_closed"] = () => {
-                browseCacheRef.current.delete(pathRef.current);
-                fetchDataRef.current(true);
-                triggerRefreshRef.current();
-            };
+            listeners["child_added"] = refreshDir;
+            listeners["child_removed"] = refreshDir;
+            listeners["pr_closed"] = refreshDir;
         } else {
             // mat: key — both material view and attachment listing
             listeners["material_deleted"] = () => {
@@ -113,6 +112,7 @@ export function useBrowseSSE(
                         ? `/browse/${slugs.join("/")}`
                         : "/browse";
                 browseCacheRef.current.delete(pathRef.current);
+                triggerRefreshRef.current();
                 routerRef.current.replace(parentPath);
             };
         }

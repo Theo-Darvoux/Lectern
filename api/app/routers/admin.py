@@ -21,7 +21,6 @@ from app.models.dead_letter import DeadLetterJob
 from app.models.user import User, UserRole
 from app.schemas.common import DetailedHealthResponse, ServiceStatus
 from app.services.auth import bust_auth_config_cache, get_full_auth_config
-from app.services.user import invalidate_user_cache
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -80,7 +79,6 @@ async def admin_update_role(
     user_id: uuid.UUID,
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
     role: str = Query(...),
 ) -> dict:  # type: ignore[type-arg]
     target = await db.scalar(select(User).where(User.id == user_id))
@@ -96,7 +94,6 @@ async def admin_update_role(
         )
     target.role = new_role
     await db.flush()
-    await invalidate_user_cache(redis, str(user_id))
     return {"status": "ok", "role": new_role.value}
 
 
@@ -121,7 +118,6 @@ async def admin_approve_user(
     user_id: uuid.UUID,
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
 ) -> dict:  # type: ignore[type-arg]
     """Approve a PENDING user — sets their role to STUDENT and notifies them."""
     from app.services.notification import notify_user
@@ -134,7 +130,6 @@ async def admin_approve_user(
 
     target.role = UserRole.STUDENT
     await db.flush()
-    await invalidate_user_cache(redis, str(user_id))
 
     await notify_user(
         db,
