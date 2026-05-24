@@ -23,6 +23,18 @@ export function sanitizeNameInput(v: string): string {
   return v.replace(/[^\x20-\x7e\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f]/g, "");
 }
 
+/**
+ * Validate a post-login `next` redirect target. Returns the path only if it is a
+ * safe root-relative path; rejects absolute/protocol-relative URLs (open-redirect)
+ * and auth pages (redirect loop). Returns null otherwise.
+ */
+export function sanitizeNext(next: string | null | undefined): string | null {
+  if (!next || !next.startsWith("/")) return null;
+  if (next.startsWith("//") || next.startsWith("/\\")) return null;
+  if (next === "/login" || next.startsWith("/login/") || next.startsWith("/login?")) return null;
+  return next;
+}
+
 export function formatBytes(bytes?: number, decimals: number = 2) {
   if (!bytes) return "0 B";
   const k = 1024;

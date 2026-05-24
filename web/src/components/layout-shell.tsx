@@ -23,7 +23,7 @@ import { useOffline } from "@/hooks/use-offline";
 import { getAccessToken, hasAuthHint } from "@/lib/auth-tokens";
 import { initAuthSync } from "@/lib/auth-sync";
 import { WifiOff } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeNext } from "@/lib/utils";
 
 import { useUIStore, isGuest, isGuestBlockedPath } from "@/lib/stores";
 import { useTranslations } from "next-intl";
@@ -69,7 +69,11 @@ export function LayoutShell({ children }: { children: ReactNode }) {
     const isPending = isPendingPage;
 
     if (!isAuthenticated) {
-      if (!isPublic) router.push("/login");
+      if (!isPublic) {
+        const search = typeof window !== "undefined" ? window.location.search : "";
+        const next = sanitizeNext(pathname + search);
+        router.push(next ? `/login?next=${encodeURIComponent(next)}` : "/login");
+      }
       return;
     }
 

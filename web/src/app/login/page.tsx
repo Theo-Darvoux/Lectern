@@ -10,10 +10,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { toast } from "sonner";
 import { GoogleOAuthProvider, GoogleLogin, CredentialResponse } from "@react-oauth/google";
 import { useConfigStore } from "@/lib/stores";
+import { sanitizeNext } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Eye, KeyRound, Mail } from "lucide-react";
 
 type Step = "email" | "code" | "password";
+
+/** Read and validate the post-login redirect target from the current URL. */
+function getNext(): string | null {
+    if (typeof window === "undefined") return null;
+    return sanitizeNext(new URLSearchParams(window.location.search).get("next"));
+}
 
 import { useTranslations } from "next-intl";
 
@@ -31,7 +38,7 @@ export default function LoginPage() {
 
     useEffect(() => {
         if (isAuthenticated && user?.onboarded) {
-            router.replace("/browse");
+            router.replace(getNext() ?? "/browse");
         } else if (isAuthenticated && !user?.onboarded) {
             router.replace("/onboarding");
         }
@@ -70,7 +77,7 @@ export default function LoginPage() {
             if (data.is_new_user || !data.user.onboarded) {
                 router.push("/onboarding");
             } else {
-                router.push("/");
+                router.push(getNext() ?? "/");
             }
         } catch (err) {
             toast.error(err instanceof Error ? err.message : t("invalidCode"));
@@ -87,7 +94,7 @@ export default function LoginPage() {
             if (data.is_new_user || !data.user.onboarded) {
                 router.push("/onboarding");
             } else {
-                router.push("/");
+                router.push(getNext() ?? "/");
             }
         } catch (err) {
             toast.error(err instanceof Error ? err.message : t("invalidCredentials"));
@@ -100,7 +107,7 @@ export default function LoginPage() {
         setLoading(true);
         try {
             await continueAsGuest();
-            router.push("/browse");
+            router.push(getNext() ?? "/browse");
         } catch (err) {
             toast.error(err instanceof Error ? err.message : t("guestFailed"));
         } finally {
@@ -116,7 +123,7 @@ export default function LoginPage() {
             if (data.is_new_user || !data.user.onboarded) {
                 router.push("/onboarding");
             } else {
-                router.push("/");
+                router.push(getNext() ?? "/");
             }
         } catch (err) {
             toast.error(err instanceof Error ? err.message : t("googleFailed"));
