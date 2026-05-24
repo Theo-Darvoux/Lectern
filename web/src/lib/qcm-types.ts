@@ -24,7 +24,7 @@ export interface QCMAnswer {
   correct: boolean;
 }
 
-export const MAX_ANSWERS_PER_QUESTION = 4;
+export const MAX_ANSWERS_PER_QUESTION = 10;
 export const MAX_QUESTIONS_PER_QCM = 100;
 export const MAX_CHAPTERS_PER_QCM = 20;
 

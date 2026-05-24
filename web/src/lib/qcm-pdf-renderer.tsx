@@ -164,17 +164,21 @@ function stripHeadings(raw: string): string {
 function parseSegments(raw: string): Segment[] {
   const text = stripHeadings(raw);
   // $$...$$  $...$  \[...\]  \(...\)  \begin{env}...\end{env} (same env via \5 backref)
+  // The $...$ pattern allows single newlines (e.g. inside \begin{cases}) but not paragraph breaks.
   const MATH =
-    /\$\$([\s\S]*?)\$\$|\$([^$\n]+?)\$|\\\[([\s\S]*?)\\\]|\\\(([^)]*?)\\\)|\\begin\{([^}]+)\}([\s\S]*?)\\end\{\5\}/g;
+    /\$\$([\s\S]*?)\$\$|\$((?:[^$\n]|\n(?!\n))+?)\$|\\\[([\s\S]*?)\\\]|\\\(([^)]*?)\\\)|\\begin\{([^}]+)\}([\s\S]*?)\\end\{\5\}/g;
   const out: Segment[] = [];
   let cursor = 0;
   let m: RegExpExecArray | null;
 
   while ((m = MATH.exec(text)) !== null) {
     if (m.index > cursor) out.push(...parseFormatting(text.slice(cursor, m.index)));
-    // Groups: 1=$$, 2=$, 3=\[, 4=\(, 6=\begin{env} content — all display except 2 and 4
+    // Groups: 1=$$, 2=$, 3=\[, 4=\(, 5=env name, 6=\begin{env} content — all display except 2 and 4
     const isDisplay = m[1] !== undefined || m[3] !== undefined || m[6] !== undefined;
-    const latex = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[6] ?? "").trim();
+    // For \begin{env} matches, reconstruct the full environment so KaTeX receives it intact.
+    const latex = m[5] !== undefined
+      ? `\\begin{${m[5]}}${m[6]}\\end{${m[5]}}`
+      : (m[1] ?? m[2] ?? m[3] ?? m[4] ?? "").trim();
     if (latex) out.push({ kind: "math", latex, display: isDisplay });
     cursor = MATH.lastIndex;
   }
@@ -217,18 +221,6 @@ function collectMathExpressions(qcm: QCMFile): Array<{ latex: string; display: b
     }
   }
   return result;
-}
-
-// Strip all math environments from explanation text (used in corrigé footnotes).
-function stripAllMath(text: string): string {
-  return text
-    .replace(/\\begin\{[^}]+\}[\s\S]*?\\end\{[^}]+\}/g, "[formule]")
-    .replace(/\$\$[\s\S]*?\$\$/g, "[formule]")
-    .replace(/\$[^$\n]+?\$/g, "[formule]")
-    .replace(/\\\[[\s\S]*?\\\]/g, "[formule]")
-    .replace(/\\\([^)]*?\\\)/g, "[formule]")
-    .replace(/^#{1,6}\s*/gm, "")
-    .trim();
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
@@ -296,6 +288,16 @@ const styles = StyleSheet.create({
     marginTop: 1.5,
     flexShrink: 0,
   },
+  answerCheckboxCorrect: {
+    width: 9,
+    height: 9,
+    backgroundColor: "#16a34a",
+    borderWidth: 0.75,
+    borderColor: "#15803d",
+    marginRight: 6,
+    marginTop: 1.5,
+    flexShrink: 0,
+  },
   answerLetter: {
     fontFamily: "Helvetica-Bold",
     fontSize: BODY_PT,
@@ -303,7 +305,22 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     color: "#374151",
   },
+  answerLetterCorrect: {
+    fontFamily: "Helvetica-Bold",
+    fontSize: BODY_PT,
+    width: 16,
+    flexShrink: 0,
+    color: "#15803d",
+  },
   answerContent: { flex: 1 },
+  // ── Explanation (inline, below answers)
+  explanationBlock: {
+    marginTop: 6,
+    marginLeft: 20,
+    paddingLeft: 8,
+    borderLeftWidth: 2,
+    borderLeftColor: "#93c5fd",
+  },
   // ── Corrigé
   answerKeySection: {
     marginTop: 32,
@@ -321,13 +338,6 @@ const styles = StyleSheet.create({
   answerKeyItem: { width: "25%", marginBottom: 10, paddingRight: 8 },
   answerKeyQ: { fontFamily: "Helvetica-Bold", fontSize: 9.5, color: ACCENT },
   answerKeyLetters: { fontSize: 9.5, marginTop: 1 },
-  explanationText: {
-    fontSize: 8,
-    color: "#6b7280",
-    marginTop: 3,
-    fontFamily: "Helvetica-Oblique",
-    lineHeight: 1.4,
-  },
   // ── Page number
   pageNumber: {
     position: "absolute",
@@ -440,7 +450,7 @@ const ANSWER_LETTERS = ["A", "B", "C", "D"] as const;
 
 function QCMDocument({ qcm, title, cache }: { qcm: QCMFile; title: string; cache: MathCache }) {
   let globalQ = 0;
-  const answerKey: Array<{ num: number; letters: string; explanation?: string }> = [];
+  const answerKey: Array<{ num: number; letters: string }> = [];
 
   for (const ch of qcm.chapters) {
     for (const q of ch.questions) {
@@ -449,7 +459,7 @@ function QCMDocument({ qcm, title, cache }: { qcm: QCMFile; title: string; cache
         .map((a, i) => (a.correct ? ANSWER_LETTERS[i] : null))
         .filter(Boolean)
         .join(", ");
-      answerKey.push({ num: globalQ, letters: letters || "—", explanation: q.explanation });
+      answerKey.push({ num: globalQ, letters: letters || "—" });
     }
   }
 
@@ -490,11 +500,18 @@ function QCMDocument({ qcm, title, cache }: { qcm: QCMFile; title: string; cache
                   </View>
                   {q.answers.map((a, ai) => (
                     <View key={a.id} style={styles.answerRow}>
-                      <View style={styles.answerCheckbox} />
-                      <Text style={styles.answerLetter}>{ANSWER_LETTERS[ai]})</Text>
+                      <View style={a.correct ? styles.answerCheckboxCorrect : styles.answerCheckbox} />
+                      <Text style={a.correct ? styles.answerLetterCorrect : styles.answerLetter}>
+                        {ANSWER_LETTERS[ai]})
+                      </Text>
                       <RichText text={a.text} cache={cache} outerStyle={styles.answerContent} />
                     </View>
                   ))}
+                  {q.explanation ? (
+                    <View style={styles.explanationBlock}>
+                      <RichText text={q.explanation} cache={cache} outerStyle={{ flex: 1 }} />
+                    </View>
+                  ) : null}
                 </View>
               );
             })}
@@ -509,11 +526,6 @@ function QCMDocument({ qcm, title, cache }: { qcm: QCMFile; title: string; cache
               <View key={entry.num} style={styles.answerKeyItem}>
                 <Text style={styles.answerKeyQ}>Q{entry.num}</Text>
                 <Text style={styles.answerKeyLetters}>{entry.letters}</Text>
-                {entry.explanation ? (
-                  <Text style={styles.explanationText}>
-                    {stripAllMath(entry.explanation)}
-                  </Text>
-                ) : null}
               </View>
             ))}
           </View>
