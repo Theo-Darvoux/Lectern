@@ -26,7 +26,7 @@ import {
   getFileBadgeLabel,
   getViewerType,
 } from "@/lib/file-utils";
-import { useUIStore } from "@/lib/stores";
+import { useUIStore, useAuthStore, isGuest } from "@/lib/stores";
 // useUIStore provides: sidebarOpen, openSidebar, closeSidebar
 import { apiFetch } from "@/lib/api-client";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
@@ -178,6 +178,7 @@ export function MaterialViewer({
   const pathname = usePathname();
 
   const isRestricted = (material.id as string)?.startsWith("$") || !!searchParams.get("preview_pr");
+  const guest = isGuest(useAuthStore((s) => s.user));
 
   // Derive the parent folder URL by dropping the last path segment
   const parentFolderHref = (() => {
@@ -545,7 +546,7 @@ export function MaterialViewer({
             <AnnotationSelectionTooltip
               containerRef={viewerContainerRef}
               onSubmit={handleAnnotationSubmit}
-              disabled={isRestricted}
+              disabled={isRestricted || guest}
             />
           </div>
         </div>

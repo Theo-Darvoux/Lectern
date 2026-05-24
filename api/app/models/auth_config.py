@@ -22,6 +22,9 @@ class AuthConfig(UUIDMixin, Base):
         Boolean, default=False, server_default="false"
     )
     allow_all_domains: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    guest_access_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     auto_approve_all_domains: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )

@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { GoogleOAuthProvider, GoogleLogin, CredentialResponse } from "@react-oauth/google";
 import { useConfigStore } from "@/lib/stores";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { KeyRound, Mail } from "lucide-react";
+import { Eye, KeyRound, Mail } from "lucide-react";
 
 type Step = "email" | "code" | "password";
 
@@ -24,7 +24,7 @@ export default function LoginPage() {
     const [password, setPassword] = useState("");
     const [code, setCode] = useState("");
     const [loading, setLoading] = useState(false);
-    const { requestCode, verifyCode, verifyGoogleOAuth, loginWithPassword, isAuthenticated, user } = useAuth();
+    const { requestCode, verifyCode, verifyGoogleOAuth, loginWithPassword, continueAsGuest, isAuthenticated, user } = useAuth();
     const { config } = useConfigStore();
     const router = useRouter();
     const inputRef = useRef<HTMLInputElement>(null);
@@ -91,6 +91,18 @@ export default function LoginPage() {
             }
         } catch (err) {
             toast.error(err instanceof Error ? err.message : t("invalidCredentials"));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleGuest = async () => {
+        setLoading(true);
+        try {
+            await continueAsGuest();
+            router.push("/browse");
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : t("guestFailed"));
         } finally {
             setLoading(false);
         }
@@ -198,10 +210,35 @@ export default function LoginPage() {
                                 </div>
                             )}
 
-                            {!authMethods.totp_enabled && !authMethods.google_enabled && !authMethods.classic_enabled && (
+                            {!authMethods.totp_enabled && !authMethods.google_enabled && !authMethods.classic_enabled && !config?.guest_access_enabled && (
                                 <p className="text-sm text-center text-muted-foreground py-4">
                                     {t("noMethods")}
                                 </p>
+                            )}
+
+                            {config?.guest_access_enabled && (
+                                <div className="space-y-4">
+                                    {(authMethods.totp_enabled || authMethods.google_enabled || authMethods.classic_enabled) && (
+                                        <div className="relative w-full">
+                                            <div className="absolute inset-0 flex items-center">
+                                                <span className="w-full border-t" />
+                                            </div>
+                                            <div className="relative flex justify-center text-xs uppercase">
+                                                <span className="bg-card px-2 text-muted-foreground">{t("orContinue")}</span>
+                                            </div>
+                                        </div>
+                                    )}
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        className="w-full"
+                                        onClick={handleGuest}
+                                        disabled={loading}
+                                    >
+                                        <Eye className="mr-2 h-4 w-4" />
+                                        {t("continueAsGuest")}
+                                    </Button>
+                                </div>
                             )}
                         </div>
                     ) : step === "password" ? (

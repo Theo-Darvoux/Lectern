@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useAuth } from "@/hooks/use-auth";
-import { useNotificationStore, useUIStore } from "@/lib/stores";
+import { useNotificationStore, useUIStore, isGuest } from "@/lib/stores";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
 
@@ -64,7 +64,7 @@ const NAV_ITEMS: NavItem[] = [
 export function MobileBottomBar() {
   const t = useTranslations("Navigation");
   const isMobile = useIsMobile();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { unreadCount } = useNotificationStore();
   const { hideFooter, setMaterialActionsOpen } = useUIStore();
   const pathname = usePathname();
@@ -90,6 +90,11 @@ export function MobileBottomBar() {
 
   if (!mounted || !isMobile || !isAuthenticated) return null;
 
+  // Guests have no PRs, notifications, or profile — only browsing tabs.
+  const navItems = isGuest(user)
+    ? NAV_ITEMS.filter((i) => i.labelKey === "home" || i.labelKey === "browse")
+    : NAV_ITEMS;
+
   return (
     <div
       className="fixed bottom-0 left-0 right-0 z-[60] flex justify-center px-4"
@@ -114,7 +119,7 @@ export function MobileBottomBar() {
           "ring-1 ring-inset ring-white/20 dark:ring-white/4",
         )}
       >
-        {NAV_ITEMS.map(({ href, labelKey, Icon, match, hasBadge }) => {
+        {navItems.map(({ href, labelKey, Icon, match, hasBadge }) => {
           const isActive = match(pathname);
           const showBadge = !!hasBadge && unreadCount > 0;
           const label = t(labelKey);

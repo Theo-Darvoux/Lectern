@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Shield, Mail, Globe, Lock, Globe2, Trash2, Plus, Loader2, Save, Clock } from "lucide-react";
+import { Shield, Mail, Globe, Lock, Globe2, Trash2, Plus, Loader2, Save, Clock, Eye } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ interface AuthConfig {
     classic_auth_enabled: boolean;
     allow_all_domains: boolean;
     auto_approve_all_domains: boolean;
+    guest_access_enabled: boolean;
     jwt_access_expire_days: number;
     jwt_refresh_expire_days: number;
     domains: Domain[];
@@ -90,6 +91,7 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
             classic_auth_enabled: config.classic_auth_enabled,
             allow_all_domains: config.allow_all_domains,
             auto_approve_all_domains: config.auto_approve_all_domains,
+            guest_access_enabled: config.guest_access_enabled,
             jwt_access_expire_days: config.jwt_access_expire_days,
             jwt_refresh_expire_days: config.jwt_refresh_expire_days,
         });
@@ -162,6 +164,7 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
             classic_auth_enabled: config.classic_auth_enabled,
             allow_all_domains: config.allow_all_domains,
             auto_approve_all_domains: config.auto_approve_all_domains,
+            guest_access_enabled: config.guest_access_enabled,
             jwt_access_expire_days: config.jwt_access_expire_days,
             jwt_refresh_expire_days: config.jwt_refresh_expire_days,
         });
@@ -241,6 +244,17 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
                             }}
                         />
                     </div>
+                    <ToggleRow
+                        icon={Eye}
+                        label={t("methods.guest.label")}
+                        description={t("methods.guest.description")}
+                        checked={authForm.guest_access_enabled ?? config.guest_access_enabled}
+                        disabled={saving}
+                        onToggle={() => {
+                            setAuthForm(prev => ({ ...prev, guest_access_enabled: !(prev.guest_access_enabled ?? config.guest_access_enabled) }));
+                            setIsAuthModified(true);
+                        }}
+                    />
                 </CardContent>
             </Card>
 

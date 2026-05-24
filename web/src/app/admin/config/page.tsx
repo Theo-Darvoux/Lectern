@@ -29,6 +29,7 @@ interface AuthConfig {
     classic_auth_enabled: boolean;
     allow_all_domains: boolean;
     auto_approve_all_domains: boolean;
+    guest_access_enabled: boolean;
     jwt_access_expire_days: number;
     jwt_refresh_expire_days: number;
     domains: any[];

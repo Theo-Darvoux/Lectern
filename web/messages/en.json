@@ -13,6 +13,8 @@
     "sending": "Sending...",
     "sendVerificationCode": "Send verification code",
     "continueWithPassword": "Continue with password",
+    "continueAsGuest": "Continue as guest",
+    "guestFailed": "Could not start guest session",
     "noMethods": "No authentication methods are currently enabled.",
     "passwordLabel": "Password",
     "passwordPlaceholder": "••••••••",
@@ -184,7 +186,9 @@
     "login": "Login",
     "home": "Home",
     "prs": "PRs",
-    "inbox": "Inbox"
+    "inbox": "Inbox",
+    "guest": "Guest",
+    "exitGuest": "Log in"
   },
   "Home": {
     "seeAll": "See all",
@@ -440,6 +444,7 @@
     "saveChanges": "Save Changes",
     "cancel": "Cancel",
     "writeAComment": "Write a comment...",
+    "guestReadOnly": "Log in to join the discussion.",
     "chattingDisabled": "Chatting disabled",
     "chattingDisabledForPreview": "Chatting is disabled for draft or preview items.",
     "commentExceedsLimit": "Comment exceeds {max} character limit",
@@ -1232,6 +1237,10 @@
           "classic": {
             "label": "Email + password (classic)",
             "description": "Traditional login using email and a password."
+          },
+          "guest": {
+            "label": "Guest browsing",
+            "description": "Let visitors browse the platform read-only without an account. Guests cannot upload, comment, like, favourite, annotate, or contribute."
           }
         },
         "session": {

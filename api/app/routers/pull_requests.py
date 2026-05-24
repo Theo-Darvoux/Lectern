@@ -14,7 +14,13 @@ from app.core.exceptions import NotFoundError
 from app.core.limiter import limiter
 from app.core.redis import get_redis
 from app.core.sse import register_topic_queue, sse_event_stream, unregister_topic_queue
-from app.dependencies.auth import SSEUser, get_current_user, require_moderator, require_role
+from app.dependencies.auth import (
+    SSEUser,
+    get_current_user,
+    require_moderator,
+    require_not_guest,
+    require_role,
+)
 from app.dependencies.pagination import set_pagination_headers
 from app.models.pull_request import PRComment, PullRequest
 from app.models.user import User, UserRole
@@ -69,7 +75,7 @@ async def create_pull_request(
 async def list_pull_requests(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_not_guest())],
     status: str | None = None,
     type: str | None = None,
     author_id: uuid.UUID | None = None,
@@ -85,7 +91,7 @@ async def list_pull_requests(
 async def list_pull_requests_for_item(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_not_guest())],
     target_type: str = Query(alias="targetType"),
     target_id: str = Query(alias="targetId"),
     page: int = Query(1, ge=1),
@@ -105,7 +111,7 @@ async def list_pull_requests_for_item(
 async def get_pull_request(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_not_guest())],
 ) -> PullRequestOut:
     pr = await db.scalar(
         select(PullRequest).options(joinedload(PullRequest.author)).where(PullRequest.id == id)
@@ -174,7 +180,7 @@ async def cancel_pull_request(
 async def get_pull_request_diff(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_not_guest())],
 ) -> dict[str, Any]:
     diff = await get_pr_diff_service(db, id)
     return diff
@@ -184,7 +190,7 @@ async def get_pull_request_diff(
 async def get_pull_request_preview(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_not_guest())],
     op_index: int = Query(0, ge=0, alias="opIndex"),
 ) -> dict[str, Any]:
     preview = await get_pr_preview_service(db, id, op_index, current_user)
@@ -195,7 +201,7 @@ async def get_pull_request_preview(
 async def list_pull_request_comments(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_not_guest())],
 ) -> list[PRCommentOut]:
     stmt = (
         select(PRComment)

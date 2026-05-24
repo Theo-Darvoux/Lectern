@@ -25,15 +25,21 @@ import { initAuthSync } from "@/lib/auth-sync";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-import { useUIStore } from "@/lib/stores";
+import { useUIStore, isGuest, isGuestBlockedPath } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 
 export function LayoutShell({ children }: { children: ReactNode }) {
   const t = useTranslations("Layout");
   const { user, isAuthenticated, isLoading, fetchMe } = useAuth();
+  const guest = isGuest(user);
   const { hideFooter } = useUIStore();
-  const pathname = usePathname();
+  const rawPathname = usePathname();
   const router = useRouter();
+
+  // `trailingSlash: true` makes client-side navigations (e.g. router.push after
+  // logout) report paths like "/login/". Strip the trailing slash so the route
+  // checks below match regardless of how the page was reached.
+  const pathname = rawPathname.length > 1 ? rawPathname.replace(/\/$/, "") : rawPathname;
 
   const isPublicPage = pathname === "/login" || pathname === "/login/verify" || pathname === "/privacy" || pathname === "/terms";
   const isOnboardingPage = pathname === "/onboarding";
@@ -58,9 +64,9 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isLoading) return;
 
-    const isPublic = pathname === "/login" || pathname === "/login/verify" || pathname === "/privacy" || pathname === "/terms";
-    const isOnboarding = pathname === "/onboarding";
-    const isPending = pathname === "/pending-approval";
+    const isPublic = isPublicPage;
+    const isOnboarding = isOnboardingPage;
+    const isPending = isPendingPage;
 
     if (!isAuthenticated) {
       if (!isPublic) router.push("/login");
@@ -69,6 +75,14 @@ export function LayoutShell({ children }: { children: ReactNode }) {
 
     // Authenticated user checks
     if (!user) return; // Wait for user data
+
+    // Read-only guests have no profile, settings, PRs, notifications, or
+    // onboarding — send them back to browsing if they land on those routes.
+    // Other users' profiles (/profile/<id>) remain viewable.
+    if (user.role === "guest" && isGuestBlockedPath(pathname)) {
+      router.push("/browse");
+      return;
+    }
 
     if (user.role === "pending" && !isPending) {
       router.push("/pending-approval");
@@ -129,9 +143,14 @@ export function LayoutShell({ children }: { children: ReactNode }) {
       {!shouldHideContent && <MobileBottomBar />}
       <ConfirmDialog />
 
-      <StagingFab />
-      <ReviewDrawer />
-      <GlobalDropZone />
+      {/* Upload / contribution surfaces are unavailable to read-only guests. */}
+      {!guest && (
+        <>
+          <StagingFab />
+          <ReviewDrawer />
+          <GlobalDropZone />
+        </>
+      )}
       <CookieBanner />
     </div>
   );

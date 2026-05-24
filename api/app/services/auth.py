@@ -86,6 +86,7 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "google_client_id": None,
             "allow_all_domains": False,
             "auto_approve_all_domains": False,
+            "guest_access_enabled": False,
             "classic_auth_enabled": True,
             "jwt_access_expire_days": settings.jwt_access_token_expire_days,
             "jwt_refresh_expire_days": settings.jwt_refresh_token_expire_days,
@@ -149,6 +150,7 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "classic_auth_enabled": config_row.classic_auth_enabled,
             "allow_all_domains": config_row.allow_all_domains,
             "auto_approve_all_domains": config_row.auto_approve_all_domains,
+            "guest_access_enabled": config_row.guest_access_enabled,
             "jwt_access_expire_days": config_row.jwt_access_expire_days
             if config_row.jwt_access_expire_days is not None  # type: ignore[redundant-expr]
             else settings.jwt_access_token_expire_days,
@@ -439,6 +441,11 @@ async def get_or_create_user(
     db.add(user)
     await db.flush()
     return user, True
+
+
+async def get_guest_user(db: AsyncSession) -> User | None:
+    """Return the single shared guest identity seeded by migration 012."""
+    return await db.scalar(select(User).where(User.role == UserRole.GUEST))
 
 
 def issue_tokens(

@@ -22,6 +22,7 @@ class UserRole(enum.StrEnum):
     MODERATOR = "moderator"
     BUREAU = "bureau"
     VIEUX = "vieux"
+    GUEST = "guest"
 
 
 class User(UUIDMixin, Base):
@@ -46,6 +47,10 @@ class User(UUIDMixin, Base):
     password_hash: Mapped[str | None] = mapped_column(String(255))
     auto_approve: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def is_guest(self) -> bool:
+        return self.role == UserRole.GUEST
 
     @property
     def is_moderator(self) -> bool:

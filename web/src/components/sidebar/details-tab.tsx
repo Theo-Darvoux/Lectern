@@ -28,7 +28,8 @@ import {
 } from "@/lib/file-utils";
 import { apiFetch } from "@/lib/api-client";
 import { ExpandableText } from "@/components/ui/expandable-text";
-import { useUIStore, useBrowseRefreshStore } from "@/lib/stores";
+import { useUIStore, useBrowseRefreshStore, isGuest } from "@/lib/stores";
+import { useAuth } from "@/hooks/use-auth";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { isRestrictedTarget } from "@/lib/utils";
@@ -144,6 +145,7 @@ function InteractionBar({
   const [isLiking, setIsLiking] = useState(false);
   const [isFavouriting, setIsFavouriting] = useState(false);
   const { updateSidebarData } = useUIStore();
+  const { user } = useAuth();
   const t = useTranslations("Sidebar");
   const triggerBrowseRefresh = useBrowseRefreshStore(
     (s) => s.triggerBrowseRefresh,
@@ -154,6 +156,9 @@ function InteractionBar({
     setIsFavourited(initialIsFavourited);
     setLikeCount(initialLikeCount);
   }, [targetId, initialIsLiked, initialIsFavourited, initialLikeCount]);
+
+  // Guests are read-only: liking and favouriting are unavailable.
+  if (isGuest(user)) return null;
 
   const handleLike = async () => {
     if (isLiking || disabled) return;

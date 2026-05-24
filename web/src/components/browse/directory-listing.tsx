@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore, useUIStore } from "@/lib/stores";
+import { useBrowseRefreshStore, useUIStore, useAuthStore, isGuest } from "@/lib/stores";
 import {
   Plus,
   Upload,
@@ -92,6 +92,7 @@ export function DirectoryListing({
     (s) => s.triggerBrowseRefresh,
   );
   const openSidebar = useUIStore((s) => s.openSidebar);
+  const guest = isGuest(useAuthStore((s) => s.user));
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadParentMat, setUploadParentMat] = useState<{ id: string; name: string } | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
@@ -576,6 +577,7 @@ export function DirectoryListing({
                   </div>
                 )}
 
+                {!guest && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -610,6 +612,7 @@ export function DirectoryListing({
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+                )}
             </div>
           </div>
         ) : (

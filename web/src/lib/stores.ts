@@ -31,6 +31,31 @@ export interface UserBrief {
     auto_approve: boolean;
 }
 
+export const GUEST_ROLE = "guest";
+
+/** A guest is a read-only visitor with no real profile. */
+export function isGuest(user: UserBrief | null | undefined): boolean {
+    return user?.role === GUEST_ROLE;
+}
+
+/**
+ * Routes a read-only guest may not visit: their own profile, settings,
+ * notifications, pull requests, onboarding, and QCM authoring. Other users'
+ * profiles (`/profile/<id>`) and QCM viewing (under `/browse`) remain allowed.
+ */
+export function isGuestBlockedPath(pathname: string): boolean {
+    return (
+        pathname === "/profile" ||
+        pathname === "/onboarding" ||
+        pathname.startsWith("/settings") ||
+        pathname.startsWith("/pull-requests") ||
+        pathname.startsWith("/notifications") ||
+        pathname === "/qcm/new" ||
+        pathname === "/qcm/preview" ||
+        (pathname.startsWith("/qcm/") && pathname.endsWith("/edit"))
+    );
+}
+
 interface AuthState {
     user: UserBrief | null;
     isAuthenticated: boolean;
@@ -180,6 +205,7 @@ export interface PublicConfig {
     google_client_id: string | null;
     classic_enabled: boolean;
     allow_all_domains: boolean;
+    guest_access_enabled: boolean;
 }
 
 interface ConfigState {

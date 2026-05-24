@@ -9,7 +9,7 @@ import {
   AnnotationForm,
 } from "@/components/annotations/annotation-thread";
 import { useAnnotationsContext } from "@/hooks/use-annotations";
-import { useAuthStore } from "@/lib/stores";
+import { useAuthStore, isGuest } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 
 interface SidebarTarget {
@@ -28,6 +28,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps) {
   const t = useTranslations("Sidebar");
   const { user } = useAuthStore();
+  // Guests are read-only: treat them as anonymous so reply/edit/delete
+  // affordances (which require a current user id) never render.
+  const guest = isGuest(user);
   const ctx = useAnnotationsContext();
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -143,8 +146,8 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
             <div key={thread.root.id} className="py-3">
               <AnnotationThread
                 thread={thread}
-                currentUserId={user?.id ?? null}
-                currentUserRole={user?.role ?? null}
+                currentUserId={guest ? null : (user?.id ?? null)}
+                currentUserRole={guest ? null : (user?.role ?? null)}
                 onReply={handleReply}
                 onEdit={handleStartEdit}
                 onDelete={handleDelete}

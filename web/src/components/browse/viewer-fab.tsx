@@ -29,7 +29,7 @@ import { FlagButton } from "@/components/flags/flag-button";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
-import { useUIStore } from "@/lib/stores";
+import { useUIStore, useAuthStore, isGuest } from "@/lib/stores";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import { useStagingStore } from "@/lib/staging-store";
 import { apiFetch } from "@/lib/api-client";
@@ -153,6 +153,7 @@ export function ViewerFab({
   const isRestricted = isPreview || isDraft;
 
   const { openSidebar, updateSidebarData, sidebarTarget } = useUIStore();
+  const guest = isGuest(useAuthStore((s) => s.user));
   const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
@@ -364,53 +365,58 @@ export function ViewerFab({
             }}
           />
 
-          {/* ── Edits ── */}
-          <ActionCell
-            icon={<Inbox className="h-5 w-5" />}
-            label={t("edits")}
-            disabled={isRestricted}
-            onClick={() => {
-              close();
-              openSidebar("edits", {
-                type: "material",
-                id: materialId,
-                data: material,
-              });
-            }}
-          />
-
-          {/* ── Edit (Metadata & Content) ── */}
-          {viewerType === "qcm" ? (
+          {/* ── Edits (pull requests) — hidden from read-only guests ── */}
+          {!guest && (
             <ActionCell
-              icon={<Edit className="h-5 w-5" />}
-              label={t("edit")}
-              href={`/qcm/${materialId}/edit`}
-            />
-          ) : (
-            <ActionCell
-              icon={<Edit className="h-5 w-5" />}
-              label={t("edit")}
+              icon={<Inbox className="h-5 w-5" />}
+              label={t("edits")}
+              disabled={isRestricted}
               onClick={() => {
                 close();
-                setEditDialogOpen(true);
+                openSidebar("edits", {
+                  type: "material",
+                  id: materialId,
+                  data: material,
+                });
               }}
             />
           )}
 
-          {/* ── Like ── */}
-          <ActionCell
-            icon={
-              isLiking ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <ThumbsUp className={cn("h-5 w-5", isLiked && "fill-blue-500")} />
-              )
-            }
-            label={isLiked ? t("liked") : t("like")}
-            tint={isLiked ? "primary" : "default"}
-            disabled={isRestricted}
-            onClick={handleLike}
-          />
+          {/* ── Edit (Metadata & Content) — hidden from read-only guests ── */}
+          {!guest &&
+            (viewerType === "qcm" ? (
+              <ActionCell
+                icon={<Edit className="h-5 w-5" />}
+                label={t("edit")}
+                href={`/qcm/${materialId}/edit`}
+              />
+            ) : (
+              <ActionCell
+                icon={<Edit className="h-5 w-5" />}
+                label={t("edit")}
+                onClick={() => {
+                  close();
+                  setEditDialogOpen(true);
+                }}
+              />
+            ))}
+
+          {/* ── Like — hidden from read-only guests ── */}
+          {!guest && (
+            <ActionCell
+              icon={
+                isLiking ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <ThumbsUp className={cn("h-5 w-5", isLiked && "fill-blue-500")} />
+                )
+              }
+              label={isLiked ? t("liked") : t("like")}
+              tint={isLiked ? "primary" : "default"}
+              disabled={isRestricted}
+              onClick={handleLike}
+            />
+          )}
 
           {/* ── View attachments ── */}
           {!isAttachment && (
@@ -423,39 +429,43 @@ export function ViewerFab({
             />
           )}
 
-          {/* ── Report ── */}
-          <div className="flex flex-col items-center gap-2">
-            <FlagButton
-              targetType="material"
-              targetId={materialId}
-              variant="ghost"
-              size="icon"
-              disabled={isRestricted}
-              className={cn(
-                "h-16 w-16 rounded-2xl bg-destructive/10 text-destructive hover:bg-destructive/20 active:scale-90 transition-transform",
-                isRestricted && "opacity-50 pointer-events-none"
-              )}
-              iconClassName="h-5 w-5"
-              hideText
-            />
-            <span className="text-[11.5px] font-medium text-muted-foreground text-center truncate w-full px-1">
-              {t("report")}
-            </span>
-          </div>
+          {/* ── Report — hidden from read-only guests ── */}
+          {!guest && (
+            <div className="flex flex-col items-center gap-2">
+              <FlagButton
+                targetType="material"
+                targetId={materialId}
+                variant="ghost"
+                size="icon"
+                disabled={isRestricted}
+                className={cn(
+                  "h-16 w-16 rounded-2xl bg-destructive/10 text-destructive hover:bg-destructive/20 active:scale-90 transition-transform",
+                  isRestricted && "opacity-50 pointer-events-none"
+                )}
+                iconClassName="h-5 w-5"
+                hideText
+              />
+              <span className="text-[11.5px] font-medium text-muted-foreground text-center truncate w-full px-1">
+                {t("report")}
+              </span>
+            </div>
+          )}
 
-          {/* ── Delete ── */}
-          <ConfirmDeleteDialog
-            onConfirm={handleDelete}
-            title={t("deleteDocument")}
-            description={t("deleteDocumentConfirm", { title: materialTitle || t("thisDocument") })}
-            trigger={
-                <ActionCell
-                    icon={<Trash2 className="h-5 w-5" />}
-                    label={t("delete")}
-                    tint="destructive"
-                />
-            }
-          />
+          {/* ── Delete — hidden from read-only guests ── */}
+          {!guest && (
+            <ConfirmDeleteDialog
+              onConfirm={handleDelete}
+              title={t("deleteDocument")}
+              description={t("deleteDocumentConfirm", { title: materialTitle || t("thisDocument") })}
+              trigger={
+                  <ActionCell
+                      icon={<Trash2 className="h-5 w-5" />}
+                      label={t("delete")}
+                      tint="destructive"
+                  />
+              }
+            />
+          )}
         </div>
       </DrawerContent>
     </Drawer>

@@ -447,9 +447,14 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
   >({});
   const [page, setPage] = useState(0);
   const [finished, setFinished] = useState(false);
+  const questionsScrollRef = useRef<HTMLDivElement>(null);
 
   // Prevent external initialData changes from wiping in-progress user state.
   const hasStartedRef = useRef(false);
+
+  useEffect(() => {
+    questionsScrollRef.current?.scrollTo({ top: 0 });
+  }, [page]);
 
   useEffect(() => {
     if (initialData) {
@@ -625,7 +630,7 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
       </div>
 
       {/* Questions */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div ref={questionsScrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
         {currentChapter.questions.map((q, i) => {
           const qThreads = annotationsApi?.threads.filter(
             (t) => t.root.position_data?.question_id === q.id,

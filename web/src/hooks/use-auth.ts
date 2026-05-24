@@ -53,6 +53,23 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
+    const continueAsGuest = useCallback(async () => {
+        const data = await apiFetch<{
+            access_token: string;
+            user: UserBrief;
+            is_new_user: boolean;
+        }>("/auth/guest", {
+            method: "POST",
+            skipAuth: true,
+        });
+
+        setAccessToken(data.access_token);
+        setUser(data.user);
+        scheduleRefreshTimer(data.access_token);
+        broadcastTokenAcquired(data.access_token);
+        return data;
+    }, [setUser]);
+
     const logout = useCallback(async () => {
         try {
             await apiFetch("/auth/logout", { method: "POST" });
@@ -121,5 +138,5 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
-    return { user, isAuthenticated, isLoading, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, logout, fetchMe };
+    return { user, isAuthenticated, isLoading, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, continueAsGuest, logout, fetchMe };
 }

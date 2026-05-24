@@ -17,7 +17,7 @@ import {
 import { useState, useEffect, useCallback } from "react";
 import { SearchModal } from "@/components/search/search-modal";
 import { SearchInline } from "@/components/search/search-inline";
-import { useNotificationStore, useConfigStore } from "@/lib/stores";
+import { useNotificationStore, useConfigStore, isGuest } from "@/lib/stores";
 import { useSSE } from "@/hooks/use-sse";
 import { usePathname } from "next/navigation";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -54,6 +54,7 @@ export function Navbar() {
   const t = useTranslations("Navigation");
   const tCommon = useTranslations("Common");
   const { user, isAuthenticated, logout } = useAuth();
+  const guest = isGuest(user);
   const [searchOpen, setSearchOpen] = useState(false);
   const { unreadCount, setUnreadCount } = useNotificationStore();
   const { config } = useConfigStore();
@@ -176,7 +177,23 @@ export function Navbar() {
               <Search className="h-4 w-4" />
             </Button>
           )}
-          {isAuthenticated && user ? (
+          {guest ? (
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-3 py-1 text-xs font-medium text-muted-foreground">
+                <User className="h-3.5 w-3.5" />
+                {t("guest")}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-full"
+                onClick={logout}
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                {t("exitGuest")}
+              </Button>
+            </div>
+          ) : isAuthenticated && user ? (
             <>
               {/* Contributions — desktop only (bottom bar handles mobile nav) */}
               <Link href="/pull-requests" className="hidden md:block">

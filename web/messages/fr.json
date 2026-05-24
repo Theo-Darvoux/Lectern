@@ -13,6 +13,8 @@
     "sending": "Envoi en cours...",
     "sendVerificationCode": "Envoyer le code de vérification",
     "continueWithPassword": "Continuer avec le mot de passe",
+    "continueAsGuest": "Continuer en tant qu'invité",
+    "guestFailed": "Impossible de démarrer la session invité",
     "noMethods": "Aucune méthode d'authentification n'est actuellement activée.",
     "passwordLabel": "Mot de passe",
     "passwordPlaceholder": "••••••••",
@@ -184,7 +186,9 @@
     "login": "Se connecter",
     "home": "Accueil",
     "prs": "PRs",
-    "inbox": "Boîte de réception"
+    "inbox": "Boîte de réception",
+    "guest": "Invité",
+    "exitGuest": "Se connecter"
   },
   "Home": {
     "seeAll": "Tout voir",
@@ -440,6 +444,7 @@
     "saveChanges": "Enregistrer les modifications",
     "cancel": "Annuler",
     "writeAComment": "Écrire un commentaire...",
+    "guestReadOnly": "Connectez-vous pour participer à la discussion.",
     "chattingDisabled": "Chat désactivé",
     "chattingDisabledForPreview": "Le chat est désactivé pour les brouillons et aperçus.",
     "commentExceedsLimit": "Le commentaire dépasse la limite de {max} caractères",
@@ -1232,6 +1237,10 @@
           "classic": {
             "label": "Email + mot de passe (classique)",
             "description": "Connexion traditionnelle via email et mot de passe."
+          },
+          "guest": {
+            "label": "Navigation invité",
+            "description": "Permet aux visiteurs de consulter la plateforme en lecture seule sans compte. Les invités ne peuvent ni téléverser, ni commenter, ni aimer, ni mettre en favori, ni annoter, ni contribuer."
           }
         },
         "session": {

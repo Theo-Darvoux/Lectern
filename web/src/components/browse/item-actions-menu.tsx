@@ -47,7 +47,7 @@ import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore } from "@/lib/stores";
+import { useBrowseRefreshStore, useAuthStore, isGuest } from "@/lib/stores";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import {
   Dialog,
@@ -232,6 +232,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
 function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
   const router = useRouter();
   const context = useContext(ActionsContext);
+  const guest = isGuest(useAuthStore((s) => s.user));
   if (!context) return null;
   const { item, actions } = context;
   const { t } = actions;
@@ -310,7 +311,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
               <span>{t("print")}</span>
             </Item>
           )}
-          {context.onAddAttachment && (
+          {context.onAddAttachment && !guest && (
             <Item onClick={context.onAddAttachment} className="cursor-pointer">
               <Paperclip className="mr-2 h-4 w-4" />
               <span>{t("addAttachment")}</span>
@@ -322,17 +323,18 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
       {!actions.isRestricted && (
         <>
-          {actions.viewerType === "qcm" ? (
-            <Item onClick={() => router.push(`/qcm/${item.id}/edit`)} className="cursor-pointer">
-              <PencilLine className="mr-2 h-4 w-4" />
-              <span>{t("edit")}</span>
-            </Item>
-          ) : (
-            <Item onClick={() => actions.setEditDialogOpen(true)} className="cursor-pointer">
-              <Edit2 className="mr-2 h-4 w-4" />
-              <span>{t("edit")}</span>
-            </Item>
-          )}
+          {!guest &&
+            (actions.viewerType === "qcm" ? (
+              <Item onClick={() => router.push(`/qcm/${item.id}/edit`)} className="cursor-pointer">
+                <PencilLine className="mr-2 h-4 w-4" />
+                <span>{t("edit")}</span>
+              </Item>
+            ) : (
+              <Item onClick={() => actions.setEditDialogOpen(true)} className="cursor-pointer">
+                <Edit2 className="mr-2 h-4 w-4" />
+                <span>{t("edit")}</span>
+              </Item>
+            ))}
           <Item onClick={actions.handleShare} className="cursor-pointer">
             <LinkIcon className="mr-2 h-4 w-4" />
             <span>{t("copyLink")}</span>
@@ -340,7 +342,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
         </>
       )}
 
-      {actions.isMaterial && !actions.isRestricted && (
+      {actions.isMaterial && !actions.isRestricted && !guest && (
         <div onClick={(e) => e.stopPropagation()}>
           <FlagButton
             targetType="material"
@@ -352,16 +354,19 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
         </div>
       )}
 
-      <Separator />
-
-      <Item
-        onClick={() => actions.setDeleteDialogOpen(true)}
-        variant="destructive"
-        className="cursor-pointer"
-      >
-        <Trash2 className="mr-2 h-4 w-4" />
-        <span>{isCreated ? t("discardDraft") : t("delete")}</span>
-      </Item>
+      {!guest && (
+        <>
+          <Separator />
+          <Item
+            onClick={() => actions.setDeleteDialogOpen(true)}
+            variant="destructive"
+            className="cursor-pointer"
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            <span>{isCreated ? t("discardDraft") : t("delete")}</span>
+          </Item>
+        </>
+      )}
     </>
   );
 }

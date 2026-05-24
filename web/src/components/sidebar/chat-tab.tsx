@@ -10,7 +10,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import Link from "next/link";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch, API_BASE } from "@/lib/api-client";
-import { useAuthStore } from "@/lib/stores";
+import { useAuthStore, isGuest } from "@/lib/stores";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
@@ -61,12 +61,14 @@ function CommentItem({
   comment,
   currentUserId,
   currentUserRole,
+  guest = false,
   onEdit,
   onDelete,
 }: {
   comment: Comment;
   currentUserId: string | null;
   currentUserRole: string | null;
+  guest?: boolean;
   onEdit: (id: string, body: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -126,7 +128,7 @@ function CommentItem({
           text={comment.body}
           className="text-xs text-foreground/90 leading-relaxed mt-0.5"
         />
-        <div className="mt-1 flex flex-wrap gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <div className={`mt-1 flex flex-wrap gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 ${guest ? "hidden" : ""}`}>
           {canEdit && (
             <button
               onClick={() => onEdit(comment.id, comment.body)}
@@ -170,6 +172,7 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
   const t = useTranslations("Sidebar");
   const isMobile = useIsMobile();
   const { user } = useAuthStore();
+  const guest = isGuest(user);
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(false);
   const [body, setBody] = useState("");
@@ -364,6 +367,7 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
                 comment={c}
                 currentUserId={user?.id ?? null}
                 currentUserRole={user?.role ?? null}
+                guest={guest}
                 onEdit={startEdit}
                 onDelete={handleDelete}
               />
@@ -373,6 +377,13 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
         </div>
       </ScrollArea>
 
+      {guest ? (
+        <div className="shrink-0 border-t bg-background p-3">
+          <p className="text-[11px] text-center text-muted-foreground italic">
+            {t("guestReadOnly")}
+          </p>
+        </div>
+      ) : (
       <div className="shrink-0 border-t bg-background p-3 pt-3 pb-3 md:pb-4 space-y-1.5 shadow-[0_-8px_20px_-10px_rgba(0,0,0,0.1)]">
         {disabled && (
           <p className="text-[10px] text-center text-muted-foreground bg-muted/30 py-1 rounded-sm mb-1">
@@ -424,6 +435,7 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

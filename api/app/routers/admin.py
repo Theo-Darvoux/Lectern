@@ -464,6 +464,7 @@ class AuthConfigPatch(BaseModel):
     classic_auth_enabled: bool | None = None
     allow_all_domains: bool | None = None
     auto_approve_all_domains: bool | None = None
+    guest_access_enabled: bool | None = None
     jwt_access_expire_days: int | None = None
     jwt_refresh_expire_days: int | None = None
     smtp_host: str | None = None

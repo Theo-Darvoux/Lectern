@@ -33,6 +33,8 @@ from app.services.notification import notify_admins_pending_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+GUEST_SESSION_EXPIRE_DAYS = 1
+
 
 async def require_client_id(request: Request):  # type: ignore[no-untyped-def]
     if not request.headers.get("x-client-id"):
@@ -61,6 +63,7 @@ async def get_auth_methods(
         "google_client_id": auth_config.get("google_client_id"),
         "classic_enabled": auth_config.get("classic_auth_enabled", False),
         "allow_all_domains": auth_config.get("allow_all_domains", False),
+        "guest_access_enabled": auth_config.get("guest_access_enabled", False),
         "site_name": auth_config.get("site_name"),
         "site_name_style": auth_config.get("site_name_style"),
         "site_description": auth_config.get("site_description"),
@@ -83,6 +86,52 @@ async def get_auth_methods(
         "data_transfers": auth_config.get("data_transfers"),
         "legal_version": auth_config.get("legal_version"),
     }
+
+
+@router.post("/guest", response_model=TokenResponse)
+async def guest_session(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    response: Response,
+) -> TokenResponse:
+    """Start a read-only guest session when an admin has enabled guest access."""
+    auth_config = await auth_service.get_full_auth_config(db, redis)
+    if not auth_config.get("guest_access_enabled"):
+        raise UnauthorizedError("Guest access is disabled")
+
+    guest = await auth_service.get_guest_user(db)
+    if guest is None:
+        raise UnauthorizedError("Guest access is unavailable")
+
+    # Guest sessions are deliberately short-lived; there is nothing to persist.
+    access_token, refresh_token, _ = auth_service.issue_tokens(
+        guest,
+        jwt_access_expire_days=GUEST_SESSION_EXPIRE_DAYS,
+        jwt_refresh_expire_days=GUEST_SESSION_EXPIRE_DAYS,
+    )
+
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=GUEST_SESSION_EXPIRE_DAYS * 24 * 3600,
+        path="/api/auth/",
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        user=UserBrief(
+            id=str(guest.id),
+            email=guest.email,
+            display_name=guest.display_name,
+            avatar_url=guest.avatar_url,
+            role=guest.role.value,
+            onboarded=guest.onboarded,
+        ),
+        is_new_user=False,
+    )
 
 
 @router.post("/request-code")
