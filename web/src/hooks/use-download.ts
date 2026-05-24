@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { apiFetch, apiFetchBlob } from "@/lib/api-client";
+import { apiFetch, apiFetchBlob, fetchMaterialFile } from "@/lib/api-client";
+import { generateQcmPdfBlob } from "@/lib/qcm-pdf-renderer";
 import { toast } from "sonner";
 
 function triggerBlobDownload(blob: Blob, filename: string) {
@@ -54,11 +55,14 @@ export function useDownload() {
         }
     };
 
-    const downloadQcmAsPdf = async (materialId: string) => {
+    const downloadQcmAsPdf = async (materialId: string, title?: string) => {
         setIsDownloading(true);
         try {
-            const blob = await apiFetchBlob(`/qcm/export-pdf/${materialId}`);
-            triggerBlobDownload(blob, `qcm-${materialId}.pdf`);
+            const response = await fetchMaterialFile(materialId);
+            const qcm = await response.json();
+            const blob = await generateQcmPdfBlob(qcm, title ?? "QCM");
+            const safeName = (title ?? "qcm").replace(/[^a-z0-9_\-]/gi, "_").slice(0, 80);
+            triggerBlobDownload(blob, `${safeName}.pdf`);
         } catch (error) {
             console.error("QCM PDF export failed:", error);
             toast.error("Failed to export QCM as PDF. Please try again.");

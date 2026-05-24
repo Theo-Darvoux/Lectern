@@ -14,6 +14,8 @@ import {
   Send,
   Loader2,
   ShieldAlert,
+  FileText,
+  Code2,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
@@ -23,6 +25,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -31,6 +36,9 @@ import {
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
@@ -178,7 +186,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
     }
   };
 
-  const { downloadMaterial, downloadQcmAsXml, isDownloading } = useDownload();
+  const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId: item.id,
@@ -210,6 +218,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
     handleShare,
     downloadMaterial,
     downloadQcmAsXml,
+    downloadQcmAsPdf,
     isDownloading,
     print,
     isPrinting,
@@ -233,7 +242,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
   const Separator = isContextMenu ? ContextMenuSeparator : DropdownMenuSeparator;
   const Label = isContextMenu ? ContextMenuLabel : DropdownMenuLabel;
 
-  const { downloadMaterial, downloadQcmAsXml, isDownloading, print, isPrinting, canPrint } = actions;
+  const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading, print, isPrinting, canPrint } = actions;
 
   const isCreated = item.staged === "created";
 
@@ -245,14 +254,52 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
       {actions.isMaterial && !actions.isRestricted && (
         <>
-          <Item
-            onClick={() => actions.viewerType === "qcm" ? downloadQcmAsXml(item.id) : downloadMaterial(item.id)}
-            disabled={isDownloading}
-            className="cursor-pointer"
-          >
-            {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-            <span>{t("download")}</span>
-          </Item>
+          {actions.viewerType === "qcm" ? (
+            isContextMenu ? (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger disabled={isDownloading} className="cursor-pointer">
+                  {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                  <span>{t("download")}</span>
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  <ContextMenuItem onClick={() => downloadQcmAsPdf(item.id, actions.title)} className="cursor-pointer">
+                    <FileText className="mr-2 h-4 w-4" />
+                    <span>{t("downloadPdf")}</span>
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => downloadQcmAsXml(item.id)} className="cursor-pointer">
+                    <Code2 className="mr-2 h-4 w-4" />
+                    <span>{t("downloadXml")}</span>
+                  </ContextMenuItem>
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            ) : (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger disabled={isDownloading} className="cursor-pointer">
+                  {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                  <span>{t("download")}</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DropdownMenuItem onClick={() => downloadQcmAsPdf(item.id, actions.title)} className="cursor-pointer">
+                    <FileText className="mr-2 h-4 w-4" />
+                    <span>{t("downloadPdf")}</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => downloadQcmAsXml(item.id)} className="cursor-pointer">
+                    <Code2 className="mr-2 h-4 w-4" />
+                    <span>{t("downloadXml")}</span>
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )
+          ) : (
+            <Item
+              onClick={() => downloadMaterial(item.id)}
+              disabled={isDownloading}
+              className="cursor-pointer"
+            >
+              {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+              <span>{t("download")}</span>
+            </Item>
+          )}
           {canPrint && (
             <Item
               onClick={() => print()}
@@ -521,7 +568,7 @@ export function ItemActionsDropdownTrigger() {
   // down on it arms the row, mounting the real menu before the click resolves.
   if (!context) {
     return (
-      <div onClick={(e) => e.stopPropagation()}>
+      <div onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
         <Button
           variant="ghost"
           size="icon"
@@ -538,7 +585,7 @@ export function ItemActionsDropdownTrigger() {
   }
 
   return (
-    <div onClick={(e) => e.stopPropagation()}>
+    <div onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <Button

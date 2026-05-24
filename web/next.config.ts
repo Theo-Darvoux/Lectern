@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
   // /browse/<path>) render without enumerating every possible param.
   ...(process.env.NODE_ENV === "production" ? { output: "export" as const } : {}),
   trailingSlash: true,
-  transpilePackages: ["papaparse"],
+  transpilePackages: ["papaparse", "@react-pdf/renderer"],
   typescript: {
     ignoreBuildErrors: true,
   },

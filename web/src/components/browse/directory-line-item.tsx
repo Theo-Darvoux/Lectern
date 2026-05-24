@@ -236,23 +236,21 @@ function DirectoryLineItemImpl({
                             <Info className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
                         </button>
                         <ItemActionsDropdownTrigger />
-                    <Link
-                        href={buildPath()}
+                    <button
                         className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
                         title={t("openItem")}
                         onClick={(e) => {
+                            e.stopPropagation();
                             if (onNavigate) {
-                                e.preventDefault();
-                                e.stopPropagation();
                                 onNavigate();
                             } else {
-                                e.stopPropagation();
+                                router.push(buildPath());
                             }
                         }}
                         aria-label={t("openItemFor", { title: name })}
                     >
                         <ChevronRight className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
-                    </Link>
+                    </button>
                 </div>
             </Link>
         </ItemActionsMenu>

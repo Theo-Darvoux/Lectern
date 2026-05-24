@@ -347,7 +347,7 @@ function MaterialGridCardImpl({
           {/* Action overlay on hover — uses translate instead of opacity so the
               animation runs on the compositor thread (zero paint cost during scroll). */}
           {!selectMode && (
-            <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-end gap-0.5 p-1.5 translate-y-full group-hover:translate-y-0 has-[[data-state=open]]:translate-y-0 transition-transform duration-150 bg-black/40">
+            <div onClick={(e) => e.stopPropagation()} className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-end gap-0.5 p-1.5 translate-y-full group-hover:translate-y-0 has-[[data-state=open]]:translate-y-0 transition-transform duration-150 bg-black/40">
               {!isRestricted && (
                 <button
                   onClick={handleChat}
@@ -376,23 +376,21 @@ function MaterialGridCardImpl({
                 </button>
               )}
               <ItemActionsDropdownTrigger />
-              <Link
-                href={buildPath()}
+              <button
                 className="rounded-md p-1.5 hover:bg-white/20 active:scale-95 transition-transform"
                 title={t("preview")}
                 onClick={(e) => {
+                  e.stopPropagation();
                   if (onNavigate) {
-                    e.preventDefault();
-                    e.stopPropagation();
                     onNavigate();
                   } else {
-                    e.stopPropagation();
+                    router.push(buildPath());
                   }
                 }}
                 aria-label={t("viewOrPreviewFor", { title, action: t("preview") })}
               >
                 <Eye className="h-3.5 w-3.5 text-white" />
-              </Link>
+              </button>
             </div>
           )}
         </div>

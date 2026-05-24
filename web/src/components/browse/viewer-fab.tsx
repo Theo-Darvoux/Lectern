@@ -263,7 +263,7 @@ export function ViewerFab({
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="center" className="min-w-44">
                 <DropdownMenuItem
-                  onClick={() => { close(); downloadQcmAsPdf(materialId); }}
+                  onClick={() => { close(); downloadQcmAsPdf(materialId, materialTitle); }}
                 >
                   <FileText className="h-4 w-4" />
                   {t("downloadPdf")}

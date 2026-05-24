@@ -9,9 +9,17 @@ import {
   MoreVertical,
   Loader2,
   PanelRight,
+  FileText,
+  Code2,
 } from "lucide-react";
 import { useIsMobile, useIsDesktop } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   formatFileSize,
   getFileBadgeColor,
@@ -262,7 +270,7 @@ export function MaterialViewer({
 
   const annotationsData = useAnnotations(materialId);
   const { createAnnotation, threads } = annotationsData;
-  const { downloadMaterial, downloadQcmAsXml, isDownloading } = useDownload();
+  const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId,
@@ -390,20 +398,50 @@ export function MaterialViewer({
                           )}
                         </Button>
                       )}
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="h-8 w-8 shrink-0"
-                        onClick={() => viewerType === "qcm" ? downloadQcmAsXml(materialId) : downloadMaterial(materialId)}
-                        disabled={isDownloading}
-                        title={t("downloadDocument")}
-                      >
-                        {isDownloading ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Download className="h-4 w-4" />
-                        )}
-                      </Button>
+                      {viewerType === "qcm" ? (
+                        <DropdownMenu modal={false}>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8 shrink-0"
+                              disabled={isDownloading}
+                              title={t("downloadDocument")}
+                            >
+                              {isDownloading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Download className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => downloadQcmAsPdf(materialId, title)} className="cursor-pointer">
+                              <FileText className="mr-2 h-4 w-4" />
+                              <span>{t("downloadPdf")}</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => downloadQcmAsXml(materialId)} className="cursor-pointer">
+                              <Code2 className="mr-2 h-4 w-4" />
+                              <span>{t("downloadXml")}</span>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 shrink-0"
+                          onClick={() => downloadMaterial(materialId)}
+                          disabled={isDownloading}
+                          title={t("downloadDocument")}
+                        >
+                          {isDownloading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Download className="h-4 w-4" />
+                          )}
+                        </Button>
+                      )}
                     </div>
                 </ItemActionsMenu>
 

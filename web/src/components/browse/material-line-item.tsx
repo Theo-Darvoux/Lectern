@@ -325,23 +325,21 @@ function MaterialLineItemImpl({
                         </button>
                     )}
                     <ItemActionsDropdownTrigger />
-                    <Link
-                        href={buildPath()}
+                    <button
                         className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
                         title={isMobile ? t("view") || "View" : t("preview") || "Preview"}
                         onClick={(e) => {
+                            e.stopPropagation();
                             if (onNavigate) {
-                                e.preventDefault();
-                                e.stopPropagation();
                                 onNavigate();
                             } else {
-                                e.stopPropagation();
+                                router.push(buildPath());
                             }
                         }}
                         aria-label={t("viewOrPreviewFor", { title, action: isMobile ? (t("view") || "View") : (t("preview") || "Preview") })}
                     >
                         <Eye className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
-                    </Link>
+                    </button>
                 </div>
             </Link>
         </ItemActionsMenu>

@@ -211,7 +211,7 @@ function DirectoryGridCardImpl({
 
           {/* Hover action overlay — translate is compositor-composited, unlike opacity which can trigger paint. */}
           {!selectMode && (
-            <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-end gap-0.5 p-1.5 translate-y-full group-hover:translate-y-0 has-[[data-state=open]]:translate-y-0 transition-transform duration-150 bg-black/30">
+            <div onClick={(e) => e.stopPropagation()} className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-end gap-0.5 p-1.5 translate-y-full group-hover:translate-y-0 has-[[data-state=open]]:translate-y-0 transition-transform duration-150 bg-black/30">
               {!isRestricted && (
                 <button
                   onClick={handleChat}
@@ -231,23 +231,21 @@ function DirectoryGridCardImpl({
                 <Info className="h-3.5 w-3.5 text-white" />
               </button>
               <ItemActionsDropdownTrigger />
-              <Link
-                href={buildPath()}
+              <button
                 className="rounded-md p-1.5 hover:bg-white/20 active:scale-95 transition-transform"
                 title={t("openItem")}
                 onClick={(e) => {
+                  e.stopPropagation();
                   if (onNavigate) {
-                    e.preventDefault();
-                    e.stopPropagation();
                     onNavigate();
                   } else {
-                    e.stopPropagation();
+                    router.push(buildPath());
                   }
                 }}
                 aria-label={t("openItemFor", { title: name })}
               >
                 <ChevronRight className="h-3.5 w-3.5 text-white" />
-              </Link>
+              </button>
             </div>
           )}
         </div>
