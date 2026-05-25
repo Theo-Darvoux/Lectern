@@ -201,11 +201,22 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
         return () => window.removeEventListener("resize", scheduleRecalc);
     }, [scheduleRecalc]);
 
+    const dpr = useMemo(() => {
+        if (typeof window === "undefined") return 1;
+        const rawDpr = window.devicePixelRatio || 1;
+        const targetPixelWidth = width * rawDpr;
+        if (targetPixelWidth > 2000) {
+            return Math.max(1, 2000 / width);
+        }
+        return Math.min(2, rawDpr);
+    }, [width]);
+
     return (
         <div ref={pageRef} style={{ position: "relative" }}>
             <Page
                 pageNumber={pageNumber}
                 width={width}
+                devicePixelRatio={dpr}
                 renderTextLayer={shouldRenderTextLayer}
                 renderAnnotationLayer={false}
                 onRenderSuccess={scheduleRecalc}
@@ -589,7 +600,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                                 rowHeight={getRowHeight}
                                 rowComponent={PdfRow}
                                 rowProps={EMPTY_ROW_PROPS}
-                                overscanCount={3}
+                                overscanCount={1}
                                 useIsScrolling
                                 onRowsRendered={handleRowsRendered}
                                 className="bg-zinc-200 dark:bg-zinc-800/50"
