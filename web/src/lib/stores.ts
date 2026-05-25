@@ -90,6 +90,7 @@ interface UIState {
     hideFooter: boolean;
     materialActionsOpen: boolean;
     treeSidebarOpen: boolean;
+    activeViewerType: string | null;
     openSidebar: (tab: SidebarTab, target: SidebarTarget) => void;
     setSidebarTarget: (target: SidebarTarget) => void;
     updateSidebarData: (data: Record<string, unknown>) => void;
@@ -102,6 +103,7 @@ interface UIState {
     toggleSidebar: () => void;
     setTreeSidebarOpen: (open: boolean) => void;
     toggleTreeSidebar: () => void;
+    setActiveViewerType: (type: string | null) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -112,6 +114,7 @@ export const useUIStore = create<UIState>((set) => ({
     hideFooter: false,
     materialActionsOpen: false,
     treeSidebarOpen: readInitialTreeSidebarOpen(),
+    activeViewerType: null,
     openSidebar: (tab, target) =>
         set({ sidebarOpen: true, sidebarTab: tab, sidebarTarget: target }),
     setSidebarTarget: (target) =>
@@ -149,6 +152,7 @@ export const useUIStore = create<UIState>((set) => ({
             persistTreeSidebarOpen(next);
             return { treeSidebarOpen: next };
         }),
+    setActiveViewerType: (type) => set({ activeViewerType: type }),
 }));
 
 // ---------------------------------------------------------------------------

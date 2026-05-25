@@ -199,6 +199,7 @@ export function MaterialViewer({
     setHideFooter,
     materialActionsOpen,
     setMaterialActionsOpen,
+    setActiveViewerType,
   } = useUIStore();
   const viewerContainerRef = useRef<HTMLDivElement>(null);
 
@@ -213,6 +214,11 @@ export function MaterialViewer({
       document.documentElement.style.overflow = "";
     };
   }, [setHideFooter]);
+
+  useEffect(() => {
+    setActiveViewerType(viewerType);
+    return () => setActiveViewerType(null);
+  }, [viewerType, setActiveViewerType]);
 
   const materialId = String(material.id ?? "");
 

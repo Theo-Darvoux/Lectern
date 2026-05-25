@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
 import { usePathname } from "next/navigation";
+import { useUIStore } from "@/lib/stores";
 
 export function StagingFab() {
   const t = useTranslations("Staging");
@@ -15,11 +16,14 @@ export function StagingFab() {
   const count = operations.length;
   const expiredCount = operations.filter((s) => isExpired(s)).length;
   const pathname = usePathname();
+  const activeViewerType = useUIStore((s) => s.activeViewerType);
 
   // Hide on QCM editor pages — the editor has its own fixed toolbar that conflicts.
   const isQcmEditor = /^\/qcm\/(new|[^/]+\/edit)/.test(pathname);
+  // Hide when viewing a QCM — the next/prev navigation sits at the same position.
+  const isQcmViewer = activeViewerType === "qcm";
 
-  if (count === 0 || isQcmEditor) return null;
+  if (count === 0 || isQcmEditor || isQcmViewer) return null;
 
   return (
     <Button
