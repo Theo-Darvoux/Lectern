@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { ZoomIn, ZoomOut, BookOpen } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -234,6 +234,33 @@ const AnnotatedPage = React.memo(function AnnotatedPage({ pageNumber, width, ann
         };
     }, [scheduleRecalc]);
 
+    // ── Flicker-prevention snapshot ───────────────────────────────────────────
+    // When react-pdf re-renders at a new width it resizes (clears) the canvas,
+    // causing a white flash. We capture a JPEG snapshot of the canvas after every
+    // successful render and show it as an overlay while the new canvas is blank.
+    const snapshotUrlRef = useRef<string | null>(null);
+    const [showSnapshot, setShowSnapshot] = useState(false);
+    const prevWidthRef = useRef(width);
+
+    // No-dep: runs after every committed render, always keeps a fresh snapshot.
+    useLayoutEffect(() => {
+        const canvas = pageRef.current?.querySelector("canvas");
+        if (canvas && canvas.width > 0) {
+            try { snapshotUrlRef.current = canvas.toDataURL("image/jpeg", 0.85); }
+            catch { /* cross-origin or tainted canvas — skip */ }
+        }
+    });
+
+    // When width changes, show the snapshot immediately (before react-pdf clears
+    // the canvas). Hide it again once onRenderSuccess fires.
+    useLayoutEffect(() => {
+        if (prevWidthRef.current === width) return;
+        prevWidthRef.current = width;
+        if (snapshotUrlRef.current) setShowSnapshot(true);
+    }, [width]);
+
+    const handleRenderSuccess = useCallback(() => setShowSnapshot(false), []);
+
     return (
         <div ref={pageRef} style={{ position: "relative" }}>
             <Page
@@ -241,7 +268,26 @@ const AnnotatedPage = React.memo(function AnnotatedPage({ pageNumber, width, ann
                 width={width}
                 renderTextLayer
                 renderAnnotationLayer={false}
+                onRenderSuccess={handleRenderSuccess}
             />
+            {/* Snapshot overlay: sits above the blank canvas while re-rendering.
+                Stretched to new dimensions — identical to the CSS-scale preview
+                already shown during the gesture, so the transition is seamless. */}
+            {showSnapshot && snapshotUrlRef.current && (
+                <img
+                    src={snapshotUrlRef.current}
+                    alt=""
+                    aria-hidden
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
+                        zIndex: 5,
+                        pointerEvents: "none",
+                    }}
+                />
+            )}
             {/* Transparent click overlays — above everything, pointer-events: auto.
                 onMouseDown preventDefault stops the browser from resetting the text
                 selection state, which would otherwise cause the highlight to flash. */}
@@ -346,6 +392,66 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         return () => clearTimeout(timer);
     }, [zoom]);
 
+    // ── Focal-point zoom ────────────────────────────────────────────────────────
+    // focalRef.contentY = Y in content-div layout space (scrollTop + viewportY).
+    // focalRef.viewportY = Y of the gesture origin within the scroll container
+    //   viewport (clientY − containerRect.top). These two values let us:
+    //   (a) set transform-origin so the CSS scale pivots around the cursor/fingers,
+    //   (b) correct scrollTop after a stableZoom re-render so the same document
+    //       position stays under the cursor/fingers.
+    const focalRef = useRef<{ contentY: number; viewportY: number } | null>(null);
+    // Tracks the stableZoom value that was in effect at the LAST scroll correction,
+    // so we can compute the ratio for the next one.
+    const prevStableZoomRef = useRef<number>(100);
+
+    // Capture focal point from ctrl+wheel and pinch-to-zoom gesture starts.
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+        const onWheel = (e: WheelEvent) => {
+            if (!e.ctrlKey && !e.metaKey) return;
+            const rect = el.getBoundingClientRect();
+            const viewportY = e.clientY - rect.top;
+            focalRef.current = { contentY: el.scrollTop + viewportY, viewportY };
+        };
+        const onTouchStart = (e: TouchEvent) => {
+            if (e.touches.length !== 2) return;
+            const rect = el.getBoundingClientRect();
+            const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            const viewportY = midY - rect.top;
+            focalRef.current = { contentY: el.scrollTop + viewportY, viewportY };
+        };
+        // passive:true — we are only reading, usePinchZoom already prevents default
+        el.addEventListener("wheel", onWheel, { passive: true });
+        el.addEventListener("touchstart", onTouchStart, { passive: true });
+        return () => {
+            el.removeEventListener("wheel", onWheel);
+            el.removeEventListener("touchstart", onTouchStart);
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // After stableZoom changes the canvas re-renders at a new pixel size, which
+    // changes the scroll container's scrollHeight. Correct scrollTop BEFORE the
+    // browser paints so the focal point stays at the same viewport position.
+    useLayoutEffect(() => {
+        const el = scrollRef.current;
+        if (!el || !focalRef.current || prevStableZoomRef.current === stableZoom) {
+            prevStableZoomRef.current = stableZoom;
+            return;
+        }
+        const { contentY, viewportY } = focalRef.current;
+        const scaleFactor = stableZoom / prevStableZoomRef.current;
+        // The focal point was at contentY in the old layout; it is now at
+        // contentY * scaleFactor.  Set scrollTop so it appears at viewportY.
+        el.scrollTop = Math.max(0, contentY * scaleFactor - viewportY);
+        prevStableZoomRef.current = stableZoom;
+        // Clear focal point so transformOrigin resets to "top center" once the
+        // canvas has re-rendered — prevents stale pivot from leaving empty space
+        // above the content on subsequent scroll or minor CSS scale corrections.
+        focalRef.current = null;
+    }, [stableZoom]);
+
     const containerWidthRef = useRef(containerWidth);
     containerWidthRef.current = containerWidth;
 
@@ -444,6 +550,14 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
     // key on stable fields so memo doesn't invalidate every time the threads
     // array reference changes due to SSE/mutation state updates
+    // Dynamic transform-origin: scale around the last captured focal point so
+    // the content under the cursor/fingers stays fixed during the gesture.
+    // focalRef.current is set synchronously by the wheel/touch listener before
+    // each render triggered by zoom changes, so it is always up-to-date here.
+    const transformOrigin = focalRef.current
+        ? `center ${focalRef.current.contentY}px`
+        : "top center";
+
     const annotationsKey = annotations
         .map((t) => {
             const occ = t.root.position_data?.occurrenceIndex;
@@ -536,7 +650,9 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                         // Always apply the transform so the browser keeps this element
                         // on a GPU compositor layer (will-change promotes it up front).
                         transform: `scale(${cssScale})`,
-                        transformOrigin: "top center",
+                        // Pivot around the focal point so the content under the
+                        // cursor/fingers stays fixed while the scale changes.
+                        transformOrigin,
                         // Instant response during gesture; brief ease-out when snapping
                         // back to scale(1) after the debounce fires and canvas re-renders.
                         transition: isScaling ? "none" : "transform 0.15s ease-out",

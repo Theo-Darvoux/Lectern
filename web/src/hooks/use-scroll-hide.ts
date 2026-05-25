@@ -34,8 +34,10 @@ export function useScrollHide(scrollRef: React.RefObject<HTMLElement | null>) {
 
       accumulated.current += delta;
 
-      // Only toggle after the user has scrolled 150px in one sustained direction
-      if (Math.abs(accumulated.current) >= 150) {
+      // Hide quickly on scroll-down (150px), but require a strong intentional
+      // upward scroll (500px) before showing the toolbar again.
+      const threshold = accumulated.current < 0 ? 500 : 150;
+      if (Math.abs(accumulated.current) >= threshold) {
         setNavbarVisible(accumulated.current < 0);
         accumulated.current = 0;
       }
