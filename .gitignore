@@ -1,5 +1,6 @@
 .claude/
 /*.md
+workspace/
 
 # Python
 __pycache__/
@@ -16,7 +17,6 @@ api/scratch/
 *.sqlite
 *.sqlite3
 *.db
-audit_output.txt
 
 # Node / Next.js
 node_modules/

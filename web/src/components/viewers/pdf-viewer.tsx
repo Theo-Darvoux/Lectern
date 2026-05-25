@@ -129,19 +129,29 @@ interface HighlightBounds extends HighlightRect {
 }
 
 const AnnotatedPage = React.memo(function AnnotatedPage({
-    pageNumber, width, annotations, onAnnotationClick, onLoadSuccess,
+    pageNumber, width, annotations, onAnnotationClick, onLoadSuccess, isInteracting
 }: {
     pageNumber: number;
     width: number;
     annotations: PageAnnotation[];
     onAnnotationClick?: (threadId: string, e: React.MouseEvent) => void;
     onLoadSuccess?: (pageNum: number, page: any) => void;
+    isInteracting: boolean;
 }) {
     const pageRef = useRef<HTMLDivElement>(null);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
     const [clickRects, setClickRects] = useState<HighlightBounds[]>([]);
+    const [shouldRenderTextLayer, setShouldRenderTextLayer] = useState(false);
     const annotationsRef = useRef(annotations);
     useEffect(() => { annotationsRef.current = annotations; });
+
+    useEffect(() => {
+        if (shouldRenderTextLayer) return;
+        if (!isInteracting) {
+            const timer = setTimeout(() => setShouldRenderTextLayer(true), 150);
+            return () => clearTimeout(timer);
+        }
+    }, [isInteracting, shouldRenderTextLayer]);
 
     const annotationsKey = annotations
         .map(a => `${a.selection_text ?? ""}:${a.page ?? "_"}:${a.occurrenceIndex ?? "_"}`)
@@ -196,9 +206,10 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
             <Page
                 pageNumber={pageNumber}
                 width={width}
-                renderTextLayer
+                renderTextLayer={shouldRenderTextLayer}
                 renderAnnotationLayer={false}
                 onRenderSuccess={scheduleRecalc}
+                onRenderTextLayerSuccess={scheduleRecalc}
                 onLoadSuccess={page => onLoadSuccess?.(pageNumber, page)}
             />
             {/* Visual Highlights */}
@@ -256,15 +267,21 @@ interface RowContext {
 
 const RowCtx = React.createContext<RowContext>(null!);
 
-function PdfRow({ index, style }: RowComponentProps<object>) {
+function PdfRow({ index, style, isScrolling }: RowComponentProps<object> & { isScrolling?: boolean }) {
     const { twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess } = React.useContext(RowCtx);
+    const isInteracting = isScaling || !!isScrolling;
     const padding = 16;
+    
+    // Unconditionally compute for single and two-page views to satisfy rules of hooks
+    const pageNum = index + 1;
+    const leftPage = index * 2 + 1;
+    const rightPage = index * 2 + 2;
+    
+    const pageAnns = React.useMemo(() => allAnnotations.filter(a => a.page === pageNum || a.page == null), [allAnnotations, pageNum]);
+    const leftAnns = React.useMemo(() => allAnnotations.filter(a => a.page === leftPage || a.page == null), [allAnnotations, leftPage]);
+    const rightAnns = React.useMemo(() => allAnnotations.filter(a => a.page === rightPage || a.page == null), [allAnnotations, rightPage]);
 
     if (twoPageView) {
-        const leftPage = index * 2 + 1;
-        const rightPage = index * 2 + 2;
-        const leftAnns = React.useMemo(() => allAnnotations.filter(a => a.page === leftPage || a.page == null), [allAnnotations, leftPage]);
-        const rightAnns = React.useMemo(() => allAnnotations.filter(a => a.page === rightPage || a.page == null), [allAnnotations, rightPage]);
         const combinedWidth = pageWidthCommitted * 2 + PAGE_GAP;
         const isWider = combinedWidth > containerWidth - padding * 2;
         return (
@@ -278,17 +295,15 @@ function PdfRow({ index, style }: RowComponentProps<object>) {
                     transformOrigin: isWider ? "top left" : "top center",
                     transition: isScaling ? "none" : "transform 0.15s ease-out",
                 }}>
-                    <AnnotatedPage pageNumber={leftPage} width={pageWidthCommitted} annotations={leftAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} />
+                    <AnnotatedPage pageNumber={leftPage} width={pageWidthCommitted} annotations={leftAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} isInteracting={isInteracting} />
                     {rightPage <= numPages && (
-                        <AnnotatedPage pageNumber={rightPage} width={pageWidthCommitted} annotations={rightAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} />
+                        <AnnotatedPage pageNumber={rightPage} width={pageWidthCommitted} annotations={rightAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} isInteracting={isInteracting} />
                     )}
                 </div>
             </div>
         );
     }
 
-    const pageNum = index + 1;
-    const pageAnns = React.useMemo(() => allAnnotations.filter(a => a.page === pageNum || a.page == null), [allAnnotations, pageNum]);
     const isWider = pageWidthCommitted > containerWidth - padding * 2;
     return (
         <div style={style} data-page={pageNum}>
@@ -300,7 +315,7 @@ function PdfRow({ index, style }: RowComponentProps<object>) {
                 transformOrigin: isWider ? "top left" : "top center",
                 transition: isScaling ? "none" : "transform 0.15s ease-out",
             }}>
-                <AnnotatedPage pageNumber={pageNum} width={pageWidthCommitted} annotations={pageAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} />
+                <AnnotatedPage pageNumber={pageNum} width={pageWidthCommitted} annotations={pageAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} isInteracting={isInteracting} />
             </div>
         </div>
     );
@@ -575,6 +590,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                                 rowComponent={PdfRow}
                                 rowProps={EMPTY_ROW_PROPS}
                                 overscanCount={3}
+                                useIsScrolling
                                 onRowsRendered={handleRowsRendered}
                                 className="bg-zinc-200 dark:bg-zinc-800/50"
                             />
