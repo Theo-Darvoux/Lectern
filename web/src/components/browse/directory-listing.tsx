@@ -50,7 +50,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { useStagingStore } from "@/lib/staging-store";
-import { useDropZoneStore } from "@/components/pr/global-drop-zone";
+import { useDropZoneStore } from "@/lib/drop-zone-store";
 import { useSelectionStore } from "@/lib/selection-store";
 import type { Operation } from "@/lib/staging-store";
 import type { SelectedItem } from "@/lib/selection-store";

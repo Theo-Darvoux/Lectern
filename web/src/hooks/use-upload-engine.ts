@@ -9,7 +9,7 @@ import { collectDroppedItems, extractDirPaths, traverseFolder, zipScannedFiles, 
 import { useAuth } from "@/hooks/use-auth";
 import { useTranslations } from "next-intl";
 import { useUploadQueue, type QueueItem } from "@/lib/upload-queue";
-import { useDropZoneStore } from "@/components/pr/global-drop-zone";
+import { useDropZoneStore } from "@/lib/drop-zone-store";
 
 const MAX_CONCURRENT_UPLOADS = 4;
 const maxFilesPerBatch_DEFAULT = 50;

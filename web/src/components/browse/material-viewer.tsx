@@ -215,11 +215,6 @@ export function MaterialViewer({
     };
   }, [setHideFooter]);
 
-  useEffect(() => {
-    setActiveViewerType(viewerType);
-    return () => setActiveViewerType(null);
-  }, [viewerType, setActiveViewerType]);
-
   const materialId = String(material.id ?? "");
 
   // Overlay any staged (draft) edits for this material so the viewer reflects
@@ -274,6 +269,11 @@ export function MaterialViewer({
   }, [materialId]);
 
   const viewerType = getViewerType(mimeType, fileName);
+
+  useEffect(() => {
+    setActiveViewerType(viewerType);
+    return () => setActiveViewerType(null);
+  }, [viewerType, setActiveViewerType]);
 
   const annotationsData = useAnnotations(materialId);
   const { createAnnotation, threads } = annotationsData;
