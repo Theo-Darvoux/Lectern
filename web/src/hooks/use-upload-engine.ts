@@ -2,7 +2,7 @@ import { useCallback, useRef, useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { useStagingStore } from "@/lib/staging-store";
 import type { CreateMaterialOp } from "@/lib/staging-store";
-import { MAX_FILE_SIZE_MB, ACCEPTED_FILE_TYPES } from "@/lib/file-utils";
+import { MAX_FILE_SIZE_MB, ACCEPTED_FILE_TYPES, guessFileMime } from "@/lib/file-utils";
 import { uploadFile, getUploadConfig, logicalFileSize, trackExistingUpload, uploadBatchZip, type UploadConfig, type TusUploadHandle } from "@/lib/upload-client";
 import { ApiError } from "@/lib/api-client";
 import { collectDroppedItems, extractDirPaths, traverseFolder, zipScannedFiles, type ScannedFile } from "@/lib/drop-utils";
@@ -92,6 +92,7 @@ export function useUploadEngine({
     const uploadQueueRef = useRef<string[]>([]);
 
     const [pendingDirPaths, setPendingDirPaths] = useState<DirPathMap>(new Map());
+    const [pendingMimeFiles, setPendingMimeFiles] = useState<ScannedFile[]>([]);
     const [editingPath, setEditingPath] = useState<string | null>(null);
     const [editValue, setEditValue] = useState("");
     const [batchTags, setBatchTags] = useState<string[]>([]);
@@ -372,19 +373,41 @@ export function useUploadEngine({
 
             let valid = scanned.filter((s) => s.file.size <= currentMaxSize);
 
+            // Resolve MIME types from extension for files the browser mis-labels as octet-stream
+            valid = valid.map(s => {
+                const mime = guessFileMime(s.file);
+                if (mime !== s.file.type) {
+                    return { ...s, file: new File([s.file], s.file.name, { type: mime, lastModified: s.file.lastModified }) };
+                }
+                return s;
+            });
+
             if (config) {
-                valid = valid.filter((s) => {
+                const toProcess: ScannedFile[] = [];
+                const needsMime: ScannedFile[] = [];
+
+                for (const s of valid) {
                     const f = s.file;
                     const ext = `.${f.name.split(".").pop()?.toLowerCase()}`;
                     const isAllowedExt = config.allowed_extensions.includes(ext);
                     const isAllowedMime = f.type ? config.allowed_mimetypes.includes(f.type) : false;
+                    const isTextMime = f.type.startsWith("text/");
+                    const isOctetStream = !f.type || f.type === "application/octet-stream";
 
-                    if (!isAllowedExt && !isAllowedMime && !f.type.startsWith("text/")) {
+                    if (isOctetStream && isAllowedExt) {
+                        // Extension is allowed but MIME still unknown — ask user
+                        needsMime.push(s);
+                    } else if (!isAllowedExt && !isAllowedMime && !isTextMime) {
                         toast.error(t("fileTypeNotSupported", { type: f.type || ext }));
-                        return false;
+                    } else {
+                        toProcess.push(s);
                     }
-                    return true;
-                });
+                }
+
+                if (needsMime.length > 0) {
+                    setPendingMimeFiles(prev => [...prev, ...needsMime]);
+                }
+                valid = toProcess;
             }
 
             if (valid.length === 0) return;
@@ -435,6 +458,20 @@ export function useUploadEngine({
         },
         [start, nextTempId, addItems, config, maxFilesPerBatch, t],
     );
+
+    const handleMimeConfirm = useCallback(
+        (selections: Array<{ scanned: ScannedFile; mime: string }>) => {
+            setPendingMimeFiles([]);
+            const resolved: ScannedFile[] = selections.map(({ scanned, mime }) => ({
+                ...scanned,
+                file: new File([scanned.file], scanned.file.name, { type: mime, lastModified: scanned.file.lastModified }),
+            }));
+            processScannedFiles(resolved);
+        },
+        [processScannedFiles],
+    );
+
+    const dismissPendingMime = useCallback(() => setPendingMimeFiles([]), []);
 
     const processFolderViaZip = useCallback(
         async (entry: FileSystemDirectoryEntry, folderName: string) => {
@@ -847,6 +884,7 @@ export function useUploadEngine({
         canStage,
         
         pendingDirPaths,
+        pendingMimeFiles,
         editingPath,
         editValue,
         batchTags,
@@ -862,7 +900,7 @@ export function useUploadEngine({
         setEditValue,
         setBatchTags,
         setReAttachingClientId,
-        
+
         handleReAttach,
         commitRename,
         addFlatFiles,
@@ -873,6 +911,8 @@ export function useUploadEngine({
         pauseUpload,
         resumeUpload,
         handleStage,
+        handleMimeConfirm,
+        dismissPendingMime,
         
         handleDragOver,
         handleDragLeave,

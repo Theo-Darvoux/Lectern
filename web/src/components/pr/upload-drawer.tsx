@@ -20,6 +20,7 @@ import { useUploadEngine, fileSize } from "@/hooks/use-upload-engine";
 import { DropZoneOverlay } from "./drop-zone-overlay";
 import { PendingFolders } from "./zip-progress";
 import { UploadQueueItem } from "./upload-queue-item";
+import { MimeSelectDialog } from "./mime-select-dialog";
 
 interface UploadDrawerProps {
     open: boolean;
@@ -58,6 +59,7 @@ export function UploadDrawer({
     const dropzoneRef = useRef<HTMLDivElement>(null);
 
     return (
+    <>
         <Sheet open={open} onOpenChange={engine.handleClose}>
             <SheetContent
                 side="right"
@@ -176,5 +178,14 @@ export function UploadDrawer({
                 </SheetFooter>
             </SheetContent>
         </Sheet>
+
+        {engine.pendingMimeFiles.length > 0 && (
+            <MimeSelectDialog
+                files={engine.pendingMimeFiles}
+                onConfirm={engine.handleMimeConfirm}
+                onDismiss={engine.dismissPendingMime}
+            />
+        )}
+    </>
     );
 }

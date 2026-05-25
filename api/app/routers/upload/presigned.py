@@ -188,9 +188,8 @@ async def complete_upload(
     real_mime = guess_mime_from_bytes(head)
 
     # We run mime correction exactly as we do in direct upload
-    import os
 
-    ext = os.path.splitext(intent["filename"])[1].lower()
+    ext = MimeRegistry.get_extension(intent["filename"])
 
     if real_mime != "application/octet-stream":
         safe_name, ext = _apply_mime_correction(intent["filename"], real_mime, ext)
@@ -338,7 +337,6 @@ async def presigned_multipart_complete(
     )
 
     # MIME re-validation via Range GET (audit fix #4)
-    import os
 
     from app.core.mimetypes import guess_mime_from_bytes
     from app.core.storage import read_object_bytes
@@ -346,7 +344,7 @@ async def presigned_multipart_complete(
 
     head = await read_object_bytes(intent["quarantine_key"], byte_count=2048)
     real_mime = guess_mime_from_bytes(head)
-    ext = os.path.splitext(intent["filename"])[1].lower()
+    ext = MimeRegistry.get_extension(intent["filename"])
     if real_mime != "application/octet-stream":
         safe_name, ext = _apply_mime_correction(intent["filename"], real_mime, ext)
         intent["filename"] = safe_name

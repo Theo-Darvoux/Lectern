@@ -199,3 +199,40 @@ class TestMimeRegistry:
         # Ensure a sample of code extensions passed through
         for ext in (".py", ".js", ".rs", ".go", ".ts"):
             assert ext in ALLOWED_EXTENSIONS, f"{ext} should be in ALLOWED_EXTENSIONS"
+
+    def test_resolve_upload_mime_preserves_valid(self):
+        assert MimeRegistry.resolve_upload_mime("test.pdf", "application/pdf") == "application/pdf"
+        assert MimeRegistry.resolve_upload_mime("test.png", "image/png") == "image/png"
+
+    def test_resolve_upload_mime_extension_mapping(self):
+        # Mapped extensions resolve to their first mapped MIME
+        assert (
+            MimeRegistry.resolve_upload_mime("test.pdf", "application/octet-stream")
+            == "application/pdf"
+        )
+        assert (
+            MimeRegistry.resolve_upload_mime("test.tex", "application/octet-stream")
+            == "application/x-tex"
+        )
+
+    def test_resolve_upload_mime_guess_type(self):
+        # Checks python mimetypes database for allowed mimes
+        assert (
+            MimeRegistry.resolve_upload_mime("test.py", "application/octet-stream")
+            == "text/x-python"
+        )
+
+    def test_resolve_upload_mime_fallback_to_text(self):
+        # Any explicitly allowed extension with unknown mimetype defaults to text/plain
+        # .dockerfile is allowed but not in EXTENSION_MAPPING or standard mimetypes guess
+        assert (
+            MimeRegistry.resolve_upload_mime("Dockerfile", "application/octet-stream")
+            == "text/plain"
+        )
+
+    def test_resolve_upload_mime_unsupported(self):
+        # Completely unknown extensions fall back to raw_mime
+        assert (
+            MimeRegistry.resolve_upload_mime("test.xyzabc", "application/octet-stream")
+            == "application/octet-stream"
+        )

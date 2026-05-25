@@ -556,7 +556,11 @@
     "concurrencyLimitReached": "Upload limit reached",
     "waits": "Waiting...",
     "untitled": "Untitled",
-    "reAttach": "Re-attach file"
+    "reAttach": "Re-attach file",
+    "mimeSelectTitle": "Select file type",
+    "mimeSelectDesc": "The type of the following file(s) could not be detected automatically. Please select the correct text-based file type to continue.",
+    "mimeSelectConfirm": "Continue",
+    "mimeSelectSkip": "Skip these files"
   },
   "PRWizard": {
     "createDirectory": "Create Folder",

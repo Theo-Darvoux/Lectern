@@ -205,9 +205,13 @@ async def tus_create(
 
     safe_name, _ext = _validate_filename(raw_filename, allowed_extensions=allowed_exts)
 
-    if not MimeRegistry.is_allowed_mime(raw_mime, allowed=allowed_mimes):
+    # Resolve octet-stream to a proper MIME when the browser doesn't know the type.
+    # The actual MIME is always re-detected from magic bytes during processing.
+    resolved_mime = MimeRegistry.resolve_upload_mime(raw_filename, raw_mime)
+
+    if not MimeRegistry.is_allowed_mime(resolved_mime, allowed=allowed_mimes):
         raise BadRequestError(
-            f"MIME type '{raw_mime}' is not allowed for upload.",
+            f"MIME type '{resolved_mime}' is not allowed for upload.",
             code=ERR_TYPE_NOT_ALLOWED,
         )
 
@@ -229,7 +233,7 @@ async def tus_create(
 
     s3_upload_id = await create_multipart_upload(
         quarantine_key,
-        content_type=raw_mime,
+        content_type=resolved_mime,
         content_disposition="",
     )
 
@@ -239,7 +243,7 @@ async def tus_create(
         "quarantine_key": quarantine_key,
         "s3_upload_id": s3_upload_id,
         "filename": safe_name,
-        "mime_type": raw_mime,
+        "mime_type": resolved_mime,
         "offset": "0",
         "length": str(upload_length),
         "parts": "[]",
@@ -253,7 +257,7 @@ async def tus_create(
         user_id=user_id,
         quarantine_key=quarantine_key,
         filename=safe_name,
-        mime_type=raw_mime,
+        mime_type=resolved_mime,
         size_bytes=upload_length,
     )
 
@@ -398,9 +402,23 @@ async def tus_patch(
                                 head = f.read(MAGIC_HEADER_SIZE)
                             detected_mime = guess_mime_from_bytes(head)
 
+                            # Allow minor variations (e.g. text/x-tex vs application/x-tex) if both
+                            # are valid for the file's extension.
+                            ext = Path(state["filename"]).suffix.lower()
+                            allowed_for_ext = MimeRegistry.get_allowed_mimes_for_extension(ext)
+                            is_compatible = (
+                                (
+                                    detected_mime in allowed_for_ext
+                                    and state["mime_type"] in allowed_for_ext
+                                )
+                                if allowed_for_ext
+                                else False
+                            )
+
                             if (
                                 detected_mime != "application/octet-stream"
                                 and detected_mime != state["mime_type"]
+                                and not is_compatible
                             ):
                                 logger.warning(
                                     "TUS MIME mismatch for %s: declared %s, detected %s",

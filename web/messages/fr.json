@@ -556,7 +556,11 @@
     "concurrencyLimitReached": "Limite de téléversements atteinte",
     "waits": "En attente...",
     "untitled": "Sans titre",
-    "reAttach": "Ré-attacher le fichier"
+    "reAttach": "Ré-attacher le fichier",
+    "mimeSelectTitle": "Sélectionner le type de fichier",
+    "mimeSelectDesc": "Le type du ou des fichiers suivants n'a pas pu être détecté automatiquement. Veuillez sélectionner le type de fichier texte approprié pour continuer.",
+    "mimeSelectConfirm": "Continuer",
+    "mimeSelectSkip": "Ignorer ces fichiers"
   },
   "PRWizard": {
     "createDirectory": "Créer un dossier",

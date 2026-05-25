@@ -185,7 +185,7 @@ def _validate_filename(
             f"Filename too long ({len(safe_name)} chars, max {_MAX_FILENAME_LENGTH}).",
             code=ERR_FILENAME_TOO_LONG,
         )
-    ext = os.path.splitext(safe_name)[1].lower()
+    ext = MimeRegistry.get_extension(safe_name)
     if not MimeRegistry.is_supported_extension(ext, allowed=allowed_extensions):
         raise BadRequestError(
             f"File extension '{ext}' is not supported.",

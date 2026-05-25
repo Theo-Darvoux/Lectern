@@ -1,5 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
-import { formatFileSize, getFileExtension, getViewerType } from "./file-utils";
+import { formatFileSize, getFileExtension, getViewerType, guessFileMime } from "./file-utils";
 
 describe("file-utils", () => {
   describe("formatFileSize", () => {
@@ -43,4 +42,25 @@ describe("file-utils", () => {
       expect(getViewerType("application/vnd.wikint.qcm+json", "data")).toBe("qcm");
     });
   });
+
+  describe("guessFileMime", () => {
+    it("returns raw mime if valid", () => {
+      const file = { name: "test.pdf", type: "application/pdf" } as File;
+      expect(guessFileMime(file)).toBe("application/pdf");
+    });
+
+    it("guesses mime from extension when raw mime is empty or octet-stream", () => {
+      const file1 = { name: "test.pdf", type: "" } as File;
+      expect(guessFileMime(file1)).toBe("application/pdf");
+
+      const file2 = { name: "test.tex", type: "application/octet-stream" } as File;
+      expect(guessFileMime(file2)).toBe("application/x-tex");
+    });
+
+    it("falls back to octet-stream for unknown extensions", () => {
+      const file = { name: "test.unknown", type: "" } as File;
+      expect(guessFileMime(file)).toBe("application/octet-stream");
+    });
+  });
 });
+

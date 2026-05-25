@@ -61,6 +61,175 @@ export function getFileExtension(filename: string): string {
     return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
 }
 
+/** Extension → canonical MIME type. Covers all ACCEPTED_FILE_TYPES so browsers that
+ *  report application/octet-stream for unknown extensions get the right type. */
+export const EXT_TO_MIME: Record<string, string> = {
+    // Documents
+    pdf: "application/pdf",
+    epub: "application/epub+zip",
+    djvu: "image/vnd.djvu",
+    djv: "image/vnd.djvu",
+    // Images
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    svg: "image/svg+xml",
+    // Audio
+    mp3: "audio/mpeg",
+    wav: "audio/wav",
+    ogg: "audio/ogg",
+    flac: "audio/flac",
+    aac: "audio/aac",
+    m4a: "audio/mp4",
+    // Video
+    mp4: "video/mp4",
+    webm: "video/webm",
+    // Office
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    doc: "application/msword",
+    xls: "application/vnd.ms-excel",
+    ppt: "application/vnd.ms-powerpoint",
+    odt: "application/vnd.oasis.opendocument.text",
+    ods: "application/vnd.oasis.opendocument.spreadsheet",
+    // Text / markup
+    md: "text/markdown",
+    markdown: "text/markdown",
+    rst: "text/plain",
+    adoc: "text/plain",
+    txt: "text/plain",
+    csv: "text/csv",
+    log: "text/plain",
+    env: "text/plain",
+    // Data formats
+    json: "application/json",
+    json5: "application/json",
+    jsonc: "application/json",
+    xml: "application/xml",
+    yaml: "application/x-yaml",
+    yml: "application/x-yaml",
+    toml: "application/toml",
+    ini: "text/plain",
+    cfg: "text/plain",
+    conf: "text/plain",
+    // TeX / LaTeX
+    tex: "application/x-tex",
+    latex: "application/x-tex",
+    sty: "application/x-tex",
+    cls: "application/x-tex",
+    bib: "application/x-tex",
+    dtx: "application/x-tex",
+    ins: "application/x-tex",
+    // C / C++
+    c: "text/x-csrc",
+    h: "text/x-chdr",
+    cpp: "text/x-c++src",
+    cxx: "text/x-c++src",
+    cc: "text/x-c++src",
+    hpp: "text/x-c++hdr",
+    hxx: "text/x-c++hdr",
+    // Python
+    py: "text/x-python",
+    pyw: "text/x-python",
+    pyi: "text/x-python",
+    // Java / JVM
+    java: "text/x-java-source",
+    kt: "text/x-kotlin",
+    kts: "text/x-kotlin",
+    scala: "text/x-scala",
+    groovy: "text/plain",
+    gradle: "text/plain",
+    // Web
+    js: "text/javascript",
+    mjs: "text/javascript",
+    cjs: "text/javascript",
+    ts: "application/typescript",
+    jsx: "text/javascript",
+    tsx: "application/typescript",
+    vue: "text/plain",
+    svelte: "text/plain",
+    html: "text/html",
+    htm: "text/html",
+    css: "text/css",
+    scss: "text/plain",
+    sass: "text/plain",
+    less: "text/plain",
+    // Systems / Low-level
+    rs: "text/x-rust",
+    go: "text/x-go",
+    zig: "text/x-zig",
+    v: "text/plain",
+    nim: "text/x-nim",
+    odin: "text/plain",
+    d: "text/plain",
+    // Scripting
+    rb: "text/x-ruby",
+    php: "text/x-php",
+    pl: "text/plain",
+    pm: "text/plain",
+    sh: "text/x-shellscript",
+    bash: "text/x-shellscript",
+    zsh: "text/x-shellscript",
+    fish: "text/x-shellscript",
+    lua: "text/x-lua",
+    tcl: "text/plain",
+    ps1: "text/x-powershell",
+    psm1: "text/x-powershell",
+    psd1: "text/x-powershell",
+    // .NET
+    cs: "text/plain",
+    vb: "text/plain",
+    fs: "text/plain",
+    fsx: "text/plain",
+    swift: "text/plain",
+    // Data science / stats
+    r: "text/x-r",
+    rmd: "text/plain",
+    jl: "text/x-julia",
+    m: "text/plain",
+    // Functional / other
+    ml: "text/plain",
+    mli: "text/plain",
+    hs: "text/x-haskell",
+    lhs: "text/x-haskell",
+    ex: "text/x-elixir",
+    exs: "text/x-elixir",
+    erl: "text/x-erlang",
+    hrl: "text/x-erlang",
+    clj: "text/x-clojure",
+    cljs: "text/x-clojure",
+    cljc: "text/x-clojure",
+    edn: "text/plain",
+    elm: "text/plain",
+    // Dart, SQL, GraphQL
+    dart: "text/x-dart",
+    sql: "application/sql",
+    graphql: "application/graphql",
+    gql: "application/graphql",
+    // Config / Build
+    tf: "text/plain",
+    hcl: "text/plain",
+    nix: "text/x-nix",
+    proto: "text/x-protobuf",
+    diff: "text/x-diff",
+    patch: "text/x-patch",
+    asm: "text/plain",
+    s: "text/plain",
+    // WikINT QCM
+    qcm: "application/vnd.wikint.qcm+json",
+};
+
+/** Resolve the best MIME type for a file: browser-reported → extension lookup → octet-stream. */
+export function guessFileMime(file: File): string {
+    const raw = file.type;
+    if (raw && raw !== "application/octet-stream") return raw;
+    const ext = getFileExtension(file.name);
+    return EXT_TO_MIME[ext] ?? "application/octet-stream";
+}
+
 /** Extension → color classes used by browse listing, viewer header, and sidebar. */
 export const EXT_BADGE_COLORS: Record<string, string> = {
     pdf: "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300",

@@ -490,3 +490,39 @@ class MimeRegistry:
 
         guessed, _ = mimetypes.guess_type(filename)
         return guessed or "application/octet-stream"
+
+    @staticmethod
+    def get_extension(filename: str) -> str:
+        """Extract extension from filename.
+
+        To align with frontend, treats the last dot-separated part (or the entire filename
+        if no dot is present) as the extension, with a leading dot.
+        """
+        if not filename:
+            return ""
+        parts = filename.split(".")
+        return f".{parts[-1].lower()}" if len(parts) > 1 or (parts and parts[0]) else ""
+
+    @staticmethod
+    def resolve_upload_mime(filename: str, raw_mime: str) -> str:
+        """Resolve the best MIME to use for upload validation.
+
+        When the client sends application/octet-stream (browser doesn't know the type),
+        try to determine the real MIME from the file extension so the upload can proceed.
+        The actual MIME is always re-detected from magic bytes during processing.
+        """
+        if raw_mime and raw_mime != "application/octet-stream":
+            return raw_mime
+        ext = MimeRegistry.get_extension(filename)
+        # Check our trusted extension mapping first
+        known = EXTENSION_MAPPING.get(ext)
+        if known:
+            return known[0]
+        # Fall back to Python's mimetypes database
+        guessed, _ = mimetypes.guess_type(filename)
+        if guessed and guessed in ALLOWED_MIME_TYPES:
+            return guessed
+        # For any extension we explicitly allow, use text/plain as safe fallback
+        if ext in ALLOWED_EXTENSIONS:
+            return "text/plain"
+        return raw_mime

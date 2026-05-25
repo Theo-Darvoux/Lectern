@@ -309,13 +309,15 @@ async def test_medium5_async_iterator_adapter_protocol():
 
 @pytest.mark.asyncio
 async def test_medium6_use_upload_hook_no_undefined_client_id_ref():
-    """The useUpload hook must not reference an undefined clientIdRef variable."""
-    hook_path = Path(__file__).parent.parent.parent / "web" / "src" / "hooks" / "use-upload.ts"
+    """The useUploadEngine hook must not reference an undefined clientIdRef variable."""
+    hook_path = (
+        Path(__file__).parent.parent.parent / "web" / "src" / "hooks" / "use-upload-engine.ts"
+    )
     if not hook_path.exists():
         pytest.skip("Frontend source not available")
     source = hook_path.read_text()
     assert "clientIdRef" not in source, (
-        "use-upload.ts still references undefined clientIdRef — "
+        "use-upload-engine.ts still references undefined clientIdRef — "
         "this causes a ReferenceError at runtime."
     )
 

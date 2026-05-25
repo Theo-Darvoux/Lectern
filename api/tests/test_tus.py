@@ -467,3 +467,43 @@ async def test_tus_create_invalid_metadata(client: AsyncClient, db_session: Asyn
 
     response = await client.post("/api/upload/tus", headers=headers)
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_tus_patch_compatible_mime_success(
+    client: AsyncClient, db_session: AsyncSession, fake_redis_setup, mock_storage, mock_arq_pool
+):
+    user = await _create_user(db_session)
+    await db_session.commit()
+
+    tus_id = str(uuid.uuid4())
+    # Content starting with LaTeX documentclass (will sniff as text/x-tex)
+    chunk = b"\\documentclass{article}\nhello world"
+    state = {
+        "user_id": str(user.id),
+        "upload_id": "test-upload-id",
+        "quarantine_key": "q-key",
+        "s3_upload_id": "s3-id",
+        "filename": "test.tex",
+        "mime_type": "application/x-tex",  # Declared MIME
+        "offset": "0",
+        "length": str(len(chunk)),
+        "parts": "[]",
+    }
+    await fake_redis_setup.hset(f"tus:state:{tus_id}", state)
+
+    headers = _auth_headers(user)
+    headers.update(
+        {
+            "Tus-Resumable": "1.0.0",
+            "Content-Type": "application/offset+octet-stream",
+            "Upload-Offset": "0",
+        }
+    )
+
+    response = await client.patch(f"/api/upload/tus/{tus_id}", headers=headers, content=chunk)
+
+    # Should succeed (204) because text/x-tex and application/x-tex are compatible for .tex
+    assert response.status_code == 204, (
+        f"Failed: {response.status_code} - {response.json() if response.status_code != 204 else ''}"
+    )
