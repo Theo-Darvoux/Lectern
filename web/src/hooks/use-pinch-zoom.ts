@@ -56,9 +56,13 @@ export function usePinchZoom({
     const resetZoom = useCallback(() => setZoom(initial), [initial]);
 
     // ── Pinch & wheel ────────────────────────────────────────────────────────
-    // We keep the initial distance in a ref so we can compute the ratio
+    // We keep the initial distance in a ref so we can compute the ratio.
+    // `zoomRef` mirrors `zoom` so listeners can read the current value without
+    // the effect re-running on every zoom change (avoids listener churn).
     const pinchStartDistRef = useRef<number | null>(null);
     const pinchStartZoomRef = useRef<number>(initial);
+    const zoomRef = useRef(zoom);
+    useEffect(() => { zoomRef.current = zoom; });
 
     useEffect(() => {
         const el = targetRef?.current;
@@ -70,7 +74,7 @@ export function usePinchZoom({
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             pinchStartDistRef.current = Math.hypot(dx, dy);
-            pinchStartZoomRef.current = zoom;
+            pinchStartZoomRef.current = zoomRef.current;
         };
 
         const onTouchMove = (e: TouchEvent) => {
@@ -106,7 +110,7 @@ export function usePinchZoom({
             el.removeEventListener("touchend", onTouchEnd);
             el.removeEventListener("wheel", onWheel);
         };
-    }, [targetRef, clamp, step, zoom]);
+    }, [targetRef, clamp, step]);
 
     // ── Keyboard shortcuts ───────────────────────────────────────────────────
     useEffect(() => {

@@ -39,6 +39,7 @@
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
     "react-pdf": "^9.2.1",
+    "react-window": "^2.2.7",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
