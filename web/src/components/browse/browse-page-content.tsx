@@ -321,7 +321,7 @@ function BrowseContent() {
         document.title = `${t("courseMaterials")} • ${siteName}`;
       }
     }
-  }, [data, path]);
+  }, [data, path, config]);
 
   const prevRefreshCountRef = useRef(refreshCount);
   useEffect(() => {

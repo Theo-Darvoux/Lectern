@@ -39,6 +39,8 @@ interface AuthConfig {
     smtp_user: string | null;
     smtp_password: string | null;
     smtp_from: string | null;
+    smtp_sender_name: string | null;
+    smtp_avatar_url: string | null;
     smtp_use_tls: boolean;
     s3_endpoint: string | null;
     s3_access_key: string | null;

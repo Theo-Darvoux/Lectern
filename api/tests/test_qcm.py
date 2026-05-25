@@ -159,20 +159,25 @@ class TestValidateQCMStructure:
         with pytest.raises(HTTPException):
             _validate_qcm_structure(qcm)
 
-    def test_answer_five_not_allowed(self):
+    def test_exceeds_max_answers(self):
         from fastapi import HTTPException
+        from app.routers.qcm import QCM_MAX_ANSWERS_PER_QUESTION
 
         qcm = _minimal_qcm()
         qcm["chapters"][0]["questions"][0]["answers"] = [
-            {"id": f"a{i}", "text": f"Answer {i}", "correct": False} for i in range(5)
+            {"id": f"a{i}", "text": f"Answer {i}", "correct": False}
+            for i in range(QCM_MAX_ANSWERS_PER_QUESTION + 1)
         ]
         with pytest.raises(HTTPException):
             _validate_qcm_structure(qcm)
 
-    def test_answer_four_allowed(self):
+    def test_max_answers_exactly_allowed(self):
+        from app.routers.qcm import QCM_MAX_ANSWERS_PER_QUESTION
+
         qcm = _minimal_qcm()
         qcm["chapters"][0]["questions"][0]["answers"] = [
-            {"id": f"a{i}", "text": f"Answer {i}", "correct": i == 0} for i in range(4)
+            {"id": f"a{i}", "text": f"Answer {i}", "correct": i == 0}
+            for i in range(QCM_MAX_ANSWERS_PER_QUESTION)
         ]
         _validate_qcm_structure(qcm)  # no exception
 

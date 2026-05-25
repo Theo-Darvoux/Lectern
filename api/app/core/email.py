@@ -2,7 +2,7 @@ import contextlib
 import re
 import textwrap
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid
+from email.utils import formataddr, formatdate, make_msgid
 
 import aiosmtplib
 
@@ -32,6 +32,7 @@ async def send_email(
     user = config.smtp_user if config and config.smtp_user else settings.smtp_user
     password = config.smtp_password if config and config.smtp_password else settings.smtp_password
     from_email = config.smtp_from if config and config.smtp_from else settings.smtp_from
+    sender_name = config.smtp_sender_name if config and config.smtp_sender_name else None
     use_tls = (
         config.smtp_use_tls if config and config.smtp_use_tls is not None else settings.smtp_use_tls
     )
@@ -44,7 +45,7 @@ async def send_email(
     # Build a multipart/alternative message so SpamAssassin doesn't penalise
     # HTML-only messages (MIME_HTML_ONLY). Plain text is the first (fallback) part.
     message = EmailMessage()
-    message["From"] = from_email
+    message["From"] = formataddr((sender_name, from_email)) if sender_name and from_email else from_email
     message["To"] = to
     message["Subject"] = subject
     # These headers are required — their absence is penalised heavily by SpamAssassin

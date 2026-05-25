@@ -1314,8 +1314,13 @@
           "port": "ex: 587",
           "user": "ex: utilisateur@gmail.com",
           "password": "••••••••",
-          "from": "ex: noreply@wikint.com"
-        }
+          "from": "ex: noreply@wikint.com",
+          "senderName": "ex: Mon App"
+        },
+        "senderName": "Nom affiché de l'expéditeur",
+        "senderNameDescription": "Affiché comme nom d'expéditeur dans les clients mail, ex: \"Mon App\". Apparaît sous la forme : Nom <email@domaine.com>",
+        "avatar": "Avatar de l'expéditeur",
+        "avatarDescription": "Image circulaire affichée dans le corps de l'email au-dessus du nom de l'application."
       },
       "Storage": {
         "title": "Configuration Stockage S3",

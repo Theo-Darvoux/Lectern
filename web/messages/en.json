@@ -1314,8 +1314,13 @@
           "port": "e.g. 587",
           "user": "e.g. user@gmail.com",
           "password": "••••••••",
-          "from": "e.g. noreply@wikint.com"
-        }
+          "from": "e.g. noreply@wikint.com",
+          "senderName": "e.g. My App Team"
+        },
+        "senderName": "Sender Display Name",
+        "senderNameDescription": "Shown as the sender name in email clients, e.g. \"My App Team\". Appears as: Sender Name <from@email.com>",
+        "avatar": "Sender Avatar",
+        "avatarDescription": "Circular image shown in the email body above the app name."
       },
       "Storage": {
         "title": "S3 Storage Configuration",

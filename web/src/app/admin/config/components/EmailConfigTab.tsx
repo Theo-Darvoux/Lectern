@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Mail, Loader2, Save, Send } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Mail, Loader2, Save, Send, Upload, Download, X } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,8 @@ interface AuthConfig {
     smtp_user: string | null;
     smtp_password: string | null;
     smtp_from: string | null;
+    smtp_sender_name: string | null;
+    smtp_avatar_url: string | null;
     smtp_use_tls: boolean;
 }
 
@@ -61,6 +63,107 @@ function ToggleRow({
     );
 }
 
+interface AvatarUploadFieldProps {
+    label: string;
+    description: string;
+    currentUrl: string | null;
+    onUploaded: (url: string) => void;
+    onClear: () => void;
+}
+
+function AvatarUploadField({ label, description, currentUrl, onUploaded, onClear }: AvatarUploadFieldProps) {
+    const [uploading, setUploading] = useState(false);
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    const handleFile = async (file: File) => {
+        setUploading(true);
+        try {
+            const fd = new FormData();
+            fd.append("file", file);
+            const { url } = await apiFetch<{ url: string }>("/admin/auth-config/upload-email-avatar", {
+                method: "POST",
+                body: fd,
+            });
+            onUploaded(url);
+            toast.success(`${label} uploaded`);
+        } catch (e: unknown) {
+            toast.error(e instanceof Error ? e.message : "Upload failed");
+        } finally {
+            setUploading(false);
+        }
+    };
+
+    return (
+        <div className="space-y-2">
+            <Label>{label}</Label>
+            <p className="text-xs text-muted-foreground">{description}</p>
+            <div className="flex items-center gap-4">
+                {currentUrl ? (
+                    <div className="relative group flex-shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                            src={currentUrl}
+                            alt={label}
+                            className="h-14 w-14 rounded-full object-cover border bg-muted/30"
+                        />
+                        <button
+                            type="button"
+                            onClick={onClear}
+                            className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 group-hover:opacity-100 transition-opacity shadow"
+                        >
+                            <X className="h-3 w-3" />
+                        </button>
+                    </div>
+                ) : (
+                    <div className="h-14 w-14 rounded-full border-2 border-dashed border-muted-foreground/30 bg-muted/20 flex items-center justify-center flex-shrink-0">
+                        <Upload className="h-5 w-5 text-muted-foreground/50" />
+                    </div>
+                )}
+                <div className="flex flex-col gap-1.5">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        disabled={uploading}
+                        onClick={() => inputRef.current?.click()}
+                    >
+                        {uploading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                            <Upload className="h-4 w-4" />
+                        )}
+                        {currentUrl ? "Replace" : "Upload"}
+                    </Button>
+                    {currentUrl && (
+                        <a
+                            href={currentUrl}
+                            download
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                            <Download className="h-3 w-3" />
+                            Download
+                        </a>
+                    )}
+                </div>
+            </div>
+            <input
+                ref={inputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                className="hidden"
+                onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleFile(file);
+                    e.target.value = "";
+                }}
+            />
+        </div>
+    );
+}
+
 export function EmailConfigTab({ config, saving, patchConfig }: EmailConfigTabProps) {
     const t = useTranslations("Admin.Config.Email");
     const [emailForm, setEmailForm] = useState<Partial<AuthConfig>>({});
@@ -76,6 +179,8 @@ export function EmailConfigTab({ config, saving, patchConfig }: EmailConfigTabPr
             smtp_user: config.smtp_user,
             smtp_password: config.smtp_password,
             smtp_from: config.smtp_from,
+            smtp_sender_name: config.smtp_sender_name,
+            smtp_avatar_url: config.smtp_avatar_url,
             smtp_use_tls: config.smtp_use_tls,
         });
         setIsEmailModified(false);
@@ -95,6 +200,8 @@ export function EmailConfigTab({ config, saving, patchConfig }: EmailConfigTabPr
             smtp_user: config.smtp_user,
             smtp_password: config.smtp_password,
             smtp_from: config.smtp_from,
+            smtp_sender_name: config.smtp_sender_name,
+            smtp_avatar_url: config.smtp_avatar_url,
             smtp_use_tls: config.smtp_use_tls,
         });
         setIsEmailModified(false);
@@ -205,6 +312,19 @@ export function EmailConfigTab({ config, saving, patchConfig }: EmailConfigTabPr
                                 }}
                             />
                         </div>
+                        <div className="space-y-2 md:col-span-2">
+                            <Label htmlFor="smtp_sender_name">{t("senderName")}</Label>
+                            <Input
+                                id="smtp_sender_name"
+                                placeholder={t("placeholders.senderName")}
+                                value={emailForm.smtp_sender_name || ""}
+                                onChange={(e) => {
+                                    setEmailForm((prev) => ({ ...prev, smtp_sender_name: e.target.value }));
+                                    setIsEmailModified(true);
+                                }}
+                            />
+                            <p className="text-xs text-muted-foreground">{t("senderNameDescription")}</p>
+                        </div>
                     </div>
 
                     <ToggleRow
@@ -220,14 +340,30 @@ export function EmailConfigTab({ config, saving, patchConfig }: EmailConfigTabPr
                             setIsEmailModified(true);
                         }}
                     />
-                    
+
+                    <div className="border-t pt-6">
+                        <AvatarUploadField
+                            label={t("avatar")}
+                            description={t("avatarDescription")}
+                            currentUrl={emailForm.smtp_avatar_url ?? null}
+                            onUploaded={(url) => {
+                                setEmailForm((prev) => ({ ...prev, smtp_avatar_url: url }));
+                                setIsEmailModified(true);
+                            }}
+                            onClear={() => {
+                                setEmailForm((prev) => ({ ...prev, smtp_avatar_url: null }));
+                                setIsEmailModified(true);
+                            }}
+                        />
+                    </div>
+
                     <div className="flex justify-end gap-3 pt-4 border-t">
                         {isEmailModified && (
                             <Button variant="outline" onClick={handleDiscard}>
                                 {t("discard")}
                             </Button>
                         )}
-                        <Button 
+                        <Button
                             onClick={handleSave}
                             disabled={saving || (!isEmailModified && !!config)}
                             className="gap-2"

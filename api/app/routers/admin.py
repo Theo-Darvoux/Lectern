@@ -500,6 +500,8 @@ class AuthConfigPatch(BaseModel):
     smtp_user: str | None = None
     smtp_password: str | None = None
     smtp_from: str | None = None
+    smtp_sender_name: str | None = None
+    smtp_avatar_url: str | None = None
     smtp_use_tls: bool | None = None
     s3_endpoint: str | None = None
     s3_access_key: str | None = None
@@ -834,4 +836,16 @@ async def upload_footer_logo(
 ) -> dict:  # type: ignore[type-arg]
     return await _upload_branding_asset(
         file, "footer-logo", _LOGO_ALLOWED_TYPES, db, redis, "footer_logo_url"
+    )
+
+
+@router.post("/auth-config/upload-email-avatar")
+async def upload_email_avatar(
+    _user: AdminUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    file: UploadFile = File(...),
+) -> dict:  # type: ignore[type-arg]
+    return await _upload_branding_asset(
+        file, "email-avatar", _LOGO_ALLOWED_TYPES, db, redis, "smtp_avatar_url"
     )

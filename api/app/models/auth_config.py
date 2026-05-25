@@ -38,6 +38,8 @@ class AuthConfig(UUIDMixin, Base):
     smtp_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
     smtp_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     smtp_from: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    smtp_sender_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    smtp_avatar_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     smtp_use_tls: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     # S3 Storage Settings

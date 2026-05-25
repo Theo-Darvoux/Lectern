@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { apiFetch } from "@/lib/api-client";
 import { useConfigStore, PublicConfig } from "@/lib/stores";
 import { parseSegments, buildFontsUrlForNames } from "@/lib/fonts";
@@ -8,6 +9,7 @@ import { BackgroundWatermark } from "@/components/background-watermark";
 
 export function ConfigProvider({ children }: { children: ReactNode }) {
     const { config, setConfig } = useConfigStore();
+    const pathname = usePathname();
 
     // Initial fetch and BroadcastChannel setup
     useEffect(() => {
@@ -36,7 +38,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         if (!config) return;
 
-        // Update tab title if the page hasn't set a custom one (i.e. still the static default)
+        // Update tab title if the page hasn't set a custom one (i.e. still the static default).
+        // Re-runs on pathname change so navigation to pages without custom titles also updates.
         if (config.site_name && !document.title.includes(" • ")) {
             document.title = config.site_name;
         }
@@ -93,7 +96,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
                 document.documentElement.style.setProperty('--primary-foreground-custom', 'oklch(0.985 0 0)');
             }
         }
-    }, [config]);
+    }, [config, pathname]);
 
     return (
         <>
