@@ -527,13 +527,13 @@ export function MaterialViewer({
           </div>{/* end header overlay */}
 
           {/*
-           * Viewer wrapper — permanent paddingTop reserves the header's space.
-           * This value never changes on scroll, so the viewer box never resizes.
-           * The remaining padding (sides + bottom) keeps the existing spacing.
+           * Viewer wrapper — paddingTop is dynamically adjusted based on header visibility.
+           * When the header is hidden, it transitions to standard padding (pt-2 / sm:pt-4 / md:pt-6)
+           * to match the sides, ensuring the viewer expands to use the empty top space.
            */}
           <div
-            className="flex-1 min-h-0 overflow-hidden px-2 pb-2 max-sm:pb-20 sm:px-4 sm:pb-4 md:px-6 md:pb-6"
-            style={{ paddingTop: headerHeight }}
+            className="flex-1 min-h-0 overflow-hidden px-2 pt-2 pb-2 max-sm:pb-20 sm:px-4 sm:pt-4 sm:pb-4 md:px-6 md:pt-6 md:pb-6 transition-all duration-300 ease-in-out"
+            style={{ paddingTop: navbarVisible ? headerHeight : undefined }}
           >
           <div
             ref={viewerContainerRef}

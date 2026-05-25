@@ -122,9 +122,11 @@ function buildHighlightRanges(
     return results;
 }
 
-// ─── AnnotatedPage ───────────────────────────────────────────────────────────
-
 const OVERLAY_CLASS = "pdf-annotation-overlay";
+
+interface HighlightBounds extends HighlightRect {
+    threadId: string;
+}
 
 const AnnotatedPage = React.memo(function AnnotatedPage({
     pageNumber, width, annotations, onAnnotationClick,
@@ -136,7 +138,7 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
 }) {
     const pageRef = useRef<HTMLDivElement>(null);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const [clickRects, setClickRects] = useState<Array<HighlightRect & { threadId: string }>>([]);
+    const [clickRects, setClickRects] = useState<HighlightBounds[]>([]);
     const annotationsRef = useRef(annotations);
     useEffect(() => { annotationsRef.current = annotations; });
 
@@ -146,27 +148,25 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
 
     const doRecalc = useCallback(() => {
         const el = pageRef.current;
-        if (!el || !el.querySelector(".react-pdf__Page__textContent")) return;
-        el.querySelectorAll(`.${OVERLAY_CLASS}`).forEach(n => n.remove());
+        if (!el) return;
 
-        const pageInnerDiv = el.querySelector(".react-pdf__Page") as HTMLElement | null;
+        // Ensure the text layer is rendered before measuring
+        if (!el.querySelector(".react-pdf__Page__textContent")) return;
+
+        const containerRect = el.getBoundingClientRect();
         const results = buildHighlightRanges(el, annotationsRef.current);
-        const rects: Array<HighlightRect & { threadId: string }> = [];
+        const rects: HighlightBounds[] = [];
 
         for (const { range, threadId } of results) {
             for (const r of range.getClientRects()) {
                 if (r.width <= 0 || r.height <= 0) continue;
-                if (pageInnerDiv) {
-                    const innerRect = pageInnerDiv.getBoundingClientRect();
-                    const div = document.createElement("div");
-                    div.className = `${OVERLAY_CLASS} annotation-highlight rounded-sm`;
-                    div.style.cssText = `position:absolute;left:${r.left - innerRect.left}px;top:${r.top - innerRect.top}px;width:${r.width}px;height:${r.height}px;z-index:1;pointer-events:none;`;
-                    const tl = pageInnerDiv.querySelector(".textLayer");
-                    if (tl) pageInnerDiv.insertBefore(div, tl);
-                    else pageInnerDiv.appendChild(div);
-                }
-                const containerRect = el.getBoundingClientRect();
-                rects.push({ x: r.left - containerRect.left, y: r.top - containerRect.top, w: r.width, h: r.height, threadId });
+                rects.push({
+                    x: r.left - containerRect.left,
+                    y: r.top - containerRect.top,
+                    w: r.width,
+                    h: r.height,
+                    threadId,
+                });
             }
         }
         setClickRects(rects);
@@ -174,38 +174,62 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
 
     const scheduleRecalc = useCallback(() => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        timeoutRef.current = setTimeout(doRecalc, 300);
+        timeoutRef.current = setTimeout(doRecalc, 150);
     }, [doRecalc]);
 
-    useEffect(() => { scheduleRecalc(); }, [annotationsKey, scheduleRecalc]);
-
     useEffect(() => {
-        const el = pageRef.current;
-        if (!el) return;
-        const observer = new MutationObserver((mutations) => {
-            const hasExternalChange = mutations.some(m =>
-                Array.from(m.addedNodes).some(n => !(n instanceof Element && n.classList.contains(OVERLAY_CLASS)))
-            );
-            if (hasExternalChange) scheduleRecalc();
-        });
-        observer.observe(el, { childList: true, subtree: true });
         scheduleRecalc();
         return () => {
-            observer.disconnect();
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            el.querySelectorAll(`.${OVERLAY_CLASS}`).forEach(n => n.remove());
         };
+    }, [annotationsKey, scheduleRecalc]);
+
+    // Recalculate on window resize to ensure highlights align correctly
+    useEffect(() => {
+        window.addEventListener("resize", scheduleRecalc);
+        return () => window.removeEventListener("resize", scheduleRecalc);
     }, [scheduleRecalc]);
 
     return (
         <div ref={pageRef} style={{ position: "relative" }}>
-            <Page pageNumber={pageNumber} width={width} renderTextLayer renderAnnotationLayer={false} />
+            <Page
+                pageNumber={pageNumber}
+                width={width}
+                renderTextLayer
+                renderAnnotationLayer={false}
+                onRenderSuccess={scheduleRecalc}
+            />
+            {/* Visual Highlights */}
+            {clickRects.map((h, i) => (
+                <div
+                    key={`hl-${i}`}
+                    className={`${OVERLAY_CLASS} annotation-highlight rounded-sm`}
+                    style={{
+                        position: "absolute",
+                        left: h.x,
+                        top: h.y,
+                        width: h.w,
+                        height: h.h,
+                        zIndex: 1,
+                        pointerEvents: "none",
+                    }}
+                />
+            ))}
+            {/* Click Targets */}
             {onAnnotationClick && clickRects.map((h, i) => (
                 <div
-                    key={i}
+                    key={`click-${i}`}
                     onMouseDown={e => e.preventDefault()}
                     onClick={e => onAnnotationClick(h.threadId, e)}
-                    style={{ position: "absolute", left: h.x, top: h.y, width: h.w, height: h.h, zIndex: 10, cursor: "pointer" }}
+                    style={{
+                        position: "absolute",
+                        left: h.x,
+                        top: h.y,
+                        width: h.w,
+                        height: h.h,
+                        zIndex: 10,
+                        cursor: "pointer",
+                    }}
                 />
             ))}
         </div>
@@ -220,6 +244,7 @@ interface RowContext {
     twoPageView: boolean;
     numPages: number;
     pageWidthCommitted: number;
+    containerWidth: number;
     cssScale: number;
     isScaling: boolean;
     allAnnotations: PageAnnotation[];
@@ -229,7 +254,7 @@ interface RowContext {
 const RowCtx = React.createContext<RowContext>(null!);
 
 function PdfRow({ index, style }: RowComponentProps<object>) {
-    const { twoPageView, numPages, pageWidthCommitted, cssScale, isScaling, allAnnotations, handleAnnotationClick } = React.useContext(RowCtx);
+    const { twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick } = React.useContext(RowCtx);
     const padding = 16;
 
     if (twoPageView) {
@@ -237,13 +262,17 @@ function PdfRow({ index, style }: RowComponentProps<object>) {
         const rightPage = index * 2 + 2;
         const leftAnns = allAnnotations.filter(a => a.page === leftPage || a.page == null);
         const rightAnns = allAnnotations.filter(a => a.page === rightPage || a.page == null);
+        const combinedWidth = pageWidthCommitted * 2 + PAGE_GAP;
+        const isWider = combinedWidth > containerWidth - padding * 2;
         return (
             <div style={style} data-page={leftPage}>
                 <div style={{
-                    display: "flex", justifyContent: "center", alignItems: "flex-start",
+                    display: "flex",
+                    justifyContent: isWider ? "flex-start" : "center",
+                    alignItems: "flex-start",
                     gap: PAGE_GAP, padding: `${PAGE_GAP / 2}px ${padding}px`,
                     transform: isScaling ? `scale(${cssScale})` : undefined,
-                    transformOrigin: "top center",
+                    transformOrigin: isWider ? "top left" : "top center",
                     transition: isScaling ? "none" : "transform 0.15s ease-out",
                 }}>
                     <AnnotatedPage pageNumber={leftPage} width={pageWidthCommitted} annotations={leftAnns} onAnnotationClick={handleAnnotationClick} />
@@ -257,13 +286,15 @@ function PdfRow({ index, style }: RowComponentProps<object>) {
 
     const pageNum = index + 1;
     const pageAnns = allAnnotations.filter(a => a.page === pageNum || a.page == null);
+    const isWider = pageWidthCommitted > containerWidth - padding * 2;
     return (
         <div style={style} data-page={pageNum}>
             <div style={{
-                display: "flex", justifyContent: "center",
+                display: "flex",
+                justifyContent: isWider ? "flex-start" : "center",
                 padding: `${PAGE_GAP / 2}px ${padding}px`,
                 transform: isScaling ? `scale(${cssScale})` : undefined,
-                transformOrigin: "top center",
+                transformOrigin: isWider ? "top left" : "top center",
                 transition: isScaling ? "none" : "transform 0.15s ease-out",
             }}>
                 <AnnotatedPage pageNumber={pageNum} width={pageWidthCommitted} annotations={pageAnns} onAnnotationClick={handleAnnotationClick} />
@@ -277,7 +308,7 @@ function PdfRow({ index, style }: RowComponentProps<object>) {
 export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerProps) {
     const t = useTranslations("Viewers");
     const shellScrollRef = useRef<HTMLDivElement>(null);
-    const listRef = useListRef();
+    const listRef = useListRef(null);
 
     const { blobUrl, loading, error } = useMaterialFile({ materialId, fileKey, mode: "url" });
 
@@ -438,8 +469,8 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
     // ── Row context ──────────────────────────────────────────────────────────
     const rowCtxValue = useMemo<RowContext>(() => ({
-        twoPageView, numPages, pageWidthCommitted, cssScale, isScaling, allAnnotations, handleAnnotationClick,
-    }), [twoPageView, numPages, pageWidthCommitted, cssScale, isScaling, allAnnotations, handleAnnotationClick]);
+        twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick,
+    }), [twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick]);
 
     // ── Loading skeleton ─────────────────────────────────────────────────────
     const loadingSkeleton = (
