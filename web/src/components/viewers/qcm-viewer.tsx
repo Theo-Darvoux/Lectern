@@ -36,6 +36,7 @@ import {
   AnnotationForm,
 } from "@/components/annotations/annotation-thread";
 import { useAuthStore } from "@/lib/stores";
+import { useScrollHide } from "@/hooks/use-scroll-hide";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Markdown + KaTeX renderer
@@ -448,6 +449,7 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
   const [page, setPage] = useState(0);
   const [finished, setFinished] = useState(false);
   const questionsScrollRef = useRef<HTMLDivElement>(null);
+  useScrollHide(questionsScrollRef);
 
   // Prevent external initialData changes from wiping in-progress user state.
   const hasStartedRef = useRef(false);

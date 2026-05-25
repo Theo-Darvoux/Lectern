@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useRef } from "react";
+import React, { useRef, useCallback } from "react";
 import { Loader2, AlertCircle } from "lucide-react";
 import { useFullscreen } from "@/hooks/use-fullscreen";
+import { useScrollHide } from "@/hooks/use-scroll-hide";
 import { ViewerToolbar } from "./viewer-toolbar";
 import { FullscreenToggle } from "./fullscreen-toggle";
 import { cn } from "@/lib/utils";
@@ -33,6 +34,17 @@ export function ViewerShell({
 }: ViewerShellProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const { isFullscreen, toggleFullscreen } = useFullscreen(containerRef);
+    const internalScrollRef = useRef<HTMLDivElement>(null);
+    useScrollHide(internalScrollRef);
+
+    // Merge the external scrollRef (used by pinch-zoom etc.) with our internal one
+    const setScrollEl = useCallback(
+      (el: HTMLDivElement | null) => {
+        internalScrollRef.current = el;
+        if (scrollRef) scrollRef.current = el;
+      },
+      [scrollRef],
+    );
 
     return (
         <div
@@ -60,7 +72,7 @@ export function ViewerShell({
             />
 
             <div
-                ref={scrollRef}
+                ref={setScrollEl}
                 className="flex-1 relative overflow-auto bg-zinc-200 dark:bg-zinc-800/50"
                 style={{ touchAction: "pan-x pan-y" }}
             >

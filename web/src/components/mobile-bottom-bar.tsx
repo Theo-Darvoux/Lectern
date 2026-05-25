@@ -66,7 +66,7 @@ export function MobileBottomBar() {
   const isMobile = useIsMobile();
   const { isAuthenticated, user } = useAuth();
   const { unreadCount } = useNotificationStore();
-  const { hideFooter, setMaterialActionsOpen } = useUIStore();
+  const { hideFooter, navbarVisible, setMaterialActionsOpen } = useUIStore();
   const pathname = usePathname();
   const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
   const touchStartY = useRef<number | null>(null);
@@ -97,11 +97,11 @@ export function MobileBottomBar() {
 
   return (
     <div
-      className="fixed bottom-0 left-0 right-0 z-[60] flex justify-center px-4"
+      className="fixed bottom-0 left-0 right-0 z-[60] flex justify-center px-4 transition-transform duration-300 ease-in-out"
       style={{
         paddingBottom: "max(env(safe-area-inset-bottom, 0px), 14px)",
-        transform: "translateZ(0)",
-        WebkitTransform: "translateZ(0)",
+        transform: navbarVisible ? "translateZ(0)" : "translateY(100%) translateZ(0)",
+        WebkitTransform: navbarVisible ? "translateZ(0)" : "translateY(100%) translateZ(0)",
       }}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}

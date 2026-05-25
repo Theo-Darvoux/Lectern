@@ -200,20 +200,24 @@ export function MaterialViewer({
     materialActionsOpen,
     setMaterialActionsOpen,
     setActiveViewerType,
+    navbarVisible,
+    setNavbarVisible,
   } = useUIStore();
   const viewerContainerRef = useRef<HTMLDivElement>(null);
 
-  // Hide footer and prevent page scroll while previewer is active
+  // Hide footer, enter immersive mode, and prevent page scroll while viewer is active
   useEffect(() => {
     setHideFooter(true);
+    setNavbarVisible(false);
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
     return () => {
       setHideFooter(false);
+      setNavbarVisible(true);
       document.body.style.overflow = "";
       document.documentElement.style.overflow = "";
     };
-  }, [setHideFooter]);
+  }, [setHideFooter, setNavbarVisible]);
 
   const materialId = String(material.id ?? "");
 
@@ -332,7 +336,11 @@ export function MaterialViewer({
     <AnnotationsContext.Provider value={annotationsData}>
       <div className="flex h-full w-full overflow-hidden gap-0">
         <div className="flex-1 flex flex-col min-w-0 min-h-0 p-2 max-sm:pb-20 sm:p-4 md:p-6 gap-3">
-          {/* Breadcrumbs */}
+          {/* Breadcrumbs + compact header — slide away in immersive mode */}
+          <div
+            className="overflow-hidden transition-all duration-300 ease-in-out flex flex-col gap-3"
+            style={{ maxHeight: navbarVisible ? 120 : 0, opacity: navbarVisible ? 1 : 0 }}
+          >
           <div>
             <Breadcrumbs items={breadcrumbs} linkLast={true} />
           </div>
@@ -474,6 +482,7 @@ export function MaterialViewer({
               </div>
             )}
           </div>
+          </div>{/* end immersive slide wrapper */}
 
           {/* Viewer */}
           <div

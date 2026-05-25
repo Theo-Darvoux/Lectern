@@ -32,7 +32,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   const t = useTranslations("Layout");
   const { user, isAuthenticated, isLoading, fetchMe } = useAuth();
   const guest = isGuest(user);
-  const { hideFooter } = useUIStore();
+  const { hideFooter, navbarVisible } = useUIStore();
   const rawPathname = usePathname();
   const router = useRouter();
 
@@ -126,7 +126,12 @@ export function LayoutShell({ children }: { children: ReactNode }) {
         <WifiOff className="h-3.5 w-3.5" />
         {t("offlineWarning")}
       </div>
-      {!shouldHideContent && <Navbar />}
+      <div
+        className="overflow-hidden transition-all duration-300 ease-in-out"
+        style={{ maxHeight: navbarVisible ? 56 : 0 }}
+      >
+        {!shouldHideContent && <Navbar />}
+      </div>
       <main className="flex-1 w-full grid grid-cols-1 min-h-0 overflow-y-auto overflow-x-hidden">
         {shouldHideContent ? (
           <div className="flex flex-col items-center justify-center min-h-[50vh] animate-in fade-in duration-500">
