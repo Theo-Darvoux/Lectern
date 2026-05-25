@@ -146,12 +146,13 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
     useEffect(() => { annotationsRef.current = annotations; });
 
     useEffect(() => {
-        if (shouldRenderTextLayer) return;
-        if (!isInteracting) {
-            const timer = setTimeout(() => setShouldRenderTextLayer(true), 150);
-            return () => clearTimeout(timer);
+        if (isInteracting) {
+            setShouldRenderTextLayer(false);
+            return;
         }
-    }, [isInteracting, shouldRenderTextLayer]);
+        const timer = setTimeout(() => setShouldRenderTextLayer(true), 150);
+        return () => clearTimeout(timer);
+    }, [isInteracting]);
 
     const annotationsKey = annotations
         .map(a => `${a.selection_text ?? ""}:${a.page ?? "_"}:${a.occurrenceIndex ?? "_"}`)
@@ -205,8 +206,8 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
         if (typeof window === "undefined") return 1;
         const rawDpr = window.devicePixelRatio || 1;
         const targetPixelWidth = width * rawDpr;
-        if (targetPixelWidth > 2000) {
-            return Math.max(1, 2000 / width);
+        if (targetPixelWidth > 1600) {
+            return Math.max(0.5, 1600 / width);
         }
         return Math.min(2, rawDpr);
     }, [width]);
@@ -385,6 +386,9 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             if (el && el.scrollHeight > el.clientHeight) {
                 scrollAnchorRef.current = { ratio: el.scrollTop / (el.scrollHeight - el.clientHeight) };
             }
+            if (listRef.current) {
+                listRef.current.resetAfterIndex(0);
+            }
             setCommittedZoom(zoom);
         }, 350);
         return () => clearTimeout(timer);
@@ -397,7 +401,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         const newMax = el.scrollHeight - el.clientHeight;
         if (newMax > 0) el.scrollTop = anchor.ratio * newMax;
         scrollAnchorRef.current = null;
-    }, [committedZoom]);
+    }, [committedZoom, twoPageView]);
 
     // ── Container resize ─────────────────────────────────────────────────────
     useEffect(() => {
@@ -405,7 +409,10 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         if (!el) return;
         const ro = new ResizeObserver(entries => {
             const w = entries[0]?.contentRect.width;
-            if (w && w > 0) setContainerWidth(w);
+            if (w && w > 0) {
+                if (listRef.current) listRef.current.resetAfterIndex(0);
+                setContainerWidth(w);
+            }
         });
         ro.observe(el);
         return () => ro.disconnect();
@@ -442,6 +449,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         const currentAspect = pageAspectsRef.current.get(pageNum);
         if (currentAspect !== aspect) {
             pageAspectsRef.current.set(pageNum, aspect);
+            if (listRef.current) listRef.current.resetAfterIndex(0);
             setAspectsVersion(v => v + 1);
         }
     }, []);
@@ -541,7 +549,14 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             error={error || parseError}
             toolbarLeft={
                 <button
-                    onClick={() => setTwoPageView(!twoPageView)}
+                    onClick={() => {
+                        const el = shellScrollRef.current;
+                        if (el && el.scrollHeight > el.clientHeight) {
+                            scrollAnchorRef.current = { ratio: el.scrollTop / (el.scrollHeight - el.clientHeight) };
+                        }
+                        if (listRef.current) listRef.current.resetAfterIndex(0);
+                        setTwoPageView(!twoPageView);
+                    }}
                     disabled={loading}
                     className={`rounded-md p-2 transition-colors disabled:opacity-40 ${twoPageView ? "bg-zinc-200 dark:bg-zinc-800 text-foreground" : "text-muted-foreground hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-foreground"}`}
                     title={t("pdf.toggleTwoPage")}

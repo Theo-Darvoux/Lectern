@@ -1,6 +1,7 @@
 .claude/
 /*.md
 workspace/
+.antigravityignore
 
 # Python
 __pycache__/
