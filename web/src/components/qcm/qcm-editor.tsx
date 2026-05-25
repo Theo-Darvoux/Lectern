@@ -38,8 +38,6 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { QCMFile, QCMChapter, QCMQuestion, QCMAnswer, QCMMeta } from "@/lib/qcm-types";
 import {
-  MAX_ANSWERS_PER_QUESTION,
-  MAX_QUESTIONS_PER_QCM,
   MAX_CHAPTERS_PER_QCM,
   MAX_LEN_TITLE,
   MAX_LEN_DESCRIPTION,
@@ -48,6 +46,7 @@ import {
   MAX_LEN_ANSWER,
   MAX_LEN_EXPLANATION,
 } from "@/lib/qcm-types";
+import { useQcmLimits } from "@/lib/qcm-limits";
 import {
   createEmptyChapter,
   createEmptyQuestion,
@@ -217,6 +216,7 @@ function QuestionEditor({
   onMoveDown,
 }: QuestionEditorProps) {
   const t = useTranslations("QCM.editor");
+  const { max_answers_per_question: MAX_ANSWERS_PER_QUESTION } = useQcmLimits();
   const [previewText, setPreviewText] = useState(false);
   const [showExplanation, setShowExplanation] = useState(
     !!question.explanation,
@@ -420,6 +420,7 @@ function ChapterEditor({
   totalQuestions,
 }: ChapterEditorProps) {
   const t = useTranslations("QCM.editor");
+  const { max_questions_per_qcm: MAX_QUESTIONS_PER_QCM } = useQcmLimits();
 
   const addQuestion = () => {
     if (totalQuestions >= MAX_QUESTIONS_PER_QCM) {

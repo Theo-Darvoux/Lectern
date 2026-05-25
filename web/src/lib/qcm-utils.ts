@@ -1,5 +1,6 @@
 import type { QCMFile, QCMChapter, QCMQuestion, QCMAnswer } from "./qcm-types";
 import { MAX_ANSWERS_PER_QUESTION, MAX_QUESTIONS_PER_QCM } from "./qcm-types";
+import type { QcmLimits } from "./qcm-limits";
 
 export function generateQCMId(): string {
   return crypto.randomUUID();
@@ -34,7 +35,9 @@ export function countQCMQuestions(qcm: QCMFile): number {
 }
 
 /** Runtime validation — returns true if the unknown value is a valid QCMFile. */
-export function validateQCMFile(qcm: unknown): qcm is QCMFile {
+export function validateQCMFile(qcm: unknown, limits?: QcmLimits): qcm is QCMFile {
+  const maxAnswers = limits?.max_answers_per_question ?? MAX_ANSWERS_PER_QUESTION;
+  const maxQuestions = limits?.max_questions_per_qcm ?? MAX_QUESTIONS_PER_QCM;
   if (typeof qcm !== "object" || qcm === null) return false;
   const obj = qcm as Record<string, unknown>;
   if (obj.version !== 1) return false;
@@ -53,7 +56,7 @@ export function validateQCMFile(qcm: unknown): qcm is QCMFile {
       if (typeof question.id !== "string" || !question.id) return false;
       if (typeof question.text !== "string") return false;
       if (!Array.isArray(question.answers)) return false;
-      if (question.answers.length < 1 || question.answers.length > MAX_ANSWERS_PER_QUESTION)
+      if (question.answers.length < 1 || question.answers.length > maxAnswers)
         return false;
 
       for (const a of question.answers as unknown[]) {
@@ -70,7 +73,7 @@ export function validateQCMFile(qcm: unknown): qcm is QCMFile {
     (sum: number, ch: QCMChapter) => sum + ch.questions.length,
     0,
   );
-  return totalQuestions <= MAX_QUESTIONS_PER_QCM;
+  return totalQuestions <= maxQuestions;
 }
 
 export { MAX_ANSWERS_PER_QUESTION, MAX_QUESTIONS_PER_QCM };

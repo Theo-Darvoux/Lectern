@@ -20,6 +20,15 @@ http {
         default 1;
     }
 
+    # Social / link-preview crawlers don't run JS. Route them to the backend OG
+    # renderer (location @og) so shared-link previews show the live admin-config
+    # branding instead of the default baked <head>. Mirrors production nginx.
+    # Excludes search engines (they render JS and must index the real SPA).
+    map $http_user_agent $is_bot {
+        default 0;
+        "~*(facebookexternalhit|facebookcatalog|Facebot|Twitterbot|Slackbot|Slack-ImgProxy|Discordbot|WhatsApp|LinkedInBot|Pinterest|redditbot|TelegramBot|vkShare|SkypeUriPreview|Embedly|Iframely|Mastodon|Bluesky)" 1;
+    }
+
     # SPA fallback (dev only). The Next pages keep `dynamicParams = false`
     # (required by the production `output: export`), so `next dev` 404s any
     # un-prerendered param like /browse/<id> or /profile/<real-id>. Map each
@@ -173,8 +182,24 @@ http {
             return 403;
         }
 
+        # Backend-rendered Open Graph metadata for crawlers (see $is_bot map).
+        location @og {
+            rewrite ^ /api/og break;
+            proxy_pass http://api;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Original-Path $orig_uri;
+        }
+
         # Main Frontend Application
         location / {
+            set $orig_uri $uri;
+            error_page 463 = @og;
+            if ($is_bot) {
+                return 463;
+            }
             # Deep dynamic routes that next dev didn't prerender: serve the
             # matching shell upstream while keeping the browser URL intact.
             if ($spa_shell != "") {

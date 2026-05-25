@@ -356,14 +356,17 @@ class TestParseMoodleXML:
         q = result["chapters"][0]["questions"][0]
         assert "explanation" not in q
 
-    def test_max_4_answers_per_question(self):
+    def test_max_answers_per_question(self):
+        from app.routers.qcm import QCM_MAX_ANSWERS_PER_QUESTION
+
         answers_xml = "".join(
-            f'<answer fraction="0"><text>Answer {i}</text></answer>' for i in range(10)
+            f'<answer fraction="0"><text>Answer {i}</text></answer>'
+            for i in range(QCM_MAX_ANSWERS_PER_QUESTION + 5)
         )
         xml = _moodle_xml([{"name": "Test: Q", "text": "Q?", "answers": answers_xml}])
         result = _parse_moodle_xml(xml)
         answers = result["chapters"][0]["questions"][0]["answers"]
-        assert len(answers) <= 4
+        assert len(answers) <= QCM_MAX_ANSWERS_PER_QUESTION
 
     def test_invalid_xml_raises_422(self):
         from fastapi import HTTPException

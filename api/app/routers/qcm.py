@@ -39,6 +39,7 @@ router = APIRouter(prefix="/api/qcm", tags=["qcm"])
 # ---------------------------------------------------------------------------
 
 QCM_MAX_QUESTIONS: int = int(os.environ.get("QCM_MAX_QUESTIONS", "100"))
+QCM_MAX_ANSWERS_PER_QUESTION: int = int(os.environ.get("QCM_MAX_ANSWERS_PER_QUESTION", "10"))
 QCM_MIME_TYPE = "application/vnd.wikint.qcm+json"
 
 # ---------------------------------------------------------------------------
@@ -86,10 +87,14 @@ def _validate_qcm_structure(data: dict[str, Any]) -> None:
                 )
 
             answers = question.get("answers")
-            if not isinstance(answers, list) or len(answers) < 1 or len(answers) > 4:
+            if (
+                not isinstance(answers, list)
+                or len(answers) < 1
+                or len(answers) > QCM_MAX_ANSWERS_PER_QUESTION
+            ):
                 raise HTTPException(
                     status_code=422,
-                    detail=f"Question {qi} in chapter {ci} must have 1–4 answers",
+                    detail=f"Question {qi} in chapter {ci} must have 1–{QCM_MAX_ANSWERS_PER_QUESTION} answers",
                 )
 
             for ai, answer in enumerate(answers):
@@ -141,6 +146,14 @@ class QCMStageResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("/limits")
+async def get_qcm_limits() -> dict:
+    return {
+        "max_questions_per_qcm": QCM_MAX_QUESTIONS,
+        "max_answers_per_question": QCM_MAX_ANSWERS_PER_QUESTION,
+    }
 
 
 @router.post("/stage", response_model=QCMStageResponse)
@@ -312,7 +325,7 @@ def _parse_moodle_xml(xml_bytes: bytes) -> dict[str, Any]:
                     "correct": is_correct,
                 }
             )
-            if len(answers) >= 4:
+            if len(answers) >= QCM_MAX_ANSWERS_PER_QUESTION:
                 break
 
         if not answers:

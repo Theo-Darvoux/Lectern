@@ -19,6 +19,17 @@ http {
         default 1;
     }
 
+    # Social / link-preview crawlers don't run JS, so the static export's baked
+    # <head> would show stale default branding. Route these User-Agents to the
+    # backend OG renderer (location @og), which emits the live admin-config
+    # branding. Everything else gets the static SPA untouched. Deliberately
+    # excludes search engines (Googlebot, bingbot, …): they render JS and crawl
+    # for indexing, so they must see the real SPA, not the OG stub.
+    map $http_user_agent $is_bot {
+        default 0;
+        "~*(facebookexternalhit|facebookcatalog|Facebot|Twitterbot|Slackbot|Slack-ImgProxy|Discordbot|WhatsApp|LinkedInBot|Pinterest|redditbot|TelegramBot|vkShare|SkypeUriPreview|Embedly|Iframely|Mastodon|Bluesky)" 1;
+    }
+
     access_log /var/log/nginx/access.log combined if=$loggable;
 
     sendfile on;
@@ -66,11 +77,28 @@ http {
 
         location / {
             set $web_backend web;
+            set $orig_uri $uri;
+            error_page 463 = @og;
+            if ($is_bot) {
+                return 463;
+            }
             proxy_pass http://$web_backend:80;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        }
+
+        # Backend-rendered Open Graph metadata for crawlers (see $is_bot map).
+        location @og {
+            set $api_backend api;
+            rewrite ^ /api/og break;
+            proxy_pass http://$api_backend:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+            proxy_set_header X-Original-Path $orig_uri;
         }
     }
 }

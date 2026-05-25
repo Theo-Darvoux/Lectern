@@ -14,7 +14,7 @@ export interface QCMChapter {
 export interface QCMQuestion {
   id: string;
   text: string; // Markdown + LaTeX
-  answers: QCMAnswer[]; // 1–4 answers
+  answers: QCMAnswer[];
   explanation?: string; // optional Markdown + LaTeX
 }
 
