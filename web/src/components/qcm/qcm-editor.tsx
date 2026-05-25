@@ -154,7 +154,7 @@ function AnswerRow({ answer, onChange, onDelete, canDelete }: AnswerRowProps) {
             value={answer.text}
             onChange={(e) => onChange({ ...answer, text: e.target.value.slice(0, MAX_LEN_ANSWER) })}
             placeholder={t("answerText")}
-            className="min-h-[2.5rem] resize-none text-sm"
+            className="min-h-[2.5rem] text-sm"
             rows={1}
             maxLength={MAX_LEN_ANSWER}
           />

@@ -576,7 +576,7 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
 
   if (finished) {
     return (
-      <div className="flex-1 overflow-y-auto">
+      <div className="h-full overflow-y-auto">
         <ResultsView
           qcm={qcm}
           questionStates={questionStates}
