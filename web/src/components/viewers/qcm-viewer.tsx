@@ -449,7 +449,7 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
   const [page, setPage] = useState(0);
   const [finished, setFinished] = useState(false);
   const questionsScrollRef = useRef<HTMLDivElement>(null);
-  useScrollHide(questionsScrollRef);
+  useScrollHide(questionsScrollRef, { onlyShowAtTop: true });
 
   // Prevent external initialData changes from wiping in-progress user state.
   const hasStartedRef = useRef(false);

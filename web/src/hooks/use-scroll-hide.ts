@@ -3,7 +3,14 @@
 import { useEffect, useRef } from "react";
 import { useUIStore } from "@/lib/stores";
 
-export function useScrollHide(scrollRef: React.RefObject<HTMLElement | null>) {
+export interface ScrollHideOptions {
+  onlyShowAtTop?: boolean;
+}
+
+export function useScrollHide(
+  scrollRef: React.RefObject<HTMLElement | null>,
+  options?: ScrollHideOptions
+) {
   const setNavbarVisible = useUIStore((s) => s.setNavbarVisible);
   const lastY = useRef(0);
   const accumulated = useRef(0);
@@ -16,6 +23,12 @@ export function useScrollHide(scrollRef: React.RefObject<HTMLElement | null>) {
       const y = el.scrollTop;
       const delta = y - lastY.current;
       lastY.current = y;
+
+      if (options?.onlyShowAtTop) {
+        // Only show when fully at the top (y <= 0)
+        setNavbarVisible(y <= 0);
+        return;
+      }
 
       // Always show navbar when the user is at (or near) the top of the document
       if (y < 40) {
@@ -45,5 +58,6 @@ export function useScrollHide(scrollRef: React.RefObject<HTMLElement | null>) {
 
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [scrollRef, setNavbarVisible]);
+  }, [scrollRef, setNavbarVisible, options?.onlyShowAtTop]);
 }
+

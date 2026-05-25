@@ -129,12 +129,13 @@ interface HighlightBounds extends HighlightRect {
 }
 
 const AnnotatedPage = React.memo(function AnnotatedPage({
-    pageNumber, width, annotations, onAnnotationClick,
+    pageNumber, width, annotations, onAnnotationClick, onLoadSuccess,
 }: {
     pageNumber: number;
     width: number;
     annotations: PageAnnotation[];
     onAnnotationClick?: (threadId: string, e: React.MouseEvent) => void;
+    onLoadSuccess?: (pageNum: number, page: any) => void;
 }) {
     const pageRef = useRef<HTMLDivElement>(null);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -198,6 +199,7 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
                 renderTextLayer
                 renderAnnotationLayer={false}
                 onRenderSuccess={scheduleRecalc}
+                onLoadSuccess={page => onLoadSuccess?.(pageNumber, page)}
             />
             {/* Visual Highlights */}
             {clickRects.map((h, i) => (
@@ -249,12 +251,13 @@ interface RowContext {
     isScaling: boolean;
     allAnnotations: PageAnnotation[];
     handleAnnotationClick: (threadId: string, e: React.MouseEvent) => void;
+    onPageLoadSuccess: (pageNum: number, page: any) => void;
 }
 
 const RowCtx = React.createContext<RowContext>(null!);
 
 function PdfRow({ index, style }: RowComponentProps<object>) {
-    const { twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick } = React.useContext(RowCtx);
+    const { twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess } = React.useContext(RowCtx);
     const padding = 16;
 
     if (twoPageView) {
@@ -275,9 +278,9 @@ function PdfRow({ index, style }: RowComponentProps<object>) {
                     transformOrigin: isWider ? "top left" : "top center",
                     transition: isScaling ? "none" : "transform 0.15s ease-out",
                 }}>
-                    <AnnotatedPage pageNumber={leftPage} width={pageWidthCommitted} annotations={leftAnns} onAnnotationClick={handleAnnotationClick} />
+                    <AnnotatedPage pageNumber={leftPage} width={pageWidthCommitted} annotations={leftAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} />
                     {rightPage <= numPages && (
-                        <AnnotatedPage pageNumber={rightPage} width={pageWidthCommitted} annotations={rightAnns} onAnnotationClick={handleAnnotationClick} />
+                        <AnnotatedPage pageNumber={rightPage} width={pageWidthCommitted} annotations={rightAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} />
                     )}
                 </div>
             </div>
@@ -297,7 +300,7 @@ function PdfRow({ index, style }: RowComponentProps<object>) {
                 transformOrigin: isWider ? "top left" : "top center",
                 transition: isScaling ? "none" : "transform 0.15s ease-out",
             }}>
-                <AnnotatedPage pageNumber={pageNum} width={pageWidthCommitted} annotations={pageAnns} onAnnotationClick={handleAnnotationClick} />
+                <AnnotatedPage pageNumber={pageNum} width={pageWidthCommitted} annotations={pageAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} />
             </div>
         </div>
     );
@@ -341,6 +344,11 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         thread: ThreadData; clientX: number; clientY: number;
     } | null>(null);
 
+    // ── Page dimensions / Dynamic aspect ratio updates ───────────────────────
+    const pageAspectsRef = useRef<Map<number, number>>(new Map());
+    const [aspectsReady, setAspectsReady] = useState(false);
+    const [aspectsVersion, setAspectsVersion] = useState(0);
+
     // ── Committed zoom (debounced) ───────────────────────────────────────────
     const [committedZoom, setCommittedZoom] = useState(100);
     const scrollAnchorRef = useRef<{ ratio: number } | null>(null);
@@ -377,10 +385,6 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         return () => ro.disconnect();
     }, []);
 
-    // ── Page dimensions ──────────────────────────────────────────────────────
-    const pageAspectsRef = useRef<Map<number, number>>(new Map());
-    const [aspectsReady, setAspectsReady] = useState(false);
-
     const onDocumentLoadSuccess = useCallback(async (pdf: { numPages: number }) => {
         setNumPages(pdf.numPages);
         const pdfDoc = pdf as unknown as {
@@ -388,17 +392,32 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         };
 
         const aspects = new Map<number, number>();
-        for (let i = 1; i <= pdf.numPages; i++) {
-            try {
-                const page = await pdfDoc.getPage(i);
-                const vp = page.getViewport({ scale: 1 });
-                aspects.set(i, vp.height / vp.width);
-            } catch {
+        try {
+            // Get aspect ratio of the first page to use as the default/starting aspect ratio
+            const firstPage = await pdfDoc.getPage(1);
+            const vp = firstPage.getViewport({ scale: 1 });
+            const defaultAspect = vp.height / vp.width;
+
+            for (let i = 1; i <= pdf.numPages; i++) {
+                aspects.set(i, defaultAspect);
+            }
+        } catch {
+            for (let i = 1; i <= pdf.numPages; i++) {
                 aspects.set(i, DEFAULT_ASPECT);
             }
         }
         pageAspectsRef.current = aspects;
         setAspectsReady(true);
+    }, []);
+
+    const onPageLoadSuccess = useCallback((pageNum: number, page: any) => {
+        const vp = page.getViewport({ scale: 1 });
+        const aspect = vp.height / vp.width;
+        const currentAspect = pageAspectsRef.current.get(pageNum);
+        if (currentAspect !== aspect) {
+            pageAspectsRef.current.set(pageNum, aspect);
+            setAspectsVersion(v => v + 1);
+        }
     }, []);
 
     const onDocumentLoadError = useCallback((err: Error) => {
@@ -459,7 +478,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         }
         const aspect = pageAspectsRef.current.get(index + 1) ?? DEFAULT_ASPECT;
         return pageWidthCommitted * aspect + PAGE_GAP;
-    }, [numPages, pageWidthCommitted, twoPageView]);
+    }, [numPages, pageWidthCommitted, twoPageView, aspectsVersion]);
 
     // ── Page tracking ────────────────────────────────────────────────────────
     const handleRowsRendered = useCallback((visible: { startIndex: number }) => {
@@ -469,8 +488,8 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
     // ── Row context ──────────────────────────────────────────────────────────
     const rowCtxValue = useMemo<RowContext>(() => ({
-        twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick,
-    }), [twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick]);
+        twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess,
+    }), [twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess]);
 
     // ── Loading skeleton ─────────────────────────────────────────────────────
     const loadingSkeleton = (
