@@ -15,7 +15,7 @@ import { ViewerShell } from "./viewer-shell";
 import { AnnotationInlinePopover } from "@/components/annotations/annotation-inline-popover";
 import { useTranslations } from "next-intl";
 
-pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 
 // Suppress known pdfjs noise
 if (typeof window !== "undefined") {
