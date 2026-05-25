@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import time
 import uuid
 from datetime import UTC, datetime
@@ -8,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Depends, File, Query, Request, UploadFile
 from pydantic import BaseModel, EmailStr
 from redis.asyncio import Redis
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -39,7 +40,7 @@ async def admin_list_users(
     db: Annotated[AsyncSession, Depends(get_db)],
     role: Annotated[str | None, Query()] = None,
     search: Annotated[str | None, Query()] = None,
-    page: int = Query(1, ge=1),
+    cursor: Annotated[str | None, Query()] = None,
     limit: int = Query(50, ge=1, le=100),
 ) -> dict:  # type: ignore[type-arg]
     base = select(User)
@@ -52,10 +53,36 @@ async def admin_list_users(
     count_result = await db.execute(select(func.count()).select_from(base.subquery()))
     total = count_result.scalar_one()
 
+    if cursor:
+        try:
+            decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+            created_at_str, id_str = decoded.split(",", 1)
+            cursor_dt = datetime.fromisoformat(created_at_str)
+            cursor_id = uuid.UUID(id_str)
+            base = base.where(
+                or_(
+                    User.created_at < cursor_dt,
+                    and_(User.created_at == cursor_dt, User.id < cursor_id),
+                )
+            )
+        except Exception:
+            raise BadRequestError("Invalid cursor")
+
     result = await db.execute(
-        base.order_by(User.created_at.desc()).offset((page - 1) * limit).limit(limit)
+        base.order_by(User.created_at.desc(), User.id.desc()).limit(limit + 1)
     )
-    users = result.scalars().all()
+    users = list(result.scalars().all())
+
+    has_more = len(users) > limit
+    if has_more:
+        users = users[:limit]
+
+    next_cursor: str | None = None
+    if has_more and users:
+        last = users[-1]
+        raw = f"{last.created_at.isoformat()},{last.id}"
+        next_cursor = base64.urlsafe_b64encode(raw.encode()).decode()
+
     return {
         "items": [
             {
@@ -69,8 +96,8 @@ async def admin_list_users(
             for u in users
         ],
         "total": total,
-        "page": page,
-        "pages": max(1, (total + limit - 1) // limit),
+        "next_cursor": next_cursor,
+        "has_more": has_more,
     }
 
 

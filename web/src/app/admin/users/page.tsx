@@ -31,8 +31,8 @@ interface AdminUser {
 interface PaginatedUsers {
     items: AdminUser[];
     total: number;
-    page: number;
-    pages: number;
+    next_cursor: string | null;
+    has_more: boolean;
 }
 
 const ROLE_BADGE: Record<string, string> = {
@@ -41,6 +41,7 @@ const ROLE_BADGE: Record<string, string> = {
     moderator: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
     bureau: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
     vieux: "bg-gray-100 text-gray-800 dark:bg-gray-800/50 dark:text-gray-300",
+    guest: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
 };
 
 export default function AdminUsersPage() {
@@ -50,23 +51,25 @@ export default function AdminUsersPage() {
     const { show } = useConfirmDialog();
 
     const [users, setUsers] = useState<AdminUser[]>([]);
-    const [page, setPage] = useState(1);
-    const [pages, setPages] = useState(1);
+    const [total, setTotal] = useState(0);
+    const [cursorStack, setCursorStack] = useState<string[]>([]);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
     const [search, setSearch] = useState("");
     const [roleFilter, setRoleFilter] = useState("all");
     const [loading, setLoading] = useState(true);
 
-    const fetchUsers = async (p = page) => {
+    const fetchUsers = async (cursor: string | null = null) => {
         setLoading(true);
         try {
-            const params = new URLSearchParams({ page: String(p), limit: "50" });
+            const params = new URLSearchParams({ limit: "50" });
+            if (cursor) params.append("cursor", cursor);
             if (search) params.append("search", search);
             if (roleFilter !== "all") params.append("role", roleFilter);
 
             const data = await apiFetch<PaginatedUsers>(`/admin/users?${params}`);
             setUsers(data.items);
-            setPage(data.page);
-            setPages(data.pages);
+            setTotal(data.total);
+            setNextCursor(data.next_cursor);
         } catch {
             toast.error(t("state.loadError"));
         } finally {
@@ -75,9 +78,29 @@ export default function AdminUsersPage() {
     };
 
     useEffect(() => {
-        const timer = setTimeout(() => fetchUsers(1), 300);
+        setCursorStack([]);
+        setNextCursor(null);
+        const timer = setTimeout(() => fetchUsers(null), 300);
         return () => clearTimeout(timer);
-    }, [search, roleFilter]);  
+    }, [search, roleFilter]);
+
+    const handleNext = () => {
+        if (!nextCursor) return;
+        setCursorStack((prev) => {
+            fetchUsers(nextCursor);
+            return [...prev, nextCursor];
+        });
+    };
+
+    const handlePrev = () => {
+        setCursorStack((prev) => {
+            const stack = [...prev];
+            stack.pop();
+            const prevCursor = stack.length > 0 ? stack[stack.length - 1] : null;
+            fetchUsers(prevCursor);
+            return stack;
+        });
+    };
 
     const handleRoleChange = async (userId: string, newRole: string) => {
         try {
@@ -144,6 +167,8 @@ export default function AdminUsersPage() {
     };
 
     const pendingCount = users.filter((u) => u.role === "pending").length;
+    const hasPrev = cursorStack.length > 0;
+    const hasNext = !!nextCursor;
 
     return (
         <div className="space-y-4">
@@ -191,8 +216,12 @@ export default function AdminUsersPage() {
                         <SelectItem value="moderator">{t("roleLabels.moderator")}</SelectItem>
                         <SelectItem value="bureau">{t("roleLabels.bureau")}</SelectItem>
                         <SelectItem value="vieux">{t("roleLabels.vieux")}</SelectItem>
+                        <SelectItem value="guest">{t("roleLabels.guest")}</SelectItem>
                     </SelectContent>
                 </Select>
+                <span className="text-sm text-muted-foreground whitespace-nowrap">
+                    {t("userCount", { count: total })}
+                </span>
             </div>
 
             <div className="rounded-lg border bg-card">
@@ -220,7 +249,7 @@ export default function AdminUsersPage() {
                                         {u.display_name ?? "-"}
                                     </td>
                                     <td className="p-4">
-                                        {canManageRoles && u.id !== user?.id && u.role !== "pending" ? (
+                                        {canManageRoles && u.id !== user?.id && u.role !== "pending" && u.role !== "guest" ? (
                                             <Select
                                                 value={u.role || "student"}
                                                 onValueChange={(val) => handleRoleChange(u.id, val)}
@@ -242,7 +271,9 @@ export default function AdminUsersPage() {
                                                     ROLE_BADGE[u.role ?? "student"] ?? ROLE_BADGE.student
                                                 )}
                                             >
-                                                {u.role === "pending" ? `⏳ ${t("roleLabels.pending")}` : (u.role ? t(`roleLabels.${u.role}` as any) : t("roleLabels.student"))}
+                                                {u.role === "pending"
+                                                    ? `⏳ ${t("roleLabels.pending")}`
+                                                    : (u.role ? t(`roleLabels.${u.role}` as any) : t("roleLabels.student"))}
                                             </Badge>
                                         )}
                                     </td>
@@ -271,8 +302,8 @@ export default function AdminUsersPage() {
                                                     </Button>
                                                 </>
                                             )}
-                                            {/* Non-pending: delete */}
-                                            {canManageRoles && u.id !== user?.id && u.role !== "pending" && (
+                                            {/* Non-pending, non-guest: delete */}
+                                            {canManageRoles && u.id !== user?.id && u.role !== "pending" && u.role !== "guest" && (
                                                 <Button
                                                     variant="ghost"
                                                     size="icon"
@@ -306,24 +337,21 @@ export default function AdminUsersPage() {
                 </div>
             </div>
 
-            {pages > 1 && (
+            {(hasPrev || hasNext) && (
                 <div className="flex items-center justify-center gap-2">
                     <Button
                         variant="ghost"
                         size="sm"
-                        disabled={page <= 1}
-                        onClick={() => fetchUsers(page - 1)}
+                        disabled={!hasPrev}
+                        onClick={handlePrev}
                     >
                         {t("pagination.previous")}
                     </Button>
-                    <span className="text-sm text-muted-foreground">
-                        {page} {t("pagination.of")} {pages}
-                    </span>
                     <Button
                         variant="ghost"
                         size="sm"
-                        disabled={page >= pages}
-                        onClick={() => fetchUsers(page + 1)}
+                        disabled={!hasNext}
+                        onClick={handleNext}
                     >
                         {t("pagination.next")}
                     </Button>

@@ -1789,7 +1789,8 @@
         "student": "Student",
         "moderator": "Moderator",
         "bureau": "Bureau",
-        "vieux": "Vieux"
+        "vieux": "Vieux",
+        "guest": "Guest"
       },
       "table": {
         "email": "Email",
@@ -1833,7 +1834,8 @@
         "previous": "Previous",
         "next": "Next",
         "of": "of"
-      }
+      },
+      "userCount": "{count, plural, =1 {# user} other {# users}}"
     },
     "DLQ": {
       "title": "Dead Letter Queue",

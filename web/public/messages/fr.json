@@ -1774,7 +1774,8 @@
         "student": "Étudiant",
         "moderator": "Modérateur",
         "bureau": "Bureau",
-        "vieux": "Vieux"
+        "vieux": "Vieux",
+        "guest": "Invité"
       },
       "table": {
         "email": "Email",
@@ -1818,7 +1819,8 @@
         "previous": "Précédent",
         "next": "Suivant",
         "of": "sur"
-      }
+      },
+      "userCount": "{count, plural, =1 {# utilisateur} other {# utilisateurs}}"
     },
     "DLQ": {
       "title": "File d'attente (Dead Letter Queue)",
