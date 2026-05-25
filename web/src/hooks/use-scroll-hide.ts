@@ -48,8 +48,8 @@ export function useScrollHide(
       accumulated.current += delta;
 
       // Hide quickly on scroll-down (150px), but require a strong intentional
-      // upward scroll (500px) before showing the toolbar again.
-      const threshold = accumulated.current < 0 ? 500 : 150;
+      // upward scroll (1000px) before showing the toolbar again.
+      const threshold = accumulated.current < 0 ? 1000 : 150;
       if (Math.abs(accumulated.current) >= threshold) {
         setNavbarVisible(accumulated.current < 0);
         accumulated.current = 0;

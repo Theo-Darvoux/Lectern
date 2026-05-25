@@ -263,8 +263,8 @@ function PdfRow({ index, style }: RowComponentProps<object>) {
     if (twoPageView) {
         const leftPage = index * 2 + 1;
         const rightPage = index * 2 + 2;
-        const leftAnns = allAnnotations.filter(a => a.page === leftPage || a.page == null);
-        const rightAnns = allAnnotations.filter(a => a.page === rightPage || a.page == null);
+        const leftAnns = React.useMemo(() => allAnnotations.filter(a => a.page === leftPage || a.page == null), [allAnnotations, leftPage]);
+        const rightAnns = React.useMemo(() => allAnnotations.filter(a => a.page === rightPage || a.page == null), [allAnnotations, rightPage]);
         const combinedWidth = pageWidthCommitted * 2 + PAGE_GAP;
         const isWider = combinedWidth > containerWidth - padding * 2;
         return (
@@ -288,7 +288,7 @@ function PdfRow({ index, style }: RowComponentProps<object>) {
     }
 
     const pageNum = index + 1;
-    const pageAnns = allAnnotations.filter(a => a.page === pageNum || a.page == null);
+    const pageAnns = React.useMemo(() => allAnnotations.filter(a => a.page === pageNum || a.page == null), [allAnnotations, pageNum]);
     const isWider = pageWidthCommitted > containerWidth - padding * 2;
     return (
         <div style={style} data-page={pageNum}>
