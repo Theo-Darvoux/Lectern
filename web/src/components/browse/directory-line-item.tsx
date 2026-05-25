@@ -7,7 +7,7 @@ import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { Folder, Info, ChevronRight, ThumbsUp, MessageSquare } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
-import { useUIStore } from "@/lib/stores";
+import { useUIStore, useLikeOverrides } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 
 interface DirectoryLineItemProps {
@@ -53,8 +53,9 @@ function DirectoryLineItemImpl({
     const childDirCount = Number(directory.child_directory_count ?? 0);
     const childMatCount = Number(directory.child_material_count ?? 0);
     const totalCount = childDirCount + childMatCount;
-    const likeCount = Number(directory.like_count ?? 0);
-    const isLiked = Boolean(directory.is_liked);
+    const likeOverride = useLikeOverrides((s) => s.directoryOverrides[id]);
+    const likeCount = likeOverride !== undefined ? likeOverride.likeCount : Number(directory.like_count ?? 0);
+    const isLiked = likeOverride !== undefined ? likeOverride.isLiked : Boolean(directory.is_liked);
 
     const buildPath = () => {
         const dirPath = `${pathBase}/${slug}`;

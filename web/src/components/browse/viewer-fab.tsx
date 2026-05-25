@@ -29,7 +29,7 @@ import { FlagButton } from "@/components/flags/flag-button";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
-import { useUIStore, useAuthStore, isGuest } from "@/lib/stores";
+import { useUIStore, useAuthStore, useLikeOverrides, isGuest } from "@/lib/stores";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import { useStagingStore } from "@/lib/staging-store";
 import { apiFetch } from "@/lib/api-client";
@@ -161,14 +161,17 @@ export function ViewerFab({
     fileName,
     mimeType,
   });
-  // Source of truth for like state: the sidebar target when it points at this
-  // material (so FAB and Details tab stay in sync), else the material prop.
+  // Source of truth for like state: session-level override (if toggled this
+  // session), then sidebar target data (updated optimistically on toggle),
+  // then the original server-fetched material prop.
+  const likeOverride = useLikeOverrides((s) => s.materialOverrides[materialId]);
+  const setMaterialLike = useLikeOverrides((s) => s.setMaterialLike);
   const liveData =
     sidebarTarget && sidebarTarget.type === "material" && sidebarTarget.id === materialId
       ? sidebarTarget.data
       : material;
-  const isLiked = Boolean(liveData.is_liked);
-  const likeCount = Number(liveData.like_count ?? 0);
+  const isLiked = likeOverride !== undefined ? likeOverride.isLiked : Boolean(liveData.is_liked);
+  const likeCount = likeOverride !== undefined ? likeOverride.likeCount : Number(liveData.like_count ?? 0);
   const [isLiking, setIsLiking] = useState(false);
   const addOperation = useStagingStore((s) => s.addOperation);
 
@@ -197,13 +200,16 @@ export function ViewerFab({
     const next = !isLiked;
     const nextCount = likeCount + (next ? 1 : -1);
 
-    // Optimistic update through the store so FAB and Details tab stay in sync.
+    // Optimistic update: push to the override store (syncs listing rows) and
+    // the sidebar store (syncs the Details tab if open).
+    setMaterialLike(materialId, next, nextCount);
     updateSidebarData({ is_liked: next, like_count: nextCount });
     setIsLiking(true);
 
     try {
       await apiFetch(`/materials/${materialId}/like`, { method: "POST" });
     } catch {
+      setMaterialLike(materialId, !next, likeCount);
       updateSidebarData({ is_liked: !next, like_count: likeCount });
       toast.error(t("failedToUpdateLike") || "Failed to update like");
     } finally {

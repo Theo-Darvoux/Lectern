@@ -45,7 +45,9 @@ async def send_email(
     # Build a multipart/alternative message so SpamAssassin doesn't penalise
     # HTML-only messages (MIME_HTML_ONLY). Plain text is the first (fallback) part.
     message = EmailMessage()
-    message["From"] = formataddr((sender_name, from_email)) if sender_name and from_email else from_email
+    message["From"] = (
+        formataddr((sender_name, from_email)) if sender_name and from_email else from_email
+    )
     message["To"] = to
     message["Subject"] = subject
     # These headers are required — their absence is penalised heavily by SpamAssassin

@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
-import { useUIStore } from "@/lib/stores";
+import { useUIStore, useLikeOverrides } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
 import { EXT_ICONS, TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
 import { useTranslations } from "next-intl";
@@ -74,8 +74,9 @@ function MaterialLineItemImpl({
     const id = String(material.id ?? "");
     const type = String(material.type ?? "other");
     const attachmentCount = draftAttachmentCount ?? Number(material.attachment_count ?? 0);
-    const likeCount = Number(material.like_count ?? 0);
-    const isLiked = Boolean(material.is_liked);
+    const likeOverride = useLikeOverrides((s) => s.materialOverrides[id]);
+    const likeCount = likeOverride !== undefined ? likeOverride.likeCount : Number(material.like_count ?? 0);
+    const isLiked = likeOverride !== undefined ? likeOverride.isLiked : Boolean(material.is_liked);
 
     // Extract file name from current version info if available
     let fileName = "";

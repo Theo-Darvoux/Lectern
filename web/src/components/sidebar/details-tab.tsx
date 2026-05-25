@@ -28,7 +28,7 @@ import {
 } from "@/lib/file-utils";
 import { apiFetch } from "@/lib/api-client";
 import { ExpandableText } from "@/components/ui/expandable-text";
-import { useUIStore, useBrowseRefreshStore, isGuest } from "@/lib/stores";
+import { useUIStore, useBrowseRefreshStore, useLikeOverrides, isGuest } from "@/lib/stores";
 import { useAuth } from "@/hooks/use-auth";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -139,9 +139,20 @@ function InteractionBar({
   initialLikeCount,
   disabled = false,
 }: InteractionBarProps) {
-  const [isLiked, setIsLiked] = useState(initialIsLiked);
+  const likeOverride = useLikeOverrides((s) =>
+    targetType === "material" ? s.materialOverrides[targetId] : s.directoryOverrides[targetId],
+  );
+  const setLikeOverride = useLikeOverrides((s) =>
+    targetType === "material" ? s.setMaterialLike : s.setDirectoryLike,
+  );
+  // Prefer session-level override (e.g. liked earlier this session) over the
+  // prop value that came from the initial server fetch.
+  const effectiveIsLiked = likeOverride !== undefined ? likeOverride.isLiked : initialIsLiked;
+  const effectiveLikeCount = likeOverride !== undefined ? likeOverride.likeCount : initialLikeCount;
+
+  const [isLiked, setIsLiked] = useState(effectiveIsLiked);
   const [isFavourited, setIsFavourited] = useState(initialIsFavourited);
-  const [likeCount, setLikeCount] = useState(initialLikeCount);
+  const [likeCount, setLikeCount] = useState(effectiveLikeCount);
   const [isLiking, setIsLiking] = useState(false);
   const [isFavouriting, setIsFavouriting] = useState(false);
   const { updateSidebarData } = useUIStore();
@@ -152,10 +163,10 @@ function InteractionBar({
   );
 
   useEffect(() => {
-    setIsLiked(initialIsLiked);
+    setIsLiked(effectiveIsLiked);
     setIsFavourited(initialIsFavourited);
-    setLikeCount(initialLikeCount);
-  }, [targetId, initialIsLiked, initialIsFavourited, initialLikeCount]);
+    setLikeCount(effectiveLikeCount);
+  }, [targetId, effectiveIsLiked, initialIsFavourited, effectiveLikeCount]);
 
   // Guests are read-only: liking and favouriting are unavailable.
   if (isGuest(user)) return null;
@@ -166,6 +177,7 @@ function InteractionBar({
     const nextCount = likeCount + (next ? 1 : -1);
     setIsLiked(next);
     setLikeCount(nextCount);
+    setLikeOverride(targetId, next, nextCount);
     setIsLiking(true);
     try {
       const endpoint =
@@ -178,6 +190,7 @@ function InteractionBar({
     } catch {
       setIsLiked(!next);
       setLikeCount(likeCount);
+      setLikeOverride(targetId, !next, likeCount);
       toast.error(t("failedToUpdateLike"));
     } finally {
       setIsLiking(false);

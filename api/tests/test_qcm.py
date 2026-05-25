@@ -161,6 +161,7 @@ class TestValidateQCMStructure:
 
     def test_exceeds_max_answers(self):
         from fastapi import HTTPException
+
         from app.routers.qcm import QCM_MAX_ANSWERS_PER_QUESTION
 
         qcm = _minimal_qcm()

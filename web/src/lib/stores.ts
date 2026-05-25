@@ -160,6 +160,32 @@ export const useUIStore = create<UIState>((set) => ({
 }));
 
 // ---------------------------------------------------------------------------
+// Like overrides — client-side cache of like state toggled this session.
+// Lets MaterialLineItem / DirectoryLineItem / InteractionBar stay in sync
+// without waiting for a re-fetch, and prevents the sidebar from reverting
+// to stale server data when reopened after a like.
+// ---------------------------------------------------------------------------
+interface LikeOverridesState {
+    materialOverrides: Record<string, { isLiked: boolean; likeCount: number }>;
+    directoryOverrides: Record<string, { isLiked: boolean; likeCount: number }>;
+    setMaterialLike: (id: string, isLiked: boolean, likeCount: number) => void;
+    setDirectoryLike: (id: string, isLiked: boolean, likeCount: number) => void;
+}
+
+export const useLikeOverrides = create<LikeOverridesState>((set) => ({
+    materialOverrides: {},
+    directoryOverrides: {},
+    setMaterialLike: (id, isLiked, likeCount) =>
+        set((s) => ({
+            materialOverrides: { ...s.materialOverrides, [id]: { isLiked, likeCount } },
+        })),
+    setDirectoryLike: (id, isLiked, likeCount) =>
+        set((s) => ({
+            directoryOverrides: { ...s.directoryOverrides, [id]: { isLiked, likeCount } },
+        })),
+}));
+
+// ---------------------------------------------------------------------------
 // Browse refresh store — incremented after a direct-approved PR so the browse
 // page re-fetches immediately without a manual page reload.
 // ---------------------------------------------------------------------------

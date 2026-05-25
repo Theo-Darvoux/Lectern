@@ -96,6 +96,8 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "smtp_password": settings.smtp_password,
             "smtp_ip": settings.smtp_ip,
             "smtp_from": settings.smtp_from,
+            "smtp_sender_name": None,
+            "smtp_avatar_url": None,
             "smtp_use_tls": settings.smtp_use_tls,
             "s3_endpoint": settings.s3_endpoint,
             "s3_access_key": settings.s3_access_key,
@@ -173,6 +175,8 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
             "smtp_from": config_row.smtp_from
             if config_row.smtp_from is not None
             else settings.smtp_from,
+            "smtp_sender_name": config_row.smtp_sender_name,
+            "smtp_avatar_url": config_row.smtp_avatar_url,
             "smtp_use_tls": config_row.smtp_use_tls
             if config_row.smtp_use_tls is not None  # type: ignore[redundant-expr]
             else settings.smtp_use_tls,

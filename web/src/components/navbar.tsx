@@ -178,19 +178,19 @@ export function Navbar() {
             </Button>
           )}
           {guest ? (
-            <div className="flex items-center gap-2">
-              <span className="flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-3 py-1 text-xs font-medium text-muted-foreground">
-                <User className="h-3.5 w-3.5" />
-                {t("guest")}
+            <div className="flex items-center gap-1 sm:gap-2">
+              <span className="flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2 sm:px-3 py-1 text-xs font-medium text-muted-foreground">
+                <User className="h-3.5 w-3.5 shrink-0" />
+                <span className="hidden sm:inline">{t("guest")}</span>
               </span>
               <Button
                 variant="outline"
                 size="sm"
-                className="rounded-full"
+                className="rounded-full px-2 sm:px-3"
                 onClick={logout}
               >
-                <LogOut className="mr-2 h-4 w-4" />
-                {t("exitGuest")}
+                <LogOut className="h-4 w-4 shrink-0" />
+                <span className="hidden sm:inline sm:ml-2">{t("exitGuest")}</span>
               </Button>
             </div>
           ) : isAuthenticated && user ? (

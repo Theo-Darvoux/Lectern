@@ -18,8 +18,12 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("auth_configs", sa.Column("smtp_sender_name", sa.String(length=100), nullable=True))
-    op.add_column("auth_configs", sa.Column("smtp_avatar_url", sa.String(length=255), nullable=True))
+    op.add_column(
+        "auth_configs", sa.Column("smtp_sender_name", sa.String(length=100), nullable=True)
+    )
+    op.add_column(
+        "auth_configs", sa.Column("smtp_avatar_url", sa.String(length=255), nullable=True)
+    )
 
 
 def downgrade() -> None:

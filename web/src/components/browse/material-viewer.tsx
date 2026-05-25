@@ -208,7 +208,7 @@ export function MaterialViewer({
   // Hide footer, enter immersive mode, and prevent page scroll while viewer is active
   useEffect(() => {
     setHideFooter(true);
-    setNavbarVisible(false);
+    setNavbarVisible(true);
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
     return () => {
@@ -218,6 +218,28 @@ export function MaterialViewer({
       document.documentElement.style.overflow = "";
     };
   }, [setHideFooter, setNavbarVisible]);
+
+  // On mobile, hide the navbar/bottom-bar when scrolling down, show when scrolling up
+  useEffect(() => {
+    if (!isMobile) return;
+    let lastY = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      lastY = e.touches[0].clientY;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0].clientY;
+      const delta = lastY - y;
+      if (Math.abs(delta) < 5) return;
+      setNavbarVisible(delta < 0);
+      lastY = y;
+    };
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    return () => {
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+    };
+  }, [isMobile, setNavbarVisible]);
 
   const materialId = String(material.id ?? "");
 
