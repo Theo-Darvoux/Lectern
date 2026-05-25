@@ -315,6 +315,9 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
     const [currentPage, setCurrentPage] = useState(1);
     const [containerWidth, setContainerWidth] = useState<number>(800);
     const [stableWidth, setStableWidth] = useState<number>(800);
+    // stableZoom is a debounced copy of zoom — the canvas only re-renders once the
+    // zoom gesture is idle. During the gesture, a CSS transform bridges the gap.
+    const [stableZoom, setStableZoom] = useState<number>(100);
     const [twoPageView, setTwoPageView] = useState(false);
     const [parseError, setParseError] = useState<string | null>(null);
     const [activeAnnotation, setActiveAnnotation] = useState<{
@@ -330,13 +333,21 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         }
     }, [annotations]);
 
-    // Debounce containerWidth into stableWidth
+    // Debounce containerWidth → stableWidth (smooths window resize)
     useEffect(() => {
-        const timer = setTimeout(() => {
-            setStableWidth(containerWidth);
-        }, 150);
+        const timer = setTimeout(() => setStableWidth(containerWidth), 150);
         return () => clearTimeout(timer);
     }, [containerWidth]);
+
+    // Debounce zoom → stableZoom (smooths zoom gestures — no canvas re-render
+    // until the user stops interacting for 400 ms)
+    useEffect(() => {
+        const timer = setTimeout(() => setStableZoom(zoom), 400);
+        return () => clearTimeout(timer);
+    }, [zoom]);
+
+    const containerWidthRef = useRef(containerWidth);
+    containerWidthRef.current = containerWidth;
 
     useEffect(() => {
         const el = scrollRef.current;
@@ -346,7 +357,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             cancelAnimationFrame(rafId);
             rafId = requestAnimationFrame(() => {
                 const width = entries[0]?.contentRect.width;
-                if (width && Math.abs(width - containerWidth) > 1) {
+                if (width && Math.abs(width - containerWidthRef.current) > 1) {
                     setContainerWidth(width);
                 }
             });
@@ -356,7 +367,8 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             ro.disconnect();
             cancelAnimationFrame(rafId);
         };
-    }, [containerWidth]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -415,18 +427,20 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         sentinels.forEach((el) => io.observe(el));
 
         return () => io.disconnect();
-    }, [numPages, zoom, twoPageView]);
+    // zoom intentionally omitted — the IO root/sentinels don't change on zoom
+    }, [numPages, twoPageView]);
 
-    // We use stableWidth for the actual PDF rendering to avoid heavy rerenders during transitions.
-    // If stableWidth !== containerWidth, we apply a CSS transform to scale the pages visually.
+    // Canvas render dimensions: driven by stable values so the PDF engine only
+    // re-rasterises once per gesture (after the debounce settles), not on every step.
     const baseWidthStable = twoPageView ? (stableWidth - 32 - 16) / 2 : stableWidth - 32;
-    const pageWidthStable = (baseWidthStable * zoom) / 100;
+    const pageWidthStable = (baseWidthStable * stableZoom) / 100;
 
+    // CSS scale bridges the gap between what is rendered and what the user expects
+    // to see right now. It is GPU-accelerated and causes zero canvas re-renders.
     const baseWidthActual = twoPageView ? (containerWidth - 32 - 16) / 2 : containerWidth - 32;
     const pageWidthActual = (baseWidthActual * zoom) / 100;
-
-    const scale = pageWidthStable > 0 ? pageWidthActual / pageWidthStable : 1;
-    const isResizing = Math.abs(scale - 1) > 0.001;
+    const cssScale = pageWidthStable > 0 ? pageWidthActual / pageWidthStable : 1;
+    const isScaling = Math.abs(cssScale - 1) > 0.001;
 
     // key on stable fields so memo doesn't invalidate every time the threads
     // array reference changes due to SSE/mutation state updates
@@ -519,9 +533,14 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             {!loading && !error && blobUrl && (
                 <div
                     style={{
-                        transform: isResizing ? `scale(${scale})` : undefined,
+                        // Always apply the transform so the browser keeps this element
+                        // on a GPU compositor layer (will-change promotes it up front).
+                        transform: `scale(${cssScale})`,
                         transformOrigin: "top center",
-                        transition: isResizing ? "none" : "transform 0.2s ease-out",
+                        // Instant response during gesture; brief ease-out when snapping
+                        // back to scale(1) after the debounce fires and canvas re-renders.
+                        transition: isScaling ? "none" : "transform 0.15s ease-out",
+                        willChange: "transform",
                     }}
                 >
                     <Document

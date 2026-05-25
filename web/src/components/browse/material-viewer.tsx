@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   ArrowLeft,
@@ -204,6 +204,8 @@ export function MaterialViewer({
     setNavbarVisible,
   } = useUIStore();
   const viewerContainerRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
 
   // Hide footer, enter immersive mode, and prevent page scroll while viewer is active
   useEffect(() => {
@@ -218,6 +220,18 @@ export function MaterialViewer({
       document.documentElement.style.overflow = "";
     };
   }, [setHideFooter, setNavbarVisible]);
+
+  // Measure the header height so the viewer can reserve exactly that space permanently.
+  // Using ResizeObserver means it stays accurate if fonts/content change.
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setHeaderHeight(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // On mobile, hide the navbar/bottom-bar when scrolling down, show when scrolling up
   useEffect(() => {
@@ -357,11 +371,17 @@ export function MaterialViewer({
   return (
     <AnnotationsContext.Provider value={annotationsData}>
       <div className="flex h-full w-full overflow-hidden gap-0">
-        <div className="flex-1 flex flex-col min-w-0 min-h-0 p-2 max-sm:pb-20 sm:p-4 md:p-6 gap-3">
-          {/* Breadcrumbs + compact header — slide away in immersive mode */}
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
+          {/*
+           * Header — absolutely positioned so it overlays the viewer.
+           * Slides in/out via translateY (GPU composited, zero layout reflow).
+           * The viewer below has a permanent paddingTop equal to the measured
+           * header height, so it never resizes when the header shows/hides.
+           */}
           <div
-            className="overflow-hidden transition-all duration-300 ease-in-out flex flex-col gap-3"
-            style={{ maxHeight: navbarVisible ? 120 : 0, opacity: navbarVisible ? 1 : 0 }}
+            ref={headerRef}
+            className="absolute top-0 left-0 right-0 z-20 flex flex-col gap-3 p-2 sm:p-4 md:p-6 bg-background/95 backdrop-blur-sm transition-transform duration-300 ease-in-out"
+            style={{ transform: navbarVisible ? "translateY(0)" : "translateY(-110%)" }}
           >
           <div>
             <Breadcrumbs items={breadcrumbs} linkLast={true} />
@@ -504,12 +524,20 @@ export function MaterialViewer({
               </div>
             )}
           </div>
-          </div>{/* end immersive slide wrapper */}
+          </div>{/* end header overlay */}
 
-          {/* Viewer */}
+          {/*
+           * Viewer wrapper — permanent paddingTop reserves the header's space.
+           * This value never changes on scroll, so the viewer box never resizes.
+           * The remaining padding (sides + bottom) keeps the existing spacing.
+           */}
+          <div
+            className="flex-1 min-h-0 overflow-hidden px-2 pb-2 max-sm:pb-20 sm:px-4 sm:pb-4 md:px-6 md:pb-6"
+            style={{ paddingTop: headerHeight }}
+          >
           <div
             ref={viewerContainerRef}
-            className="relative flex-1 min-h-0 overflow-hidden rounded-lg border"
+            className="relative h-full overflow-hidden rounded-lg border"
           >
             {viewerType === "pdf" && (
               <PdfViewer
@@ -586,6 +614,7 @@ export function MaterialViewer({
               disabled={isRestricted || guest}
             />
           </div>
+          </div>{/* end viewer wrapper */}
         </div>
 
         <SharedSidebar />
