@@ -4,7 +4,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMe
 import { ZoomIn, ZoomOut, BookOpen } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
 import { List, useListRef } from "react-window";
-import type { ListImperativeAPI, RowComponentProps } from "react-window";
+import type { RowComponentProps } from "react-window";
 import { Skeleton } from "@/components/ui/skeleton";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -414,9 +414,6 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             if (el && el.scrollHeight > el.clientHeight) {
                 scrollAnchorRef.current = { ratio: el.scrollTop / (el.scrollHeight - el.clientHeight) };
             }
-            if (listRef.current) {
-                listRef.current.resetAfterIndex(0);
-            }
             setCommittedZoom(zoom);
         }, 350);
         return () => clearTimeout(timer);
@@ -438,7 +435,6 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         const ro = new ResizeObserver(entries => {
             const w = entries[0]?.contentRect.width;
             if (w && w > 0) {
-                if (listRef.current) listRef.current.resetAfterIndex(0);
                 setContainerWidth(w);
             }
         });
@@ -446,12 +442,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         return () => ro.disconnect();
     }, []);
 
-    // ── Reset react-window cache on twoPageView toggle ───────────────────────
-    useEffect(() => {
-        if (listRef.current) {
-            listRef.current.resetAfterIndex(0);
-        }
-    }, [twoPageView]);
+
 
     const onDocumentLoadSuccess = useCallback(async (pdf: { numPages: number }) => {
         setNumPages(pdf.numPages);
@@ -484,7 +475,6 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         const currentAspect = pageAspectsRef.current.get(pageNum);
         if (currentAspect !== aspect) {
             pageAspectsRef.current.set(pageNum, aspect);
-            if (listRef.current) listRef.current.resetAfterIndex(0);
             setAspectsVersion(v => v + 1);
         }
     }, []);
@@ -553,6 +543,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         const aspect = pageAspectsRef.current.get(index + 1) ?? DEFAULT_ASPECT;
         return pageWidthCommitted * aspect + PAGE_GAP;
     }, [numPages, pageWidthCommitted, twoPageView, aspectsVersion]);
+
 
     // ── Page tracking ────────────────────────────────────────────────────────
     const handleRowsRendered = useCallback((visible: { startIndex: number }) => {
