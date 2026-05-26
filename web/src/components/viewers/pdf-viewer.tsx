@@ -335,7 +335,7 @@ function PdfRow({ index, style, isScrolling }: RowComponentProps<object> & { isS
             <div style={style} data-page={leftPage}>
                 <div style={{
                     display: "flex",
-                    justifyContent: "center",
+                    width: "max-content", margin: "0 auto", justifyContent: "center",
                     alignItems: "flex-start",
                     gap: PAGE_GAP, padding: `${PAGE_GAP / 2}px ${padding}px`,
                 }}>
@@ -352,7 +352,7 @@ function PdfRow({ index, style, isScrolling }: RowComponentProps<object> & { isS
         <div style={style} data-page={pageNum}>
             <div style={{
                 display: "flex",
-                justifyContent: "center",
+                width: "max-content", margin: "0 auto", justifyContent: "center",
                 padding: `${PAGE_GAP / 2}px ${padding}px`,
             }}>
                 <AnnotatedPage pageNumber={pageNum} width={pageWidthCommitted} annotations={pageAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} isInteracting={isInteracting} />
