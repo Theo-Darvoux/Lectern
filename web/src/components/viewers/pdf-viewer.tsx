@@ -368,7 +368,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
     const shellScrollRef = useRef<HTMLDivElement>(null);
     const listRef = useListRef(null);
 
-    const { blobUrl, loading, error } = useMaterialFile({ materialId, fileKey, mode: "url" });
+    const { blobUrl, loading, error } = useMaterialFile({ materialId, fileKey, mode: "blob" });
 
     // The list's outer element is the actual scroll container for pinch-zoom
     const listOuterRef = useRef<HTMLDivElement>(null);
@@ -444,26 +444,14 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
 
 
-    const onDocumentLoadSuccess = useCallback(async (pdf: { numPages: number }) => {
+    const onDocumentLoadSuccess = useCallback((pdf: { numPages: number }) => {
         setNumPages(pdf.numPages);
-        const pdfDoc = pdf as unknown as {
-            getPage: (n: number) => Promise<{ getViewport: (o: { scale: number }) => { width: number; height: number } }>;
-        };
-
+        // Pre-fill all pages with the default A4 aspect ratio immediately so the
+        // list can render right away. Individual pages will update their true aspect
+        // ratio lazily via onPageLoadSuccess as they are rendered into view.
         const aspects = new Map<number, number>();
-        try {
-            // Get aspect ratio of the first page to use as the default/starting aspect ratio
-            const firstPage = await pdfDoc.getPage(1);
-            const vp = firstPage.getViewport({ scale: 1 });
-            const defaultAspect = vp.height / vp.width;
-
-            for (let i = 1; i <= pdf.numPages; i++) {
-                aspects.set(i, defaultAspect);
-            }
-        } catch {
-            for (let i = 1; i <= pdf.numPages; i++) {
-                aspects.set(i, DEFAULT_ASPECT);
-            }
+        for (let i = 1; i <= pdf.numPages; i++) {
+            aspects.set(i, DEFAULT_ASPECT);
         }
         pageAspectsRef.current = aspects;
         setAspectsReady(true);
