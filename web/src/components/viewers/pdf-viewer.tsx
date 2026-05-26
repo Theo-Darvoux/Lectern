@@ -206,8 +206,8 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
         if (typeof window === "undefined") return 1;
         const rawDpr = window.devicePixelRatio || 1;
         const targetPixelWidth = width * rawDpr;
-        if (targetPixelWidth > 1600) {
-            return Math.max(0.5, 1600 / width);
+        if (targetPixelWidth > 2048) {
+            return Math.max(0.5, 2048 / width);
         }
         return Math.min(2, rawDpr);
     }, [width]);
@@ -275,13 +275,50 @@ interface RowContext {
     allAnnotations: PageAnnotation[];
     handleAnnotationClick: (threadId: string, e: React.MouseEvent) => void;
     onPageLoadSuccess: (pageNum: number, page: any) => void;
+    innerWidth: number;
+    scrollContainerRef: React.RefObject<HTMLDivElement | null>;
 }
 
 const RowCtx = React.createContext<RowContext>(null!);
 
+const InnerElement = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(({ style, ...rest }, ref) => {
+    const { cssScale, isScaling, innerWidth, scrollContainerRef } = React.useContext(RowCtx);
+    const [origin, setOrigin] = useState("50% 50%");
+    
+    useLayoutEffect(() => {
+        if (isScaling && scrollContainerRef.current) {
+            setOrigin(prev => {
+                if (prev.includes("px")) return prev;
+                const el = scrollContainerRef.current!;
+                const y = el.scrollTop + el.clientHeight / 2;
+                const x = el.scrollLeft + el.clientWidth / 2;
+                return `${x}px ${y}px`;
+            });
+        } else {
+            setOrigin("50% 50%");
+        }
+    }, [isScaling, scrollContainerRef]);
+
+    return (
+        <div
+            ref={ref}
+            style={{
+                ...style,
+                width: innerWidth,
+                minWidth: '100%',
+                transform: isScaling ? `scale(${cssScale})` : undefined,
+                transformOrigin: origin,
+                transition: isScaling ? "none" : "transform 0.15s ease-out",
+            }}
+            {...rest}
+        />
+    );
+});
+InnerElement.displayName = "InnerElement";
+
 function PdfRow({ index, style, isScrolling }: RowComponentProps<object> & { isScrolling?: boolean }) {
-    const { twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess } = React.useContext(RowCtx);
-    const isInteracting = isScaling || !!isScrolling;
+    const { twoPageView, numPages, pageWidthCommitted, allAnnotations, handleAnnotationClick, onPageLoadSuccess } = React.useContext(RowCtx);
+    const isInteracting = !!isScrolling;
     const padding = 16;
     
     // Unconditionally compute for single and two-page views to satisfy rules of hooks
@@ -294,18 +331,13 @@ function PdfRow({ index, style, isScrolling }: RowComponentProps<object> & { isS
     const rightAnns = React.useMemo(() => allAnnotations.filter(a => a.page === rightPage || a.page == null), [allAnnotations, rightPage]);
 
     if (twoPageView) {
-        const combinedWidth = pageWidthCommitted * 2 + PAGE_GAP;
-        const isWider = combinedWidth > containerWidth - padding * 2;
         return (
             <div style={style} data-page={leftPage}>
                 <div style={{
                     display: "flex",
-                    justifyContent: isWider ? "flex-start" : "center",
+                    justifyContent: "center",
                     alignItems: "flex-start",
                     gap: PAGE_GAP, padding: `${PAGE_GAP / 2}px ${padding}px`,
-                    transform: isScaling ? `scale(${cssScale})` : undefined,
-                    transformOrigin: isWider ? "top left" : "top center",
-                    transition: isScaling ? "none" : "transform 0.15s ease-out",
                 }}>
                     <AnnotatedPage pageNumber={leftPage} width={pageWidthCommitted} annotations={leftAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} isInteracting={isInteracting} />
                     {rightPage <= numPages && (
@@ -316,16 +348,12 @@ function PdfRow({ index, style, isScrolling }: RowComponentProps<object> & { isS
         );
     }
 
-    const isWider = pageWidthCommitted > containerWidth - padding * 2;
     return (
         <div style={style} data-page={pageNum}>
             <div style={{
                 display: "flex",
-                justifyContent: isWider ? "flex-start" : "center",
+                justifyContent: "center",
                 padding: `${PAGE_GAP / 2}px ${padding}px`,
-                transform: isScaling ? `scale(${cssScale})` : undefined,
-                transformOrigin: isWider ? "top left" : "top center",
-                transition: isScaling ? "none" : "transform 0.15s ease-out",
             }}>
                 <AnnotatedPage pageNumber={pageNum} width={pageWidthCommitted} annotations={pageAnns} onAnnotationClick={handleAnnotationClick} onLoadSuccess={onPageLoadSuccess} isInteracting={isInteracting} />
             </div>
@@ -418,6 +446,13 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         return () => ro.disconnect();
     }, []);
 
+    // ── Reset react-window cache on twoPageView toggle ───────────────────────
+    useEffect(() => {
+        if (listRef.current) {
+            listRef.current.resetAfterIndex(0);
+        }
+    }, [twoPageView]);
+
     const onDocumentLoadSuccess = useCallback(async (pdf: { numPages: number }) => {
         setNumPages(pdf.numPages);
         const pdfDoc = pdf as unknown as {
@@ -499,6 +534,11 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
     const cssScale = committedZoom > 0 ? zoom / committedZoom : 1;
     const isScaling = Math.abs(cssScale - 1) > 0.001;
 
+    const contentWidth = twoPageView 
+        ? (pageWidthCommitted * 2) + PAGE_GAP + padding * 2
+        : pageWidthCommitted + padding * 2;
+    const innerWidth = Math.max(containerWidth, contentWidth);
+
     // ── react-window config ──────────────────────────────────────────────────
     const itemCount = twoPageView ? Math.ceil(numPages / 2) : numPages;
 
@@ -522,8 +562,8 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
     // ── Row context ──────────────────────────────────────────────────────────
     const rowCtxValue = useMemo<RowContext>(() => ({
-        twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess,
-    }), [twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess]);
+        twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess, innerWidth, scrollContainerRef: listOuterRef,
+    }), [twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess, innerWidth, listOuterRef]);
 
     // ── Loading skeleton ─────────────────────────────────────────────────────
     const loadingSkeleton = (
@@ -554,7 +594,6 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                         if (el && el.scrollHeight > el.clientHeight) {
                             scrollAnchorRef.current = { ratio: el.scrollTop / (el.scrollHeight - el.clientHeight) };
                         }
-                        if (listRef.current) listRef.current.resetAfterIndex(0);
                         setTwoPageView(!twoPageView);
                     }}
                     disabled={loading}
@@ -616,6 +655,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                                 rowHeight={getRowHeight}
                                 rowComponent={PdfRow}
                                 rowProps={EMPTY_ROW_PROPS}
+                                innerElementType={InnerElement}
                                 overscanCount={1}
                                 useIsScrolling
                                 onRowsRendered={handleRowsRendered}
