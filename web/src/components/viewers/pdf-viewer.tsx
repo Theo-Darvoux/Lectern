@@ -382,7 +382,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
     useEffect(() => {
         const timer = setTimeout(() => {
-            const el = shellScrollRef.current;
+            const el = listRef.current?.element ?? shellScrollRef.current;
             if (el && el.scrollHeight > el.clientHeight) {
                 scrollAnchorRef.current = { ratio: el.scrollTop / (el.scrollHeight - el.clientHeight) };
             }
@@ -395,7 +395,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
     }, [zoom]);
 
     useLayoutEffect(() => {
-        const el = shellScrollRef.current;
+        const el = listRef.current?.element ?? shellScrollRef.current;
         const anchor = scrollAnchorRef.current;
         if (!el || !anchor) return;
         const newMax = el.scrollHeight - el.clientHeight;
@@ -550,7 +550,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             toolbarLeft={
                 <button
                     onClick={() => {
-                        const el = shellScrollRef.current;
+                        const el = listRef.current?.element ?? shellScrollRef.current;
                         if (el && el.scrollHeight > el.clientHeight) {
                             scrollAnchorRef.current = { ratio: el.scrollTop / (el.scrollHeight - el.clientHeight) };
                         }
@@ -606,6 +606,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                     onLoadSuccess={onDocumentLoadSuccess}
                     onLoadError={onDocumentLoadError}
                     loading={loadingSkeleton}
+                    className="h-full w-full"
                 >
                     {numPages > 0 && aspectsReady && (
                         <RowCtx.Provider value={rowCtxValue}>
@@ -618,7 +619,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                                 overscanCount={1}
                                 useIsScrolling
                                 onRowsRendered={handleRowsRendered}
-                                className="bg-zinc-200 dark:bg-zinc-800/50"
+                                className="h-full w-full bg-zinc-200 dark:bg-zinc-800/50"
                             />
                         </RowCtx.Provider>
                     )}
