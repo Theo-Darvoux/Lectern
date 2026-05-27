@@ -802,6 +802,10 @@ generate_presigned_get_url_cached = generate_presigned_get_cached
 
 async def get_public_url(file_key: str) -> str:
     """Return the permanent public URL for an object that is readable without auth."""
+    # Worker takes priority — branding assets are served via its public /branding/* route.
+    if settings.worker_zip_url:
+        return f"{settings.worker_zip_url.rstrip('/')}/{file_key}"
+
     cfg = await _get_s3_settings()
     public_endpoint = cfg["public_endpoint"]
     bucket = cfg["bucket"]

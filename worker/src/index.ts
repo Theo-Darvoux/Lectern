@@ -86,7 +86,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    if (!url.pathname.startsWith("/zip") && !url.pathname.startsWith("/file/")) {
+    const isBranding = url.pathname.startsWith("/branding/");
+    if (!url.pathname.startsWith("/zip") && !url.pathname.startsWith("/file/") && !isBranding) {
       return new Response("Not found", { status: 404 });
     }
 
@@ -103,6 +104,22 @@ export default {
 
     if (request.method !== "GET") {
       return new Response("Method not allowed", { status: 405 });
+    }
+
+    // ==========================================
+    // PUBLIC ROUTE: Branding assets (no token)
+    // ==========================================
+    if (isBranding) {
+      const key = url.pathname.slice(1); // strip leading /  →  branding/logo.webp
+      const object = await env.BUCKET.get(key);
+      if (!object) return new Response("Not found", { status: 404 });
+
+      const headers = new Headers();
+      object.writeHttpMetadata(headers);
+      headers.set("Cache-Control", "public, max-age=86400");
+      headers.set("Access-Control-Allow-Origin", "*");
+
+      return new Response(object.body as ReadableStream, { headers });
     }
 
     const token = url.searchParams.get("token");
