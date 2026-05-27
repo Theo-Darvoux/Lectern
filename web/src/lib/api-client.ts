@@ -169,14 +169,25 @@ export async function apiFetchBlob(
     return res.blob();
 }
 
-/**
- * Fetch material file content via a two-step presigned URL flow.
- * Step 1: authenticated call to /inline to get a short-lived presigned URL.
- * Step 2: plain fetch (no Authorization header) to the presigned URL.
- * This avoids the S3 400 caused by forwarding auth headers on same-origin redirects.
- */
+// ─── Presigned URL cache ─────────────────────────────────────────────────────
+// Cloudflare CDN caches by full URL. Generating a new presigned URL on every
+// file open always produces a cache miss → R2 storage backend (~15 Mbps cap).
+// Reusing the same URL within its TTL hits the CDN edge → full speed.
+// The server issues URLs with a 15-min TTL; we cache for 12 min to stay safe.
+const _URL_CACHE_TTL_MS = 12 * 60 * 1000;
+const _urlCache = new Map<string, { url: string; expiresAt: number }>();
+
+export function bustMaterialUrlCache(materialId: string): void {
+    _urlCache.delete(materialId);
+}
+
 export async function getMaterialFileUrl(materialId: string): Promise<string> {
+    const cached = _urlCache.get(materialId);
+    if (cached && Date.now() < cached.expiresAt) {
+        return cached.url;
+    }
     const { url } = await apiFetch<{ url: string }>(`/materials/${materialId}/inline`);
+    _urlCache.set(materialId, { url, expiresAt: Date.now() + _URL_CACHE_TTL_MS });
     return url;
 }
 
@@ -186,6 +197,7 @@ export async function fetchMaterialFile(materialId: string): Promise<Response> {
     if (!res.ok) throw new ApiError(res.status, `Failed to fetch file: ${res.statusText}`);
     return res;
 }
+
 
 export async function fetchMaterialBlob(materialId: string): Promise<Blob> {
     const res = await fetchMaterialFile(materialId);
