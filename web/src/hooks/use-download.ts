@@ -28,12 +28,18 @@ export function useDownload() {
 
             const { url, filename } = await apiFetch<{ url: string; filename?: string }>(endpoint);
 
-            const link = document.createElement("a");
-            link.href = url;
-            link.setAttribute("download", filename || "");
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            const isPdf = (filename ?? "").toLowerCase().endsWith(".pdf");
+            if (isPdf) {
+                // Open PDFs in the native browser PDF viewer instead of downloading
+                window.open(url, "_blank", "noopener,noreferrer");
+            } else {
+                const link = document.createElement("a");
+                link.href = url;
+                link.setAttribute("download", filename || "");
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
         } catch (error) {
             console.error("Download failed:", error);
             toast.error("Failed to start download. Please try again.");
