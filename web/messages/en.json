@@ -346,7 +346,11 @@
     "hideTree": "Hide directory tree",
     "filterFolders": "Filter folders…",
     "clear": "Clear",
-    "navigateTo": "Navigate to folder"
+    "navigateTo": "Navigate to folder",
+    "downloadZip": "Download as ZIP",
+    "downloadZipTooltip": "Download all files in this directory as a ZIP archive",
+    "downloadZipTooLarge": "This directory is too large to download as a ZIP",
+    "downloadZipEmpty": "This directory contains no downloadable files"
   },
   "Search": {
     "searchMaterials": "Search materials...",

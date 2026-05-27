@@ -76,15 +76,33 @@ async def get_material_download_url(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[None, Depends(rate_limit_downloads)],
+    redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
-    await increment_download_count(db, material_id)
     data = await get_material_with_version(db, material_id)
+    check_material_access(user.id, data)
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
         from app.core.exceptions import NotFoundError
 
         raise NotFoundError("No file available for download")
 
+    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
+
+    if redis is not None:
+        url = await generate_presigned_get_url_cached(
+            version["file_key"],
+            redis=redis,
+            filename=version.get("file_name"),
+            content_type=version.get("file_mime_type"),
+        )
+    else:
+        url = await generate_presigned_get_url(
+            version["file_key"],
+            filename=version.get("file_name"),
+            content_type=version.get("file_mime_type"),
+        )
+
+    await increment_download_count(db, material_id)
     await record_download(
         db,
         user.id,
@@ -95,13 +113,6 @@ async def get_material_download_url(
     )
     await db.commit()
 
-    from app.core.storage import generate_presigned_get_url
-
-    url = await generate_presigned_get_url(
-        version["file_key"],
-        filename=version.get("file_name"),
-        content_type=version.get("file_mime_type"),
-    )
     return {"url": url, "filename": version.get("file_name")}
 
 
@@ -177,7 +188,7 @@ async def thumbnail_material(
     if not version:
         raise AppError(404, "Material version not found")
 
-    from app.core.storage import generate_presigned_get_url
+    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
 
     # 1. Prefer dedicated stored thumbnail
     target_key = version.get("thumbnail_key")
@@ -208,12 +219,22 @@ async def thumbnail_material(
         else:
             raise AppError(404, "Thumbnail not available for this file type")
 
-    url = await generate_presigned_get_url(
-        target_key,
-        force_download=False,
-        filename=f"thumb_{version.get('file_name') or 'file'}.webp",
-        content_type=content_type,
-    )
+    thumb_filename = f"thumb_{version.get('file_name') or 'file'}.webp"
+    if redis is not None:
+        url = await generate_presigned_get_url_cached(
+            target_key,
+            redis=redis,
+            force_download=False,
+            filename=thumb_filename,
+            content_type=content_type,
+        )
+    else:
+        url = await generate_presigned_get_url(
+            target_key,
+            force_download=False,
+            filename=thumb_filename,
+            content_type=content_type,
+        )
     return {
         "url": url,
         "thumbnail_type": "webp" if is_dedicated else "fallback",
@@ -225,23 +246,22 @@ async def stream_material_file(
     material_id: str,
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[HTTPAuthorizationCredentials, Depends(security)] | None = None,
+    user: Annotated[HTTPAuthorizationCredentials | None, Depends(security)] = None,
     token: Annotated[str | None, Query()] = None,
     redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
 ) -> Any:
     from app.core.exceptions import NotFoundError, UnauthorizedError
-    from app.services.material import check_material_access, get_material_with_version
 
-    # Manual auth check because we want to allow either header OR query token
+    # Manual auth: accept either Authorization: Bearer header OR ?token= query param.
     effective_user: User | None = None
 
-    # (S7/S12) Ensure redis is available for auth checks
+    # Ensure Redis is available for auth checks and rate limiting.
     if redis is None:
         from app.core.redis import redis_client
 
         redis = redis_client
 
-    if user is not None:  # security dependency gives HTTPAuthorizationCredentials or None
+    if user is not None:
         try:
             from app.dependencies.auth import get_user_from_token
 
@@ -260,12 +280,34 @@ async def stream_material_file(
     if not effective_user:
         raise UnauthorizedError()
 
+    from app.dependencies.rate_limit import rate_limit_downloads
+
+    await rate_limit_downloads(request, effective_user, db, redis)
+
     data = await get_material_with_version(db, material_id)
     check_material_access(effective_user.id, data)
 
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
         raise NotFoundError("No file available")
+
+    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
+
+    # Redirect to presigned URL. S3/MinIO handles Range requests (206) perfectly,
+    # which is required for browser media players to seek and parse metadata.
+    if redis is not None:
+        url = await generate_presigned_get_url_cached(
+            version["file_key"],
+            redis=redis,
+            filename=version.get("file_name"),
+            content_type=version.get("file_mime_type"),
+        )
+    else:
+        url = await generate_presigned_get_url(
+            version["file_key"],
+            filename=version.get("file_name"),
+            content_type=version.get("file_mime_type"),
+        )
 
     await record_download(
         db,
@@ -277,15 +319,6 @@ async def stream_material_file(
     )
     await db.commit()
 
-    from app.core.storage import generate_presigned_get_url
-
-    # Redirect to presigned URL. S3/MinIO handles Range requests (206) perfectly,
-    # which is required for browser media players to seek and parse metadata.
-    url = await generate_presigned_get_url(
-        version["file_key"],
-        filename=version.get("file_name"),
-        content_type=version.get("file_mime_type"),
-    )
     return RedirectResponse(url=url, status_code=302)
 
 
@@ -318,12 +351,32 @@ async def get_version_download_url(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[None, Depends(rate_limit_downloads)],
+    redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
+    data = await get_material_with_version(db, material_id)
+    check_material_access(user.id, data)
+
     version = await get_material_version(db, material_id, version_number)
     if not version.file_key:
         from app.core.exceptions import NotFoundError
 
         raise NotFoundError("No file available for download")
+
+    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
+
+    if redis is not None:
+        url = await generate_presigned_get_url_cached(
+            version.file_key,
+            redis=redis,
+            filename=version.file_name,
+            content_type=version.file_mime_type,
+        )
+    else:
+        url = await generate_presigned_get_url(
+            version.file_key,
+            filename=version.file_name,
+            content_type=version.file_mime_type,
+        )
 
     await record_download(
         db,
@@ -335,13 +388,6 @@ async def get_version_download_url(
     )
     await db.commit()
 
-    from app.core.storage import generate_presigned_get_url
-
-    url = await generate_presigned_get_url(
-        version.file_key,
-        filename=version.file_name,
-        content_type=version.file_mime_type,
-    )
     return {"url": url, "filename": version.file_name}
 
 

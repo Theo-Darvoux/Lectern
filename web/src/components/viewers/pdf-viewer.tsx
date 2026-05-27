@@ -281,7 +281,7 @@ interface RowContext {
 
 const RowCtx = React.createContext<RowContext>(null!);
 
-const InnerElement = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(({ style, ...rest }, ref) => {
+const CustomScrollContainer = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(({ children, style, ...rest }, ref) => {
     const { cssScale, isScaling, innerWidth, scrollContainerRef } = React.useContext(RowCtx);
     const [origin, setOrigin] = useState("50% 50%");
     
@@ -302,19 +302,25 @@ const InnerElement = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLD
     return (
         <div
             ref={ref}
-            style={{
-                ...style,
-                width: innerWidth,
-                minWidth: '100%',
-                transform: isScaling ? `scale(${cssScale})` : undefined,
-                transformOrigin: origin,
-                transition: isScaling ? "none" : "transform 0.15s ease-out",
-            }}
+            style={style}
             {...rest}
-        />
+        >
+            <div
+                style={{
+                    position: "relative",
+                    width: innerWidth,
+                    minWidth: "100%",
+                    transform: isScaling ? `scale(${cssScale})` : undefined,
+                    transformOrigin: origin,
+                    transition: isScaling ? "none" : "transform 0.15s ease-out",
+                }}
+            >
+                {children}
+            </div>
+        </div>
     );
 });
-InnerElement.displayName = "InnerElement";
+CustomScrollContainer.displayName = "CustomScrollContainer";
 
 function PdfRow({ index, style, isScrolling }: RowComponentProps<object> & { isScrolling?: boolean }) {
     const { twoPageView, numPages, pageWidthCommitted, allAnnotations, handleAnnotationClick, onPageLoadSuccess } = React.useContext(RowCtx);
@@ -424,6 +430,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         const anchor = scrollAnchorRef.current;
         if (!el || !anchor) return;
         const newMax = el.scrollHeight - el.clientHeight;
+        // eslint-disable-next-line react-hooks/immutability
         if (newMax > 0) el.scrollTop = anchor.ratio * newMax;
         scrollAnchorRef.current = null;
     }, [committedZoom, twoPageView]);
@@ -634,9 +641,8 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                                 rowHeight={getRowHeight}
                                 rowComponent={PdfRow}
                                 rowProps={EMPTY_ROW_PROPS}
-                                innerElementType={InnerElement}
+                                tagName={CustomScrollContainer as any}
                                 overscanCount={1}
-                                useIsScrolling
                                 onRowsRendered={handleRowsRendered}
                                 className="h-full w-full bg-zinc-200 dark:bg-zinc-800/50"
                             />

@@ -3,7 +3,7 @@ import typing
 import unicodedata
 import uuid
 
-from sqlalchemy import exists, func, literal, select, tuple_, update
+from sqlalchemy import case, exists, func, literal, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -670,3 +670,97 @@ async def toggle_directory_favourite(
 
     await db.flush()
     return favourited
+
+
+_DOWNLOAD_MAX_FILES = 500
+_DOWNLOAD_MAX_BYTES = 500 * 1024 * 1024  # 500 MiB
+
+
+async def get_directory_download_entries(
+    db: AsyncSession,
+    directory_id: uuid.UUID,
+) -> tuple[str, list[tuple[str, str]]]:
+    """Return (directory_name, [(arcname, file_key), ...]) for building a ZIP download.
+
+    arcname preserves the subdirectory structure relative to the requested directory.
+    Raises ValueError when the directory exceeds safety limits.
+    """
+    from sqlalchemy import String
+
+    root = await get_directory_by_id(db, directory_id)
+
+    # Recursive CTE: collect every descendant directory with its relative path.
+    base_case = (
+        select(
+            Directory.id,
+            literal("").cast(String).label("rel_path"),
+        )
+        .where(Directory.id == directory_id)
+        .cte(name="dir_tree", recursive=True)
+    )
+
+    base_alias = aliased(base_case, name="p")
+    dir_alias = aliased(Directory, name="d")
+
+    recursive_case = select(
+        dir_alias.id,
+        case(
+            (base_alias.c.rel_path == "", dir_alias.name),
+            else_=base_alias.c.rel_path + "/" + dir_alias.name,
+        ).label("rel_path"),
+    ).join(base_alias, dir_alias.parent_id == base_alias.c.id)
+
+    cte = base_case.union_all(recursive_case)
+
+    # Join to materials and their current file versions.
+    stmt = (
+        select(
+            cte.c.rel_path,
+            MaterialVersion.file_key,
+            MaterialVersion.file_name,
+            MaterialVersion.file_size,
+        )
+        .join(Material, Material.directory_id == cte.c.id)
+        .join(
+            MaterialVersion,
+            (MaterialVersion.material_id == Material.id)
+            & (MaterialVersion.version_number == Material.current_version),
+        )
+        .where(
+            Material.parent_material_id.is_(None),
+            MaterialVersion.file_key.isnot(None),
+            ~MaterialVersion.file_key.like("quarantine/%"),
+        )
+        .order_by(cte.c.rel_path, MaterialVersion.file_name)
+    )
+
+    rows = (await db.execute(stmt)).all()
+
+    if len(rows) > _DOWNLOAD_MAX_FILES:
+        raise ValueError(
+            f"This directory contains too many files ({len(rows)}); limit is {_DOWNLOAD_MAX_FILES}."
+        )
+
+    total = sum(r.file_size or 0 for r in rows)
+    if total > _DOWNLOAD_MAX_BYTES:
+        limit_mb = _DOWNLOAD_MAX_BYTES // (1024 * 1024)
+        raise ValueError(
+            f"This directory is too large to download as a ZIP (limit: {limit_mb} MiB)."
+        )
+
+    # Build arcnames and deduplicate conflicts within the same path.
+    entries: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for row in rows:
+        fname = row.file_name or "file"
+        arcname = f"{row.rel_path}/{fname}" if row.rel_path else fname
+        original = arcname
+        n = 1
+        while arcname in seen:
+            base, _, ext = original.rpartition(".")
+            arcname = f"{base}_{n}.{ext}" if ext else f"{original}_{n}"
+            n += 1
+        seen.add(arcname)
+        entries.append((arcname, row.file_key))
+
+    return root.name, entries

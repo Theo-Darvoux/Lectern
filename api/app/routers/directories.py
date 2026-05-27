@@ -1,16 +1,23 @@
 import asyncio
+import io
 import uuid
+import zipfile
+from collections.abc import AsyncGenerator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.database import get_db
+from app.core.redis import get_redis
 from app.core.sse import register_topic_queue, sse_event_stream, unregister_topic_queue
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_user, security
 from app.models.material import Material
 from app.models.user import User
 from app.schemas.directory import DirectoryBreadcrumb, DirectoryOut
@@ -110,6 +117,131 @@ async def directory_event_stream(id: str) -> EventSourceResponse:
     return EventSourceResponse(
         sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(id, queue)),
         headers={"X-Accel-Buffering": "no"},
+    )
+
+
+async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes, None]:
+    """Stream a ZIP file for the given (arcname, file_key) pairs.
+
+    Each file is fetched from S3 and added to the ZIP sequentially.  New bytes
+    are yielded to the client after each entry so the connection stays alive and
+    the browser can show download progress.
+    """
+    from app.core.storage import stream_object
+
+    class _Buf:
+        """Writable BytesIO wrapper that tracks how many bytes have been flushed."""
+
+        def __init__(self) -> None:
+            self._b = io.BytesIO()
+            self._flushed = 0
+
+        def write(self, data: bytes) -> int:
+            self._b.write(data)
+            return len(data)
+
+        def tell(self) -> int:
+            return self._b.tell()
+
+        def seek(self, pos: int, whence: int = 0) -> int:
+            return self._b.seek(pos, whence)
+
+        def flush(self) -> None:
+            pass
+
+        def pop(self) -> bytes:
+            cur = self._b.tell()
+            self._b.seek(self._flushed)
+            chunk = self._b.read()
+            self._flushed = cur
+            return chunk
+
+    buf = _Buf()
+    zf = zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True)
+
+    for arcname, file_key in entries:
+        try:
+            data = bytearray()
+            async with stream_object(file_key) as body:
+                while True:
+                    chunk = await body.read(65536)
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+            zf.writestr(arcname, bytes(data))
+        except Exception as exc:
+            import logging
+            logging.getLogger("wikint").warning(
+                "Failed to stream ZIP entry for key %s: %s", file_key, exc, exc_info=True
+            )
+            continue
+        new_bytes = buf.pop()
+        if new_bytes:
+            yield new_bytes
+
+    zf.close()
+    final = buf.pop()
+    if final:
+        yield final
+
+
+@router.get("/{id}/download")
+async def download_directory_zip(
+    id: uuid.UUID,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)] = None,
+    token: Annotated[str | None, Query()] = None,
+    redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
+) -> StreamingResponse:
+    """Stream all files in a directory (recursively) as a single ZIP archive.
+
+    Accepts auth via ``Authorization: Bearer`` header or ``?token=`` query param
+    so that a plain browser link (window.location.href) can trigger the download.
+    """
+    from app.core.exceptions import BadRequestError, UnauthorizedError
+    from app.dependencies.auth import get_user_from_token
+    from app.dependencies.rate_limit import rate_limit_downloads
+
+    if redis is None:
+        from app.core.redis import redis_client
+
+        redis = redis_client
+
+    effective_user: User | None = None
+    if credentials is not None:
+        try:
+            effective_user = await get_user_from_token(db, redis, credentials.credentials)
+        except Exception:
+            pass
+    if not effective_user and token:
+        try:
+            effective_user = await get_user_from_token(db, redis, token)
+        except Exception:
+            pass
+    if not effective_user:
+        raise UnauthorizedError()
+
+    await rate_limit_downloads(request, effective_user, db, redis)
+
+    try:
+        dir_name, entries = await directory_service.get_directory_download_entries(db, id)
+    except ValueError as exc:
+        raise BadRequestError(str(exc))
+
+    if not entries:
+        raise BadRequestError("This directory contains no downloadable files.")
+
+    safe_name = dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
+    from urllib.parse import quote
+
+    encoded_name = quote(dir_name)
+    disposition = f'attachment; filename="{safe_name}.zip"; filename*=UTF-8\'\'{encoded_name}.zip'
+
+    return StreamingResponse(
+        _generate_zip(entries),
+        media_type="application/zip",
+        headers={"Content-Disposition": disposition},
     )
 
 

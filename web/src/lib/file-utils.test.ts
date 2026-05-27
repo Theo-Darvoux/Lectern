@@ -1,3 +1,4 @@
+import { describe, it, expect } from "vitest";
 import { formatFileSize, getFileExtension, getViewerType, guessFileMime } from "./file-utils";
 
 describe("file-utils", () => {

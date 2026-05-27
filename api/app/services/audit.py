@@ -1,7 +1,7 @@
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,7 +33,7 @@ async def record_download(
     # 2. Structured JSON Log
     log_entry = {
         "event": "material_download",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "user_id": str(user_id),
         "material_id": str(material_id),
         "version": version_number,
@@ -48,7 +48,7 @@ async def flag_user_account(db: AsyncSession, user_id: uuid.UUID, reason: str) -
 
     log_entry = {
         "event": "user_flagged",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "user_id": str(user_id),
         "reason": reason,
     }

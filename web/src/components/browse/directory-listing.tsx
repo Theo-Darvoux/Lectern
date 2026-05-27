@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { useBrowseRefreshStore, useUIStore, useAuthStore, isGuest } from "@/lib/stores";
+import { getAccessToken } from "@/lib/auth-tokens";
 import {
   Plus,
   Upload,
@@ -41,6 +42,7 @@ import {
   ChevronDown,
   LayoutList,
   LayoutGrid,
+  Download,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -207,6 +209,27 @@ export function DirectoryListing({
     setUploadParentMat({ id, name });
     setUploadOpen(true);
   }, [setUploadOpen, setUploadParentMat]);
+
+  const [isDownloading, setIsDownloading] = useState(false);
+  const handleDownloadZip = useCallback(async () => {
+    if (!realDirId || isDownloading) return;
+    setIsDownloading(true);
+    try {
+      const token = getAccessToken();
+      const params = token ? `?token=${encodeURIComponent(token)}` : "";
+      const a = document.createElement("a");
+      a.href = `/api/directories/${realDirId}/download${params}`;
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch {
+      toast.error(t("downloadZipTooLarge"));
+    } finally {
+      // Give the browser a moment to start the download before re-enabling.
+      setTimeout(() => setIsDownloading(false), 1500);
+    }
+  }, [realDirId, isDownloading, t]);
 
   const selectMode = useSelectionStore((s) => s.selectMode);
   const selected = useSelectionStore((s) => s.selected);
@@ -530,6 +553,24 @@ export function DirectoryListing({
                   >
                     <CheckSquare className="w-4 h-4 opacity-50 group-hover:opacity-100" />
                     <span className="text-xs font-medium uppercase tracking-wider">{t("select")}</span>
+                  </Button>
+                )}
+                {realDirId && !activeGhostDir && (
+                  <Button
+                    key="download-zip-btn"
+                    size="sm"
+                    variant="ghost"
+                    className="gap-2 text-muted-foreground hover:text-foreground hover:bg-accent/50 group px-2"
+                    onClick={handleDownloadZip}
+                    disabled={isDownloading}
+                    title={t("downloadZipTooltip")}
+                  >
+                    {isDownloading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4 opacity-50 group-hover:opacity-100" />
+                    )}
+                    <span className="text-xs font-medium uppercase tracking-wider hidden sm:inline">{t("downloadZip")}</span>
                   </Button>
                 )}
                 <div className="flex items-center border rounded-md overflow-hidden h-8">

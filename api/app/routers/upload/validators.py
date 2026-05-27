@@ -169,8 +169,16 @@ def _sanitize_filename(raw: str) -> str:
     name = re.sub(r"[\x00-\x1f\x7f]", "", name)
     name = re.sub(r"[\u200b-\u200f\u2028-\u202f\u2060\ufeff]", "", name)
     name = re.sub(r"[\s%&\\<>?/!:+`|^~#*]", "_", name)
-    name = re.sub(r"_{3,}", "_", name).strip("_.")
-    return name
+
+    parts = name.rsplit(".", 1)
+    if len(parts) > 1:
+        base = re.sub(r"_{3,}", "_", parts[0]).strip("_.")
+        ext = re.sub(r"_{3,}", "_", parts[1]).strip("_.")
+        if parts[0] and not base:
+            return ""
+        return f"{base}.{ext}" if base else f".{ext}"
+    else:
+        return re.sub(r"_{3,}", "_", name).strip("_.")
 
 
 def _validate_filename(

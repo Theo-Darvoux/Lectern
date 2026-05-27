@@ -346,7 +346,11 @@
     "hideTree": "Masquer l'arborescence",
     "filterFolders": "Filtrer les dossiers…",
     "clear": "Effacer",
-    "navigateTo": "Accéder au dossier"
+    "navigateTo": "Accéder au dossier",
+    "downloadZip": "Télécharger en ZIP",
+    "downloadZipTooltip": "Télécharger tous les fichiers de ce répertoire en archive ZIP",
+    "downloadZipTooLarge": "Ce répertoire est trop volumineux pour être téléchargé en ZIP",
+    "downloadZipEmpty": "Ce répertoire ne contient aucun fichier téléchargeable"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",

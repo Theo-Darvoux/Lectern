@@ -16,12 +16,12 @@ from app.config import settings
 from app.core.database import get_db
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.redis import get_redis
+from app.core.storage import _bust_s3_settings_cache
 from app.dependencies.auth import require_role
 from app.models.auth_config import AllowedDomain, AuthConfig
 from app.models.dead_letter import DeadLetterJob
 from app.models.user import User, UserRole
 from app.schemas.common import DetailedHealthResponse, ServiceStatus
-from app.core.storage import _bust_s3_settings_cache
 from app.services.auth import bust_auth_config_cache, get_full_auth_config
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
