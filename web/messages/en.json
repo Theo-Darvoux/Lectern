@@ -350,7 +350,9 @@
     "downloadZip": "Download as ZIP",
     "downloadZipTooltip": "Download all files in this directory as a ZIP archive",
     "downloadZipTooLarge": "This directory is too large to download as a ZIP",
-    "downloadZipEmpty": "This directory contains no downloadable files"
+    "downloadZipEmpty": "This directory contains no downloadable files",
+    "downloadZipPart": "Downloading \"{dirName}\" — part {part} of {total}",
+    "downloadZipAllStarted": "All {total} parts queued — unzip each one to get the complete directory"
   },
   "Search": {
     "searchMaterials": "Search materials...",

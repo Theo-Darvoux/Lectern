@@ -764,3 +764,80 @@ async def get_directory_download_entries(
         entries.append((arcname, row.file_key))
 
     return root.name, entries
+
+
+async def get_root_download_entries(
+    db: AsyncSession,
+) -> tuple[str, list[tuple[str, str]]]:
+    """Return ("root", [(arcname, file_key), ...]) for downloading the entire root level."""
+    from sqlalchemy import String
+
+    base_case = (
+        select(
+            Directory.id,
+            Directory.name.cast(String).label("rel_path"),
+        )
+        .where(Directory.parent_id.is_(None), Directory.is_system.is_(False))
+        .cte(name="dir_tree", recursive=True)
+    )
+
+    base_alias = aliased(base_case, name="p")
+    dir_alias = aliased(Directory, name="d")
+
+    recursive_case = select(
+        dir_alias.id,
+        (base_alias.c.rel_path + "/" + dir_alias.name).label("rel_path"),
+    ).join(base_alias, dir_alias.parent_id == base_alias.c.id)
+
+    cte = base_case.union_all(recursive_case)
+
+    stmt = (
+        select(
+            cte.c.rel_path,
+            MaterialVersion.file_key,
+            MaterialVersion.file_name,
+            MaterialVersion.file_size,
+        )
+        .join(Material, Material.directory_id == cte.c.id)
+        .join(
+            MaterialVersion,
+            (MaterialVersion.material_id == Material.id)
+            & (MaterialVersion.version_number == Material.current_version),
+        )
+        .where(
+            Material.parent_material_id.is_(None),
+            MaterialVersion.file_key.isnot(None),
+            ~MaterialVersion.file_key.like("quarantine/%"),
+        )
+        .order_by(cte.c.rel_path, MaterialVersion.file_name)
+    )
+
+    rows = (await db.execute(stmt)).all()
+
+    if len(rows) > _DOWNLOAD_MAX_FILES:
+        raise ValueError(
+            f"This directory contains too many files ({len(rows)}); limit is {_DOWNLOAD_MAX_FILES}."
+        )
+
+    total_size = sum(r.file_size or 0 for r in rows)
+    if total_size > _DOWNLOAD_MAX_BYTES:
+        limit_mb = _DOWNLOAD_MAX_BYTES // (1024 * 1024)
+        raise ValueError(
+            f"This directory is too large to download as a ZIP (limit: {limit_mb} MiB)."
+        )
+
+    entries: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for row in rows:
+        fname = row.file_name or "file"
+        arcname = f"{row.rel_path}/{fname}" if row.rel_path else fname
+        original = arcname
+        n = 1
+        while arcname in seen:
+            base, _, ext = original.rpartition(".")
+            arcname = f"{base}_{n}.{ext}" if ext else f"{original}_{n}"
+            n += 1
+        seen.add(arcname)
+        entries.append((arcname, row.file_key))
+
+    return "root", entries

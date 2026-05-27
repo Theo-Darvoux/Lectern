@@ -23,6 +23,7 @@ import {
 import { submitDirectOperations } from "@/lib/pr-client";
 import { useBrowseRefreshStore, useUIStore, useAuthStore, isGuest } from "@/lib/stores";
 import { getAccessToken } from "@/lib/auth-tokens";
+import { apiFetch } from "@/lib/api-client";
 import {
   Plus,
   Upload,
@@ -211,22 +212,72 @@ export function DirectoryListing({
   }, [setUploadOpen, setUploadParentMat]);
 
   const [isDownloading, setIsDownloading] = useState(false);
+  const downloadCancelRef = useRef(false);
+
+  // Dismiss any in-progress download toast and signal the loop to stop when
+  // the component unmounts (e.g. the user navigates away mid-sequence).
+  useEffect(() => {
+    return () => {
+      downloadCancelRef.current = true;
+      toast.dismiss("dir-zip-download");
+    };
+  }, []);
+
   const handleDownloadZip = useCallback(async () => {
-    if (!realDirId || isDownloading) return;
+    if (isDownloading) return;
+    downloadCancelRef.current = false;
     setIsDownloading(true);
+    const toastId = "dir-zip-download";
+    const endpoint = realDirId ? `/directories/${realDirId}/download-chunks` : `/directories/root/download-chunks`;
     try {
-      const token = getAccessToken();
-      const params = token ? `?token=${encodeURIComponent(token)}` : "";
-      const a = document.createElement("a");
-      a.href = `/api/directories/${realDirId}/download${params}`;
-      a.download = "";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      const data = await apiFetch<{ dir_name: string; chunks: Array<{ url: string; filename: string }> }>(
+        endpoint,
+      );
+
+      const triggerLink = (url: string) => {
+        const a = document.createElement("a");
+        a.href = url;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      };
+
+      if (data.chunks.length === 0) {
+        // Worker not configured — fall back to backend streaming endpoint (root has no streaming fallback).
+        if (realDirId) {
+          const token = getAccessToken();
+          const params = token ? `?token=${encodeURIComponent(token)}` : "";
+          triggerLink(`/api/directories/${realDirId}/download${params}`);
+        } else {
+          toast.error(t("downloadZipTooLarge"));
+        }
+      } else if (data.chunks.length === 1) {
+        triggerLink(data.chunks[0].url);
+      } else {
+        // Multiple parts: trigger sequentially so the browser registers each
+        // download separately, and keep the user informed via a live toast.
+        for (let i = 0; i < data.chunks.length; i++) {
+          if (downloadCancelRef.current) break;
+          toast.loading(
+            t("downloadZipPart", { dirName: data.dir_name, part: i + 1, total: data.chunks.length }),
+            { id: toastId, duration: Infinity },
+          );
+          triggerLink(data.chunks[i].url);
+          if (i < data.chunks.length - 1) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+          }
+        }
+        if (!downloadCancelRef.current) {
+          toast.success(
+            t("downloadZipAllStarted", { total: data.chunks.length }),
+            { id: toastId, duration: 6000 },
+          );
+        }
+      }
     } catch {
+      toast.dismiss(toastId);
       toast.error(t("downloadZipTooLarge"));
     } finally {
-      // Give the browser a moment to start the download before re-enabling.
       setTimeout(() => setIsDownloading(false), 1500);
     }
   }, [realDirId, isDownloading, t]);
@@ -555,12 +606,12 @@ export function DirectoryListing({
                     <span className="text-xs font-medium uppercase tracking-wider">{t("select")}</span>
                   </Button>
                 )}
-                {realDirId && !activeGhostDir && (
+                {!activeGhostDir && (
                   <Button
                     key="download-zip-btn"
-                    size="sm"
+                    size="icon"
                     variant="ghost"
-                    className="gap-2 text-muted-foreground hover:text-foreground hover:bg-accent/50 group px-2"
+                    className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent/50 group"
                     onClick={handleDownloadZip}
                     disabled={isDownloading}
                     title={t("downloadZipTooltip")}
@@ -570,7 +621,6 @@ export function DirectoryListing({
                     ) : (
                       <Download className="w-4 h-4 opacity-50 group-hover:opacity-100" />
                     )}
-                    <span className="text-xs font-medium uppercase tracking-wider hidden sm:inline">{t("downloadZip")}</span>
                   </Button>
                 )}
                 <div className="flex items-center border rounded-md overflow-hidden h-8">

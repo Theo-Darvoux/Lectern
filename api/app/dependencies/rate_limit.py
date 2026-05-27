@@ -19,6 +19,7 @@ async def rate_limit_downloads(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    count: int = 1,
 ) -> None:
     minute_limit = 100 if settings.is_dev else 10
     daily_limit = 2000 if settings.is_dev else 200
@@ -29,10 +30,10 @@ async def rate_limit_downloads(
     daily_key = f"ratelimit:downloads:day:{user_id}"
 
     async with redis.pipeline(transaction=True) as pipe:
-        await pipe.incr(minute_key)
+        await pipe.incrby(minute_key, count)
         await pipe.expire(minute_key, 60, nx=True)
 
-        await pipe.incr(daily_key)
+        await pipe.incrby(daily_key, count)
         await pipe.expire(daily_key, 86400, nx=True)
 
         results = await pipe.execute()

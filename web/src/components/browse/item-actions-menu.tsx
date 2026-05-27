@@ -45,6 +45,8 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
+import { apiFetch } from "@/lib/api-client";
+import { getAccessToken } from "@/lib/auth-tokens";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { useBrowseRefreshStore, useAuthStore, isGuest } from "@/lib/stores";
@@ -187,6 +189,66 @@ function useItemActions(item: ItemData, itemPath?: string) {
   };
 
   const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
+
+  const [isDirDownloading, setIsDirDownloading] = useState(false);
+  const dirDownloadCancelRef = useRef(false);
+  const dirToastId = `dir-zip-download-${item.id}`;
+
+  useEffect(() => {
+    return () => {
+      dirDownloadCancelRef.current = true;
+      toast.dismiss(dirToastId);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleDownloadDirectory = useCallback(async () => {
+    if (isDirDownloading) return;
+    dirDownloadCancelRef.current = false;
+    setIsDirDownloading(true);
+    try {
+      const data = await apiFetch<{ dir_name: string; chunks: Array<{ url: string; filename: string }> }>(
+        `/directories/${item.id}/download-chunks`,
+      );
+      const triggerLink = (url: string) => {
+        const a = document.createElement("a");
+        a.href = url;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      };
+      if (data.chunks.length === 0) {
+        const token = getAccessToken();
+        const params = token ? `?token=${encodeURIComponent(token)}` : "";
+        triggerLink(`/api/directories/${item.id}/download${params}`);
+      } else if (data.chunks.length === 1) {
+        triggerLink(data.chunks[0].url);
+      } else {
+        for (let i = 0; i < data.chunks.length; i++) {
+          if (dirDownloadCancelRef.current) break;
+          toast.loading(
+            t("downloadZipPart", { dirName: data.dir_name, part: i + 1, total: data.chunks.length }),
+            { id: dirToastId, duration: Infinity },
+          );
+          triggerLink(data.chunks[i].url);
+          if (i < data.chunks.length - 1) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+          }
+        }
+        if (!dirDownloadCancelRef.current) {
+          toast.success(
+            t("downloadZipAllStarted", { total: data.chunks.length }),
+            { id: dirToastId, duration: 6000 },
+          );
+        }
+      }
+    } catch {
+      toast.dismiss(dirToastId);
+      toast.error(t("downloadZipTooLarge"));
+    } finally {
+      setTimeout(() => setIsDirDownloading(false), 1500);
+    }
+  }, [item.id, isDirDownloading, t, dirToastId]);
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId: item.id,
@@ -220,6 +282,8 @@ function useItemActions(item: ItemData, itemPath?: string) {
     downloadQcmAsXml,
     downloadQcmAsPdf,
     isDownloading,
+    handleDownloadDirectory,
+    isDirDownloading,
     print,
     isPrinting,
     canPrint,
@@ -339,6 +403,16 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
             <LinkIcon className="mr-2 h-4 w-4" />
             <span>{t("copyLink")}</span>
           </Item>
+          {!actions.isMaterial && (
+            <Item
+              onClick={actions.handleDownloadDirectory}
+              disabled={actions.isDirDownloading}
+              className="cursor-pointer"
+            >
+              {actions.isDirDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+              <span>{t("downloadZip")}</span>
+            </Item>
+          )}
         </>
       )}
 

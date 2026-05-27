@@ -350,7 +350,9 @@
     "downloadZip": "Télécharger en ZIP",
     "downloadZipTooltip": "Télécharger tous les fichiers de ce répertoire en archive ZIP",
     "downloadZipTooLarge": "Ce répertoire est trop volumineux pour être téléchargé en ZIP",
-    "downloadZipEmpty": "Ce répertoire ne contient aucun fichier téléchargeable"
+    "downloadZipEmpty": "Ce répertoire ne contient aucun fichier téléchargeable",
+    "downloadZipPart": "Téléchargement de « {dirName} » — partie {part} sur {total}",
+    "downloadZipAllStarted": "{total} parties en file — dézippez-les toutes pour obtenir le dossier complet"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",

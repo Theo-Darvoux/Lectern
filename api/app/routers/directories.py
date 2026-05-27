@@ -26,6 +26,19 @@ from app.services import directory as directory_service
 router = APIRouter(prefix="/api/directories", tags=["directories"])
 
 
+_CHUNK_SIZE = 50
+
+
+class DownloadChunk(BaseModel):
+    url: str
+    filename: str
+
+
+class DownloadChunksResponse(BaseModel):
+    dir_name: str
+    chunks: list[DownloadChunk]
+
+
 class ResolvePathsRequest(BaseModel):
     directory_ids: list[uuid.UUID] = []
     material_ids: list[uuid.UUID] = []
@@ -186,6 +199,123 @@ async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes,
     finally:
         if zf.fp is not None:
             zf.close()
+
+
+@router.get("/root/download-chunks", response_model=DownloadChunksResponse)
+async def download_root_chunks(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
+) -> DownloadChunksResponse:
+    """Return Worker ZIP chunk URLs for the entire root level (all top-level directories)."""
+    from app.config import settings
+    from app.core.exceptions import BadRequestError
+    from app.dependencies.rate_limit import rate_limit_downloads
+
+    if redis is None:
+        from app.core.redis import redis_client
+        redis = redis_client
+
+    try:
+        dir_name, entries = await directory_service.get_root_download_entries(db)
+    except ValueError as exc:
+        raise BadRequestError(str(exc))
+
+    if not entries:
+        raise BadRequestError("This directory contains no downloadable files.")
+
+    if not settings.worker_zip_url or not settings.worker_zip_hmac_secret:
+        await rate_limit_downloads(request, current_user, db, redis)
+        return DownloadChunksResponse(dir_name=dir_name, chunks=[])
+
+    from app.core.zip_token import make_zip_token
+    from urllib.parse import urlencode
+
+    entry_chunks = [entries[i : i + _CHUNK_SIZE] for i in range(0, len(entries), _CHUNK_SIZE)]
+    total = len(entry_chunks)
+
+    await rate_limit_downloads(request, current_user, db, redis, count=total)
+
+    chunks: list[DownloadChunk] = []
+    for part, chunk_entries in enumerate(entry_chunks, 1):
+        token = make_zip_token(
+            dir_name,
+            chunk_entries,
+            settings.worker_zip_hmac_secret,
+            part=part,
+            total=total,
+        )
+        url = f"{settings.worker_zip_url.rstrip('/')}/zip?{urlencode({'token': token})}"
+        suffix = f" ({part})" if part > 1 else ""
+        safe_name = (dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory") + suffix
+        chunks.append(DownloadChunk(url=url, filename=f"{safe_name}.zip"))
+
+    return DownloadChunksResponse(dir_name=dir_name, chunks=chunks)
+
+
+@router.get("/{id}/download-chunks", response_model=DownloadChunksResponse)
+async def download_directory_chunks(
+    id: uuid.UUID,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
+) -> DownloadChunksResponse:
+    """Return a list of Worker URLs for downloading a directory as one or more ZIP files.
+
+    Each chunk covers at most ``_CHUNK_SIZE`` files, keeping the Worker within the
+    free-plan subrequest cap (50) and URL-length limit.  When the Worker is not
+    configured the response contains an empty ``chunks`` list; the client should
+    fall back to the streaming ``/download`` endpoint in that case.
+    """
+    from app.config import settings
+    from app.core.exceptions import BadRequestError
+    from app.dependencies.rate_limit import rate_limit_downloads
+
+    if redis is None:
+        from app.core.redis import redis_client
+        redis = redis_client
+
+    try:
+        dir_name, entries = await directory_service.get_directory_download_entries(db, id)
+    except ValueError as exc:
+        raise BadRequestError(str(exc))
+
+    if not entries:
+        raise BadRequestError("This directory contains no downloadable files.")
+
+    if not settings.worker_zip_url or not settings.worker_zip_hmac_secret:
+        # Rate-limit as a single download before falling back.
+        await rate_limit_downloads(request, current_user, db, redis)
+        return DownloadChunksResponse(dir_name=dir_name, chunks=[])
+
+    from app.core.zip_token import make_zip_token
+    from urllib.parse import urlencode
+
+    entry_chunks = [entries[i : i + _CHUNK_SIZE] for i in range(0, len(entries), _CHUNK_SIZE)]
+    total = len(entry_chunks)
+
+    # Count each chunk as a separate download so the rate limit reflects actual
+    # Worker requests being authorised rather than always counting as one.
+    await rate_limit_downloads(request, current_user, db, redis, count=total)
+
+    chunks: list[DownloadChunk] = []
+
+    for part, chunk_entries in enumerate(entry_chunks, 1):
+        token = make_zip_token(
+            dir_name,
+            chunk_entries,
+            settings.worker_zip_hmac_secret,
+            part=part,
+            total=total,
+        )
+        url = f"{settings.worker_zip_url.rstrip('/')}/zip?{urlencode({'token': token})}"
+        suffix = f" ({part})" if part > 1 else ""
+        safe_name = (dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory") + suffix
+        chunks.append(DownloadChunk(url=url, filename=f"{safe_name}.zip"))
+
+    return DownloadChunksResponse(dir_name=dir_name, chunks=chunks)
 
 
 @router.get("/{id}/download")

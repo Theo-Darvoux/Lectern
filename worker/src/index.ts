@@ -14,6 +14,8 @@ interface ZipPayload {
   dir_name: string;
   entries: ZipEntry[];
   exp: number;
+  part?: number;
+  total?: number;
 }
 
 function b64urlDecode(s: string): ArrayBuffer {
@@ -104,27 +106,31 @@ export default {
       return new Response("Invalid or expired token", { status: 401 });
     }
 
-    const files = payload.entries.map(({ arcname, r2_key }) => ({
-      name: arcname,
-      // Lazy async fetch — client-zip calls this when it's ready to stream each file.
-      input: async () => {
+    // Async generator so R2 fetches happen one at a time (lazy) but each yielded
+    // item has a concrete ReadableStream — client-zip does not accept functions.
+    async function* streamFiles() {
+      for (const { arcname, r2_key } of payload!.entries) {
         const obj = await env.BUCKET.get(r2_key);
         if (!obj) {
-          // Return an empty entry rather than aborting the entire archive.
-          return new Response("");
+          yield { name: arcname, input: new Response(""), size: 0 };
+        } else {
+          // Passing size lets client-zip write the correct local file header
+          // upfront, avoiding data descriptors and improving unzipper compatibility.
+          yield { name: arcname, input: obj.body, size: obj.size };
         }
-        // Pass size so client-zip can write correct local file headers upfront
-        // (avoids data descriptors and improves compatibility with some unzippers).
-        return new Response(obj.body, {
-          headers: { "Content-Length": String(obj.size) },
-        });
-      },
-    }));
+      }
+    }
+    const files = streamFiles();
 
-    const asciiFallback =
+    const suffix =
+      payload.part && payload.total && payload.total > 1 && payload.part > 1
+        ? ` (${payload.part})`
+        : "";
+    const baseName =
       payload.dir_name.replace(/[^\x20-\x7E]/g, "_").replace(/\//g, "_") ||
       "directory";
-    const encodedName = encodeURIComponent(payload.dir_name);
+    const asciiFallback = baseName + suffix;
+    const encodedName = encodeURIComponent(payload.dir_name + suffix);
     const disposition = `attachment; filename="${asciiFallback}.zip"; filename*=UTF-8''${encodedName}.zip`;
 
     const zipResponse = downloadZip(files);
