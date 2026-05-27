@@ -110,6 +110,7 @@ async def inline_material(
     material_id: str,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
     from app.services.material import check_material_access, get_material_with_version
 
@@ -122,7 +123,7 @@ async def inline_material(
 
         raise NotFoundError("No file available for preview")
 
-    from app.core.storage import generate_presigned_get_url
+    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
 
     # Images, PDFs, and Videos are safe to render inline; all other types are forced
     # to download so the browser never executes or parses unknown content.
@@ -132,12 +133,26 @@ async def inline_material(
         or file_mime.startswith("video/")
         or file_mime == "application/pdf"
     )
-    url = await generate_presigned_get_url(
-        version["file_key"],
-        force_download=not inline_safe,
-        filename=version.get("file_name"),
-        content_type=version.get("file_mime_type"),
-    )
+    force_download = not inline_safe
+    file_key = version["file_key"]
+
+    # Use Redis-cached URL so Cloudflare CDN sees the same URL across requests
+    # and can serve the file from the edge rather than the slow R2 origin.
+    if redis is not None:
+        url = await generate_presigned_get_url_cached(
+            file_key,
+            redis=redis,
+            force_download=force_download,
+            filename=version.get("file_name"),
+            content_type=version.get("file_mime_type"),
+        )
+    else:
+        url = await generate_presigned_get_url(
+            file_key,
+            force_download=force_download,
+            filename=version.get("file_name"),
+            content_type=version.get("file_mime_type"),
+        )
     return {"url": url, "filename": version.get("file_name")}
 
 

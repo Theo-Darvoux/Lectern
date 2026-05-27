@@ -491,6 +491,81 @@ async def generate_presigned_get(
         return await _rewrite_host(url, is_put=False, cfg=cfg)
 
 
+# ─── Redis-backed presigned URL cache ────────────────────────────────────────
+# Cloudflare CDN caches by full URL. Generating a fresh presigned URL on every
+# request always changes the signature (X-Amz-Date / X-Amz-Signature), causing
+# a CDN cache miss and falling back to the raw R2 origin (~10 Mbps cap).
+#
+# By caching the URL in Redis for 12 min (URL TTL is 15 min) all users share
+# the same URL string → CDN sees the same URL → caches the response at the
+# edge after the first download → subsequent downloads hit CDN at full speed.
+_PRESIGN_CACHE_TTL = 12 * 60  # seconds — refresh before the 15-min R2 TTL
+_PRESIGN_CACHE_PREFIX = "presign:"
+
+
+def _presign_cache_key(file_key: str, force_download: bool) -> str:
+    return f"{_PRESIGN_CACHE_PREFIX}{file_key}:{int(force_download)}"
+
+
+async def generate_presigned_get_cached(
+    file_key: str,
+    redis: Any,
+    ttl: int = 900,
+    force_download: bool = True,
+    filename: str | None = None,
+    content_type: str | None = None,
+) -> str:
+    """Like generate_presigned_get but caches the result in Redis.
+
+    All callers that request the same (file_key, force_download) pair receive
+    the *same* URL string for up to 12 minutes. This lets the Cloudflare CDN
+    cache the underlying R2 object at the edge after the first download,
+    eliminating the ~10 Mbps R2 origin bandwidth cap for subsequent requests.
+
+    Args:
+        file_key: S3 object key.
+        redis: An active Redis client (``redis.asyncio.Redis``).
+        ttl: Presigned URL lifetime in seconds passed to R2 (default 15 min).
+        force_download: Controls Content-Disposition (attachment vs inline).
+        filename: Override download filename.
+        content_type: Override response Content-Type.
+    """
+    cache_key = _presign_cache_key(file_key, force_download)
+
+    try:
+        cached = await redis.get(cache_key)
+        if cached:
+            return cached.decode() if isinstance(cached, bytes) else cached
+    except Exception:
+        pass  # Redis unavailable — fall through to generate fresh URL
+
+    url = await generate_presigned_get(
+        file_key,
+        ttl=ttl,
+        force_download=force_download,
+        filename=filename,
+        content_type=content_type,
+    )
+
+    try:
+        await redis.set(cache_key, url, ex=_PRESIGN_CACHE_TTL)
+    except Exception:
+        pass  # Best-effort cache write
+
+    return url
+
+
+async def bust_presign_cache(file_key: str, redis: Any) -> None:
+    """Invalidate cached presigned URLs for a file (e.g. after a new version upload)."""
+    try:
+        await redis.delete(
+            _presign_cache_key(file_key, force_download=True),
+            _presign_cache_key(file_key, force_download=False),
+        )
+    except Exception:
+        pass
+
+
 async def object_exists(file_key: str) -> bool:
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
@@ -683,6 +758,7 @@ async def generate_presigned_upload_part(
 
 generate_presigned_get_url = generate_presigned_get
 generate_presigned_put_url = generate_presigned_put
+generate_presigned_get_url_cached = generate_presigned_get_cached
 
 
 async def get_public_url(file_key: str) -> str:
