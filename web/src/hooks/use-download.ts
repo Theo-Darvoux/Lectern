@@ -67,8 +67,10 @@ export function useDownload() {
             const response = await fetchMaterialFile(materialId);
             const qcm = await response.json();
             const blob = await generateQcmPdfBlob(qcm, title ?? "QCM");
-            const safeName = (title ?? "qcm").replace(/[^a-z0-9_\-]/gi, "_").slice(0, 80);
-            triggerBlobDownload(blob, `${safeName}.pdf`);
+            const blobUrl = URL.createObjectURL(blob);
+            window.open(blobUrl, "_blank", "noopener,noreferrer");
+            // Revoke after a delay so the new tab has time to load the blob
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
         } catch (error) {
             console.error("QCM PDF export failed:", error);
             toast.error("Failed to export QCM as PDF. Please try again.");

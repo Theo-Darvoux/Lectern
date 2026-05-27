@@ -88,16 +88,22 @@ async def get_material_download_url(
 
     from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
 
+    file_mime = version.get("file_mime_type") or ""
+    file_name = version.get("file_name") or ""
+    is_pdf = file_mime == "application/pdf" or file_name.lower().endswith(".pdf")
+
     if redis is not None:
         url = await generate_presigned_get_url_cached(
             version["file_key"],
             redis=redis,
+            force_download=not is_pdf,
             filename=version.get("file_name"),
             content_type=version.get("file_mime_type"),
         )
     else:
         url = await generate_presigned_get_url(
             version["file_key"],
+            force_download=not is_pdf,
             filename=version.get("file_name"),
             content_type=version.get("file_mime_type"),
         )
@@ -364,16 +370,22 @@ async def get_version_download_url(
 
     from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
 
+    file_mime = version.file_mime_type or ""
+    file_name = version.file_name or ""
+    is_pdf = file_mime == "application/pdf" or file_name.lower().endswith(".pdf")
+
     if redis is not None:
         url = await generate_presigned_get_url_cached(
             version.file_key,
             redis=redis,
+            force_download=not is_pdf,
             filename=version.file_name,
             content_type=version.file_mime_type,
         )
     else:
         url = await generate_presigned_get_url(
             version.file_key,
+            force_download=not is_pdf,
             filename=version.file_name,
             content_type=version.file_mime_type,
         )
