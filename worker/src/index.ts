@@ -10,12 +10,20 @@ interface ZipEntry {
   r2_key: string;
 }
 
-interface ZipPayload {
-  dir_name: string;
-  entries: ZipEntry[];
+interface TokenPayload {
   exp: number;
+  
+  // ZIP fields
+  dir_name?: string;
+  entries?: ZipEntry[];
   part?: number;
   total?: number;
+
+  // Single file fields
+  r2_key?: string;
+  force_download?: boolean;
+  filename?: string;
+  content_type?: string;
 }
 
 function b64urlDecode(s: string): ArrayBuffer {
@@ -30,7 +38,7 @@ function b64urlDecode(s: string): ArrayBuffer {
 async function verifyToken(
   token: string,
   secret: string
-): Promise<ZipPayload | null> {
+): Promise<TokenPayload | null> {
   const dot = token.lastIndexOf(".");
   if (dot === -1) return null;
 
@@ -60,7 +68,7 @@ async function verifyToken(
   );
   if (!valid) return null;
 
-  let payload: ZipPayload;
+  let payload: TokenPayload;
   try {
     // b64urlDecode re-adds stripped padding and returns raw bytes.
     // TextDecoder handles non-ASCII dir_name values (e.g. French accents).
@@ -75,13 +83,14 @@ async function verifyToken(
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname !== "/zip") {
+    if (!url.pathname.startsWith("/zip") && !url.pathname.startsWith("/file/")) {
       return new Response("Not found", { status: 404 });
     }
 
+    // CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -106,10 +115,68 @@ export default {
       return new Response("Invalid or expired token", { status: 401 });
     }
 
+    // ==========================================
+    // NEW ROUTE: Single File Secure Caching
+    // ==========================================
+    if (url.pathname.startsWith("/file/")) {
+      const cacheUrl = new URL(request.url);
+      cacheUrl.search = ''; 
+      const cacheKey = new Request(cacheUrl.toString(), request);
+      
+      const cache = caches.default;
+      let response = await cache.match(cacheKey);
+
+      if (!response) {
+        if (!payload.r2_key) {
+          return new Response("Invalid token payload for file", { status: 400 });
+        }
+        const object = await env.BUCKET.get(payload.r2_key);
+        
+        if (!object) return new Response("Not found", { status: 404 });
+
+        const headers = new Headers();
+        object.writeHttpMetadata(headers);
+        headers.set('etag', object.httpEtag);
+        // Force edge caching for 1 month
+        headers.set('Cache-Control', 'public, max-age=2592000'); 
+        
+        // Handle overrides
+        if (payload.content_type) {
+            headers.set('Content-Type', payload.content_type);
+        }
+        
+        if (payload.filename) {
+            const encodedName = encodeURIComponent(payload.filename);
+            const asciiFallback = payload.filename.replace(/[^\x20-\x7E]/g, "_");
+            const disposition = payload.force_download ? 'attachment' : 'inline';
+            headers.set('Content-Disposition', `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encodedName}`);
+        } else if (payload.force_download) {
+            headers.set('Content-Disposition', 'attachment');
+        } else {
+            headers.set('Content-Disposition', 'inline');
+        }
+
+        response = new Response(object.body as ReadableStream, { headers });
+        
+        // Use waitUntil if execution context is available (workers syntax)
+        // Wait, fetch in Module syntax has ctx as 3rd arg. We need to add ctx to fetch signature.
+      }
+      return response;
+    }
+
+    // ==========================================
+    // EXISTING ROUTE: ZIP Generation
+    // ==========================================
+    if (url.pathname === "/zip") {
+        if (!payload.entries || !payload.dir_name) {
+             return new Response("Invalid token payload for zip", { status: 400 });
+        }
+
+
     // Async generator so R2 fetches happen one at a time (lazy) but each yielded
     // item has a concrete ReadableStream — client-zip does not accept functions.
     async function* streamFiles() {
-      for (const { arcname, r2_key } of payload!.entries) {
+      for (const { arcname, r2_key } of payload!.entries!) {
         const obj = await env.BUCKET.get(r2_key);
         if (!obj) {
           yield { name: arcname, input: new Response(""), size: 0 };
@@ -120,26 +187,29 @@ export default {
         }
       }
     }
-    const files = streamFiles();
+      const files = streamFiles();
 
-    const suffix =
-      payload.part && payload.total && payload.total > 1 && payload.part > 1
-        ? ` (${payload.part})`
-        : "";
-    const baseName =
-      payload.dir_name.replace(/[^\x20-\x7E]/g, "_").replace(/\//g, "_") ||
-      "directory";
-    const asciiFallback = baseName + suffix;
-    const encodedName = encodeURIComponent(payload.dir_name + suffix);
-    const disposition = `attachment; filename="${asciiFallback}.zip"; filename*=UTF-8''${encodedName}.zip`;
+      const suffix =
+        payload.part && payload.total && payload.total > 1 && payload.part > 1
+          ? ` (${payload.part})`
+          : "";
+      const baseName =
+        payload.dir_name.replace(/[^\x20-\x7E]/g, "_").replace(/\//g, "_") ||
+        "directory";
+      const asciiFallback = baseName + suffix;
+      const encodedName = encodeURIComponent(payload.dir_name + suffix);
+      const disposition = `attachment; filename="${asciiFallback}.zip"; filename*=UTF-8''${encodedName}.zip`;
 
-    const zipResponse = downloadZip(files);
+      const zipResponse = downloadZip(files);
 
-    return new Response(zipResponse.body, {
-      headers: {
-        "Content-Type": "application/zip",
-        "Content-Disposition": disposition,
-      },
-    });
+      return new Response(zipResponse.body, {
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": disposition,
+        },
+      });
+    }
+
+    return new Response("Not found", { status: 404 });
   },
 };

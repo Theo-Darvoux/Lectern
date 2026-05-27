@@ -229,7 +229,7 @@ async def download_root_chunks(
         await rate_limit_downloads(request, current_user, db, redis)
         return DownloadChunksResponse(dir_name=dir_name, chunks=[])
 
-    from app.core.zip_token import make_zip_token
+    from app.core.worker_token import make_zip_token
     from urllib.parse import urlencode
 
     entry_chunks = [entries[i : i + _CHUNK_SIZE] for i in range(0, len(entries), _CHUNK_SIZE)]
@@ -290,7 +290,7 @@ async def download_directory_chunks(
         await rate_limit_downloads(request, current_user, db, redis)
         return DownloadChunksResponse(dir_name=dir_name, chunks=[])
 
-    from app.core.zip_token import make_zip_token
+    from app.core.worker_token import make_zip_token
     from urllib.parse import urlencode
 
     entry_chunks = [entries[i : i + _CHUNK_SIZE] for i in range(0, len(entries), _CHUNK_SIZE)]
@@ -377,7 +377,7 @@ async def download_directory_zip(
     # and fall back to server-side streaming for larger directories.
     _WORKER_MAX_ENTRIES = 70
     if settings.worker_zip_url and settings.worker_zip_hmac_secret and len(entries) <= _WORKER_MAX_ENTRIES:
-        from app.core.zip_token import make_zip_token
+        from app.core.worker_token import make_zip_token
         from fastapi.responses import RedirectResponse
         from urllib.parse import urlencode
 

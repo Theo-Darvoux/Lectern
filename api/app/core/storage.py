@@ -208,6 +208,7 @@ async def create_multipart_upload(
         "Bucket": cfg["bucket"],
         "Key": file_key,
         "ContentType": content_type,
+        "CacheControl": "public, max-age=86400",
     }
     if content_disposition:
         params["ContentDisposition"] = content_disposition
@@ -349,6 +350,9 @@ async def upload_file(
         extra_args["ContentEncoding"] = content_encoding
     if content_disposition:
         extra_args["ContentDisposition"] = content_disposition
+    # Let Cloudflare CDN cache the object for 24 h. Presigned URLs remain stable
+    # for 12 min (Redis cache) so the CDN can serve repeat requests from edge.
+    extra_args.setdefault("CacheControl", "public, max-age=86400")
 
     cfg = await _get_s3_settings()
     async with get_s3_client(cfg) as client:
@@ -463,6 +467,23 @@ async def generate_presigned_get(
         raise ValueError(
             f"Refusing to generate presigned GET for unscanned quarantine key: {file_key}"
         )
+
+    if settings.worker_zip_url and settings.worker_zip_hmac_secret:
+        from urllib.parse import quote
+        from app.core.worker_token import make_file_token
+        
+        token = make_file_token(
+            r2_key=file_key,
+            secret=settings.worker_zip_hmac_secret,
+            ttl=ttl,
+            filename=filename,
+            content_type=content_type,
+            force_download=force_download,
+        )
+        base_url = settings.worker_zip_url.rstrip("/")
+        # We quote the file_key to handle spaces/special characters in the path
+        path = quote(file_key)
+        return f"{base_url}/file/{path}?token={token}"
 
     cfg = await _get_s3_settings()
     params: dict[str, Any] = {
