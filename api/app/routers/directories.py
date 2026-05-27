@@ -158,31 +158,34 @@ async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes,
 
     buf = _Buf()
     zf = zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True)
+    try:
+        for arcname, file_key in entries:
+            try:
+                data = bytearray()
+                async with stream_object(file_key) as body:
+                    while True:
+                        chunk = await body.read(65536)
+                        if not chunk:
+                            break
+                        data.extend(chunk)
+                zf.writestr(arcname, bytes(data))
+            except Exception as exc:
+                import logging
+                logging.getLogger("wikint").warning(
+                    "Failed to stream ZIP entry for key %s: %s", file_key, exc, exc_info=True
+                )
+                continue
+            new_bytes = buf.pop()
+            if new_bytes:
+                yield new_bytes
 
-    for arcname, file_key in entries:
-        try:
-            data = bytearray()
-            async with stream_object(file_key) as body:
-                while True:
-                    chunk = await body.read(65536)
-                    if not chunk:
-                        break
-                    data.extend(chunk)
-            zf.writestr(arcname, bytes(data))
-        except Exception as exc:
-            import logging
-            logging.getLogger("wikint").warning(
-                "Failed to stream ZIP entry for key %s: %s", file_key, exc, exc_info=True
-            )
-            continue
-        new_bytes = buf.pop()
-        if new_bytes:
-            yield new_bytes
-
-    zf.close()
-    final = buf.pop()
-    if final:
-        yield final
+        zf.close()
+        final = buf.pop()
+        if final:
+            yield final
+    finally:
+        if zf.fp is not None:
+            zf.close()
 
 
 @router.get("/{id}/download")
@@ -198,6 +201,11 @@ async def download_directory_zip(
 
     Accepts auth via ``Authorization: Bearer`` header or ``?token=`` query param
     so that a plain browser link (window.location.href) can trigger the download.
+
+    When ``WORKER_ZIP_URL`` is configured the heavy work (fetching from R2 and
+    assembling the ZIP) is offloaded to a Cloudflare Worker.  The API only does
+    auth + DB work and then issues a redirect carrying a short-lived HMAC-signed
+    token so the Worker can verify the request without calling back to the API.
     """
     from app.core.exceptions import BadRequestError, UnauthorizedError
     from app.dependencies.auth import get_user_from_token
@@ -231,6 +239,21 @@ async def download_directory_zip(
 
     if not entries:
         raise BadRequestError("This directory contains no downloadable files.")
+
+    from app.config import settings
+
+    # Worker redirect: each entry contributes ~200 chars to the token URL.
+    # Cloudflare Workers reject requests with URLs over 16 KB, so cap at 70 entries
+    # and fall back to server-side streaming for larger directories.
+    _WORKER_MAX_ENTRIES = 70
+    if settings.worker_zip_url and settings.worker_zip_hmac_secret and len(entries) <= _WORKER_MAX_ENTRIES:
+        from app.core.zip_token import make_zip_token
+        from fastapi.responses import RedirectResponse
+        from urllib.parse import urlencode
+
+        worker_token = make_zip_token(dir_name, entries, settings.worker_zip_hmac_secret)
+        worker_url = f"{settings.worker_zip_url.rstrip('/')}/zip?{urlencode({'token': worker_token})}"
+        return RedirectResponse(url=worker_url, status_code=302)  # type: ignore[return-value]
 
     safe_name = dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
     from urllib.parse import quote

@@ -164,6 +164,14 @@ class Settings(BaseSettings):
     # Set explicitly to rotate independently of the JWT secret.
     webhook_secret: str = ""
 
+    # Cloudflare Worker ZIP endpoint.  When set, directory downloads are offloaded to
+    # the Worker (which reads R2 directly via binding) instead of streaming through
+    # the API server.  Leave empty to fall back to server-side streaming.
+    worker_zip_url: str = ""
+    # Shared HMAC-SHA256 secret between the API and the Worker.  Must match the
+    # HMAC_SECRET variable set on the Worker via `wrangler secret put HMAC_SECRET`.
+    worker_zip_hmac_secret: str = ""
+
     jwt_access_token_expire_days: int = 7
     jwt_refresh_token_expire_days: int = 31
 
