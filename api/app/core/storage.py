@@ -17,7 +17,7 @@ _session = aioboto3.Session()
 # In-process cache for S3 settings to avoid a DB + Redis round-trip on every
 # presigned URL generation. TTL is intentionally short (30 s) so that admin
 # credential changes propagate quickly without requiring a restart.
-_S3_SETTINGS_CACHE_TTL = 30  # seconds
+_S3_SETTINGS_CACHE_TTL = 500  # seconds
 _s3_settings_cache: dict[str, Any] | None = None
 _s3_settings_cache_at: float = 0.0
 
