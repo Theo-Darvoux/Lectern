@@ -225,33 +225,8 @@ async def download_root_chunks(
     if not entries:
         raise BadRequestError("This directory contains no downloadable files.")
 
-    if not settings.worker_zip_url or not settings.worker_zip_hmac_secret:
-        await rate_limit_downloads(request, current_user, db, redis)
-        return DownloadChunksResponse(dir_name=dir_name, chunks=[])
-
-    from app.core.worker_token import make_zip_token
-    from urllib.parse import urlencode
-
-    entry_chunks = [entries[i : i + _CHUNK_SIZE] for i in range(0, len(entries), _CHUNK_SIZE)]
-    total = len(entry_chunks)
-
-    await rate_limit_downloads(request, current_user, db, redis, count=total)
-
-    chunks: list[DownloadChunk] = []
-    for part, chunk_entries in enumerate(entry_chunks, 1):
-        token = make_zip_token(
-            dir_name,
-            chunk_entries,
-            settings.worker_zip_hmac_secret,
-            part=part,
-            total=total,
-        )
-        url = f"{settings.worker_zip_url.rstrip('/')}/zip?{urlencode({'token': token})}"
-        suffix = f" ({part})" if part > 1 else ""
-        safe_name = (dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory") + suffix
-        chunks.append(DownloadChunk(url=url, filename=f"{safe_name}.zip"))
-
-    return DownloadChunksResponse(dir_name=dir_name, chunks=chunks)
+    await rate_limit_downloads(request, current_user, db, redis)
+    return DownloadChunksResponse(dir_name=dir_name, chunks=[])
 
 
 @router.get("/{id}/download-chunks", response_model=DownloadChunksResponse)
@@ -285,37 +260,9 @@ async def download_directory_chunks(
     if not entries:
         raise BadRequestError("This directory contains no downloadable files.")
 
-    if not settings.worker_zip_url or not settings.worker_zip_hmac_secret:
-        # Rate-limit as a single download before falling back.
-        await rate_limit_downloads(request, current_user, db, redis)
-        return DownloadChunksResponse(dir_name=dir_name, chunks=[])
-
-    from app.core.worker_token import make_zip_token
-    from urllib.parse import urlencode
-
-    entry_chunks = [entries[i : i + _CHUNK_SIZE] for i in range(0, len(entries), _CHUNK_SIZE)]
-    total = len(entry_chunks)
-
-    # Count each chunk as a separate download so the rate limit reflects actual
-    # Worker requests being authorised rather than always counting as one.
-    await rate_limit_downloads(request, current_user, db, redis, count=total)
-
-    chunks: list[DownloadChunk] = []
-
-    for part, chunk_entries in enumerate(entry_chunks, 1):
-        token = make_zip_token(
-            dir_name,
-            chunk_entries,
-            settings.worker_zip_hmac_secret,
-            part=part,
-            total=total,
-        )
-        url = f"{settings.worker_zip_url.rstrip('/')}/zip?{urlencode({'token': token})}"
-        suffix = f" ({part})" if part > 1 else ""
-        safe_name = (dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory") + suffix
-        chunks.append(DownloadChunk(url=url, filename=f"{safe_name}.zip"))
-
-    return DownloadChunksResponse(dir_name=dir_name, chunks=chunks)
+    # Rate-limit as a single download before falling back.
+    await rate_limit_downloads(request, current_user, db, redis)
+    return DownloadChunksResponse(dir_name=dir_name, chunks=[])
 
 
 @router.get("/{id}/download")
@@ -370,20 +317,7 @@ async def download_directory_zip(
     if not entries:
         raise BadRequestError("This directory contains no downloadable files.")
 
-    from app.config import settings
-
-    # Worker redirect: each entry contributes ~200 chars to the token URL.
-    # Cloudflare Workers reject requests with URLs over 16 KB, so cap at 70 entries
-    # and fall back to server-side streaming for larger directories.
-    _WORKER_MAX_ENTRIES = 70
-    if settings.worker_zip_url and settings.worker_zip_hmac_secret and len(entries) <= _WORKER_MAX_ENTRIES:
-        from app.core.worker_token import make_zip_token
-        from fastapi.responses import RedirectResponse
-        from urllib.parse import urlencode
-
-        worker_token = make_zip_token(dir_name, entries, settings.worker_zip_hmac_secret)
-        worker_url = f"{settings.worker_zip_url.rstrip('/')}/zip?{urlencode({'token': worker_token})}"
-        return RedirectResponse(url=worker_url, status_code=302)  # type: ignore[return-value]
+    # Zip streaming is now fully handled by the backend directly below.
 
     safe_name = dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
     from urllib.parse import quote

@@ -155,13 +155,19 @@ export default {
         } else {
             headers.set('Content-Disposition', 'inline');
         }
+        
+        headers.set('Access-Control-Allow-Origin', '*');
 
         response = new Response(object.body as ReadableStream, { headers });
         
-        // Use waitUntil if execution context is available (workers syntax)
-        // Wait, fetch in Module syntax has ctx as 3rd arg. We need to add ctx to fetch signature.
+        // Cache the response
+        ctx.waitUntil(cache.put(cacheKey, response.clone()));
       }
-      return response;
+
+      // Ensure CORS header is present even on cache hits from old version
+      const finalResponse = new Response(response.body, response);
+      finalResponse.headers.set("Access-Control-Allow-Origin", "*");
+      return finalResponse;
     }
 
     // ==========================================
@@ -206,6 +212,7 @@ export default {
         headers: {
           "Content-Type": "application/zip",
           "Content-Disposition": disposition,
+          "Access-Control-Allow-Origin": "*",
         },
       });
     }
