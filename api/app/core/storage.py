@@ -1,3 +1,4 @@
+import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +14,20 @@ from app.core.typing_ext import S3Client
 
 _session = aioboto3.Session()
 
+# In-process cache for S3 settings to avoid a DB + Redis round-trip on every
+# presigned URL generation. TTL is intentionally short (30 s) so that admin
+# credential changes propagate quickly without requiring a restart.
+_S3_SETTINGS_CACHE_TTL = 30  # seconds
+_s3_settings_cache: dict[str, Any] | None = None
+_s3_settings_cache_at: float = 0.0
+
+
+def _bust_s3_settings_cache() -> None:
+    """Invalidate the in-process S3 settings cache (call after admin credential update)."""
+    global _s3_settings_cache, _s3_settings_cache_at
+    _s3_settings_cache = None
+    _s3_settings_cache_at = 0.0
+
 # Force SigV4 for all requests (required by R2 and MinIO >= 2022).
 _s3_config = BotocoreConfig(
     signature_version="s3v4",
@@ -26,7 +41,19 @@ _s3: S3Client | None = None  # persistent client, set by init_s3_client()
 
 
 async def _get_s3_settings() -> dict[str, Any]:
-    """Return effective S3 settings from Redis (DB) fallback to app settings."""
+    """Return effective S3 settings, with a short in-process TTL cache.
+
+    The cache avoids a DB + Redis round-trip on every presigned URL generation
+    (which is on the hot path for every file open). The TTL is 30 s so admin
+    credential changes propagate promptly. Call ``_bust_s3_settings_cache()``
+    after saving new credentials to invalidate immediately.
+    """
+    global _s3_settings_cache, _s3_settings_cache_at
+
+    now = time.monotonic()
+    if _s3_settings_cache is not None and (now - _s3_settings_cache_at) < _S3_SETTINGS_CACHE_TTL:
+        return _s3_settings_cache
+
     from app.core.database import async_session_factory
     from app.core.redis import redis_client
     from app.services.auth import get_full_auth_config
@@ -34,7 +61,7 @@ async def _get_s3_settings() -> dict[str, Any]:
     try:
         async with async_session_factory() as db:
             config = await get_full_auth_config(db, redis_client)
-            return {
+            result = {
                 "endpoint": config.get("s3_endpoint") or settings.s3_endpoint,
                 "access_key": config.get("s3_access_key") or settings.s3_access_key,
                 "secret_key": config.get("s3_secret_key") or settings.s3_secret_key,
@@ -47,7 +74,7 @@ async def _get_s3_settings() -> dict[str, Any]:
             }
     except Exception:
         # Final fallback to settings
-        return {
+        result = {
             "endpoint": settings.s3_endpoint,
             "access_key": settings.s3_access_key,
             "secret_key": settings.s3_secret_key,
@@ -56,6 +83,10 @@ async def _get_s3_settings() -> dict[str, Any]:
             "use_ssl": settings.s3_use_ssl,
             "public_endpoint": settings.s3_public_endpoint,
         }
+
+    _s3_settings_cache = result
+    _s3_settings_cache_at = now
+    return result
 
 
 async def init_s3_client() -> None:

@@ -21,6 +21,7 @@ from app.models.auth_config import AllowedDomain, AuthConfig
 from app.models.dead_letter import DeadLetterJob
 from app.models.user import User, UserRole
 from app.schemas.common import DetailedHealthResponse, ServiceStatus
+from app.core.storage import _bust_s3_settings_cache
 from app.services.auth import bust_auth_config_cache, get_full_auth_config
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -605,6 +606,7 @@ async def patch_auth_config(
     config_row.updated_at = datetime.now(UTC)
     await db.flush()
     await bust_auth_config_cache(redis)
+    _bust_s3_settings_cache()
     return _redact_config_for_api(await get_full_auth_config(db, redis))
 
 
@@ -637,6 +639,7 @@ async def add_domain(
     db.add(row)
     await db.flush()
     await bust_auth_config_cache(redis)
+    _bust_s3_settings_cache()
     return {"id": str(row.id), "domain": row.domain, "auto_approve": row.auto_approve}
 
 
@@ -657,6 +660,7 @@ async def update_domain(
 
     await db.flush()
     await bust_auth_config_cache(redis)
+    _bust_s3_settings_cache()
     return {"id": str(row.id), "domain": row.domain, "auto_approve": row.auto_approve}
 
 
@@ -674,6 +678,7 @@ async def delete_domain(
     await db.delete(row)
     await db.flush()
     await bust_auth_config_cache(redis)
+    _bust_s3_settings_cache()
     return {"status": "ok"}
 
 
@@ -775,6 +780,7 @@ async def _upload_branding_asset(
     config_row.updated_at = datetime.now(UTC)
     await db.flush()
     await bust_auth_config_cache(redis)
+    _bust_s3_settings_cache()
 
     return {"url": url}
 
