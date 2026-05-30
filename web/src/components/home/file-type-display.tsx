@@ -91,7 +91,7 @@ export function getFileTypeStyle(
 
     // Markdown / plain text
     if (TEXT_EXTENSIONS.has(ext)) {
-        return { gradient: "from-zinc-950 to-zinc-950", iconColorClass: "text-white", Icon: FileText };
+        return { gradient: "from-slate-700 to-slate-900", iconColorClass: "text-white", Icon: FileText };
     }
 
     // E-books
@@ -100,7 +100,7 @@ export function getFileTypeStyle(
     }
 
     // Default fallback
-    return { gradient: "from-zinc-950 to-zinc-950", iconColorClass: "text-white", Icon: File };
+    return { gradient: "from-slate-700 to-slate-900", iconColorClass: "text-white", Icon: File };
 }
 
 /**

@@ -1,6 +1,7 @@
 import tempfile
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from app.workers.upload.stages.thumbnail import _is_blank_thumbnail
@@ -35,3 +36,36 @@ def test_pale_page_with_title_bar_is_not_blank() -> None:
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, 200, 25], fill=(40, 60, 120))
     assert _is_blank_thumbnail(_save(img)) is False
+
+
+@pytest.mark.asyncio
+async def test_run_thumbnail_stage_markdown() -> None:
+    """Markdown files should be successfully converted to a WebP thumbnail."""
+    from app.core.processing import ProcessingFile
+    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
+
+    # Create a temp markdown file
+    with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w") as f:
+        f.write(
+            "# Hello World\n\nThis is a sample markdown document to test thumbnail generation.\n\n- Bullet point 1\n- Bullet point 2\n"
+        )
+        temp_path = Path(f.name)
+
+    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
+    thumb_path_str = None
+    try:
+        thumb_path_str = await run_thumbnail_stage(pf, "text/markdown", "test.md")
+        assert thumb_path_str is not None
+        thumb_path = Path(thumb_path_str)
+        assert thumb_path.exists()
+        assert thumb_path.suffix == ".webp"
+
+        # Verify it's a valid image and not blank
+        with Image.open(thumb_path) as img:
+            assert img.format == "WEBP"
+
+        assert _is_blank_thumbnail(thumb_path) is False
+    finally:
+        pf.cleanup()
+        if thumb_path_str:
+            Path(thumb_path_str).unlink(missing_ok=True)

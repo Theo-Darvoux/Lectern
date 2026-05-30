@@ -7,7 +7,8 @@ from pydantic import BaseModel
 
 
 class FeaturedItemCreate(BaseModel):
-    material_id: uuid.UUID
+    material_id: uuid.UUID | None = None
+    directory_id: uuid.UUID | None = None
     title: str | None = None
     description: str | None = None
     start_at: datetime
@@ -16,6 +17,8 @@ class FeaturedItemCreate(BaseModel):
 
 
 class FeaturedItemUpdate(BaseModel):
+    material_id: uuid.UUID | None = None
+    directory_id: uuid.UUID | None = None
     title: str | None = None
     description: str | None = None
     start_at: datetime | None = None

@@ -12,6 +12,7 @@ import {
   User,
   Settings,
   LogOut,
+  LogIn,
   Folder,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
@@ -72,7 +73,7 @@ export function Navbar() {
     const down = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         // Only trigger modal on mobile. On desktop, SearchInline handles focusing the input.
-        if (window.innerWidth < 640) {
+        if (window.innerWidth < 1024) {
           e.preventDefault();
           setSearchOpen((open) => !open);
         }
@@ -159,7 +160,7 @@ export function Navbar() {
 
         {/* Center: Search */}
         {pathname !== "/login" && (
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md px-4 pointer-events-none sm:pointer-events-auto hidden sm:block">
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md px-4 pointer-events-none lg:pointer-events-auto hidden lg:block">
             <SearchInline />
           </div>
         )}
@@ -171,7 +172,7 @@ export function Navbar() {
             <Button
               variant="ghost"
               size="icon"
-              className="sm:hidden h-9 w-9 text-muted-foreground"
+              className="lg:hidden h-9 w-9 text-muted-foreground"
               onClick={() => setSearchOpen(true)}
             >
               <Search className="h-4 w-4" />
@@ -179,9 +180,8 @@ export function Navbar() {
           )}
           {guest ? (
             <div className="flex items-center gap-1 sm:gap-2">
-              <span className="flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2 sm:px-3 py-1 text-xs font-medium text-muted-foreground">
-                <User className="h-3.5 w-3.5 shrink-0" />
-                <span className="hidden sm:inline">{t("guest")}</span>
+              <span className="flex items-center rounded-full border border-border bg-muted/50 px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                <span>{t("guest")}</span>
               </span>
               <Button
                 variant="outline"
@@ -189,7 +189,7 @@ export function Navbar() {
                 className="rounded-full px-2 sm:px-3"
                 onClick={logout}
               >
-                <LogOut className="h-4 w-4 shrink-0" />
+                <LogIn className="h-4 w-4 shrink-0" />
                 <span className="hidden sm:inline sm:ml-2">{t("exitGuest")}</span>
               </Button>
             </div>

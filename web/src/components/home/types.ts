@@ -38,9 +38,25 @@ export interface MaterialDetail {
     current_version_info: MaterialVersionInfo | null;
 }
 
+export interface DirectoryDetail {
+    id: string;
+    parent_id: string | null;
+    name: string;
+    slug: string;
+    type: string;
+    description: string | null;
+    metadata: Record<string, unknown>;
+    sort_order: number;
+    is_system: boolean;
+    tags: string[];
+    full_path: string | null;
+    created_at: string;
+}
+
 export interface FeaturedItem {
     id: string;
-    material: MaterialDetail;
+    material: MaterialDetail | null;
+    directory: DirectoryDetail | null;
     title: string | null;
     description: string | null;
     start_at: string;

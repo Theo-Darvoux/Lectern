@@ -750,21 +750,30 @@ async def _upload_branding_asset(
     if not data:
         raise BadRequestError("Empty file.")
 
-    # Convert raster images to lossless WebP; skip SVG/ICO (not raster).
+    # Convert raster images to lossless WebP (or PNG for email avatar to ensure compatibility); skip SVG/ICO (not raster).
     if content_type not in _WEBP_SKIP_TYPES:
         img = Image.open(io.BytesIO(data))
         buf = io.BytesIO()
-        img.save(buf, format="WEBP", lossless=True, quality=100)
-        data = buf.getvalue()
-        content_type = "image/webp"
+        if key_prefix == "email-avatar":
+            img.save(buf, format="PNG")
+            data = buf.getvalue()
+            content_type = "image/png"
+        else:
+            img.save(buf, format="WEBP", lossless=True, quality=100)
+            data = buf.getvalue()
+            content_type = "image/webp"
 
     ext = (
         "webp"
         if content_type == "image/webp"
         else (
-            (file.filename or f"{key_prefix}.bin").rsplit(".", 1)[-1].lower()
-            if "." in (file.filename or "")
-            else "bin"
+            "png"
+            if content_type == "image/png"
+            else (
+                (file.filename or f"{key_prefix}.bin").rsplit(".", 1)[-1].lower()
+                if "." in (file.filename or "")
+                else "bin"
+            )
         )
     )
     key = f"branding/{key_prefix}.{ext}"

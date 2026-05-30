@@ -11,9 +11,11 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.dependencies.auth import CurrentUser
+from app.models.directory import Directory
 from app.models.featured import FeaturedItem
 from app.models.material import Material, MaterialFavourite, MaterialVersion
 from app.models.pull_request import PRStatus, PullRequest
+from app.schemas.directory import DirectoryOut
 from app.schemas.home import FeaturedItemOut, HomeResponse
 from app.schemas.material import MaterialDetail
 from app.schemas.pull_request import PullRequestOut
@@ -58,7 +60,7 @@ async def _build_featured_out(
     featured_rows: Any,
     current_user_id: uuid.UUID | None = None,
 ) -> list[FeaturedItemOut]:
-    """Convert (FeaturedItem, Material, MaterialVersion?) rows into FeaturedItemOut objects.
+    """Convert (FeaturedItem, Material?, MaterialVersion?, Directory?) rows into FeaturedItemOut objects.
 
     Accepts the raw ``result.all()`` return value from SQLAlchemy.
     Fetches directory paths in a single batch query.
@@ -66,27 +68,36 @@ async def _build_featured_out(
     if not featured_rows:
         return []
 
-    # Build material dicts and collect directory IDs in one pass
-    staged: list[tuple[FeaturedItem, dict[str, Any]]] = []
-    dir_ids: set[uuid.UUID] = set()
+    staged_materials: list[tuple[FeaturedItem, dict[str, Any]]] = []
+    staged_directories: list[tuple[FeaturedItem, Directory]] = []
+    mat_dir_ids: set[uuid.UUID] = set()
+    boost_dir_ids: set[uuid.UUID] = set()
 
-    for featured, material, version in featured_rows:
-        mat_dict: dict[str, Any] = material_orm_to_dict(material, current_user_id=current_user_id)
-        if version:
-            mat_dict["current_version_info"] = version
-        if material.directory_id:
-            dir_ids.add(material.directory_id)
-        staged.append((featured, mat_dict))
+    for featured, material, version, directory in featured_rows:
+        if material:
+            mat_dict: dict[str, Any] = material_orm_to_dict(
+                material, current_user_id=current_user_id
+            )
+            if version:
+                mat_dict["current_version_info"] = version
+            if material.directory_id:
+                mat_dir_ids.add(material.directory_id)
+            staged_materials.append((featured, mat_dict))
+        elif directory:
+            boost_dir_ids.add(directory.id)
+            staged_directories.append((featured, directory))
 
-    paths = await get_directory_paths(db, dir_ids)
+    all_dir_ids = mat_dir_ids | boost_dir_ids
+    paths = await get_directory_paths(db, all_dir_ids)
 
     out: list[FeaturedItemOut] = []
-    for featured, mat_dict in staged:
+    for featured, mat_dict in staged_materials:
         mat_dict["directory_path"] = paths.get(mat_dict["directory_id"])
         out.append(
             FeaturedItemOut(
                 id=featured.id,
                 material=MaterialDetail.model_validate(mat_dict),
+                directory=None,
                 title=featured.title,
                 description=featured.description,
                 start_at=featured.start_at,
@@ -94,6 +105,37 @@ async def _build_featured_out(
                 priority=featured.priority,
             )
         )
+
+    for featured, directory in staged_directories:
+        dir_dict = {
+            "id": directory.id,
+            "parent_id": directory.parent_id,
+            "name": directory.name,
+            "slug": directory.slug,
+            "type": directory.type,
+            "description": directory.description,
+            "metadata_": directory.metadata_,
+            "sort_order": directory.sort_order,
+            "is_system": directory.is_system,
+            "tags": directory.tags,
+            "full_path": paths.get(directory.id),
+            "created_at": directory.created_at,
+        }
+        out.append(
+            FeaturedItemOut(
+                id=featured.id,
+                material=None,
+                directory=DirectoryOut.model_validate(dir_dict),
+                title=featured.title,
+                description=featured.description,
+                start_at=featured.start_at,
+                end_at=featured.end_at,
+                priority=featured.priority,
+            )
+        )
+
+    row_id_order = {row[0].id: i for i, row in enumerate(featured_rows)}
+    out.sort(key=lambda x: row_id_order.get(x.id, 9999))
     return out
 
 
@@ -143,13 +185,15 @@ async def get_home(
 
     # ── featured ──────────────────────────────────────────────────────────────
     featured_result = await db.execute(
-        select(FeaturedItem, Material, MaterialVersion)
-        .join(Material, FeaturedItem.material_id == Material.id)
+        select(FeaturedItem, Material, MaterialVersion, Directory)
+        .outerjoin(Material, FeaturedItem.material_id == Material.id)
         .outerjoin(
             MaterialVersion,
             (Material.id == MaterialVersion.material_id)
             & (Material.current_version == MaterialVersion.version_number),
         )
+        .outerjoin(Directory, FeaturedItem.directory_id == Directory.id)
+        .options(selectinload(Directory.tags))
         .where(
             FeaturedItem.start_at <= now,
             FeaturedItem.end_at >= now,

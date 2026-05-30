@@ -5,13 +5,15 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.directory import DirectoryOut
 from app.schemas.material import MaterialDetail
 from app.schemas.pull_request import PullRequestOut
 
 
 class FeaturedItemOut(BaseModel):
     id: uuid.UUID
-    material: MaterialDetail
+    material: MaterialDetail | None = None
+    directory: DirectoryOut | None = None
     title: str | None
     description: str | None
     start_at: datetime

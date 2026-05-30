@@ -216,43 +216,45 @@ function DirectoryLineItemImpl({
                     </div>
                 )}
                     <div className="flex shrink-0 items-center gap-1">
-                        {!isRestricted ? (
-                            <>
-                                <button
-                                    onClick={handleChat}
-                                    className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
-                                    title={t("chat")}
-                                    aria-label={t("chatAbout", { title: name })}
-                                >
-                                    <MessageSquare className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
-                                </button>
-                            </>
-                        ) : null}
-                        <button
-                            onClick={handleDetails}
-                            className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
-                            title={t("details")}
-                            aria-label={t("viewDetailsFor", { title: name })}
-                        >
-                            <Info className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
-                        </button>
+                        {!isMobile && !isRestricted && (
+                            <button
+                                onClick={handleChat}
+                                className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
+                                title={t("chat")}
+                                aria-label={t("chatAbout", { title: name })}
+                            >
+                                <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                            </button>
+                        )}
+                        {!isMobile && (
+                            <button
+                                onClick={handleDetails}
+                                className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
+                                title={t("details")}
+                                aria-label={t("viewDetailsFor", { title: name })}
+                            >
+                                <Info className="h-4 w-4 text-muted-foreground" />
+                            </button>
+                        )}
                         <ItemActionsDropdownTrigger />
-                    <button
-                        className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
-                        title={t("openItem")}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            if (onNavigate) {
-                                onNavigate();
-                            } else {
-                                router.push(buildPath());
-                            }
-                        }}
-                        aria-label={t("openItemFor", { title: name })}
-                    >
-                        <ChevronRight className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
-                    </button>
-                </div>
+                        {!isMobile && (
+                            <button
+                                className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
+                                title={t("openItem")}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (onNavigate) {
+                                        onNavigate();
+                                    } else {
+                                        router.push(buildPath());
+                                    }
+                                }}
+                                aria-label={t("openItemFor", { title: name })}
+                            >
+                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                            </button>
+                        )}
+                    </div>
             </Link>
         </ItemActionsMenu>
     );

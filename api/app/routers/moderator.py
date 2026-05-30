@@ -7,6 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.exceptions import BadRequestError, NotFoundError
@@ -17,6 +18,7 @@ from app.models.flag import Flag
 from app.models.material import Material, MaterialVersion
 from app.models.pull_request import PRStatus, PullRequest
 from app.models.user import User
+from app.schemas.directory import DirectoryOut
 from app.schemas.featured import FeaturedItemCreate, FeaturedItemUpdate
 from app.schemas.home import FeaturedItemOut
 from app.schemas.material import MaterialDetail
@@ -33,13 +35,15 @@ async def _query_featured_rows(
     order_by_start: bool = False,
 ) -> Sequence[Any]:
     stmt = (
-        select(FeaturedItem, Material, MaterialVersion)
-        .join(Material, FeaturedItem.material_id == Material.id)
+        select(FeaturedItem, Material, MaterialVersion, Directory)
+        .outerjoin(Material, FeaturedItem.material_id == Material.id)
         .outerjoin(
             MaterialVersion,
             (Material.id == MaterialVersion.material_id)
             & (Material.current_version == MaterialVersion.version_number),
         )
+        .outerjoin(Directory, FeaturedItem.directory_id == Directory.id)
+        .options(selectinload(Directory.tags))
     )
     if featured_id is not None:
         stmt = stmt.where(FeaturedItem.id == featured_id)
@@ -57,26 +61,34 @@ async def _rows_to_featured_out(
     if not rows:
         return []
 
-    staged: list[tuple[FeaturedItem, dict[str, Any]]] = []
-    dir_ids: set[uuid.UUID] = set()
+    staged_materials: list[tuple[FeaturedItem, dict[str, Any]]] = []
+    staged_directories: list[tuple[FeaturedItem, Directory]] = []
+    mat_dir_ids: set[uuid.UUID] = set()
+    boost_dir_ids: set[uuid.UUID] = set()
 
-    for featured, material, version in rows:
-        mat_dict: dict[str, Any] = material_orm_to_dict(material)
-        if version:
-            mat_dict["current_version_info"] = version
-        if material.directory_id:
-            dir_ids.add(material.directory_id)
-        staged.append((featured, mat_dict))
+    for featured, material, version, directory in rows:
+        if material:
+            mat_dict: dict[str, Any] = material_orm_to_dict(material)
+            if version:
+                mat_dict["current_version_info"] = version
+            if material.directory_id:
+                mat_dir_ids.add(material.directory_id)
+            staged_materials.append((featured, mat_dict))
+        elif directory:
+            boost_dir_ids.add(directory.id)
+            staged_directories.append((featured, directory))
 
-    paths = await get_directory_paths(db, dir_ids)
+    all_dir_ids = mat_dir_ids | boost_dir_ids
+    paths = await get_directory_paths(db, all_dir_ids)
 
     out: list[FeaturedItemOut] = []
-    for featured, mat_dict in staged:
+    for featured, mat_dict in staged_materials:
         mat_dict["directory_path"] = paths.get(mat_dict["directory_id"])
         out.append(
             FeaturedItemOut(
                 id=featured.id,
                 material=MaterialDetail.model_validate(mat_dict),
+                directory=None,
                 title=featured.title,
                 description=featured.description,
                 start_at=featured.start_at,
@@ -84,6 +96,37 @@ async def _rows_to_featured_out(
                 priority=featured.priority,
             )
         )
+
+    for featured, directory in staged_directories:
+        dir_dict = {
+            "id": directory.id,
+            "parent_id": directory.parent_id,
+            "name": directory.name,
+            "slug": directory.slug,
+            "type": directory.type,
+            "description": directory.description,
+            "metadata_": directory.metadata_,
+            "sort_order": directory.sort_order,
+            "is_system": directory.is_system,
+            "tags": directory.tags,
+            "full_path": paths.get(directory.id),
+            "created_at": directory.created_at,
+        }
+        out.append(
+            FeaturedItemOut(
+                id=featured.id,
+                material=None,
+                directory=DirectoryOut.model_validate(dir_dict),
+                title=featured.title,
+                description=featured.description,
+                start_at=featured.start_at,
+                end_at=featured.end_at,
+                priority=featured.priority,
+            )
+        )
+
+    row_id_order = {row[0].id: i for i, row in enumerate(rows)}
+    out.sort(key=lambda x: row_id_order.get(x.id, 9999))
     return out
 
 
@@ -149,15 +192,30 @@ async def moderator_create_featured(
     if body.end_at <= body.start_at:
         raise BadRequestError("end_at must be after start_at")
 
-    material_exists = await db.scalar(
-        select(func.count()).select_from(Material).where(Material.id == body.material_id)
-    )
-    if not material_exists:
-        raise NotFoundError("Material not found")
+    if not body.material_id and not body.directory_id:
+        raise BadRequestError("Either material_id or directory_id must be provided")
+    if body.material_id and body.directory_id:
+        raise BadRequestError(
+            "Cannot boost both a material and a directory in a single featured item"
+        )
+
+    if body.material_id:
+        material_exists = await db.scalar(
+            select(func.count()).select_from(Material).where(Material.id == body.material_id)
+        )
+        if not material_exists:
+            raise NotFoundError("Material not found")
+    else:
+        directory_exists = await db.scalar(
+            select(func.count()).select_from(Directory).where(Directory.id == body.directory_id)
+        )
+        if not directory_exists:
+            raise NotFoundError("Directory not found")
 
     featured = FeaturedItem(
         id=uuid.uuid4(),
         material_id=body.material_id,
+        directory_id=body.directory_id,
         title=body.title,
         description=body.description,
         start_at=body.start_at,
@@ -196,6 +254,18 @@ async def moderator_update_featured(
         featured.end_at = body.end_at
     if body.priority is not None:
         featured.priority = body.priority
+    if body.material_id is not None:
+        featured.material_id = body.material_id
+    if body.directory_id is not None:
+        featured.directory_id = body.directory_id
+
+    # Validation after update
+    if not featured.material_id and not featured.directory_id:
+        raise BadRequestError("Either material_id or directory_id must be provided")
+    if featured.material_id and featured.directory_id:
+        raise BadRequestError(
+            "Cannot boost both a material and a directory in a single featured item"
+        )
 
     if featured.end_at <= featured.start_at:
         raise BadRequestError("end_at must be after start_at")

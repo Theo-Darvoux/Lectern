@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { Star, ArrowRight, Tag } from "lucide-react";
+import { Star, ArrowRight, Tag, Folder } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getFileTypeStyle, getMaterialBrowsePath } from "./file-type-display";
+import { getMaterialBrowsePath } from "./file-type-display";
 import { SectionHeader } from "./section-header";
 import type { FeaturedItem } from "./types";
 import { useTranslations } from "next-intl";
+import { MaterialPreview } from "./material-preview";
 
 interface FeaturedSectionProps {
   items: FeaturedItem[];
@@ -20,38 +21,41 @@ interface FeaturedSectionProps {
 function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
   const t = useTranslations("Home");
   const material = item.material;
-  const versionInfo = material.current_version_info;
-  const fileName = versionInfo?.file_name ?? null;
-  const mimeType = versionInfo?.file_mime_type ?? null;
-  const { gradient, iconColorClass, Icon } = getFileTypeStyle(
-    fileName,
-    mimeType,
-  );
+  const directory = item.directory;
 
-  const title = item.title ?? material.title;
-  const description = item.description ?? material.description;
-  const browsePath = getMaterialBrowsePath(material);
+  const title = item.title ?? (directory ? directory.name : (material?.title || "Untitled"));
+  const description = item.description ?? (directory ? directory.description : (material?.description || null));
+  
+  const browsePath = directory
+    ? (directory.full_path ? `/browse/${directory.full_path}` : `/browse`)
+    : (material ? getMaterialBrowsePath(material) : "#");
+
+  const tags = directory ? directory.tags : (material?.tags || []);
+  const viewText = directory ? "View Folder" : t("viewMaterial");
 
   return (
     <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
       <div className="flex flex-col sm:flex-row">
-        {/* Gradient panel */}
+        {/* Thumbnail/Gradient panel */}
         <div
           className={cn(
-            "relative flex shrink-0 items-center justify-center bg-linear-to-br sm:w-64 sm:rounded-none",
-            gradient,
-            "h-48 sm:h-auto",
+            "relative flex shrink-0 items-center justify-center sm:w-64 sm:rounded-none h-48 sm:h-auto overflow-hidden",
           )}
         >
-          <Icon
-            className={cn(
-              "h-20 w-20 opacity-85 drop-shadow-md",
-              iconColorClass,
-            )}
-          />
+          {material ? (
+            <MaterialPreview
+              material={material}
+              className="absolute inset-0 h-full w-full"
+              lazy={false}
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center bg-linear-to-br from-amber-400 to-orange-500">
+              <Folder className="h-20 w-20 opacity-85 drop-shadow-md text-white" />
+            </div>
+          )}
 
           {/* Featured pill */}
-          <span className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/20 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm">
+          <span className="absolute left-3 top-3 z-20 inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/20 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm">
             <Star className="h-3 w-3 fill-white" />
             {t("featured")}
           </span>
@@ -70,10 +74,10 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
               </p>
             )}
 
-            {material.tags.length > 0 && (
+            {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-0.5">
                 <Tag className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60 self-center" />
-                {material.tags.slice(0, 6).map((tag) => (
+                {tags.slice(0, 6).map((tag) => (
                   <Badge key={tag} variant="secondary" className="text-xs">
                     {tag}
                   </Badge>
@@ -85,7 +89,7 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
           <div className="mt-5">
             <Button asChild>
               <Link href={browsePath}>
-                {t("viewMaterial")}
+                {viewText}
                 <ArrowRight className="h-4 w-4" />
               </Link>
             </Button>
@@ -102,17 +106,17 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
 function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
   const t = useTranslations("Home");
   const material = item.material;
-  const versionInfo = material.current_version_info;
-  const fileName = versionInfo?.file_name ?? null;
-  const mimeType = versionInfo?.file_mime_type ?? null;
-  const { gradient, iconColorClass, Icon } = getFileTypeStyle(
-    fileName,
-    mimeType,
-  );
+  const directory = item.directory;
 
-  const title = item.title ?? material.title;
-  const description = item.description ?? material.description;
-  const browsePath = getMaterialBrowsePath(material);
+  const title = item.title ?? (directory ? directory.name : (material?.title || "Untitled"));
+  const description = item.description ?? (directory ? directory.description : (material?.description || null));
+  
+  const browsePath = directory
+    ? (directory.full_path ? `/browse/${directory.full_path}` : `/browse`)
+    : (material ? getMaterialBrowsePath(material) : "#");
+
+  const tags = directory ? directory.tags : (material?.tags || []);
+  const viewText = directory ? "View Folder" : t("viewMaterial");
 
   return (
     <Link
@@ -120,22 +124,26 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
       className="group block w-75 flex-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
     >
       <div className="flex h-full flex-col rounded-xl border bg-card shadow-sm overflow-hidden transition-all duration-200 group-hover:shadow-md group-hover:-translate-y-0.5">
-        {/* Gradient banner */}
+        {/* Thumbnail/Gradient banner */}
         <div
           className={cn(
-            "relative flex h-40 shrink-0 items-center justify-center bg-linear-to-br",
-            gradient,
+            "relative flex h-40 shrink-0 items-center justify-center overflow-hidden",
           )}
         >
-          <Icon
-            className={cn(
-              "h-16 w-16 opacity-85 drop-shadow-sm",
-              iconColorClass,
-            )}
-          />
+          {material ? (
+            <MaterialPreview
+              material={material}
+              className="absolute inset-0 h-full w-full"
+              lazy={false}
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center bg-linear-to-br from-amber-400 to-orange-500">
+              <Folder className="h-16 w-16 opacity-85 drop-shadow-sm text-white" />
+            </div>
+          )}
 
           {/* Featured pill */}
-          <span className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">
+          <span className="absolute left-3 top-3 z-20 inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">
             <Star className="h-2.5 w-2.5 fill-white" />
             {t("featured")}
           </span>
@@ -153,9 +161,9 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
             </p>
           )}
 
-          {material.tags.length > 0 && (
+          {tags.length > 0 && (
             <div className="hidden flex-wrap gap-1 pt-0.5 sm:flex">
-              {material.tags.slice(0, 3).map((tag) => (
+              {tags.slice(0, 3).map((tag) => (
                 <Badge
                   key={tag}
                   variant="secondary"
@@ -164,9 +172,9 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
                   {tag}
                 </Badge>
               ))}
-              {material.tags.length > 3 && (
+              {tags.length > 3 && (
                 <span className="text-[10px] text-muted-foreground self-center">
-                  +{material.tags.length - 3}
+                  +{tags.length - 3}
                 </span>
               )}
             </div>
@@ -174,7 +182,7 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
 
           <div className="mt-auto hidden pt-2 sm:block">
             <span className="inline-flex items-center gap-1 text-xs font-medium text-primary group-hover:underline">
-              {t("viewMaterial")}
+              {viewText}
               <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
             </span>
           </div>

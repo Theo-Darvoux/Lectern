@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Trash2, Star, CalendarRange, ExternalLink, Check, ChevronsUpDown, Loader2 } from "lucide-react";
+import { Plus, Trash2, Star, CalendarRange, ExternalLink, Check, ChevronsUpDown, Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -71,12 +71,19 @@ function toLocalDateInput(isoString?: string | Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function MaterialSearch({ onSelect }: { onSelect: (id: string, title: string) => void }) {
+function ItemSearch({
+  onSelect,
+  selectedId,
+  selectedTitle,
+}: {
+  onSelect: (id: string, title: string, type: "material" | "directory") => void;
+  selectedId: string;
+  selectedTitle: string;
+}) {
   const t = useTranslations("Moderator.featured");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const { results, loading } = useSearch(query);
-  const [selectedTitle, setSelectedTitle] = useState("");
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -93,14 +100,14 @@ function MaterialSearch({ onSelect }: { onSelect: (id: string, title: string) =>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-        <Command shouldFilter={false}>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 max-h-[300px] overflow-hidden flex flex-col" align="start">
+        <Command shouldFilter={false} className="max-h-[300px] flex flex-col">
           <CommandInput
             placeholder={t("dialog.searchPlaceholder")}
             value={query}
             onValueChange={setQuery}
           />
-          <CommandList className="max-h-[300px]">
+          <CommandList className="max-h-[200px] overflow-y-auto">
             {loading && (
               <div className="flex items-center justify-center py-6">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -110,26 +117,31 @@ function MaterialSearch({ onSelect }: { onSelect: (id: string, title: string) =>
             {!loading && results.length === 0 && query.length > 0 && <CommandEmpty>{t("dialog.noResults")}</CommandEmpty>}
             {!loading && results.length === 0 && query.length === 0 && <CommandEmpty className="py-6 text-muted-foreground">{t("dialog.startTyping")}</CommandEmpty>}
             <CommandGroup>
-              {results.filter(r => r.search_type === "material").map((result) => {
-                const title = result.title || result.file_name || "Untitled";
+              {results.map((result) => {
+                const title = result.title || result.name || result.file_name || "Untitled";
+                const isDir = result.search_type === "directory";
                 return (
                   <CommandItem
                     key={result.id}
                     value={result.id}
                     onSelect={() => {
-                      setSelectedTitle(title);
-                      onSelect(result.id, title);
+                      onSelect(result.id, title, result.search_type);
                       setOpen(false);
                     }}
                   >
                     <Check
                       className={cn(
                         "mr-2 h-4 w-4",
-                        selectedTitle === title ? "opacity-100" : "opacity-0"
+                        selectedId === result.id ? "opacity-100" : "opacity-0"
                       )}
                     />
                     <div className="flex flex-col overflow-hidden">
-                      <span className="font-medium truncate">{title}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium truncate">{title}</span>
+                        <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+                          {isDir ? "Folder" : "File"}
+                        </Badge>
+                      </div>
                       <span className="text-[10px] text-muted-foreground font-mono truncate">{result.id}</span>
                     </div>
                   </CommandItem>
@@ -147,11 +159,14 @@ interface AddFeaturedDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
+  editItem?: FeaturedItem | null;
 }
 
-function AddFeaturedDialog({ open, onOpenChange, onSuccess }: AddFeaturedDialogProps) {
+function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: AddFeaturedDialogProps) {
   const t = useTranslations("Moderator.featured");
-  const [materialId, setMaterialId] = useState("");
+  const [itemId, setItemId] = useState("");
+  const [itemType, setItemType] = useState<"material" | "directory">("material");
+  const [selectedTitle, setSelectedTitle] = useState("");
   const [titleOverride, setTitleOverride] = useState("");
   const [descOverride, setDescOverride] = useState("");
   const [startAt, setStartAt] = useState(toLocalDateInput());
@@ -160,7 +175,9 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess }: AddFeaturedDialogP
   const [submitting, setSubmitting] = useState(false);
 
   const resetForm = () => {
-    setMaterialId("");
+    setItemId("");
+    setItemType("material");
+    setSelectedTitle("");
     setTitleOverride("");
     setDescOverride("");
     setStartAt(toLocalDateInput());
@@ -173,8 +190,34 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess }: AddFeaturedDialogP
     onOpenChange(next);
   };
 
+  useEffect(() => {
+    if (open) {
+      if (editItem) {
+        if (editItem.material) {
+          setItemId(editItem.material.id);
+          setItemType("material");
+          setSelectedTitle(editItem.material.title);
+        } else if (editItem.directory) {
+          setItemId(editItem.directory.id);
+          setItemType("directory");
+          setSelectedTitle(editItem.directory.name);
+        }
+        setTitleOverride(editItem.title || "");
+        setDescOverride(editItem.description || "");
+        setStartAt(toLocalDateInput(editItem.start_at));
+        setEndAt(toLocalDateInput(editItem.end_at));
+        setPriority(editItem.priority);
+      } else {
+        resetForm();
+      }
+    }
+  }, [open, editItem]);
+
   const handleSubmit = async () => {
-    if (!materialId.trim()) { toast.error(t("errors.materialRequired")); return; }
+    if (!itemId.trim()) {
+      toast.error("Please select a file or folder to boost");
+      return;
+    }
     if (!startAt) { toast.error(t("errors.startRequired")); return; }
     if (!endAt) { toast.error(t("errors.endRequired")); return; }
     if (new Date(endAt) <= new Date(startAt)) { toast.error(t("errors.endAfterStart")); return; }
@@ -185,20 +228,36 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess }: AddFeaturedDialogP
       const endIso = new Date(`${endAt}T23:59:59`).toISOString();
 
       const payload: Record<string, unknown> = {
-        material_id: materialId.trim(),
         start_at: startIso,
         end_at: endIso,
         priority,
       };
-      if (titleOverride.trim()) payload.title = titleOverride.trim();
-      if (descOverride.trim()) payload.description = descOverride.trim();
 
-      await apiFetch("/moderator/featured", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      if (itemType === "material") {
+        payload.material_id = itemId.trim();
+        payload.directory_id = null;
+      } else {
+        payload.directory_id = itemId.trim();
+        payload.material_id = null;
+      }
 
-      toast.success(t("success.added"));
+      payload.title = titleOverride.trim() ? titleOverride.trim() : null;
+      payload.description = descOverride.trim() ? descOverride.trim() : null;
+
+      if (editItem) {
+        await apiFetch(`/moderator/featured/${editItem.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+        toast.success("Successfully updated featured item");
+      } else {
+        await apiFetch("/moderator/featured", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        toast.success(t("success.added"));
+      }
+
       handleOpenChange(false);
       onSuccess();
     } catch (err: unknown) {
@@ -212,21 +271,27 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess }: AddFeaturedDialogP
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{t("dialog.addTitle")}</DialogTitle>
+          <DialogTitle>{editItem ? "Edit Featured Boost" : t("dialog.addTitle")}</DialogTitle>
           <DialogDescription>
-            {t("dialog.addDesc")}
+            {editItem ? "Update the details for this featured boost" : t("dialog.addDesc")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="material-search">{t("dialog.searchMaterial")} <span className="text-destructive" aria-hidden>*</span></Label>
-            <MaterialSearch onSelect={(id) => {
-              setMaterialId(id);
-            }} />
-            {materialId && (
+            <Label htmlFor="item-search">Search file or folder <span className="text-destructive" aria-hidden>*</span></Label>
+            <ItemSearch
+              selectedId={itemId}
+              selectedTitle={selectedTitle}
+              onSelect={(id, title, type) => {
+                setItemId(id);
+                setSelectedTitle(title);
+                setItemType(type);
+              }}
+            />
+            {itemId && (
               <p className="text-[10px] text-muted-foreground font-mono mt-1">
-                {t("dialog.selectedId", { id: materialId })}
+                Selected ID: {itemId} ({itemType === "material" ? "File" : "Folder"})
               </p>
             )}
           </div>
@@ -282,7 +347,9 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess }: AddFeaturedDialogP
 
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={submitting}>{t("dialog.cancel")}</Button>
-          <Button onClick={handleSubmit} disabled={submitting}>{submitting ? t("dialog.adding") : t("addFeatured")}</Button>
+          <Button onClick={handleSubmit} disabled={submitting}>
+            {submitting ? (editItem ? "Updating..." : t("dialog.adding")) : (editItem ? "Save Changes" : t("addFeatured"))}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -294,6 +361,7 @@ export default function ModeratorFeaturedPage() {
   const [items, setItems] = useState<FeaturedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editItem, setEditItem] = useState<FeaturedItem | null>(null);
   const { show } = useConfirmDialog();
 
   const fetchItems = useCallback(async () => {
@@ -317,9 +385,10 @@ export default function ModeratorFeaturedPage() {
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
   const handleDelete = (item: FeaturedItem) => {
+    const itemTitle = item.title ?? (item.directory ? item.directory.name : (item.material?.title || "Untitled"));
     show(
       t("delete.confirmTitle"),
-      t("delete.confirmDesc", { title: item.title ?? item.material.title }),
+      t("delete.confirmDesc", { title: itemTitle }),
       async () => {
         try {
           await apiFetch(`/moderator/featured/${item.id}`, { method: "DELETE" });
@@ -330,6 +399,18 @@ export default function ModeratorFeaturedPage() {
         }
       },
     );
+  };
+
+  const handleEdit = (item: FeaturedItem) => {
+    setEditItem(item);
+    setDialogOpen(true);
+  };
+
+  const handleDialogOpenChange = (open: boolean) => {
+    setDialogOpen(open);
+    if (!open) {
+      setEditItem(null);
+    }
   };
 
   return (
@@ -346,7 +427,12 @@ export default function ModeratorFeaturedPage() {
         </Button>
       </div>
 
-      <AddFeaturedDialog open={dialogOpen} onOpenChange={setDialogOpen} onSuccess={fetchItems} />
+      <AddFeaturedDialog
+        open={dialogOpen}
+        onOpenChange={handleDialogOpenChange}
+        onSuccess={fetchItems}
+        editItem={editItem}
+      />
 
       <div className="rounded-lg border bg-card">
         <div className="overflow-x-auto">
@@ -381,33 +467,57 @@ export default function ModeratorFeaturedPage() {
               )}
               {items.map((item) => {
                 const status = getFeaturedStatus(item);
-                const materialTitle = item.material.title;
+                const isDir = !!item.directory;
+                const displayName = item.directory ? item.directory.name : (item.material?.title || "Untitled");
+                const itemTypeLabel = isDir ? "Folder" : "File";
+                const itemId = item.directory ? item.directory.id : item.material?.id;
+
+                let browseUrl = "";
+                if (item.directory) {
+                  browseUrl = item.directory.full_path ? `/browse/${item.directory.full_path}` : `/browse`;
+                } else if (item.material) {
+                  browseUrl = item.material.directory_path
+                    ? `/browse/${item.material.directory_path}/${item.material.slug}`
+                    : `/browse/${item.material.slug}`;
+                }
+
                 const statusKey = `status.${status}` as const;
                 return (
                   <tr key={item.id} className="transition-colors hover:bg-muted/30">
                     <td className="p-4">
                       <div className="space-y-0.5">
-                        <p className="font-medium leading-snug">{materialTitle}</p>
                         <div className="flex items-center gap-1.5">
-                          <code className="text-[11px] text-muted-foreground font-mono">{item.material.id.slice(0, 8)}…</code>
-                          <Link
-                            href={item.material.directory_path ? `/browse/${item.material.directory_path}/${item.material.slug}` : `/browse/${item.material.slug}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <ExternalLink className="h-2.5 w-2.5" />
-                            {t("view")}
-                          </Link>
+                          <p className="font-medium leading-snug">{displayName}</p>
+                          <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 font-normal">
+                            {itemTypeLabel}
+                          </Badge>
                         </div>
+                        {itemId && (
+                          <div className="flex items-center gap-1.5">
+                            <code className="text-[11px] text-muted-foreground font-mono">{itemId.slice(0, 8)}…</code>
+                            {browseUrl && (
+                              <Link
+                                href={browseUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <ExternalLink className="h-2.5 w-2.5" />
+                                {t("view")}
+                              </Link>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td className="p-4">
                       {item.title ? (
                         <span className="line-clamp-1 max-w-45">{item.title}</span>
                       ) : (
-                        <span className="italic text-muted-foreground/50 text-xs">{t("dialog.usesMaterialTitle")}</span>
+                        <span className="italic text-muted-foreground/50 text-xs">
+                          {isDir ? "Uses folder name" : t("dialog.usesMaterialTitle")}
+                        </span>
                       )}
                     </td>
                     <td className="p-4">
@@ -421,16 +531,28 @@ export default function ModeratorFeaturedPage() {
                       <Badge variant="secondary" className="tabular-nums min-w-8 justify-center">{item.priority}</Badge>
                     </td>
                     <td className="p-4 text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(item)}
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        title={t("delete.confirmTitle")}
-                        aria-label={t("delete.confirmTitle")}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleEdit(item)}
+                          className="text-muted-foreground hover:bg-muted"
+                          title="Edit boost"
+                          aria-label="Edit boost"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDelete(item)}
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          title={t("delete.confirmTitle")}
+                          aria-label={t("delete.confirmTitle")}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 );
