@@ -62,6 +62,8 @@ async def run_thumbnail_stage(
                 "text/x-markdown",
             ) or original_filename.lower().endswith((".md", ".markdown")):
                 await _thumbnail_markdown(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
+            elif mime_type == "application/vnd.wikint.qcm+json" or original_filename.lower().endswith(".qcm"):
+                await _thumbnail_qcm(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
             elif mime_type.startswith("text/") or original_filename.lower().endswith(
                 (
                     ".txt",
@@ -489,3 +491,81 @@ async def _thumbnail_text(
         await _thumbnail_pdf(pdf_path, output_path, size, quality)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+async def _thumbnail_qcm(
+    input_path: Path, output_path: Path, size: tuple[int, int], quality: int
+) -> None:
+    """Render a visual card for a QCM file."""
+
+    def _sync() -> None:
+        import json
+
+        from PIL import ImageDraw, ImageFont
+
+        try:
+            with open(input_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error("Failed to parse QCM file for thumbnail: %s", e)
+            return
+
+        chapters = data.get("chapters", [])
+        title = "QCM"
+        if chapters and chapters[0].get("title"):
+            title = chapters[0]["title"]
+
+        questions = []
+        for ch in chapters:
+            for q in ch.get("questions", []):
+                questions.append(q)
+
+        # Create image
+        img = Image.new("RGB", size, (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+
+        try:
+            # Try to load a nice font if available, fallback to default
+            font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
+            font_header = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+            font_text = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+        except OSError:
+            font_title = ImageFont.load_default()
+            font_header = ImageFont.load_default()
+            font_text = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+
+        # Draw header banner (violet-600)
+        header_height = 48
+        draw.rectangle([(0, 0), (size[0], header_height)], fill="#7c3aed")
+
+        # Header text
+        header_text = f"QCM • {len(questions)} question{'s' if len(questions) != 1 else ''}"
+        draw.text((16, 14), header_text, fill="white", font=font_header)
+
+        # Draw title
+        margin_x = 24
+        current_y = header_height + 24
+        title_truncated = title[:45] + "..." if len(title) > 48 else title
+        draw.text((margin_x, current_y), title_truncated, fill="#111827", font=font_title)
+        current_y += 40
+
+        # Draw questions
+        max_questions = 5
+        for i, q in enumerate(questions[:max_questions]):
+            q_text = q.get("text", "").strip().replace("\n", " ")
+            if len(q_text) > 65:
+                q_text = q_text[:65] + "..."
+            
+            draw.text((margin_x, current_y), f"Q{i+1} • {q_text}", fill="#4b5563", font=font_text)
+            current_y += 28
+
+        # Draw footer if more questions
+        if len(questions) > max_questions:
+            remaining = len(questions) - max_questions
+            draw.text((margin_x, current_y + 8), f"... and {remaining} more", fill="#9ca3af", font=font_small)
+
+        img.save(output_path, "WEBP", quality=quality)
+
+    await asyncio.to_thread(_sync)
