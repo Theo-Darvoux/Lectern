@@ -1263,7 +1263,7 @@ function PRDetailContent() {
                     </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => { setShowRejectDialog(false); setRejectReason(""); }}>
-                            {t("cancel", { ns: "PRWizard" })}
+                            {tCommon("cancel")}
                         </Button>
                         <Button
                             variant="destructive"
@@ -1368,7 +1368,7 @@ function PRDetailContent() {
                                 setRevertUnderstood(false);
                             }}
                         >
-                            {t("cancel", { ns: "PRWizard" })}
+                            {tCommon("cancel")}
                         </Button>
                         <Button
                             variant="destructive"

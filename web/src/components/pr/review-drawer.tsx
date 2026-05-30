@@ -368,7 +368,8 @@ export function ReviewDrawer() {
             return () => { cancelled = true; };
         }
          
-    }, [operations.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [operations, tAuto]);
 
     const { user } = useAuth();
     const isPrivileged = PRIVILEGED_ROLES.has(user?.role ?? "");
@@ -523,17 +524,22 @@ export function ReviewDrawer() {
                     {/* Operations list */}
                     <ScrollArea className="min-h-0 flex-1 -mx-6 px-6 my-2">
                         <div className="space-y-2 py-1">
-                            {operations.map((staged, i) => (
-                                <OperationCard
-                                    key={i}
-                                    staged={staged}
-                                    index={i}
-                                    onRemove={removeOperation}
-                                    onEdit={setEditingIndex}
-                                    onPreview={handlePreview}
-                                    tCommon={tCommon}
-                                />
-                            ))}
+                            {operations.map((staged, i) => {
+                                const op = unwrapOp(staged);
+                                const targetId = (op as any).material_id ?? (op as any).directory_id ?? (op as any).target_id ?? (op as any).temp_id ?? i;
+                                const stableKey = `${staged.stagedAt ?? i}-${op.op}-${targetId}`;
+                                return (
+                                    <OperationCard
+                                        key={stableKey}
+                                        staged={staged}
+                                        index={i}
+                                        onRemove={removeOperation}
+                                        onEdit={setEditingIndex}
+                                        onPreview={handlePreview}
+                                        tCommon={tCommon}
+                                    />
+                                );
+                            })}
                             {operations.length === 0 && (
                                 <p className="py-8 text-center text-sm text-muted-foreground">
                                     {t("noPendingChanges")}

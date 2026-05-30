@@ -718,8 +718,8 @@
     "backToList": "Retour à la liste",
     "publish": "Publier",
     "reject": "Rejeter",
-    "revertContribution": "revertContribution",
-    "cancel": "cancel",
+    "revertContribution": "Annuler la contribution",
+    "cancel": "Annuler",
     "fields": {
       "type": "Type",
       "tags": "Mots-clés",
@@ -889,6 +889,9 @@
     "newFolder": "Nouveau dossier",
     "fabExpired": "Fichiers expirés",
     "fabDraft": "Brouillon",
+    "file": "Fichier",
+    "changeFile": "Changer",
+    "retryUpload": "Réessayer",
     "labels": {
       "create_material": "Ajouter \"{name}\"",
       "edit_material": "Modifier le document \"{name}\"",

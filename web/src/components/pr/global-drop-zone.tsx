@@ -166,11 +166,18 @@ export function GlobalDropZone() {
             }
         };
 
-        // Fallback: catch drops that escape the overlay (e.g. dropped outside it)
+        // Fallback: catch drops that reach the document level
         const onDrop = (e: DragEvent) => {
             dragCounterRef.current = 0;
             setIsDragOver(false);
             e.preventDefault();
+            if (e.dataTransfer?.items?.length) {
+                collectDroppedItems(e.dataTransfer.items).then((dropped) => {
+                    if (dropped.files.length > 0 || dropped.folders.length > 0) {
+                        handleItemsDrop(dropped);
+                    }
+                });
+            }
         };
 
         document.addEventListener("dragenter", onDragEnter);

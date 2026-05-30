@@ -718,8 +718,8 @@
     "backToList": "Back to list",
     "publish": "Publish",
     "reject": "Reject",
-    "revertContribution": "revertContribution",
-    "cancel": "cancel",
+    "revertContribution": "Revert contribution",
+    "cancel": "Cancel",
     "fields": {
       "type": "Type",
       "tags": "Tags",
@@ -889,6 +889,9 @@
     "newFolder": "New Folder",
     "fabExpired": "Expired files",
     "fabDraft": "Draft",
+    "file": "File",
+    "changeFile": "Change",
+    "retryUpload": "Retry",
     "labels": {
       "create_material": "Add \"{name}\"",
       "edit_material": "Edit material \"{name}\"",

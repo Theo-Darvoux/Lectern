@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiFetch, apiFetchWithResponse } from "@/lib/api-client";
+import { apiFetchWithResponse } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { createSSEConnection } from "@/lib/sse-client";
 import { PRCard } from "./pr-card";
@@ -36,6 +36,7 @@ export function PRList() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [filterStatus, setFilterStatus] = useState<StatusFilter>("open");
+  const [totalCount, setTotalCount] = useState<number | null>(null);
 
   // Lightweight counts for the tab badges
   const [counts, setCounts] = useState<Record<string, number | null>>({
@@ -84,12 +85,15 @@ export function PRList() {
     params.set("limit", String(PAGE_SIZE));
     if (filterStatus) params.set("status", filterStatus);
 
-    apiFetch<PullRequestOut[]>(`/pull-requests?${params}`)
-      .then((data) => {
-        if (active) setPrs(data);
+    apiFetchWithResponse<PullRequestOut[]>(`/pull-requests?${params}`)
+      .then(({ data, response }) => {
+        if (!active) return;
+        setPrs(data);
+        const total = response.headers.get("X-Total-Count");
+        setTotalCount(total ? parseInt(total, 10) : null);
       })
       .catch(() => {
-        if (active) setPrs([]);
+        if (active) { setPrs([]); setTotalCount(null); }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -249,7 +253,7 @@ export function PRList() {
             variant="ghost"
             size="sm"
             className="gap-1 text-muted-foreground"
-            disabled={prs.length < PAGE_SIZE}
+            disabled={totalCount !== null ? page * PAGE_SIZE >= totalCount : prs.length < PAGE_SIZE}
             onClick={() => setPage((p) => p + 1)}
           >
             {t("older")}

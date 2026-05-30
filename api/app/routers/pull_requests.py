@@ -128,7 +128,6 @@ async def approve_pull_request(
     current_user: Annotated[User, Depends(require_moderator())],
 ) -> dict[str, Any]:
     await approve_pr_service(db, id, current_user)
-    await db.commit()
     return {"status": "ok"}
 
 
@@ -140,7 +139,6 @@ async def reject_pull_request(
     current_user: Annotated[User, Depends(require_moderator())],
 ) -> dict[str, Any]:
     await reject_pr_service(db, id, data.reason, current_user)
-    await db.commit()
     return {"status": "ok"}
 
 
@@ -160,7 +158,6 @@ async def revert_pull_request(
     ],
 ) -> PullRequestOut:
     revert = await revert_pr_service(db, id, current_user)
-    await db.commit()
     return PullRequestOut.model_validate(revert)
 
 
@@ -172,7 +169,6 @@ async def cancel_pull_request(
 ) -> dict[str, Any]:
     """Author cancels their own open pull request."""
     await cancel_pr_service(db, id, current_user)
-    await db.commit()
     return {"status": "ok"}
 
 

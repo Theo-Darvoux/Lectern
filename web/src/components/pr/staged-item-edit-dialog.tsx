@@ -233,7 +233,7 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
                     {/* File replacement — only for binary create_material ops */}
                     {hasReplaceableFile && (
                         <div className="min-w-0 space-y-2">
-                            <label className="text-sm font-medium">Fichier</label>
+                            <label className="text-sm font-medium">{t("file")}</label>
 
                             {/* Current file */}
                             {uploadState === "idle" && (
@@ -253,7 +253,7 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
                                         onClick={() => fileInputRef.current?.click()}
                                     >
                                         <UploadCloud className="h-3 w-3 mr-1" />
-                                        Changer
+                                        {t("changeFile")}
                                     </Button>
                                 </div>
                             )}
@@ -311,7 +311,7 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
                                         className="h-6 shrink-0 text-xs"
                                         onClick={resetUpload}
                                     >
-                                        Réessayer
+                                        {t("retryUpload")}
                                     </Button>
                                 </div>
                             )}
