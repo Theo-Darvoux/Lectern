@@ -62,8 +62,6 @@ async def run_thumbnail_stage(
                 "text/x-markdown",
             ) or original_filename.lower().endswith((".md", ".markdown")):
                 await _thumbnail_markdown(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
-            elif mime_type == "application/vnd.wikint.qcm+json" or original_filename.lower().endswith(".qcm"):
-                await _thumbnail_qcm(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
             elif mime_type.startswith("text/") or original_filename.lower().endswith(
                 (
                     ".txt",
@@ -491,82 +489,3 @@ async def _thumbnail_text(
         await _thumbnail_pdf(pdf_path, output_path, size, quality)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-async def _thumbnail_qcm(
-    input_path: Path, output_path: Path, size: tuple[int, int], quality: int
-) -> None:
-    """Render a visual card for a QCM file."""
-
-    def _sync() -> None:
-        import json
-        from PIL import ImageDraw, ImageFont, Image
-
-        try:
-            with open(input_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception as e:
-            logger.error("Failed to parse QCM file for thumbnail: %s", e)
-            return
-
-        chapters = data.get("chapters", [])
-        title = "QCM"
-        if chapters and chapters[0].get("title"):
-            title = chapters[0]["title"]
-
-        questions = []
-        for ch in chapters:
-            for q in ch.get("questions", []):
-                questions.append(q)
-
-        # Create image with deep purple background (violet-700)
-        img = Image.new("RGB", size, "#6d28d9")
-        draw = ImageDraw.Draw(img)
-
-        try:
-            font_path_bold = "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Bold.ttf"
-            font_path_regular = "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Regular.ttf"
-            font_title = ImageFont.truetype(font_path_bold, 42)
-            font_header = ImageFont.truetype(font_path_bold, 20)
-            font_text = ImageFont.truetype(font_path_regular, 20)
-            font_qcm = ImageFont.truetype(font_path_bold, 120)
-        except OSError:
-            font_title = ImageFont.load_default()
-            font_header = ImageFont.load_default()
-            font_text = ImageFont.load_default()
-            font_qcm = ImageFont.load_default()
-
-        center_x = size[0] // 2
-
-        # Draw huge "QCM" watermark in darker purple (violet-800)
-        try:
-            draw.text((center_x, size[1] // 2), "QCM", fill="#5b21b6", font=font_qcm, anchor="mm")
-        except TypeError:
-            # Fallback if anchor is not supported in older Pillow
-            draw.text((center_x - 100, size[1] // 2 - 60), "QCM", fill="#5b21b6", font=font_qcm)
-
-        # Draw header text (violet-200)
-        header_text = "QUESTIONNAIRE À CHOIX MULTIPLES"
-        try:
-            draw.text((center_x, 60), header_text, fill="#ddd6fe", font=font_header, anchor="mt")
-        except TypeError:
-            draw.text((80, 60), header_text, fill="#ddd6fe", font=font_header)
-
-        # Draw title (white)
-        title_truncated = title[:40] + "..." if len(title) > 40 else title
-        try:
-            draw.text((center_x, size[1] // 2), title_truncated, fill="#ffffff", font=font_title, anchor="mm")
-        except TypeError:
-            draw.text((80, size[1] // 2), title_truncated, fill="#ffffff", font=font_title)
-
-        # Draw questions count (violet-200)
-        q_count = len(questions)
-        q_text = f"{q_count} question{'s' if q_count != 1 else ''}"
-        try:
-            draw.text((center_x, size[1] - 80), q_text, fill="#ddd6fe", font=font_text, anchor="mb")
-        except TypeError:
-            draw.text((center_x - 40, size[1] - 80), q_text, fill="#ddd6fe", font=font_text)
-
-        img.save(output_path, "WEBP", quality=quality)
-
-    await asyncio.to_thread(_sync)

@@ -84,6 +84,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const isText = (mimeType.startsWith("text/") || /\.(txt|py|js|ts|json)$/i.test(fileName)) && !isMarkdown;
   const isPDF = mimeType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf");
   const isOffice = mimeType.includes("ms-") || mimeType.includes("officedocument") || /\.(docx|xlsx|pptx)$/i.test(fileName);
+  const isQCM = mimeType === "application/vnd.wikint.qcm+json" || fileName.toLowerCase().endsWith(".qcm");
 
   // Track container width for react-pdf Page sizing — only needed when react-pdf will render.
   useEffect(() => {
@@ -223,7 +224,8 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     showPdfWebp ||
     (url && isVideo && videoLoaded) ||
     (url && isText && textPreview) ||
-    (url && isMarkdown && textPreview);
+    (url && isMarkdown && textPreview) ||
+    isQCM;
 
   return (
     <div
@@ -361,6 +363,28 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
             {textPreview}
           </div>
           <div className="absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-black/20 to-transparent" />
+        </div>
+      )}
+
+      {/* ── QCM HTML Preview Card ─────────────────────────────────────────── */}
+      {isQCM && (
+        <div className="absolute inset-0 bg-violet-800 flex items-center justify-center p-4 overflow-hidden select-none animate-in fade-in duration-300">
+          {/* Watermark */}
+          <div className="absolute font-black text-6xl sm:text-7xl md:text-[100px] leading-none text-violet-950/40 -rotate-12 select-none pointer-events-none tracking-tighter">
+            QCM
+          </div>
+          
+          <div className="relative z-10 flex flex-col items-center justify-center w-full h-full text-center">
+            <span className="text-[9px] sm:text-[10px] font-bold tracking-widest text-violet-300 uppercase mb-1.5 sm:mb-2 opacity-90">
+              Questionnaire
+            </span>
+            <h3 className="text-white font-bold text-sm sm:text-base md:text-lg line-clamp-3 leading-snug max-w-[90%] drop-shadow-sm">
+              {material.title || "QCM"}
+            </h3>
+          </div>
+          
+          {/* Inner border/glass effect */}
+          <div className="absolute inset-1.5 sm:inset-2 border border-white/10 rounded-md sm:rounded-lg pointer-events-none" />
         </div>
       )}
 
