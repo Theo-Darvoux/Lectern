@@ -171,7 +171,16 @@ function DirectoryGridCardImpl({
       >
         {/* Icon area */}
         <div className={cn("aspect-[4/3] relative flex items-center justify-center bg-linear-to-br overflow-hidden", bgGradient)}>
-          <Folder className={cn("h-14 w-14", iconColor)} />
+          {/* Huge watermark */}
+          <Folder className={cn("absolute h-48 w-48 opacity-[0.08] -rotate-12 translate-y-4 translate-x-4 pointer-events-none", iconColor)} />
+          
+          {/* Decorative subtle background grid/pattern or glass pane */}
+          <div className="absolute inset-4 rounded-xl bg-white/10 dark:bg-black/5 backdrop-blur-sm border border-white/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] pointer-events-none" />
+          
+          {/* Main icon container with hover scale */}
+          <div className="relative z-10 p-4 bg-white/40 dark:bg-black/20 rounded-2xl shadow-lg backdrop-blur-md ring-1 ring-white/50 dark:ring-white/10 group-hover:scale-110 group-hover:shadow-xl transition-all duration-500 ease-out">
+            <Folder className={cn("h-12 w-12 sm:h-14 sm:w-14 drop-shadow-sm", iconColor)} />
+          </div>
 
           {/* Staged badge */}
           {staged && (
@@ -211,7 +220,7 @@ function DirectoryGridCardImpl({
 
           {/* Hover action overlay — translate is compositor-composited, unlike opacity which can trigger paint. */}
           {!selectMode && (
-            <div onClick={(e) => e.stopPropagation()} className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-end gap-0.5 p-1.5 translate-y-full group-hover:translate-y-0 has-[[data-state=open]]:translate-y-0 transition-transform duration-150 bg-black/30">
+            <div onClick={(e) => { e.preventDefault(); e.stopPropagation(); }} className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-end gap-0.5 p-1.5 translate-y-full group-hover:translate-y-0 has-[[data-state=open]]:translate-y-0 transition-transform duration-150 bg-black/30">
               {!isRestricted && (
                 <button
                   onClick={handleChat}
