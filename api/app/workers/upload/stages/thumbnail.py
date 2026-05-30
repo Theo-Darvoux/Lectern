@@ -62,6 +62,25 @@ async def run_thumbnail_stage(
                 "text/x-markdown",
             ) or original_filename.lower().endswith((".md", ".markdown")):
                 await _thumbnail_markdown(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
+            elif mime_type.startswith("text/") or original_filename.lower().endswith(
+                (
+                    ".txt",
+                    ".tex",
+                    ".py",
+                    ".js",
+                    ".ts",
+                    ".json",
+                    ".html",
+                    ".css",
+                    ".sh",
+                    ".yaml",
+                    ".yml",
+                    ".ini",
+                    ".conf",
+                    ".sql",
+                )
+            ):
+                await _thumbnail_text(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
             else:
                 logger.info("Skipping thumbnail for unsupported MIME type: %s", mime_type)
                 return None
@@ -416,6 +435,51 @@ async def _thumbnail_markdown(
         if not pdf_files:
             logger.error(
                 "soffice produced no PDF for markdown. out=%r, err=%r",
+                stdout_bytes.decode(errors="replace") if stdout_bytes else "",
+                stderr_bytes.decode(errors="replace") if stderr_bytes else "",
+            )
+            return
+
+        pdf_path = pdf_files[0]
+        await _thumbnail_pdf(pdf_path, output_path, size, quality)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+async def _thumbnail_text(
+    input_path: Path, output_path: Path, size: tuple[int, int], quality: int
+) -> None:
+    """Render a text/code file by copying it to a temp .txt file and converting to PDF/WebP."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="wikint_txt_thumb_"))
+    try:
+        # Copy file to have a .txt suffix so LibreOffice imports it cleanly as plain text
+        temp_txt = tmp_dir / "document.txt"
+        shutil.copy2(input_path, temp_txt)
+
+        cmd = [
+            "soffice",
+            f"-env:UserInstallation=file://{tmp_dir}",
+            "--headless",
+            "--norestore",
+            "--nofirststartwizard",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(tmp_dir),
+            str(temp_txt),
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=60)
+
+        pdf_files = list(tmp_dir.glob("*.pdf"))
+        if not pdf_files:
+            logger.error(
+                "soffice produced no PDF for text file. out=%r, err=%r",
                 stdout_bytes.decode(errors="replace") if stdout_bytes else "",
                 stderr_bytes.decode(errors="replace") if stderr_bytes else "",
             )

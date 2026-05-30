@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Trash2, Star, CalendarRange, ExternalLink, Check, ChevronsUpDown, Loader2, Pencil } from "lucide-react";
+import { Plus, Trash2, Star, CalendarRange, ExternalLink, Check, ChevronsUpDown, Loader2, Pencil, Folder, FileText } from "lucide-react";
+import { TYPE_ICONS, EXT_ICONS } from "@/lib/material-icons";
+import { getFileExtension } from "@/lib/file-utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -76,7 +78,7 @@ function ItemSearch({
   selectedId,
   selectedTitle,
 }: {
-  onSelect: (id: string, title: string, type: "material" | "directory") => void;
+  onSelect: (id: string, title: string, type: "material" | "directory", path: string) => void;
   selectedId: string;
   selectedTitle: string;
 }) {
@@ -100,7 +102,7 @@ function ItemSearch({
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 max-h-[300px] overflow-hidden flex flex-col" align="start">
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 max-h-[300px] overflow-hidden flex flex-col" align="start" portal={false}>
         <Command shouldFilter={false} className="max-h-[300px] flex flex-col">
           <CommandInput
             placeholder={t("dialog.searchPlaceholder")}
@@ -120,29 +122,44 @@ function ItemSearch({
               {results.map((result) => {
                 const title = result.title || result.name || result.file_name || "Untitled";
                 const isDir = result.search_type === "directory";
+                const extension = getFileExtension(title) || (result.browse_path ? getFileExtension(result.browse_path) : "");
+
+                let Icon: React.ElementType = isDir ? Folder : FileText;
+                if (!isDir) {
+                  if (result.type && TYPE_ICONS[result.type]) {
+                    Icon = TYPE_ICONS[result.type];
+                  } else if (extension && EXT_ICONS[extension]) {
+                    Icon = EXT_ICONS[extension];
+                  }
+                }
+
+                const pathDisplay = result.browse_path ? result.browse_path.replace(/^\/browse/, "") || "/" : "/";
+
                 return (
                   <CommandItem
                     key={result.id}
                     value={result.id}
                     onSelect={() => {
-                      onSelect(result.id, title, result.search_type);
+                      onSelect(result.id, title, result.search_type, pathDisplay);
                       setOpen(false);
                     }}
+                    className="flex items-center gap-2 cursor-pointer"
                   >
                     <Check
                       className={cn(
-                        "mr-2 h-4 w-4",
+                        "mr-2 h-4 w-4 shrink-0",
                         selectedId === result.id ? "opacity-100" : "opacity-0"
                       )}
                     />
-                    <div className="flex flex-col overflow-hidden">
+                    <Icon className={cn("h-4 w-4 shrink-0", isDir ? "text-primary" : "text-blue-500")} />
+                    <div className="flex flex-col overflow-hidden flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium truncate">{title}</span>
                         <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
                           {isDir ? "Folder" : "File"}
                         </Badge>
                       </div>
-                      <span className="text-[10px] text-muted-foreground font-mono truncate">{result.id}</span>
+                      <span className="text-[10px] text-muted-foreground font-mono truncate">{pathDisplay}</span>
                     </div>
                   </CommandItem>
                 );
@@ -167,6 +184,7 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: AddFeatu
   const [itemId, setItemId] = useState("");
   const [itemType, setItemType] = useState<"material" | "directory">("material");
   const [selectedTitle, setSelectedTitle] = useState("");
+  const [selectedPath, setSelectedPath] = useState("");
   const [titleOverride, setTitleOverride] = useState("");
   const [descOverride, setDescOverride] = useState("");
   const [startAt, setStartAt] = useState(toLocalDateInput());
@@ -178,6 +196,7 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: AddFeatu
     setItemId("");
     setItemType("material");
     setSelectedTitle("");
+    setSelectedPath("");
     setTitleOverride("");
     setDescOverride("");
     setStartAt(toLocalDateInput());
@@ -197,10 +216,18 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: AddFeatu
           setItemId(editItem.material.id);
           setItemType("material");
           setSelectedTitle(editItem.material.title);
+          setSelectedPath(
+            editItem.material.directory_path
+              ? `/${editItem.material.directory_path}/${editItem.material.slug}`
+              : `/${editItem.material.slug}`
+          );
         } else if (editItem.directory) {
           setItemId(editItem.directory.id);
           setItemType("directory");
           setSelectedTitle(editItem.directory.name);
+          setSelectedPath(
+            editItem.directory.full_path ? `/${editItem.directory.full_path}` : "/"
+          );
         }
         setTitleOverride(editItem.title || "");
         setDescOverride(editItem.description || "");
@@ -283,15 +310,16 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: AddFeatu
             <ItemSearch
               selectedId={itemId}
               selectedTitle={selectedTitle}
-              onSelect={(id, title, type) => {
+              onSelect={(id, title, type, path) => {
                 setItemId(id);
                 setSelectedTitle(title);
                 setItemType(type);
+                setSelectedPath(path);
               }}
             />
-            {itemId && (
+            {selectedPath && (
               <p className="text-[10px] text-muted-foreground font-mono mt-1">
-                Selected ID: {itemId} ({itemType === "material" ? "File" : "Folder"})
+                Selected Path: {selectedPath} ({itemType === "material" ? "File" : "Folder"})
               </p>
             )}
           </div>
@@ -481,20 +509,35 @@ export default function ModeratorFeaturedPage() {
                     : `/browse/${item.material.slug}`;
                 }
 
+                const pathDisplay = browseUrl.replace(/^\/browse/, "") || "/";
+
+                let Icon: React.ElementType = isDir ? Folder : FileText;
+                if (!isDir && item.material) {
+                  const extension = getFileExtension(item.material.title);
+                  if (item.material.type && TYPE_ICONS[item.material.type]) {
+                    Icon = TYPE_ICONS[item.material.type];
+                  } else if (extension && EXT_ICONS[extension]) {
+                    Icon = EXT_ICONS[extension];
+                  }
+                }
+
                 const statusKey = `status.${status}` as const;
                 return (
                   <tr key={item.id} className="transition-colors hover:bg-muted/30">
                     <td className="p-4">
                       <div className="space-y-0.5">
                         <div className="flex items-center gap-1.5">
+                          <Icon className={cn("h-4 w-4 shrink-0", isDir ? "text-primary" : "text-blue-500")} />
                           <p className="font-medium leading-snug">{displayName}</p>
                           <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 font-normal">
                             {itemTypeLabel}
                           </Badge>
                         </div>
                         {itemId && (
-                          <div className="flex items-center gap-1.5">
-                            <code className="text-[11px] text-muted-foreground font-mono">{itemId.slice(0, 8)}…</code>
+                          <div className="flex items-center gap-1.5 pl-[22px]">
+                            <span className="text-[11px] text-muted-foreground font-mono truncate max-w-xs" title={pathDisplay}>
+                              {pathDisplay}
+                            </span>
                             {browseUrl && (
                               <Link
                                 href={browseUrl}

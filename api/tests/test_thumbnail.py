@@ -69,3 +69,36 @@ async def test_run_thumbnail_stage_markdown() -> None:
         pf.cleanup()
         if thumb_path_str:
             Path(thumb_path_str).unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_run_thumbnail_stage_text() -> None:
+    """Text/code files should be successfully converted to a WebP thumbnail."""
+    from app.core.processing import ProcessingFile
+    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
+
+    # Create a temp latex file
+    with tempfile.NamedTemporaryFile(suffix=".tex", delete=False, mode="w") as f:
+        f.write(
+            "\\documentclass{article}\n\\begin{document}\nHello World from LaTeX!\n\\end{document}\n"
+        )
+        temp_path = Path(f.name)
+
+    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
+    thumb_path_str = None
+    try:
+        thumb_path_str = await run_thumbnail_stage(pf, "text/x-tex", "test.tex")
+        assert thumb_path_str is not None
+        thumb_path = Path(thumb_path_str)
+        assert thumb_path.exists()
+        assert thumb_path.suffix == ".webp"
+
+        # Verify it's a valid image and not blank
+        with Image.open(thumb_path) as img:
+            assert img.format == "WEBP"
+
+        assert _is_blank_thumbnail(thumb_path) is False
+    finally:
+        pf.cleanup()
+        if thumb_path_str:
+            Path(thumb_path_str).unlink(missing_ok=True)

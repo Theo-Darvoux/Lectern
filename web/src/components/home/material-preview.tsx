@@ -148,7 +148,29 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         if ((isText || isMarkdown) && data.url) {
           try {
             const res = await fetch(data.url);
-            const text = await res.text();
+            const contentEncoding = res.headers.get("Content-Encoding");
+            let text = "";
+            if (contentEncoding === "gzip" || contentEncoding?.includes("gzip")) {
+              if (res.body && typeof DecompressionStream !== "undefined") {
+                const decompressedStream = res.body.pipeThrough(new DecompressionStream("gzip"));
+                const decompressedResponse = new Response(decompressedStream);
+                text = await decompressedResponse.text();
+              } else {
+                text = await res.text();
+              }
+            } else {
+              const blob = await res.blob();
+              const buffer = await blob.arrayBuffer();
+              const arr = new Uint8Array(buffer);
+              if (arr.length >= 2 && arr[0] === 0x1f && arr[1] === 0x8b && typeof DecompressionStream !== "undefined") {
+                const stream = new Blob([buffer]).stream();
+                const decompressedStream = stream.pipeThrough(new DecompressionStream("gzip"));
+                const decompressedResponse = new Response(decompressedStream);
+                text = await decompressedResponse.text();
+              } else {
+                text = new TextDecoder().decode(buffer);
+              }
+            }
             if (mounted) setTextPreview(text.slice(0, 1000));
           } catch {
             // ignore

@@ -39,7 +39,7 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
         {/* Thumbnail/Gradient panel */}
         <div
           className={cn(
-            "relative flex shrink-0 items-center justify-center sm:w-64 sm:rounded-none h-48 sm:h-auto overflow-hidden",
+            "relative flex shrink-0 items-center justify-center sm:w-64 sm:rounded-none h-48 sm:h-auto sm:min-h-[220px] overflow-hidden",
           )}
         >
           {material ? (
@@ -121,7 +121,7 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
   return (
     <Link
       href={browsePath}
-      className="group block w-75 flex-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
+      className="group block w-72 flex-none sm:w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
     >
       <div className="flex h-full flex-col rounded-xl border bg-card shadow-sm overflow-hidden transition-all duration-200 group-hover:shadow-md group-hover:-translate-y-0.5">
         {/* Thumbnail/Gradient banner */}
@@ -211,7 +211,7 @@ export function FeaturedSection({ items }: FeaturedSectionProps) {
           <FeaturedHeroCard item={items[0]} />
         ) : (
           <div>
-            <div className="flex gap-4 overflow-x-auto pb-3 scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none]">
+            <div className="flex gap-4 overflow-x-auto pb-3 scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] sm:grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 sm:overflow-x-visible sm:pb-0">
               {items.map((item) => (
                 <FeaturedScrollCard key={item.id} item={item} />
               ))}

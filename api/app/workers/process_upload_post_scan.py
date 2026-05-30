@@ -118,7 +118,19 @@ async def process_upload_post_scan(
                 "Post-scan metadata strip failed for upload %s: %s — continuing.", upload_id, exc
             )
 
-        # ── 3. Compress (soft failure — degrade gracefully) ──────────────────
+        # ── 3. Generate thumbnail (soft failure — no thumbnail is acceptable) ─
+        try:
+            thumbnail_path = await run_thumbnail_stage(
+                pf, actual_mime, original_filename, tracer, config=auth_config
+            )
+        except Exception as exc:
+            logger.warning(
+                "Post-scan thumbnail generation failed for upload %s: %s — no thumbnail.",
+                upload_id,
+                exc,
+            )
+
+        # ── 4. Compress (soft failure — degrade gracefully) ──────────────────
         final_mime = actual_mime
         content_encoding: str | None = None
         compress_ok = False
@@ -139,18 +151,6 @@ async def process_upload_post_scan(
         except Exception as exc:
             logger.warning(
                 "Post-scan compression failed for upload %s: %s — serving uncompressed original.",
-                upload_id,
-                exc,
-            )
-
-        # ── 4. Generate thumbnail (soft failure — no thumbnail is acceptable) ─
-        try:
-            thumbnail_path = await run_thumbnail_stage(
-                pf, final_mime, original_filename, tracer, config=auth_config
-            )
-        except Exception as exc:
-            logger.warning(
-                "Post-scan thumbnail generation failed for upload %s: %s — no thumbnail.",
                 upload_id,
                 exc,
             )

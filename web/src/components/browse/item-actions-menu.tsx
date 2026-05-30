@@ -16,6 +16,8 @@ import {
   ShieldAlert,
   FileText,
   Code2,
+  Info,
+  MessageSquare,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
@@ -49,7 +51,7 @@ import { apiFetch } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore, useAuthStore, isGuest } from "@/lib/stores";
+import { useBrowseRefreshStore, useAuthStore, isGuest, useUIStore } from "@/lib/stores";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import {
   Dialog,
@@ -297,11 +299,10 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
   const router = useRouter();
   const context = useContext(ActionsContext);
   const guest = isGuest(useAuthStore((s) => s.user));
+  const openSidebar = useUIStore((s) => s.openSidebar);
   if (!context) return null;
   const { item, actions } = context;
   const { t } = actions;
-
-
 
   const Item = isContextMenu ? ContextMenuItem : DropdownMenuItem;
   const Separator = isContextMenu ? ContextMenuSeparator : DropdownMenuSeparator;
@@ -311,11 +312,43 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
   const isCreated = item.staged === "created";
 
+  const handleDetailsClick = () => {
+    openSidebar("details", {
+      type: "directory",
+      id: item.id,
+      data: { ...item.data, __path: context.itemPath },
+    });
+  };
+
+  const handleChatClick = () => {
+    openSidebar("chat", {
+      type: "directory",
+      id: item.id,
+      data: item.data,
+    });
+  };
+
   return (
     <>
       <Label className="px-2 py-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
         {actions.isMaterial ? t("materialActions") : t("folderActions")}
       </Label>
+
+      {!actions.isMaterial && (
+        <>
+          <Item onClick={handleDetailsClick} className="cursor-pointer">
+            <Info className="mr-2 h-4 w-4" />
+            <span>{t("details")}</span>
+          </Item>
+          {!actions.isRestricted && (
+            <Item onClick={handleChatClick} className="cursor-pointer">
+              <MessageSquare className="mr-2 h-4 w-4" />
+              <span>{t("chat")}</span>
+            </Item>
+          )}
+          <Separator />
+        </>
+      )}
 
       {actions.isMaterial && !actions.isRestricted && (
         <>

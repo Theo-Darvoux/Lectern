@@ -201,6 +201,7 @@ def dynamic_part_size(file_size: int) -> int:
 async def create_multipart_upload(
     file_key: str,
     content_type: str = "application/octet-stream",
+    content_encoding: str | None = None,
     content_disposition: str | None = "attachment",
 ) -> str:
     """Initiate an S3 multipart upload. Returns the UploadId."""
@@ -211,6 +212,8 @@ async def create_multipart_upload(
         "ContentType": content_type,
         "CacheControl": "public, max-age=86400",
     }
+    if content_encoding:
+        params["ContentEncoding"] = content_encoding
     if content_disposition:
         params["ContentDisposition"] = content_disposition
     async with get_s3_client(cfg) as client:
@@ -301,7 +304,10 @@ async def upload_file_multipart(
 
     # Large file — multipart with concurrent part uploads
     s3_upload_id = await create_multipart_upload(
-        file_key, content_type=content_type, content_disposition=content_disposition
+        file_key,
+        content_type=content_type,
+        content_encoding=content_encoding,
+        content_disposition=content_disposition,
     )
 
     try:
@@ -382,6 +388,27 @@ async def download_file(file_key: str, dest_path: str | Path) -> None:
                     await _asyncio.to_thread(f.write, chunk)
         finally:
             body.close()
+
+        if response.get("ContentEncoding") == "gzip":
+            await _asyncio.to_thread(_decompress_gzip_file, dest_path)
+
+
+def _decompress_gzip_file(file_path: Path | str) -> None:
+    import gzip
+    import shutil
+    from pathlib import Path
+
+    path = Path(file_path)
+    temp_path = path.with_suffix(path.suffix + ".decompressed.tmp")
+    try:
+        with gzip.open(path, "rb") as f_in:
+            with open(temp_path, "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        temp_path.replace(path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        # Keep the original file on failure
+        pass
 
 
 async def download_file_with_hash(file_key: str, dest_path: str | Path) -> str:
