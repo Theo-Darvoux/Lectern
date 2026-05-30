@@ -50,7 +50,6 @@
     "delete": "Supprimer",
     "close": "Fermer",
     "remove": "Retirer",
-    "edit": "Modifier",
     "deleteItemTitle": "Supprimer l'élément",
     "deleteItemDescription": "Êtes-vous sûr de vouloir supprimer cet élément ? Cette action est irréversible.",
     "deleting": "Suppression...",
@@ -239,7 +238,6 @@
     "directoryDetails": "Détails du dossier",
     "select": "Sélectionner",
     "paste": "Coller (",
-    "upload": "Téléverser",
     "newFolder": "Nouveau dossier",
     "cut": "Couper",
     "delete": "Supprimer",
@@ -267,13 +265,11 @@
     "noItemsYet": "Aucun élément pour l'instant",
     "emptyDirectory": "Ce dossier est vide.",
     "download": "Télécharger",
-    "moodleXml": "Moodle XML",
     "downloadPdf": "Télécharger en PDF",
     "downloadXml": "Télécharger Moodle XML",
     "print": "Imprimer",
     "edit": "Modifier",
     "copyLink": "Copier le lien",
-    "deletePermanentlyConfirm": "Êtes-vous sûr de vouloir supprimer définitivement",
     "likes": "J'aime",
     "chat": "Discuter",
     "details": "Détails",
@@ -285,12 +281,6 @@
     "edits": "Modifications",
     "report": "Signaler",
     "deleteDocument": "Supprimer le document",
-    "materialActions": "Actions sur le document",
-    "folderActions": "Actions sur le dossier",
-    "discardDraft": "Supprimer le brouillon",
-    "deleteTitle": "Supprimer {type}",
-    "discardDraftConfirm": "Êtes-vous sûr de vouloir supprimer ce brouillon de {type} ? Toutes les modifications non sauvegardées seront perdues.",
-    "deleteNow": "Supprimer maintenant",
     "deleting": "Suppression en cours",
     "moving": "Déplacement en cours",
     "contribution": "Contribution",
@@ -314,7 +304,6 @@
     "itemDeletedSuccessfully": "{type} supprimé avec succès",
     "failedToDeleteItem": "Échec de la suppression de l'élément",
     "linkCopied": "Lien copié dans le presse-papiers",
-    "discard": "Abandonner",
     "addAttachment": "Ajouter une pièce jointe",
     "material": "Document",
     "folder": "Dossier",
@@ -337,7 +326,6 @@
     "itemsAlreadyInFolder": "Les éléments sont déjà dans ce dossier",
     "cannotMoveFolderIntoItself": "Impossible de déplacer un dossier dans lui-même ou dans l'un de ses sous-dossiers",
     "itemsAddedToDraft": "{count, plural, =1 {1 élément ajouté} other {# éléments ajoutés}} au brouillon",
-    "_": "_",
     "failedToUpdateLike": "failedToUpdateLike",
     "listView": "Vue liste",
     "gridView": "Vue grille",
@@ -347,10 +335,8 @@
     "filterFolders": "Filtrer les dossiers…",
     "clear": "Effacer",
     "navigateTo": "Accéder au dossier",
-    "downloadZip": "Télécharger en ZIP",
     "downloadZipTooltip": "Télécharger tous les fichiers de ce répertoire en archive ZIP",
     "downloadZipTooLarge": "Ce répertoire est trop volumineux pour être téléchargé en ZIP",
-    "downloadZipEmpty": "Ce répertoire ne contient aucun fichier téléchargeable",
     "downloadZipPart": "Téléchargement de « {dirName} » — partie {part} sur {total}",
     "downloadZipAllStarted": "{total} parties en file — dézippez-les toutes pour obtenir le dossier complet"
   },
@@ -548,12 +534,6 @@
     "confirmFailedFiles": "{count, plural, =1 {# fichier a échoué et ne sera pas inclus} other {# fichiers ont échoué et ne seront pas inclus}}. Continuer ?",
     "mbPerSec": "Mo/s",
     "secondsShort": "s",
-    "units": {
-      "b": "{count} o",
-      "kb": "{count} Ko",
-      "mb": "{count} Mo",
-      "gb": "{count} Go"
-    },
     "hashing": "Calcul de l'empreinte...",
     "checkingDedup": "Vérification des doublons...",
     "completed": "Téléchargement terminé",
@@ -935,9 +915,6 @@
     "editText": "Modifier le texte",
     "replaceFile": "Remplacer le fichier",
     "metadata": "Métadonnées",
-    "replaceDesc": "Téléchargez un nouveau fichier pour remplacer la version actuelle. L'ancien fichier sera conservé dans l'historique des versions.",
-    "dropActive": "Déposez le fichier ici",
-    "dropDefault": "Glissez-déposez ou cliquez pour parcourir",
     "changeDesc": "Description du changement",
     "changeDescPlaceholderText": "ex: Correction d'une faute dans l'introduction",
     "changeDescPlaceholderBinary": "ex: Mise à jour édition 2024",
@@ -972,7 +949,6 @@
       }
     },
     "flags": {
-      "title": "Signalements de contenu",
       "noFlags": "Aucun signalement à examiner.",
       "loadError": "Échec du chargement des signalements",
       "updateError": "Échec de la mise à jour du signalement",
@@ -1009,7 +985,6 @@
       "loadError": "Échec du chargement des répertoires"
     },
     "pullRequests": {
-      "title": "File des contributions",
       "searchPlaceholder": "Rechercher dans la file...",
       "columnTitle": "Titre",
       "columnType": "Type",
@@ -1028,7 +1003,6 @@
       }
     },
     "featured": {
-      "title": "Matériels mis en avant",
       "description": "Gérez quels matériels apparaissent dans la section <featured>Mis en avant</featured> sur la page d'accueil.",
       "addFeatured": "Ajouter une mise en avant",
       "loading": "Chargement des éléments mis en avant…",
@@ -1051,11 +1025,9 @@
       "dialog": {
         "addTitle": "Ajouter un matériel mis en avant",
         "addDesc": "Mettez en avant un matériel sur la page d'accueil pendant une période donnée. Les éléments avec une priorité plus élevée apparaissent en premier.",
-        "searchMaterial": "Rechercher un matériel",
         "searchPlaceholder": "Rechercher des matériels...",
         "noResults": "Aucun matériel trouvé.",
         "startTyping": "Commencez à taper pour rechercher...",
-        "selectedId": "Sélectionné : {id}",
         "titleOverride": "Surcharge du titre",
         "titleOverridePlaceholder": "Laisser vide pour utiliser le titre du matériel",
         "descOverride": "Surcharge de la description",
@@ -1077,7 +1049,6 @@
         "error": "Échec de la suppression de l'élément mis en avant"
       },
       "errors": {
-        "materialRequired": "L'ID du matériel est requis",
         "startRequired": "La date de début est requise",
         "endRequired": "La date de fin est requise",
         "endAfterStart": "La date de fin doit être après la date de début",
@@ -1165,7 +1136,6 @@
           "logo": "Logo",
           "favicon": "Favicon",
           "placeholders": {
-            "siteName": "WikINT",
             "siteDescription": "Wiki pour SudParis Intelligence"
           }
         },
@@ -1428,7 +1398,6 @@
       }
     },
     "Dashboard": {
-      "title": "Tableau de bord Admin",
       "status": {
         "healthy": "Tous les systèmes sont opérationnels",
         "degraded": "Dégradation partielle",
@@ -1502,117 +1471,7 @@
           "unknown": "Inconnu",
           "healthy": "Sain",
           "degraded": "Dégradé",
-          "unhealthy": "En panne",
-          "title": "Tableau de bord Admin",
-          "status": {
-            "healthy": "Tous les systèmes sont opérationnels",
-            "degraded": "Dégradation partielle",
-            "unhealthy": "Interruption de service détectée",
-            "lastUpdated": "Dernière mise à jour : {time}",
-            "refreshing": "Actualisation...",
-            "refresh": "Actualiser",
-            "updated": "Statut du système mis à jour",
-            "refreshFailed": "Échec de l'actualisation du statut"
-          },
-          "metrics": {
-            "pendingJobs": "Tâches en attente",
-            "totalUsers": "Utilisateurs totaux",
-            "materials": "Matériels",
-            "maxUpload": "Upload Max"
-          },
-          "services": {
-            "database": {
-              "name": "Base de données",
-              "description": "Stockage PostgreSQL principal"
-            },
-            "redis": {
-              "name": "Redis",
-              "description": "Cache & bus d'événements"
-            },
-            "storage": {
-              "name": "Stockage S3",
-              "description": "Stockage d'objets & fichiers",
-              "capacityUsed": "Capacité utilisée"
-            },
-            "email": {
-              "name": "Email (SMTP)",
-              "description": "Service de relais SMTP",
-              "host": "Hôte",
-              "user": "Utilisateur",
-              "googleAuth": "Authentification Google",
-              "active": "Activé",
-              "disabled": "Désactivé",
-              "anonymous": "Anonyme"
-            },
-            "search": {
-              "name": "Recherche",
-              "description": "Indexation MeiliSearch"
-            },
-            "workers": {
-              "name": "Workers",
-              "description": "Pipeline ARQ en arrière-plan",
-              "poolStatus": "Statut du pool",
-              "activeWorkers": "Workers actifs",
-              "offline": "Hors ligne",
-              "job": "{count, plural, =1 {tâche} other {tâches}}"
-            },
-            "scanner": {
-              "name": "Scanner",
-              "description": "Moteur de malware YARA",
-              "pendingScans": "Scans en attente",
-              "yaraEngine": "Moteur YARA",
-              "bazaarApi": "API Bazaar",
-              "initialized": "Initialisé"
-            }
-          },
-          "sections": {
-            "title": "Sections Administratives",
-            "users": {
-              "title": "Gestion des Utilisateurs",
-              "description": "Gérez les rôles des utilisateurs et approuvez les demandes d'accès en attente."
-            },
-            "dlq": {
-              "title": "File d'attente (DLQ)",
-              "description": "Inspectez les tâches en arrière-plan en échec, relancez-les ou ignorez-les."
-            },
-            "config": {
-              "title": "Configuration",
-              "description": "Configurez l'authentification, le stockage et les paramètres de la plateforme."
-            }
-          },
-          "failed": "failed",
-          "noOrphans": "noOrphans",
-          "success": "success",
-          "pruneFailed": "pruneFailed",
-          "button": "button",
-          "description": "description",
-          "ready": {
-            "title": "title",
-            "description": "description",
-            "scanning": "scanning",
-            "start": "start"
-          },
-          "stats": {
-            "s3Total": "s3Total",
-            "objects": "objects",
-            "orphans": "orphans",
-            "unused": "unused",
-            "missing": "missing",
-            "broken": "broken"
-          },
-          "orphans": {
-            "title": "title",
-            "actionRequired": "actionRequired",
-            "cas": "cas",
-            "thumbnails": "thumbnails"
-          },
-          "critical": {
-            "title": "title",
-            "description": "description"
-          },
-          "reset": "reset",
-          "pruning": "pruning",
-          "prune": "prune"
+          "unhealthy": "En panne"
         }
       },
       "sections": {
@@ -1664,140 +1523,10 @@
         "success": "Purge réussie de {count} objets",
         "pruneFailed": "La purge a échoué",
         "failed": "La réconciliation a échoué",
-        "noOrphans": "Pas d'orphelins à purger",
-        "status": {
-          "healthy": "Tous les systèmes sont opérationnels",
-          "degraded": "Dégradation partielle",
-          "unhealthy": "Interruption de service détectée",
-          "lastUpdated": "Dernière mise à jour : {time}",
-          "refreshing": "Actualisation...",
-          "refresh": "Actualiser",
-          "updated": "Statut du système mis à jour",
-          "refreshFailed": "Échec de l'actualisation du statut"
-        },
-        "metrics": {
-          "pendingJobs": "Tâches en attente",
-          "totalUsers": "Utilisateurs totaux",
-          "materials": "Matériels",
-          "maxUpload": "Upload Max"
-        },
-        "services": {
-          "database": {
-            "name": "Base de données",
-            "description": "Stockage PostgreSQL principal"
-          },
-          "redis": {
-            "name": "Redis",
-            "description": "Cache & bus d'événements"
-          },
-          "storage": {
-            "name": "Stockage S3",
-            "description": "Stockage d'objets & fichiers",
-            "capacityUsed": "Capacité utilisée"
-          },
-          "email": {
-            "name": "Email (SMTP)",
-            "description": "Service de relais SMTP",
-            "host": "Hôte",
-            "user": "Utilisateur",
-            "googleAuth": "Authentification Google",
-            "active": "Activé",
-            "disabled": "Désactivé",
-            "anonymous": "Anonyme"
-          },
-          "search": {
-            "name": "Recherche",
-            "description": "Indexation MeiliSearch"
-          },
-          "workers": {
-            "name": "Workers",
-            "description": "Pipeline ARQ en arrière-plan",
-            "poolStatus": "Statut du pool",
-            "activeWorkers": "Workers actifs",
-            "offline": "Hors ligne",
-            "job": "{count, plural, =1 {tâche} other {tâches}}"
-          },
-          "scanner": {
-            "name": "Scanner",
-            "description": "Moteur de malware YARA",
-            "pendingScans": "Scans en attente",
-            "yaraEngine": "Moteur YARA",
-            "bazaarApi": "API Bazaar",
-            "initialized": "Initialisé"
-          }
-        },
-        "sections": {
-          "title": "Sections Administratives",
-          "users": {
-            "title": "Gestion des Utilisateurs",
-            "description": "Gérez les rôles des utilisateurs et approuvez les demandes d'accès en attente."
-          },
-          "dlq": {
-            "title": "File d'attente (DLQ)",
-            "description": "Inspectez les tâches en arrière-plan en échec, relancez-les ou ignorez-les."
-          },
-          "config": {
-            "title": "Configuration",
-            "description": "Configurez l'authentification, le stockage et les paramètres de la plateforme."
-          }
-        },
-        "currentStatus": "currentStatus",
-        "unknown": "unknown",
-        "responseTime": "responseTime",
-        "noMetrics": "noMetrics",
-        "storageUsage": "storageUsage",
-        "enabled": "enabled",
-        "disabled": "disabled",
-        "storageLimit": "storageLimit",
-        "bucket": "bucket",
-        "ssl": "ssl"
-      },
-      "failed": "failed",
-      "noOrphans": "noOrphans",
-      "success": "success",
-      "pruneFailed": "pruneFailed",
-      "button": "button",
-      "description": "description",
-      "ready": {
-        "title": "title",
-        "description": "description",
-        "scanning": "scanning",
-        "start": "start"
-      },
-      "stats": {
-        "s3Total": "s3Total",
-        "objects": "objects",
-        "orphans": "orphans",
-        "unused": "unused",
-        "missing": "missing",
-        "broken": "broken"
-      },
-      "orphans": {
-        "title": "title",
-        "actionRequired": "actionRequired",
-        "cas": "cas",
-        "thumbnails": "thumbnails"
-      },
-      "critical": {
-        "title": "title",
-        "description": "description"
-      },
-      "reset": "reset",
-      "pruning": "pruning",
-      "prune": "prune",
-      "currentStatus": "currentStatus",
-      "unknown": "unknown",
-      "responseTime": "responseTime",
-      "noMetrics": "noMetrics",
-      "storageUsage": "storageUsage",
-      "enabled": "enabled",
-      "disabled": "disabled",
-      "storageLimit": "storageLimit",
-      "bucket": "bucket",
-      "ssl": "ssl"
+        "noOrphans": "Pas d'orphelins à purger"
+      }
     },
     "Users": {
-      "title": "Gestion des Utilisateurs",
       "pendingBanner": "{count, plural, =1 {# utilisateur en attente} other {# utilisateurs en attente}} d'approbation",
       "showOnlyPending": "Afficher uniquement les attentes",
       "searchPlaceholder": "Rechercher par nom ou email...",
@@ -1850,8 +1579,7 @@
       },
       "pagination": {
         "previous": "Précédent",
-        "next": "Suivant",
-        "of": "sur"
+        "next": "Suivant"
       },
       "userCount": "{count, plural, =1 {# utilisateur} other {# utilisateurs}}"
     },
@@ -2010,10 +1738,7 @@
       "importMoodleConfirm": "Remplacer le contenu actuel par l'import Moodle ?",
       "submit": "Soumettre",
       "saveToDraft": "Enregistrer dans le brouillon",
-      "savedToDraft": "Ajouté au brouillon",
-      "publish": "Publier",
       "submitting": "Envoi en cours...",
-      "editQCM": "Modifier le QCM",
       "deleteChapter": "Supprimer le chapitre",
       "deleteQuestion": "Supprimer la question",
       "deleteAnswer": "Supprimer la réponse",
@@ -2022,16 +1747,11 @@
       "maxChapters": "Maximum 20 chapitres"
     },
     "viewer": {
-      "revealAll": "Révéler toutes les réponses",
-      "hideAll": "Masquer les réponses",
-      "score": "Score",
       "chapter": "Chapitre",
       "question": "Question",
       "questions": "Questions",
       "explanation": "Explication",
       "noChapters": "Ce QCM ne contient pas de chapitres.",
-      "correct": "Correct",
-      "incorrect": "Incorrect",
       "validate": "Valider",
       "reveal": "Révéler",
       "previous": "Précédent",

@@ -50,7 +50,6 @@
     "delete": "Delete",
     "close": "Close",
     "remove": "Remove",
-    "edit": "Edit",
     "deleteItemTitle": "Delete item",
     "deleteItemDescription": "Are you sure you want to delete this item? This action cannot be undone.",
     "deleting": "Deleting...",
@@ -239,7 +238,6 @@
     "directoryDetails": "Directory details",
     "select": "Select",
     "paste": "Paste (",
-    "upload": "Upload",
     "newFolder": "New Folder",
     "cut": "Cut",
     "delete": "Delete",
@@ -267,13 +265,11 @@
     "noItemsYet": "No items yet",
     "emptyDirectory": "This directory is empty.",
     "download": "Download",
-    "moodleXml": "Moodle XML",
     "downloadPdf": "Download PDF",
     "downloadXml": "Download Moodle XML",
     "print": "Print",
     "edit": "Edit",
     "copyLink": "Copy Link",
-    "deletePermanentlyConfirm": "Are you sure you want to permanently delete",
     "likes": "Likes",
     "chat": "Chat",
     "details": "Details",
@@ -285,12 +281,6 @@
     "edits": "Edits",
     "report": "Report",
     "deleteDocument": "Delete Document",
-    "materialActions": "Material Actions",
-    "folderActions": "Folder Actions",
-    "discardDraft": "Discard Draft",
-    "deleteTitle": "Delete {type}",
-    "discardDraftConfirm": "Are you sure you want to discard this staged {type}? All unsaved changes will be lost.",
-    "deleteNow": "Delete Now",
     "deleting": "Deleting",
     "moving": "Moving",
     "contribution": "Contribution",
@@ -314,7 +304,6 @@
     "itemDeletedSuccessfully": "{type} deleted successfully",
     "failedToDeleteItem": "Failed to delete item",
     "linkCopied": "Link copied to clipboard",
-    "discard": "Discard",
     "addAttachment": "Add Attachment",
     "material": "Material",
     "folder": "Folder",
@@ -337,7 +326,6 @@
     "itemsAlreadyInFolder": "Items are already in this folder",
     "cannotMoveFolderIntoItself": "Cannot move a folder into itself or its own subfolder",
     "itemsAddedToDraft": "{count, plural, =1 {1 item} other {# items}} added to draft",
-    "_": "_",
     "failedToUpdateLike": "failedToUpdateLike",
     "listView": "List view",
     "gridView": "Grid view",
@@ -347,10 +335,8 @@
     "filterFolders": "Filter folders…",
     "clear": "Clear",
     "navigateTo": "Navigate to folder",
-    "downloadZip": "Download as ZIP",
     "downloadZipTooltip": "Download all files in this directory as a ZIP archive",
     "downloadZipTooLarge": "This directory is too large to download as a ZIP",
-    "downloadZipEmpty": "This directory contains no downloadable files",
     "downloadZipPart": "Downloading \"{dirName}\" — part {part} of {total}",
     "downloadZipAllStarted": "All {total} parts queued — unzip each one to get the complete directory"
   },
@@ -548,12 +534,6 @@
     "confirmFailedFiles": "{count, plural, =1 {# file} other {# files}} failed and will not be included. Continue?",
     "mbPerSec": "MB/s",
     "secondsShort": "s",
-    "units": {
-      "b": "{count} B",
-      "kb": "{count} KB",
-      "mb": "{count} MB",
-      "gb": "{count} GB"
-    },
     "hashing": "Hashing file...",
     "checkingDedup": "Checking for duplicates...",
     "completed": "Upload complete",
@@ -935,9 +915,6 @@
     "editText": "Edit text",
     "replaceFile": "Replace file",
     "metadata": "Metadata",
-    "replaceDesc": "Upload a new file to replace the current version. The previous file will be kept in version history.",
-    "dropActive": "Drop file here",
-    "dropDefault": "Drag & drop or click to browse",
     "changeDesc": "Change description",
     "changeDescPlaceholderText": "e.g. Fixed typo in introduction",
     "changeDescPlaceholderBinary": "e.g. Updated to 2024 edition",
@@ -972,7 +949,6 @@
       }
     },
     "flags": {
-      "title": "Content Flags",
       "noFlags": "No flags to review.",
       "loadError": "Failed to load flags",
       "updateError": "Failed to update flag",
@@ -1009,7 +985,6 @@
       "loadError": "Failed to load directories"
     },
     "pullRequests": {
-      "title": "Contribution Queue",
       "searchPlaceholder": "Search contribution queue...",
       "columnTitle": "Title",
       "columnType": "Type",
@@ -1028,7 +1003,6 @@
       }
     },
     "featured": {
-      "title": "Featured Materials",
       "description": "Manage which materials appear in the <featured>Featured</featured> section on the home page.",
       "addFeatured": "Add Featured",
       "loading": "Loading featured items…",
@@ -1051,11 +1025,9 @@
       "dialog": {
         "addTitle": "Add Featured Material",
         "addDesc": "Feature a material on the home page for a specified time window. Higher priority items appear first.",
-        "searchMaterial": "Search Material",
         "searchPlaceholder": "Search materials...",
         "noResults": "No materials found.",
         "startTyping": "Start typing to search...",
-        "selectedId": "Selected: {id}",
         "titleOverride": "Title Override",
         "titleOverridePlaceholder": "Leave blank to use the material's own title",
         "descOverride": "Description Override",
@@ -1077,7 +1049,6 @@
         "error": "Failed to remove featured item"
       },
       "errors": {
-        "materialRequired": "Material ID is required",
         "startRequired": "Start date is required",
         "endRequired": "End date is required",
         "endAfterStart": "End date must be after start date",
@@ -1165,7 +1136,6 @@
           "logo": "Logo",
           "favicon": "Favicon",
           "placeholders": {
-            "siteName": "WikINT",
             "siteDescription": "Wiki for SudParis Intelligence"
           }
         },
@@ -1428,7 +1398,6 @@
       }
     },
     "Dashboard": {
-      "title": "Admin Dashboard",
       "status": {
         "healthy": "All Systems Operational",
         "degraded": "Partial Degradation",
@@ -1502,117 +1471,7 @@
           "unknown": "Unknown",
           "healthy": "Healthy",
           "degraded": "Degraded",
-          "unhealthy": "Unhealthy",
-          "title": "Admin Dashboard",
-          "status": {
-            "healthy": "All Systems Operational",
-            "degraded": "Partial Degradation",
-            "unhealthy": "Service Disruption Detected",
-            "lastUpdated": "Last updated: {time}",
-            "refreshing": "Refreshing...",
-            "refresh": "Refresh",
-            "updated": "System status updated",
-            "refreshFailed": "Failed to refresh status"
-          },
-          "metrics": {
-            "pendingJobs": "Pending Jobs",
-            "totalUsers": "Total Users",
-            "materials": "Materials",
-            "maxUpload": "Max Upload"
-          },
-          "services": {
-            "database": {
-              "name": "Database",
-              "description": "Primary PostgreSQL storage"
-            },
-            "redis": {
-              "name": "Redis",
-              "description": "Cache & event bus"
-            },
-            "storage": {
-              "name": "S3 Storage",
-              "description": "Object & file storage",
-              "capacityUsed": "Capacity Used"
-            },
-            "email": {
-              "name": "Email (SMTP)",
-              "description": "SMTP relay service",
-              "host": "Host",
-              "user": "User",
-              "googleAuth": "Google OAuth",
-              "active": "Active",
-              "disabled": "Disabled",
-              "anonymous": "Anonymous"
-            },
-            "search": {
-              "name": "Search",
-              "description": "MeiliSearch indexing"
-            },
-            "workers": {
-              "name": "Workers",
-              "description": "ARQ background pipeline",
-              "poolStatus": "Pool Status",
-              "activeWorkers": "Active Workers",
-              "offline": "Offline",
-              "job": "{count, plural, =1 {job} other {jobs}}"
-            },
-            "scanner": {
-              "name": "Scanner",
-              "description": "YARA malware engine",
-              "pendingScans": "Pending Scans",
-              "yaraEngine": "YARA Engine",
-              "bazaarApi": "Bazaar API",
-              "initialized": "Initialized"
-            }
-          },
-          "sections": {
-            "title": "Administrative Sections",
-            "users": {
-              "title": "User Management",
-              "description": "Manage user roles and approve pending access requests."
-            },
-            "dlq": {
-              "title": "Dead Letter Queue",
-              "description": "Inspect failed background jobs, retry or dismiss them."
-            },
-            "config": {
-              "title": "Configuration",
-              "description": "Configure authentication, storage, and platform settings."
-            }
-          },
-          "failed": "failed",
-          "noOrphans": "noOrphans",
-          "success": "success",
-          "pruneFailed": "pruneFailed",
-          "button": "button",
-          "description": "description",
-          "ready": {
-            "title": "title",
-            "description": "description",
-            "scanning": "scanning",
-            "start": "start"
-          },
-          "stats": {
-            "s3Total": "s3Total",
-            "objects": "objects",
-            "orphans": "orphans",
-            "unused": "unused",
-            "missing": "missing",
-            "broken": "broken"
-          },
-          "orphans": {
-            "title": "title",
-            "actionRequired": "actionRequired",
-            "cas": "cas",
-            "thumbnails": "thumbnails"
-          },
-          "critical": {
-            "title": "title",
-            "description": "description"
-          },
-          "reset": "reset",
-          "pruning": "pruning",
-          "prune": "prune"
+          "unhealthy": "Unhealthy"
         }
       },
       "sections": {
@@ -1664,140 +1523,10 @@
         "success": "Successfully pruned {count} objects",
         "pruneFailed": "Pruning failed",
         "failed": "Reconciliation failed",
-        "noOrphans": "No orphans to prune",
-        "status": {
-          "healthy": "All Systems Operational",
-          "degraded": "Partial Degradation",
-          "unhealthy": "Service Disruption Detected",
-          "lastUpdated": "Last updated: {time}",
-          "refreshing": "Refreshing...",
-          "refresh": "Refresh",
-          "updated": "System status updated",
-          "refreshFailed": "Failed to refresh status"
-        },
-        "metrics": {
-          "pendingJobs": "Pending Jobs",
-          "totalUsers": "Total Users",
-          "materials": "Materials",
-          "maxUpload": "Max Upload"
-        },
-        "services": {
-          "database": {
-            "name": "Database",
-            "description": "Primary PostgreSQL storage"
-          },
-          "redis": {
-            "name": "Redis",
-            "description": "Cache & event bus"
-          },
-          "storage": {
-            "name": "S3 Storage",
-            "description": "Object & file storage",
-            "capacityUsed": "Capacity Used"
-          },
-          "email": {
-            "name": "Email (SMTP)",
-            "description": "SMTP relay service",
-            "host": "Host",
-            "user": "User",
-            "googleAuth": "Google OAuth",
-            "active": "Active",
-            "disabled": "Disabled",
-            "anonymous": "Anonymous"
-          },
-          "search": {
-            "name": "Search",
-            "description": "MeiliSearch indexing"
-          },
-          "workers": {
-            "name": "Workers",
-            "description": "ARQ background pipeline",
-            "poolStatus": "Pool Status",
-            "activeWorkers": "Active Workers",
-            "offline": "Offline",
-            "job": "{count, plural, =1 {job} other {jobs}}"
-          },
-          "scanner": {
-            "name": "Scanner",
-            "description": "YARA malware engine",
-            "pendingScans": "Pending Scans",
-            "yaraEngine": "YARA Engine",
-            "bazaarApi": "Bazaar API",
-            "initialized": "Initialized"
-          }
-        },
-        "sections": {
-          "title": "Administrative Sections",
-          "users": {
-            "title": "User Management",
-            "description": "Manage user roles and approve pending access requests."
-          },
-          "dlq": {
-            "title": "Dead Letter Queue",
-            "description": "Inspect failed background jobs, retry or dismiss them."
-          },
-          "config": {
-            "title": "Configuration",
-            "description": "Configure authentication, storage, and platform settings."
-          }
-        },
-        "currentStatus": "currentStatus",
-        "unknown": "unknown",
-        "responseTime": "responseTime",
-        "noMetrics": "noMetrics",
-        "storageUsage": "storageUsage",
-        "enabled": "enabled",
-        "disabled": "disabled",
-        "storageLimit": "storageLimit",
-        "bucket": "bucket",
-        "ssl": "ssl"
-      },
-      "failed": "failed",
-      "noOrphans": "noOrphans",
-      "success": "success",
-      "pruneFailed": "pruneFailed",
-      "button": "button",
-      "description": "description",
-      "ready": {
-        "title": "title",
-        "description": "description",
-        "scanning": "scanning",
-        "start": "start"
-      },
-      "stats": {
-        "s3Total": "s3Total",
-        "objects": "objects",
-        "orphans": "orphans",
-        "unused": "unused",
-        "missing": "missing",
-        "broken": "broken"
-      },
-      "orphans": {
-        "title": "title",
-        "actionRequired": "actionRequired",
-        "cas": "cas",
-        "thumbnails": "thumbnails"
-      },
-      "critical": {
-        "title": "title",
-        "description": "description"
-      },
-      "reset": "reset",
-      "pruning": "pruning",
-      "prune": "prune",
-      "currentStatus": "currentStatus",
-      "unknown": "unknown",
-      "responseTime": "responseTime",
-      "noMetrics": "noMetrics",
-      "storageUsage": "storageUsage",
-      "enabled": "enabled",
-      "disabled": "disabled",
-      "storageLimit": "storageLimit",
-      "bucket": "bucket",
-      "ssl": "ssl"
+        "noOrphans": "No orphans to prune"
+      }
     },
     "Users": {
-      "title": "User Management",
       "pendingBanner": "{count, plural, =1 {# pending user} other {# pending users}} awaiting approval",
       "showOnlyPending": "Show only pending",
       "searchPlaceholder": "Search by name or email...",
@@ -1850,8 +1579,7 @@
       },
       "pagination": {
         "previous": "Previous",
-        "next": "Next",
-        "of": "of"
+        "next": "Next"
       },
       "userCount": "{count, plural, =1 {# user} other {# users}}"
     },
@@ -2010,10 +1738,7 @@
       "importMoodleConfirm": "Replace current content with Moodle import?",
       "submit": "Submit",
       "saveToDraft": "Save to draft",
-      "savedToDraft": "Added to draft",
-      "publish": "Publish",
       "submitting": "Submitting...",
-      "editQCM": "Edit QCM",
       "deleteChapter": "Delete chapter",
       "deleteQuestion": "Delete question",
       "deleteAnswer": "Delete answer",
@@ -2022,16 +1747,11 @@
       "maxChapters": "Maximum 20 chapters"
     },
     "viewer": {
-      "revealAll": "Reveal all answers",
-      "hideAll": "Hide answers",
-      "score": "Score",
       "chapter": "Chapter",
       "question": "Question",
       "questions": "Questions",
       "explanation": "Explanation",
       "noChapters": "This QCM has no chapters.",
-      "correct": "Correct",
-      "incorrect": "Incorrect",
       "validate": "Validate",
       "reveal": "Reveal",
       "previous": "Previous",
