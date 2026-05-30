@@ -109,7 +109,7 @@ function ItemSearch({
             value={query}
             onValueChange={setQuery}
           />
-          <CommandList className="max-h-[240px] overflow-y-auto">
+          <CommandList className="max-h-[240px] overflow-y-auto" onWheel={(e) => e.stopPropagation()}>
             {loading && (
               <div className="flex items-center justify-center py-6">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
