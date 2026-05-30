@@ -62,7 +62,13 @@ async def run_thumbnail_stage(
                 return None
 
             if thumb_path.exists():
-                if _is_blank_thumbnail(thumb_path):
+                # Only discard near-blank thumbnails for raster images, where an
+                # all-white result genuinely means there is nothing to show. For
+                # PDF/Office/video the dedicated pipelines already select the best
+                # available page/frame (and fall back across pages), so we keep
+                # their output as best effort — otherwise single-page or pale
+                # documents (e.g. featured PDFs) end up with no thumbnail at all.
+                if mime_type.startswith("image/") and _is_blank_thumbnail(thumb_path):
                     logger.info(
                         "Thumbnail for %s is nearly blank — discarding to allow native fallback",
                         original_filename,
@@ -80,7 +86,7 @@ async def run_thumbnail_stage(
 
 
 def _is_blank_thumbnail(
-    path: Path, brightness_threshold: float = 250.0, stddev_threshold: float = 8.0
+    path: Path, brightness_threshold: float = 252.0, stddev_threshold: float = 4.0
 ) -> bool:
     """Return True if the thumbnail is nearly all white (blank document page).
 
@@ -88,8 +94,10 @@ def _is_blank_thumbnail(
     - mean grayscale brightness ≥ brightness_threshold (very bright)
     - pixel stddev ≤ stddev_threshold (very little contrast)
 
-    Using both guards prevents discarding legitimately bright images like
-    snow photos or pale-background slides that still have visible content.
+    Thresholds are deliberately strict so only an essentially uniform white image
+    is treated as blank. Using both guards prevents discarding legitimately bright
+    content like snow photos, pale-background slides, or PDF title pages that
+    still have a small amount of visible text.
     """
     try:
         from PIL import ImageStat

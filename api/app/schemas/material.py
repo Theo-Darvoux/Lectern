@@ -44,6 +44,8 @@ class MaterialOut(BaseModel):
     is_liked: bool = False
     is_favourited: bool = False
     attachment_count: int = 0
+    comment_count: int = 0
+    annotation_count: int = 0
     tags: list[str] = []
     created_at: datetime
     updated_at: datetime

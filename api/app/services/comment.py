@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -10,6 +11,8 @@ from app.models.comment import Comment
 from app.models.directory import Directory
 from app.models.material import Material
 from app.models.user import User, UserRole
+
+logger = logging.getLogger("wikint")
 
 
 def _to_uuid(value: str | uuid.UUID) -> uuid.UUID:
@@ -79,6 +82,21 @@ async def create_comment(
     )
     db.add(comment)
     await db.flush()
+
+    if target_type == "material":
+        from app.services.notification import notify_material_subscribers
+
+        try:
+            await notify_material_subscribers(
+                db,
+                uid,
+                author_id,
+                "material_comment",
+                "New message on a document you follow",
+                link=f"/browse?material={uid}",
+            )
+        except Exception:
+            logger.exception("Failed to notify subscribers of new comment")
 
     result = await db.execute(
         select(Comment).options(joinedload(Comment.author)).where(Comment.id == comment.id)

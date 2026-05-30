@@ -5,6 +5,7 @@ Covers:
   safety limits, deduplication, quarantine filtering)
 - GET /api/directories/{id}/download endpoint (auth, streaming ZIP, error cases)
 """
+
 import io
 import uuid
 import zipfile
@@ -160,12 +161,8 @@ class TestGetDirectoryDownloadEntries:
         user = await _create_user(db_session)
         root = await _create_directory(db_session, user, name="Root")
         sub = await _create_directory(db_session, user, parent_id=root.id, name="Sub")
-        await _create_material_with_version(
-            db_session, root, user, file_name="root_file.pdf"
-        )
-        await _create_material_with_version(
-            db_session, sub, user, file_name="sub_file.pdf"
-        )
+        await _create_material_with_version(db_session, root, user, file_name="root_file.pdf")
+        await _create_material_with_version(db_session, sub, user, file_name="sub_file.pdf")
         await db_session.commit()
 
         _, entries = await get_directory_download_entries(db_session, root.id)
@@ -189,7 +186,9 @@ class TestGetDirectoryDownloadEntries:
         user = await _create_user(db_session)
         directory = await _create_directory(db_session, user)
         await _create_material_with_version(
-            db_session, directory, user,
+            db_session,
+            directory,
+            user,
             file_key=f"quarantine/{user.id}/abc/scan.pdf",
             file_name="scan.pdf",
         )
@@ -234,7 +233,9 @@ class TestGetDirectoryDownloadEntries:
             db_session, directory, user, file_name="main.pdf"
         )
         await _create_material_with_version(
-            db_session, directory, user,
+            db_session,
+            directory,
+            user,
             file_name="attachment.pdf",
             parent_material_id=parent_mat.id,
         )
@@ -267,7 +268,9 @@ class TestGetDirectoryDownloadEntries:
         directory = await _create_directory(db_session, user)
         for i in range(_DOWNLOAD_MAX_FILES + 1):
             await _create_material_with_version(
-                db_session, directory, user,
+                db_session,
+                directory,
+                user,
                 title=f"Mat {i}",
                 file_name=f"file_{i}.pdf",
             )
@@ -281,7 +284,9 @@ class TestGetDirectoryDownloadEntries:
         directory = await _create_directory(db_session, user)
         # One material that exceeds the byte limit
         await _create_material_with_version(
-            db_session, directory, user,
+            db_session,
+            directory,
+            user,
             file_name="huge.pdf",
             file_size=_DOWNLOAD_MAX_BYTES + 1,
         )
@@ -318,7 +323,9 @@ class TestGetDirectoryDownloadEntries:
 
 
 class TestDownloadDirectoryZipEndpoint:
-    async def test_requires_authentication(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_requires_authentication(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         user = await _create_user(db_session)
         directory = await _create_directory(db_session, user)
         await db_session.commit()
@@ -326,7 +333,9 @@ class TestDownloadDirectoryZipEndpoint:
         response = await client.get(f"/api/directories/{directory.id}/download")
         assert response.status_code == 401
 
-    async def test_empty_directory_returns_400(self, client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_empty_directory_returns_400(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         user = await _create_user(db_session)
         directory = await _create_directory(db_session, user)
         await db_session.commit()
@@ -476,7 +485,9 @@ class TestDownloadDirectoryZipEndpoint:
         user = await _create_user(db_session)
         directory = await _create_directory(db_session, user)
         await _create_material_with_version(
-            db_session, directory, user,
+            db_session,
+            directory,
+            user,
             file_name="huge.pdf",
             file_size=_DOWNLOAD_MAX_BYTES + 1,
         )

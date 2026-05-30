@@ -170,7 +170,7 @@ async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes,
             return chunk
 
     buf = _Buf()
-    zf = zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True)
+    zf = zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True)  # type: ignore[call-overload]
     try:
         for arcname, file_key in entries:
             try:
@@ -184,6 +184,7 @@ async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes,
                 zf.writestr(arcname, bytes(data))
             except Exception as exc:
                 import logging
+
                 logging.getLogger("wikint").warning(
                     "Failed to stream ZIP entry for key %s: %s", file_key, exc, exc_info=True
                 )
@@ -209,12 +210,12 @@ async def download_root_chunks(
     redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
 ) -> DownloadChunksResponse:
     """Return Worker ZIP chunk URLs for the entire root level (all top-level directories)."""
-    from app.config import settings
     from app.core.exceptions import BadRequestError
     from app.dependencies.rate_limit import rate_limit_downloads
 
     if redis is None:
         from app.core.redis import redis_client
+
         redis = redis_client
 
     try:
@@ -244,12 +245,12 @@ async def download_directory_chunks(
     configured the response contains an empty ``chunks`` list; the client should
     fall back to the streaming ``/download`` endpoint in that case.
     """
-    from app.config import settings
     from app.core.exceptions import BadRequestError
     from app.dependencies.rate_limit import rate_limit_downloads
 
     if redis is None:
         from app.core.redis import redis_client
+
         redis = redis_client
 
     try:
@@ -323,7 +324,7 @@ async def download_directory_zip(
     from urllib.parse import quote
 
     encoded_name = quote(dir_name)
-    disposition = f'attachment; filename="{safe_name}.zip"; filename*=UTF-8\'\'{encoded_name}.zip'
+    disposition = f"attachment; filename=\"{safe_name}.zip\"; filename*=UTF-8''{encoded_name}.zip"
 
     return StreamingResponse(
         _generate_zip(entries),

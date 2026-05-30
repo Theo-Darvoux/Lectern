@@ -111,6 +111,67 @@ async def notify_user(
     await create_notification(db, user_id, notification_type, title, body, link)
 
 
+async def notify_material_subscribers(
+    db: AsyncSession,
+    material_id: uuid.UUID,
+    actor_id: uuid.UUID,
+    notification_type: str,
+    title: str,
+    body: str | None = None,
+    link: str | None = None,
+) -> None:
+    """Notify everyone "subscribed" to a material when activity happens on it.
+
+    Subscribers are users who have shown interest in the document: its author,
+    anyone who liked or favourited (saved) it, and anyone who previously
+    annotated or commented on it. The acting user is always excluded, and the
+    recipient set is de-duplicated so each person gets at most one notification.
+    """
+    from app.models.annotation import Annotation
+    from app.models.comment import Comment
+    from app.models.material import Material, MaterialFavourite, MaterialLike
+
+    recipient_ids: set[uuid.UUID] = set()
+
+    author_res = await db.execute(select(Material.author_id).where(Material.id == material_id))
+    author_id = author_res.scalar_one_or_none()
+    if author_id:
+        recipient_ids.add(author_id)
+
+    like_res = await db.execute(
+        select(MaterialLike.user_id).where(MaterialLike.material_id == material_id)
+    )
+    recipient_ids.update(like_res.scalars().all())
+
+    fav_res = await db.execute(
+        select(MaterialFavourite.user_id).where(MaterialFavourite.material_id == material_id)
+    )
+    recipient_ids.update(fav_res.scalars().all())
+
+    ann_res = await db.execute(
+        select(Annotation.author_id).where(Annotation.material_id == material_id)
+    )
+    recipient_ids.update(a for a in ann_res.scalars().all() if a is not None)
+
+    com_res = await db.execute(
+        select(Comment.author_id).where(
+            Comment.target_type == "material",
+            Comment.target_id == material_id,
+        )
+    )
+    recipient_ids.update(c for c in com_res.scalars().all() if c is not None)
+
+    recipient_ids.discard(actor_id)
+
+    for recipient_id in recipient_ids:
+        try:
+            await create_notification(db, recipient_id, notification_type, title, body, link)
+        except Exception:
+            logger.exception(
+                "Failed to send %s notification to %s", notification_type, recipient_id
+            )
+
+
 async def notify_admins_pending_user(db: AsyncSession, user: "User") -> None:  # type: ignore[name-defined]
     """Notify all BUREAU/VIEUX admins when a new user is awaiting approval."""
     from app.models.user import User as UserModel

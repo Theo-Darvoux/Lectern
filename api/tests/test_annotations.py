@@ -340,3 +340,75 @@ async def test_create_annotation_on_nonexistent_material(
         headers=_auth_headers(user),
     )
     assert response.status_code == 404
+
+
+async def test_annotations_and_comments_survive_pdf_replacement(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Replacing a PDF (new MaterialVersion + current_version bump) must NOT drop
+    annotations or comments. Both are keyed on the stable material id, not on the
+    file/version, so they stay visible after a replacement.
+
+    Locks the current behaviour so a future upload/PR refactor cannot silently
+    lose user annotations and chats.
+    """
+    user = await _create_user(db_session)
+    material, _ = await _create_material(db_session, user)
+    await db_session.commit()
+
+    # An annotation on the document (version 1).
+    ann_resp = await client.post(
+        f"/api/materials/{material.id}/annotations",
+        json={
+            "body": "Important note",
+            "selection_text": "sel",
+            "position_data": {"startOffset": 0, "endOffset": 3, "textContent": "sel"},
+            "page": 1,
+        },
+        headers=_auth_headers(user),
+    )
+    assert ann_resp.status_code == 201
+
+    # A comment (chat) on the document.
+    com_resp = await client.post(
+        "/api/comments",
+        json={
+            "target_type": "material",
+            "target_id": str(material.id),
+            "body": "Nice document!",
+        },
+        headers=_auth_headers(user),
+    )
+    assert com_resp.status_code == 201
+
+    # Simulate replacing the PDF: add version 2 and bump current_version.
+    new_version = MaterialVersion(
+        id=uuid.uuid4(),
+        material_id=material.id,
+        version_number=2,
+        file_key="test/file2.pdf",
+        file_name="file2.pdf",
+        file_size=2048,
+        file_mime_type="application/pdf",
+    )
+    db_session.add(new_version)
+    material_db = await db_session.get(Material, material.id)
+    assert material_db is not None
+    material_db.current_version = 2
+    await db_session.commit()
+
+    # Annotations are still returned for the material.
+    ann_list = await client.get(
+        f"/api/materials/{material.id}/annotations",
+        headers=_auth_headers(user),
+    )
+    assert ann_list.status_code == 200
+    assert ann_list.json()["total"] >= 1
+
+    # Comments are still returned for the material.
+    com_list = await client.get(
+        f"/api/comments?targetType=material&targetId={material.id}",
+        headers=_auth_headers(user),
+    )
+    assert com_list.status_code == 200
+    assert com_list.json()["total"] >= 1

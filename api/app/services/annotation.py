@@ -221,6 +221,21 @@ async def create_annotation(
             )
         except Exception:
             logger.exception("Failed to send annotation_reply notification")
+    elif not reply_to_id:
+        # A new root annotation: notify everyone following this document.
+        from app.services.notification import notify_material_subscribers
+
+        try:
+            await notify_material_subscribers(
+                db,
+                mid,
+                author_id,
+                "material_annotation",
+                "New annotation on a document you follow",
+                link=f"/browse?material={mid}",
+            )
+        except Exception:
+            logger.exception("Failed to notify subscribers of new annotation")
 
     result = await db.execute(
         select(Annotation)

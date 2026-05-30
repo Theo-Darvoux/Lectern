@@ -69,3 +69,79 @@ async def test_mark_all_read(client: AsyncClient, db_session: AsyncSession) -> N
     response = await client.post("/api/notifications/read-all", headers=_auth_headers(user))
     assert response.status_code == 200
     assert response.json()["marked"] == 3
+
+
+async def _create_material_with(db: AsyncSession, author: User):
+    """Minimal material (+ directory + v1) owned by `author`, for subscriber tests."""
+    from app.models.directory import Directory
+    from app.models.material import Material, MaterialVersion
+
+    directory = Directory(
+        id=uuid.uuid4(),
+        name="Dir",
+        slug=f"dir-{uuid.uuid4().hex[:6]}",
+        type="folder",
+        created_by=author.id,
+    )
+    db.add(directory)
+    await db.flush()
+    material = Material(
+        id=uuid.uuid4(),
+        directory_id=directory.id,
+        title="Doc",
+        slug=f"doc-{uuid.uuid4().hex[:6]}",
+        type="document",
+        current_version=1,
+        author_id=author.id,
+    )
+    db.add(material)
+    await db.flush()
+    db.add(
+        MaterialVersion(
+            id=uuid.uuid4(),
+            material_id=material.id,
+            version_number=1,
+            file_key="k.pdf",
+            file_name="k.pdf",
+            file_size=1,
+            file_mime_type="application/pdf",
+        )
+    )
+    await db.flush()
+    return material
+
+
+async def test_comment_notifies_subscribers_not_actor(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Posting a comment on a material notifies its author and likers, but never
+    the user who posted, and at most once per recipient."""
+    from app.models.material import MaterialLike
+
+    author = await _create_user(db_session)  # subscribed: material author
+    liker = await _create_user(db_session)  # subscribed: liked the material
+    commenter = await _create_user(db_session)  # the actor — must NOT be notified
+
+    material = await _create_material_with(db_session, author)
+    db_session.add(MaterialLike(user_id=liker.id, material_id=material.id))
+    await db_session.commit()
+
+    resp = await client.post(
+        "/api/comments",
+        json={
+            "target_type": "material",
+            "target_id": str(material.id),
+            "body": "Great doc!",
+        },
+        headers=_auth_headers(commenter),
+    )
+    assert resp.status_code == 201
+
+    # Author and liker each got exactly one notification; commenter got none.
+    for subscriber in (author, liker):
+        r = await client.get("/api/notifications", headers=_auth_headers(subscriber))
+        assert r.json()["total"] == 1
+        assert r.json()["items"][0]["type"] == "material_comment"
+
+    r = await client.get("/api/notifications", headers=_auth_headers(commenter))
+    assert r.json()["total"] == 0

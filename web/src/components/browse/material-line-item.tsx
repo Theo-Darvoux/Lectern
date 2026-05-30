@@ -316,6 +316,7 @@ function MaterialLineItemImpl({
                     {staged === "created" && onAddAttachment && (
                         <button
                             onClick={(e) => {
+                                e.preventDefault();
                                 e.stopPropagation();
                                 onAddAttachment(id, title);
                             }}
@@ -330,6 +331,7 @@ function MaterialLineItemImpl({
                         className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
                         title={isMobile ? t("view") || "View" : t("preview") || "Preview"}
                         onClick={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
                             if (onNavigate) {
                                 onNavigate();

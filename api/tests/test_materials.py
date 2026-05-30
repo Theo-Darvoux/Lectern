@@ -301,3 +301,56 @@ async def test_view_material_unauthenticated(client: AsyncClient, db_session: As
 
     response = await client.post(f"/api/materials/{material.id}/view")
     assert response.status_code == 401
+
+
+async def test_material_detail_comment_and_annotation_counts(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """GET /materials/{id} returns correct comment_count and annotation_count.
+
+    Plan H: expose activity counters on material detail so the frontend can show
+    badges on the sidebar tabs without polling.
+    """
+    from app.models.annotation import Annotation
+    from app.models.comment import Comment
+
+    actor = await _create_user(db_session)
+    directory = await _create_directory(db_session, actor)
+    material = await _create_material(db_session, directory, actor)
+    await db_session.commit()
+
+    # --- zero counts initially ---
+    r = await client.get(f"/api/materials/{material.id}", headers=_auth_headers(actor))
+    assert r.status_code == 200
+    data = r.json()
+    assert data["comment_count"] == 0
+    assert data["annotation_count"] == 0
+
+    # --- add 2 comments and 3 annotations ---
+    for _ in range(2):
+        db_session.add(
+            Comment(
+                id=uuid.uuid4(),
+                target_type="material",
+                target_id=material.id,
+                body="hi",
+                author_id=actor.id,
+            )
+        )
+    for _ in range(3):
+        db_session.add(
+            Annotation(
+                id=uuid.uuid4(),
+                material_id=material.id,
+                author_id=actor.id,
+                body="note",
+                page=1,
+            )
+        )
+    await db_session.commit()
+
+    r2 = await client.get(f"/api/materials/{material.id}", headers=_auth_headers(actor))
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert data2["comment_count"] == 2
+    assert data2["annotation_count"] == 3

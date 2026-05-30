@@ -148,13 +148,13 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
           </h3>
 
           {description && (
-            <p className="text-xs text-muted-foreground line-clamp-2 flex-1">
+            <p className="hidden text-xs text-muted-foreground line-clamp-2 flex-1 sm:block">
               {description}
             </p>
           )}
 
           {material.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 pt-0.5">
+            <div className="hidden flex-wrap gap-1 pt-0.5 sm:flex">
               {material.tags.slice(0, 3).map((tag) => (
                 <Badge
                   key={tag}
@@ -172,7 +172,7 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
             </div>
           )}
 
-          <div className="mt-auto pt-2">
+          <div className="mt-auto hidden pt-2 sm:block">
             <span className="inline-flex items-center gap-1 text-xs font-medium text-primary group-hover:underline">
               {t("viewMaterial")}
               <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />

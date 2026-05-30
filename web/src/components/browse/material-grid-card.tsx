@@ -368,7 +368,7 @@ function MaterialGridCardImpl({
               </button>
               {staged === "created" && onAddAttachment && (
                 <button
-                  onClick={(e) => { e.stopPropagation(); onAddAttachment(id, title); }}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); onAddAttachment(id, title); }}
                   className="rounded-md p-1.5 hover:bg-white/20 active:scale-95 transition-transform"
                   title={t("addAttachment")}
                 >
@@ -380,6 +380,7 @@ function MaterialGridCardImpl({
                 className="rounded-md p-1.5 hover:bg-white/20 active:scale-95 transition-transform"
                 title={t("preview")}
                 onClick={(e) => {
+                  e.preventDefault();
                   e.stopPropagation();
                   if (onNavigate) {
                     onNavigate();

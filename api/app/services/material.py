@@ -16,6 +16,8 @@ def material_orm_to_dict(
     m: Material,
     *,
     attachment_count: int = 0,
+    comment_count: int = 0,
+    annotation_count: int = 0,
     directory_path: str | None = None,
     current_user_id: uuid.UUID | None = None,
     is_liked: bool | None = None,
@@ -67,6 +69,8 @@ def material_orm_to_dict(
         "created_at": m.created_at,
         "updated_at": m.updated_at,
         "attachment_count": attachment_count,
+        "comment_count": comment_count,
+        "annotation_count": annotation_count,
         "current_version_info": None,
     }
 
@@ -225,8 +229,36 @@ async def get_material_with_version(
         or 0
     )
 
+    # Count comments keyed to this material
+    from app.models.comment import Comment
+
+    com_count = (
+        await db.scalar(
+            select(func.count())
+            .select_from(Comment)
+            .where(Comment.target_type == "material", Comment.target_id == material.id)
+        )
+        or 0
+    )
+
+    # Count root-level annotations on this material
+    from app.models.annotation import Annotation
+
+    ann_count = (
+        await db.scalar(
+            select(func.count())
+            .select_from(Annotation)
+            .where(Annotation.material_id == material.id)
+        )
+        or 0
+    )
+
     mat_dict = material_orm_to_dict(
-        material, attachment_count=att_count, current_user_id=current_user_id
+        material,
+        attachment_count=att_count,
+        comment_count=com_count,
+        annotation_count=ann_count,
+        current_user_id=current_user_id,
     )
     if current_version:
         mat_dict["current_version_info"] = version_orm_to_dict(current_version)

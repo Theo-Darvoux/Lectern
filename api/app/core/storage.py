@@ -30,6 +30,7 @@ def _bust_s3_settings_cache() -> None:
     _s3_settings_cache = None
     _s3_settings_cache_at = 0.0
 
+
 # Force SigV4 for all requests (required by R2 and MinIO >= 2022).
 _s3_config = BotocoreConfig(
     signature_version="s3v4",
@@ -470,8 +471,9 @@ async def generate_presigned_get(
 
     if settings.worker_zip_url and settings.worker_zip_hmac_secret:
         from urllib.parse import quote
+
         from app.core.worker_token import make_file_token
-        
+
         token = make_file_token(
             r2_key=file_key,
             secret=settings.worker_zip_hmac_secret,
@@ -562,7 +564,9 @@ async def generate_presigned_get_cached(
         filename: Override download filename.
         content_type: Override response Content-Type.
     """
-    cache_key = _presign_cache_key(file_key, force_download, filename=filename, content_type=content_type)
+    cache_key = _presign_cache_key(
+        file_key, force_download, filename=filename, content_type=content_type
+    )
 
     try:
         cached = await redis.get(cache_key)
