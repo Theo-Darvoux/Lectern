@@ -500,8 +500,7 @@ async def _thumbnail_qcm(
 
     def _sync() -> None:
         import json
-
-        from PIL import ImageDraw, ImageFont
+        from PIL import ImageDraw, ImageFont, Image
 
         try:
             with open(input_path, "r", encoding="utf-8") as f:
@@ -520,51 +519,53 @@ async def _thumbnail_qcm(
             for q in ch.get("questions", []):
                 questions.append(q)
 
-        # Create image
-        img = Image.new("RGB", size, (255, 255, 255))
+        # Create image with deep purple background (violet-700)
+        img = Image.new("RGB", size, "#6d28d9")
         draw = ImageDraw.Draw(img)
 
         try:
-            # Try to load a nice font if available, fallback to default
-            font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
-            font_header = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-            font_text = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
-            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+            font_path_bold = "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Bold.ttf"
+            font_path_regular = "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Regular.ttf"
+            font_title = ImageFont.truetype(font_path_bold, 42)
+            font_header = ImageFont.truetype(font_path_bold, 20)
+            font_text = ImageFont.truetype(font_path_regular, 20)
+            font_qcm = ImageFont.truetype(font_path_bold, 120)
         except OSError:
             font_title = ImageFont.load_default()
             font_header = ImageFont.load_default()
             font_text = ImageFont.load_default()
-            font_small = ImageFont.load_default()
+            font_qcm = ImageFont.load_default()
 
-        # Draw header banner (violet-600)
-        header_height = 48
-        draw.rectangle([(0, 0), (size[0], header_height)], fill="#7c3aed")
+        center_x = size[0] // 2
 
-        # Header text
-        header_text = f"QCM • {len(questions)} question{'s' if len(questions) != 1 else ''}"
-        draw.text((16, 14), header_text, fill="white", font=font_header)
+        # Draw huge "QCM" watermark in darker purple (violet-800)
+        try:
+            draw.text((center_x, size[1] // 2), "QCM", fill="#5b21b6", font=font_qcm, anchor="mm")
+        except TypeError:
+            # Fallback if anchor is not supported in older Pillow
+            draw.text((center_x - 100, size[1] // 2 - 60), "QCM", fill="#5b21b6", font=font_qcm)
 
-        # Draw title
-        margin_x = 24
-        current_y = header_height + 24
-        title_truncated = title[:45] + "..." if len(title) > 48 else title
-        draw.text((margin_x, current_y), title_truncated, fill="#111827", font=font_title)
-        current_y += 40
+        # Draw header text (violet-200)
+        header_text = "QUESTIONNAIRE À CHOIX MULTIPLES"
+        try:
+            draw.text((center_x, 60), header_text, fill="#ddd6fe", font=font_header, anchor="mt")
+        except TypeError:
+            draw.text((80, 60), header_text, fill="#ddd6fe", font=font_header)
 
-        # Draw questions
-        max_questions = 5
-        for i, q in enumerate(questions[:max_questions]):
-            q_text = q.get("text", "").strip().replace("\n", " ")
-            if len(q_text) > 65:
-                q_text = q_text[:65] + "..."
-            
-            draw.text((margin_x, current_y), f"Q{i+1} • {q_text}", fill="#4b5563", font=font_text)
-            current_y += 28
+        # Draw title (white)
+        title_truncated = title[:40] + "..." if len(title) > 40 else title
+        try:
+            draw.text((center_x, size[1] // 2), title_truncated, fill="#ffffff", font=font_title, anchor="mm")
+        except TypeError:
+            draw.text((80, size[1] // 2), title_truncated, fill="#ffffff", font=font_title)
 
-        # Draw footer if more questions
-        if len(questions) > max_questions:
-            remaining = len(questions) - max_questions
-            draw.text((margin_x, current_y + 8), f"... and {remaining} more", fill="#9ca3af", font=font_small)
+        # Draw questions count (violet-200)
+        q_count = len(questions)
+        q_text = f"{q_count} question{'s' if q_count != 1 else ''}"
+        try:
+            draw.text((center_x, size[1] - 80), q_text, fill="#ddd6fe", font=font_text, anchor="mb")
+        except TypeError:
+            draw.text((center_x - 40, size[1] - 80), q_text, fill="#ddd6fe", font=font_text)
 
         img.save(output_path, "WEBP", quality=quality)
 
