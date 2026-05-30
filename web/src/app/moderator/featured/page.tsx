@@ -102,14 +102,14 @@ function ItemSearch({
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 max-h-[300px] overflow-hidden flex flex-col" align="start">
-        <Command shouldFilter={false} className="max-h-[300px] flex flex-col">
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 overflow-hidden flex flex-col" align="start">
+        <Command shouldFilter={false} className="flex flex-col">
           <CommandInput
             placeholder={t("dialog.searchPlaceholder")}
             value={query}
             onValueChange={setQuery}
           />
-          <CommandList className="max-h-[200px] overflow-y-auto">
+          <CommandList className="max-h-[240px] overflow-y-auto">
             {loading && (
               <div className="flex items-center justify-center py-6">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />

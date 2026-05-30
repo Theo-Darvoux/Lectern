@@ -235,6 +235,7 @@ function DirectoryGridCardImpl({
                 className="rounded-md p-1.5 hover:bg-white/20 active:scale-95 transition-transform"
                 title={t("openItem")}
                 onClick={(e) => {
+                  e.preventDefault();
                   e.stopPropagation();
                   if (onNavigate) {
                     onNavigate();

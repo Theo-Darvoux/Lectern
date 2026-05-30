@@ -148,50 +148,56 @@ export default {
           return new Response("Invalid token payload for file", { status: 400 });
         }
         const object = await env.BUCKET.get(payload.r2_key);
-        
+
         if (!object) return new Response("Not found", { status: 404 });
+
+        const isGzip = object.httpMetadata?.contentEncoding === "gzip";
 
         const headers = new Headers();
         object.writeHttpMetadata(headers);
-        headers.set('etag', object.httpEtag);
+        headers.set("etag", object.httpEtag);
         // Force edge caching for 1 month
-        headers.set('Cache-Control', 'public, max-age=2592000'); 
-        
+        headers.set("Cache-Control", "public, max-age=2592000");
+
         // Handle overrides
         if (payload.content_type) {
-            headers.set('Content-Type', payload.content_type);
+          headers.set("Content-Type", payload.content_type);
         }
-        
-        if (payload.filename) {
-            const encodedName = encodeURIComponent(payload.filename);
-            const asciiFallback = payload.filename.replace(/[^\x20-\x7E]/g, "_");
-            const disposition = payload.force_download ? 'attachment' : 'inline';
-            headers.set('Content-Disposition', `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encodedName}`);
-        } else if (payload.force_download) {
-            headers.set('Content-Disposition', 'attachment');
-        } else {
-            headers.set('Content-Disposition', 'inline');
-        }
-        
-        headers.set('Access-Control-Allow-Origin', '*');
 
-        response = new Response(object.body as ReadableStream, { headers });
-        
-        // Cache the response
+        if (payload.filename) {
+          const encodedName = encodeURIComponent(payload.filename);
+          const asciiFallback = payload.filename.replace(/[^\x20-\x7E]/g, "_");
+          const disposition = payload.force_download ? "attachment" : "inline";
+          headers.set("Content-Disposition", `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encodedName}`);
+        } else if (payload.force_download) {
+          headers.set("Content-Disposition", "attachment");
+        } else {
+          headers.set("Content-Disposition", "inline");
+        }
+
+        // Decompress gzip on fresh R2 fetches so the browser receives raw bytes.
+        // We check httpMetadata directly (not the HTTP header) because Cloudflare's
+        // cache can strip the gzip body while keeping the content-encoding header,
+        // which would cause double-decompression garbage on cached responses.
+        let body: ReadableStream = object.body;
+        if (isGzip) {
+          body = body.pipeThrough(new DecompressionStream("gzip"));
+          headers.delete("content-encoding");
+          headers.delete("content-length");
+        }
+
+        headers.set("Access-Control-Allow-Origin", "*");
+
+        response = new Response(body, { headers });
+
+        // Cache the already-decompressed response so cache hits are safe.
         ctx.waitUntil(cache.put(cacheKey, response.clone()));
       }
 
-      // Ensure CORS header is present even on cache hits from old version
-      let body = response.body as ReadableStream;
+      // Cache hit: serve directly. The cached response is already decompressed.
       const headers = new Headers(response.headers);
-      if (headers.get("content-encoding") === "gzip") {
-        body = body.pipeThrough(new DecompressionStream("gzip"));
-        headers.delete("content-encoding");
-        headers.delete("content-length");
-      }
-
       headers.set("Access-Control-Allow-Origin", "*");
-      return new Response(body, {
+      return new Response(response.body as ReadableStream, {
         status: response.status,
         statusText: response.statusText,
         headers,

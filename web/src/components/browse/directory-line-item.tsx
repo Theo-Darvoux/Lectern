@@ -242,6 +242,7 @@ function DirectoryLineItemImpl({
                                 className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
                                 title={t("openItem")}
                                 onClick={(e) => {
+                                    e.preventDefault();
                                     e.stopPropagation();
                                     if (onNavigate) {
                                         onNavigate();
