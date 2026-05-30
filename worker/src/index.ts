@@ -182,9 +182,20 @@ export default {
       }
 
       // Ensure CORS header is present even on cache hits from old version
-      const finalResponse = new Response(response.body, response);
-      finalResponse.headers.set("Access-Control-Allow-Origin", "*");
-      return finalResponse;
+      let body = response.body as ReadableStream;
+      const headers = new Headers(response.headers);
+      if (headers.get("content-encoding") === "gzip") {
+        body = body.pipeThrough(new DecompressionStream("gzip"));
+        headers.delete("content-encoding");
+        headers.delete("content-length");
+      }
+
+      headers.set("Access-Control-Allow-Origin", "*");
+      return new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
     }
 
     // ==========================================
@@ -204,9 +215,13 @@ export default {
         if (!obj) {
           yield { name: arcname, input: new Response(""), size: 0 };
         } else {
-          // Passing size lets client-zip write the correct local file header
-          // upfront, avoiding data descriptors and improving unzipper compatibility.
-          yield { name: arcname, input: obj.body, size: obj.size };
+          let input = obj.body;
+          let size: number | undefined = obj.size;
+          if (obj.httpMetadata?.contentEncoding === "gzip") {
+            input = obj.body.pipeThrough(new DecompressionStream("gzip"));
+            size = undefined;
+          }
+          yield { name: arcname, input, size };
         }
       }
     }

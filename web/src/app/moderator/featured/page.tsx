@@ -102,7 +102,7 @@ function ItemSearch({
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 max-h-[300px] overflow-hidden flex flex-col" align="start" portal={false}>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 max-h-[300px] overflow-hidden flex flex-col" align="start">
         <Command shouldFilter={false} className="max-h-[300px] flex flex-col">
           <CommandInput
             placeholder={t("dialog.searchPlaceholder")}
@@ -296,7 +296,7 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: AddFeatu
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg flex flex-col max-h-[90vh]">
         <DialogHeader>
           <DialogTitle>{editItem ? "Edit Featured Boost" : t("dialog.addTitle")}</DialogTitle>
           <DialogDescription>
@@ -304,7 +304,7 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: AddFeatu
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 flex-1 overflow-y-auto min-h-0 pr-1 py-1">
           <div className="space-y-1.5">
             <Label htmlFor="item-search">Search file or folder <span className="text-destructive" aria-hidden>*</span></Label>
             <ItemSearch
@@ -345,7 +345,7 @@ function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: AddFeatu
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="start-at">{t("dialog.startDate")} <span className="text-destructive" aria-hidden>*</span></Label>
               <Input id="start-at" type="date" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
