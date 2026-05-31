@@ -12,9 +12,9 @@ from app.config import settings
 from app.core.database import get_db
 from app.dependencies.auth import CurrentUser
 
-router = APIRouter(prefix="/api/onlyoffice", tags=["onlyoffice"])
+router = APIRouter(prefix="/api/eurooffice", tags=["eurooffice"])
 
-# Maps file extensions to ONLYOFFICE documentType
+# Maps file extensions to EuroOffice documentType
 _EXT_TO_DOCTYPE: dict[str, str] = {
     "docx": "word",
     "doc": "word",
@@ -31,14 +31,14 @@ _ALGORITHM = "HS256"
 
 
 def _create_file_token(material_id: str) -> str:
-    """Create a short-lived JWT for ONLYOFFICE to fetch a specific file."""
-    expire = datetime.now(UTC) + timedelta(seconds=settings.onlyoffice_file_token_ttl)
+    """Create a short-lived JWT for EuroOffice to fetch a specific file."""
+    expire = datetime.now(UTC) + timedelta(seconds=settings.eurooffice_file_token_ttl)
     payload = {
         "sub": material_id,
-        "type": "onlyoffice_file",
+        "type": "eurooffice_file",
         "exp": expire,
     }
-    return jwt.encode(payload, settings.onlyoffice_file_token_secret, algorithm=_ALGORITHM)
+    return jwt.encode(payload, settings.eurooffice_file_token_secret, algorithm=_ALGORITHM)
 
 
 def _verify_file_token(token: str, material_id: str) -> bool:
@@ -46,22 +46,22 @@ def _verify_file_token(token: str, material_id: str) -> bool:
     try:
         payload = jwt.decode(
             token,
-            settings.onlyoffice_file_token_secret,
+            settings.eurooffice_file_token_secret,
             algorithms=[_ALGORITHM],
         )
-        return payload.get("sub") == material_id and payload.get("type") == "onlyoffice_file"
+        return payload.get("sub") == material_id and payload.get("type") == "eurooffice_file"
     except jwt.PyJWTError:
         return False
 
 
 @router.get("/config/{material_id}")
-async def get_onlyoffice_config(
+async def get_eurooffice_config(
     material_id: uuid.UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
     """
-    Return a signed ONLYOFFICE editor configuration for the given material.
+    Return a signed EuroOffice editor configuration for the given material.
     Called by the frontend (authenticated with user JWT).
     """
     from app.core.exceptions import NotFoundError
@@ -79,12 +79,12 @@ async def get_onlyoffice_config(
     ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
     doc_type = _EXT_TO_DOCTYPE.get(ext, "word")
 
-    # Short-lived token for ONLYOFFICE to fetch the file via the internal API.
-    # Embedded in the query string because ONLYOFFICE's file downloader does not
+    # Short-lived token for EuroOffice to fetch the file via the internal API.
+    # Embedded in the query string because EuroOffice's file downloader does not
     # forward custom requestHeaders — it only sends its own JWT.  This is an
     # internal container-to-container URL, never exposed to the browser.
     file_token = _create_file_token(material_id_str)
-    file_url = f"{settings.onlyoffice_internal_api_base_url}/api/onlyoffice/file/{material_id_str}?token={file_token}"
+    file_url = f"{settings.eurooffice_internal_api_base_url}/api/eurooffice/file/{material_id_str}?token={file_token}"
 
     # Cache key: version_number invalidates on new uploads.
     doc_key = f"{material_id_str}-v{version['version_number']}"
@@ -141,25 +141,25 @@ async def get_onlyoffice_config(
         },
     }
 
-    # Sign the entire config — ONLYOFFICE validates this token before rendering
-    config["token"] = jwt.encode(config, settings.onlyoffice_jwt_secret, algorithm=_ALGORITHM)
+    # Sign the entire config — EuroOffice validates this token before rendering
+    config["token"] = jwt.encode(config, settings.eurooffice_jwt_secret, algorithm=_ALGORITHM)
 
     return config
 
 
 @router.api_route("/file/{material_id}", methods=["GET", "HEAD"])
-async def serve_file_to_onlyoffice(
+async def serve_file_to_eurooffice(
     request: Request,
     material_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """
-    Serve the raw file bytes to ONLYOFFICE Document Server.
-    Called internally by ONLYOFFICE (not the browser).
+    Serve the raw file bytes to EuroOffice Document Server.
+    Called internally by EuroOffice (not the browser).
     Authenticated via a short-lived scoped JWT passed as ?token= query param
     (fallback: X-OO-File-Token header).
 
-    ONLYOFFICE probes the URL with HEAD before downloading and retries failed
+    EuroOffice probes the URL with HEAD before downloading and retries failed
     GETs with the same token — both methods must return 2xx.  We rely on the
     JWT expiry (60 s) rather than single-use JTI enforcement so retries work.
     """

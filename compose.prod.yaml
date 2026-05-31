@@ -118,7 +118,7 @@ services:
       /bin/sh -c "envsubst '$$S3_PUBLIC_DOMAIN' < /etc/nginx/templates/nginx.conf.template > /tmp/nginx.conf && exec nginx -c /tmp/nginx.conf -g 'daemon off;'"
     volumes:
       - ./infra/nginx/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
-      - ./infra/nginx/nginx.onlyoffice.snippet:/etc/nginx/nginx.onlyoffice.snippet:ro
+      - ./infra/nginx/nginx.eurooffice.snippet:/etc/nginx/nginx.eurooffice.snippet:ro
     deploy:
       resources:
         limits:

@@ -52,7 +52,7 @@ jobs:
           push: true
           build-args: |
             NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
-            NEXT_PUBLIC_ONLYOFFICE_URL=${{ vars.NEXT_PUBLIC_ONLYOFFICE_URL }}
+            NEXT_PUBLIC_EUROOFFICE_URL=${{ vars.NEXT_PUBLIC_EUROOFFICE_URL }}
           tags: |
             ${{ env.WEB_IMAGE }}:latest
             ${{ env.WEB_IMAGE }}:${{ github.sha }}

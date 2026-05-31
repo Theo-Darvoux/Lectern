@@ -13,8 +13,8 @@ interface OfficeViewerProps {
     fileName: string;
 }
 
-const BASE_ONLYOFFICE_URL = process.env.NEXT_PUBLIC_ONLYOFFICE_URL || "http://localhost/onlyoffice/";
-const ONLYOFFICE_URL = BASE_ONLYOFFICE_URL.endsWith("/") ? BASE_ONLYOFFICE_URL : `${BASE_ONLYOFFICE_URL}/`;
+const BASE_EUROOFFICE_URL = process.env.NEXT_PUBLIC_EUROOFFICE_URL || "http://localhost/eurooffice/";
+const EUROOFFICE_URL = BASE_EUROOFFICE_URL.endsWith("/") ? BASE_EUROOFFICE_URL : `${BASE_EUROOFFICE_URL}/`;
 
 export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProps) {
     const t = useTranslations("Viewers.office");
@@ -96,15 +96,15 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 setError(null);
 
                 // 1. Fetch the signed OnlyOffice/Euro-Office config from the backend
-                const config = await apiFetch<any>(`/onlyoffice/config/${materialId}`);
-                
+                const config = await apiFetch<any>(`/eurooffice/config/${materialId}`);
+
                 if (!isMounted) return;
 
                 // 2. Load the API script if not already present
                 if (!(window as any).DocsAPI) {
                     const script = document.createElement("script");
-                    script.id = "onlyoffice-api-script";
-                    script.src = `${ONLYOFFICE_URL}web-apps/apps/api/documents/api.js`;
+                    script.id = "eurooffice-api-script";
+                    script.src = `${EUROOFFICE_URL}web-apps/apps/api/documents/api.js`;
                     script.async = true;
                     script.onload = () => {
                         if (isMounted) loadEditor(config);

@@ -23,13 +23,13 @@ from app.routers.auth import router as auth_router
 from app.routers.browse import router as browse_router
 from app.routers.comments import router as comments_router
 from app.routers.directories import router as directories_router
+from app.routers.eurooffice import router as eurooffice_router
 from app.routers.flags import router as flags_router
 from app.routers.home import router as home_router
 from app.routers.materials import router as materials_router
 from app.routers.moderator import router as moderator_router
 from app.routers.notifications import router as notifications_router
 from app.routers.og import router as og_router
-from app.routers.onlyoffice import router as onlyoffice_router
 from app.routers.pr_comments import router as pr_comments_router
 from app.routers.pull_requests import router as pull_requests_router
 from app.routers.qcm import router as qcm_router
@@ -301,7 +301,7 @@ app.include_router(og_router)
 app.include_router(pr_comments_router)
 app.include_router(pull_requests_router)
 app.include_router(search_router)
-app.include_router(onlyoffice_router)
+app.include_router(eurooffice_router)
 app.include_router(tus_router)
 app.include_router(upload_api_router)
 app.include_router(home_router)

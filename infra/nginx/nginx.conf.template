@@ -56,7 +56,7 @@ http {
         add_header X-Content-Type-Options "nosniff" always;
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
-        include /etc/nginx/nginx.onlyoffice.snippet;
+        include /etc/nginx/nginx.eurooffice.snippet;
 
         location /api/ {
             set $api_backend api;

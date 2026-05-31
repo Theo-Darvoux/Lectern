@@ -1,28 +1,27 @@
 # ─────────────────────────────────────────────────────────────────
-# ONLYOFFICE Document Server Nginx Configuration Snippet
+# EuroOffice Document Server Nginx Configuration Snippet
 # ─────────────────────────────────────────────────────────────────
-# To enable ONLYOFFICE in production:
-# 1. Run docker compose with the onlyoffice profile: `docker compose --profile onlyoffice up -d`
-# 2. Include this snippet inside the `server` block in `nginx.conf`:
-#    include /etc/nginx/nginx.onlyoffice.snippet;
-# 3. Ensure NEXT_PUBLIC_ONLYOFFICE_URL is set in the environment
-# 4. Add 'unsafe-eval' to the default script-src in the CSP map
-#    in nginx.conf — the OnlyOffice api.js script requires it.
+# To enable EuroOffice in production:
+# 1. Include this snippet inside the `server` block in `nginx.conf`:
+#    include /etc/nginx/nginx.eurooffice.snippet;
+# 2. Ensure NEXT_PUBLIC_EUROOFFICE_URL is set in the environment
+# 3. Add 'unsafe-eval' to the default script-src in the CSP map
+#    in nginx.conf — the EuroOffice api.js script requires it.
 
 
 # 1. Specific fix for themes.json (must be before prefix matches)
-location ~* ^/(onlyoffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/themes.json$ {
-    set $onlyoffice_upstream http://onlyoffice;
+location ~* ^/(eurooffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/themes.json$ {
+    set $eurooffice_upstream http://eurooffice;
     rewrite ^ /web-apps/apps/themes/themes.json break;
-    proxy_pass $onlyoffice_upstream;
+    proxy_pass $eurooffice_upstream;
     proxy_set_header Host $host;
 }
 
-# 2. WebSocket and Coauthoring endpoints (handles /onlyoffice/ prefix and versioned paths)
-location ~* ^/(onlyoffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+/)?(doc|coauthoring)/ {
-    set $onlyoffice_upstream http://onlyoffice;
-    rewrite ^/onlyoffice/(.*)$ /$1 break;
-    proxy_pass $onlyoffice_upstream;
+# 2. WebSocket and Coauthoring endpoints (handles /eurooffice/ prefix and versioned paths)
+location ~* ^/(eurooffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+/)?(doc|coauthoring)/ {
+    set $eurooffice_upstream http://eurooffice;
+    rewrite ^/eurooffice/(.*)$ /$1 break;
+    proxy_pass $eurooffice_upstream;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
@@ -38,11 +37,11 @@ location ~* ^/(onlyoffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+/)?(doc|coauthoring)/
     proxy_send_timeout 300s;
 }
 
-# 3. General OnlyOffice Document Server — serves JS API and editor assets
-location /onlyoffice/ {
-    set $onlyoffice_upstream http://onlyoffice;
-    rewrite ^/onlyoffice/(.*)$ /$1 break;
-    proxy_pass $onlyoffice_upstream;
+# 3. General EuroOffice Document Server — serves JS API and editor assets
+location /eurooffice/ {
+    set $eurooffice_upstream http://eurooffice;
+    rewrite ^/eurooffice/(.*)$ /$1 break;
+    proxy_pass $eurooffice_upstream;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
@@ -56,20 +55,20 @@ location /onlyoffice/ {
     gzip off;
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
-    
+
     # Rewrite Location header for redirects (e.g. login pages)
-    proxy_redirect http://$host/ $scheme://$host/onlyoffice/;
+    proxy_redirect http://$host/ $scheme://$host/eurooffice/;
 }
 
-# Deny access to ONLYOFFICE internal and admin paths from the public network
+# Deny access to EuroOffice internal and admin paths from the public network
 location ~* ^/(converter|healthcheck)/ {
     return 403;
 }
 
 # 4. Versioned build paths (for absolute requests like /9.2.1-hash/web-apps/...)
 location ~* ^/(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/ {
-    set $onlyoffice_upstream http://onlyoffice;
-    proxy_pass $onlyoffice_upstream;
+    set $eurooffice_upstream http://eurooffice;
+    proxy_pass $eurooffice_upstream;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
@@ -81,8 +80,8 @@ location ~* ^/(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/ {
 
 # 5. Absolute asset paths (requested by the editor JS)
 location ~* ^/(cache|web-apps|sdkjs|sdkjs-plugins|fonts|dictionaries|meta|printfile)/ {
-    set $onlyoffice_upstream http://onlyoffice;
-    proxy_pass $onlyoffice_upstream;
+    set $eurooffice_upstream http://eurooffice;
+    proxy_pass $eurooffice_upstream;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
@@ -93,13 +92,13 @@ location ~* ^/(cache|web-apps|sdkjs|sdkjs-plugins|fonts|dictionaries|meta|printf
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
 
-    # If ONLYOFFICE doesn't recognise the path (404), fall through to
+    # If EuroOffice doesn't recognise the path (404), fall through to
     # Next.js so future WikINT routes on these prefixes still work.
     proxy_intercept_errors on;
     error_page 404 = @nextjs_oo_fallback;
 }
 
-# Fallback for paths that matched the ONLYOFFICE regex but returned 404.
+# Fallback for paths that matched the EuroOffice regex but returned 404.
 location @nextjs_oo_fallback {
     proxy_pass http://web;
     proxy_set_header Host $host;

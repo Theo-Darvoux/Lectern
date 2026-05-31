@@ -222,14 +222,14 @@ class Settings(BaseSettings):
             "X-Requested-With",
         ]
 
-    # ONLYOFFICE Document Server
-    onlyoffice_internal_api_base_url: str = "http://api:8000"
-    onlyoffice_jwt_secret: str = "change-me-onlyoffice-jwt-secret"
+    # EuroOffice Document Server
+    eurooffice_internal_api_base_url: str = "http://api:8000"
+    eurooffice_jwt_secret: str = "change-me-eurooffice-jwt-secret"
     # Separate secret for file-access tokens — known only to the API.
-    # Must differ from onlyoffice_jwt_secret so a compromised OnlyOffice
+    # Must differ from eurooffice_jwt_secret so a compromised EuroOffice
     # container cannot forge file-download tokens.
-    onlyoffice_file_token_secret: str = "change-me-onlyoffice-file-token-secret"
-    onlyoffice_file_token_ttl: int = 60  # seconds (1 minute)
+    eurooffice_file_token_secret: str = "change-me-eurooffice-file-token-secret"
+    eurooffice_file_token_ttl: int = 60  # seconds (1 minute)
 
     @model_validator(mode="after")
     def _check_secrets(self) -> "Settings":
@@ -250,23 +250,23 @@ class Settings(BaseSettings):
             raise ValueError("MEILI_MASTER_KEY must be set to a secure value in production.")
 
         _known_placeholders = {
-            "change-me-onlyoffice-jwt-secret",
-            "insecure-dev-only-onlyoffice-secret",
+            "change-me-eurooffice-jwt-secret",
+            "insecure-dev-only-eurooffice-secret",
         }
-        if self.onlyoffice_jwt_secret in _known_placeholders:
-            raise ValueError("ONLYOFFICE_JWT_SECRET must be set to a secure value in production.")
+        if self.eurooffice_jwt_secret in _known_placeholders:
+            raise ValueError("EUROOFFICE_JWT_SECRET must be set to a secure value in production.")
 
         _file_token_placeholders = {
-            "change-me-onlyoffice-file-token-secret",
-            "insecure-dev-only-onlyoffice-file-token-secret",
+            "change-me-eurooffice-file-token-secret",
+            "insecure-dev-only-eurooffice-file-token-secret",
         }
-        if self.onlyoffice_file_token_secret in _file_token_placeholders:
+        if self.eurooffice_file_token_secret in _file_token_placeholders:
             raise ValueError(
-                "ONLYOFFICE_FILE_TOKEN_SECRET must be set to a secure value in production."
+                "EUROOFFICE_FILE_TOKEN_SECRET must be set to a secure value in production."
             )
 
-        if self.onlyoffice_file_token_secret == self.onlyoffice_jwt_secret:
-            raise ValueError("ONLYOFFICE_FILE_TOKEN_SECRET must differ from ONLYOFFICE_JWT_SECRET.")
+        if self.eurooffice_file_token_secret == self.eurooffice_jwt_secret:
+            raise ValueError("EUROOFFICE_FILE_TOKEN_SECRET must differ from EUROOFFICE_JWT_SECRET.")
 
         return self
 

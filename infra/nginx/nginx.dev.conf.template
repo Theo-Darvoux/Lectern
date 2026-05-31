@@ -65,8 +65,8 @@ http {
         server web:3000;
     }
 
-    upstream onlyoffice {
-        server onlyoffice:80;
+    upstream eurooffice {
+        server eurooffice:80;
     }
 
     upstream minio {
@@ -89,12 +89,12 @@ http {
             proxy_set_header Connection $connection_upgrade;
         }
 
-        # ONLYOFFICE / Euro-Office Routing Logic
+        # EuroOffice Routing Logic
 
-        # A. Global catch-all for versioned paths (handles redirects that strip /onlyoffice/)
+        # A. Global catch-all for versioned paths (handles redirects that strip /eurooffice/)
         location ~* ^/(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/ {
-            set $onlyoffice_upstream http://onlyoffice;
-            proxy_pass $onlyoffice_upstream;
+            set $eurooffice_upstream http://eurooffice;
+            proxy_pass $eurooffice_upstream;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection $connection_upgrade;
@@ -108,19 +108,19 @@ http {
         }
         
         # B. Specific fix for themes.json
-        location ~* ^/(onlyoffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/themes.json$ {
-            set $onlyoffice_upstream http://onlyoffice;
+        location ~* ^/(eurooffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/themes.json$ {
+            set $eurooffice_upstream http://eurooffice;
             rewrite ^ /web-apps/apps/themes/themes.json break;
-            proxy_pass $onlyoffice_upstream;
+            proxy_pass $eurooffice_upstream;
             proxy_set_header Host $host;
         }
 
-        # C. Main OnlyOffice block with prefix
-        location /onlyoffice/ {
-            set $onlyoffice_upstream http://onlyoffice;
-            rewrite ^/onlyoffice/(.*)$ /$1 break;
+        # C. Main EuroOffice block with prefix
+        location /eurooffice/ {
+            set $eurooffice_upstream http://eurooffice;
+            rewrite ^/eurooffice/(.*)$ /$1 break;
             
-            proxy_pass $onlyoffice_upstream;
+            proxy_pass $eurooffice_upstream;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection $connection_upgrade;
@@ -139,18 +139,18 @@ http {
             proxy_send_timeout 3600s;
             proxy_connect_timeout 60s;
 
-            # Ensure redirects from OnlyOffice include the /onlyoffice/ prefix
-            proxy_redirect / /onlyoffice/;
+            # Ensure redirects from EuroOffice include the /eurooffice/ prefix
+            proxy_redirect / /eurooffice/;
 
             # Allow internal redirects and capture errors
             proxy_intercept_errors on;
             error_page 404 = @nextjs_fallback;
         }
 
-        # D. Non-versioned OnlyOffice asset and cache paths
+        # D. Non-versioned EuroOffice asset and cache paths
         location ~* ^/(cache|web-apps|sdkjs|sdkjs-plugins|fonts|dictionaries|meta|printfile)/ {
-            set $onlyoffice_upstream http://onlyoffice;
-            proxy_pass $onlyoffice_upstream;
+            set $eurooffice_upstream http://eurooffice;
+            proxy_pass $eurooffice_upstream;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -162,10 +162,10 @@ http {
             error_page 404 = @nextjs_fallback;
         }
 
-        # E. Direct API access (some versions use /doc/ or /coauthoring/ without version hash)
+        # E. Direct API access (some versions use /doc/ or /coauthoring/ without version hash — EuroOffice)
         location ~* ^/(doc|coauthoring|downloadas|command|status|history|shards)/ {
-            set $onlyoffice_upstream http://onlyoffice;
-            proxy_pass $onlyoffice_upstream;
+            set $eurooffice_upstream http://eurooffice;
+            proxy_pass $eurooffice_upstream;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection $connection_upgrade;
@@ -177,7 +177,7 @@ http {
             proxy_read_timeout 3600s;
         }
 
-        # Deny access to ONLYOFFICE internal and admin paths
+        # Deny access to EuroOffice internal and admin paths
         location ~* ^/(converter|healthcheck)/ {
             return 403;
         }
@@ -218,7 +218,7 @@ http {
             proxy_connect_timeout 300s;
         }
 
-        # Fallback for paths that matched the ONLYOFFICE regex but returned 404.
+        # Fallback for paths that matched the EuroOffice regex but returned 404.
         location @nextjs_fallback {
             proxy_pass http://web;
             proxy_set_header Host $host;

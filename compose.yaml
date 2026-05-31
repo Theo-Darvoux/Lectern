@@ -6,8 +6,8 @@ x-common-env: &common-env
   MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
   SECRET_KEY: ${SECRET_KEY}
   MALWAREBAZAAR_API_KEY: ${MALWAREBAZAAR_API_KEY}
-  ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
-  ONLYOFFICE_FILE_TOKEN_SECRET: ${ONLYOFFICE_FILE_TOKEN_SECRET}
+  EUROOFFICE_JWT_SECRET: ${EUROOFFICE_JWT_SECRET}
+  EUROOFFICE_FILE_TOKEN_SECRET: ${EUROOFFICE_FILE_TOKEN_SECRET}
   WORKER_ZIP_URL: ${WORKER_ZIP_URL:-}
   WORKER_ZIP_HMAC_SECRET: ${WORKER_ZIP_HMAC_SECRET:-}
 
@@ -137,14 +137,14 @@ services:
     networks:
       - frontend
 
-  onlyoffice:
+  eurooffice:
     image: ghcr.io/euro-office/documentserver:latest
-    container_name: wikint-onlyoffice-1
+    container_name: wikint-eurooffice-1
     restart: unless-stopped
     stop_grace_period: 1m
     environment:
       - JWT_ENABLED=true
-      - JWT_SECRET=${ONLYOFFICE_JWT_SECRET:?ONLYOFFICE_JWT_SECRET must be set (see .env.example)}
+      - JWT_SECRET=${EUROOFFICE_JWT_SECRET:?EUROOFFICE_JWT_SECRET must be set (see .env.example)}
       - JWT_IN_BODY=true
       - ALLOW_PRIVATE_IP_ADDRESS=true
     networks:
@@ -157,8 +157,10 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    logging:
+      driver: "none"
     volumes:
-      - onlyoffice_data:/var/www/onlyoffice/Data
+      - eurooffice_data:/var/www/onlyoffice/Data
       - eurooffice_log:/var/log/onlyoffice
     deploy:
       resources:
@@ -190,7 +192,6 @@ volumes:
   postgres_data:
   redis_data:
   meilisearch_data:
-  onlyoffice_data:
-  onlyoffice_log:
+  eurooffice_data:
   eurooffice_log:
   wikint_backups:
