@@ -37,9 +37,7 @@ def downgrade() -> None:
         sa.Column("classic_auth_enabled", sa.Boolean(), server_default="false", nullable=False),
         sa.Column("allow_all_domains", sa.Boolean(), server_default="false", nullable=False),
         sa.Column("guest_access_enabled", sa.Boolean(), server_default="false", nullable=False),
-        sa.Column(
-            "auto_approve_all_domains", sa.Boolean(), server_default="false", nullable=False
-        ),
+        sa.Column("auto_approve_all_domains", sa.Boolean(), server_default="false", nullable=False),
         sa.Column("jwt_access_expire_days", sa.Integer(), server_default="7", nullable=False),
         sa.Column("jwt_refresh_expire_days", sa.Integer(), server_default="31", nullable=False),
         sa.Column("smtp_host", sa.String(255), nullable=True),

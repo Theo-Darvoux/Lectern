@@ -18,7 +18,6 @@ Covers (in issue order):
   #17 validate_email_for_auth comment/logic corrected
 """
 
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest

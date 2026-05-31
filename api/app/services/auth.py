@@ -68,7 +68,10 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
     else:
         domain_rows = list((await db.execute(select(AllowedDomain))).scalars().all())
         domains = (
-            [{"id": str(d.id), "domain": d.domain, "auto_approve": d.auto_approve} for d in domain_rows]
+            [
+                {"id": str(d.id), "domain": d.domain, "auto_approve": d.auto_approve}
+                for d in domain_rows
+            ]
             if domain_rows
             else _FALLBACK_DOMAINS
         )

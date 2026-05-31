@@ -54,9 +54,7 @@ def _render_site_name_html(site_name: str, site_name_style: str | None) -> tuple
     return name_html, fonts_url
 
 
-async def send_verification_email(
-    email: str, code: str, magic_link: str
-) -> None:
+async def send_verification_email(email: str, code: str, magic_link: str) -> None:
     site_name = settings.site_name
     site_name_style = settings.site_name_style
     primary_color = settings.primary_color or "#111827"

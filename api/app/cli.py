@@ -501,8 +501,7 @@ async def _config_export_env() -> None:
             domain_rows = domain_result.all()
             if domain_rows:
                 parts = ",".join(
-                    f"{d.domain}:{'auto' if d.auto_approve else 'manual'}"
-                    for d in domain_rows
+                    f"{d.domain}:{'auto' if d.auto_approve else 'manual'}" for d in domain_rows
                 )
                 lines.append(f"ALLOWED_DOMAINS={shlex.quote(parts)}")
         except Exception:
