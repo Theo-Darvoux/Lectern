@@ -89,8 +89,10 @@ export function useScrollHide(
         el.removeEventListener("touchmove", onTouchMove);
       };
     } else {
-      const onScroll = () => {
-        const y = el.scrollTop;
+      const onScroll = (e: Event) => {
+        const target = e.target as HTMLElement;
+        if (!target) return;
+        const y = target.scrollTop;
         const delta = y - lastY.current;
         lastY.current = y;
 
@@ -110,7 +112,7 @@ export function useScrollHide(
         }
 
         // Never hide the navbar if the scrollable area is small
-        if (el.scrollHeight - el.clientHeight < 150) {
+        if (target.scrollHeight - target.clientHeight < 150) {
           return;
         }
 
@@ -133,8 +135,8 @@ export function useScrollHide(
         }
       };
 
-      el.addEventListener("scroll", onScroll, { passive: true });
-      return () => el.removeEventListener("scroll", onScroll);
+      el.addEventListener("scroll", onScroll, { capture: true, passive: true });
+      return () => el.removeEventListener("scroll", onScroll, { capture: true });
     }
   }, [scrollRef, setNavbarVisible, options?.onlyShowAtTop, isMobile]);
 }
