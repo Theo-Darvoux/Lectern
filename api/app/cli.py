@@ -438,69 +438,82 @@ async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -
         typer.echo("Run with --no-dry-run to apply changes.")
 
 
-@app.command(name="config-set")
-def config_set(
-    field: str = typer.Argument(..., help="The field name to update (e.g. s3_endpoint, smtp_host)"),
-    value: str = typer.Argument(..., help="The new value"),
-) -> None:
-    """Update a global configuration field."""
-    asyncio.run(_config_set(field, value))
+@app.command(name="config-export-env")
+def config_export_env() -> None:
+    """Export current DB auth_configs row as .env-ready KEY=value lines.
+
+    Run this ONCE against the live DB before the auth_configs drop migration.
+    The output is paste-ready into your .env file.
+
+    WARNING: output contains secrets (SMTP password, S3 keys). Keep it secure.
+    """
+    asyncio.run(_config_export_env())
 
 
-async def _config_set(field: str, value: str) -> None:
-    from sqlalchemy import select
+async def _config_export_env() -> None:
+    import shlex
 
-    from app.core.database import async_session_factory
-    from app.models.auth_config import AuthConfig
-
-    async with async_session_factory() as session:
-        res = await session.execute(select(AuthConfig))
-        config = res.scalar_one_or_none()
-
-        if config is None:
-            config = AuthConfig()
-            session.add(config)
-
-        # Handle type conversion for bool/int
-        if hasattr(config, field):
-            attr_type = type(getattr(config, field))
-            if attr_type is bool:
-                final_val: bool | int | str = value.lower() in ("true", "1", "yes")
-            elif attr_type is int:
-                final_val = int(value)
-            else:
-                final_val = value
-
-            setattr(config, field, final_val)
-            await session.commit()
-            typer.echo(f"Successfully set {field} to {final_val}")
-        else:
-            typer.echo(f"Error: AuthConfig has no field '{field}'")
-
-
-@app.command(name="config-get")
-def config_get() -> None:
-    """Display the current global configuration."""
-    asyncio.run(_config_get())
-
-
-async def _config_get() -> None:
-    from sqlalchemy import select
+    from sqlalchemy import text
 
     from app.core.database import async_session_factory
-    from app.models.auth_config import AuthConfig
+
+    # Column → env-var name overrides.  Columns not listed here map to UPPERCASE(column).
+    column_map: dict[str, str] = {
+        "jwt_access_expire_days": "JWT_ACCESS_TOKEN_EXPIRE_DAYS",
+        "jwt_refresh_expire_days": "JWT_REFRESH_TOKEN_EXPIRE_DAYS",
+    }
 
     async with async_session_factory() as session:
-        res = await session.execute(select(AuthConfig))
-        config = res.scalar_one_or_none()
-
-        if config is None:
-            typer.echo("No configuration found in database.")
+        # Fetch column names directly — auth_configs table may not have a model
+        # at this point (model was dropped from Python but table still exists in DB).
+        try:
+            result = await session.execute(text("SELECT * FROM auth_configs LIMIT 1"))
+        except Exception as e:
+            typer.echo(f"# Could not read auth_configs: {e}")
+            typer.echo("# Table may already be dropped or does not exist.")
             return
 
-        for key, val in config.__dict__.items():
-            if not key.startswith("_"):
-                typer.echo(f"{key}: {val}")
+        row = result.mappings().first()
+        if row is None:
+            typer.echo("# auth_configs table is empty — nothing to export.")
+            return
+
+        skip = {"id", "created_at", "updated_at"}
+
+        lines = []
+        for col, val in row.items():
+            if col in skip or val is None:
+                continue
+            env_key = column_map.get(col, col.upper())
+            if isinstance(val, bool):
+                env_val = "true" if val else "false"
+            elif isinstance(val, (int, float)):
+                env_val = str(val)
+            else:
+                env_val = shlex.quote(str(val))
+            lines.append(f"{env_key}={env_val}")
+
+        # Append allowed_domains rows as ALLOWED_DOMAINS
+        try:
+            domain_result = await session.execute(
+                text("SELECT domain, auto_approve FROM allowed_domains ORDER BY domain")
+            )
+            domain_rows = domain_result.all()
+            if domain_rows:
+                parts = ",".join(
+                    f"{d.domain}:{'auto' if d.auto_approve else 'manual'}"
+                    for d in domain_rows
+                )
+                lines.append(f"ALLOWED_DOMAINS={shlex.quote(parts)}")
+        except Exception:
+            pass
+
+        if lines:
+            typer.echo("# Exported from auth_configs — paste into .env")
+            for line in lines:
+                typer.echo(line)
+        else:
+            typer.echo("# All columns are NULL — env defaults are already in effect.")
 
 
 @app.command(name="magic-link")
