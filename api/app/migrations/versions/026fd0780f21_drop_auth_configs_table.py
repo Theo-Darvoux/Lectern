@@ -1,7 +1,7 @@
 """drop auth_configs table
 
-Revision ID: a1b2c3d4e5f6
-Revises: fe2b420e9ac1
+Revision ID: 026fd0780f21
+Revises: 014_add_directory_id_to_featured
 Create Date: 2026-05-31 00:00:00.000000
 
 Run this migration ONLY after:
@@ -17,8 +17,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "a1b2c3d4e5f6"
-down_revision: str | None = "fe2b420e9ac1"
+revision: str = "026fd0780f21"
+down_revision: str | None = "014_add_directory_id_to_featured"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
