@@ -196,11 +196,12 @@ const AnnotatedPage = React.memo(function AnnotatedPage({
         };
     }, [annotationsKey, scheduleRecalc]);
 
-    // Recalculate on window resize to ensure highlights align correctly
-    useEffect(() => {
-        window.addEventListener("resize", scheduleRecalc);
-        return () => window.removeEventListener("resize", scheduleRecalc);
-    }, [scheduleRecalc]);
+    // Annotation highlights are recalculated via scheduleRecalc on page render/text-layer success.
+    // We intentionally do NOT add a window resize listener here: the parent PdfViewer already
+    // observes container width changes and re-renders pages with a new `width` prop, which
+    // triggers onRenderSuccess → scheduleRecalc automatically. Adding a per-page window resize
+    // listener would fire expensive DOM measurements (getBoundingClientRect / getClientRects)
+    // for every visible page on every resize event, causing a crash during rapid resizing.
 
     const dpr = useMemo(() => {
         if (typeof window === "undefined") return 1;
@@ -436,17 +437,32 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
     }, [committedZoom, twoPageView]);
 
     // ── Container resize ─────────────────────────────────────────────────────
+    // Debounce the ResizeObserver so that rapid/continuous resizing (e.g. dragging
+    // Firefox responsive-mode handles) only triggers one re-render after the resize
+    // settles, instead of firing on every animation frame and crashing the tab.
     useEffect(() => {
         const el = shellScrollRef.current;
         if (!el) return;
+        let rafId: number | null = null;
+        let pendingWidth: number | null = null;
         const ro = new ResizeObserver(entries => {
             const w = entries[0]?.contentRect.width;
-            if (w && w > 0) {
-                setContainerWidth(w);
-            }
+            if (!w || w <= 0) return;
+            pendingWidth = w;
+            if (rafId !== null) return; // already scheduled
+            rafId = requestAnimationFrame(() => {
+                rafId = null;
+                if (pendingWidth !== null) {
+                    setContainerWidth(pendingWidth);
+                    pendingWidth = null;
+                }
+            });
         });
         ro.observe(el);
-        return () => ro.disconnect();
+        return () => {
+            ro.disconnect();
+            if (rafId !== null) cancelAnimationFrame(rafId);
+        };
     }, []);
 
 
