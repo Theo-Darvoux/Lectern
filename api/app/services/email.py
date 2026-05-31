@@ -2,7 +2,6 @@ import json
 
 from app.config import settings
 from app.core.email import send_email
-from app.models.auth_config import AuthConfig
 
 
 def _parse_name_segments(raw: str | None) -> list[dict] | None:
@@ -56,12 +55,12 @@ def _render_site_name_html(site_name: str, site_name_style: str | None) -> tuple
 
 
 async def send_verification_email(
-    email: str, code: str, magic_link: str, config: AuthConfig | None = None
+    email: str, code: str, magic_link: str
 ) -> None:
-    site_name = (config.site_name if config else None) or settings.site_name
-    site_name_style = config.site_name_style if config else None
-    primary_color = (config.primary_color if config else None) or "#111827"
-    avatar_url = config.smtp_avatar_url if config else None
+    site_name = settings.site_name
+    site_name_style = settings.site_name_style
+    primary_color = settings.primary_color or "#111827"
+    avatar_url = settings.smtp_avatar_url
 
     name_html, fonts_url = _render_site_name_html(site_name, site_name_style)
 
@@ -115,4 +114,4 @@ async def send_verification_email(
     </body>
     </html>
     """
-    await send_email(email, subject, body, config=config)
+    await send_email(email, subject, body)

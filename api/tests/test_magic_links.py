@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.auth_config import AllowedDomain, AuthConfig
+from app.models.auth_config import AllowedDomain
 
 
 async def test_magic_link_flow_success(
@@ -13,8 +13,6 @@ async def test_magic_link_flow_success(
     # 1. Request code (which generates magic token)
     email = "test@telecom-sudparis.eu"
 
-    # Ensure domain is allowed. Must add AuthConfig row so AllowedDomain rows are used.
-    db_session.add(AuthConfig(classic_auth_enabled=True, totp_enabled=True))
     db_session.add(AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True))
     await db_session.flush()
 
@@ -62,7 +60,6 @@ async def test_magic_link_new_user_signup(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any
 ) -> None:
     email = "newuser@telecom-sudparis.eu"
-    db_session.add(AuthConfig(classic_auth_enabled=True, totp_enabled=True))
     db_session.add(AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True))
     await db_session.flush()
 
@@ -98,7 +95,6 @@ async def test_magic_link_pending_approval(
 ) -> None:
     # Domain allowed but NOT auto-approve
     email = "pending@manual.edu"
-    db_session.add(AuthConfig(classic_auth_enabled=True, totp_enabled=True))
     db_session.add(AllowedDomain(domain="manual.edu", auto_approve=False))
     await db_session.flush()
 
@@ -122,7 +118,6 @@ async def test_magic_link_expired(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any
 ) -> None:
     email = "expired@telecom-sudparis.eu"
-    db_session.add(AuthConfig(classic_auth_enabled=True, totp_enabled=True))
     db_session.add(AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True))
     await db_session.flush()
 

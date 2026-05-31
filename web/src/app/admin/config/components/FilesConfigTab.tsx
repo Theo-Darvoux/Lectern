@@ -1,18 +1,15 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { 
-    Settings2, HardDrive, FileCode, Sliders, Shield, 
-    Loader2, Save, Info, Image as ImageIcon, FileText, Code2, RefreshCw,
-    Search, CheckSquare, Square
+import { useMemo, useState } from "react";
+import {
+    Settings2, HardDrive, FileCode, Sliders,
+    Info, Image as ImageIcon, FileText, Code2, RefreshCw,
+    Search, Shield
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { TabsContent } from "@/components/ui/tabs";
-import { toast } from "sonner";
-import { TagInput } from "@/components/ui/tag-input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -36,8 +33,6 @@ interface AuthConfig {
 
 interface FilesConfigTabProps {
     config: AuthConfig;
-    saving: boolean;
-    patchConfig: (patch: Partial<AuthConfig>) => Promise<void>;
 }
 
 interface FileFormat {
@@ -116,27 +111,23 @@ const FILE_GROUPS: FileGroup[] = [
     }
 ];
 
-function SliderInput({ 
-    label, 
-    value, 
-    onChange, 
-    min = 1, 
-    max = 100, 
-    step = 1, 
+function ReadOnlySlider({
+    label,
+    value,
+    min = 1,
+    max = 100,
     suffix = "",
-    tooltip
-}: { 
-    label: string; 
-    value: number | null; 
-    onChange: (val: number) => void; 
-    min?: number; 
-    max?: number; 
-    step?: number; 
+    tooltip,
+}: {
+    label: string;
+    value: number | null;
+    min?: number;
+    max?: number;
     suffix?: string;
     tooltip?: string;
 }) {
     return (
-        <div className="space-y-3 p-4 rounded-xl bg-muted/30 border border-muted/50 hover:border-primary/20 transition-colors">
+        <div className="space-y-3 p-4 rounded-xl bg-muted/30 border border-muted/50">
             <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2">
                     <Label className="text-sm font-semibold">{label}</Label>
@@ -161,10 +152,10 @@ function SliderInput({
                 type="range"
                 min={min}
                 max={max}
-                step={step}
                 value={value ?? min}
-                onChange={(e) => onChange(parseInt(e.target.value))}
-                className="w-full h-1.5 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary hover:accent-primary/80 transition-all"
+                readOnly
+                disabled
+                className="w-full h-1.5 bg-secondary rounded-lg appearance-none accent-primary"
             />
             <div className="flex justify-between text-[10px] text-muted-foreground font-medium px-0.5">
                 <span>{min}{suffix}</span>
@@ -174,102 +165,27 @@ function SliderInput({
     );
 }
 
-export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabProps) {
+export function FilesConfigTab({ config }: FilesConfigTabProps) {
     const t = useTranslations("Admin.Config.Files");
-    const [filesForm, setFilesForm] = useState<Partial<AuthConfig>>({});
-    const [isFilesModified, setIsFilesModified] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
 
-    useEffect(() => {
-        setFilesForm({ ...config });
-        setIsFilesModified(false);
-    }, [config]);
-
-    const handleSave = async () => {
-        await patchConfig(filesForm);
-        toast.success(t("success"));
-        setIsFilesModified(false);
-    };
-
-    const handleDiscard = () => {
-        setFilesForm({ ...config });
-        setIsFilesModified(false);
-    };
-
-    const currentExtensions = useMemo(() => 
-        new Set(filesForm.allowed_extensions?.split(",").map(s => s.trim().toLowerCase()).filter(Boolean) || []),
-    [filesForm.allowed_extensions]);
-
-    const currentMimes = useMemo(() => 
-        new Set(filesForm.allowed_mime_types?.split(",").map(s => s.trim().toLowerCase()).filter(Boolean) || []),
-    [filesForm.allowed_mime_types]);
-
-    const toggleFormat = (format: FileFormat) => {
-        const newExts = new Set(currentExtensions);
-        const newMimes = new Set(currentMimes);
-        
-        const isCurrentlyActive = format.extensions.every(e => newExts.has(e.toLowerCase()));
-        
-        if (isCurrentlyActive) {
-            format.extensions.forEach(e => newExts.delete(e.toLowerCase()));
-            format.mimes.forEach(m => newMimes.delete(m.toLowerCase()));
-        } else {
-            format.extensions.forEach(e => newExts.add(e.toLowerCase()));
-            format.mimes.forEach(m => newMimes.add(m.toLowerCase()));
-        }
-        
-        setFilesForm(prev => ({
-            ...prev,
-            allowed_extensions: Array.from(newExts).join(", "),
-            allowed_mime_types: Array.from(newMimes).join(", ")
-        }));
-        setIsFilesModified(true);
-    };
-
-    const toggleGroup = (group: FileGroup, forceState?: boolean) => {
-        const newExts = new Set(currentExtensions);
-        const newMimes = new Set(currentMimes);
-        
-        const allActive = group.formats.every(f => 
-            f.extensions.every(e => newExts.has(e.toLowerCase()))
-        );
-        
-        const targetState = forceState !== undefined ? forceState : !allActive;
-        
-        group.formats.forEach(f => {
-            if (targetState) {
-                f.extensions.forEach(e => newExts.add(e.toLowerCase()));
-                f.mimes.forEach(m => newMimes.add(m.toLowerCase()));
-            } else {
-                f.extensions.forEach(e => newExts.delete(e.toLowerCase()));
-                f.mimes.forEach(m => newMimes.delete(m.toLowerCase()));
-            }
-        });
-        
-        setFilesForm(prev => ({
-            ...prev,
-            allowed_extensions: Array.from(newExts).join(", "),
-            allowed_mime_types: Array.from(newMimes).join(", ")
-        }));
-        setIsFilesModified(true);
-    };
+    const currentExtensions = useMemo(() =>
+        new Set(config.allowed_extensions?.split(",").map(s => s.trim().toLowerCase()).filter(Boolean) || []),
+    [config.allowed_extensions]);
 
     const filteredGroups = useMemo(() => {
         if (!searchQuery) return FILE_GROUPS;
         return FILE_GROUPS.map(group => ({
             ...group,
-            formats: group.formats.filter(f => 
-                f.label.toLowerCase().includes(searchQuery.toLowerCase()) || 
+            formats: group.formats.filter(f =>
+                f.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
                 f.extensions.some(e => e.toLowerCase().includes(searchQuery.toLowerCase()))
             )
         })).filter(group => group.formats.length > 0);
     }, [searchQuery]);
 
-    const isFormatActive = (format: FileFormat) => 
+    const isFormatActive = (format: FileFormat) =>
         format.extensions.every(e => currentExtensions.has(e.toLowerCase()));
-
-    const isGroupFullyActive = (group: FileGroup) => 
-        group.formats.every(f => isFormatActive(f));
 
     return (
         <TabsContent value="files" className="mt-6 space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -299,7 +215,7 @@ export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabPr
                             { id: "max_office_size_mb", label: t("limits.office"), icon: FileText, color: "text-orange-500" },
                             { id: "max_text_size_mb", label: t("limits.text"), icon: Code2, color: "text-indigo-500" },
                         ].map((item) => (
-                            <div key={item.id} className="group space-y-3 p-4 rounded-xl bg-muted/20 border border-transparent hover:border-primary/20 hover:bg-muted/30 transition-all duration-200">
+                            <div key={item.id} className="group space-y-3 p-4 rounded-xl bg-muted/20 border border-transparent">
                                 <Label htmlFor={item.id} className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
                                     <item.icon className={`h-3.5 w-3.5 ${item.color}`} />
                                     {item.label}
@@ -308,13 +224,9 @@ export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabPr
                                     <Input
                                         id={item.id}
                                         type="number"
-                                        className="h-11 pl-4 pr-12 font-mono text-lg bg-background/50 border-muted-foreground/20 focus:ring-primary/20 focus:border-primary/50 transition-all rounded-lg"
-                                        value={filesForm[item.id as keyof AuthConfig] ?? ""}
-                                        onChange={(e) => {
-                                            const val = parseInt(e.target.value) || 0;
-                                            setFilesForm((prev) => ({ ...prev, [item.id]: val }));
-                                            setIsFilesModified(true);
-                                        }}
+                                        readOnly
+                                        className="h-11 pl-4 pr-12 font-mono text-lg bg-muted/30 border-muted-foreground/20 rounded-lg cursor-default"
+                                        value={config[item.id as keyof AuthConfig] ?? ""}
                                     />
                                     <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground/60">MB</span>
                                 </div>
@@ -341,17 +253,13 @@ export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabPr
                 </CardHeader>
                 <CardContent className="p-8 space-y-10">
                     <div className="grid gap-8 md:grid-cols-2">
-                        <SliderInput 
-                            label={t("processing.pdfQuality")} 
-                            value={filesForm.pdf_quality ?? 80}
-                            onChange={(val) => {
-                                setFilesForm(prev => ({ ...prev, pdf_quality: val }));
-                                setIsFilesModified(true);
-                            }}
+                        <ReadOnlySlider
+                            label={t("processing.pdfQuality")}
+                            value={config.pdf_quality ?? 80}
                             tooltip={t("processing.pdfQualityTooltip")}
                             suffix="%"
                         />
-                        
+
                         <div className="space-y-3 p-4 rounded-xl bg-muted/30 border border-muted/50">
                             <div className="flex items-center gap-2">
                                 <Label htmlFor="video_compression" className="text-sm font-semibold">
@@ -370,12 +278,9 @@ export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabPr
                             </div>
                             <select
                                 id="video_compression"
-                                className="w-full h-11 rounded-lg border border-muted-foreground/20 bg-background/50 px-4 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all appearance-none cursor-pointer"
-                                value={filesForm.video_compression_profile || "balanced"}
-                                onChange={(e) => {
-                                    setFilesForm((prev) => ({ ...prev, video_compression_profile: e.target.value }));
-                                    setIsFilesModified(true);
-                                }}
+                                disabled
+                                className="w-full h-11 rounded-lg border border-muted-foreground/20 bg-muted/30 px-4 py-2 text-sm appearance-none cursor-default"
+                                value={config.video_compression_profile || "balanced"}
                             >
                                 <option value="fast">{t("processing.videoProfiles.fast")}</option>
                                 <option value="balanced">{t("processing.videoProfiles.balanced")}</option>
@@ -383,27 +288,18 @@ export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabPr
                             </select>
                         </div>
 
-                        <SliderInput 
-                            label={t("processing.thumbnailQuality")} 
-                            value={filesForm.thumbnail_quality ?? 80}
-                            onChange={(val) => {
-                                setFilesForm(prev => ({ ...prev, thumbnail_quality: val }));
-                                setIsFilesModified(true);
-                            }}
+                        <ReadOnlySlider
+                            label={t("processing.thumbnailQuality")}
+                            value={config.thumbnail_quality ?? 80}
                             tooltip={t("processing.thumbnailQualityTooltip")}
                             suffix="%"
                         />
 
-                        <SliderInput 
-                            label={t("processing.thumbnailSize")} 
+                        <ReadOnlySlider
+                            label={t("processing.thumbnailSize")}
                             min={100}
                             max={1280}
-                            step={20}
-                            value={filesForm.thumbnail_size_px ?? 400}
-                            onChange={(val) => {
-                                setFilesForm(prev => ({ ...prev, thumbnail_size_px: val }));
-                                setIsFilesModified(true);
-                            }}
+                            value={config.thumbnail_size_px ?? 400}
                             tooltip={t("processing.thumbnailSizeTooltip")}
                             suffix="px"
                         />
@@ -428,7 +324,7 @@ export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabPr
                         </div>
                         <div className="relative w-64">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                            <Input 
+                            <Input
                                 placeholder={t("whitelist.search")}
                                 className="pl-9 h-10 bg-background/50 border-muted-foreground/20"
                                 value={searchQuery}
@@ -438,25 +334,6 @@ export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabPr
                     </div>
                 </CardHeader>
                 <CardContent className="p-0">
-                    <div className="flex border-b bg-muted/30 px-8 py-3 gap-4">
-                        <Button 
-                            variant="outline" 
-                            size="sm" 
-                            className="h-8 text-xs font-bold gap-2 rounded-full"
-                            onClick={() => FILE_GROUPS.forEach(g => toggleGroup(g, true))}
-                        >
-                            <CheckSquare className="h-3.5 w-3.5" /> {t("whitelist.selectAll")}
-                        </Button>
-                        <Button 
-                            variant="outline" 
-                            size="sm" 
-                            className="h-8 text-xs font-bold gap-2 rounded-full"
-                            onClick={() => FILE_GROUPS.forEach(g => toggleGroup(g, false))}
-                        >
-                            <Square className="h-3.5 w-3.5" /> {t("whitelist.deselectAll")}
-                        </Button>
-                    </div>
-                    
                     <Accordion type="multiple" className="px-8 py-4" defaultValue={["Images", "Documents"]}>
                         {filteredGroups.map((group) => (
                             <AccordionItem key={group.name} value={group.name} className="border-muted-foreground/10">
@@ -474,28 +351,19 @@ export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabPr
                                     </div>
                                 </AccordionTrigger>
                                 <AccordionContent className="pb-8">
-                                    <div className="flex justify-end mb-4 px-1">
-                                        <Button 
-                                            variant="ghost" 
-                                            size="sm" 
-                                            className="h-8 text-[10px] font-bold uppercase tracking-wider px-3 rounded-full hover:bg-primary/10 hover:text-primary"
-                                            onClick={() => toggleGroup(group)}
-                                        >
-                                            {isGroupFullyActive(group) ? t("whitelist.deselectCategory") : t("whitelist.selectCategory")}
-                                        </Button>
-                                    </div>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-12 gap-y-4 pt-2 px-1">
                                         {group.formats.map((format) => (
                                             <div key={format.id} className="flex items-center space-x-3 py-1">
-                                                <Checkbox 
-                                                    id={format.id} 
+                                                <Checkbox
+                                                    id={format.id}
                                                     checked={isFormatActive(format)}
-                                                    onCheckedChange={() => toggleFormat(format)}
+                                                    disabled
+                                                    aria-readonly="true"
                                                 />
                                                 <div className="grid gap-1.5 leading-none">
                                                     <label
                                                         htmlFor={format.id}
-                                                        className="text-sm font-medium leading-none cursor-pointer peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                                                        className="text-sm font-medium leading-none"
                                                     >
                                                         {format.label}
                                                     </label>
@@ -525,57 +393,21 @@ export function FilesConfigTab({ config, saving, patchConfig }: FilesConfigTabPr
                                 </Tooltip>
                             </TooltipProvider>
                         </div>
-                        
+
                         <div className="grid gap-6 md:grid-cols-2">
                             <div className="space-y-2">
                                 <Label className="text-[10px] font-bold uppercase text-muted-foreground/60">{t("whitelist.extensions")}</Label>
-                                <TagInput 
-                                    tags={filesForm.allowed_extensions ? filesForm.allowed_extensions.split(",").map(s => s.trim()).filter(Boolean) : []}
-                                    onChange={(tags) => {
-                                        setFilesForm(prev => ({ ...prev, allowed_extensions: tags.join(", ") }));
-                                        setIsFilesModified(true);
-                                    }}
-                                    placeholder={t("whitelist.extensionsPlaceholder")}
-                                    maxTags={1000}
-                                />
+                                <div className="min-h-[2.5rem] rounded-md border bg-muted/30 px-3 py-2 text-sm font-mono break-all">
+                                    {config.allowed_extensions || <span className="text-muted-foreground italic">—</span>}
+                                </div>
                             </div>
                             <div className="space-y-2">
                                 <Label className="text-[10px] font-bold uppercase text-muted-foreground/60">{t("whitelist.mimes")}</Label>
-                                <TagInput 
-                                    tags={filesForm.allowed_mime_types ? filesForm.allowed_mime_types.split(",").map(s => s.trim()).filter(Boolean) : []}
-                                    onChange={(tags) => {
-                                        setFilesForm(prev => ({ ...prev, allowed_mime_types: tags.join(", ") }));
-                                        setIsFilesModified(true);
-                                    }}
-                                    placeholder={t("whitelist.mimesPlaceholder")}
-                                    maxTags={1000}
-                                />
+                                <div className="min-h-[2.5rem] rounded-md border bg-muted/30 px-3 py-2 text-sm font-mono break-all">
+                                    {config.allowed_mime_types || <span className="text-muted-foreground italic">—</span>}
+                                </div>
                             </div>
                         </div>
-                    </div>
-
-                    <div className="p-8 flex justify-end gap-3 border-t border-muted/50 bg-card">
-                        {isFilesModified && (
-                            <Button 
-                                variant="ghost" 
-                                onClick={handleDiscard}
-                                className="text-muted-foreground hover:text-foreground"
-                            >
-                                {t("discard")}
-                            </Button>
-                        )}
-                        <Button 
-                            onClick={handleSave}
-                            disabled={saving || (!isFilesModified && !!config)}
-                            className="gap-2 px-10 h-11 text-sm font-bold shadow-lg shadow-primary/20 hover:shadow-primary/40 transition-all rounded-xl"
-                        >
-                            {saving ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                                <Save className="h-4 w-4" />
-                            )}
-                            {t("save")}
-                        </Button>
                     </div>
                 </CardContent>
             </Card>

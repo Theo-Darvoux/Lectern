@@ -1201,8 +1201,9 @@
         "load": "Failed to load configuration",
         "save": "Failed to save configuration"
       },
+      "envBanner": "Configured via environment variables — edit .env and redeploy to change.",
       "Authentication": {
-        "description": "Control authentication providers, allowed email domains, and access policies. Changes take effect immediately (cache TTL: 60 s).",
+        "description": "Configuration is set via environment variables and is read-only here. Domain allow-list can still be managed below.",
         "methods": {
           "title": "Authentication Methods",
           "description": "Toggle which login methods are active on the platform.",
@@ -1238,6 +1239,7 @@
           "title": "Allowed Email Domains",
           "description": "Emails from these domains can request access. Toggle <strong>Auto-approve</strong> to let users from that domain skip the pending queue.",
           "empty": "No domains configured — fallback to default domains.",
+          "envOverrideBanner": "Domain list is set by ALLOWED_DOMAINS in .env — changes below update the database fallback only.",
           "allowAll": {
             "label": "Allow all domains",
             "description": "Bypass whitelist for all providers"

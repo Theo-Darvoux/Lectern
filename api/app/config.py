@@ -12,11 +12,31 @@ class Settings(BaseSettings):
         "change-this-to-a-secure-random-string-with-at-least-32-bytes"
     )
 
+    # Auth toggles
+    totp_enabled: bool = True
+    google_oauth_enabled: bool = False
+    google_client_id: str | None = None
+    classic_auth_enabled: bool = False
+    allow_all_domains: bool = False
+    auto_approve_all_domains: bool = False
+    guest_access_enabled: bool = False
+
+    # Allowed domains — comma-separated "domain:auto|domain:manual" entries.
+    # When set, this wins over DB rows. Empty means fall back to DB.
+    # Example: "telecom-sudparis.eu:auto,imt-bs.eu:auto"
+    allowed_domains: str = ""
+
     # Branding Defaults
     site_name: str = "WikINT"
+    site_name_style: str | None = None
     site_description: str = "Wiki for SudParis Intelligence"
     site_logo_url: str | None = None
     site_favicon_url: str | None = None
+    og_image_url: str | None = None
+    bg_watermark_url: str | None = None
+    bg_watermark_opacity_light: float | None = None
+    bg_watermark_opacity_dark: float | None = None
+    footer_logo_url: str | None = None
     primary_color: str = "#3b82f6"
     footer_text: str = "© 2024 WikINT"
     organization_url: str | None = "https://www.telecom-sudparis.eu"
@@ -101,6 +121,8 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = ""
+    smtp_sender_name: str | None = None
+    smtp_avatar_url: str | None = None
     smtp_use_tls: bool = True
 
     backup_dir: str = "/var/lib/wikint/backups"
@@ -140,6 +162,14 @@ class Settings(BaseSettings):
     # Can be set via PDF_QUALITY (int) or PDF_COMPRESSION_LEVEL (Ghostscript alias).
     pdf_quality: int = 75
     pdf_compression_level: str | None = None
+
+    thumbnail_quality: int = 85
+    thumbnail_size_px: int = 640
+
+    # Comma-separated allowed file extensions (e.g. ".pdf,.docx"). Empty = allow all.
+    allowed_extensions: str | None = None
+    # Comma-separated allowed MIME types. Empty = allow all.
+    allowed_mime_types: str | None = None
 
     @model_validator(mode="after")
     def _map_pdf_quality(self) -> "Settings":

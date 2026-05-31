@@ -88,23 +88,19 @@ async def test_upload_too_large(
     mock_s3 = AsyncMock()
     mock_s3_client.return_value.__aenter__.return_value = mock_s3
 
+    from unittest.mock import patch
+
+    from app.config import settings
+
     user = await _create_user(db_session)
 
-    # 1. Seed dynamic config with a 0 MiB limit for documents (PDFs)
-    from app.models.auth_config import AuthConfig
-
-    config = AuthConfig(max_document_size_mb=0)
-    db_session.add(config)
-    await db_session.commit()
-
-    # 2. Invalidate cache so it fetches from DB
-    mock_redis.get.return_value = None
-
-    response = await client.post(
-        "/api/upload",
-        files=_make_pdf_file(b"%PDF-1.4 some content here"),
-        headers=_auth_headers(user),
-    )
+    # Patch document size limit to 0 MiB so any PDF is rejected
+    with patch.object(settings, "max_document_size_mb", 0):
+        response = await client.post(
+            "/api/upload",
+            files=_make_pdf_file(b"%PDF-1.4 some content here"),
+            headers=_auth_headers(user),
+        )
     # If this fails with 202, it means validation was bypassed.
     assert response.status_code == 400
     assert "exceeds" in response.json()["detail"].lower()

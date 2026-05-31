@@ -1201,8 +1201,9 @@
         "load": "Échec du chargement de la configuration",
         "save": "Échec de l'enregistrement de la configuration"
       },
+      "envBanner": "Configuration définie via variables d'environnement — modifiez .env et redéployez pour changer.",
       "Authentication": {
-        "description": "Contrôlez les fournisseurs d'authentification, les domaines email autorisés et les politiques d'accès. Les modifications prennent effet immédiatement (cache TTL : 60 s).",
+        "description": "La configuration est définie via les variables d'environnement et est en lecture seule ici. La liste des domaines autorisés reste gérée ci-dessous.",
         "methods": {
           "title": "Méthodes d'authentification",
           "description": "Activez ou désactivez les méthodes de connexion sur la plateforme.",
@@ -1238,6 +1239,7 @@
           "title": "Domaines email autorisés",
           "description": "Les emails provenant de ces domaines peuvent demander l'accès. Activez <strong>Auto-approbation</strong> pour permettre aux utilisateurs de ces domaines d'éviter la file d'attente.",
           "empty": "Aucun domaine configuré — repli sur les domaines par défaut.",
+          "envOverrideBanner": "La liste de domaines est définie par ALLOWED_DOMAINS dans .env — les modifications ci-dessous ne mettent à jour que la base de données de repli.",
           "allowAll": {
             "label": "Autoriser tous les domaines",
             "description": "Ignorer la liste blanche pour tous les fournisseurs"

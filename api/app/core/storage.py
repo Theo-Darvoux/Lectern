@@ -1,5 +1,4 @@
 import logging
-import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,21 +15,6 @@ from app.core.typing_ext import S3Client
 _logger = logging.getLogger("wikint")
 _session = aioboto3.Session()
 
-# In-process cache for S3 settings to avoid a DB + Redis round-trip on every
-# presigned URL generation. TTL is 500 s; call _bust_s3_settings_cache() after
-# an admin credential change to invalidate immediately.
-_S3_SETTINGS_CACHE_TTL = 500  # seconds
-_s3_settings_cache: dict[str, Any] | None = None
-_s3_settings_cache_at: float = 0.0
-
-
-def _bust_s3_settings_cache() -> None:
-    """Invalidate the in-process S3 settings cache (call after admin credential update)."""
-    global _s3_settings_cache, _s3_settings_cache_at
-    _s3_settings_cache = None
-    _s3_settings_cache_at = 0.0
-
-
 # Force SigV4 for all requests (required by R2 and MinIO >= 2022).
 _s3_config = BotocoreConfig(
     signature_version="s3v4",
@@ -44,55 +28,16 @@ _s3: S3Client | None = None  # persistent client, set by init_s3_client()
 
 
 async def _get_s3_settings() -> dict[str, Any]:
-    """Return effective S3 settings, with a short in-process TTL cache.
-
-    The cache avoids a DB + Redis round-trip on every presigned URL generation
-    (which is on the hot path for every file open). The TTL is 30 s so admin
-    credential changes propagate promptly. Call ``_bust_s3_settings_cache()``
-    after saving new credentials to invalidate immediately.
-    """
-    global _s3_settings_cache, _s3_settings_cache_at
-
-    now = time.monotonic()
-    if _s3_settings_cache is not None and (now - _s3_settings_cache_at) < _S3_SETTINGS_CACHE_TTL:
-        return _s3_settings_cache
-
-    from app.core.database import async_session_factory
-    from app.core.redis import redis_client
-    from app.services.auth import get_full_auth_config
-
-    try:
-        async with async_session_factory() as db:
-            config = await get_full_auth_config(db, redis_client)
-            result = {
-                "endpoint": config.get("s3_endpoint") or settings.s3_endpoint,
-                "access_key": config.get("s3_access_key") or settings.s3_access_key,
-                "secret_key": config.get("s3_secret_key") or settings.s3_secret_key,
-                "bucket": config.get("s3_bucket") or settings.s3_bucket,
-                "region": config.get("s3_region") or settings.s3_region,
-                "use_ssl": config.get("s3_use_ssl")
-                if config.get("s3_use_ssl") is not None
-                else settings.s3_use_ssl,
-                "public_endpoint": config.get("s3_public_endpoint") or settings.s3_public_endpoint,
-            }
-    except Exception:
-        _logger.warning(
-            "Failed to load S3 settings from DB/Redis; falling back to environment settings",
-            exc_info=True,
-        )
-        result = {
-            "endpoint": settings.s3_endpoint,
-            "access_key": settings.s3_access_key,
-            "secret_key": settings.s3_secret_key,
-            "bucket": settings.s3_bucket,
-            "region": settings.s3_region,
-            "use_ssl": settings.s3_use_ssl,
-            "public_endpoint": settings.s3_public_endpoint,
-        }
-
-    _s3_settings_cache = result
-    _s3_settings_cache_at = now
-    return result
+    """Return S3 settings from environment variables."""
+    return {
+        "endpoint": settings.s3_endpoint,
+        "access_key": settings.s3_access_key,
+        "secret_key": settings.s3_secret_key,
+        "bucket": settings.s3_bucket,
+        "region": settings.s3_region,
+        "use_ssl": settings.s3_use_ssl,
+        "public_endpoint": settings.s3_public_endpoint,
+    }
 
 
 async def init_s3_client() -> None:

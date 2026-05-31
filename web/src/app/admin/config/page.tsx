@@ -8,11 +8,11 @@ import {
     HardDrive,
     FileCode,
     Palette,
+    Info,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useConfigStore } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 
 // Extracted Components
@@ -22,7 +22,7 @@ import { StorageConfigTab } from "./components/StorageConfigTab";
 import { FilesConfigTab } from "./components/FilesConfigTab";
 import { BrandingConfigTab } from "./components/BrandingConfigTab";
 
-interface AuthConfig {
+export interface AuthConfig {
     totp_enabled: boolean;
     google_oauth_enabled: boolean;
     google_client_id: string | null;
@@ -30,6 +30,7 @@ interface AuthConfig {
     allow_all_domains: boolean;
     auto_approve_all_domains: boolean;
     guest_access_enabled: boolean;
+    domains_from_env: boolean;
     jwt_access_expire_days: number;
     jwt_refresh_expire_days: number;
     domains: any[];
@@ -90,9 +91,6 @@ export default function AdminConfigPage() {
     const t = useTranslations("Admin.Config");
     const [config, setConfig] = useState<AuthConfig | null>(null);
     const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-
-    const { setConfig: setGlobalConfig } = useConfigStore();
 
     const fetchConfig = useCallback(async () => {
         try {
@@ -109,30 +107,6 @@ export default function AdminConfigPage() {
         fetchConfig();
     }, [fetchConfig]);
 
-    const patchConfig = async (patch: Partial<Omit<AuthConfig, "domains">>) => {
-        setSaving(true);
-        try {
-            const updated = await apiFetch<AuthConfig>("/admin/auth-config", {
-                method: "PATCH",
-                body: JSON.stringify(patch),
-            });
-            setConfig(updated);
-            setGlobalConfig(updated as any);
-
-            // Broadcast to other tabs
-            const bc = new BroadcastChannel("wikint_config_updates");
-            bc.postMessage("refresh");
-            bc.close();
-            
-            return updated;
-        } catch {
-            toast.error(t("errors.save"));
-            throw new Error("Save failed");
-        } finally {
-            setSaving(false);
-        }
-    };
-
     if (loading) {
         return (
             <div className="flex items-center justify-center py-20">
@@ -145,38 +119,43 @@ export default function AdminConfigPage() {
 
     return (
         <div className="space-y-6">
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/40 dark:bg-amber-900/20 dark:text-amber-300">
+                <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{t("envBanner")}</span>
+            </div>
+
             <Tabs defaultValue="authentication" className="w-full space-y-6">
                 <TabsList className="bg-background border p-1 h-12">
-                    <TabsTrigger 
-                        value="authentication" 
+                    <TabsTrigger
+                        value="authentication"
                         className="flex items-center gap-2 px-6 data-[state=active]:bg-primary/10 data-[state=active]:text-primary transition-all font-medium"
                     >
                         <Shield className="h-4 w-4" />
                         {t("tabs.authentication")}
                     </TabsTrigger>
-                    <TabsTrigger 
-                        value="email" 
+                    <TabsTrigger
+                        value="email"
                         className="flex items-center gap-2 px-6 data-[state=active]:bg-primary/10 data-[state=active]:text-primary transition-all font-medium"
                     >
                         <Mail className="h-4 w-4" />
                         {t("tabs.email")}
                     </TabsTrigger>
-                    <TabsTrigger 
-                        value="storage" 
+                    <TabsTrigger
+                        value="storage"
                         className="flex items-center gap-2 px-6 data-[state=active]:bg-primary/10 data-[state=active]:text-primary transition-all font-medium"
                     >
                         <HardDrive className="h-4 w-4" />
                         {t("tabs.storage")}
                     </TabsTrigger>
-                    <TabsTrigger 
-                        value="files" 
+                    <TabsTrigger
+                        value="files"
                         className="flex items-center gap-2 px-6 data-[state=active]:bg-primary/10 data-[state=active]:text-primary transition-all font-medium"
                     >
                         <FileCode className="h-4 w-4" />
                         {t("tabs.files")}
                     </TabsTrigger>
-                    <TabsTrigger 
-                        value="branding" 
+                    <TabsTrigger
+                        value="branding"
                         className="flex items-center gap-2 px-6 data-[state=active]:bg-primary/10 data-[state=active]:text-primary transition-all font-medium"
                     >
                         <Palette className="h-4 w-4" />
@@ -184,11 +163,11 @@ export default function AdminConfigPage() {
                     </TabsTrigger>
                 </TabsList>
 
-                <AuthConfigTab config={config} saving={saving} patchConfig={patchConfig as any} />
-                <EmailConfigTab config={config} saving={saving} patchConfig={patchConfig as any} />
-                <StorageConfigTab config={config} saving={saving} patchConfig={patchConfig as any} />
-                <FilesConfigTab config={config} saving={saving} patchConfig={patchConfig as any} />
-                <BrandingConfigTab config={config} saving={saving} patchConfig={patchConfig as any} />
+                <AuthConfigTab config={config} />
+                <EmailConfigTab config={config} />
+                <StorageConfigTab config={config} />
+                <FilesConfigTab config={config} />
+                <BrandingConfigTab config={config} />
             </Tabs>
         </div>
     );

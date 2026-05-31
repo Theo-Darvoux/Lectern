@@ -1,12 +1,13 @@
 """Guest (read-only visitor) access: session issuance and read-only enforcement."""
 
 import uuid
+from contextlib import contextmanager
+from unittest.mock import patch
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token
-from app.models.auth_config import AuthConfig
 from app.models.user import User, UserRole
 
 
@@ -43,9 +44,12 @@ async def _create_student(db: AsyncSession) -> User:
     return user
 
 
-async def _enable_guest_access(db: AsyncSession) -> None:
-    db.add(AuthConfig(guest_access_enabled=True))
-    await db.flush()
+@contextmanager
+def _enable_guest_access():
+    from app.config import settings
+
+    with patch.object(settings, "guest_access_enabled", True):
+        yield
 
 
 # --------------------------------------------------------------------------- #
@@ -68,9 +72,8 @@ async def test_guest_session_rejected_when_disabled(client: AsyncClient, db_sess
 
 async def test_guest_session_issued_when_enabled(client: AsyncClient, db_session: AsyncSession):
     await _create_guest_user(db_session)
-    await _enable_guest_access(db_session)
-
-    resp = await client.post("/api/auth/guest")
+    with _enable_guest_access():
+        resp = await client.post("/api/auth/guest")
     assert resp.status_code == 200
     body = resp.json()
     assert body["user"]["role"] == "guest"
@@ -83,8 +86,8 @@ async def test_guest_session_unavailable_without_seeded_guest(
     client: AsyncClient, db_session: AsyncSession
 ):
     # Toggle on, but no guest identity seeded -> cannot start a session.
-    await _enable_guest_access(db_session)
-    resp = await client.post("/api/auth/guest")
+    with _enable_guest_access():
+        resp = await client.post("/api/auth/guest")
     assert resp.status_code == 401
 
 

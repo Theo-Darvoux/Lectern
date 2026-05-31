@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, File, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, Query, Request
 from pydantic import BaseModel, EmailStr
 from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select
@@ -16,13 +16,12 @@ from app.config import settings
 from app.core.database import get_db
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.redis import get_redis
-from app.core.storage import _bust_s3_settings_cache
 from app.dependencies.auth import require_role
-from app.models.auth_config import AllowedDomain, AuthConfig
+from app.models.auth_config import AllowedDomain
 from app.models.dead_letter import DeadLetterJob
 from app.models.user import User, UserRole
 from app.schemas.common import DetailedHealthResponse, ServiceStatus
-from app.services.auth import bust_auth_config_cache, get_full_auth_config
+from app.services.auth import get_full_auth_config
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -485,71 +484,6 @@ async def get_detailed_health(
 # ── Auth configuration ────────────────────────────────────────────────────────
 
 
-class AuthConfigPatch(BaseModel):
-    totp_enabled: bool | None = None
-    google_oauth_enabled: bool | None = None
-    google_client_id: str | None = None
-    classic_auth_enabled: bool | None = None
-    allow_all_domains: bool | None = None
-    auto_approve_all_domains: bool | None = None
-    guest_access_enabled: bool | None = None
-    jwt_access_expire_days: int | None = None
-    jwt_refresh_expire_days: int | None = None
-    smtp_host: str | None = None
-    smtp_ip: str | None = None
-    smtp_port: int | None = None
-    smtp_user: str | None = None
-    smtp_password: str | None = None
-    smtp_from: str | None = None
-    smtp_sender_name: str | None = None
-    smtp_avatar_url: str | None = None
-    smtp_use_tls: bool | None = None
-    s3_endpoint: str | None = None
-    s3_access_key: str | None = None
-    s3_secret_key: str | None = None
-    s3_bucket: str | None = None
-    s3_public_endpoint: str | None = None
-    s3_region: str | None = None
-    s3_use_ssl: bool | None = None
-    max_storage_gb: int | None = None
-
-    max_file_size_mb: int | None = None
-    max_image_size_mb: int | None = None
-    max_audio_size_mb: int | None = None
-    max_video_size_mb: int | None = None
-    max_document_size_mb: int | None = None
-    max_office_size_mb: int | None = None
-    max_text_size_mb: int | None = None
-    pdf_quality: int | None = None
-    video_compression_profile: str | None = None
-    thumbnail_quality: int | None = None
-    thumbnail_size_px: int | None = None
-    allowed_extensions: str | None = None
-    allowed_mime_types: str | None = None
-
-    site_name: str | None = None
-    site_name_style: str | None = None
-    site_description: str | None = None
-    site_logo_url: str | None = None
-    site_favicon_url: str | None = None
-    primary_color: str | None = None
-    footer_text: str | None = None
-    footer_logo_url: str | None = None
-    organization_url: str | None = None
-    og_image_url: str | None = None
-    bg_watermark_url: str | None = None
-    bg_watermark_opacity_light: float | None = None
-    bg_watermark_opacity_dark: float | None = None
-    legal_name: str | None = None
-    legal_address: str | None = None
-    legal_siret: str | None = None
-    contact_email: str | None = None
-    dpo_email: str | None = None
-    dpo_address: str | None = None
-    data_transfers: str | None = None
-    legal_version: str | None = None
-
-
 class DomainCreate(BaseModel):
     domain: str
     auto_approve: bool = True
@@ -584,32 +518,6 @@ async def get_auth_config(
     return _redact_config_for_api(await get_full_auth_config(db, redis))
 
 
-@router.patch("/auth-config")
-async def patch_auth_config(
-    body: Annotated[AuthConfigPatch, Body()],
-    _user: AdminUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-) -> dict:  # type: ignore[type-arg]
-    config_row = await db.scalar(select(AuthConfig))
-    if config_row is None:
-        config_row = AuthConfig()
-        db.add(config_row)
-
-    update_data = body.model_dump(exclude_unset=True)
-
-    for field, value in update_data.items():
-        if isinstance(value, str):
-            value = value.strip() if value else None
-        setattr(config_row, field, value)
-
-    config_row.updated_at = datetime.now(UTC)
-    await db.flush()
-    await bust_auth_config_cache(redis)
-    _bust_s3_settings_cache()
-    return _redact_config_for_api(await get_full_auth_config(db, redis))
-
-
 @router.get("/auth-config/domains")
 async def list_domains(
     _user: AdminUser,
@@ -625,7 +533,6 @@ async def add_domain(
     body: Annotated[DomainCreate, Body()],
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> dict:  # type: ignore[type-arg]
     domain = body.domain.strip().lstrip("@").lower()
     if not domain:
@@ -638,8 +545,6 @@ async def add_domain(
     row = AllowedDomain(domain=domain, auto_approve=body.auto_approve)
     db.add(row)
     await db.flush()
-    await bust_auth_config_cache(redis)
-    _bust_s3_settings_cache()
     return {"id": str(row.id), "domain": row.domain, "auto_approve": row.auto_approve}
 
 
@@ -649,7 +554,6 @@ async def update_domain(
     body: Annotated[DomainPatch, Body()],
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> dict:  # type: ignore[type-arg]
     row = await db.scalar(select(AllowedDomain).where(AllowedDomain.id == domain_id))
     if not row:
@@ -659,8 +563,6 @@ async def update_domain(
         row.auto_approve = body.auto_approve
 
     await db.flush()
-    await bust_auth_config_cache(redis)
-    _bust_s3_settings_cache()
     return {"id": str(row.id), "domain": row.domain, "auto_approve": row.auto_approve}
 
 
@@ -669,7 +571,6 @@ async def delete_domain(
     domain_id: uuid.UUID,
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> dict:  # type: ignore[type-arg]
     row = await db.scalar(select(AllowedDomain).where(AllowedDomain.id == domain_id))
     if not row:
@@ -677,8 +578,6 @@ async def delete_domain(
 
     await db.delete(row)
     await db.flush()
-    await bust_auth_config_cache(redis)
-    _bust_s3_settings_cache()
     return {"status": "ok"}
 
 
@@ -690,177 +589,16 @@ class TestEmailIn(BaseModel):
 async def admin_test_email(
     body: Annotated[TestEmailIn, Body()],
     _user: AdminUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
     from app.core.email import send_email
 
-    config = await db.scalar(select(AuthConfig))
-
-    sitename = (config.site_name if config is not None else None) or settings.site_name
-
+    sitename = settings.site_name
     subject = f"{sitename} - Test Email"
     body_text = f"This is a test email from {sitename}. Current time: {datetime.now(UTC)}"
 
     try:
-        await send_email(body.email, subject, body_text, config=config)
+        await send_email(body.email, subject, body_text)
     except Exception as e:
         raise BadRequestError(f"Failed to send test email: {str(e)}")
 
     return {"status": "ok", "message": "Test email sent"}
-
-
-_LOGO_ALLOWED_TYPES = frozenset(
-    {"image/png", "image/jpeg", "image/svg+xml", "image/webp", "image/gif"}
-)
-_FAVICON_ALLOWED_TYPES = frozenset(
-    {"image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml"}
-)
-_IMAGE_ALLOWED_TYPES = frozenset(
-    {"image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"}
-)
-_BRANDING_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
-
-
-_WEBP_SKIP_TYPES = frozenset({"image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"})
-
-
-async def _upload_branding_asset(
-    file: UploadFile,
-    key_prefix: str,
-    allowed_types: frozenset[str],
-    db: AsyncSession,
-    redis: Redis,  # type: ignore[type-arg]
-    config_field: str,
-) -> dict:  # type: ignore[type-arg]
-    import io
-
-    from PIL import Image
-
-    from app.core.storage import get_public_url, upload_file
-
-    content_type = file.content_type or "application/octet-stream"
-    if content_type not in allowed_types:
-        raise BadRequestError(
-            f"Invalid file type '{content_type}'. Allowed: {', '.join(sorted(allowed_types))}"
-        )
-
-    data = await file.read()
-    if len(data) > _BRANDING_MAX_BYTES:
-        raise BadRequestError("File too large. Maximum 5 MB.")
-    if not data:
-        raise BadRequestError("Empty file.")
-
-    # Convert raster images to lossless WebP (or PNG for email avatar to ensure compatibility); skip SVG/ICO (not raster).
-    if content_type not in _WEBP_SKIP_TYPES:
-        img = Image.open(io.BytesIO(data))
-        buf = io.BytesIO()
-        if key_prefix == "email-avatar":
-            img.save(buf, format="PNG")
-            data = buf.getvalue()
-            content_type = "image/png"
-        else:
-            img.save(buf, format="WEBP", lossless=True, quality=100)
-            data = buf.getvalue()
-            content_type = "image/webp"
-
-    ext = (
-        "webp"
-        if content_type == "image/webp"
-        else (
-            "png"
-            if content_type == "image/png"
-            else (
-                (file.filename or f"{key_prefix}.bin").rsplit(".", 1)[-1].lower()
-                if "." in (file.filename or "")
-                else "bin"
-            )
-        )
-    )
-    key = f"branding/{key_prefix}.{ext}"
-
-    await upload_file(data, key, content_type=content_type, content_disposition="inline")
-    url = await get_public_url(key)
-
-    config_row = await db.scalar(select(AuthConfig))
-    if config_row is None:
-        config_row = AuthConfig()
-        db.add(config_row)
-    setattr(config_row, config_field, url)
-    config_row.updated_at = datetime.now(UTC)
-    await db.flush()
-    await bust_auth_config_cache(redis)
-    _bust_s3_settings_cache()
-
-    return {"url": url}
-
-
-@router.post("/auth-config/upload-logo")
-async def upload_logo(
-    _user: AdminUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    file: UploadFile = File(...),
-) -> dict:  # type: ignore[type-arg]
-    return await _upload_branding_asset(
-        file, "logo", _LOGO_ALLOWED_TYPES, db, redis, "site_logo_url"
-    )
-
-
-@router.post("/auth-config/upload-favicon")
-async def upload_favicon(
-    _user: AdminUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    file: UploadFile = File(...),
-) -> dict:  # type: ignore[type-arg]
-    return await _upload_branding_asset(
-        file, "favicon", _FAVICON_ALLOWED_TYPES, db, redis, "site_favicon_url"
-    )
-
-
-@router.post("/auth-config/upload-og-image")
-async def upload_og_image(
-    _user: AdminUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    file: UploadFile = File(...),
-) -> dict:  # type: ignore[type-arg]
-    return await _upload_branding_asset(
-        file, "og-image", _IMAGE_ALLOWED_TYPES, db, redis, "og_image_url"
-    )
-
-
-@router.post("/auth-config/upload-bg-watermark")
-async def upload_bg_watermark(
-    _user: AdminUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    file: UploadFile = File(...),
-) -> dict:  # type: ignore[type-arg]
-    return await _upload_branding_asset(
-        file, "bg-watermark", _IMAGE_ALLOWED_TYPES, db, redis, "bg_watermark_url"
-    )
-
-
-@router.post("/auth-config/upload-footer-logo")
-async def upload_footer_logo(
-    _user: AdminUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    file: UploadFile = File(...),
-) -> dict:  # type: ignore[type-arg]
-    return await _upload_branding_asset(
-        file, "footer-logo", _LOGO_ALLOWED_TYPES, db, redis, "footer_logo_url"
-    )
-
-
-@router.post("/auth-config/upload-email-avatar")
-async def upload_email_avatar(
-    _user: AdminUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    file: UploadFile = File(...),
-) -> dict:  # type: ignore[type-arg]
-    return await _upload_branding_asset(
-        file, "email-avatar", _LOGO_ALLOWED_TYPES, db, redis, "smtp_avatar_url"
-    )

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Shield, Mail, Globe, Lock, Globe2, Trash2, Plus, Loader2, Save, Clock, Eye } from "lucide-react";
+import { Shield, Mail, Globe, Lock, Globe2, Trash2, Plus, Loader2, Clock, Eye, Info } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -28,6 +28,7 @@ interface AuthConfig {
     allow_all_domains: boolean;
     auto_approve_all_domains: boolean;
     guest_access_enabled: boolean;
+    domains_from_env?: boolean;
     jwt_access_expire_days: number;
     jwt_refresh_expire_days: number;
     domains: Domain[];
@@ -35,23 +36,17 @@ interface AuthConfig {
 
 interface AuthConfigTabProps {
     config: AuthConfig;
-    saving: boolean;
-    patchConfig: (patch: Partial<AuthConfig>) => Promise<void>;
 }
 
-function ToggleRow({
+function ReadOnlyToggleRow({
     label,
     description,
     checked,
-    disabled,
-    onToggle,
     icon: Icon,
 }: {
     label: string;
     description: string;
     checked: boolean;
-    disabled?: boolean;
-    onToggle: () => void;
     icon: React.ElementType;
 }) {
     return (
@@ -63,39 +58,20 @@ function ToggleRow({
                     <p className="mt-1 text-xs text-muted-foreground">{description}</p>
                 </div>
             </div>
-            <Switch
-                checked={checked}
-                disabled={disabled}
-                onCheckedChange={onToggle}
-            />
+            <Switch checked={checked} disabled aria-readonly="true" />
         </div>
     );
 }
 
-export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProps) {
+export function AuthConfigTab({ config }: AuthConfigTabProps) {
     const t = useTranslations("Admin.Config.Authentication");
-    const [authForm, setAuthForm] = useState<Partial<AuthConfig>>({});
-    const [isAuthModified, setIsAuthModified] = useState(false);
-    
-    // Domain form state (kept local as it uses its own endpoints)
+
     const [newDomain, setNewDomain] = useState("");
     const [newAutoApprove, setNewAutoApprove] = useState(true);
     const [addingDomain, setAddingDomain] = useState(false);
     const [domains, setDomains] = useState<Domain[]>(config.domains);
 
     useEffect(() => {
-        setAuthForm({
-            totp_enabled: config.totp_enabled,
-            google_oauth_enabled: config.google_oauth_enabled,
-            google_client_id: config.google_client_id,
-            classic_auth_enabled: config.classic_auth_enabled,
-            allow_all_domains: config.allow_all_domains,
-            auto_approve_all_domains: config.auto_approve_all_domains,
-            guest_access_enabled: config.guest_access_enabled,
-            jwt_access_expire_days: config.jwt_access_expire_days,
-            jwt_refresh_expire_days: config.jwt_refresh_expire_days,
-        });
-        setIsAuthModified(false);
         setDomains(config.domains);
     }, [config]);
 
@@ -150,27 +126,6 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
         }
     };
 
-    const handleSave = async () => {
-        await patchConfig(authForm);
-        toast.success(t("success"));
-        setIsAuthModified(false);
-    };
-
-    const handleDiscard = () => {
-        setAuthForm({
-            totp_enabled: config.totp_enabled,
-            google_oauth_enabled: config.google_oauth_enabled,
-            google_client_id: config.google_client_id,
-            classic_auth_enabled: config.classic_auth_enabled,
-            allow_all_domains: config.allow_all_domains,
-            auto_approve_all_domains: config.auto_approve_all_domains,
-            guest_access_enabled: config.guest_access_enabled,
-            jwt_access_expire_days: config.jwt_access_expire_days,
-            jwt_refresh_expire_days: config.jwt_refresh_expire_days,
-        });
-        setIsAuthModified(false);
-    };
-
     return (
         <TabsContent value="authentication" className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <p className="text-sm text-muted-foreground">
@@ -188,72 +143,41 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="divide-y px-6 pb-4">
-                    <ToggleRow
+                    <ReadOnlyToggleRow
                         icon={Mail}
                         label={t("methods.totp.label")}
                         description={t("methods.totp.description")}
-                        checked={authForm.totp_enabled ?? config.totp_enabled}
-                        disabled={saving}
-                        onToggle={() => {
-                            setAuthForm(prev => ({ ...prev, totp_enabled: !prev.totp_enabled }));
-                            setIsAuthModified(true);
-                        }}
+                        checked={config.totp_enabled}
                     />
                     <div className="flex flex-col gap-4 py-4">
-                        <ToggleRow
+                        <ReadOnlyToggleRow
                             icon={Globe}
                             label={t("methods.google.label")}
                             description={t("methods.google.description")}
-                            checked={authForm.google_oauth_enabled ?? config.google_oauth_enabled}
-                            disabled={saving || (!authForm.google_client_id && !config.google_client_id)}
-                            onToggle={() => {
-                                setAuthForm(prev => ({ ...prev, google_oauth_enabled: !prev.google_oauth_enabled }));
-                                setIsAuthModified(true);
-                            }}
+                            checked={config.google_oauth_enabled}
                         />
                         <div className="ml-8 space-y-2">
                             <Label htmlFor="google-client-id" className="text-xs font-medium text-muted-foreground">{t("methods.google.clientId")}</Label>
-                            <div className="flex gap-2">
-                                <Input
-                                    id="google-client-id"
-                                    type="text"
-                                    placeholder={t("methods.google.clientIdPlaceholder")}
-                                    value={authForm.google_client_id ?? config.google_client_id ?? ""}
-                                    onChange={(e) => {
-                                        setAuthForm(prev => ({ ...prev, google_client_id: e.target.value }));
-                                        setIsAuthModified(true);
-                                    }}
-                                    className="h-8 max-w-[400px]"
-                                />
-                            </div>
-                            {!(authForm.google_client_id ?? config.google_client_id) && (
-                                <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                                    {t("methods.google.clientIdRequired")}
-                                </p>
-                            )}
+                            <Input
+                                id="google-client-id"
+                                type="text"
+                                readOnly
+                                value={config.google_client_id ?? ""}
+                                className="h-8 max-w-[400px] bg-muted/30 cursor-default"
+                            />
                         </div>
-                        <ToggleRow
+                        <ReadOnlyToggleRow
                             icon={Lock}
                             label={t("methods.classic.label")}
                             description={t("methods.classic.description")}
-                            checked={authForm.classic_auth_enabled ?? config.classic_auth_enabled}
-                            disabled={saving}
-                            onToggle={() => {
-                                setAuthForm(prev => ({ ...prev, classic_auth_enabled: !prev.classic_auth_enabled }));
-                                setIsAuthModified(true);
-                            }}
+                            checked={config.classic_auth_enabled}
                         />
                     </div>
-                    <ToggleRow
+                    <ReadOnlyToggleRow
                         icon={Eye}
                         label={t("methods.guest.label")}
                         description={t("methods.guest.description")}
-                        checked={authForm.guest_access_enabled ?? config.guest_access_enabled}
-                        disabled={saving}
-                        onToggle={() => {
-                            setAuthForm(prev => ({ ...prev, guest_access_enabled: !(prev.guest_access_enabled ?? config.guest_access_enabled) }));
-                            setIsAuthModified(true);
-                        }}
+                        checked={config.guest_access_enabled}
                     />
                 </CardContent>
             </Card>
@@ -278,14 +202,9 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
                                 <Input
                                     id="jwt-access"
                                     type="number"
-                                    min="1"
-                                    max="365"
-                                    value={authForm.jwt_access_expire_days ?? config.jwt_access_expire_days}
-                                    onChange={(e) => {
-                                        setAuthForm(prev => ({ ...prev, jwt_access_expire_days: parseInt(e.target.value) || 0 }));
-                                        setIsAuthModified(true);
-                                    }}
-                                    className="h-9 w-24"
+                                    readOnly
+                                    value={config.jwt_access_expire_days}
+                                    className="h-9 w-24 bg-muted/30 cursor-default"
                                 />
                             </div>
                             <p className="text-[11px] text-muted-foreground">
@@ -301,14 +220,9 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
                                 <Input
                                     id="jwt-refresh"
                                     type="number"
-                                    min="1"
-                                    max="365"
-                                    value={authForm.jwt_refresh_expire_days ?? config.jwt_refresh_expire_days}
-                                    onChange={(e) => {
-                                        setAuthForm(prev => ({ ...prev, jwt_refresh_expire_days: parseInt(e.target.value) || 0 }));
-                                        setIsAuthModified(true);
-                                    }}
-                                    className="h-9 w-24"
+                                    readOnly
+                                    value={config.jwt_refresh_expire_days}
+                                    className="h-9 w-24 bg-muted/30 cursor-default"
                                 />
                             </div>
                             <p className="text-[11px] text-muted-foreground">
@@ -328,6 +242,13 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
                     <CardDescription dangerouslySetInnerHTML={{ __html: t.raw("domains.description") }} />
                 </CardHeader>
                 <CardContent className="space-y-4">
+                    {config.domains_from_env && (
+                        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/40 dark:bg-amber-900/20 dark:text-amber-300">
+                            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span>{t("domains.envOverrideBanner")}</span>
+                        </div>
+                    )}
+
                     {domains.length === 0 ? (
                         <p className="text-sm text-muted-foreground italic">
                             {t("domains.empty")}
@@ -348,17 +269,10 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
                                     <Badge variant="outline" className="text-[10px] font-mono whitespace-nowrap hidden sm:inline-flex">
                                         GLOBAL_ACCESS
                                     </Badge>
-                                    <Switch
-                                        checked={authForm.allow_all_domains ?? config.allow_all_domains}
-                                        disabled={saving}
-                                        onCheckedChange={() => {
-                                            setAuthForm(prev => ({ ...prev, allow_all_domains: !prev.allow_all_domains }));
-                                            setIsAuthModified(true);
-                                        }}
-                                    />
+                                    <Switch checked={config.allow_all_domains} disabled />
                                 </div>
                             </div>
-                            {(authForm.allow_all_domains ?? config.allow_all_domains) && (
+                            {config.allow_all_domains && (
                                 <div className="flex items-center justify-between gap-4 px-4 py-3 bg-amber-500/5 border-t border-amber-500/20">
                                     <div className="flex items-center gap-3">
                                         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-500/10">
@@ -373,14 +287,7 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
                                         <Badge variant="outline" className="text-[10px] font-mono whitespace-nowrap hidden sm:inline-flex">
                                             AUTO_APPROVE_ALL
                                         </Badge>
-                                        <Switch
-                                            checked={authForm.auto_approve_all_domains ?? config.auto_approve_all_domains}
-                                            disabled={saving}
-                                            onCheckedChange={() => {
-                                                setAuthForm(prev => ({ ...prev, auto_approve_all_domains: !prev.auto_approve_all_domains }));
-                                                setIsAuthModified(true);
-                                            }}
-                                        />
+                                        <Switch checked={config.auto_approve_all_domains} disabled />
                                     </div>
                                 </div>
                             )}
@@ -467,26 +374,6 @@ export function AuthConfigTab({ config, saving, patchConfig }: AuthConfigTabProp
                     </div>
                 </CardContent>
             </Card>
-
-            <div className="flex justify-end gap-3 p-6 border-t bg-muted/20 rounded-b-lg">
-                {isAuthModified && (
-                    <Button variant="outline" onClick={handleDiscard}>
-                        {t("discard")}
-                    </Button>
-                )}
-                <Button 
-                    disabled={saving || !isAuthModified} 
-                    onClick={handleSave}
-                    className="gap-2"
-                >
-                    {saving ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                        <Save className="h-4 w-4" />
-                    )}
-                    {t("save")}
-                </Button>
-            </div>
         </TabsContent>
     );
 }

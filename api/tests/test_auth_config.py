@@ -1,13 +1,14 @@
-"""Tests for Phase 2: DB-backed auth config and Phase 3: PENDING approval flow."""
+"""Tests for auth config and PENDING approval flow."""
 
 from __future__ import annotations
 
 import uuid
+from unittest.mock import patch
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.auth_config import AllowedDomain, AuthConfig
+from app.models.auth_config import AllowedDomain
 from app.models.user import User, UserRole
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -35,13 +36,6 @@ async def _seed_domain(db: AsyncSession, domain: str, auto_approve: bool = True)
     return row
 
 
-async def _seed_config(db: AsyncSession, **kwargs) -> AuthConfig:
-    row = AuthConfig(**kwargs)
-    db.add(row)
-    await db.flush()
-    return row
-
-
 def _auth(user: User) -> dict[str, str]:
     from app.core.security import create_access_token
 
@@ -62,29 +56,6 @@ async def test_get_auth_config_defaults(client: AsyncClient, db_session: AsyncSe
     assert data["google_oauth_enabled"] is False
     assert data["allow_all_domains"] is False
     assert isinstance(data["domains"], list)
-
-
-async def test_patch_auth_config(client: AsyncClient, db_session: AsyncSession) -> None:
-    admin = await _make_user(db_session, UserRole.BUREAU)
-    r = await client.patch(
-        "/api/admin/auth-config",
-        json={"allow_all_domains": True},
-        headers=_auth(admin),
-    )
-    assert r.status_code == 200
-    assert r.json()["allow_all_domains"] is True
-
-
-async def test_patch_auth_config_moderator_forbidden(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
-    mod = await _make_user(db_session, UserRole.MODERATOR)
-    r = await client.patch(
-        "/api/admin/auth-config",
-        json={"totp_enabled": False},
-        headers=_auth(mod),
-    )
-    assert r.status_code == 403
 
 
 # ── allowed domains CRUD ──────────────────────────────────────────────────────
@@ -195,13 +166,13 @@ async def test_request_code_open_registration(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     """With allow_all_domains=True, any email is allowed."""
-    await _seed_config(
-        db_session, allow_all_domains=True, totp_enabled=True, classic_auth_enabled=True
-    )
-    r = await client.post(
-        "/api/auth/request-code",
-        json={"email": "anyone@gmail.com"},
-    )
+    from app.config import settings
+
+    with patch.object(settings, "allow_all_domains", True):
+        r = await client.post(
+            "/api/auth/request-code",
+            json={"email": "anyone@gmail.com"},
+        )
     assert r.status_code == 200
 
 
@@ -209,7 +180,6 @@ async def test_request_code_newly_added_domain(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     """Domains added via admin API are immediately honoured."""
-    await _seed_config(db_session, classic_auth_enabled=True)
     await _seed_domain(db_session, "newuni.ac.uk")
     r = await client.post(
         "/api/auth/request-code",
@@ -222,7 +192,6 @@ async def test_request_code_removed_domain_rejected(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     """No domains in DB and no allow_all_domains → fallback used → unknown domain rejected."""
-    await _seed_config(db_session, classic_auth_enabled=True)  # no domains seeded
     r = await client.post(
         "/api/auth/request-code",
         json={"email": "user@unknown.io"},
@@ -338,7 +307,6 @@ async def test_new_user_gets_pending_role_when_domain_not_auto_approve(
     from app.config import settings
 
     # Seed: domain exists but auto_approve=False
-    await _seed_config(db_session, classic_auth_enabled=True)
     await _seed_domain(db_session, "manual.edu", auto_approve=False)
 
     # Put a valid OTP-format code in fake redis (must match ^[A-Z2-9]{8}$)

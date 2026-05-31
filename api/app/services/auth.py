@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import secrets
 from datetime import UTC, datetime
 from typing import Any
@@ -12,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.security import create_access_token, create_refresh_token
-from app.models.auth_config import AllowedDomain, AuthConfig
+from app.models.auth_config import AllowedDomain
 from app.models.user import User, UserRole
 
 CODE_TTL_SECONDS = 900
@@ -21,16 +20,7 @@ RATE_LIMIT_MAX = 3
 VERIFY_RATE_LIMIT_MAX = 5
 VERIFY_RATE_LIMIT_TTL_SECONDS = 600
 
-AUTH_CONFIG_CACHE_KEY = "auth:full_config"
-AUTH_CONFIG_CACHE_TTL = 60
-
-# Fields that must never be stored in the Redis cache.  Secrets are always
-# re-hydrated from the DB (or env settings) on every call — accepting one
-# extra indexed SELECT per cache-hit in exchange for keeping credentials off
-# the Redis keyspace.
-_REDIS_SECRET_FIELDS = frozenset({"smtp_password", "s3_access_key", "s3_secret_key"})
-
-# Hardcoded fallback used when DB has no AllowedDomain rows (pre-migration or test envs).
+# Hardcoded fallback used when DB has no AllowedDomain rows and ALLOWED_DOMAINS env is unset.
 _FALLBACK_DOMAINS = [
     {"domain": "telecom-sudparis.eu", "auto_approve": True},
     {"domain": "imt-bs.eu", "auto_approve": True},
@@ -39,271 +29,115 @@ _FALLBACK_DOMAINS = [
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-def _extract_secrets(config_row: AuthConfig | None) -> dict[str, Any]:
-    """Return the secret fields from a DB row, falling back to env settings."""
-    return {
-        "smtp_password": (
-            config_row.smtp_password
-            if config_row and config_row.smtp_password is not None
-            else settings.smtp_password
-        ),
-        "s3_access_key": (
-            config_row.s3_access_key
-            if config_row and config_row.s3_access_key is not None
-            else settings.s3_access_key
-        ),
-        "s3_secret_key": (
-            config_row.s3_secret_key
-            if config_row and config_row.s3_secret_key is not None
-            else settings.s3_secret_key
-        ),
-    }
+def _parse_allowed_domains(raw: str) -> list[dict[str, Any]]:
+    """Parse ALLOWED_DOMAINS env string into a list of domain policy dicts.
+
+    Format: "domain1:auto,domain2:manual" — "auto" sets auto_approve=True,
+    "manual" sets auto_approve=False. Default when mode is omitted is auto.
+    """
+    result = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            domain, mode = part.rsplit(":", 1)
+            auto_approve = mode.strip().lower() != "manual"
+        else:
+            domain = part
+            auto_approve = True
+        result.append({"domain": domain.strip(), "auto_approve": auto_approve})
+    return result
 
 
 async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]:  # type: ignore[type-arg]
-    """Return auth config from Redis cache, falling back to DB.
+    """Return auth config derived from environment settings.
 
-    Secrets (smtp_password, s3_access_key, s3_secret_key) are never stored in
-    Redis — they are always re-loaded from the DB row on every call to prevent
-    credential exposure if the Redis keyspace is read by an unauthorized party.
+    Domain resolution order (sub-decision B):
+    1. ALLOWED_DOMAINS env var — when set, domains are read-only and the UI
+       shows an "overridden by .env" banner (domains_from_env=True).
+    2. allowed_domains DB table — editable via admin CRUD.
+    3. _FALLBACK_DOMAINS — hardcoded default for fresh installs.
+
+    The ``redis`` param is kept for call-site compatibility but is no longer
+    used for caching.
     """
-    cached = await redis.get(AUTH_CONFIG_CACHE_KEY)
-    if cached:
-        raw = cached if isinstance(cached, str) else cached.decode()
-        result = json.loads(raw)
-        # Re-hydrate secrets from DB (never cached in Redis)
-        config_row = await db.scalar(select(AuthConfig))
-        result.update(_extract_secrets(config_row))
-        return result  # type: ignore[no-any-return]
-
-    config_row = await db.scalar(select(AuthConfig))
-    domain_rows = list((await db.execute(select(AllowedDomain))).scalars().all())
-
-    if config_row is None:
-        result: dict[str, Any] = {  # type: ignore[no-redef]
-            "totp_enabled": True,
-            "google_oauth_enabled": False,
-            "google_client_id": None,
-            "allow_all_domains": False,
-            "auto_approve_all_domains": False,
-            "guest_access_enabled": False,
-            "classic_auth_enabled": True,
-            "jwt_access_expire_days": settings.jwt_access_token_expire_days,
-            "jwt_refresh_expire_days": settings.jwt_refresh_token_expire_days,
-            "smtp_host": settings.smtp_host,
-            "smtp_port": settings.smtp_port,
-            "smtp_user": settings.smtp_user,
-            "smtp_password": settings.smtp_password,
-            "smtp_ip": settings.smtp_ip,
-            "smtp_from": settings.smtp_from,
-            "smtp_sender_name": None,
-            "smtp_avatar_url": None,
-            "smtp_use_tls": settings.smtp_use_tls,
-            "s3_endpoint": settings.s3_endpoint,
-            "s3_access_key": settings.s3_access_key,
-            "s3_secret_key": settings.s3_secret_key,
-            "s3_bucket": settings.s3_bucket,
-            "s3_public_endpoint": settings.s3_public_endpoint,
-            "s3_region": settings.s3_region,
-            "s3_use_ssl": settings.s3_use_ssl,
-            "max_storage_gb": settings.max_storage_gb,
-            "max_file_size_mb": settings.max_file_size_mb,
-            "max_image_size_mb": settings.max_image_size_mb,
-            "max_audio_size_mb": settings.max_audio_size_mb,
-            "max_video_size_mb": settings.max_video_size_mb,
-            "max_document_size_mb": settings.max_document_size_mb,
-            "max_office_size_mb": settings.max_office_size_mb,
-            "max_text_size_mb": settings.max_text_size_mb,
-            "pdf_quality": settings.pdf_quality,
-            "video_compression_profile": settings.video_compression_profile,
-            "allowed_extensions": None,
-            "allowed_mime_types": None,
-            "site_name": settings.site_name,
-            "site_name_style": None,
-            "site_description": settings.site_description,
-            "site_logo_url": settings.site_logo_url,
-            "site_favicon_url": settings.site_favicon_url,
-            "primary_color": settings.primary_color,
-            "footer_text": settings.footer_text,
-            "footer_logo_url": None,
-            "organization_url": settings.organization_url,
-            "og_image_url": None,
-            "bg_watermark_url": None,
-            "bg_watermark_opacity_light": None,
-            "bg_watermark_opacity_dark": None,
-            "legal_name": settings.legal_name,
-            "legal_address": settings.legal_address,
-            "contact_email": settings.contact_email,
-            "dpo_email": settings.dpo_email,
-            "dpo_address": settings.dpo_address,
-            "data_transfers": settings.data_transfers,
-            "legal_version": settings.legal_version,
-            "domains": _FALLBACK_DOMAINS,
-        }
+    if settings.allowed_domains:
+        domains = _parse_allowed_domains(settings.allowed_domains)
+        domains_from_env = True
     else:
-        domains = [
-            {"id": str(d.id), "domain": d.domain, "auto_approve": d.auto_approve}
-            for d in domain_rows
-        ]
-        result = {
-            "totp_enabled": config_row.totp_enabled,
-            "google_oauth_enabled": config_row.google_oauth_enabled,
-            "google_client_id": config_row.google_client_id,
-            "classic_auth_enabled": config_row.classic_auth_enabled,
-            "allow_all_domains": config_row.allow_all_domains,
-            "auto_approve_all_domains": config_row.auto_approve_all_domains,
-            "guest_access_enabled": config_row.guest_access_enabled,
-            "jwt_access_expire_days": config_row.jwt_access_expire_days
-            if config_row.jwt_access_expire_days is not None  # type: ignore[redundant-expr]
-            else settings.jwt_access_token_expire_days,
-            "jwt_refresh_expire_days": config_row.jwt_refresh_expire_days
-            if config_row.jwt_refresh_expire_days is not None  # type: ignore[redundant-expr]
-            else settings.jwt_refresh_token_expire_days,
-            "smtp_host": config_row.smtp_host
-            if config_row.smtp_host is not None
-            else settings.smtp_host,
-            "smtp_ip": config_row.smtp_ip if config_row.smtp_ip is not None else settings.smtp_ip,
-            "smtp_port": config_row.smtp_port
-            if config_row.smtp_port is not None
-            else settings.smtp_port,
-            "smtp_user": config_row.smtp_user
-            if config_row.smtp_user is not None
-            else settings.smtp_user,
-            "smtp_password": config_row.smtp_password
-            if config_row.smtp_password is not None
-            else settings.smtp_password,
-            "smtp_from": config_row.smtp_from
-            if config_row.smtp_from is not None
-            else settings.smtp_from,
-            "smtp_sender_name": config_row.smtp_sender_name,
-            "smtp_avatar_url": config_row.smtp_avatar_url,
-            "smtp_use_tls": config_row.smtp_use_tls
-            if config_row.smtp_use_tls is not None  # type: ignore[redundant-expr]
-            else settings.smtp_use_tls,
-            "s3_endpoint": config_row.s3_endpoint
-            if config_row.s3_endpoint is not None
-            else settings.s3_endpoint,
-            "s3_access_key": config_row.s3_access_key
-            if config_row.s3_access_key is not None
-            else settings.s3_access_key,
-            "s3_secret_key": config_row.s3_secret_key
-            if config_row.s3_secret_key is not None
-            else settings.s3_secret_key,
-            "s3_bucket": config_row.s3_bucket
-            if config_row.s3_bucket is not None
-            else settings.s3_bucket,
-            "s3_public_endpoint": config_row.s3_public_endpoint
-            if config_row.s3_public_endpoint is not None
-            else settings.s3_public_endpoint,
-            "s3_region": config_row.s3_region
-            if config_row.s3_region is not None
-            else settings.s3_region,
-            "s3_use_ssl": config_row.s3_use_ssl
-            if config_row.s3_use_ssl is not None  # type: ignore[redundant-expr]
-            else settings.s3_use_ssl,
-            "max_storage_gb": config_row.max_storage_gb
-            if config_row.max_storage_gb is not None
-            else settings.max_storage_gb,
-            "max_file_size_mb": config_row.max_file_size_mb
-            if config_row.max_file_size_mb is not None
-            else settings.max_file_size_mb,
-            "max_image_size_mb": config_row.max_image_size_mb
-            if config_row.max_image_size_mb is not None
-            else settings.max_image_size_mb,
-            "max_audio_size_mb": config_row.max_audio_size_mb
-            if config_row.max_audio_size_mb is not None
-            else settings.max_audio_size_mb,
-            "max_video_size_mb": config_row.max_video_size_mb
-            if config_row.max_video_size_mb is not None
-            else settings.max_video_size_mb,
-            "max_document_size_mb": config_row.max_document_size_mb
-            if config_row.max_document_size_mb is not None
-            else settings.max_document_size_mb,
-            "max_office_size_mb": config_row.max_office_size_mb
-            if config_row.max_office_size_mb is not None
-            else settings.max_office_size_mb,
-            "max_text_size_mb": config_row.max_text_size_mb
-            if config_row.max_text_size_mb is not None
-            else settings.max_text_size_mb,
-            "pdf_quality": config_row.pdf_quality
-            if config_row.pdf_quality is not None
-            else settings.pdf_quality,
-            "video_compression_profile": config_row.video_compression_profile
-            if config_row.video_compression_profile is not None
-            else settings.video_compression_profile,
-            "thumbnail_quality": config_row.thumbnail_quality
-            if config_row.thumbnail_quality is not None
-            else 85,
-            "thumbnail_size_px": config_row.thumbnail_size_px
-            if config_row.thumbnail_size_px is not None
-            else 640,
-            "allowed_extensions": config_row.allowed_extensions,
-            "allowed_mime_types": config_row.allowed_mime_types,
-            "site_name": config_row.site_name
-            if config_row.site_name is not None
-            else settings.site_name,
-            "site_name_style": config_row.site_name_style,
-            "site_description": config_row.site_description
-            if config_row.site_description is not None
-            else settings.site_description,
-            "site_logo_url": config_row.site_logo_url
-            if config_row.site_logo_url is not None
-            else settings.site_logo_url,
-            "site_favicon_url": config_row.site_favicon_url
-            if config_row.site_favicon_url is not None
-            else settings.site_favicon_url,
-            "primary_color": config_row.primary_color
-            if config_row.primary_color is not None
-            else settings.primary_color,
-            "footer_text": config_row.footer_text
-            if config_row.footer_text is not None
-            else settings.footer_text,
-            "organization_url": config_row.organization_url
-            if config_row.organization_url is not None
-            else settings.organization_url,
-            "footer_logo_url": config_row.footer_logo_url,
-            "og_image_url": config_row.og_image_url,
-            "bg_watermark_url": config_row.bg_watermark_url,
-            "bg_watermark_opacity_light": config_row.bg_watermark_opacity_light,
-            "bg_watermark_opacity_dark": config_row.bg_watermark_opacity_dark,
-            "legal_name": config_row.legal_name
-            if config_row.legal_name is not None
-            else settings.legal_name,
-            "legal_address": config_row.legal_address
-            if config_row.legal_address is not None
-            else settings.legal_address,
-            "legal_siret": config_row.legal_siret
-            if config_row.legal_siret is not None
-            else settings.legal_siret,
-            "contact_email": config_row.contact_email
-            if config_row.contact_email is not None
-            else settings.contact_email,
-            "dpo_email": config_row.dpo_email
-            if config_row.dpo_email is not None
-            else settings.dpo_email,
-            "dpo_address": config_row.dpo_address
-            if config_row.dpo_address is not None
-            else settings.dpo_address,
-            "data_transfers": config_row.data_transfers
-            if config_row.data_transfers is not None
-            else settings.data_transfers,
-            "legal_version": config_row.legal_version
-            if config_row.legal_version is not None
-            else settings.legal_version,
-            "domains": domains if domains else _FALLBACK_DOMAINS,
-        }
+        domain_rows = list((await db.execute(select(AllowedDomain))).scalars().all())
+        domains = (
+            [{"id": str(d.id), "domain": d.domain, "auto_approve": d.auto_approve} for d in domain_rows]
+            if domain_rows
+            else _FALLBACK_DOMAINS
+        )
+        domains_from_env = False
 
-    cacheable = {k: v for k, v in result.items() if k not in _REDIS_SECRET_FIELDS}
-    await redis.setex(AUTH_CONFIG_CACHE_KEY, AUTH_CONFIG_CACHE_TTL, json.dumps(cacheable))
-    return result  # type: ignore[no-any-return]
-
-
-async def get_auth_config(db: AsyncSession) -> AuthConfig | None:
-    return await db.scalar(select(AuthConfig))
-
-
-async def bust_auth_config_cache(redis: Redis) -> None:  # type: ignore[type-arg]
-    await redis.delete(AUTH_CONFIG_CACHE_KEY)
+    return {
+        "totp_enabled": settings.totp_enabled,
+        "google_oauth_enabled": settings.google_oauth_enabled,
+        "google_client_id": settings.google_client_id,
+        "classic_auth_enabled": settings.classic_auth_enabled,
+        "allow_all_domains": settings.allow_all_domains,
+        "auto_approve_all_domains": settings.auto_approve_all_domains,
+        "guest_access_enabled": settings.guest_access_enabled,
+        "jwt_access_expire_days": settings.jwt_access_token_expire_days,
+        "jwt_refresh_expire_days": settings.jwt_refresh_token_expire_days,
+        "smtp_host": settings.smtp_host,
+        "smtp_ip": settings.smtp_ip,
+        "smtp_port": settings.smtp_port,
+        "smtp_user": settings.smtp_user,
+        "smtp_password": settings.smtp_password,
+        "smtp_from": settings.smtp_from,
+        "smtp_sender_name": settings.smtp_sender_name,
+        "smtp_avatar_url": settings.smtp_avatar_url,
+        "smtp_use_tls": settings.smtp_use_tls,
+        "s3_endpoint": settings.s3_endpoint,
+        "s3_access_key": settings.s3_access_key,
+        "s3_secret_key": settings.s3_secret_key,
+        "s3_bucket": settings.s3_bucket,
+        "s3_public_endpoint": settings.s3_public_endpoint,
+        "s3_region": settings.s3_region,
+        "s3_use_ssl": settings.s3_use_ssl,
+        "max_storage_gb": settings.max_storage_gb,
+        "max_file_size_mb": settings.max_file_size_mb,
+        "max_image_size_mb": settings.max_image_size_mb,
+        "max_audio_size_mb": settings.max_audio_size_mb,
+        "max_video_size_mb": settings.max_video_size_mb,
+        "max_document_size_mb": settings.max_document_size_mb,
+        "max_office_size_mb": settings.max_office_size_mb,
+        "max_text_size_mb": settings.max_text_size_mb,
+        "pdf_quality": settings.pdf_quality,
+        "video_compression_profile": settings.video_compression_profile,
+        "thumbnail_quality": settings.thumbnail_quality,
+        "thumbnail_size_px": settings.thumbnail_size_px,
+        "allowed_extensions": settings.allowed_extensions,
+        "allowed_mime_types": settings.allowed_mime_types,
+        "site_name": settings.site_name,
+        "site_name_style": settings.site_name_style,
+        "site_description": settings.site_description,
+        "site_logo_url": settings.site_logo_url,
+        "site_favicon_url": settings.site_favicon_url,
+        "primary_color": settings.primary_color,
+        "footer_text": settings.footer_text,
+        "footer_logo_url": settings.footer_logo_url,
+        "organization_url": settings.organization_url,
+        "og_image_url": settings.og_image_url,
+        "bg_watermark_url": settings.bg_watermark_url,
+        "bg_watermark_opacity_light": settings.bg_watermark_opacity_light,
+        "bg_watermark_opacity_dark": settings.bg_watermark_opacity_dark,
+        "legal_name": settings.legal_name,
+        "legal_address": settings.legal_address,
+        "legal_siret": settings.legal_siret,
+        "contact_email": settings.contact_email,
+        "dpo_email": settings.dpo_email,
+        "dpo_address": settings.dpo_address,
+        "data_transfers": settings.data_transfers,
+        "legal_version": settings.legal_version,
+        "domains": domains,
+        "domains_from_env": domains_from_env,
+    }
 
 
 async def validate_email_for_auth(email: str, db: AsyncSession, redis: Redis) -> bool:  # type: ignore[type-arg]

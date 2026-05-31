@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import uuid
+from unittest.mock import patch
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.auth_config import AuthConfig
 from app.models.directory import Directory, DirectoryType
 
 
@@ -23,23 +23,21 @@ async def test_og_falls_back_to_default_branding(client: AsyncClient) -> None:
 async def test_og_reflects_admin_config_branding(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    db_session.add(
-        AuthConfig(
-            site_name="Mon Wiki",
-            site_description="Cours de la promo 2026",
-            og_image_url="https://files.example.com/branding/og-image.webp",
-        )
-    )
-    await db_session.commit()
+    from app.config import settings
 
-    resp = await client.get(
-        "/api/og",
-        headers={
-            "X-Original-Path": "/popular/",
-            "Host": "wiki.example.com",
-            "X-Forwarded-Proto": "https",
-        },
-    )
+    with (
+        patch.object(settings, "site_name", "Mon Wiki"),
+        patch.object(settings, "site_description", "Cours de la promo 2026"),
+        patch.object(settings, "og_image_url", "https://files.example.com/branding/og-image.webp"),
+    ):
+        resp = await client.get(
+            "/api/og",
+            headers={
+                "X-Original-Path": "/popular/",
+                "Host": "wiki.example.com",
+                "X-Forwarded-Proto": "https",
+            },
+        )
     assert resp.status_code == 200
     body = resp.text
     assert "<title>Mon Wiki</title>" in body
@@ -55,7 +53,8 @@ async def test_og_reflects_admin_config_branding(
 async def test_og_per_resource_directory_title(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    db_session.add(AuthConfig(site_name="Mon Wiki", site_description="Default desc"))
+    from app.config import settings
+
     db_session.add(
         Directory(
             id=uuid.uuid4(),
@@ -67,7 +66,11 @@ async def test_og_per_resource_directory_title(
     )
     await db_session.commit()
 
-    resp = await client.get("/api/og", headers={"X-Original-Path": "/browse/maths/"})
+    with (
+        patch.object(settings, "site_name", "Mon Wiki"),
+        patch.object(settings, "site_description", "Default desc"),
+    ):
+        resp = await client.get("/api/og", headers={"X-Original-Path": "/browse/maths/"})
     assert resp.status_code == 200
     body = resp.text
     assert "Mathématiques" in body

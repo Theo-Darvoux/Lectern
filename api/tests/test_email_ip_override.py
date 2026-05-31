@@ -3,14 +3,24 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.core.email import send_email
-from app.models.auth_config import AuthConfig
 
 
 @pytest.mark.asyncio
 async def test_send_email_with_ip_override_port_587() -> None:
     """When smtp_ip is set and port=587, connect() is called without server_hostname
     and starttls() receives server_hostname=<real host> for cert validation."""
-    with patch("aiosmtplib.SMTP", autospec=True) as mock_smtp_class:
+    from app.config import settings
+
+    with (
+        patch.object(settings, "smtp_host", "mail.example.com"),
+        patch.object(settings, "smtp_ip", "1.2.3.4"),
+        patch.object(settings, "smtp_port", 587),
+        patch.object(settings, "smtp_user", "user"),
+        patch.object(settings, "smtp_password", "password"),
+        patch.object(settings, "smtp_from", "noreply@example.com"),
+        patch.object(settings, "smtp_use_tls", True),
+        patch("aiosmtplib.SMTP", autospec=True) as mock_smtp_class,
+    ):
         mock_smtp = mock_smtp_class.return_value
         mock_smtp.connect = AsyncMock()
         mock_smtp.starttls = AsyncMock()
@@ -18,17 +28,7 @@ async def test_send_email_with_ip_override_port_587() -> None:
         mock_smtp.send_message = AsyncMock()
         mock_smtp.close = AsyncMock()
 
-        config = AuthConfig(
-            smtp_host="mail.example.com",
-            smtp_ip="1.2.3.4",
-            smtp_port=587,
-            smtp_user="user",
-            smtp_password="password",
-            smtp_from="noreply@example.com",
-            smtp_use_tls=True,
-        )
-
-        await send_email("to@example.com", "Subject", "Body", config=config)
+        await send_email("to@example.com", "Subject", "Body")
 
         # Must connect to the IP
         init_kwargs = mock_smtp_class.call_args.kwargs
@@ -49,7 +49,18 @@ async def test_send_email_with_ip_override_port_587() -> None:
 async def test_send_email_with_ip_override_port_465() -> None:
     """When smtp_ip is set and port=465 (implicit TLS), we downgrade to the
     STARTTLS path so server_hostname can be injected for cert validation."""
-    with patch("aiosmtplib.SMTP", autospec=True) as mock_smtp_class:
+    from app.config import settings
+
+    with (
+        patch.object(settings, "smtp_host", "mail.example.com"),
+        patch.object(settings, "smtp_ip", "1.2.3.4"),
+        patch.object(settings, "smtp_port", 465),
+        patch.object(settings, "smtp_user", "user"),
+        patch.object(settings, "smtp_password", "password"),
+        patch.object(settings, "smtp_from", "noreply@example.com"),
+        patch.object(settings, "smtp_use_tls", True),
+        patch("aiosmtplib.SMTP", autospec=True) as mock_smtp_class,
+    ):
         mock_smtp = mock_smtp_class.return_value
         mock_smtp.connect = AsyncMock()
         mock_smtp.starttls = AsyncMock()
@@ -57,17 +68,7 @@ async def test_send_email_with_ip_override_port_465() -> None:
         mock_smtp.send_message = AsyncMock()
         mock_smtp.close = AsyncMock()
 
-        config = AuthConfig(
-            smtp_host="mail.example.com",
-            smtp_ip="1.2.3.4",
-            smtp_port=465,
-            smtp_user="user",
-            smtp_password="password",
-            smtp_from="noreply@example.com",
-            smtp_use_tls=True,
-        )
-
-        await send_email("to@example.com", "Subject", "Body", config=config)
+        await send_email("to@example.com", "Subject", "Body")
 
         init_kwargs = mock_smtp_class.call_args.kwargs
         assert init_kwargs["hostname"] == "1.2.3.4"
@@ -83,7 +84,18 @@ async def test_send_email_with_ip_override_port_465() -> None:
 async def test_send_email_without_ip_override() -> None:
     """Without an IP override, starttls() is called with server_hostname=None
     (library uses the hostname parameter as expected)."""
-    with patch("aiosmtplib.SMTP", autospec=True) as mock_smtp_class:
+    from app.config import settings
+
+    with (
+        patch.object(settings, "smtp_host", "mail.example.com"),
+        patch.object(settings, "smtp_ip", None),
+        patch.object(settings, "smtp_port", 587),
+        patch.object(settings, "smtp_user", "user"),
+        patch.object(settings, "smtp_password", "password"),
+        patch.object(settings, "smtp_from", "noreply@example.com"),
+        patch.object(settings, "smtp_use_tls", True),
+        patch("aiosmtplib.SMTP", autospec=True) as mock_smtp_class,
+    ):
         mock_smtp = mock_smtp_class.return_value
         mock_smtp.connect = AsyncMock()
         mock_smtp.starttls = AsyncMock()
@@ -91,17 +103,7 @@ async def test_send_email_without_ip_override() -> None:
         mock_smtp.send_message = AsyncMock()
         mock_smtp.close = AsyncMock()
 
-        config = AuthConfig(
-            smtp_host="mail.example.com",
-            smtp_ip=None,
-            smtp_port=587,
-            smtp_user="user",
-            smtp_password="password",
-            smtp_from="noreply@example.com",
-            smtp_use_tls=True,
-        )
-
-        await send_email("to@example.com", "Subject", "Body", config=config)
+        await send_email("to@example.com", "Subject", "Body")
 
         init_kwargs = mock_smtp_class.call_args.kwargs
         assert init_kwargs["hostname"] == "mail.example.com"

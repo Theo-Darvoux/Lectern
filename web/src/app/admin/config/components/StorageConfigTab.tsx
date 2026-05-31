@@ -1,14 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Database, Cloud, Loader2, Save } from "lucide-react";
+import { Database, Cloud } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { TabsContent } from "@/components/ui/tabs";
-import { toast } from "sonner";
 import { useTranslations } from "next-intl";
 
 interface AuthConfig {
@@ -24,81 +21,10 @@ interface AuthConfig {
 
 interface StorageConfigTabProps {
     config: AuthConfig;
-    saving: boolean;
-    patchConfig: (patch: Partial<AuthConfig>) => Promise<void>;
 }
 
-function ToggleRow({
-    label,
-    description,
-    checked,
-    disabled,
-    onToggle,
-    icon: Icon,
-}: {
-    label: string;
-    description: string;
-    checked: boolean;
-    disabled?: boolean;
-    onToggle: () => void;
-    icon: React.ElementType;
-}) {
-    return (
-        <div className="flex items-start justify-between gap-4 py-4">
-            <div className="flex gap-3">
-                <Icon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
-                <div>
-                    <p className="font-medium text-sm leading-none">{label}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-                </div>
-            </div>
-            <Switch
-                checked={checked}
-                disabled={disabled}
-                onCheckedChange={onToggle}
-            />
-        </div>
-    );
-}
-
-export function StorageConfigTab({ config, saving, patchConfig }: StorageConfigTabProps) {
+export function StorageConfigTab({ config }: StorageConfigTabProps) {
     const t = useTranslations("Admin.Config.Storage");
-    const [storageForm, setStorageForm] = useState<Partial<AuthConfig>>({});
-    const [isStorageModified, setIsStorageModified] = useState(false);
-
-    useEffect(() => {
-        setStorageForm({
-            s3_endpoint: config.s3_endpoint,
-            s3_access_key: config.s3_access_key,
-            s3_secret_key: config.s3_secret_key,
-            s3_bucket: config.s3_bucket,
-            s3_public_endpoint: config.s3_public_endpoint,
-            s3_region: config.s3_region,
-            s3_use_ssl: config.s3_use_ssl,
-            max_storage_gb: config.max_storage_gb,
-        });
-        setIsStorageModified(false);
-    }, [config]);
-
-    const handleSave = async () => {
-        await patchConfig(storageForm);
-        toast.success(t("success"));
-        setIsStorageModified(false);
-    };
-
-    const handleDiscard = () => {
-        setStorageForm({
-            s3_endpoint: config.s3_endpoint,
-            s3_access_key: config.s3_access_key,
-            s3_secret_key: config.s3_secret_key,
-            s3_bucket: config.s3_bucket,
-            s3_public_endpoint: config.s3_public_endpoint,
-            s3_region: config.s3_region,
-            s3_use_ssl: config.s3_use_ssl,
-            max_storage_gb: config.max_storage_gb,
-        });
-        setIsStorageModified(false);
-    };
 
     return (
         <TabsContent value="storage" className="mt-6 space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -118,12 +44,9 @@ export function StorageConfigTab({ config, saving, patchConfig }: StorageConfigT
                             <Label htmlFor="s3_endpoint">{t("endpoint")}</Label>
                             <Input
                                 id="s3_endpoint"
-                                placeholder={t("placeholders.endpoint")}
-                                value={storageForm.s3_endpoint || ""}
-                                onChange={(e) => {
-                                    setStorageForm((prev) => ({ ...prev, s3_endpoint: e.target.value }));
-                                    setIsStorageModified(true);
-                                }}
+                                readOnly
+                                value={config.s3_endpoint ?? ""}
+                                className="bg-muted/30 cursor-default"
                             />
                             <p className="text-[10px] text-muted-foreground">
                                 {t("endpointHelp")}
@@ -133,36 +56,27 @@ export function StorageConfigTab({ config, saving, patchConfig }: StorageConfigT
                             <Label htmlFor="s3_region">{t("region")}</Label>
                             <Input
                                 id="s3_region"
-                                placeholder={t("placeholders.region")}
-                                value={storageForm.s3_region || ""}
-                                onChange={(e) => {
-                                    setStorageForm((prev) => ({ ...prev, s3_region: e.target.value }));
-                                    setIsStorageModified(true);
-                                }}
+                                readOnly
+                                value={config.s3_region ?? ""}
+                                className="bg-muted/30 cursor-default"
                             />
                         </div>
                         <div className="space-y-2">
                             <Label htmlFor="s3_bucket">{t("bucket")}</Label>
                             <Input
                                 id="s3_bucket"
-                                placeholder={t("placeholders.bucket")}
-                                value={storageForm.s3_bucket || ""}
-                                onChange={(e) => {
-                                    setStorageForm((prev) => ({ ...prev, s3_bucket: e.target.value }));
-                                    setIsStorageModified(true);
-                                }}
+                                readOnly
+                                value={config.s3_bucket ?? ""}
+                                className="bg-muted/30 cursor-default"
                             />
                         </div>
                         <div className="space-y-2">
                             <Label htmlFor="s3_public_endpoint">{t("publicEndpoint")}</Label>
                             <Input
                                 id="s3_public_endpoint"
-                                placeholder={t("placeholders.publicEndpoint")}
-                                value={storageForm.s3_public_endpoint || ""}
-                                onChange={(e) => {
-                                    setStorageForm((prev) => ({ ...prev, s3_public_endpoint: e.target.value }));
-                                    setIsStorageModified(true);
-                                }}
+                                readOnly
+                                value={config.s3_public_endpoint ?? ""}
+                                className="bg-muted/30 cursor-default"
                             />
                         </div>
                     </div>
@@ -173,12 +87,9 @@ export function StorageConfigTab({ config, saving, patchConfig }: StorageConfigT
                             <Input
                                 id="s3_access_key"
                                 type="password"
-                                autoComplete="off"
-                                value={storageForm.s3_access_key || ""}
-                                onChange={(e) => {
-                                    setStorageForm((prev) => ({ ...prev, s3_access_key: e.target.value }));
-                                    setIsStorageModified(true);
-                                }}
+                                readOnly
+                                value={config.s3_access_key ?? ""}
+                                className="bg-muted/30 cursor-default"
                             />
                         </div>
                         <div className="space-y-2">
@@ -186,16 +97,13 @@ export function StorageConfigTab({ config, saving, patchConfig }: StorageConfigT
                             <Input
                                 id="s3_secret_key"
                                 type="password"
-                                autoComplete="off"
-                                value={storageForm.s3_secret_key || ""}
-                                onChange={(e) => {
-                                    setStorageForm((prev) => ({ ...prev, s3_secret_key: e.target.value }));
-                                    setIsStorageModified(true);
-                                }}
+                                readOnly
+                                value={config.s3_secret_key ?? ""}
+                                className="bg-muted/30 cursor-default"
                             />
                         </div>
                     </div>
-                    
+
                     <div className="pt-4 border-t space-y-4">
                         <div className="space-y-2 max-w-xs">
                             <Label htmlFor="max_storage_gb">{t("maxStorage")}</Label>
@@ -203,13 +111,9 @@ export function StorageConfigTab({ config, saving, patchConfig }: StorageConfigT
                                 <Input
                                     id="max_storage_gb"
                                     type="number"
-                                    placeholder={t("placeholders.maxStorage")}
-                                    value={storageForm.max_storage_gb ?? ""}
-                                    onChange={(e) => {
-                                        const val = e.target.value === "" ? null : parseInt(e.target.value);
-                                        setStorageForm((prev) => ({ ...prev, max_storage_gb: val }));
-                                        setIsStorageModified(true);
-                                    }}
+                                    readOnly
+                                    value={config.max_storage_gb ?? ""}
+                                    className="bg-muted/30 cursor-default"
                                 />
                                 <span className="text-sm font-bold text-muted-foreground whitespace-nowrap">GB</span>
                             </div>
@@ -218,38 +122,15 @@ export function StorageConfigTab({ config, saving, patchConfig }: StorageConfigT
                             </p>
                         </div>
 
-                        <ToggleRow
-                            icon={Cloud}
-                            label={t("useSsl")}
-                            description={t("useSslDescription")}
-                            checked={storageForm.s3_use_ssl ?? true}
-                            onToggle={() => {
-                                setStorageForm((prev) => ({
-                                    ...prev,
-                                    s3_use_ssl: !prev.s3_use_ssl,
-                                }));
-                                setIsStorageModified(true);
-                            }}
-                        />
-                        
-                        <div className="flex justify-end gap-3">
-                            {isStorageModified && (
-                                <Button variant="outline" onClick={handleDiscard}>
-                                    {t("discard")}
-                                </Button>
-                            )}
-                            <Button 
-                                onClick={handleSave}
-                                disabled={saving || (!isStorageModified && !!config)}
-                                className="gap-2"
-                            >
-                                {saving ? (
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                    <Save className="h-4 w-4" />
-                                )}
-                                {t("save")}
-                            </Button>
+                        <div className="flex items-start justify-between gap-4 py-4">
+                            <div className="flex gap-3">
+                                <Cloud className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+                                <div>
+                                    <p className="font-medium text-sm leading-none">{t("useSsl")}</p>
+                                    <p className="mt-1 text-xs text-muted-foreground">{t("useSslDescription")}</p>
+                                </div>
+                            </div>
+                            <Switch checked={config.s3_use_ssl} disabled />
                         </div>
                     </div>
                 </CardContent>

@@ -106,24 +106,7 @@ def _decode_upload_metadata(header: str | None) -> dict[str, str]:
 async def tus_options(
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> Response:
-    # Read max_file_size_mb from Redis cache only — no DB round-trip for OPTIONS.
-    # This endpoint is hit on every CORS preflight; opening a DB session here
-    # would add unnecessary latency and connection pressure.
-    import json as _json
-
-    from app.services.auth import AUTH_CONFIG_CACHE_KEY
-
-    max_size_mb = settings.max_file_size_mb
-    try:
-        cached = await redis.get(AUTH_CONFIG_CACHE_KEY)
-        if cached:
-            cfg = _json.loads(cached if isinstance(cached, str) else cached.decode())
-            if cfg.get("max_file_size_mb") is not None:
-                max_size_mb = cfg["max_file_size_mb"]
-    except Exception:
-        pass
-
-    max_size = max_size_mb * 1024 * 1024
+    max_size = settings.max_file_size_mb * 1024 * 1024
 
     return Response(
         status_code=204,

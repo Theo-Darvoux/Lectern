@@ -25,69 +25,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.auth_config import AllowedDomain, AuthConfig
+from app.models.auth_config import AllowedDomain
 from app.models.user import User, UserRole
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-
-def _make_config_row(**kwargs):
-    return AuthConfig(**kwargs)
-
-
-# ── Issue #1: Secrets not in Redis cache / not in API response ────────────────
-
-
-@pytest.mark.asyncio
-async def test_get_full_auth_config_strips_secrets_from_redis(
-    db_session: AsyncSession,
-):
-    """Cached value in Redis must not contain smtp_password, s3_access_key, s3_secret_key."""
-    from app.services.auth import get_full_auth_config
-
-    captured = {}
-
-    async def fake_setex(key, ttl, value):
-        captured["value"] = value
-
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    redis.setex = AsyncMock(side_effect=fake_setex)
-
-    await get_full_auth_config(db_session, redis)
-
-    assert "value" in captured
-    cached_dict = json.loads(captured["value"])
-    for secret in ("smtp_password", "s3_access_key", "s3_secret_key"):
-        assert secret not in cached_dict, f"{secret} must not appear in Redis cache"
-
-
-@pytest.mark.asyncio
-async def test_get_full_auth_config_rehydrates_secrets_on_cache_hit(
-    db_session: AsyncSession,
-):
-    """On Redis cache hit, secrets must be re-loaded from DB/settings."""
-    from app.services.auth import get_full_auth_config
-
-    config_row = AuthConfig(
-        s3_access_key="db-access-key",
-        s3_secret_key="db-secret-key",
-        smtp_password="db-smtp-pass",
-    )
-    db_session.add(config_row)
-    await db_session.flush()
-
-    # Redis returns a cached dict WITHOUT secrets (as we would store it)
-    cached_public = json.dumps({"totp_enabled": True, "site_name": "Test"})
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=cached_public.encode())
-    redis.setex = AsyncMock()
-
-    result = await get_full_auth_config(db_session, redis)
-
-    assert result["s3_access_key"] == "db-access-key"
-    assert result["s3_secret_key"] == "db-secret-key"
-    assert result["smtp_password"] == "db-smtp-pass"
+# ── Issue #1: Secrets not in API response ────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -187,9 +128,7 @@ async def test_google_oauth_verify_runs_in_thread(
     db_session: AsyncSession,
 ):
     """id_token.verify_oauth2_token must be called via asyncio.to_thread."""
-    config = AuthConfig(google_oauth_enabled=True, allow_all_domains=True)
-    db_session.add(config)
-    await db_session.flush()
+    from app.config import settings
 
     call_thread_ids: list = []
 
@@ -202,7 +141,11 @@ async def test_google_oauth_verify_runs_in_thread(
             "email_verified": True,
         }
 
-    with patch("app.routers.auth.asyncio.to_thread", side_effect=spy_to_thread):
+    with (
+        patch.object(settings, "google_oauth_enabled", True),
+        patch.object(settings, "allow_all_domains", True),
+        patch("app.routers.auth.asyncio.to_thread", side_effect=spy_to_thread),
+    ):
         await client.post(
             "/api/auth/google",
             json={"credential": "fake_token"},
@@ -223,11 +166,13 @@ async def test_google_oauth_rejects_unverified_email(
     client: AsyncClient,
     db_session: AsyncSession,
 ):
-    config = AuthConfig(google_oauth_enabled=True, allow_all_domains=True)
-    db_session.add(config)
-    await db_session.flush()
+    from app.config import settings
 
-    with patch("app.routers.auth.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+    with (
+        patch.object(settings, "google_oauth_enabled", True),
+        patch.object(settings, "allow_all_domains", True),
+        patch("app.routers.auth.asyncio.to_thread", new_callable=AsyncMock) as mock_thread,
+    ):
         mock_thread.return_value = {
             "iss": "accounts.google.com",
             "email": "user@telecom-sudparis.eu",
@@ -247,11 +192,13 @@ async def test_google_oauth_rejects_missing_email_verified_field(
     client: AsyncClient,
     db_session: AsyncSession,
 ):
-    config = AuthConfig(google_oauth_enabled=True, allow_all_domains=True)
-    db_session.add(config)
-    await db_session.flush()
+    from app.config import settings
 
-    with patch("app.routers.auth.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+    with (
+        patch.object(settings, "google_oauth_enabled", True),
+        patch.object(settings, "allow_all_domains", True),
+        patch("app.routers.auth.asyncio.to_thread", new_callable=AsyncMock) as mock_thread,
+    ):
         mock_thread.return_value = {
             "iss": "accounts.google.com",
             "email": "user@telecom-sudparis.eu",
@@ -273,10 +220,9 @@ async def test_validate_email_allow_all_domains_with_matching_domain(
     db_session: AsyncSession,
 ):
     """Domain in list → uses that domain's auto_approve, even with allow_all_domains=True."""
+    from app.config import settings
     from app.services.auth import validate_email_for_auth
 
-    config = AuthConfig(allow_all_domains=True)
-    db_session.add(config)
     domain = AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True)
     db_session.add(domain)
     await db_session.flush()
@@ -285,7 +231,8 @@ async def test_validate_email_allow_all_domains_with_matching_domain(
     redis.get = AsyncMock(return_value=None)
     redis.setex = AsyncMock()
 
-    result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session, redis)
+    with patch.object(settings, "allow_all_domains", True):
+        result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session, redis)
     assert result is True
 
 
@@ -294,17 +241,15 @@ async def test_validate_email_allow_all_domains_unlisted_domain_is_pending(
     db_session: AsyncSession,
 ):
     """Domain not in list but allow_all_domains=True → allowed but auto_approve=False (PENDING)."""
+    from app.config import settings
     from app.services.auth import validate_email_for_auth
-
-    config = AuthConfig(allow_all_domains=True)
-    db_session.add(config)
-    await db_session.flush()
 
     redis = AsyncMock()
     redis.get = AsyncMock(return_value=None)
     redis.setex = AsyncMock()
 
-    result = await validate_email_for_auth("user@unknown.com", db_session, redis)
+    with patch.object(settings, "allow_all_domains", True):
+        result = await validate_email_for_auth("user@unknown.com", db_session, redis)
     assert result is False  # allowed but PENDING (not auto-approved)
 
 
@@ -315,14 +260,11 @@ async def test_validate_email_disallow_unlisted_domain_no_allow_all(
     """Domain not in list and allow_all_domains=False → ValueError (rejected)."""
     from app.services.auth import validate_email_for_auth
 
-    config = AuthConfig(allow_all_domains=False)
-    db_session.add(config)
-    await db_session.flush()
-
     redis = AsyncMock()
     redis.get = AsyncMock(return_value=None)
     redis.setex = AsyncMock()
 
+    # Default settings.allow_all_domains = False
     with pytest.raises(ValueError, match="not allowed"):
         await validate_email_for_auth("user@evil.com", db_session, redis)
 
@@ -620,10 +562,9 @@ async def test_validate_email_listed_domain_auto_approve_respected(
     db_session: AsyncSession,
 ):
     """Domain in list with auto_approve=False → returns False even if allow_all_domains=True."""
+    from app.config import settings
     from app.services.auth import validate_email_for_auth
 
-    config = AuthConfig(allow_all_domains=True)
-    db_session.add(config)
     domain = AllowedDomain(domain="restricted.edu", auto_approve=False)
     db_session.add(domain)
     await db_session.flush()
@@ -632,7 +573,8 @@ async def test_validate_email_listed_domain_auto_approve_respected(
     redis.get = AsyncMock(return_value=None)
     redis.setex = AsyncMock()
 
-    result = await validate_email_for_auth("user@restricted.edu", db_session, redis)
+    with patch.object(settings, "allow_all_domains", True):
+        result = await validate_email_for_auth("user@restricted.edu", db_session, redis)
     assert result is False
 
 
@@ -641,10 +583,9 @@ async def test_validate_email_listed_domain_checked_before_allow_all(
     db_session: AsyncSession,
 ):
     """Domain matching in list takes priority over allow_all_domains fallback."""
+    from app.config import settings
     from app.services.auth import validate_email_for_auth
 
-    config = AuthConfig(allow_all_domains=True)
-    db_session.add(config)
     domain = AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True)
     db_session.add(domain)
     await db_session.flush()
@@ -653,5 +594,6 @@ async def test_validate_email_listed_domain_checked_before_allow_all(
     redis.get = AsyncMock(return_value=None)
     redis.setex = AsyncMock()
 
-    result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session, redis)
+    with patch.object(settings, "allow_all_domains", True):
+        result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session, redis)
     assert result is True

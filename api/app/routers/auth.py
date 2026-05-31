@@ -167,9 +167,8 @@ async def request_code(
     base_url = settings.frontend_url.rstrip("/")
     magic_link = f"{base_url}/login/verify?token={magic_token}"
 
-    config = await auth_service.get_auth_config(db)
     try:
-        await send_verification_email(email, code, magic_link, config=config)
+        await send_verification_email(email, code, magic_link)
     except Exception as e:
         import logging
 
