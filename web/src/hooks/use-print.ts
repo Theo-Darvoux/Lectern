@@ -156,9 +156,18 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
         case "pdf": {
           const blob = await fetchMaterialBlob(materialId);
           const blobUrl = URL.createObjectURL(blob);
-          printInIframe(blobUrl, { isBlobUrl: true, title: fileName });
-          // Revoke after a delay to allow the iframe to use it
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+          const win = window.open(blobUrl, "_blank");
+          if (!win) {
+            toast.error("Pop-up blocked. Please allow pop-ups to print the PDF.");
+            URL.revokeObjectURL(blobUrl);
+            return;
+          }
+          win.addEventListener("load", () => {
+            setTimeout(() => {
+              win.print();
+              URL.revokeObjectURL(blobUrl);
+            }, 500);
+          });
           break;
         }
 

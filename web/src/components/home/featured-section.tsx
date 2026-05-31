@@ -55,7 +55,7 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
           )}
 
           {/* Featured pill */}
-          <span className="absolute left-3 top-3 z-20 inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/20 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm">
+          <span className="absolute left-3 top-3 z-20 inline-flex items-center gap-1 rounded-full border border-white/60 bg-white/20 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]">
             <Star className="h-3 w-3 fill-white" />
             {t("featured")}
           </span>
@@ -143,7 +143,7 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
           )}
 
           {/* Featured pill */}
-          <span className="absolute left-3 top-3 z-20 inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm">
+          <span className="absolute left-3 top-3 z-20 inline-flex items-center gap-1 rounded-full border border-white/60 bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)]">
             <Star className="h-2.5 w-2.5 fill-white" />
             {t("featured")}
           </span>

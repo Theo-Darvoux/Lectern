@@ -32,6 +32,7 @@ services:
   api:
     image: ghcr.io/theo-darvoux/wikint/api:latest
     command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 120
+    env_file: .env
     environment:
       - ENVIRONMENT=production
     deploy:
@@ -46,6 +47,7 @@ services:
   worker:
     image: ghcr.io/theo-darvoux/wikint/api:latest
     command: arq app.workers.settings.WorkerSettings
+    env_file: .env
     environment:
       - ENVIRONMENT=production
     deploy:
@@ -60,6 +62,7 @@ services:
   worker-fast:
     image: ghcr.io/theo-darvoux/wikint/api:latest
     command: arq app.workers.settings.UploadFastWorkerSettings
+    env_file: .env
     environment:
       - ENVIRONMENT=production
       # Each replica runs WORKER_FAST_MAX_JOBS concurrent jobs (default 4).
@@ -78,6 +81,7 @@ services:
   worker-slow:
     image: ghcr.io/theo-darvoux/wikint/api:latest
     command: arq app.workers.settings.UploadSlowWorkerSettings
+    env_file: .env
     environment:
       - ENVIRONMENT=production
       # Each replica runs WORKER_SLOW_MAX_JOBS concurrent jobs (default 2).
@@ -95,6 +99,7 @@ services:
 
   web:
     image: ghcr.io/theo-darvoux/wikint/web:latest
+    env_file: .env
     deploy:
       resources:
         limits:

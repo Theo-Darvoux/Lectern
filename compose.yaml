@@ -85,6 +85,7 @@ services:
 
   api:
     restart: unless-stopped
+    env_file: .env
     environment:
       <<: *common-env
       FRONTEND_URL: ${FRONTEND_URL}
@@ -107,20 +108,24 @@ services:
   worker:
     <<: *worker-base
     stop_grace_period: 30s
+    env_file: .env
     environment: *common-env
 
   worker-fast:
     <<: *worker-base
     stop_grace_period: 30s
+    env_file: .env
     environment: *common-env
 
   worker-slow:
     <<: *worker-base
     stop_grace_period: 1m
+    env_file: .env
     environment: *common-env
 
   web:
     restart: unless-stopped
+    env_file: .env
     depends_on:
       - api
     healthcheck:

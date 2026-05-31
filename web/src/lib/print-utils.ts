@@ -13,8 +13,6 @@ export function isPrintable(viewerType: string): boolean {
 }
 
 interface PrintIframeOptions {
-  /** If true, the src is a blob URL to load directly (for PDF). */
-  isBlobUrl?: boolean;
   /** Optional CSS to inject into the iframe document. */
   css?: string;
   /** Title for the printed page. */
@@ -22,8 +20,7 @@ interface PrintIframeOptions {
 }
 
 /**
- * Opens a hidden iframe, writes HTML (or loads a blob URL),
- * triggers window.print(), then cleans up.
+ * Opens a hidden iframe, writes HTML content, triggers window.print(), then cleans up.
  */
 export function printInIframe(content: string, options: PrintIframeOptions = {}): void {
   const iframe = document.createElement("iframe");
@@ -36,7 +33,6 @@ export function printInIframe(content: string, options: PrintIframeOptions = {})
   document.body.appendChild(iframe);
 
   const cleanup = () => {
-    // Small delay to let the print dialog finish
     setTimeout(() => {
       if (document.body.contains(iframe)) {
         document.body.removeChild(iframe);
@@ -44,60 +40,43 @@ export function printInIframe(content: string, options: PrintIframeOptions = {})
     }, 1000);
   };
 
-  if (options.isBlobUrl) {
-    // For PDFs: load the blob URL directly in the iframe
-    iframe.onload = () => {
-      try {
-        iframe.contentWindow?.focus();
-        iframe.contentWindow?.print();
-      } catch {
-        // Cross-origin fallback: open in new tab
-        window.open(content, "_blank");
-      }
-      cleanup();
-    };
-    iframe.src = content;
-  } else {
-    // For HTML content: write directly
-    const doc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (!doc) { cleanup(); return; }
+  const doc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!doc) { cleanup(); return; }
 
-    doc.open();
-    doc.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>${options.title ?? "Print"}</title>
-          <style>
-            *, *::before, *::after { box-sizing: border-box; }
-            body {
-              margin: 0;
-              padding: 20px;
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
-                           Roboto, Helvetica, Arial, sans-serif;
-              color: #111;
-              background: #fff;
-            }
-            img { max-width: 100%; height: auto; }
-            pre { white-space: pre-wrap; word-break: break-word; }
-            table { border-collapse: collapse; width: 100%; }
-            th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
-            ${options.css ?? ""}
-            @media print {
-              body { padding: 0; }
-            }
-          </style>
-        </head>
-        <body>${content}</body>
-      </html>
-    `);
-    doc.close();
+  doc.open();
+  doc.write(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>${options.title ?? "Print"}</title>
+        <style>
+          *, *::before, *::after { box-sizing: border-box; }
+          body {
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                         Roboto, Helvetica, Arial, sans-serif;
+            color: #111;
+            background: #fff;
+          }
+          img { max-width: 100%; height: auto; }
+          pre { white-space: pre-wrap; word-break: break-word; }
+          table { border-collapse: collapse; width: 100%; }
+          th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
+          ${options.css ?? ""}
+          @media print {
+            body { padding: 0; }
+          }
+        </style>
+      </head>
+      <body>${content}</body>
+    </html>
+  `);
+  doc.close();
 
-    // Wait for images/resources to load
-    iframe.contentWindow?.addEventListener("afterprint", cleanup);
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-    }, 300);
-  }
+  iframe.contentWindow?.addEventListener("afterprint", cleanup);
+  setTimeout(() => {
+    iframe.contentWindow?.focus();
+    iframe.contentWindow?.print();
+  }, 300);
 }

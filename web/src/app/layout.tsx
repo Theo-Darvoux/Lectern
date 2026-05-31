@@ -14,8 +14,9 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "WikINT",
-  description: "Collaborative course materials platform",
+  title: process.env.SITE_NAME || "WikINT",
+  description: process.env.SITE_DESCRIPTION || "Collaborative course materials platform",
+  icons: { icon: process.env.SITE_FAVICON_URL || "/favicon.ico" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
