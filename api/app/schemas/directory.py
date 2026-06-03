@@ -15,6 +15,7 @@ class DirectoryOut(BaseModel):
     sort_order: int
     tags: list[str] = []
     full_path: str | None = None
+    preview_material_ids: list[str] = []
     created_at: datetime
 
     @field_validator("tags", mode="before")

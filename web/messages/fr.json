@@ -177,6 +177,8 @@
     "contributions": "Contributions",
     "notifications": "Notifications",
     "viewAll": "Tout voir",
+    "markAllRead": "Tout marquer comme lu",
+    "markRead": "Marquer comme lu",
     "noNewNotifications": "Aucune nouvelle notification",
     "goToNotifications": "Aller aux notifications",
     "profile": "Profil",

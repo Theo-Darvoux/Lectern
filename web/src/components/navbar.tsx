@@ -14,6 +14,8 @@ import {
   LogOut,
   LogIn,
   Folder,
+  Check,
+  CheckCheck,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { SearchModal } from "@/components/search/search-modal";
@@ -39,7 +41,9 @@ import { API_BASE } from "@/lib/api-client";
 import {
   fetchNotifications,
   fetchUnreadCount,
+  markAllNotificationsRead,
   markNotificationRead,
+  notificationIcon,
   type NotificationItem,
 } from "@/lib/notifications";
 import { formatDistanceToNow } from "date-fns/formatDistanceToNow";
@@ -109,6 +113,37 @@ export function Navbar() {
     },
     [decrement],
   );
+
+  // Mark a single notification read in place, without navigating away.
+  const markOneRead = useCallback(
+    (e: React.MouseEvent, n: NotificationItem) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (n.read) return;
+      setRecentNotifications((prev) =>
+        prev.map((item) =>
+          item.id === n.id ? { ...item, read: true } : item,
+        ),
+      );
+      decrement();
+      markNotificationRead(n.id).catch(() => {});
+    },
+    [decrement],
+  );
+
+  const markAllRead = useCallback(async () => {
+    setRecentNotifications((prev) =>
+      prev.map((item) => ({ ...item, read: true })),
+    );
+    setUnreadCount(0);
+    try {
+      await markAllNotificationsRead();
+    } catch {
+      // Reconcile on next open/focus.
+    }
+  }, [setUnreadCount]);
+
+  const hasUnreadRecent = recentNotifications.some((n) => !n.read);
 
   useEffect(() => {
     if (popoverOpen) {
@@ -230,43 +265,83 @@ export function Navbar() {
                       )}
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-80 p-0" align="end">
-                    <div className="flex items-center justify-between border-b px-4 py-3">
-                      <p className="text-sm font-semibold">{t("notifications")}</p>
-                      <Link
-                        href="/notifications"
-                        className="text-xs text-primary hover:underline"
-                        onClick={() => setPopoverOpen(false)}
-                      >
-                        {t("viewAll")}
-                      </Link>
+                  <PopoverContent className="w-96 p-0" align="end">
+                    <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold">
+                          {t("notifications")}
+                        </p>
+                        {unreadCount > 0 && (
+                          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/10 px-1.5 text-[11px] font-medium text-primary">
+                            {unreadCount > 99 ? "99+" : unreadCount}
+                          </span>
+                        )}
+                      </div>
+                      {hasUnreadRecent && (
+                        <button
+                          type="button"
+                          onClick={markAllRead}
+                          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                        >
+                          <CheckCheck className="h-3.5 w-3.5" />
+                          {t("markAllRead")}
+                        </button>
+                      )}
                     </div>
-                    <div className="max-h-[300px] overflow-y-auto">
+                    <div className="max-h-[360px] overflow-y-auto">
                       {loadingNotifications ? (
-                        <div className="p-4 text-center text-sm text-muted-foreground">
+                        <div className="p-6 text-center text-sm text-muted-foreground">
                           {tCommon("loading")}
                         </div>
                       ) : recentNotifications.length === 0 ? (
-                        <div className="p-4 text-center text-sm text-muted-foreground">
+                        <div className="flex flex-col items-center gap-2 p-8 text-center text-sm text-muted-foreground">
+                          <Bell className="h-6 w-6 opacity-40" />
                           {t("noNewNotifications")}
                         </div>
                       ) : (
                         <div className="flex flex-col">
-                          {recentNotifications.map((n) => (
-                            <Link
-                              key={n.id}
-                              href={n.link || "/notifications"}
-                              onClick={() => handleNotificationClick(n)}
-                              className={`flex flex-col gap-1 border-b p-3 text-sm transition-colors hover:bg-muted/50 ${n.read ? "opacity-70" : "bg-muted/10 font-medium"}`}
-                            >
-                              <span className="line-clamp-2">{n.title}</span>
-                              <span className="text-xs text-muted-foreground">
-                                {formatDistanceToNow(new Date(n.created_at), {
-                                  addSuffix: true,
-                                })}
-                              </span>
-                            </Link>
-                          ))}
+                          {recentNotifications.map((n) => {
+                            const Icon = notificationIcon(n.type);
+                            return (
+                              <div
+                                key={n.id}
+                                className={`group relative flex items-start gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0 hover:bg-muted/50 ${n.read ? "" : "bg-primary/5"}`}
+                              >
+                                <div
+                                  className={`mt-0.5 shrink-0 rounded-full p-1.5 ${n.read ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"}`}
+                                >
+                                  <Icon className="h-3.5 w-3.5" />
+                                </div>
+                                <Link
+                                  href={n.link || "/notifications"}
+                                  onClick={() => handleNotificationClick(n)}
+                                  className="min-w-0 flex-1"
+                                >
+                                  <span
+                                    className={`block line-clamp-2 text-sm ${n.read ? "text-muted-foreground" : "font-medium"}`}
+                                  >
+                                    {n.title}
+                                  </span>
+                                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                                    {formatDistanceToNow(new Date(n.created_at), {
+                                      addSuffix: true,
+                                    })}
+                                  </span>
+                                </Link>
+                                {!n.read && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => markOneRead(e, n)}
+                                    title={t("markRead")}
+                                    aria-label={t("markRead")}
+                                    className="mt-0.5 shrink-0 rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+                                  >
+                                    <Check className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

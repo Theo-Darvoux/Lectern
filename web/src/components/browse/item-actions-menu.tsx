@@ -64,6 +64,7 @@ import {
 } from "@/components/ui/dialog";
 import { FlagButton } from "@/components/flags/flag-button";
 import { getViewerType } from "@/lib/file-utils";
+import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -671,9 +672,18 @@ export function ItemActionsMenu({
   );
 }
 
-export function ItemActionsDropdownTrigger() {
+export function ItemActionsDropdownTrigger({
+  className,
+  iconClassName,
+}: {
+  className?: string;
+  iconClassName?: string;
+} = {}) {
   const context = useContext(ActionsContext);
   const arm = useContext(ArmContext);
+
+  const btnClass = cn("h-8 w-8 hover:bg-muted active:scale-95 transition-transform", className);
+  const iconClass = cn("h-4 w-4 text-muted-foreground", iconClassName);
 
   // Unarmed row: render a cheap static trigger (no Radix). Hovering / pointer-
   // down on it arms the row, mounting the real menu before the click resolves.
@@ -683,13 +693,13 @@ export function ItemActionsDropdownTrigger() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 hover:bg-muted active:scale-95 transition-transform"
+          className={btnClass}
           aria-haspopup="menu"
           onPointerEnter={arm ?? undefined}
           onPointerDown={arm ?? undefined}
           onClick={arm ?? undefined}
         >
-          <MoreVertical className="h-4 w-4 text-muted-foreground" />
+          <MoreVertical className={iconClass} />
         </Button>
       </div>
     );
@@ -702,9 +712,9 @@ export function ItemActionsDropdownTrigger() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 hover:bg-muted active:scale-95 transition-transform"
+            className={btnClass}
           >
-            <MoreVertical className="h-4 w-4 text-muted-foreground" />
+            <MoreVertical className={iconClass} />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">

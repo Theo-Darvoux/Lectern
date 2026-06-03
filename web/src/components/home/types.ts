@@ -50,6 +50,7 @@ export interface DirectoryDetail {
     is_system: boolean;
     tags: string[];
     full_path: string | null;
+    preview_material_ids: string[];
     created_at: string;
 }
 

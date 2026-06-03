@@ -7,12 +7,59 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getMaterialBrowsePath } from "./file-type-display";
 import { SectionHeader } from "./section-header";
-import type { FeaturedItem } from "./types";
+import type { FeaturedItem, DirectoryDetail } from "./types";
 import { useTranslations } from "next-intl";
 import { MaterialPreview } from "./material-preview";
+import { DirectoryPreviewCollage } from "@/components/browse/directory-preview-collage";
+import { getDirectoryIcon } from "@/lib/directory-icons";
+import { getDirectoryColor } from "@/lib/directory-colors";
 
 interface FeaturedSectionProps {
   items: FeaturedItem[];
+}
+
+// ─────────────────────────────────────────────
+// Directory thumbnail — collage of contained materials, custom icon, or
+// the signature folder gradient. Mirrors the in-directory grid card.
+// ─────────────────────────────────────────────
+function DirectoryThumbnail({
+  directory,
+  iconSize,
+}: {
+  directory: DirectoryDetail;
+  iconSize: string;
+}) {
+  const metadata = (directory.metadata ?? {}) as Record<string, unknown>;
+  const iconId = metadata.thumbnail_icon ? String(metadata.thumbnail_icon) : null;
+  const colorId = metadata.thumbnail_color ? String(metadata.thumbnail_color) : null;
+  const previewIds = directory.preview_material_ids ?? [];
+  const showCollage = !iconId && previewIds.length > 0;
+
+  if (showCollage) {
+    return (
+      <div className="absolute inset-0 bg-muted">
+        <DirectoryPreviewCollage materialIds={previewIds} />
+      </div>
+    );
+  }
+
+  // Custom icon/colour set in browse → mirror that theme; otherwise keep the
+  // signature amber→orange folder.
+  if (iconId || colorId) {
+    const { Icon } = getDirectoryIcon(iconId);
+    const { gradient, iconClass } = getDirectoryColor(colorId);
+    return (
+      <div className={cn("absolute inset-0 flex items-center justify-center bg-linear-to-br", gradient)}>
+        <Icon className={cn(iconSize, "drop-shadow-sm", iconClass)} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-linear-to-br from-amber-400 to-orange-500">
+      <Folder className={cn(iconSize, "opacity-85 drop-shadow-md text-white")} />
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -48,6 +95,8 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
               className="absolute inset-0 h-full w-full"
               lazy={false}
             />
+          ) : directory ? (
+            <DirectoryThumbnail directory={directory} iconSize="h-20 w-20" />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center bg-linear-to-br from-amber-400 to-orange-500">
               <Folder className="h-20 w-20 opacity-85 drop-shadow-md text-white" />
@@ -136,6 +185,8 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
               className="absolute inset-0 h-full w-full"
               lazy={false}
             />
+          ) : directory ? (
+            <DirectoryThumbnail directory={directory} iconSize="h-16 w-16" />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center bg-linear-to-br from-amber-400 to-orange-500">
               <Folder className="h-16 w-16 opacity-85 drop-shadow-sm text-white" />

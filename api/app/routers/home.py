@@ -20,7 +20,7 @@ from app.schemas.directory import DirectoryOut
 from app.schemas.home import FeaturedItemOut, HomeResponse, HomeStats
 from app.schemas.material import MaterialDetail
 from app.schemas.pull_request import PullRequestOut
-from app.services.directory import get_directory_paths
+from app.services.directory import get_directory_paths, get_preview_material_ids
 from app.services.material import material_orm_to_dict
 
 router = APIRouter(prefix="/api/home", tags=["home"])
@@ -88,6 +88,7 @@ async def _build_featured_out(
 
     all_dir_ids = mat_dir_ids | boost_dir_ids
     paths = await get_directory_paths(db, all_dir_ids)
+    preview_ids = await get_preview_material_ids(db, list(boost_dir_ids))
 
     out: list[FeaturedItemOut] = []
     for featured, mat_dict in staged_materials:
@@ -117,6 +118,7 @@ async def _build_featured_out(
             "sort_order": directory.sort_order,
             "tags": directory.tags,
             "full_path": paths.get(directory.id),
+            "preview_material_ids": preview_ids.get(directory.id, []),
             "created_at": directory.created_at,
         }
         out.append(

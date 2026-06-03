@@ -3,15 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns/formatDistanceToNow";
-import {
-  Check,
-  CheckCircle2,
-  GitPullRequest,
-  History,
-  MessageSquare,
-  Flag,
-  UserCheck,
-} from "lucide-react";
+import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNotificationStore } from "@/lib/stores";
 import {
@@ -19,26 +11,13 @@ import {
   fetchUnreadCount,
   markAllNotificationsRead,
   markNotificationRead,
+  notificationIcon,
   type NotificationItem,
 } from "@/lib/notifications";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
 
 const PAGE_SIZE = 30;
-
-const TYPE_ICONS: Record<string, React.ElementType> = {
-  pr_approved: CheckCircle2,
-  pr_rejected: GitPullRequest,
-  pr_reverted: History,
-  pr_comment_reply: MessageSquare,
-  annotation_reply: MessageSquare,
-  material_annotation: MessageSquare,
-  material_comment: MessageSquare,
-  flag_resolved: Flag,
-  new_flag: Flag,
-  pending_user: UserCheck,
-  access_approved: UserCheck,
-};
 
 type Filter = "all" | "unread";
 
@@ -179,7 +158,7 @@ export default function NotificationsPage() {
         <>
           <div className="divide-y rounded-lg border">
             {notifications.map((n) => {
-              const Icon = TYPE_ICONS[n.type] || MessageSquare;
+              const Icon = notificationIcon(n.type);
               return (
                 <div
                   key={n.id}

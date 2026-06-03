@@ -1,4 +1,33 @@
+import type { ElementType } from "react";
+import {
+  CheckCircle2,
+  Flag,
+  GitPullRequest,
+  History,
+  MessageSquare,
+  UserCheck,
+} from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
+
+/** Maps a notification type to its display icon. Shared by the navbar popover
+ * and the full notifications page so the two stay visually consistent. */
+const NOTIFICATION_ICONS: Record<string, ElementType> = {
+  pr_approved: CheckCircle2,
+  pr_rejected: GitPullRequest,
+  pr_reverted: History,
+  pr_comment_reply: MessageSquare,
+  annotation_reply: MessageSquare,
+  material_annotation: MessageSquare,
+  material_comment: MessageSquare,
+  flag_resolved: Flag,
+  new_flag: Flag,
+  pending_user: UserCheck,
+  access_approved: UserCheck,
+};
+
+export function notificationIcon(type: string): ElementType {
+  return NOTIFICATION_ICONS[type] ?? MessageSquare;
+}
 
 export interface NotificationItem {
   id: string;
