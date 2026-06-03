@@ -55,9 +55,35 @@ def directory_orm_to_dict(
 async def get_preview_material_ids(
     db: AsyncSession, dir_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, list[str]]:
-    """Return up to 4 image material IDs per directory (latest version, image MIME type)."""
+    """Return up to 4 preview material IDs per directory (latest version).
+
+    Walks each requested directory's whole subtree, so a folder that only
+    contains sub-folders still surfaces thumbnails "back-propagated" from
+    materials nested deeper. Direct children win: results are ordered by depth
+    first, so a directory's own materials fill the slots before descendants'.
+    """
     if not dir_ids:
         return {}
+
+    # Recursive CTE: map each requested root directory to every directory in its
+    # subtree (itself at depth 0).
+    base = select(
+        Directory.id.label("root_id"),
+        Directory.id.label("dir_id"),
+        literal(0).label("depth"),
+    ).where(Directory.id.in_(dir_ids))
+    subtree = base.cte("preview_subtree", recursive=True)
+    child = aliased(Directory)
+    subtree = subtree.union_all(
+        select(
+            subtree.c.root_id,
+            child.id,
+            (subtree.c.depth + 1).label("depth"),
+        ).where(
+            child.parent_id == subtree.c.dir_id,
+            child.deleted_at.is_(None),
+        )
+    )
 
     latest_ver_subq = (
         select(
@@ -69,23 +95,16 @@ async def get_preview_material_ids(
     )
 
     rows = await db.execute(
-        select(Material.directory_id, Material.id)
+        select(subtree.c.root_id, Material.id)
+        .join(Material, Material.directory_id == subtree.c.dir_id)
         .join(latest_ver_subq, Material.id == latest_ver_subq.c.material_id)
-        .join(
-            MaterialVersion,
-            (MaterialVersion.material_id == Material.id)
-            & (MaterialVersion.version_number == latest_ver_subq.c.max_ver),
-        )
-        .where(
-            Material.directory_id.in_(dir_ids),
-            Material.parent_material_id.is_(None),
-        )
-        .order_by(Material.directory_id, Material.title)
+        .where(Material.parent_material_id.is_(None))
+        .order_by(subtree.c.root_id, subtree.c.depth, Material.title)
     )
 
     result: dict[uuid.UUID, list[str]] = {}
     for row in rows.all():
-        lst = result.setdefault(row.directory_id, [])
+        lst = result.setdefault(row.root_id, [])
         if len(lst) < 4:
             lst.append(str(row.id))
     return result
