@@ -23,7 +23,7 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
   const material = item.material;
   const directory = item.directory;
 
-  const title = item.title ?? (directory ? directory.name : (material?.title || "Untitled"));
+  const title = item.title ?? (directory ? directory.name : (material?.title || t("untitled")));
   const description = item.description ?? (directory ? directory.description : (material?.description || null));
   
   const browsePath = directory
@@ -31,7 +31,7 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
     : (material ? getMaterialBrowsePath(material) : "#");
 
   const tags = directory ? directory.tags : (material?.tags || []);
-  const viewText = directory ? "View Folder" : t("viewMaterial");
+  const viewText = directory ? t("viewFolder") : t("viewMaterial");
 
   return (
     <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
@@ -108,7 +108,7 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
   const material = item.material;
   const directory = item.directory;
 
-  const title = item.title ?? (directory ? directory.name : (material?.title || "Untitled"));
+  const title = item.title ?? (directory ? directory.name : (material?.title || t("untitled")));
   const description = item.description ?? (directory ? directory.description : (material?.description || null));
   
   const browsePath = directory
@@ -116,7 +116,7 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
     : (material ? getMaterialBrowsePath(material) : "#");
 
   const tags = directory ? directory.tags : (material?.tags || []);
-  const viewText = directory ? "View Folder" : t("viewMaterial");
+  const viewText = directory ? t("viewFolder") : t("viewMaterial");
 
   return (
     <Link

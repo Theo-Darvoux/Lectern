@@ -78,10 +78,20 @@ export interface PullRequestOut {
     reverts_pr_id?: string | null;
 }
 
+export interface HomeStats {
+    total_materials: number;
+    total_directories: number;
+    open_prs: number;
+    my_contributions: number;
+}
+
 export interface HomeData {
     featured: FeaturedItem[];
     popular_today: MaterialDetail[];
     popular_14d: MaterialDetail[];
     recent_prs: PullRequestOut[];
     recent_favourites: MaterialDetail[];
+    recently_viewed: MaterialDetail[];
+    recently_added: MaterialDetail[];
+    stats: HomeStats;
 }

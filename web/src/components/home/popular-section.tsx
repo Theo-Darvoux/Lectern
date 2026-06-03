@@ -1,116 +1,102 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { useState } from "react";
+import { Flame, ArrowRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MaterialCard } from "./material-card";
-import { SectionHeader } from "./section-header";
 import type { MaterialDetail } from "./types";
 import { useTranslations } from "next-intl";
 
-const MAX_CARDS = 8;
-const SKELETON_COUNT = 4;
+type Period = "today" | "14d";
 
 interface PopularSectionProps {
-  title: string;
-  subtitle?: string;
-  materials: MaterialDetail[];
-  seeAllHref: string;
+  today: MaterialDetail[];
+  fortnight: MaterialDetail[];
   isLoading?: boolean;
 }
 
+const MAX_CARDS = 8;
+const GRID =
+  "grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4";
+
 function SkeletonCard() {
   return (
-    <div className="w-55 flex-none sm:w-full rounded-xl border bg-card shadow-sm overflow-hidden">
-      {/* Preview skeleton */}
+    <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
       <Skeleton className="aspect-4/3 w-full rounded-none" />
-      {/* Body skeleton */}
-      <div className="p-3 space-y-2">
+      <div className="space-y-2 p-3">
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-3.5 w-3/4" />
         <Skeleton className="h-3 w-1/2" />
-        <div className="flex gap-3 pt-1">
-          <Skeleton className="h-3 w-10" />
-          <Skeleton className="h-3 w-10" />
-        </div>
       </div>
     </div>
   );
 }
 
-function SeeAllCard({
-  href,
-  totalCount,
-}: {
-  href: string;
-  totalCount: number;
-}) {
-  const t = useTranslations("Home");
-  return (
-    <Link
-      href={href}
-      className="block w-45 flex-none sm:w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
-      aria-label={t("seeAllMaterials")}
-    >
-      <div className="flex h-full min-h-50 flex-col items-center justify-center gap-3 rounded-xl border border-dashed bg-muted/30 p-4 text-center transition-colors hover:bg-muted/60">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-          <ChevronRight className="h-5 w-5 text-primary" />
-        </div>
-        <div>
-          <p className="text-sm font-semibold text-foreground">{t("seeAll")}</p>
-          {totalCount > MAX_CARDS && (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              +{totalCount - MAX_CARDS} {t("more")}
-            </p>
-          )}
-        </div>
-      </div>
-    </Link>
-  );
-}
-
 export function PopularSection({
-  title,
-  subtitle,
-  materials,
-  seeAllHref,
+  today,
+  fortnight,
   isLoading = false,
 }: PopularSectionProps) {
   const t = useTranslations("Home");
-  const visibleMaterials = materials.slice(0, MAX_CARDS);
-  const hasMore = materials.length >= MAX_CARDS;
+  const [period, setPeriod] = useState<Period>("today");
+
+  const materials = period === "today" ? today : fortnight;
+  const visible = materials.slice(0, MAX_CARDS);
+  const seeAllHref = `/popular?period=${period}`;
 
   return (
-    <section aria-label={title}>
-      <SectionHeader
-        title={title}
-        subtitle={subtitle}
-        seeAllHref={seeAllHref}
-        seeAllLabel={t("seeAll")}
-      />
+    <section aria-label={t("popularTitle")}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="flex items-center gap-2 text-lg font-semibold leading-tight tracking-tight sm:text-xl">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-orange-500/10 text-orange-500">
+            <Flame className="h-4 w-4" />
+          </span>
+          {t("popularTitle")}
+        </h2>
+
+        <div className="flex items-center gap-2">
+          <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)}>
+            <TabsList className="h-8">
+              <TabsTrigger value="today" className="text-xs">
+                {t("periodToday")}
+              </TabsTrigger>
+              <TabsTrigger value="14d" className="text-xs">
+                {t("periodFortnight")}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          <Link
+            href={seeAllHref}
+            className="hidden shrink-0 items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:inline-flex"
+          >
+            {t("seeAll")}
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      </div>
 
       <div className="mt-4">
-        <div className="flex gap-4 overflow-x-auto pb-3 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden sm:grid sm:grid-cols-3 sm:overflow-x-visible sm:pb-0 lg:grid-cols-4 xl:grid-cols-5">
-          {isLoading ? (
-            Array.from({ length: SKELETON_COUNT }).map((_, i) => (
+        {isLoading ? (
+          <div className={GRID}>
+            {Array.from({ length: 4 }).map((_, i) => (
               <SkeletonCard key={i} />
-            ))
-          ) : visibleMaterials.length === 0 ? (
-            <p className="py-6 text-sm text-muted-foreground">
-              {t("nothingHereYet")}
-            </p>
-          ) : (
-            <>
-              {visibleMaterials.map((material) => (
-                <MaterialCard key={material.id} material={material} />
-              ))}
-
-              {hasMore && (
-                <SeeAllCard href={seeAllHref} totalCount={materials.length} />
-              )}
-            </>
-          )}
-        </div>
+            ))}
+          </div>
+        ) : visible.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/20 py-10 text-center">
+            <Flame className="h-8 w-8 text-muted-foreground/30" />
+            <p className="text-sm text-muted-foreground">{t("nothingHereYet")}</p>
+          </div>
+        ) : (
+          <div className={GRID}>
+            {visible.map((material) => (
+              <MaterialCard key={material.id} material={material} />
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

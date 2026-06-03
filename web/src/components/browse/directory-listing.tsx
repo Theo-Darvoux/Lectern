@@ -586,7 +586,7 @@ export function DirectoryListing({
           {!selectMode ? (
             <div className="flex items-center justify-between h-11">
               <div className="flex items-center gap-2">
-                {allSelectableItems.length > 0 && (
+                {!guest && allSelectableItems.length > 0 && (
                   <Button
                     key="select-btn"
                     size="sm"

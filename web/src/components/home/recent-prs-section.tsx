@@ -31,7 +31,7 @@ function PRRowSkeleton() {
 function PRRow({ pr }: { pr: PullRequestOut }) {
     const t = useTranslations("Home");
     const authorLabel =
-        pr.author?.display_name ?? pr.author?.email ?? "Unknown";
+        pr.author?.display_name ?? pr.author?.email ?? t("unknownAuthor");
 
     const timeAgo = formatDistanceToNow(new Date(pr.created_at), {
         addSuffix: true,
@@ -84,7 +84,7 @@ export function RecentPRsSection({ prs, isLoading = false }: RecentPRsSectionPro
         <section aria-label={t("recentContributions")}>
             <SectionHeader
                 title={t("recentContributions")}
-                subtitle={t("helpReviewContributions")}
+                icon={<GitPullRequest className="h-4 w-4" />}
                 seeAllHref="/pull-requests"
                 seeAllLabel={t("allContributions")}
             />

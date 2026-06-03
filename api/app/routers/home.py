@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,8 +15,9 @@ from app.models.directory import Directory
 from app.models.featured import FeaturedItem
 from app.models.material import Material, MaterialFavourite, MaterialVersion
 from app.models.pull_request import PRStatus, PullRequest
+from app.models.view_history import ViewHistory
 from app.schemas.directory import DirectoryOut
-from app.schemas.home import FeaturedItemOut, HomeResponse
+from app.schemas.home import FeaturedItemOut, HomeResponse, HomeStats
 from app.schemas.material import MaterialDetail
 from app.schemas.pull_request import PullRequestOut
 from app.services.directory import get_directory_paths
@@ -149,6 +150,9 @@ async def get_home(
     - **popular_14d**: top 8 root materials by views_14d DESC
     - **recent_prs**: 5 most recently opened open pull requests
     - **recent_favourites**: current user's 6 most recently favourited materials
+    - **recently_viewed**: current user's 8 most recently viewed materials
+    - **recently_added**: 8 most recently created root materials
+    - **stats**: lightweight platform + personal counters
     """
     now = datetime.now(UTC)
 
@@ -224,12 +228,67 @@ async def get_home(
     )
     recent_favourites = await _build_material_details(db, fav_result.all(), user.id)
 
+    # ── recently viewed ───────────────────────────────────────────────────────
+    viewed_result = await db.execute(
+        select(Material, MaterialVersion)
+        .join(ViewHistory, ViewHistory.material_id == Material.id)
+        .outerjoin(
+            MaterialVersion,
+            (Material.id == MaterialVersion.material_id)
+            & (Material.current_version == MaterialVersion.version_number),
+        )
+        .where(ViewHistory.user_id == user.id, Material.deleted_at.is_(None))
+        .order_by(ViewHistory.viewed_at.desc())
+        .limit(8)
+    )
+    recently_viewed = await _build_material_details(db, viewed_result.all(), user.id)
+
+    # ── recently added ────────────────────────────────────────────────────────
+    added_result = await db.execute(
+        select(Material, MaterialVersion)
+        .outerjoin(
+            MaterialVersion,
+            (Material.id == MaterialVersion.material_id)
+            & (Material.current_version == MaterialVersion.version_number),
+        )
+        .where(Material.parent_material_id.is_(None), Material.deleted_at.is_(None))
+        .order_by(Material.created_at.desc())
+        .limit(8)
+    )
+    recently_added = await _build_material_details(db, added_result.all(), user.id)
+
+    # ── stats ─────────────────────────────────────────────────────────────────
+    total_materials = await db.scalar(
+        select(func.count())
+        .select_from(Material)
+        .where(Material.parent_material_id.is_(None), Material.deleted_at.is_(None))
+    )
+    total_directories = await db.scalar(
+        select(func.count()).select_from(Directory).where(Directory.deleted_at.is_(None))
+    )
+    open_prs_count = await db.scalar(
+        select(func.count()).select_from(PullRequest).where(PullRequest.status == PRStatus.OPEN)
+    )
+    my_contributions = await db.scalar(
+        select(func.count()).select_from(PullRequest).where(PullRequest.author_id == user.id)
+    )
+
+    stats = HomeStats(
+        total_materials=total_materials or 0,
+        total_directories=total_directories or 0,
+        open_prs=open_prs_count or 0,
+        my_contributions=my_contributions or 0,
+    )
+
     return HomeResponse(
         featured=featured,
         popular_today=popular_today,
         popular_14d=popular_14d,
         recent_prs=recent_prs,
         recent_favourites=recent_favourites,
+        recently_viewed=recently_viewed,
+        recently_added=recently_added,
+        stats=stats,
     )
 
 

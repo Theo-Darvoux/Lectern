@@ -33,7 +33,7 @@ export function MaterialCard({ material, className }: MaterialCardProps) {
     <Link
       href={browsePath}
       className={cn(
-        "block w-55 flex-none sm:w-full group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl",
+        "block w-full group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl",
         className,
       )}
     >

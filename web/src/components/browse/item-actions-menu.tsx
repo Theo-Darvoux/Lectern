@@ -420,7 +420,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
       {!actions.isRestricted && (
         <>
-          {!guest &&
+          {!guest && actions.isMaterial &&
             (actions.viewerType === "qcm" ? (
               <Item onClick={() => router.push(`/qcm/${item.id}/edit`)} className="cursor-pointer">
                 <PencilLine className="mr-2 h-4 w-4" />

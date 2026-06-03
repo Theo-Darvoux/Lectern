@@ -23,9 +23,19 @@ class FeaturedItemOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class HomeStats(BaseModel):
+    total_materials: int
+    total_directories: int
+    open_prs: int
+    my_contributions: int
+
+
 class HomeResponse(BaseModel):
     featured: list[FeaturedItemOut]
     popular_today: list[MaterialDetail]
     popular_14d: list[MaterialDetail]
     recent_prs: list[PullRequestOut]
     recent_favourites: list[MaterialDetail]
+    recently_viewed: list[MaterialDetail]
+    recently_added: list[MaterialDetail]
+    stats: HomeStats

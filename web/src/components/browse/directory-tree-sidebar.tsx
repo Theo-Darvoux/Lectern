@@ -408,6 +408,7 @@ export function DirectoryTreeSidebar() {
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
 
   const pathname = usePathname();
+  const isOnBrowse = pathname === "/browse" || pathname.startsWith("/browse/");
   const currentSlugs = useMemo(() => {
     const stripped = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
     return stripped ? stripped.split("/") : [];
@@ -895,7 +896,7 @@ export function DirectoryTreeSidebar() {
             className={cn(
               "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px]",
               "transition-colors",
-              activeId === null && currentSlugs.length === 0
+              activeId === null && currentSlugs.length === 0 && isOnBrowse
                 ? "bg-accent text-accent-foreground font-medium"
                 : "hover:bg-accent/50 text-foreground/90",
             )}
@@ -904,7 +905,7 @@ export function DirectoryTreeSidebar() {
             <Home
               className={cn(
                 "h-4 w-4",
-                activeId === null && currentSlugs.length === 0
+                activeId === null && currentSlugs.length === 0 && isOnBrowse
                   ? "text-primary"
                   : "text-muted-foreground/80",
               )}

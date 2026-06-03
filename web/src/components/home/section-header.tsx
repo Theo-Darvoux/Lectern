@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 
 interface SectionHeaderProps {
   title: string;
   subtitle?: string;
+  icon?: ReactNode;
   seeAllHref?: string;
   seeAllLabel?: string;
   className?: string;
@@ -15,6 +17,7 @@ import { useTranslations } from "next-intl";
 export function SectionHeader({
   title,
   subtitle,
+  icon,
   seeAllHref,
   seeAllLabel,
   className,
@@ -25,8 +28,13 @@ export function SectionHeader({
   return (
     <div className={cn("space-y-0.5", className)}>
       <div className="flex items-center justify-between gap-4">
-        <h2 className="text-lg font-semibold leading-tight tracking-tight sm:text-xl">
-          {title}
+        <h2 className="flex min-w-0 items-center gap-2 text-lg font-semibold leading-tight tracking-tight sm:text-xl">
+          {icon && (
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              {icon}
+            </span>
+          )}
+          <span className="truncate">{title}</span>
         </h2>
 
         {seeAllHref && (

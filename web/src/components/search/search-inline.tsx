@@ -13,8 +13,9 @@ import {
 } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
 
-export function SearchInline() {
+export function SearchInline({ className }: { className?: string } = {}) {
     const t = useTranslations("Search");
     const router = useRouter();
     const [open, setOpen] = React.useState(false);
@@ -53,7 +54,7 @@ export function SearchInline() {
     }, []);
 
     return (
-        <div className="relative w-full max-w-md pointer-events-auto">
+        <div className={cn("relative w-full max-w-md pointer-events-auto", className)}>
             <Popover open={open} onOpenChange={setOpen}>
                 <PopoverTrigger asChild>
                     <div className="relative group">
