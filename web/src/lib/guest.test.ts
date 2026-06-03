@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isGuest, isGuestBlockedPath, GUEST_ROLE, type UserBrief } from "@/lib/stores";
+import { isGuest, isGuestBlockedPath, GUEST_ROLE, type UserBrief } from "@/lib/guest";
 
 function makeUser(role: string): UserBrief {
     return {

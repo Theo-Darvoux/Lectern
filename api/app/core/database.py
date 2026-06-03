@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncGenerator
 
 from sqlalchemy import event
@@ -14,6 +15,8 @@ engine = create_async_engine(
 )
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+logger = logging.getLogger(__name__)
 
 
 @event.listens_for(Session, "do_orm_execute")
@@ -92,11 +95,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
                     broadcast_to_topic(topic, event)
 
             if jobs:
-                import logging
-
                 import app.core.redis as redis_core
 
-                db_logger = logging.getLogger("wikint")
                 coalesced = _coalesce_index_jobs(jobs)
 
                 if redis_core.arq_pool:
@@ -104,13 +104,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
                         try:
                             await redis_core.arq_pool.enqueue_job(*job)
                         except Exception as e:
-                            db_logger.critical(
+                            logger.critical(
                                 "CRITICAL: Failed to enqueue background job after commit: %s. Job data: %s",
                                 e,
                                 job,
                             )
                 else:
-                    db_logger.critical(
+                    logger.critical(
                         "CRITICAL: No arq_pool available to enqueue jobs after commit. Jobs: %s",
                         coalesced,
                     )

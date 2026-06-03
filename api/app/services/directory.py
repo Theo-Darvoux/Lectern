@@ -3,7 +3,7 @@ import typing
 import unicodedata
 import uuid
 
-from sqlalchemy import case, exists, func, literal, select, tuple_, update
+from sqlalchemy import String, case, exists, func, literal, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -18,14 +18,44 @@ def slugify(text: str) -> str:
     return re.sub(r"[-\s]+", "-", text).strip("-")
 
 
+def directory_orm_to_dict(
+    d: Directory,
+    *,
+    full_path: str,
+    is_liked: bool = False,
+    is_favourited: bool = False,
+    child_directory_count: int | None = None,
+    child_material_count: int | None = None,
+) -> dict[str, typing.Any]:
+    out: dict[str, typing.Any] = {
+        "id": str(d.id),
+        "parent_id": str(d.parent_id) if d.parent_id else None,
+        "name": d.name,
+        "slug": d.slug,
+        "type": d.type.value if hasattr(d.type, "value") else d.type,
+        "description": d.description,
+        "metadata": d.metadata_,
+        "sort_order": d.sort_order,
+        "is_system": d.is_system,
+        "tags": [t.name for t in d.tags],
+        "full_path": full_path,
+        "like_count": d.like_count,
+        "is_liked": is_liked,
+        "is_favourited": is_favourited,
+        "created_at": d.created_at,
+    }
+    if child_directory_count is not None:
+        out["child_directory_count"] = child_directory_count
+    if child_material_count is not None:
+        out["child_material_count"] = child_material_count
+    return out
+
+
 async def get_directory_paths(
     db: AsyncSession, directory_ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, str]:
     if not directory_ids:
         return {}
-
-    from sqlalchemy import String
-    from sqlalchemy.orm import aliased
 
     base_case = (
         select(
@@ -67,9 +97,6 @@ async def get_ancestor_map(
     """
     if not directory_ids:
         return {}
-
-    from sqlalchemy import String
-    from sqlalchemy.orm import aliased
 
     base_case = (
         select(
@@ -149,29 +176,17 @@ async def get_root_directories(
         )
         favourited_ids = {r.directory_id for r in fav_rows.all()}
 
-    items = []
-    for d in directories:
-        items.append(
-            {
-                "id": str(d.id),
-                "parent_id": str(d.parent_id) if d.parent_id else None,
-                "name": d.name,
-                "slug": d.slug,
-                "type": d.type.value if hasattr(d.type, "value") else d.type,
-                "description": d.description,
-                "metadata": d.metadata_,
-                "sort_order": d.sort_order,
-                "is_system": d.is_system,
-                "tags": [t.name for t in d.tags],
-                "full_path": d.slug,
-                "like_count": d.like_count,
-                "is_liked": d.id in liked_ids,
-                "is_favourited": d.id in favourited_ids,
-                "created_at": d.created_at,
-                "child_directory_count": dir_counts.get(d.id, 0),
-                "child_material_count": mat_counts.get(d.id, 0),
-            }
+    items = [
+        directory_orm_to_dict(
+            d,
+            full_path=d.slug,
+            is_liked=d.id in liked_ids,
+            is_favourited=d.id in favourited_ids,
+            child_directory_count=dir_counts.get(d.id, 0),
+            child_material_count=mat_counts.get(d.id, 0),
         )
+        for d in directories
+    ]
 
     # Root-level materials. is_liked/is_favourited are resolved in a batched
     # query inside _attach_version_and_counts, so we don't eagerly load the
@@ -196,7 +211,7 @@ async def _attach_version_and_counts(
     directory_path: str | None,
 ) -> list[dict[str, typing.Any]]:
     """Batch-fetch attachment counts and current versions for a list of materials."""
-    from app.services.material import material_orm_to_dict, version_orm_to_dict
+    from app.services.material import material_orm_to_dict
 
     if not materials:
         return []
@@ -246,28 +261,22 @@ async def _attach_version_and_counts(
         )
         favourited_ids = {r.material_id for r in fav_rows.all()}
 
-    out = []
-    for material in materials:
-        version = all_versions.get((material.id, material.current_version))
-        mat_dict = material_orm_to_dict(
+    return [
+        material_orm_to_dict(
             material,
             attachment_count=att_counts.get(material.id, 0),
             current_user_id=current_user_id,
             directory_path=directory_path,
             is_liked=material.id in liked_ids,
             is_favourited=material.id in favourited_ids,
+            current_version=all_versions.get((material.id, material.current_version)),
         )
-        if version:
-            mat_dict["current_version_info"] = version_orm_to_dict(version)
-        out.append(mat_dict)
-    return out
+        for material in materials
+    ]
 
 
 async def get_directory_by_id(db: AsyncSession, directory_id: str | uuid.UUID) -> Directory:
-
     if isinstance(directory_id, str):
-        import uuid
-
         directory_id = uuid.UUID(directory_id)
     result = await db.execute(
         select(Directory).options(selectinload(Directory.tags)).where(Directory.id == directory_id)
@@ -350,25 +359,14 @@ async def get_directory_children(
         favourited_dir_ids = {r.directory_id for r in fav_rows.all()}
 
     dirs_with_counts = [
-        {
-            "id": str(d.id),
-            "parent_id": str(d.parent_id) if d.parent_id else None,
-            "name": d.name,
-            "slug": d.slug,
-            "type": d.type.value if hasattr(d.type, "value") else d.type,
-            "description": d.description,
-            "metadata": d.metadata_,
-            "sort_order": d.sort_order,
-            "is_system": d.is_system,
-            "tags": [t.name for t in d.tags],
-            "full_path": f"{parent_full_path}/{d.slug}" if parent_full_path else d.slug,
-            "like_count": d.like_count,
-            "is_liked": d.id in liked_dir_ids,
-            "is_favourited": d.id in favourited_dir_ids,
-            "created_at": d.created_at,
-            "child_directory_count": gc_dir_counts.get(d.id, 0),
-            "child_material_count": gc_mat_counts.get(d.id, 0),
-        }
+        directory_orm_to_dict(
+            d,
+            full_path=f"{parent_full_path}/{d.slug}" if parent_full_path else d.slug,
+            is_liked=d.id in liked_dir_ids,
+            is_favourited=d.id in favourited_dir_ids,
+            child_directory_count=gc_dir_counts.get(d.id, 0),
+            child_material_count=gc_mat_counts.get(d.id, 0),
+        )
         for d in child_dirs
     ]
 
@@ -587,25 +585,12 @@ async def resolve_browse_path(
         )
         return {
             "type": "directory_listing",
-            "directory": {
-                "id": str(current_dir.id),
-                "parent_id": str(current_dir.parent_id) if current_dir.parent_id else None,
-                "name": current_dir.name,
-                "slug": current_dir.slug,
-                "type": current_dir.type.value
-                if hasattr(current_dir.type, "value")
-                else current_dir.type,
-                "description": current_dir.description,
-                "metadata": current_dir.metadata_,
-                "sort_order": current_dir.sort_order,
-                "is_system": current_dir.is_system,
-                "full_path": current_dir_full_path,
-                "tags": [t.name for t in current_dir.tags],
-                "like_count": current_dir.like_count,
-                "is_liked": is_liked,
-                "is_favourited": is_favourited,
-                "created_at": current_dir.created_at,
-            },
+            "directory": directory_orm_to_dict(
+                current_dir,
+                full_path=current_dir_full_path,
+                is_liked=is_liked,
+                is_favourited=is_favourited,
+            ),
             "directories": children["directories"],
             "materials": children["materials"],
             "_breadcrumbs": path_segments,
@@ -676,43 +661,11 @@ _DOWNLOAD_MAX_FILES = 500
 _DOWNLOAD_MAX_BYTES = 500 * 1024 * 1024  # 500 MiB
 
 
-async def get_directory_download_entries(
+async def _build_zip_entries(
     db: AsyncSession,
-    directory_id: uuid.UUID,
-) -> tuple[str, list[tuple[str, str]]]:
-    """Return (directory_name, [(arcname, file_key), ...]) for building a ZIP download.
-
-    arcname preserves the subdirectory structure relative to the requested directory.
-    Raises ValueError when the directory exceeds safety limits.
-    """
-    from sqlalchemy import String
-
-    root = await get_directory_by_id(db, directory_id)
-
-    # Recursive CTE: collect every descendant directory with its relative path.
-    base_case = (
-        select(
-            Directory.id,
-            literal("").cast(String).label("rel_path"),
-        )
-        .where(Directory.id == directory_id)
-        .cte(name="dir_tree", recursive=True)
-    )
-
-    base_alias = aliased(base_case, name="p")
-    dir_alias = aliased(Directory, name="d")
-
-    recursive_case = select(
-        dir_alias.id,
-        case(
-            (base_alias.c.rel_path == "", dir_alias.name),
-            else_=base_alias.c.rel_path + "/" + dir_alias.name,
-        ).label("rel_path"),
-    ).join(base_alias, dir_alias.parent_id == base_alias.c.id)
-
-    cte = base_case.union_all(recursive_case)
-
-    # Join to materials and their current file versions.
+    cte: typing.Any,
+) -> list[tuple[str, str]]:
+    """Execute the ZIP content query for a directory tree CTE and build deduplicated arcnames."""
     stmt = (
         select(
             cte.c.rel_path,
@@ -748,7 +701,6 @@ async def get_directory_download_entries(
             f"This directory is too large to download as a ZIP (limit: {limit_mb} MiB)."
         )
 
-    # Build arcnames and deduplicate conflicts within the same path.
     entries: list[tuple[str, str]] = []
     seen: set[str] = set()
     for row in rows:
@@ -763,15 +715,48 @@ async def get_directory_download_entries(
         seen.add(arcname)
         entries.append((arcname, row.file_key))
 
-    return root.name, entries
+    return entries
+
+
+async def get_directory_download_entries(
+    db: AsyncSession,
+    directory_id: uuid.UUID,
+) -> tuple[str, list[tuple[str, str]]]:
+    """Return (directory_name, [(arcname, file_key), ...]) for building a ZIP download.
+
+    arcname preserves the subdirectory structure relative to the requested directory.
+    Raises ValueError when the directory exceeds safety limits.
+    """
+    root = await get_directory_by_id(db, directory_id)
+
+    base_case = (
+        select(
+            Directory.id,
+            literal("").cast(String).label("rel_path"),
+        )
+        .where(Directory.id == directory_id)
+        .cte(name="dir_tree", recursive=True)
+    )
+
+    base_alias = aliased(base_case, name="p")
+    dir_alias = aliased(Directory, name="d")
+
+    recursive_case = select(
+        dir_alias.id,
+        case(
+            (base_alias.c.rel_path == "", dir_alias.name),
+            else_=base_alias.c.rel_path + "/" + dir_alias.name,
+        ).label("rel_path"),
+    ).join(base_alias, dir_alias.parent_id == base_alias.c.id)
+
+    cte = base_case.union_all(recursive_case)
+    return root.name, await _build_zip_entries(db, cte)
 
 
 async def get_root_download_entries(
     db: AsyncSession,
 ) -> tuple[str, list[tuple[str, str]]]:
     """Return ("root", [(arcname, file_key), ...]) for downloading the entire root level."""
-    from sqlalchemy import String
-
     base_case = (
         select(
             Directory.id,
@@ -790,54 +775,4 @@ async def get_root_download_entries(
     ).join(base_alias, dir_alias.parent_id == base_alias.c.id)
 
     cte = base_case.union_all(recursive_case)
-
-    stmt = (
-        select(
-            cte.c.rel_path,
-            MaterialVersion.file_key,
-            MaterialVersion.file_name,
-            MaterialVersion.file_size,
-        )
-        .join(Material, Material.directory_id == cte.c.id)
-        .join(
-            MaterialVersion,
-            (MaterialVersion.material_id == Material.id)
-            & (MaterialVersion.version_number == Material.current_version),
-        )
-        .where(
-            Material.parent_material_id.is_(None),
-            MaterialVersion.file_key.isnot(None),
-            ~MaterialVersion.file_key.like("quarantine/%"),
-        )
-        .order_by(cte.c.rel_path, MaterialVersion.file_name)
-    )
-
-    rows = (await db.execute(stmt)).all()
-
-    if len(rows) > _DOWNLOAD_MAX_FILES:
-        raise ValueError(
-            f"This directory contains too many files ({len(rows)}); limit is {_DOWNLOAD_MAX_FILES}."
-        )
-
-    total_size = sum(r.file_size or 0 for r in rows)
-    if total_size > _DOWNLOAD_MAX_BYTES:
-        limit_mb = _DOWNLOAD_MAX_BYTES // (1024 * 1024)
-        raise ValueError(
-            f"This directory is too large to download as a ZIP (limit: {limit_mb} MiB)."
-        )
-
-    entries: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for row in rows:
-        fname = row.file_name or "file"
-        arcname = f"{row.rel_path}/{fname}" if row.rel_path else fname
-        original = arcname
-        n = 1
-        while arcname in seen:
-            base, _, ext = original.rpartition(".")
-            arcname = f"{base}_{n}.{ext}" if ext else f"{original}_{n}"
-            n += 1
-        seen.add(arcname)
-        entries.append((arcname, row.file_key))
-
-    return "root", entries
+    return "root", await _build_zip_entries(db, cte)

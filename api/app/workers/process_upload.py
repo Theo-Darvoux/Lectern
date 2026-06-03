@@ -6,7 +6,7 @@ from app.workers.upload.constants import _STAGES, _overall
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.pipeline import UploadPipeline, _get_fallback_scanner
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 async def process_upload(

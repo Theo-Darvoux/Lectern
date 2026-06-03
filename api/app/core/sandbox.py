@@ -19,7 +19,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # ── Bwrap availability detection (evaluated once) ───────────────────────────
 

@@ -27,7 +27,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     import logging
     import shutil
 
-    logger = logging.getLogger("wikint")
+    logger = logging.getLogger(__name__)
 
     if not shutil.which("bwrap"):
         raise RuntimeError(

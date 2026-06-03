@@ -26,7 +26,8 @@ import {
   getFileBadgeLabel,
   getViewerType,
 } from "@/lib/file-utils";
-import { useUIStore, useAuthStore, isGuest } from "@/lib/stores";
+import { useUIStore, useAuthStore } from "@/lib/stores";
+import { isGuest } from "@/lib/guest";
 // useUIStore provides: sidebarOpen, openSidebar, closeSidebar
 import { apiFetch } from "@/lib/api-client";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";

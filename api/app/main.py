@@ -39,35 +39,15 @@ from app.routers.upload import router as upload_api_router
 from app.routers.users import router as users_router
 from app.schemas.common import HealthResponse
 
-logger = logging.getLogger("wikint")
-
-# In-process cache for the S3 domain used in CSP headers.
-# Refreshed at most once per minute; avoids a DB query on every HTTP request.
-_s3_csp_domain: str | None = None
-_s3_csp_domain_fetched_at: float = 0.0
-_S3_CSP_DOMAIN_TTL = 60.0
+logger = logging.getLogger(__name__)
 
 
-async def _get_s3_csp_domain() -> str:
-    global _s3_csp_domain, _s3_csp_domain_fetched_at
-    now = time.monotonic()
-    if _s3_csp_domain is not None and now - _s3_csp_domain_fetched_at < _S3_CSP_DOMAIN_TTL:
-        return _s3_csp_domain
-    try:
-        from app.core.database import async_session_factory
-        from app.core.redis import redis_client
-        from app.services.auth import get_full_auth_config
+def _s3_csp_domain() -> str:
+    """Extract the bare host[:port] from the S3 public endpoint for CSP header use."""
+    from urllib.parse import urlparse
 
-        async with async_session_factory() as db:
-            config = await get_full_auth_config(db, redis_client)
-        domain = config.get("s3_public_endpoint") or settings.s3_public_endpoint or ""
-    except Exception:
-        domain = settings.s3_public_endpoint or ""
-    if "://" in domain:
-        domain = domain.split("://")[1]
-    _s3_csp_domain = domain
-    _s3_csp_domain_fetched_at = now
-    return domain
+    ep = settings.s3_public_endpoint or ""
+    return urlparse(ep).netloc or ep
 
 
 @asynccontextmanager
@@ -76,7 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     from app.core.meilisearch import setup_meilisearch
     from app.core.redis import close_arq_pool, init_arq_pool
-    from app.core.scanner import MalwareScanner, close_scanner, init_scanner
+    from app.core.scanner import MalwareScanner
     from app.core.storage import close_s3_client, init_s3_client
     from app.core.telemetry import setup_telemetry
 
@@ -102,18 +82,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Hard-fail: storage and scanner are required for safe operation
     await init_s3_client()
 
-    # Modern DI-based scanner
     scanner = MalwareScanner()
     scanner.initialize()
     app.state.scanner = scanner
 
-    # Backward compatibility for code not yet refactored to DI
-    init_scanner()
-
     yield
     logger.info("WikINT API shutting down")
     await scanner.close()
-    await close_scanner()
     await close_arq_pool()
     await close_s3_client()
     from app.core.redis import redis_client
@@ -145,7 +120,7 @@ async def add_security_headers(
 ) -> Response:
     response = await call_next(request)
 
-    s3_domain = await _get_s3_csp_domain()
+    s3_domain = _s3_csp_domain()
 
     # Build dynamic CSP
     connect_src = (

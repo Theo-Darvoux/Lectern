@@ -208,19 +208,24 @@ export default {
     // EXISTING ROUTE: ZIP Generation
     // ==========================================
     if (url.pathname === "/zip") {
-        if (!payload.entries || !payload.dir_name) {
-             return new Response("Invalid token payload for zip", { status: 400 });
-        }
+      if (!payload.entries || !payload.dir_name) {
+        return new Response("Invalid token payload for zip", { status: 400 });
+      }
 
+      const entries = payload.entries;
+      const dirName = payload.dir_name;
 
-    // Async generator so R2 fetches happen one at a time (lazy) but each yielded
-    // item has a concrete ReadableStream — client-zip does not accept functions.
-    async function* streamFiles() {
-      for (const { arcname, r2_key } of payload!.entries!) {
-        const obj = await env.BUCKET.get(r2_key);
-        if (!obj) {
-          yield { name: arcname, input: new Response(""), size: 0 };
-        } else {
+      // Async generator so R2 fetches happen one at a time (lazy) but each
+      // yielded item has a concrete ReadableStream — client-zip does not
+      // accept functions.
+      async function* streamFiles() {
+        for (const { arcname, r2_key } of entries) {
+          const obj = await env.BUCKET.get(r2_key);
+          if (!obj) {
+            // R2 key missing — skip rather than yielding a corrupt empty file.
+            console.error(`ZIP: missing R2 key ${r2_key}, skipping ${arcname}`);
+            continue;
+          }
           let input = obj.body;
           let size: number | undefined = obj.size;
           if (obj.httpMetadata?.contentEncoding === "gzip") {
@@ -230,18 +235,20 @@ export default {
           yield { name: arcname, input, size };
         }
       }
-    }
+
       const files = streamFiles();
 
+      // Part suffix is omitted for part 1 so a single-part download has a
+      // clean filename; subsequent parts append " (N)" for disambiguation.
       const suffix =
         payload.part && payload.total && payload.total > 1 && payload.part > 1
           ? ` (${payload.part})`
           : "";
       const baseName =
-        payload.dir_name.replace(/[^\x20-\x7E]/g, "_").replace(/\//g, "_") ||
+        dirName.replace(/[^\x20-\x7E]/g, "_").replace(/\//g, "_") ||
         "directory";
       const asciiFallback = baseName + suffix;
-      const encodedName = encodeURIComponent(payload.dir_name + suffix);
+      const encodedName = encodeURIComponent(dirName + suffix);
       const disposition = `attachment; filename="${asciiFallback}.zip"; filename*=UTF-8''${encodedName}.zip`;
 
       const zipResponse = downloadZip(files);

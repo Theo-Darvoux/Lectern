@@ -9,7 +9,8 @@ import {
   AnnotationForm,
 } from "@/components/annotations/annotation-thread";
 import { useAnnotationsContext } from "@/hooks/use-annotations";
-import { useAuthStore, isGuest } from "@/lib/stores";
+import { useAuthStore } from "@/lib/stores";
+import { isGuest } from "@/lib/guest";
 import { useTranslations } from "next-intl";
 
 interface SidebarTarget {

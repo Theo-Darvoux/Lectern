@@ -1,9 +1,11 @@
 import asyncio
 import io
+import logging
 import uuid
 import zipfile
 from collections.abc import AsyncGenerator
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
@@ -15,13 +17,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.database import get_db
-from app.core.redis import get_redis
+from app.core.exceptions import BadRequestError, UnauthorizedError
+from app.core.redis import get_redis, redis_client
 from app.core.sse import register_topic_queue, sse_event_stream, unregister_topic_queue
-from app.dependencies.auth import get_current_user, security
+from app.core.storage import stream_object
+from app.dependencies.auth import get_current_user, get_user_from_token, security
+from app.dependencies.rate_limit import rate_limit_downloads
 from app.models.material import Material
 from app.models.user import User
 from app.schemas.directory import DirectoryBreadcrumb, DirectoryOut
 from app.services import directory as directory_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/directories", tags=["directories"])
 
@@ -110,7 +117,7 @@ async def get_directory_children(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> dict:  # type: ignore[type-arg]
+) -> dict[str, Any]:
     return await directory_service.get_directory_children(db, id)
 
 
@@ -140,7 +147,6 @@ async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes,
     are yielded to the client after each entry so the connection stays alive and
     the browser can show download progress.
     """
-    from app.core.storage import stream_object
 
     class _Buf:
         """Writable BytesIO wrapper that tracks how many bytes have been flushed."""
@@ -183,9 +189,7 @@ async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes,
                         data.extend(chunk)
                 zf.writestr(arcname, bytes(data))
             except Exception as exc:
-                import logging
-
-                logging.getLogger("wikint").warning(
+                logger.warning(
                     "Failed to stream ZIP entry for key %s: %s", file_key, exc, exc_info=True
                 )
                 continue
@@ -210,12 +214,7 @@ async def download_root_chunks(
     redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
 ) -> DownloadChunksResponse:
     """Return Worker ZIP chunk URLs for the entire root level (all top-level directories)."""
-    from app.core.exceptions import BadRequestError
-    from app.dependencies.rate_limit import rate_limit_downloads
-
     if redis is None:
-        from app.core.redis import redis_client
-
         redis = redis_client
 
     try:
@@ -245,12 +244,7 @@ async def download_directory_chunks(
     configured the response contains an empty ``chunks`` list; the client should
     fall back to the streaming ``/download`` endpoint in that case.
     """
-    from app.core.exceptions import BadRequestError
-    from app.dependencies.rate_limit import rate_limit_downloads
-
     if redis is None:
-        from app.core.redis import redis_client
-
         redis = redis_client
 
     try:
@@ -285,13 +279,7 @@ async def download_directory_zip(
     auth + DB work and then issues a redirect carrying a short-lived HMAC-signed
     token so the Worker can verify the request without calling back to the API.
     """
-    from app.core.exceptions import BadRequestError, UnauthorizedError
-    from app.dependencies.auth import get_user_from_token
-    from app.dependencies.rate_limit import rate_limit_downloads
-
     if redis is None:
-        from app.core.redis import redis_client
-
         redis = redis_client
 
     effective_user: User | None = None
@@ -321,8 +309,6 @@ async def download_directory_zip(
     # Zip streaming is now fully handled by the backend directly below.
 
     safe_name = dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
-    from urllib.parse import quote
-
     encoded_name = quote(dir_name)
     disposition = f"attachment; filename=\"{safe_name}.zip\"; filename*=UTF-8''{encoded_name}.zip"
 

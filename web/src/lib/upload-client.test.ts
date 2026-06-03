@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { uploadFile } from "./upload-client";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { uploadFile, logicalFileSize, getUploadConfig } from "./upload-client";
 import { sha256File } from "./crypto-utils";
 import { compressImageIfNeeded } from "./file-utils";
 import { apiRequest } from "./api-client";
@@ -122,7 +122,7 @@ describe("upload-client: uploadFile", () => {
 
   it("does not re-calculate hash if file was not compressed", async () => {
     vi.mocked(sha256File).mockResolvedValueOnce("original-hash");
-    
+
     vi.mocked(compressImageIfNeeded).mockResolvedValueOnce({
       file: mockFile,
       compressed: false,
@@ -133,5 +133,106 @@ describe("upload-client: uploadFile", () => {
     expect(sha256File).toHaveBeenCalledTimes(1);
     expect(sha256File).toHaveBeenCalledWith(mockFile, expect.any(Function), undefined);
     expect(result.content_sha256).toBe("original-hash");
-  }, 10000); // Increased timeout
+  }, 10000);
+
+  it("skips upload and returns result when dedup check says file exists", async () => {
+    vi.mocked(sha256File).mockResolvedValueOnce("known-hash");
+
+    vi.mocked(apiRequest).mockImplementation(async (url: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/upload/check-exists")) {
+        return { json: async () => ({ exists: true, file_key: "cached-key" }) } as any;
+      }
+      if (urlStr.includes("/upload/status/batch")) {
+        return {
+          json: async () => ({
+            statuses: {
+              "cached-key": {
+                status: "clean",
+                file_key: "cached-key",
+                result: {
+                  file_key: "cached-key",
+                  size: 100,
+                  original_size: 100,
+                  mime_type: "image/png",
+                  content_encoding: null,
+                },
+              },
+            },
+          }),
+        } as any;
+      }
+      return { json: async () => ({}) } as any;
+    });
+
+    // forcePipeline: false is required to enable the dedup check path
+    const result = await uploadFile(mockFile, { forcePipeline: false });
+
+    const calls = vi.mocked(apiRequest).mock.calls.map(([u]) => String(u));
+    expect(calls.some((u) => u.includes("/upload/init"))).toBe(false);
+    expect(result.file_key).toBe("cached-key");
+  }, 10000);
+});
+
+// ── logicalFileSize ──────────────────────────────────────────────────────────
+
+describe("logicalFileSize", () => {
+  it("returns size when content_encoding is null", () => {
+    expect(logicalFileSize({ size: 500, original_size: 1000, content_encoding: null })).toBe(500);
+  });
+
+  it("returns original_size when content_encoding is gzip", () => {
+    expect(logicalFileSize({ size: 300, original_size: 1000, content_encoding: "gzip" })).toBe(1000);
+  });
+
+  it("returns size for unknown encodings (not gzip)", () => {
+    expect(logicalFileSize({ size: 400, original_size: 800, content_encoding: "br" })).toBe(400);
+  });
+
+  it("handles identical size and original_size", () => {
+    expect(logicalFileSize({ size: 200, original_size: 200, content_encoding: null })).toBe(200);
+  });
+});
+
+// ── getUploadConfig ──────────────────────────────────────────────────────────
+
+describe("getUploadConfig", () => {
+  const mockConfig = {
+    allowed_extensions: [".pdf", ".png"],
+    allowed_mimetypes: ["application/pdf", "image/png"],
+    max_file_size_mb: 50,
+  };
+
+  // Run all three behaviours in a single test so module-level cache state
+  // flows naturally from one assertion to the next without ordering issues.
+  it("fetches once, caches within TTL, and re-fetches after expiry", async () => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+
+    // Advance past any cache left by previous tests so the first call fetches.
+    vi.advanceTimersByTime(10 * 60 * 1000);
+
+    vi.mocked(apiRequest).mockResolvedValue({
+      json: async () => mockConfig,
+    } as any);
+
+    // First call: fetches from the network.
+    const result = await getUploadConfig();
+    expect(result).toEqual(mockConfig);
+    const callsAfterFirst = vi.mocked(apiRequest).mock.calls.length;
+    expect(callsAfterFirst).toBeGreaterThanOrEqual(1);
+
+    // Second call immediately: uses the cache (no extra network call).
+    await getUploadConfig();
+    expect(vi.mocked(apiRequest).mock.calls.length).toBe(callsAfterFirst);
+
+    // Advance past the 5-minute TTL.
+    vi.advanceTimersByTime(6 * 60 * 1000);
+
+    // Third call: cache expired, fetches again.
+    await getUploadConfig();
+    expect(vi.mocked(apiRequest).mock.calls.length).toBe(callsAfterFirst + 1);
+
+    vi.useRealTimers();
+  });
 });

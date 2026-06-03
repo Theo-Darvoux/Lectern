@@ -15,7 +15,7 @@ from typing import Any
 from app.config import settings
 from app.core.redis import redis_client, redis_semaphore
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # Fallback local semaphores for environments without Redis or as a secondary guard.
 # We prefer distributed semaphores for clustered workers.
@@ -32,20 +32,39 @@ async def _get_concurrency_guard(guard_type: str) -> AsyncIterator[None]:
     limit = _SUBPROCESS_LIMIT if guard_type == "subprocess" else _IMAGE_MEMORY_LIMIT
     local_sem = _local_subprocess_sem if guard_type == "subprocess" else _local_image_sem
 
+    acquired = False
+    body_exc: BaseException | None = None
     try:
         async with redis_semaphore(redis_client, f"heavy_ops:{guard_type}", limit=limit):
+            acquired = True
             async with local_sem:
-                yield
-    except (TimeoutError, Exception) as e:
-        # If Redis is down or slow, rely strictly on the local semaphore
-        # to prevent complete processing stall.
+                try:
+                    yield
+                except BaseException as exc:
+                    body_exc = exc
+                    raise
+            return
+    except Exception as e:
+        if acquired:
+            if body_exc is not None and e is not body_exc:
+                # redis.zrem in __aexit__ raised and masked the body exception —
+                # restore the original so security checks aren't silently swallowed.
+                raise body_exc from e  # type: ignore[misc]
+            raise
+        # Exception came from Redis semaphore acquisition — fall back to local only.
         if isinstance(e, (asyncio.TimeoutError, TimeoutError)):
             logger.warning(
                 "Timeout acquiring distributed semaphore for %s, falling back to local only",
                 guard_type,
             )
-        async with local_sem:
-            yield
+        else:
+            logger.warning(
+                "Redis semaphore error for %s guard, falling back to local only: %s",
+                guard_type,
+                e,
+            )
+    async with local_sem:
+        yield
 
 
 async def run_managed_subprocess(

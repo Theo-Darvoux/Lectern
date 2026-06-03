@@ -64,11 +64,6 @@ async def db_session(db_connection, engine) -> AsyncGenerator[AsyncSession, None
     session = shared_session_factory()
     session.info["post_commit_jobs"] = []
 
-    from app.routers.upload import helpers as u_helpers
-
-    orig_helpers_factory = u_helpers.async_session_factory
-    u_helpers.async_session_factory = shared_session_factory
-
     yield session
 
     await session.close()
@@ -76,7 +71,6 @@ async def db_session(db_connection, engine) -> AsyncGenerator[AsyncSession, None
         await db_connection.run_sync(Base.metadata.drop_all)
 
     c_db.async_session_factory = orig_factory
-    u_helpers.async_session_factory = orig_helpers_factory
 
 
 @pytest.fixture(scope="session")

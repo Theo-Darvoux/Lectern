@@ -11,8 +11,9 @@ from app.models.comment import Comment
 from app.models.directory import Directory
 from app.models.material import Material
 from app.models.user import User, UserRole
+from app.services.notification import notify_material_subscribers
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 def _to_uuid(value: str | uuid.UUID) -> uuid.UUID:
@@ -27,11 +28,15 @@ def _to_uuid(value: str | uuid.UUID) -> uuid.UUID:
 async def validate_target(db: AsyncSession, target_type: str, target_id: str) -> None:
     uid = _to_uuid(target_id)
     if target_type == "directory":
-        result = await db.execute(select(Directory).where(Directory.id == uid))
+        result = await db.execute(
+            select(Directory).where(Directory.id == uid, Directory.deleted_at.is_(None))
+        )
         if not result.scalar_one_or_none():
             raise NotFoundError("Directory not found")
     elif target_type == "material":
-        result = await db.execute(select(Material).where(Material.id == uid))
+        result = await db.execute(
+            select(Material).where(Material.id == uid, Material.deleted_at.is_(None))
+        )
         if not result.scalar_one_or_none():
             raise NotFoundError("Material not found")
     else:
@@ -84,8 +89,6 @@ async def create_comment(
     await db.flush()
 
     if target_type == "material":
-        from app.services.notification import notify_material_subscribers
-
         try:
             await notify_material_subscribers(
                 db,

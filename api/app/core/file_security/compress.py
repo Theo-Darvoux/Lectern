@@ -24,7 +24,7 @@ from app.core.file_security._svg import SvgSecurityError, _optimize_svg, check_s
 from app.core.file_security._zip import _gzip_compress_path, _recompress_zip_path
 from app.core.mimetypes import GZIP_MIME_TYPES, ZIP_MIME_TYPES
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # Threshold above which we skip video compression (re-exported for process_upload)
 __all__ = ["compress_file_path", "CompressResultPath", "VIDEO_COMPRESS_THRESHOLD"]

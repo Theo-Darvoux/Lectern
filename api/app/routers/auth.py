@@ -1,6 +1,9 @@
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any
+
+logger = logging.getLogger(__name__)
 
 import google.auth.transport.requests
 from fastapi import APIRouter, Depends, Request, Response
@@ -16,7 +19,7 @@ from app.core.exceptions import BadRequestError, RateLimitError, UnauthorizedErr
 from app.core.redis import get_redis
 from app.core.security import decode_token
 from app.dependencies.auth import CurrentUser
-from app.models.user import UserRole
+from app.models.user import User, UserRole
 from app.schemas.auth import (
     GoogleLoginIn,
     LoginIn,
@@ -30,13 +33,14 @@ from app.schemas.auth import (
 from app.services import auth as auth_service
 from app.services.email import send_verification_email
 from app.services.notification import notify_admins_pending_user
+from app.services.user import get_user_by_id
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 GUEST_SESSION_EXPIRE_DAYS = 1
 
 
-async def require_client_id(request: Request):  # type: ignore[no-untyped-def]
+async def require_client_id(request: Request) -> None:
     if not request.headers.get("x-client-id"):
         raise UnauthorizedError("Missing Client-ID header (CSRF Protection)")
 
@@ -51,52 +55,77 @@ def get_client_id(request: Request) -> str:
 limiter = Limiter(key_func=get_client_id, enabled=not settings.is_dev)
 
 
+def _set_refresh_cookie(response: Response, token: str, expire_days: int | None = None) -> None:
+    days = expire_days if expire_days is not None else settings.jwt_refresh_token_expire_days
+    response.set_cookie(
+        key="refresh_token",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=days * 24 * 3600,
+        path="/api/auth/",
+    )
+
+
+def _login_response(user: User, response: Response, *, is_new: bool) -> TokenResponse:
+    access_token, refresh_token, _ = auth_service.issue_tokens(user)
+    _set_refresh_cookie(response, refresh_token)
+    return TokenResponse(
+        access_token=access_token,
+        user=UserBrief(
+            id=str(user.id),
+            email=user.email,
+            display_name=user.display_name,
+            avatar_url=user.avatar_url,
+            role=user.role.value,
+            onboarded=user.onboarded,
+            auto_approve=user.auto_approve,
+        ),
+        is_new_user=is_new,
+    )
+
+
 @router.get("/methods")
-async def get_auth_methods(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-) -> dict[str, Any]:
-    auth_config = await auth_service.get_full_auth_config(db, redis)
+async def get_auth_methods() -> dict[str, Any]:
     return {
-        "totp_enabled": auth_config.get("totp_enabled", True),
-        "google_enabled": auth_config.get("google_oauth_enabled", False),
-        "google_client_id": auth_config.get("google_client_id"),
-        "classic_enabled": auth_config.get("classic_auth_enabled", False),
-        "allow_all_domains": auth_config.get("allow_all_domains", False),
-        "guest_access_enabled": auth_config.get("guest_access_enabled", False),
-        "site_name": auth_config.get("site_name"),
-        "site_name_style": auth_config.get("site_name_style"),
-        "site_description": auth_config.get("site_description"),
-        "site_logo_url": auth_config.get("site_logo_url"),
-        "site_favicon_url": auth_config.get("site_favicon_url"),
-        "primary_color": auth_config.get("primary_color"),
-        "footer_text": auth_config.get("footer_text"),
-        "footer_logo_url": auth_config.get("footer_logo_url"),
-        "organization_url": auth_config.get("organization_url"),
-        "og_image_url": auth_config.get("og_image_url"),
-        "bg_watermark_url": auth_config.get("bg_watermark_url"),
-        "bg_watermark_opacity_light": auth_config.get("bg_watermark_opacity_light"),
-        "bg_watermark_opacity_dark": auth_config.get("bg_watermark_opacity_dark"),
-        "legal_name": auth_config.get("legal_name"),
-        "legal_address": auth_config.get("legal_address"),
-        "legal_siret": auth_config.get("legal_siret"),
-        "contact_email": auth_config.get("contact_email"),
-        "dpo_email": auth_config.get("dpo_email"),
-        "dpo_address": auth_config.get("dpo_address"),
-        "data_transfers": auth_config.get("data_transfers"),
-        "legal_version": auth_config.get("legal_version"),
+        "totp_enabled": settings.totp_enabled,
+        "google_enabled": settings.google_oauth_enabled,
+        "google_client_id": settings.google_client_id,
+        "classic_enabled": settings.classic_auth_enabled,
+        "allow_all_domains": settings.allow_all_domains,
+        "guest_access_enabled": settings.guest_access_enabled,
+        "site_name": settings.site_name,
+        "site_name_style": settings.site_name_style,
+        "site_description": settings.site_description,
+        "site_logo_url": settings.site_logo_url,
+        "site_favicon_url": settings.site_favicon_url,
+        "primary_color": settings.primary_color,
+        "footer_text": settings.footer_text,
+        "footer_logo_url": settings.footer_logo_url,
+        "organization_url": settings.organization_url,
+        "og_image_url": settings.og_image_url,
+        "bg_watermark_url": settings.bg_watermark_url,
+        "bg_watermark_opacity_light": settings.bg_watermark_opacity_light,
+        "bg_watermark_opacity_dark": settings.bg_watermark_opacity_dark,
+        "legal_name": settings.legal_name,
+        "legal_address": settings.legal_address,
+        "legal_siret": settings.legal_siret,
+        "contact_email": settings.contact_email,
+        "dpo_email": settings.dpo_email,
+        "dpo_address": settings.dpo_address,
+        "data_transfers": settings.data_transfers,
+        "legal_version": settings.legal_version,
     }
 
 
 @router.post("/guest", response_model=TokenResponse)
 async def guest_session(
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     response: Response,
 ) -> TokenResponse:
     """Start a read-only guest session when an admin has enabled guest access."""
-    auth_config = await auth_service.get_full_auth_config(db, redis)
-    if not auth_config.get("guest_access_enabled"):
+    if not settings.guest_access_enabled:
         raise UnauthorizedError("Guest access is disabled")
 
     guest = await auth_service.get_guest_user(db)
@@ -109,17 +138,7 @@ async def guest_session(
         jwt_access_expire_days=GUEST_SESSION_EXPIRE_DAYS,
         jwt_refresh_expire_days=GUEST_SESSION_EXPIRE_DAYS,
     )
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=GUEST_SESSION_EXPIRE_DAYS * 24 * 3600,
-        path="/api/auth/",
-    )
-
+    _set_refresh_cookie(response, refresh_token, GUEST_SESSION_EXPIRE_DAYS)
     return TokenResponse(
         access_token=access_token,
         user=UserBrief(
@@ -129,6 +148,7 @@ async def guest_session(
             avatar_url=guest.avatar_url,
             role=guest.role.value,
             onboarded=guest.onboarded,
+            auto_approve=guest.auto_approve,
         ),
         is_new_user=False,
     )
@@ -144,12 +164,11 @@ async def request_code(
 ) -> dict[str, str]:
     email = data.email
 
-    auth_config = await auth_service.get_full_auth_config(db, redis)
-    if not auth_config.get("totp_enabled"):
+    if not settings.totp_enabled:
         raise UnauthorizedError("Email verification codes are disabled")
 
     try:
-        await auth_service.validate_email_for_auth(email, db, redis)
+        await auth_service.validate_email_for_auth(email, db)
     except ValueError as exc:
         raise BadRequestError(str(exc))
 
@@ -170,9 +189,7 @@ async def request_code(
     try:
         await send_verification_email(email, code, magic_link)
     except Exception as e:
-        import logging
-
-        logging.getLogger("wikint").error(f"Failed to send verification email: {e}", exc_info=True)
+        logger.error("Failed to send verification email: %s", e, exc_info=True)
 
     return {"message": "Verification code sent"}
 
@@ -199,41 +216,13 @@ async def verify_code(
     # Re-validate to get auto_approve; ValidationError is possible if domain
     # was removed between request-code and verify-code steps.
     try:
-        auto_approve = await auth_service.validate_email_for_auth(email, db, redis)
+        auto_approve = await auth_service.validate_email_for_auth(email, db)
     except ValueError:
         auto_approve = False
     user, is_new = await auth_service.get_or_create_user(db, email, auto_approve=auto_approve)
     if is_new and user.role == UserRole.PENDING:
         await notify_admins_pending_user(db, user)
-    auth_config = await auth_service.get_full_auth_config(db, redis)
-    access_token, refresh_token, _ = auth_service.issue_tokens(
-        user,
-        jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
-    )
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=auth_config.get("jwt_refresh_expire_days", 31) * 24 * 3600,
-        path="/api/auth/",
-    )
-
-    return TokenResponse(
-        access_token=access_token,
-        user=UserBrief(
-            id=str(user.id),
-            email=user.email,
-            display_name=user.display_name,
-            avatar_url=user.avatar_url,
-            role=user.role.value,
-            onboarded=user.onboarded,
-        ),
-        is_new_user=is_new,
-    )
+    return _login_response(user, response, is_new=is_new)
 
 
 @router.post("/verify-magic-link", response_model=TokenResponse)
@@ -251,52 +240,22 @@ async def verify_magic_link(
 
     await auth_service.reset_verify_rate_limit(redis, email)
     try:
-        auto_approve = await auth_service.validate_email_for_auth(email, db, redis)
+        auto_approve = await auth_service.validate_email_for_auth(email, db)
     except ValueError:
         auto_approve = False
     user, is_new = await auth_service.get_or_create_user(db, email, auto_approve=auto_approve)
     if is_new and user.role == UserRole.PENDING:
         await notify_admins_pending_user(db, user)
-    auth_config = await auth_service.get_full_auth_config(db, redis)
-    access_token, refresh_token, _ = auth_service.issue_tokens(
-        user,
-        jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
-    )
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=auth_config.get("jwt_refresh_expire_days", 31) * 24 * 3600,
-        path="/api/auth/",
-    )
-
-    return TokenResponse(
-        access_token=access_token,
-        user=UserBrief(
-            id=str(user.id),
-            email=user.email,
-            display_name=user.display_name,
-            avatar_url=user.avatar_url,
-            role=user.role.value,
-            onboarded=user.onboarded,
-        ),
-        is_new_user=is_new,
-    )
+    return _login_response(user, response, is_new=is_new)
 
 
 @router.post("/google", response_model=TokenResponse)
 async def verify_google_oauth(
     data: GoogleLoginIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     response: Response,
 ) -> TokenResponse:
-    auth_config = await auth_service.get_full_auth_config(db, redis)
-    if not auth_config.get("google_oauth_enabled"):
+    if not settings.google_oauth_enabled:
         raise UnauthorizedError("Google OAuth is disabled")
 
     try:
@@ -306,12 +265,10 @@ async def verify_google_oauth(
             id_token.verify_oauth2_token,
             data.credential,
             google.auth.transport.requests.Request(),
-            auth_config.get("google_client_id"),
+            settings.google_client_id,
         )
     except Exception as e:
-        import logging
-
-        logging.getLogger("wikint").error(f"Google OAuth verification failed: {e}", exc_info=True)
+        logger.error("Google OAuth verification failed: %s", e, exc_info=True)
         raise UnauthorizedError("Invalid Google credential")
 
     if id_info.get("iss") not in ["accounts.google.com", "https://accounts.google.com"]:
@@ -328,7 +285,7 @@ async def verify_google_oauth(
 
     # Enforce domain whitelisting / auto-approve rules
     try:
-        auto_approve = await auth_service.validate_email_for_auth(email, db, redis)
+        auto_approve = await auth_service.validate_email_for_auth(email, db)
     except ValueError as exc:
         raise BadRequestError(str(exc))
 
@@ -356,45 +313,16 @@ async def verify_google_oauth(
     if is_new and user.role == UserRole.PENDING:
         await notify_admins_pending_user(db, user)
 
-    access_token, refresh_token, _ = auth_service.issue_tokens(
-        user,
-        jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
-    )
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=auth_config.get("jwt_refresh_expire_days", 31) * 24 * 3600,
-        path="/api/auth/",
-    )
-
-    return TokenResponse(
-        access_token=access_token,
-        user=UserBrief(
-            id=str(user.id),
-            email=user.email,
-            display_name=user.display_name,
-            avatar_url=user.avatar_url,
-            role=user.role.value,
-            onboarded=user.onboarded,
-        ),
-        is_new_user=is_new,
-    )
+    return _login_response(user, response, is_new=is_new)
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
     data: LoginIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     response: Response,
 ) -> TokenResponse:
-    auth_config = await auth_service.get_full_auth_config(db, redis)
-    if not auth_config.get("classic_auth_enabled"):
+    if not settings.classic_auth_enabled:
         raise UnauthorizedError("Classic authentication (email + password) is disabled")
 
     user = await auth_service.authenticate_user(db, data.email, data.password)
@@ -404,34 +332,7 @@ async def login(
     user.last_login_at = datetime.now(UTC)
     await db.flush()
 
-    access_token, refresh_token, _ = auth_service.issue_tokens(
-        user,
-        jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
-    )
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=auth_config.get("jwt_refresh_expire_days", 31) * 24 * 3600,
-        path="/api/auth/",
-    )
-
-    return TokenResponse(
-        access_token=access_token,
-        user=UserBrief(
-            id=str(user.id),
-            email=user.email,
-            display_name=user.display_name,
-            avatar_url=user.avatar_url,
-            role=user.role.value,
-            onboarded=user.onboarded,
-        ),
-        is_new_user=False,
-    )
+    return _login_response(user, response, is_new=False)
 
 
 @router.post("/refresh", response_model=RefreshResponse, dependencies=[Depends(require_client_id)])
@@ -461,8 +362,6 @@ async def refresh_token(
     if not user_id:
         raise UnauthorizedError("Invalid token")
 
-    from app.services.user import get_user_by_id
-
     user = await get_user_by_id(db, user_id)
     if not user:
         raise UnauthorizedError("User not found")
@@ -474,22 +373,8 @@ async def refresh_token(
         if remaining > 0:
             await auth_service.blacklist_token(redis, old_jti, remaining)
 
-    auth_config = await auth_service.get_full_auth_config(db, redis)
-    new_access_token, new_refresh_token, _ = auth_service.issue_tokens(
-        user,
-        jwt_access_expire_days=auth_config.get("jwt_access_expire_days"),
-        jwt_refresh_expire_days=auth_config.get("jwt_refresh_expire_days"),
-    )
-
-    response.set_cookie(
-        key="refresh_token",
-        value=new_refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=auth_config.get("jwt_refresh_expire_days", 31) * 24 * 3600,
-        path="/api/auth/",
-    )
+    new_access_token, new_refresh_token, _ = auth_service.issue_tokens(user)
+    _set_refresh_cookie(response, new_refresh_token)
 
     return RefreshResponse(access_token=new_access_token)
 

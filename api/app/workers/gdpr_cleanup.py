@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.models.user import User
 from app.services.user import hard_delete_user
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 GDPR_RETENTION_DAYS = 30
 
@@ -21,10 +21,12 @@ async def gdpr_cleanup(ctx: dict[str, typing.Any]) -> None:
 
         async with async_session_factory() as db:
             result = await db.execute(
-                select(User).where(
+                select(User)
+                .where(
                     User.deleted_at.is_not(None),
                     User.deleted_at <= cutoff,
                 )
+                .execution_options(include_deleted=True)
             )
             users_to_delete = result.scalars().all()
 

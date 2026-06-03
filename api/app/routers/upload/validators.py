@@ -14,23 +14,31 @@ from app.core.upload_errors import (
     ERR_TYPE_NOT_ALLOWED,
 )
 
-# ── Per-MIME-category size caps ──────────────────────────────────────────────
-
-_PER_TYPE_LIMITS: dict[str, int] = {
-    "image/svg+xml": settings.max_svg_size_mb * 1024 * 1024,
-    "image/": settings.max_image_size_mb * 1024 * 1024,
-    "audio/": settings.max_audio_size_mb * 1024 * 1024,
-    "video/": settings.max_video_size_mb * 1024 * 1024,
-    "application/pdf": settings.max_document_size_mb * 1024 * 1024,
-    "application/epub+zip": settings.max_document_size_mb * 1024 * 1024,
-    "image/vnd.djvu": settings.max_document_size_mb * 1024 * 1024,
-    "text/": settings.max_text_size_mb * 1024 * 1024,
-    "application/vnd.openxmlformats": settings.max_office_size_mb * 1024 * 1024,
-    "application/msword": settings.max_office_size_mb * 1024 * 1024,
-    "application/vnd.ms-": settings.max_office_size_mb * 1024 * 1024,
-}
-
 _MAX_FILENAME_LENGTH = 255
+
+
+def _mb(key: str, fallback: int, config: dict[str, Any] | None) -> int:
+    """Return the byte limit for *key*, preferring config over the settings default."""
+    v = config.get(key) if config else None
+    return (v if v is not None else fallback) * 1024 * 1024
+
+
+def _build_limits(config: dict[str, Any] | None) -> dict[str, int]:
+    doc = _mb("max_document_size_mb", settings.max_document_size_mb, config)
+    office = _mb("max_office_size_mb", settings.max_office_size_mb, config)
+    return {
+        "image/svg+xml": _mb("max_svg_size_mb", settings.max_svg_size_mb, config),
+        "image/": _mb("max_image_size_mb", settings.max_image_size_mb, config),
+        "audio/": _mb("max_audio_size_mb", settings.max_audio_size_mb, config),
+        "video/": _mb("max_video_size_mb", settings.max_video_size_mb, config),
+        "application/pdf": doc,
+        "application/epub+zip": doc,
+        "image/vnd.djvu": doc,
+        "text/": _mb("max_text_size_mb", settings.max_text_size_mb, config),
+        "application/vnd.openxmlformats": office,
+        "application/msword": office,
+        "application/vnd.ms-": office,
+    }
 
 
 def _check_per_type_size(mime_type: str, size: int, config: dict[str, Any] | None = None) -> None:
@@ -39,98 +47,8 @@ def _check_per_type_size(mime_type: str, size: int, config: dict[str, Any] | Non
     Category-specific limits (e.g. 500MB for video) take precedence over the
     global default.
     """
-    if config:
-        limits = {
-            "image/svg+xml": (  # type: ignore[operator]
-                config.get("max_svg_size_mb")
-                if config.get("max_svg_size_mb") is not None
-                else settings.max_svg_size_mb
-            )
-            * 1024
-            * 1024,
-            "image/": (  # type: ignore[operator]
-                config.get("max_image_size_mb")
-                if config.get("max_image_size_mb") is not None
-                else settings.max_image_size_mb
-            )
-            * 1024
-            * 1024,
-            "audio/": (  # type: ignore[operator]
-                config.get("max_audio_size_mb")
-                if config.get("max_audio_size_mb") is not None
-                else settings.max_audio_size_mb
-            )
-            * 1024
-            * 1024,
-            "video/": (  # type: ignore[operator]
-                config.get("max_video_size_mb")
-                if config.get("max_video_size_mb") is not None
-                else settings.max_video_size_mb
-            )
-            * 1024
-            * 1024,
-            "application/pdf": (  # type: ignore[operator]
-                config.get("max_document_size_mb")
-                if config.get("max_document_size_mb") is not None
-                else settings.max_document_size_mb
-            )
-            * 1024
-            * 1024,
-            "application/epub+zip": (  # type: ignore[operator]
-                config.get("max_document_size_mb")
-                if config.get("max_document_size_mb") is not None
-                else settings.max_document_size_mb
-            )
-            * 1024
-            * 1024,
-            "image/vnd.djvu": (  # type: ignore[operator]
-                config.get("max_document_size_mb")
-                if config.get("max_document_size_mb") is not None
-                else settings.max_document_size_mb
-            )
-            * 1024
-            * 1024,
-            "text/": (  # type: ignore[operator]
-                config.get("max_text_size_mb")
-                if config.get("max_text_size_mb") is not None
-                else settings.max_text_size_mb
-            )
-            * 1024
-            * 1024,
-            "application/vnd.openxmlformats": (  # type: ignore[operator]
-                config.get("max_office_size_mb")
-                if config.get("max_office_size_mb") is not None
-                else settings.max_office_size_mb
-            )
-            * 1024
-            * 1024,
-            "application/msword": (  # type: ignore[operator]
-                config.get("max_office_size_mb")
-                if config.get("max_office_size_mb") is not None
-                else settings.max_office_size_mb
-            )
-            * 1024
-            * 1024,
-            "application/vnd.ms-": (  # type: ignore[operator]
-                config.get("max_office_size_mb")
-                if config.get("max_office_size_mb") is not None
-                else settings.max_office_size_mb
-            )
-            * 1024
-            * 1024,
-        }
-        global_limit = (
-            (  # type: ignore[operator]
-                config.get("max_file_size_mb")
-                if config.get("max_file_size_mb") is not None
-                else settings.max_file_size_mb
-            )
-            * 1024
-            * 1024
-        )
-    else:
-        limits = _PER_TYPE_LIMITS
-        global_limit = settings.max_file_size_mb * 1024 * 1024
+    limits = _build_limits(config)
+    global_limit = _mb("max_file_size_mb", settings.max_file_size_mb, config)
 
     # 1. Exact MIME match first, then prefix match
     limit = limits.get(mime_type)

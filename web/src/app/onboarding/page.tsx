@@ -3,7 +3,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
-import { useAuthStore, type UserBrief } from "@/lib/stores";
+import { useAuthStore } from "@/lib/stores";
+import type { UserBrief } from "@/lib/guest";
 import { apiFetch } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

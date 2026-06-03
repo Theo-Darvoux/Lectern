@@ -24,6 +24,7 @@ import hashlib as _hashlib
 import json
 import logging
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -42,6 +43,7 @@ from app.core.storage import (
     abort_multipart_upload,
     complete_multipart_upload,
     create_multipart_upload,
+    object_exists,
     upload_part,
 )
 from app.core.upload_errors import (
@@ -57,12 +59,13 @@ from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
 from app.routers.upload.helpers import (
     _check_pending_cap,
+    _check_storage_limit,
     _create_upload_row,
     _enqueue_processing,
 )
 from app.routers.upload.validators import _check_per_type_size, _validate_filename
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/upload/tus", tags=["upload"])
 
@@ -145,20 +148,7 @@ async def tus_create(
     if upload_length <= 0:
         raise BadRequestError("Upload-Length must be > 0", code=ERR_FILE_TOO_LARGE)
 
-    # Fetch dynamic config
-    from app.services.auth import get_full_auth_config
-
-    config = await get_full_auth_config(db, redis)
-
-    max_bytes = (
-        (  # type: ignore[operator]
-            config.get("max_file_size_mb")
-            if config.get("max_file_size_mb") is not None
-            else settings.max_file_size_mb
-        )
-        * 1024
-        * 1024
-    )
+    max_bytes = settings.max_file_size_mb * 1024 * 1024  # type: ignore[operator]
     if upload_length > max_bytes:
         raise BadRequestError(
             f"Upload-Length {upload_length // (1024 * 1024)} MiB exceeds server maximum of {max_bytes // (1024 * 1024)} MiB.",
@@ -173,17 +163,17 @@ async def tus_create(
 
     # Process allowed lists
     allowed_exts: set[str] | None = None
-    if config.get("allowed_extensions"):
+    if settings.allowed_extensions:
         allowed_exts = {
-            e.strip().lower() for e in config["allowed_extensions"].split(",") if e.strip()
+            e.strip().lower() for e in settings.allowed_extensions.split(",") if e.strip()
         }
         if not all(e.startswith(".") for e in allowed_exts):
             allowed_exts = {e if e.startswith(".") else f".{e}" for e in allowed_exts}
 
     allowed_mimes: set[str] | None = None
-    if config.get("allowed_mime_types"):
+    if settings.allowed_mime_types:
         allowed_mimes = {
-            m.strip().lower() for m in config["allowed_mime_types"].split(",") if m.strip()
+            m.strip().lower() for m in settings.allowed_mime_types.split(",") if m.strip()
         }
 
     safe_name, _ext = _validate_filename(raw_filename, allowed_extensions=allowed_exts)
@@ -198,11 +188,9 @@ async def tus_create(
             code=ERR_TYPE_NOT_ALLOWED,
         )
 
-    from app.routers.upload.helpers import _check_storage_limit
+    await _check_storage_limit(upload_length, db)
 
-    await _check_storage_limit(upload_length, config=config)
-
-    _check_per_type_size(raw_mime, upload_length, config=config)
+    _check_per_type_size(raw_mime, upload_length)
 
     tus_id = str(uuid.uuid4())
     upload_id = str(uuid.uuid4())
@@ -210,8 +198,21 @@ async def tus_create(
     await _check_pending_cap(
         user_id,
         redis,
+        db,
         privileged=user.role in PRIVILEGED_ROLES,
         reserve_key=quarantine_key,
+    )
+
+    # Flush the DB row before opening the S3 multipart upload so that any DB
+    # failure aborts early without leaving an orphaned multipart on S3.
+    await _create_upload_row(
+        upload_id=upload_id,
+        user_id=user_id,
+        quarantine_key=quarantine_key,
+        filename=safe_name,
+        mime_type=resolved_mime,
+        size_bytes=upload_length,
+        db=db,
     )
 
     s3_upload_id = await create_multipart_upload(
@@ -234,15 +235,6 @@ async def tus_create(
     await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id}", mapping=state)  # type: ignore[arg-type, misc]
     await redis.expire(f"{_TUS_STATE_PREFIX}{tus_id}", _TUS_STATE_TTL)
     await redis.sadd(_TUS_ACTIVE_SESSIONS, tus_id)  # type: ignore[misc]
-
-    await _create_upload_row(
-        upload_id=upload_id,
-        user_id=user_id,
-        quarantine_key=quarantine_key,
-        filename=safe_name,
-        mime_type=resolved_mime,
-        size_bytes=upload_length,
-    )
 
     location = f"{request.base_url}api/upload/tus/{tus_id}"
     return Response(
@@ -290,15 +282,7 @@ async def tus_patch(
     # TTL ensures the counter self-heals if the process crashes before decr.
     await redis.expire(_inflight_key, 300)
 
-    # Fetch dynamic config
-    from app.services.auth import get_full_auth_config
-
-    config = await get_full_auth_config(db, redis)
-
-    max_concurrent = (
-        config.get("tus_max_concurrent_per_user") or settings.tus_max_concurrent_per_user
-    )
-    if inflight > max_concurrent:
+    if inflight > settings.tus_max_concurrent_per_user:
         await redis.decr(_inflight_key)
         return Response(
             status_code=429,
@@ -325,7 +309,7 @@ async def tus_patch(
         except ValueError:
             raise BadRequestError("Content-Length must be an integer.")
 
-        chunk_max = config.get("tus_chunk_max_bytes") or settings.tus_chunk_max_bytes
+        chunk_max = settings.tus_chunk_max_bytes
         if chunk_size > chunk_max:
             raise BadRequestError(f"Chunk too large: maximum {chunk_max} bytes, got {chunk_size}")
 
@@ -440,7 +424,7 @@ async def tus_patch(
 
                 is_final = (current_offset + chunk_size) == total_length
 
-                chunk_min = config.get("tus_chunk_min_bytes") or settings.tus_chunk_min_bytes
+                chunk_min = settings.tus_chunk_min_bytes
                 if not is_final and chunk_size < chunk_min:
                     raise BadRequestError(
                         f"Non-final chunk too small: minimum {chunk_min} bytes, got {chunk_size}"
@@ -479,8 +463,6 @@ async def tus_patch(
                         )
                     except Exception as exc:
                         if "NoSuchUpload" in str(exc):
-                            from app.core.storage import object_exists
-
                             if await object_exists(quarantine_key):
                                 logger.info(
                                     "Upload %s already completed in S3, proceeding.", tus_id_str
@@ -504,8 +486,6 @@ async def tus_patch(
                             await abort_multipart_upload(quarantine_key, state["s3_upload_id"])
                             await redis.delete(state_key)
                             raise BadRequestError("Failed to complete upload. Please retry.")
-
-                    import time
 
                     await redis.zadd(
                         f"quota:uploads:{state['user_id']}", {quarantine_key: time.time()}
@@ -563,7 +543,7 @@ async def tus_delete(
 async def _load_state(tus_id: str, user: CurrentUser, redis: Redis) -> dict[str, str]:  # type: ignore[type-arg]
     """Load tus state from Redis, enforcing ownership."""
     state_key = f"{_TUS_STATE_PREFIX}{tus_id}"
-    state: dict = await redis.hgetall(state_key)  # type: ignore[type-arg, misc]
+    state: dict[bytes | str, bytes | str] = await redis.hgetall(state_key)  # type: ignore[misc]
     if not state:
         raise NotFoundError("Upload not found or expired.", code=ERR_TUS_UPLOAD_NOT_FOUND)
 

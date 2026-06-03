@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import difflib
 import gzip
+import mimetypes as _mimetypes
 import uuid
 from typing import Annotated, Any
 
@@ -11,15 +13,21 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import AppError, BadRequestError
-from app.core.redis import get_redis
-from app.dependencies.auth import CurrentUser, security
+from app.core.exceptions import AppError, BadRequestError, NotFoundError, UnauthorizedError
+from app.core.redis import get_redis, redis_client
+from app.core.storage import (
+    generate_presigned_get_url,
+    generate_presigned_get_url_cached,
+    read_full_object,
+)
+from app.core.storage import upload_file as storage_upload_file
+from app.dependencies.auth import CurrentUser, get_user_from_token, security
 from app.dependencies.rate_limit import rate_limit_downloads
+from app.models.upload import Upload
 from app.models.user import User
 from app.schemas.material import MaterialDetail, MaterialVersionOut
 from app.services.audit import record_download
 from app.services.material import (
-    check_material_access,
     get_material_attachments,
     get_material_thumbnail_info,
     get_material_version,
@@ -49,6 +57,31 @@ _TEXT_EDIT_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB cap on raw text body
 router = APIRouter(prefix="/api/materials", tags=["materials"])
 
 
+async def _presigned_url(
+    key: str,
+    redis: Redis | None,
+    *,
+    force_download: bool = True,
+    filename: str | None = None,
+    content_type: str | None = None,
+) -> str:
+    """Return a presigned URL, using the Redis-cached variant when Redis is available."""
+    if redis is not None:
+        return await generate_presigned_get_url_cached(
+            key,
+            redis=redis,
+            force_download=force_download,
+            filename=filename,
+            content_type=content_type,
+        )
+    return await generate_presigned_get_url(
+        key,
+        force_download=force_download,
+        filename=filename,
+        content_type=content_type,
+    )
+
+
 def _is_text_mime(mime: str) -> bool:
     """Return True if this MIME type can be represented as editable UTF-8 text."""
     m = (mime or "").lower()
@@ -64,8 +97,6 @@ async def get_material(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MaterialDetail:
     data = await get_material_with_version(db, material_id, current_user_id=user.id)
-    if user is not None:
-        check_material_access(user.id, data)
     return MaterialDetail.model_validate(data)
 
 
@@ -79,34 +110,21 @@ async def get_material_download_url(
     redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
     data = await get_material_with_version(db, material_id)
-    check_material_access(user.id, data)
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
-        from app.core.exceptions import NotFoundError
-
         raise NotFoundError("No file available for download")
-
-    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
 
     file_mime = version.get("file_mime_type") or ""
     file_name = version.get("file_name") or ""
     is_pdf = file_mime == "application/pdf" or file_name.lower().endswith(".pdf")
 
-    if redis is not None:
-        url = await generate_presigned_get_url_cached(
-            version["file_key"],
-            redis=redis,
-            force_download=not is_pdf,
-            filename=version.get("file_name"),
-            content_type=version.get("file_mime_type"),
-        )
-    else:
-        url = await generate_presigned_get_url(
-            version["file_key"],
-            force_download=not is_pdf,
-            filename=version.get("file_name"),
-            content_type=version.get("file_mime_type"),
-        )
+    url = await _presigned_url(
+        version["file_key"],
+        redis,
+        force_download=not is_pdf,
+        filename=version.get("file_name"),
+        content_type=version.get("file_mime_type"),
+    )
 
     await increment_download_count(db, material_id)
     await record_download(
@@ -129,18 +147,10 @@ async def inline_material(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
-    from app.services.material import check_material_access, get_material_with_version
-
     data = await get_material_with_version(db, material_id)
-    check_material_access(user.id, data)
-
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
-        from app.core.exceptions import NotFoundError
-
         raise NotFoundError("No file available for preview")
-
-    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
 
     # Images, PDFs, and Videos are safe to render inline; all other types are forced
     # to download so the browser never executes or parses unknown content.
@@ -150,26 +160,13 @@ async def inline_material(
         or file_mime.startswith("video/")
         or file_mime == "application/pdf"
     )
-    force_download = not inline_safe
-    file_key = version["file_key"]
-
-    # Use Redis-cached URL so Cloudflare CDN sees the same URL across requests
-    # and can serve the file from the edge rather than the slow R2 origin.
-    if redis is not None:
-        url = await generate_presigned_get_url_cached(
-            file_key,
-            redis=redis,
-            force_download=force_download,
-            filename=version.get("file_name"),
-            content_type=version.get("file_mime_type"),
-        )
-    else:
-        url = await generate_presigned_get_url(
-            file_key,
-            force_download=force_download,
-            filename=version.get("file_name"),
-            content_type=version.get("file_mime_type"),
-        )
+    url = await _presigned_url(
+        version["file_key"],
+        redis,
+        force_download=not inline_safe,
+        filename=version.get("file_name"),
+        content_type=version.get("file_mime_type"),
+    )
     return {"url": url, "filename": version.get("file_name")}
 
 
@@ -193,8 +190,6 @@ async def thumbnail_material(
     version = await get_material_thumbnail_info(db, mid, redis)
     if not version:
         raise AppError(404, "Material version not found")
-
-    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
 
     # 1. Prefer dedicated stored thumbnail
     target_key = version.get("thumbnail_key")
@@ -226,21 +221,13 @@ async def thumbnail_material(
             raise AppError(404, "Thumbnail not available for this file type")
 
     thumb_filename = f"thumb_{version.get('file_name') or 'file'}.webp"
-    if redis is not None:
-        url = await generate_presigned_get_url_cached(
-            target_key,
-            redis=redis,
-            force_download=False,
-            filename=thumb_filename,
-            content_type=content_type,
-        )
-    else:
-        url = await generate_presigned_get_url(
-            target_key,
-            force_download=False,
-            filename=thumb_filename,
-            content_type=content_type,
-        )
+    url = await _presigned_url(
+        target_key,
+        redis,
+        force_download=False,
+        filename=thumb_filename,
+        content_type=content_type,
+    )
     return {
         "url": url,
         "thumbnail_type": "webp" if is_dedicated else "fallback",
@@ -256,29 +243,20 @@ async def stream_material_file(
     token: Annotated[str | None, Query()] = None,
     redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
 ) -> Any:
-    from app.core.exceptions import NotFoundError, UnauthorizedError
-
     # Manual auth: accept either Authorization: Bearer header OR ?token= query param.
     effective_user: User | None = None
 
-    # Ensure Redis is available for auth checks and rate limiting.
     if redis is None:
-        from app.core.redis import redis_client
-
         redis = redis_client
 
     if user is not None:
         try:
-            from app.dependencies.auth import get_user_from_token
-
             effective_user = await get_user_from_token(db, redis, user.credentials)
         except Exception:
             pass
 
     if not effective_user and token:
         try:
-            from app.dependencies.auth import get_user_from_token
-
             effective_user = await get_user_from_token(db, redis, token)
         except Exception:
             pass
@@ -286,34 +264,29 @@ async def stream_material_file(
     if not effective_user:
         raise UnauthorizedError()
 
-    from app.dependencies.rate_limit import rate_limit_downloads
-
     await rate_limit_downloads(request, effective_user, db, redis)
 
     data = await get_material_with_version(db, material_id)
-    check_material_access(effective_user.id, data)
-
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
         raise NotFoundError("No file available")
 
-    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
-
     # Redirect to presigned URL. S3/MinIO handles Range requests (206) perfectly,
     # which is required for browser media players to seek and parse metadata.
-    if redis is not None:
-        url = await generate_presigned_get_url_cached(
-            version["file_key"],
-            redis=redis,
-            filename=version.get("file_name"),
-            content_type=version.get("file_mime_type"),
-        )
-    else:
-        url = await generate_presigned_get_url(
-            version["file_key"],
-            filename=version.get("file_name"),
-            content_type=version.get("file_mime_type"),
-        )
+    file_mime = version.get("file_mime_type") or ""
+    inline_safe = (
+        file_mime.startswith("image/")
+        or file_mime.startswith("video/")
+        or file_mime.startswith("audio/")
+        or file_mime == "application/pdf"
+    )
+    url = await _presigned_url(
+        version["file_key"],
+        redis,
+        force_download=not inline_safe,
+        filename=version.get("file_name"),
+        content_type=file_mime or None,
+    )
 
     await record_download(
         db,
@@ -360,35 +333,21 @@ async def get_version_download_url(
     redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
     data = await get_material_with_version(db, material_id)
-    check_material_access(user.id, data)
-
     version = await get_material_version(db, material_id, version_number)
     if not version.file_key:
-        from app.core.exceptions import NotFoundError
-
         raise NotFoundError("No file available for download")
-
-    from app.core.storage import generate_presigned_get_url, generate_presigned_get_url_cached
 
     file_mime = version.file_mime_type or ""
     file_name = version.file_name or ""
     is_pdf = file_mime == "application/pdf" or file_name.lower().endswith(".pdf")
 
-    if redis is not None:
-        url = await generate_presigned_get_url_cached(
-            version.file_key,
-            redis=redis,
-            force_download=not is_pdf,
-            filename=version.file_name,
-            content_type=version.file_mime_type,
-        )
-    else:
-        url = await generate_presigned_get_url(
-            version.file_key,
-            force_download=not is_pdf,
-            filename=version.file_name,
-            content_type=version.file_mime_type,
-        )
+    url = await _presigned_url(
+        version.file_key,
+        redis,
+        force_download=not is_pdf,
+        filename=version.file_name,
+        content_type=version.file_mime_type,
+    )
 
     await record_download(
         db,
@@ -469,12 +428,7 @@ async def get_material_text_content(
     Works for both plain-text files and gzip-compressed text files (.gz).
     Only available for text-based MIME types.
     """
-    from app.core.exceptions import BadRequestError, NotFoundError
-    from app.core.storage import read_full_object
-
     data = await get_material_with_version(db, material_id)
-    check_material_access(user.id, data)
-
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
         raise NotFoundError("No file available")
@@ -524,13 +478,7 @@ async def save_material_text_content(
     Returns ``{ file_key, file_name, file_size, file_mime_type }`` ready
     to be included in an ``edit_material`` PR operation.
     """
-    from app.core.exceptions import BadRequestError, NotFoundError
-    from app.core.storage import upload_file as storage_upload_file
-    from app.models.upload import Upload
-
     data = await get_material_with_version(db, material_id)
-    check_material_access(user.id, data)
-
     version = data.get("current_version_info")
     if version is None:
         raise NotFoundError("No version found for this material")
@@ -543,9 +491,6 @@ async def save_material_text_content(
 
     is_gzip_wrapped = current_mime == "application/gzip" or current_name.endswith(".gz")
 
-    # Determine inner MIME type for validation
-    import mimetypes as _mimetypes
-
     if is_gzip_wrapped:
         guessed, _ = _mimetypes.guess_type(logical_name)
         check_mime = guessed or "text/plain"
@@ -556,10 +501,6 @@ async def save_material_text_content(
         raise BadRequestError("Cannot save text content for a non-text file")
 
     # Compute text diff
-    import difflib
-
-    from app.core.storage import read_full_object
-
     try:
         old_bytes = await read_full_object(version["file_key"])
         if is_gzip_wrapped:

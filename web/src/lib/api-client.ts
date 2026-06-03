@@ -177,10 +177,6 @@ export async function apiFetchBlob(
 const _URL_CACHE_TTL_MS = 12 * 60 * 1000;
 const _urlCache = new Map<string, { url: string; expiresAt: number }>();
 
-export function bustMaterialUrlCache(materialId: string): void {
-    _urlCache.delete(materialId);
-}
-
 export async function getMaterialFileUrl(materialId: string): Promise<string> {
     const cached = _urlCache.get(materialId);
     if (cached && Date.now() < cached.expiresAt) {

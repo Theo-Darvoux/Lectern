@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from app.config import settings
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 _tracer: trace.Tracer | None = None
 
@@ -41,13 +41,13 @@ def get_tracer() -> trace.Tracer:
     return _tracer or trace.get_tracer("wikint")
 
 
-def inject_trace_context() -> dict:  # type: ignore[type-arg]
+def inject_trace_context() -> dict[str, str]:
     """Return W3C traceparent/tracestate for ARQ job propagation."""
     carrier: dict[str, str] = {}
     propagate.inject(carrier)
     return carrier
 
 
-def extract_trace_context(carrier: dict) -> Any:  # type: ignore[type-arg]
+def extract_trace_context(carrier: dict[str, Any]) -> Any:
     """Extract and return an OTel context from an ARQ job kwargs dict."""
     return propagate.extract(carrier)

@@ -23,7 +23,7 @@ from app.core.file_security._zip import (
 )
 from app.core.sandbox import sandboxed_run
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from oletools.olevba import VBA_Parser

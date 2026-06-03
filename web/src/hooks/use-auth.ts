@@ -3,7 +3,8 @@
 import { useCallback } from "react";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { setAccessToken, getAccessToken } from "@/lib/auth-tokens";
-import { useAuthStore, UserBrief } from "@/lib/stores";
+import { useAuthStore } from "@/lib/stores";
+import type { UserBrief } from "@/lib/guest";
 import { broadcastTokenAcquired, performLogout, scheduleRefreshTimer } from "@/lib/auth-sync";
 
 export function useAuth() {

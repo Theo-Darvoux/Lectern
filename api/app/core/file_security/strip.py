@@ -19,7 +19,7 @@ from app.core.file_security._office import _strip_ole2_from_path, _strip_ooxml_f
 from app.core.file_security._pdf import _strip_pdf_from_path
 from app.core.mimetypes import OLE2_MIME_TYPES, ZIP_MIME_TYPES
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 async def strip_metadata_file(file_path: Path, mime_type: str) -> Path:
@@ -34,17 +34,17 @@ async def strip_metadata_file(file_path: Path, mime_type: str) -> Path:
     try:
         if mime_type.startswith("image/"):
             async with _get_concurrency_guard("image"):
-                return await asyncio.to_thread(_strip_image_from_path, file_path)  # type: ignore[unused-ignore]
+                return await asyncio.to_thread(_strip_image_from_path, file_path)
         elif mime_type == "application/pdf":
-            return await asyncio.to_thread(_strip_pdf_from_path, file_path)  # type: ignore[unused-ignore]
+            return await asyncio.to_thread(_strip_pdf_from_path, file_path)
         elif mime_type.startswith("video/"):
-            return await _strip_video_from_path(file_path, mime_type)  # type: ignore[unused-ignore]
+            return await _strip_video_from_path(file_path, mime_type)
         elif mime_type.startswith("audio/"):
-            return await asyncio.to_thread(_strip_audio_from_path, file_path, mime_type)  # type: ignore[unused-ignore]
+            return await asyncio.to_thread(_strip_audio_from_path, file_path, mime_type)
         elif mime_type in OLE2_MIME_TYPES:
-            return await _strip_ole2_from_path(file_path)  # type: ignore[unused-ignore]
+            return await _strip_ole2_from_path(file_path)
         elif mime_type in ZIP_MIME_TYPES:
-            return await _strip_ooxml_from_path(file_path)  # type: ignore[unused-ignore]
+            return await _strip_ooxml_from_path(file_path)
     except ValueError:
         # Propagation: macro detection or deliberate security rejections
         raise

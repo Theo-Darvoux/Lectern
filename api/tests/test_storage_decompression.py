@@ -45,9 +45,7 @@ async def test_download_file_decompresses_gzip() -> None:
     mock_client_context.__aexit__ = AsyncMock(return_value=False)
 
     with (
-        patch(
-            "app.core.storage._get_s3_settings", AsyncMock(return_value={"bucket": "test-bucket"})
-        ),
+        patch("app.core.storage._get_s3_settings", return_value={"bucket": "test-bucket"}),
         patch("app.core.storage.get_s3_client", return_value=mock_client_context),
     ):
         with tempfile.TemporaryDirectory() as tmpdir:

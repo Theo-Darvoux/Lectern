@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from app.config import settings
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 ROLLOVER_MAP = {"1A": "2A", "2A": "3A+", "3A+": "3A+"}
 

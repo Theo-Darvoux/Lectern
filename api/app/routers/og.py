@@ -12,12 +12,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.database import get_db
-from app.core.redis import get_redis
-from app.services.auth import get_full_auth_config
+from app.services.directory import resolve_browse_path
+from app.services.material import get_material_by_id
+from app.services.user import get_user_by_id
 
 router = APIRouter(prefix="/api", tags=["og"])
 
@@ -34,8 +35,6 @@ async def _resolve_resource(db: AsyncSession, path: str) -> tuple[str, str | Non
 
     try:
         if segments[0] == "browse":
-            from app.services.directory import resolve_browse_path
-
             sub = "/".join(segments[1:])
             if not sub:
                 return None
@@ -53,15 +52,11 @@ async def _resolve_resource(db: AsyncSession, path: str) -> tuple[str, str | Non
             return None
 
         if segments[0] == "profile" and len(segments) >= 2:
-            from app.services.user import get_user_by_id
-
             user = await get_user_by_id(db, segments[1])
             if user is not None and user.display_name:
                 return user.display_name, user.bio
 
         if segments[0] == "qcm" and len(segments) >= 2 and segments[1] not in {"new", "preview"}:
-            from app.services.material import get_material_by_id
-
             material = await get_material_by_id(db, segments[1])
             if material is not None and material.title:
                 return material.title, material.description
@@ -80,13 +75,11 @@ def _meta(prop: str, content: str, *, name: bool = False) -> str:
 async def render_og(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> HTMLResponse:
-    config = await get_full_auth_config(db, redis)
-    site_name = config.get("site_name") or "WikINT"
-    site_description = config.get("site_description") or ""
-    og_image = config.get("og_image_url")
-    favicon = config.get("site_favicon_url")
+    site_name = settings.site_name or "WikINT"
+    site_description = settings.site_description or ""
+    og_image = settings.og_image_url
+    favicon = settings.site_favicon_url
 
     original_path = request.headers.get("x-original-path", "/")
     proto = request.headers.get("x-forwarded-proto", "https")

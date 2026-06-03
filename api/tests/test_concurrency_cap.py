@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import Request
@@ -28,13 +28,7 @@ async def test_tus_concurrency_cap_enforced():
 
     import uuid
 
-    with (
-        patch("app.services.auth.get_full_auth_config", new_callable=AsyncMock) as m_config,
-    ):
-        m_config.return_value = {"max_file_size_mb": 1000}
-        response = await tus_patch(
-            uuid.UUID(tus_id), mock_request, mock_user, mock_redis, AsyncMock()
-        )
+    response = await tus_patch(uuid.UUID(tus_id), mock_request, mock_user, mock_redis, AsyncMock())
 
     assert response.status_code == 429
     assert response.headers["X-WikINT-Error"] == ERR_TUS_CONCURRENCY_LIMIT

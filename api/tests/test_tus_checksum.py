@@ -72,9 +72,7 @@ async def test_tus_patch_valid_checksum():
         patch("app.routers.tus.complete_multipart_upload", new_callable=AsyncMock),
         patch("app.routers.tus.abort_multipart_upload", new_callable=AsyncMock),
         patch("app.routers.tus._enqueue_processing", new_callable=AsyncMock),
-        patch("app.services.auth.get_full_auth_config", new_callable=AsyncMock) as m_config,
     ):
-        m_config.return_value = {"max_file_size_mb": 1000}
         m_upload.return_value = "etag-123"
 
         import uuid
@@ -109,9 +107,7 @@ async def test_tus_patch_wrong_checksum():
         patch("app.routers.tus.upload_part", new_callable=AsyncMock) as m_upload,
         patch("app.routers.tus.complete_multipart_upload", new_callable=AsyncMock),
         patch("app.routers.tus.abort_multipart_upload", new_callable=AsyncMock),
-        patch("app.services.auth.get_full_auth_config", new_callable=AsyncMock) as m_config,
     ):
-        m_config.return_value = {"max_file_size_mb": 1000}
         m_upload.return_value = "etag-123"
 
         with pytest.raises(AppError) as exc:

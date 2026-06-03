@@ -1,6 +1,7 @@
 import contextlib
 import re
 import uuid
+from typing import Any
 
 from meilisearch_python_sdk.models.search import SearchParams
 from sqlalchemy import select
@@ -22,7 +23,7 @@ async def perform_search(
     current_user_id: uuid.UUID | None = None,
     directory_id: uuid.UUID | None = None,
     type_filter: str | None = None,
-) -> dict:  # type: ignore[type-arg]
+) -> dict[str, Any]:
     if not query.strip():
         return {"items": [], "total": 0, "page": page, "limit": limit}
 

@@ -12,7 +12,7 @@ from redis.asyncio import Redis
 
 from app.config import settings
 
-logger = logging.getLogger("wikint.cas")
+logger = logging.getLogger(__name__)
 
 _CAS_INFO = b"wikint-cas-v1"
 
@@ -114,9 +114,9 @@ return count
 
 
 async def increment_cas_ref(
-    redis: Redis,
+    redis: Redis,  # type: ignore[type-arg]
     sha256: str,
-    initial_data: dict[str, Any] | None = None,  # type: ignore[type-arg]
+    initial_data: dict[str, Any] | None = None,
 ) -> int:
     """Atomically increment the CAS ref count. Returns the new count, or 0 on error."""
     cas_key = hmac_cas_key(sha256)

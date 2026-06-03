@@ -18,7 +18,7 @@ from app.core.file_security._concurrency import (
     _get_concurrency_guard,  # noqa: F401 (re-exported for strip.py)
 )
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # Decompression-bomb protection: reject images with more than 50M pixels.
 Image.MAX_IMAGE_PIXELS = 50_000_000
@@ -148,20 +148,3 @@ def _compress_image_path(file_path: Path) -> Path:
     except Exception as exc:
         logger.warning("Image compression failed for %s: %s", file_path, exc)
     return file_path
-
-
-def _compress_image_bytes(file_bytes: bytes) -> bytes:
-    """Resize image to max 2048px and compress (deprecated bytes-based API)."""
-    try:
-        with Image.open(io.BytesIO(file_bytes)) as img:
-            max_size = 2048
-            if img.width > max_size or img.height > max_size:
-                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-            output = io.BytesIO()
-            _save_compressed_image(img, img.format or "JPEG", output)
-            compressed = output.getvalue()
-            if len(compressed) < len(file_bytes):
-                return compressed
-    except Exception as exc:
-        logger.warning("Image compression bytes failed: %s", exc)
-    return file_bytes

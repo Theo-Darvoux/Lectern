@@ -15,7 +15,7 @@ from app.workers.upload.context import WorkerContext
 from app.workers.upload.exceptions import MalwareError, UploadError
 from app.workers.upload.utils import parallel_tasks
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 async def run_scan_and_strip(

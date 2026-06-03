@@ -108,7 +108,7 @@ async def test_prune_accepts_valid_prefixes(
     fake_rc.delete = AsyncMock()
     with (
         patch("app.routers.admin_storage.delete_object", new_callable=AsyncMock),
-        patch("app.core.redis.redis_client", fake_rc),
+        patch("app.routers.admin_storage.redis_client", fake_rc),
     ):
         response = await client.post(
             "/api/admin/storage/prune",
@@ -231,7 +231,7 @@ async def test_validate_email_allow_all_domains_with_matching_domain(
     redis.setex = AsyncMock()
 
     with patch.object(settings, "allow_all_domains", True):
-        result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session, redis)
+        result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session)
     assert result is True
 
 
@@ -248,7 +248,7 @@ async def test_validate_email_allow_all_domains_unlisted_domain_is_pending(
     redis.setex = AsyncMock()
 
     with patch.object(settings, "allow_all_domains", True):
-        result = await validate_email_for_auth("user@unknown.com", db_session, redis)
+        result = await validate_email_for_auth("user@unknown.com", db_session)
     assert result is False  # allowed but PENDING (not auto-approved)
 
 
@@ -265,7 +265,7 @@ async def test_validate_email_disallow_unlisted_domain_no_allow_all(
 
     # Default settings.allow_all_domains = False
     with pytest.raises(ValueError, match="not allowed"):
-        await validate_email_for_auth("user@evil.com", db_session, redis)
+        await validate_email_for_auth("user@evil.com", db_session)
 
 
 @pytest.mark.asyncio
@@ -432,10 +432,13 @@ async def test_check_storage_limit_clamps_negative_redis_value():
     original_client = redis_core.redis_client
     redis_core.redis_client = fake_redis
 
+    mock_db = AsyncMock()
+
     try:
         # With 1 GB max and effectively 0 usage (clamped), a small upload should pass
         await _check_storage_limit(
             1024,
+            mock_db,
             config={"max_storage_gb": 1},
         )
         # No exception = pass (usage was clamped to 0, not kept as -999999999)
@@ -573,7 +576,7 @@ async def test_validate_email_listed_domain_auto_approve_respected(
     redis.setex = AsyncMock()
 
     with patch.object(settings, "allow_all_domains", True):
-        result = await validate_email_for_auth("user@restricted.edu", db_session, redis)
+        result = await validate_email_for_auth("user@restricted.edu", db_session)
     assert result is False
 
 
@@ -594,5 +597,5 @@ async def test_validate_email_listed_domain_checked_before_allow_all(
     redis.setex = AsyncMock()
 
     with patch.object(settings, "allow_all_domains", True):
-        result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session, redis)
+        result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session)
     assert result is True

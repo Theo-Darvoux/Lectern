@@ -58,8 +58,8 @@ async def test_apply_pr_idempotency(db_session: AsyncSession):
 
     # Mock storage info and copy
     with (
-        patch("app.services.pr._get_file_info", new_callable=AsyncMock) as mock_info,
-        patch("app.core.storage.copy_object", new_callable=AsyncMock) as mock_copy,
+        patch("app.services.pr.get_object_info", new_callable=AsyncMock) as mock_info,
+        patch("app.services.pr.copy_object", new_callable=AsyncMock) as mock_copy,
         patch("app.services.pr._unique_material_slug", new_callable=AsyncMock) as mock_slug,
     ):
         mock_info.return_value = {"size": 100, "content_type": "application/pdf"}

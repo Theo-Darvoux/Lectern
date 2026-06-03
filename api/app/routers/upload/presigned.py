@@ -6,13 +6,16 @@ import time
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from redis.asyncio import Redis
+from sqlalchemy import update as sql_update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.constants import PRIVILEGED_ROLES
+from app.core.database import get_db
 from app.core.exceptions import BadRequestError, ForbiddenError
-from app.core.mimetypes import MimeRegistry
+from app.core.mimetypes import MimeRegistry, guess_mime_from_bytes
 from app.core.redis import get_redis
 from app.core.storage import (
     abort_multipart_upload,
@@ -31,6 +34,7 @@ from app.core.upload_errors import (
 )
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
+from app.models.upload import Upload
 from app.routers.upload.helpers import (
     _QUOTA_KEY_PREFIX,
     _UPLOAD_INTENT_PREFIX,
@@ -39,7 +43,11 @@ from app.routers.upload.helpers import (
     _create_upload_row,
     _enqueue_processing,
 )
-from app.routers.upload.validators import _check_per_type_size, _validate_filename
+from app.routers.upload.validators import (
+    _apply_mime_correction,
+    _check_per_type_size,
+    _validate_filename,
+)
 from app.schemas.material import (
     PresignedMultipartCompleteRequest,
     PresignedMultipartInitOut,
@@ -51,7 +59,7 @@ from app.schemas.material import (
     UploadStatus,
 )
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -71,6 +79,7 @@ async def init_upload(
     data: UploadInitRequest,
     user: CurrentUser,
     redis: Annotated[RedisProtocol, Depends(get_redis)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[None, Depends(rate_limit_uploads)],
     response: Response,
 ) -> PresignedUploadOut:
@@ -97,6 +106,7 @@ async def init_upload(
     await _check_pending_cap(
         user_id,
         redis,  # type: ignore[arg-type]
+        db,
         privileged=user.role in PRIVILEGED_ROLES,
         reserve_key=quarantine_key,
     )
@@ -127,6 +137,7 @@ async def init_upload(
         filename=safe_name,
         mime_type=data.mime_type,
         size_bytes=data.size,
+        db=db,
     )
 
     return PresignedUploadOut(
@@ -180,9 +191,7 @@ async def complete_upload(
         )
 
     # MIME re-validation: Range GET first 2048 bytes
-    from app.core.mimetypes import guess_mime_from_bytes
     from app.core.storage import read_object_bytes
-    from app.routers.upload.validators import _apply_mime_correction
 
     head = await read_object_bytes(data.quarantine_key, byte_count=2048)
     real_mime = guess_mime_from_bytes(head)
@@ -228,12 +237,11 @@ async def presigned_multipart_init(
     data: UploadInitRequest,
     user: CurrentUser,
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[None, Depends(rate_limit_uploads)],
 ) -> PresignedMultipartInitOut:
     """Initialise a direct-to-S3 multipart upload."""
     if not settings.enable_presigned_multipart:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=501, detail="Presigned multipart not enabled")
 
     user_id = str(user.id)
@@ -255,6 +263,7 @@ async def presigned_multipart_init(
     await _check_pending_cap(
         user_id,
         redis,
+        db,
         privileged=user.role in PRIVILEGED_ROLES,
         reserve_key=quarantine_key,
     )
@@ -293,6 +302,7 @@ async def presigned_multipart_init(
         filename=safe_name,
         mime_type=data.mime_type,
         size_bytes=data.size,
+        db=db,
     )
 
     return PresignedMultipartInitOut(
@@ -337,10 +347,7 @@ async def presigned_multipart_complete(
     )
 
     # MIME re-validation via Range GET (audit fix #4)
-
-    from app.core.mimetypes import guess_mime_from_bytes
     from app.core.storage import read_object_bytes
-    from app.routers.upload.validators import _apply_mime_correction
 
     head = await read_object_bytes(intent["quarantine_key"], byte_count=2048)
     real_mime = guess_mime_from_bytes(head)
@@ -399,10 +406,7 @@ async def presigned_multipart_abort(
     # Clean up quota and DB row (audit fix #14)
     await redis.zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", intent["quarantine_key"])
     try:
-        from sqlalchemy import update as sql_update
-
         from app.core.database import async_session_factory
-        from app.models.upload import Upload
 
         async with async_session_factory() as session:
             await session.execute(

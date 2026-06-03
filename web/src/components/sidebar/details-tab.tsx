@@ -28,7 +28,8 @@ import {
 } from "@/lib/file-utils";
 import { apiFetch } from "@/lib/api-client";
 import { ExpandableText } from "@/components/ui/expandable-text";
-import { useUIStore, useBrowseRefreshStore, useLikeOverrides, isGuest } from "@/lib/stores";
+import { useUIStore, useBrowseRefreshStore, useLikeOverrides } from "@/lib/stores";
+import { isGuest } from "@/lib/guest";
 import { useAuth } from "@/hooks/use-auth";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";

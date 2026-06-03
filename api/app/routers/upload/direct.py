@@ -13,7 +13,7 @@ from app.config import settings
 from app.core.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
 from app.core.database import get_db
 from app.core.exceptions import BadRequestError
-from app.core.file_security import SvgSecurityError
+from app.core.file_security import SvgSecurityError, check_svg_safety_stream
 from app.core.mimetypes import guess_mime_from_bytes
 from app.core.processing import ProcessingFile
 from app.core.redis import get_redis
@@ -25,6 +25,7 @@ from app.routers.upload.helpers import (
     _IDEM_KEY_PREFIX,
     _IDEM_TTL,
     _check_pending_cap,
+    _check_storage_limit,
     _create_upload_row,
     _enqueue_processing,
 )
@@ -34,9 +35,8 @@ from app.routers.upload.validators import (
     _validate_filename,
 )
 from app.schemas.material import UploadPendingOut, UploadStatus
-from app.services.auth import get_full_auth_config
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -72,38 +72,27 @@ async def upload_file(
             raise BadRequestError("X-Upload-ID must be a valid UUID")
         upload_id = idem_header
 
-    # Fetch dynamic config
-    config = await get_full_auth_config(db, redis)
-
     # Process allowed lists
     allowed_exts: set[str] | None = None
-    if config.get("allowed_extensions"):
+    if settings.allowed_extensions:
         allowed_exts = {
-            e.strip().lower() for e in config["allowed_extensions"].split(",") if e.strip()
+            e.strip().lower() for e in settings.allowed_extensions.split(",") if e.strip()
         }
         if not all(e.startswith(".") for e in allowed_exts):
             # Ensure dots
             allowed_exts = {e if e.startswith(".") else f".{e}" for e in allowed_exts}
 
     allowed_mimes: set[str] | None = None
-    if config.get("allowed_mime_types"):
+    if settings.allowed_mime_types:
         allowed_mimes = {
-            m.strip().lower() for m in config["allowed_mime_types"].split(",") if m.strip()
+            m.strip().lower() for m in settings.allowed_mime_types.split(",") if m.strip()
         }
 
     # Validate filename / extension
     safe_name, ext = _validate_filename(file.filename or "unnamed", allowed_extensions=allowed_exts)
 
     # Stream to a temp file (no full-body read into RAM)
-    max_bytes = (
-        (  # type: ignore[operator]
-            config.get("max_file_size_mb")
-            if config.get("max_file_size_mb") is not None
-            else settings.max_file_size_mb
-        )
-        * 1024
-        * 1024
-    )
+    max_bytes = settings.max_file_size_mb * 1024 * 1024  # type: ignore[operator]
     pf = await ProcessingFile.from_upload(file, max_bytes)
 
     try:
@@ -129,17 +118,13 @@ async def upload_file(
             guessed, _enc = mimetypes.guess_type(safe_name)
             mime_type = guessed or "application/octet-stream"
 
-        _check_per_type_size(mime_type, pf.size, config=config)
+        _check_per_type_size(mime_type, pf.size)
 
-        from app.routers.upload.helpers import _check_storage_limit
-
-        await _check_storage_limit(pf.size, config=config)
+        await _check_storage_limit(pf.size, db)
 
         # SVG safety check
         if mime_type == "image/svg+xml":
             try:
-                from app.core.file_security import check_svg_safety_stream
-
                 with pf.open("rb") as fh:
                     check_svg_safety_stream(fh, safe_name)
             except SvgSecurityError as exc:
@@ -159,6 +144,7 @@ async def upload_file(
         await _check_pending_cap(
             user_id,
             redis,
+            db,
             privileged=user.role in PRIVILEGED_ROLES,
             reserve_key=quarantine_key,
         )
@@ -167,7 +153,7 @@ async def upload_file(
         async with get_s3_client() as s3:
             await s3.upload_file(  # type: ignore[call-arg]
                 Filename=str(pf.path),
-                Bucket=config.get("s3_bucket") or settings.s3_bucket,
+                Bucket=settings.s3_bucket,
                 Key=quarantine_key,
                 ExtraArgs={"ContentType": mime_type},
             )
@@ -179,6 +165,7 @@ async def upload_file(
             filename=safe_name,
             mime_type=mime_type,
             size_bytes=pf.size,
+            db=db,
         )
 
         await _enqueue_processing(

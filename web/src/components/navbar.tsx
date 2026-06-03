@@ -18,7 +18,8 @@ import {
 import { useState, useEffect, useCallback } from "react";
 import { SearchModal } from "@/components/search/search-modal";
 import { SearchInline } from "@/components/search/search-inline";
-import { useNotificationStore, useConfigStore, isGuest } from "@/lib/stores";
+import { useNotificationStore, useConfigStore } from "@/lib/stores";
+import { isGuest } from "@/lib/guest";
 import { useSSE } from "@/hooks/use-sse";
 import { usePathname } from "next/navigation";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";

@@ -19,7 +19,7 @@ Checks performed by :func:`check_polyglot`:
 import logging
 from pathlib import Path
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # (label, magic_prefix, format_family) triples used for header checks.
 # ``format_family`` groups semantically related MIME types so we do not flag

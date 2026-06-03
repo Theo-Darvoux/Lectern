@@ -8,14 +8,18 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from redis.asyncio import Redis
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.core.cas import decrement_cas_ref, hmac_cas_key
 from app.core.database import get_db
-from app.core.exceptions import BadRequestError
+from app.core.exceptions import BadRequestError, ForbiddenError
 from app.core.mimetypes import ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES
 from app.core.redis import get_redis
-from app.core.storage import delete_object
+from app.core.storage import delete_object, generate_presigned_get
 from app.dependencies.auth import CurrentUser
+from app.models.upload import Upload
 from app.routers.upload.helpers import _QUOTA_KEY_PREFIX, _STATUS_CACHE_PREFIX
 from app.schemas.material import (
     BatchStatusRequest,
@@ -26,7 +30,7 @@ from app.schemas.material import (
     UploadStatus,
 )
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -43,34 +47,24 @@ class UploadConfigOut(BaseModel):
 
 
 @router.get("/config", response_model=UploadConfigOut)
-async def get_upload_config(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-) -> UploadConfigOut:
+async def get_upload_config() -> UploadConfigOut:
     """Return the current upload configuration (allowed types, size limits, recommended path).
 
     Clients should use ``recommended_path`` and ``direct_threshold_mb`` to decide
     which upload path to use without hard-coding the thresholds.
     """
-    from app.config import settings
-    from app.services.auth import get_full_auth_config
-
-    config = await get_full_auth_config(db, redis)
-
-    # Use dynamic allowed lists if provided
     allowed_exts = ALLOWED_EXTENSIONS
-    if config.get("allowed_extensions"):
-        # Convert comma-separated string back to list
-        allowed_exts = [e.strip() for e in config["allowed_extensions"].split(",") if e.strip()]  # type: ignore[assignment]
+    if settings.allowed_extensions:
+        allowed_exts = [e.strip() for e in settings.allowed_extensions.split(",") if e.strip()]  # type: ignore[assignment]
 
     allowed_mimes = ALLOWED_MIME_TYPES
-    if config.get("allowed_mime_types"):
-        allowed_mimes = [m.strip() for m in config["allowed_mime_types"].split(",") if m.strip()]  # type: ignore[assignment]
+    if settings.allowed_mime_types:
+        allowed_mimes = [m.strip() for m in settings.allowed_mime_types.split(",") if m.strip()]  # type: ignore[assignment]
 
     return UploadConfigOut(
         allowed_extensions=sorted(allowed_exts),
         allowed_mimetypes=sorted(allowed_mimes),
-        max_file_size_mb=config.get("max_file_size_mb") or settings.max_file_size_mb,
+        max_file_size_mb=settings.max_file_size_mb,
         recommended_path="direct",
         direct_threshold_mb=settings.direct_upload_threshold_mb,
     )
@@ -120,15 +114,10 @@ async def cancel_upload(
     # For S3-backed keys (quarantine/, uploads/), delete the object.
     # For synthetic staging keys, decrement the CAS ref instead.
     if target_key.startswith("staging:"):
-        from app.core.cas import decrement_cas_ref
-
         # Look up the upload's SHA-256 to decrement the correct CAS ref
         from app.core.database import async_session_factory
-        from app.models.upload import Upload
 
         async with async_session_factory() as session:
-            from sqlalchemy import select
-
             row = await session.scalar(select(Upload).where(Upload.upload_id == upload_id))
             if row and row.sha256:
                 await decrement_cas_ref(redis, row.sha256)
@@ -164,8 +153,6 @@ async def check_file_exists(
     # Return exists=True but WITHOUT a raw cas/ key to avoid leaking
     # internal storage paths.  The upload flow's CAS-hit path will handle
     # the actual copy from CAS to the per-user prefix.
-    from app.core.cas import hmac_cas_key
-
     cas_key = hmac_cas_key(data.sha256)
     cas_raw = await redis.get(cas_key)
     if cas_raw:
@@ -191,7 +178,7 @@ async def batch_upload_status(
     data: BatchStatusRequest,
     user: CurrentUser,
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-) -> dict:  # type: ignore[type-arg]
+) -> dict[str, Any]:
     """Poll the processing status for up to 50 file keys in a single request."""
     user_id_str = str(user.id)
 
@@ -211,15 +198,12 @@ async def batch_upload_status(
 
     # Verify CAS key ownership via Upload table
     if cas_keys_to_verify:
-        from sqlalchemy import select as _sel
-
         from app.core.database import async_session_factory
-        from app.models.upload import Upload
 
         async with async_session_factory() as _db:
             verified = set(
                 await _db.scalars(
-                    _sel(Upload.final_key).where(
+                    select(Upload.final_key).where(
                         Upload.final_key.in_(cas_keys_to_verify),
                         Upload.user_id == user.id,
                     )
@@ -253,14 +237,11 @@ async def batch_upload_status(
                 keys_needing_fallback.add(file_key)
 
     if keys_needing_fallback:
-        from sqlalchemy import select as _sel
-
         from app.core.database import async_session_factory
-        from app.models.upload import Upload
 
         async with async_session_factory() as _db:
             db_res = await _db.execute(
-                _sel(Upload)
+                select(Upload)
                 .where(Upload.final_key.in_(list(keys_needing_fallback)), Upload.user_id == user.id)
                 .order_by(Upload.created_at.desc())
             )
@@ -329,10 +310,6 @@ async def list_my_uploads(
     Results are ordered by creation time descending (most recent first).
     All statuses are included (pending, processing, clean, failed, malicious).
     """
-    from sqlalchemy import func, select
-
-    from app.models.upload import Upload
-
     total = (
         await db.scalar(select(func.count()).select_from(Upload).where(Upload.user_id == user.id))
         or 0
@@ -382,10 +359,6 @@ async def get_upload_preview(
 
     # Verify ownership
     if file_key.startswith("cas/"):
-        from sqlalchemy import select
-
-        from app.models.upload import Upload
-
         row = await db.scalar(
             select(Upload.id).where(
                 Upload.final_key == file_key, Upload.user_id == user.id, Upload.status == "clean"
@@ -398,21 +371,13 @@ async def get_upload_preview(
     ):
         pass  # Owned by user namespace
     else:
-        from app.core.exceptions import ForbiddenError
-
         raise ForbiddenError("You are not authorized to preview this file.")
 
     # Refuse to serve unscanned quarantine files
     if file_key.startswith("quarantine/"):
         raise BadRequestError("File is still being processed and cannot be previewed yet.")
 
-    from sqlalchemy import select
-
-    from app.core.storage import generate_presigned_get
-
     # Try looking up filename and mimetype in the DB
-    from app.models.upload import Upload
-
     upload_row = await db.scalar(
         select(Upload).where(Upload.final_key == file_key, Upload.user_id == user.id)
     )

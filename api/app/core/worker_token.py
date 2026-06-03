@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import time
+from typing import Any
 
 
 def make_zip_token(
@@ -22,7 +23,7 @@ def make_zip_token(
     ``part`` / ``total`` are included when the directory is split across multiple ZIPs
     so the Worker can set the correct ``Content-Disposition`` filename (e.g. "Dir (2).zip").
     """
-    payload: dict = {
+    payload: dict[str, Any] = {
         "dir_name": dir_name,
         "entries": [{"arcname": a, "r2_key": k} for a, k in entries],
         "exp": int(time.time()) + ttl,
@@ -52,7 +53,7 @@ def make_file_token(
 
     The Worker verifies the signature and uses the payload to set headers (like Content-Disposition).
     """
-    payload: dict = {
+    payload: dict[str, Any] = {
         "r2_key": r2_key,
         "exp": int(time.time()) + ttl,
         "force_download": force_download,

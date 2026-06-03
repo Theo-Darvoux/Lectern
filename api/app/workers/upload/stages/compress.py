@@ -7,7 +7,7 @@ from app.core.file_security import compress_file_path
 from app.core.processing import ProcessingFile
 from app.workers.upload.constants import _compression_timeout
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -21,7 +21,7 @@ async def run_compress_stage(
     mime_type: str,
     original_filename: str,
     tracer: Any,
-    config: dict | None = None,  # type: ignore[type-arg]
+    config: dict[str, Any] | None = None,
 ) -> CompressResult:
     final_mime = mime_type
     content_encoding = None

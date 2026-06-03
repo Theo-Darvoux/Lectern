@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cas import _STORAGE_USAGE_KEY, hmac_cas_key
 from app.core.database import get_db
 from app.core.exceptions import BadRequestError
+from app.core.redis import redis_client
 from app.core.storage import delete_object, list_objects
 from app.models.material import MaterialVersion
 from app.models.pull_request import PRStatus, PullRequest
@@ -19,7 +21,7 @@ from app.routers.admin import AdminUser
 _PRUNEABLE_PREFIXES = ("cas/", "thumbnails/")
 
 router = APIRouter(prefix="/api/admin/storage", tags=["Admin Storage"])
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 @router.get("/reconcile")
@@ -35,8 +37,6 @@ async def reconcile_storage(
     db_thumbnail_keys = set()
     for cas_sha256, thumbnail_key in result.all():
         if cas_sha256:
-            from app.core.cas import hmac_cas_key
-
             cas_id = hmac_cas_key(cas_sha256).split(":")[-1]
             db_cas_ids.add(cas_id)
         if thumbnail_key:
@@ -156,9 +156,6 @@ async def prune_storage(
             logger.error("Failed to prune object %s: %s", key, e)
 
     # Trigger a Redis counter re-sync on next check
-    from app.core.cas import _STORAGE_USAGE_KEY
-    from app.core.redis import redis_client
-
     await redis_client.delete(_STORAGE_USAGE_KEY)
 
     return {

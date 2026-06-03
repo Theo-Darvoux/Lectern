@@ -18,7 +18,7 @@ import socket
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 def is_safe_url(url: str) -> bool:

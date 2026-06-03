@@ -261,77 +261,31 @@ async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis
     assert up2.status == "pending"
 
 
-# ── CSP s3_domain cache ───────────────────────────────────────────────────────
+# ── CSP s3_domain helper ──────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_csp_s3_domain_cache_avoids_repeated_db_calls() -> None:
-    """_get_s3_csp_domain must hit the DB only once within the TTL window."""
-    import app.main as main_module
+def test_s3_csp_domain_strips_scheme() -> None:
+    """_s3_csp_domain must strip the scheme prefix and return the bare hostname."""
+    from app.main import _s3_csp_domain
 
-    main_module._s3_csp_domain = None
-    main_module._s3_csp_domain_fetched_at = 0.0
-
-    mock_config = {"s3_public_endpoint": "https://files.example.com"}
-    mock_get_full = AsyncMock(return_value=mock_config)
-    mock_factory = MagicMock()
-    mock_db = AsyncMock()
-    mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-    mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
-    with (
-        patch("app.core.database.async_session_factory", mock_factory),
-        patch("app.services.auth.get_full_auth_config", mock_get_full),
-    ):
-        domain1 = await main_module._get_s3_csp_domain()
-        domain2 = await main_module._get_s3_csp_domain()
-
-    assert domain1 == "files.example.com"
-    assert domain2 == "files.example.com"
-    # DB was opened exactly once despite two calls
-    assert mock_factory.call_count == 1
+    with patch("app.main.settings") as mock_settings:
+        mock_settings.s3_public_endpoint = "https://files.example.com"
+        assert _s3_csp_domain() == "files.example.com"
 
 
-@pytest.mark.asyncio
-async def test_csp_s3_domain_cache_refreshes_after_ttl() -> None:
-    """_get_s3_csp_domain must re-query the DB after the TTL expires."""
-    import time
+def test_s3_csp_domain_passthrough_when_no_scheme() -> None:
+    """_s3_csp_domain returns the value unchanged when there is no scheme."""
+    from app.main import _s3_csp_domain
 
-    import app.main as main_module
-
-    main_module._s3_csp_domain = "old.example.com"
-    main_module._s3_csp_domain_fetched_at = time.monotonic() - main_module._S3_CSP_DOMAIN_TTL - 1
-
-    mock_config = {"s3_public_endpoint": "https://new.example.com"}
-    mock_get_full = AsyncMock(return_value=mock_config)
-    mock_factory = MagicMock()
-    mock_db = AsyncMock()
-    mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-    mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
-    with (
-        patch("app.core.database.async_session_factory", mock_factory),
-        patch("app.services.auth.get_full_auth_config", mock_get_full),
-    ):
-        domain = await main_module._get_s3_csp_domain()
-
-    assert domain == "new.example.com"
-    assert mock_factory.call_count == 1
+    with patch("app.main.settings") as mock_settings:
+        mock_settings.s3_public_endpoint = "files.example.com"
+        assert _s3_csp_domain() == "files.example.com"
 
 
-@pytest.mark.asyncio
-async def test_csp_s3_domain_cache_falls_back_on_error() -> None:
-    """_get_s3_csp_domain must fall back to settings.s3_public_endpoint on DB error."""
-    import app.main as main_module
+def test_s3_csp_domain_empty_when_not_configured() -> None:
+    """_s3_csp_domain returns an empty string when s3_public_endpoint is unset."""
+    from app.main import _s3_csp_domain
 
-    main_module._s3_csp_domain = None
-    main_module._s3_csp_domain_fetched_at = 0.0
-
-    with (
-        patch("app.core.database.async_session_factory", side_effect=Exception("db down")),
-        patch("app.main.settings") as mock_settings,
-    ):
-        mock_settings.s3_public_endpoint = "https://fallback.example.com"
-        domain = await main_module._get_s3_csp_domain()
-
-    assert domain == "fallback.example.com"
+    with patch("app.main.settings") as mock_settings:
+        mock_settings.s3_public_endpoint = None
+        assert _s3_csp_domain() == ""

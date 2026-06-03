@@ -889,7 +889,6 @@ async def test_pr_creation_defers_auto_merge_when_files_pending() -> None:
 
     with (
         patch("app.services.pr.object_exists", AsyncMock(return_value=True)),
-        patch("app.services.pr.get_full_auth_config", AsyncMock(return_value={})),
         patch("app.services.pr.get_or_create_tags", AsyncMock()),
     ):
         # We can't easily run the full service without a real DB, so just test

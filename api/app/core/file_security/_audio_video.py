@@ -17,7 +17,7 @@ import mutagen
 from app.core.file_security._concurrency import _get_concurrency_guard
 from app.core.sandbox import sandboxed_run
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # Threshold above which we skip video compression to avoid long timeouts
 VIDEO_COMPRESS_THRESHOLD = 500 * 1024 * 1024  # 500 MB

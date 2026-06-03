@@ -23,7 +23,7 @@ from app.services.backup import (
 )
 
 router = APIRouter(prefix="/api/admin/backup", tags=["Admin Backup"])
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 def _backup_dir() -> Path:

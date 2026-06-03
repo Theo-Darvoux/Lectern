@@ -41,9 +41,9 @@ async def _build_material_details(
 
     mat_dicts: list[dict[str, Any]] = []
     for material, version in rows:
-        mat_dict: dict[str, Any] = material_orm_to_dict(material, current_user_id=current_user_id)
-        if version:
-            mat_dict["current_version_info"] = version
+        mat_dict: dict[str, Any] = material_orm_to_dict(
+            material, current_user_id=current_user_id, current_version=version
+        )
         mat_dicts.append(mat_dict)
 
     dir_ids = {m["directory_id"] for m in mat_dicts if m.get("directory_id")}
@@ -76,10 +76,8 @@ async def _build_featured_out(
     for featured, material, version, directory in featured_rows:
         if material:
             mat_dict: dict[str, Any] = material_orm_to_dict(
-                material, current_user_id=current_user_id
+                material, current_user_id=current_user_id, current_version=version
             )
-            if version:
-                mat_dict["current_version_info"] = version
             if material.directory_id:
                 mat_dir_ids.add(material.directory_id)
             staged_materials.append((featured, mat_dict))

@@ -49,7 +49,7 @@ async def test_get_material_text_content_implicit_gzip(
     gzipped_bytes = gzip.compress(original_text.encode("utf-8"))
 
     # Mock read_full_object to return gzipped bytes
-    with patch("app.core.storage.read_full_object", new_callable=AsyncMock) as mock_read:
+    with patch("app.routers.materials.read_full_object", new_callable=AsyncMock) as mock_read:
         mock_read.return_value = gzipped_bytes
 
         response = await client.get(
@@ -93,7 +93,7 @@ async def test_get_material_text_content_plain_text(
 
     original_text = "Just some plain text."
 
-    with patch("app.core.storage.read_full_object", new_callable=AsyncMock) as mock_read:
+    with patch("app.routers.materials.read_full_object", new_callable=AsyncMock) as mock_read:
         mock_read.return_value = original_text.encode("utf-8")
 
         response = await client.get(

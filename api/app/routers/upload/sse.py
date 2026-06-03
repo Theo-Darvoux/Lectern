@@ -3,12 +3,14 @@
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from redis.asyncio import Redis
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -16,10 +18,11 @@ from app.core.database import get_db
 from app.core.exceptions import ForbiddenError, RateLimitError
 from app.core.redis import get_redis
 from app.dependencies.auth import CurrentUser
+from app.models.upload import Upload
 from app.routers.upload.helpers import _STATUS_CACHE_PREFIX
 from app.schemas.material import UploadStatus, UploadStatusOut
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -55,12 +58,6 @@ async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -
 
     # V2 keys: cas/{hmac} (ownership verified via Upload table)
     if file_key.startswith("cas/"):
-        import uuid
-
-        from sqlalchemy import select
-
-        from app.models.upload import Upload
-
         # Check if this user has any upload record pointing to this CAS key.
         # Ensure user_id is a UUID object for SQLAlchemy type processing.
         uid = uuid.UUID(str(user_id))
@@ -91,10 +88,6 @@ async def upload_status(
 
     # ── Database Fallback (Issue 6) ──
     if not cached:
-        from sqlalchemy import select
-
-        from app.models.upload import Upload
-
         # Try to find via file_key (final_key) or upload_id extracted from path
         row = await db.scalar(
             select(Upload).where(Upload.final_key == file_key, Upload.user_id == user.id)
@@ -160,10 +153,6 @@ async def upload_events(
 
     # ── Database Fallback (Issue 6) ──
     if not cached_status:
-        from sqlalchemy import select
-
-        from app.models.upload import Upload
-
         # Try to find via file_key (final_key) or upload_id extracted from path
         row = await db.scalar(
             select(Upload).where(Upload.final_key == file_key, Upload.user_id == user.id)
@@ -299,9 +288,9 @@ async def upload_events(
 
             # Stream from Pub/Sub queue
             try:
-                deadline = asyncio.get_event_loop().time() + _SSE_TIMEOUT
+                deadline = asyncio.get_running_loop().time() + _SSE_TIMEOUT
                 while True:
-                    remaining = deadline - asyncio.get_event_loop().time()
+                    remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
                         break
 
@@ -377,13 +366,13 @@ async def upload_events(
 class AsyncIteratorAdapter:
     """Adapts a plain list into a proper async iterator."""
 
-    def __init__(self, items):  # type: ignore[no-untyped-def]
+    def __init__(self, items: list[dict[str, str]]) -> None:
         self._items = iter(items)
 
-    def __aiter__(self):  # type: ignore[no-untyped-def]
+    def __aiter__(self) -> "AsyncIteratorAdapter":
         return self
 
-    async def __anext__(self):  # type: ignore[no-untyped-def]
+    async def __anext__(self) -> dict[str, str]:
         try:
             return next(self._items)
         except StopIteration:

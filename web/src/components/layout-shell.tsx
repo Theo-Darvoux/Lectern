@@ -25,7 +25,8 @@ import { initAuthSync } from "@/lib/auth-sync";
 import { WifiOff } from "lucide-react";
 import { cn, sanitizeNext } from "@/lib/utils";
 
-import { useUIStore, isGuest, isGuestBlockedPath } from "@/lib/stores";
+import { useUIStore } from "@/lib/stores";
+import { isGuest, isGuestBlockedPath } from "@/lib/guest";
 import { useTranslations } from "next-intl";
 
 export function LayoutShell({ children }: { children: ReactNode }) {

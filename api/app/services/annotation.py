@@ -11,6 +11,7 @@ from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.annotation import Annotation
 from app.models.material import Material, MaterialVersion
 from app.models.user import User, UserRole
+from app.services.notification import notify_material_subscribers, notify_user
 
 logger = logging.getLogger(__name__)
 
@@ -143,10 +144,6 @@ async def get_annotations(
 
         for root in root_annotations:
             root._replies = reply_map.get(root.id, [])
-    else:
-        for root in root_annotations:
-            root._replies = []
-
     return root_annotations, total, next_cursor
 
 
@@ -209,8 +206,6 @@ async def create_annotation(
         and reply_target.author_id
         and reply_target.author_id != author_id
     ):
-        from app.services.notification import notify_user
-
         try:
             await notify_user(
                 db,
@@ -223,8 +218,6 @@ async def create_annotation(
             logger.exception("Failed to send annotation_reply notification")
     elif not reply_to_id:
         # A new root annotation: notify everyone following this document.
-        from app.services.notification import notify_material_subscribers
-
         try:
             await notify_material_subscribers(
                 db,

@@ -51,7 +51,8 @@ import { apiFetch } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore, useAuthStore, isGuest, useUIStore } from "@/lib/stores";
+import { useBrowseRefreshStore, useAuthStore, useUIStore } from "@/lib/stores";
+import { isGuest } from "@/lib/guest";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import {
   Dialog,

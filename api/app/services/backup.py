@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.storage import delete_object, download_file, list_objects, upload_file
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 BACKUP_VERSION = "1.0"
 BACKUP_PREFIXES = ("cas/", "uploads/", "thumbnails/")
@@ -303,7 +303,6 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
             data,
             key,
             content_type="application/octet-stream",
-            content_disposition=None,  # type: ignore[arg-type]
         )
 
     return manifest

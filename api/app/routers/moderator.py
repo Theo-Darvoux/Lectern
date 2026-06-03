@@ -68,9 +68,7 @@ async def _rows_to_featured_out(
 
     for featured, material, version, directory in rows:
         if material:
-            mat_dict: dict[str, Any] = material_orm_to_dict(material)
-            if version:
-                mat_dict["current_version_info"] = version
+            mat_dict: dict[str, Any] = material_orm_to_dict(material, current_version=version)
             if material.directory_id:
                 mat_dir_ids.add(material.directory_id)
             staged_materials.append((featured, mat_dict))
@@ -158,7 +156,7 @@ async def moderator_stats(
 async def moderator_list_directories(
     _user: Annotated[User, Depends(require_moderator())],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[dict]:  # type: ignore[type-arg]
+) -> list[dict[str, Any]]:
     result = await db.execute(select(Directory).order_by(Directory.sort_order, Directory.name))
     dirs = result.scalars().all()
     return [

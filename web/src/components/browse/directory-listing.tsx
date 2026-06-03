@@ -21,7 +21,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore, useUIStore, useAuthStore, isGuest } from "@/lib/stores";
+import { useBrowseRefreshStore, useUIStore, useAuthStore } from "@/lib/stores";
+import { isGuest } from "@/lib/guest";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { apiFetch } from "@/lib/api-client";
 import {

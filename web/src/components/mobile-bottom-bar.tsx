@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useAuth } from "@/hooks/use-auth";
-import { useNotificationStore, useUIStore, isGuest } from "@/lib/stores";
+import { useNotificationStore, useUIStore } from "@/lib/stores";
+import { isGuest } from "@/lib/guest";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
 

@@ -13,7 +13,7 @@ from typing import cast
 import scour.scour as scour
 from defusedxml import ElementTree
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # Elements whose presence in an SVG is unconditionally rejected.
 _SVG_BLOCKED_ELEMENTS = frozenset(

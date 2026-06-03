@@ -12,9 +12,8 @@ from app.models.comment import Comment
 from app.models.flag import Flag, FlagStatus
 from app.models.material import Material
 from app.models.pull_request import PRComment, PullRequest
-from app.models.user import User, UserRole
-
-MODERATOR_ROLES = (UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX)
+from app.models.user import User
+from app.services.notification import MODERATOR_ROLES
 
 TARGET_TABLE_MAP: dict[str, type[UUIDMixin]] = {
     "material": Material,

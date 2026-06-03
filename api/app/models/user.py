@@ -42,6 +42,7 @@ class User(UUIDMixin, Base):
     gdpr_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     onboarded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     is_flagged: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    flag_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_hash: Mapped[str | None] = mapped_column(String(255))

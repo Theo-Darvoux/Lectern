@@ -681,7 +681,7 @@ class TestNotifications:
         db_session.add(c1)
         await db_session.commit()
 
-        with patch("app.services.notification.notify_user", new_callable=AsyncMock) as mock_notify:
+        with patch("app.routers.pull_requests.notify_user", new_callable=AsyncMock) as mock_notify:
             resp = await client.post(
                 f"/api/pull-requests/{pr.id}/comments",
                 json={"body": "Reply", "parent_id": str(c1.id)},

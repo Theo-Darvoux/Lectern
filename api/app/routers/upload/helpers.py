@@ -6,26 +6,28 @@ from typing import Any
 from uuid import UUID
 
 from redis.asyncio import Redis
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.redis as redis_core
 from app.config import settings
-from app.core.database import async_session_factory
+from app.core.cas import _STORAGE_USAGE_KEY
 from app.core.exceptions import BadRequestError
+from app.core.telemetry import inject_trace_context
 from app.core.upload_errors import ERR_QUOTA_EXCEEDED, ERR_STORAGE_FULL
+from app.models.material import MaterialVersion
+from app.models.upload import Upload
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
-async def _check_storage_limit(size_bytes: int, config: dict[str, Any]) -> None:
+async def _check_storage_limit(
+    size_bytes: int, db: AsyncSession, config: dict[str, Any] | None = None
+) -> None:
     """Raise if the global storage limit (max_storage_gb) would be exceeded."""
-    from sqlalchemy import func, select
-
-    from app.core.cas import _STORAGE_USAGE_KEY
-    from app.models.material import MaterialVersion
-
     max_gb = (
         config.get("max_storage_gb")
-        if config.get("max_storage_gb") is not None
+        if config and config.get("max_storage_gb") is not None
         else settings.max_storage_gb
     )
     if not max_gb:
@@ -40,28 +42,20 @@ async def _check_storage_limit(size_bytes: int, config: dict[str, Any]) -> None:
         if usage_raw is not None:
             usage = max(0, int(usage_raw))
         else:
-            # 2. Fallback to DB: Sum unique CAS blobs only (Physical Storage)
-            async with async_session_factory() as session:
-                # We subquery to get the size of each unique CAS blob
-                # and sum them up to get the physical storage usage.
-                from sqlalchemy import select
-
-                inner_q = (
-                    select(func.max(MaterialVersion.file_size).label("size"))
-                    .group_by(MaterialVersion.cas_sha256)
-                    .subquery()
-                )
-                usage = await session.scalar(select(func.sum(inner_q.c.size))) or 0
-
-            # Cache the result for 1 hour
+            # 2. Fallback to DB: sum unique CAS blobs only (physical storage)
+            inner_q = (
+                select(func.max(MaterialVersion.file_size).label("size"))
+                .group_by(MaterialVersion.cas_sha256)
+                .subquery()
+            )
+            usage = await db.scalar(select(func.sum(inner_q.c.size))) or 0
             await redis.set(_STORAGE_USAGE_KEY, usage, ex=3600)
     except Exception as exc:
         logger.warning(
             "Failed to get/set storage usage from Redis: %s. Falling back to logical sum.", exc
         )
         # Deep fallback to logical sum if everything else fails
-        async with async_session_factory() as session:
-            usage = await session.scalar(select(func.sum(MaterialVersion.file_size))) or 0
+        usage = await db.scalar(select(func.sum(MaterialVersion.file_size))) or 0
 
     if usage + size_bytes > max_bytes:
         logger.warning(
@@ -99,28 +93,27 @@ async def _create_upload_row(
     filename: str,
     mime_type: str,
     size_bytes: int,
+    db: AsyncSession,
     status: str = "pending",
 ) -> None:
     """Persist an upload lifecycle row. Mandatory: raises on failure."""
-    from app.models.upload import Upload
-
-    async with async_session_factory() as session:
-        row = Upload(
-            upload_id=upload_id,
-            user_id=UUID(user_id),
-            quarantine_key=quarantine_key,
-            filename=filename,
-            mime_type=mime_type,
-            size_bytes=size_bytes,
-            status=status,
-        )
-        session.add(row)
-        await session.commit()
+    row = Upload(
+        upload_id=upload_id,
+        user_id=UUID(user_id),
+        quarantine_key=quarantine_key,
+        filename=filename,
+        mime_type=mime_type,
+        size_bytes=size_bytes,
+        status=status,
+    )
+    db.add(row)
+    await db.flush()
 
 
 async def _check_pending_cap(
     user_id: str,
     redis: "Redis",  # type: ignore[type-arg]
+    db: AsyncSession,
     *,
     privileged: bool = False,
     reserve_key: str | None = None,
@@ -173,15 +166,15 @@ async def _check_pending_cap(
             user_id,
             exc,
         )
-        # Fallback: count pending rows in DB (degraded mode — no atomic reservation)
+        # Fallback: count pending rows in DB (degraded mode — no atomic reservation).
+        # Use a fresh session to avoid PendingRollbackError if the request session
+        # is in an error state from a previous operation.
         try:
-            from sqlalchemy import func, select
+            from app.core.database import async_session_factory
 
-            from app.models.upload import Upload
-
-            async with async_session_factory() as _db:
+            async with async_session_factory() as fallback_db:
                 db_count = (
-                    await _db.scalar(
+                    await fallback_db.scalar(
                         select(func.count())
                         .select_from(Upload)
                         .where(Upload.user_id == UUID(user_id), Upload.status == "pending")
@@ -223,8 +216,6 @@ async def _enqueue_processing(
     Routes to the fast queue for files below ``_FAST_QUEUE_THRESHOLD`` so that
     small document uploads are never blocked by large video transcode jobs.
     """
-    from app.core.telemetry import inject_trace_context
-
     if redis_core.arq_pool is None:
         raise BadRequestError("Background processing is temporarily unavailable. Please try again.")
 

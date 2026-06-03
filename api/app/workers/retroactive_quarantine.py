@@ -36,7 +36,7 @@ from app.models.upload import Upload
 from app.schemas.material import UploadStatus
 from app.workers.upload.context import WorkerContext
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # Redis key prefix for the quota tracking sorted set (mirrors upload worker logic).
 _QUOTA_KEY_PREFIX = "quota:uploads:"

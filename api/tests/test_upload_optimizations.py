@@ -113,8 +113,8 @@ async def test_atomic_pr_application_copy_not_move(db_session: AsyncSession):
     db_session.info["post_commit_jobs"] = []
 
     with (
-        patch("app.core.storage.copy_object", new_callable=AsyncMock) as mock_copy,
-        patch("app.core.storage.get_object_info", new_callable=AsyncMock) as mock_info,
+        patch("app.services.pr.copy_object", new_callable=AsyncMock) as mock_copy,
+        patch("app.services.pr.get_object_info", new_callable=AsyncMock) as mock_info,
     ):
         mock_info.return_value = {"size": 100, "content_type": "application/pdf"}
 

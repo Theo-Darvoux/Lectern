@@ -14,7 +14,7 @@ from app.schemas.material import UploadStatus
 from app.workers.upload.constants import ensure_disk_space
 from app.workers.upload.exceptions import MalwareError, UploadError
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 @dataclass

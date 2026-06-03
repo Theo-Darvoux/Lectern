@@ -2,7 +2,7 @@ import logging
 
 from app.core.storage import delete_object
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 async def delete_storage_objects(ctx: dict, keys: list[str]) -> None:  # type: ignore[type-arg]

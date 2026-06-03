@@ -38,7 +38,7 @@ from app.workers.upload.stages.scan_strip import (
     run_strip_only,
 )
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 def _get_fallback_scanner() -> MalwareScanner:
@@ -141,7 +141,7 @@ class UploadPipeline:
         status_str = "malicious" if status == UploadStatus.MALICIOUS else "failed"
         await self.repo.update_upload_status(self.upload_id, status_str, error_detail=detail)
 
-    async def _check_deadline(self, stage_name: str) -> None:
+    def _check_deadline(self, stage_name: str) -> None:
         elapsed = self._elapsed()
         if elapsed > settings.upload_pipeline_max_seconds:
             msg = f"Pipeline deadline exceeded at stage '{stage_name}' ({elapsed:.0f}s)"
@@ -165,7 +165,7 @@ class UploadPipeline:
         """
         # Checkpoint 1: Metadata Strip + Scan
         if self.completed_stage < 2:
-            await self._check_deadline("scan_strip")
+            self._check_deadline("scan_strip")
             if self.pf is None or self.tmp_path is None:
                 raise UploadError(UploadStatus.FAILED, "Pipeline state missing at scan_strip stage")
             if self.completed_stage == 1:
@@ -253,7 +253,7 @@ class UploadPipeline:
         running in the background.  The quarantine object is NOT deleted here —
         the post-scan job re-downloads it to compress, then deletes it.
         """
-        await self._check_deadline("finalizing")
+        self._check_deadline("finalizing")
         await self.emit_status(
             UploadStatus.PROCESSING,
             detail="Finalising upload",

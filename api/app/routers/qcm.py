@@ -27,10 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cas import hmac_cas_key, increment_cas_ref
 from app.core.database import get_db
 from app.core.redis import redis_client
+from app.core.storage import _get_s3_settings, get_s3_client
 from app.core.storage import upload_file as storage_upload_file
 from app.dependencies.auth import CurrentUser
+from app.services.material import get_material_with_version
 
-logger = logging.getLogger("wikint.qcm")
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/qcm", tags=["qcm"])
 
@@ -149,7 +151,7 @@ class QCMStageResponse(BaseModel):
 
 
 @router.get("/limits")
-async def get_qcm_limits() -> dict:
+async def get_qcm_limits() -> dict[str, Any]:
     return {
         "max_questions_per_qcm": QCM_MAX_QUESTIONS,
         "max_answers_per_question": QCM_MAX_ANSWERS_PER_QUESTION,
@@ -424,11 +426,7 @@ async def export_moodle_xml(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Export a QCM material as a Moodle-compatible XML file for re-import."""
-    from app.core.storage import _get_s3_settings, get_s3_client
-    from app.services.material import check_material_access, get_material_with_version
-
     data = await get_material_with_version(db, material_id, current_user_id=user.id)
-    check_material_access(user.id, data)
 
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
@@ -439,7 +437,7 @@ async def export_moodle_xml(
         raise HTTPException(status_code=400, detail="Material is not a QCM")
 
     file_key = version["file_key"]
-    cfg = await _get_s3_settings()
+    cfg = _get_s3_settings()
     async with get_s3_client(cfg) as client:
         response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
         body: Any = response["Body"]

@@ -12,6 +12,12 @@ from app.models.material import Material, MaterialFavourite, MaterialLike, Mater
 from app.models.view_history import ViewHistory
 
 
+def _ensure_uuid(value: str | uuid.UUID) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
+
+
 def material_orm_to_dict(
     m: Material,
     *,
@@ -22,6 +28,7 @@ def material_orm_to_dict(
     current_user_id: uuid.UUID | None = None,
     is_liked: bool | None = None,
     is_favourited: bool | None = None,
+    current_version: MaterialVersion | None = None,
 ) -> dict[str, typing.Any]:
     """Convert a Material ORM instance to a plain dict safe for Pydantic validation.
 
@@ -71,7 +78,7 @@ def material_orm_to_dict(
         "attachment_count": attachment_count,
         "comment_count": comment_count,
         "annotation_count": annotation_count,
-        "current_version_info": None,
+        "current_version_info": version_orm_to_dict(current_version) if current_version else None,
     }
 
 
@@ -151,11 +158,7 @@ async def get_material_thumbnail_info(
 
 
 async def get_material_by_id(db: AsyncSession, material_id: str | uuid.UUID) -> Material:
-
-    if isinstance(material_id, str):
-        import uuid
-
-        material_id = uuid.UUID(material_id)
+    material_id = _ensure_uuid(material_id)
     result = await db.execute(
         select(Material).options(selectinload(Material.tags)).where(Material.id == material_id)
     )
@@ -165,28 +168,9 @@ async def get_material_by_id(db: AsyncSession, material_id: str | uuid.UUID) -> 
     return material
 
 
-def check_material_access(user_id: uuid.UUID, material: dict[str, typing.Any]) -> None:
-    """
-    Authorization choke-point for material access.
-
-    SECURITY: This function is currently a stub — it always permits access.
-    Any authenticated user can reach any material regardless of ownership or
-    future visibility/ACL fields.  When per-material access controls are
-    introduced (e.g. a `visibility` or `published` flag, course enrollment
-    checks, etc.) they MUST be enforced here so all call sites are covered.
-
-    Do NOT add inline access checks at call sites; route them through this
-    function instead.
-    """
-    # TODO: enforce material["visibility"], enrollment membership, etc. once
-    # those fields exist on the Material model.
-    _ = user_id, material  # suppress unused-variable warnings until implemented
-
-
 async def get_material_file_info(db: AsyncSession, material_id: str | uuid.UUID) -> MaterialVersion:
     """Single JOIN query returning only the fields needed to serve a file."""
-    if isinstance(material_id, str):
-        material_id = uuid.UUID(material_id)
+    material_id = _ensure_uuid(material_id)
     result = await db.execute(
         select(MaterialVersion)
         .join(Material, Material.id == MaterialVersion.material_id)
@@ -204,11 +188,7 @@ async def get_material_file_info(db: AsyncSession, material_id: str | uuid.UUID)
 async def get_material_with_version(
     db: AsyncSession, material_id: str | uuid.UUID, current_user_id: uuid.UUID | None = None
 ) -> dict[str, typing.Any]:
-
-    if isinstance(material_id, str):
-        import uuid
-
-        material_id = uuid.UUID(material_id)
+    material_id = _ensure_uuid(material_id)
     material = await get_material_by_id(db, material_id)
 
     version_result = await db.execute(
@@ -253,26 +233,20 @@ async def get_material_with_version(
         or 0
     )
 
-    mat_dict = material_orm_to_dict(
+    return material_orm_to_dict(
         material,
         attachment_count=att_count,
         comment_count=com_count,
         annotation_count=ann_count,
         current_user_id=current_user_id,
+        current_version=current_version,
     )
-    if current_version:
-        mat_dict["current_version_info"] = version_orm_to_dict(current_version)
-    return mat_dict
 
 
 async def get_material_versions(
     db: AsyncSession, material_id: str | uuid.UUID
 ) -> list[MaterialVersion]:
-
-    if isinstance(material_id, str):
-        import uuid
-
-        material_id = uuid.UUID(material_id)
+    material_id = _ensure_uuid(material_id)
     await get_material_by_id(db, material_id)
     result = await db.execute(
         select(MaterialVersion)
@@ -283,12 +257,10 @@ async def get_material_versions(
 
 
 async def get_material_version(
-    db: AsyncSession, material_id: str, version_number: int
+    db: AsyncSession, material_id: str | uuid.UUID, version_number: int
 ) -> MaterialVersion:
-    import uuid as _uuid
-
-    uid = _uuid.UUID(str(material_id))
-    await get_material_by_id(db, material_id)
+    uid = _ensure_uuid(material_id)
+    await get_material_by_id(db, uid)
     result = await db.execute(
         select(MaterialVersion).where(
             MaterialVersion.material_id == uid,
@@ -304,11 +276,7 @@ async def get_material_version(
 async def get_material_attachments(
     db: AsyncSession, material_id: str | uuid.UUID, current_user_id: uuid.UUID | None = None
 ) -> list[dict[str, typing.Any]]:
-
-    if isinstance(material_id, str):
-        import uuid
-
-        material_id = uuid.UUID(material_id)
+    material_id = _ensure_uuid(material_id)
     await get_material_by_id(db, material_id)
     result = await db.execute(
         select(Material, MaterialVersion)
@@ -321,21 +289,14 @@ async def get_material_attachments(
         .order_by(Material.title)
     )
 
-    attachments_out = []
-    for material, version in result.all():
-        mat_dict = material_orm_to_dict(material, current_user_id=current_user_id)
-        if version:
-            mat_dict["current_version_info"] = version_orm_to_dict(version)
-        attachments_out.append(mat_dict)
-    return attachments_out
+    return [
+        material_orm_to_dict(material, current_user_id=current_user_id, current_version=version)
+        for material, version in result.all()
+    ]
 
 
 async def increment_download_count(db: AsyncSession, material_id: str | uuid.UUID) -> Material:
-
-    if isinstance(material_id, str):
-        import uuid
-
-        material_id = uuid.UUID(material_id)
+    material_id = _ensure_uuid(material_id)
     material = await get_material_by_id(db, material_id)
     material.download_count += 1
     await db.flush()
@@ -343,16 +304,13 @@ async def increment_download_count(db: AsyncSession, material_id: str | uuid.UUI
 
 
 async def record_view(db: AsyncSession, user_id: str, material_id: str) -> None:
-    from sqlalchemy import update
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     uid = uuid.UUID(str(user_id))
     mid = uuid.UUID(str(material_id))
 
-    # Ensure material exists (raises NotFoundError if it doesn't)
     await get_material_by_id(db, mid)
 
-    # 1. Update counters on the Material itself (Atomic increment in SQL)
     await db.execute(
         update(Material)
         .where(Material.id == mid)
@@ -362,7 +320,6 @@ async def record_view(db: AsyncSession, user_id: str, material_id: str) -> None:
         )
     )
 
-    # 2. Record individual view in ViewHistory (Last viewed by this user)
     stmt = pg_insert(ViewHistory).values(
         id=uuid.uuid4(),
         user_id=uid,
@@ -374,22 +331,6 @@ async def record_view(db: AsyncSession, user_id: str, material_id: str) -> None:
         set_={"viewed_at": stmt.excluded.viewed_at},
     )
     await db.execute(stmt)
-
-    # 3. Best practice: Also increment in Redis for ultra-fast access if needed
-    # (Though for now we primarily read from DB, Redis can serve as a hot cache)
-    try:
-        from app.core.redis import redis_client
-
-        # We use a hash for all material totals to keep it clean
-        await redis_client.hincrby("material:views:total", str(mid), 1)  # type: ignore[misc]
-        # For "today", we use a daily key that can be easily expired
-        today = datetime.now(UTC).strftime("%Y-%m-%d")
-        daily_key = f"material:views:today:{today}"
-        await redis_client.hincrby(daily_key, str(mid), 1)  # type: ignore[misc]
-        await redis_client.expire(daily_key, 86400 * 2)  # Keep for 2 days just in case
-    except Exception:
-        # Don't fail the request if Redis is down
-        pass
 
     await db.flush()
 

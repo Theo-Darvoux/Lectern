@@ -10,10 +10,7 @@ from PIL import Image
 from app.core.processing import ProcessingFile
 from app.core.telemetry import get_tracer
 
-logger = logging.getLogger("wikint")
-
-THUMBNAIL_SIZE = (640, 360)
-THUMBNAIL_QUALITY = 85
+logger = logging.getLogger(__name__)
 
 
 async def run_thumbnail_stage(
@@ -37,31 +34,25 @@ async def run_thumbnail_stage(
         thumb_path = pf.path.parent / f"thumb_{pf.path.name}.webp"
 
         try:
-            size_px = (
-                config.get("thumbnail_size_px")
-                if config and config.get("thumbnail_size_px") is not None
-                else 640
-            )
-            quality = (
-                config.get("thumbnail_quality")
-                if config and config.get("thumbnail_quality") is not None
-                else 85
-            )
+            _size_cfg = (config or {}).get("thumbnail_size_px")
+            size_px = int(_size_cfg) if _size_cfg is not None else 640
+            _qual_cfg = (config or {}).get("thumbnail_quality")
+            quality = int(_qual_cfg) if _qual_cfg is not None else 85
             size = (size_px, size_px)
 
             if mime_type.startswith("image/"):
-                await _thumbnail_image(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
+                await _thumbnail_image(pf.path, thumb_path, size, quality)
             elif mime_type.startswith("video/"):
-                await _thumbnail_video(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
+                await _thumbnail_video(pf.path, thumb_path, size, quality)
             elif mime_type == "application/pdf":
-                await _thumbnail_pdf(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
+                await _thumbnail_pdf(pf.path, thumb_path, size, quality)
             elif _is_office_mime(mime_type):
-                await _thumbnail_office(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
+                await _thumbnail_office(pf.path, thumb_path, size, quality)
             elif mime_type in (
                 "text/markdown",
                 "text/x-markdown",
             ) or original_filename.lower().endswith((".md", ".markdown")):
-                await _thumbnail_markdown(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
+                await _thumbnail_via_soffice(pf.path, thumb_path, size, quality, suffix=".md")
             elif mime_type.startswith("text/") or original_filename.lower().endswith(
                 (
                     ".txt",
@@ -80,7 +71,7 @@ async def run_thumbnail_stage(
                     ".sql",
                 )
             ):
-                await _thumbnail_text(pf.path, thumb_path, size, quality)  # type: ignore[arg-type]
+                await _thumbnail_via_soffice(pf.path, thumb_path, size, quality, suffix=".txt")
             else:
                 logger.info("Skipping thumbnail for unsupported MIME type: %s", mime_type)
                 return None
@@ -345,6 +336,8 @@ async def _thumbnail_office(
         await _thumbnail_pdf(pdf_path, output_path, size, quality)
 
     except TimeoutError:
+        process.kill()
+        await process.wait()
         logger.error("soffice timed out converting %s", input_path.name)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -401,15 +394,23 @@ async def _fallback_extract_largest_image(
     await asyncio.to_thread(_sync_process, data)
 
 
-async def _thumbnail_markdown(
-    input_path: Path, output_path: Path, size: tuple[int, int], quality: int
+async def _thumbnail_via_soffice(
+    input_path: Path,
+    output_path: Path,
+    size: tuple[int, int],
+    quality: int,
+    *,
+    suffix: str,
 ) -> None:
-    """Render a Markdown file by copying it to a temp .md file and converting to PDF/WebP."""
-    tmp_dir = Path(tempfile.mkdtemp(prefix="wikint_md_thumb_"))
+    """Convert a plain-text or Markdown file to a thumbnail via LibreOffice → Ghostscript.
+
+    LibreOffice requires the source file to have the right extension to identify the
+    format.  ``suffix`` is appended to the temp copy (e.g. ``.md`` or ``.txt``).
+    """
+    tmp_dir = Path(tempfile.mkdtemp(prefix="wikint_soffice_thumb_"))
     try:
-        # Copy file to have a .md suffix so LibreOffice recognizes it as markdown
-        temp_md = tmp_dir / "document.md"
-        shutil.copy2(input_path, temp_md)
+        temp_file = tmp_dir / f"document{suffix}"
+        shutil.copy2(input_path, temp_file)
 
         cmd = [
             "soffice",
@@ -421,7 +422,7 @@ async def _thumbnail_markdown(
             "pdf",
             "--outdir",
             str(tmp_dir),
-            str(temp_md),
+            str(temp_file),
         ]
 
         process = await asyncio.create_subprocess_exec(
@@ -429,63 +430,23 @@ async def _thumbnail_markdown(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=60)
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=60)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            raise
 
         pdf_files = list(tmp_dir.glob("*.pdf"))
         if not pdf_files:
             logger.error(
-                "soffice produced no PDF for markdown. out=%r, err=%r",
+                "soffice produced no PDF for %s file. out=%r, err=%r",
+                suffix,
                 stdout_bytes.decode(errors="replace") if stdout_bytes else "",
                 stderr_bytes.decode(errors="replace") if stderr_bytes else "",
             )
             return
 
-        pdf_path = pdf_files[0]
-        await _thumbnail_pdf(pdf_path, output_path, size, quality)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-async def _thumbnail_text(
-    input_path: Path, output_path: Path, size: tuple[int, int], quality: int
-) -> None:
-    """Render a text/code file by copying it to a temp .txt file and converting to PDF/WebP."""
-    tmp_dir = Path(tempfile.mkdtemp(prefix="wikint_txt_thumb_"))
-    try:
-        # Copy file to have a .txt suffix so LibreOffice imports it cleanly as plain text
-        temp_txt = tmp_dir / "document.txt"
-        shutil.copy2(input_path, temp_txt)
-
-        cmd = [
-            "soffice",
-            f"-env:UserInstallation=file://{tmp_dir}",
-            "--headless",
-            "--norestore",
-            "--nofirststartwizard",
-            "--convert-to",
-            "pdf",
-            "--outdir",
-            str(tmp_dir),
-            str(temp_txt),
-        ]
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=60)
-
-        pdf_files = list(tmp_dir.glob("*.pdf"))
-        if not pdf_files:
-            logger.error(
-                "soffice produced no PDF for text file. out=%r, err=%r",
-                stdout_bytes.decode(errors="replace") if stdout_bytes else "",
-                stderr_bytes.decode(errors="replace") if stderr_bytes else "",
-            )
-            return
-
-        pdf_path = pdf_files[0]
-        await _thumbnail_pdf(pdf_path, output_path, size, quality)
+        await _thumbnail_pdf(pdf_files[0], output_path, size, quality)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

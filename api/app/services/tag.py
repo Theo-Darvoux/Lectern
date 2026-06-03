@@ -1,9 +1,23 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.tag import Tag
+from app.models.tag import Tag, directory_tags, material_tags
+
+
+async def prune_orphan_tags(db: AsyncSession) -> None:
+    """Delete tags no longer referenced by any material or directory."""
+    orphan_ids = list(
+        await db.scalars(
+            select(Tag.id).where(
+                ~exists().where(material_tags.c.tag_id == Tag.id),
+                ~exists().where(directory_tags.c.tag_id == Tag.id),
+            )
+        )
+    )
+    if orphan_ids:
+        await db.execute(delete(Tag).where(Tag.id.in_(orphan_ids)))
 
 
 async def get_or_create_tags(db: AsyncSession, tag_names: list[str]) -> list[uuid.UUID]:

@@ -22,7 +22,7 @@ from PIL import Image
 
 from app.config import settings
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 _PDF_DANGEROUS_ACTION_KEYS = frozenset(
     {

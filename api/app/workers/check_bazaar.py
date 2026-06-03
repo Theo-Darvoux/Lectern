@@ -29,7 +29,7 @@ from app.workers.retroactive_quarantine import retroactive_quarantine
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.pipeline import _get_fallback_scanner
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # Redis key prefixes used by this worker.
 _BAZAAR_CLEAN_PREFIX = "bazaar:clean:"
@@ -100,10 +100,10 @@ async def check_bazaar(
         )
         await redis.set(f"{_BAZAAR_SKIPPED_PREFIX}{sha256}", "1", ex=_SKIPPED_TOMBSTONE_TTL)
         return
-    except Exception as exc:
+    except Exception:
         if owns_scanner:
             await scanner.close()
-        raise exc
+        raise
     else:
         if owns_scanner:
             await scanner.close()

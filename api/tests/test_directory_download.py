@@ -369,7 +369,7 @@ class TestDownloadDirectoryZipEndpoint:
         await db_session.commit()
 
         file_content = b"PDF content here"
-        with patch("app.core.storage.stream_object", _make_stream_mock(file_content)):
+        with patch("app.routers.directories.stream_object", _make_stream_mock(file_content)):
             response = await client.get(
                 f"/api/directories/{directory.id}/download",
                 headers=_auth_headers(user),
@@ -409,7 +409,7 @@ class TestDownloadDirectoryZipEndpoint:
             mock_body.close = AsyncMock()
             yield mock_body
 
-        with patch("app.core.storage.stream_object", _multi_stream):
+        with patch("app.routers.directories.stream_object", _multi_stream):
             response = await client.get(
                 f"/api/directories/{root.id}/download",
                 headers=_auth_headers(user),
@@ -429,7 +429,7 @@ class TestDownloadDirectoryZipEndpoint:
         await _create_material_with_version(db_session, directory, user, file_name="doc.pdf")
         await db_session.commit()
 
-        with patch("app.core.storage.stream_object", _make_stream_mock(b"data")):
+        with patch("app.routers.directories.stream_object", _make_stream_mock(b"data")):
             response = await client.get(
                 f"/api/directories/{directory.id}/download",
                 params={"token": _token(user)},
@@ -467,7 +467,7 @@ class TestDownloadDirectoryZipEndpoint:
                 raise RuntimeError("S3 unavailable")
                 yield  # unreachable, satisfies generator type
 
-        with patch("app.core.storage.stream_object", _failing_stream):
+        with patch("app.routers.directories.stream_object", _failing_stream):
             response = await client.get(
                 f"/api/directories/{directory.id}/download",
                 headers=_auth_headers(user),
@@ -508,7 +508,7 @@ class TestDownloadDirectoryZipEndpoint:
         await _create_material_with_version(db_session, directory, user, file_name="slide.pdf")
         await db_session.commit()
 
-        with patch("app.core.storage.stream_object", _make_stream_mock(b"data")):
+        with patch("app.routers.directories.stream_object", _make_stream_mock(b"data")):
             response = await client.get(
                 f"/api/directories/{directory.id}/download",
                 headers=_auth_headers(user),

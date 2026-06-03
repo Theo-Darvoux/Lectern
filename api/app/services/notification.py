@@ -4,11 +4,15 @@ import uuid
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import NotFoundError
 from app.core.sse import broadcast_to_user
+from app.models.annotation import Annotation
+from app.models.comment import Comment
+from app.models.material import Material, MaterialFavourite, MaterialLike
 from app.models.notification import Notification
 from app.models.user import User, UserRole
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 MODERATOR_ROLES = (UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX)
 ADMIN_ROLES = (UserRole.BUREAU, UserRole.VIEUX)
@@ -31,16 +35,19 @@ async def create_notification(
     )
     db.add(notif)
     await db.flush()
-    broadcast_to_user(
-        user_id,
-        {
-            "type": notification_type,
-            "id": str(notif.id),
-            "title": title,
-            "body": body,
-            "link": link,
-        },
-    )
+    try:
+        broadcast_to_user(
+            user_id,
+            {
+                "type": notification_type,
+                "id": str(notif.id),
+                "title": title,
+                "body": body,
+                "link": link,
+            },
+        )
+    except Exception:
+        logger.exception("SSE broadcast failed for notification %s", notif.id)
     return notif
 
 
@@ -80,8 +87,6 @@ async def mark_read(db: AsyncSession, notification_id: str, user_id: uuid.UUID) 
     )
     notif = result.scalar_one_or_none()
     if not notif:
-        from app.core.exceptions import NotFoundError
-
         raise NotFoundError("Notification not found")
     notif.read = True
     await db.flush()
@@ -95,9 +100,7 @@ async def mark_all_read(db: AsyncSession, user_id: uuid.UUID) -> int:
         .values(read=True)
     )
     await db.flush()
-    from typing import Any, cast
-
-    return cast(Any, result).rowcount  # type: ignore[no-any-return]
+    return result.rowcount  # type: ignore[attr-defined]
 
 
 async def notify_user(
@@ -127,10 +130,6 @@ async def notify_material_subscribers(
     annotated or commented on it. The acting user is always excluded, and the
     recipient set is de-duplicated so each person gets at most one notification.
     """
-    from app.models.annotation import Annotation
-    from app.models.comment import Comment
-    from app.models.material import Material, MaterialFavourite, MaterialLike
-
     recipient_ids: set[uuid.UUID] = set()
 
     author_res = await db.execute(select(Material.author_id).where(Material.id == material_id))
@@ -172,11 +171,9 @@ async def notify_material_subscribers(
             )
 
 
-async def notify_admins_pending_user(db: AsyncSession, user: "User") -> None:  # type: ignore[name-defined]
+async def notify_admins_pending_user(db: AsyncSession, user: User) -> None:
     """Notify all BUREAU/VIEUX admins when a new user is awaiting approval."""
-    from app.models.user import User as UserModel
-
-    result = await db.execute(select(UserModel.id).where(UserModel.role.in_(ADMIN_ROLES)))
+    result = await db.execute(select(User.id).where(User.role.in_(ADMIN_ROLES)))
     admin_ids = list(result.scalars().all())
     notifications = [
         Notification(

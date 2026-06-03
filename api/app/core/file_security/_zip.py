@@ -19,7 +19,7 @@ from pathlib import Path
 
 from PIL import Image
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # ZIP bomb protection thresholds
 _ZIP_MAX_ENTRY_BYTES = 200 * 1024 * 1024  # 200 MB per entry

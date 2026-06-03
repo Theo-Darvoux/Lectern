@@ -1,5 +1,6 @@
 .claude/
 /*.md
+!/README.md
 workspace/
 .antigravityignore
 

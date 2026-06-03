@@ -50,32 +50,34 @@ def _parse_allowed_domains(raw: str) -> list[dict[str, Any]]:
     return result
 
 
-async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]:  # type: ignore[type-arg]
-    """Return auth config derived from environment settings.
+async def get_allowed_domains(db: AsyncSession) -> tuple[list[dict[str, Any]], bool]:
+    """Resolve the allowed domain list from env override, DB rows, or hardcoded fallback.
 
-    Domain resolution order (sub-decision B):
-    1. ALLOWED_DOMAINS env var — when set, domains are read-only and the UI
-       shows an "overridden by .env" banner (domains_from_env=True).
+    Returns ``(domains, domains_from_env)``.
+    Domain resolution order:
+    1. ALLOWED_DOMAINS env var — read-only; the UI shows an "overridden by .env" banner.
     2. allowed_domains DB table — editable via admin CRUD.
     3. _FALLBACK_DOMAINS — hardcoded default for fresh installs.
-
-    The ``redis`` param is kept for call-site compatibility but is no longer
-    used for caching.
     """
     if settings.allowed_domains:
-        domains = _parse_allowed_domains(settings.allowed_domains)
-        domains_from_env = True
-    else:
-        domain_rows = list((await db.execute(select(AllowedDomain))).scalars().all())
-        domains = (
-            [
-                {"id": str(d.id), "domain": d.domain, "auto_approve": d.auto_approve}
-                for d in domain_rows
-            ]
-            if domain_rows
-            else _FALLBACK_DOMAINS
-        )
-        domains_from_env = False
+        return _parse_allowed_domains(settings.allowed_domains), True
+    domain_rows = list((await db.execute(select(AllowedDomain))).scalars().all())
+    domains = (
+        [{"id": str(d.id), "domain": d.domain, "auto_approve": d.auto_approve} for d in domain_rows]
+        if domain_rows
+        else _FALLBACK_DOMAINS
+    )
+    return domains, False
+
+
+async def get_full_auth_config(db: AsyncSession) -> dict[str, Any]:
+    """Return the full admin-facing config dict derived from environment settings.
+
+    Only call this from the admin GET /config endpoint. All other callers should
+    read ``settings`` directly — this function exists solely to produce the
+    complete config dump in one pass for admin inspection.
+    """
+    domains, domains_from_env = await get_allowed_domains(db)
 
     return {
         "totp_enabled": settings.totp_enabled,
@@ -143,7 +145,7 @@ async def get_full_auth_config(db: AsyncSession, redis: Redis) -> dict[str, Any]
     }
 
 
-async def validate_email_for_auth(email: str, db: AsyncSession, redis: Redis) -> bool:  # type: ignore[type-arg]
+async def validate_email_for_auth(email: str, db: AsyncSession) -> bool:
     """Validate email domain against DB config.
 
     Returns the domain's ``auto_approve`` flag for new-user role assignment.
@@ -154,15 +156,15 @@ async def validate_email_for_auth(email: str, db: AsyncSession, redis: Redis) ->
     explicitly listed with ``auto_approve=True`` skip the manual review step;
     unlisted domains still receive ``PENDING`` status (``auto_approve=False``).
     """
-    config = await get_full_auth_config(db, redis)
+    domains, _ = await get_allowed_domains(db)
 
     domain = email.split("@")[1] if "@" in email else ""
-    for d in config["domains"]:
+    for d in domains:
         if d["domain"] == domain:
             return bool(d["auto_approve"])
 
-    if config.get("allow_all_domains"):
-        return bool(config.get("auto_approve_all_domains", False))
+    if settings.allow_all_domains:
+        return bool(settings.auto_approve_all_domains)
 
     raise ValueError(f"Email domain @{domain} is not allowed")
 

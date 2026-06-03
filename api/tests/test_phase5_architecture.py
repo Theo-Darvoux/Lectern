@@ -47,22 +47,20 @@ async def test_create_upload_row_raises_on_db_failure():
     """_create_upload_row must raise (not swallow) DB errors."""
     from app.routers.upload.helpers import _create_upload_row
 
-    with patch("app.routers.upload.helpers.async_session_factory") as mock_factory:
-        mock_session = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_session.commit.side_effect = RuntimeError("DB unavailable")
-        mock_factory.return_value = mock_session
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock(side_effect=RuntimeError("DB unavailable"))
 
-        with pytest.raises(RuntimeError, match="DB unavailable"):
-            await _create_upload_row(
-                upload_id=str(uuid.uuid4()),
-                user_id=str(uuid.uuid4()),
-                quarantine_key="quarantine/x/y/z.pdf",
-                filename="z.pdf",
-                mime_type="application/pdf",
-                size_bytes=1024,
-            )
+    with pytest.raises(RuntimeError, match="DB unavailable"):
+        await _create_upload_row(
+            upload_id=str(uuid.uuid4()),
+            user_id=str(uuid.uuid4()),
+            quarantine_key="quarantine/x/y/z.pdf",
+            filename="z.pdf",
+            mime_type="application/pdf",
+            size_bytes=1024,
+            db=mock_db,
+        )
 
 
 # ── 3.4: Redis degradation ────────────────────────────────────────────────────
@@ -74,20 +72,18 @@ async def test_quota_check_falls_back_to_db_on_redis_failure(mock_redis: AsyncMo
     from app.routers.upload.helpers import _check_pending_cap
 
     user_id = str(uuid.uuid4())
-
-    # Redis raises on every call
     mock_redis.zremrangebyscore.side_effect = ConnectionError("Redis down")
 
-    # DB count returns 0 pending uploads — should succeed (no error raised)
-    with patch("app.routers.upload.helpers.async_session_factory") as mock_factory:
-        mock_session = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_session.scalar = AsyncMock(return_value=0)
-        mock_factory.return_value = mock_session
+    mock_db = AsyncMock()
+    mock_db.scalar = AsyncMock(return_value=0)
 
+    mock_session_ctx = MagicMock()
+    mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_session_ctx.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.core.database.async_session_factory", return_value=mock_session_ctx):
         # Should not raise
-        await _check_pending_cap(user_id, mock_redis)
+        await _check_pending_cap(user_id, mock_redis, mock_db)
 
 
 @pytest.mark.asyncio
@@ -99,16 +95,16 @@ async def test_quota_check_db_fallback_enforces_cap(mock_redis: AsyncMock):
     user_id = str(uuid.uuid4())
     mock_redis.zremrangebyscore.side_effect = ConnectionError("Redis down")
 
-    with patch("app.routers.upload.helpers.async_session_factory") as mock_factory:
-        mock_session = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-        # Return count equal to cap
-        mock_session.scalar = AsyncMock(return_value=MAX_PENDING_UPLOADS)
-        mock_factory.return_value = mock_session
+    mock_db = AsyncMock()
+    mock_db.scalar = AsyncMock(return_value=MAX_PENDING_UPLOADS)
 
+    mock_session_ctx = MagicMock()
+    mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_session_ctx.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.core.database.async_session_factory", return_value=mock_session_ctx):
         with pytest.raises(BadRequestError):
-            await _check_pending_cap(user_id, mock_redis)
+            await _check_pending_cap(user_id, mock_redis, mock_db)
 
 
 # ── 3.5: CAS dual-write ───────────────────────────────────────────────────────
@@ -376,9 +372,11 @@ async def test_edit_material_conflict_raises_on_version_lock_mismatch(
     }
 
     with (
-        patch("app.services.pr._get_file_info", AsyncMock(return_value={"size": 1024})),
-        patch("app.services.pr._resolve_mime_type", AsyncMock(return_value="application/pdf")),
-        patch("app.core.storage.copy_object", AsyncMock()),
+        patch(
+            "app.services.pr.get_object_info",
+            AsyncMock(return_value={"size": 1024, "content_type": "application/pdf"}),
+        ),
+        patch("app.services.pr.copy_object", AsyncMock()),
         pytest.raises(ConflictError),
     ):
         await _exec_edit_material(db_session, op, pr, {})

@@ -26,10 +26,11 @@ from fastapi import APIRouter, Depends, Request, UploadFile
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
 from app.core.database import get_db
 from app.core.exceptions import BadRequestError
-from app.core.file_security import SvgSecurityError
+from app.core.file_security import SvgSecurityError, check_svg_safety_stream
 from app.core.mimetypes import guess_mime_from_bytes
 from app.core.processing import ProcessingFile
 from app.core.redis import get_redis
@@ -53,9 +54,8 @@ from app.routers.upload.validators import (
     _validate_filename,
 )
 from app.schemas.material import BatchZipEntry, BatchZipResponse
-from app.services.auth import get_full_auth_config
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -257,12 +257,9 @@ async def upload_batch_zip(
     privileged = user.role in PRIVILEGED_ROLES
     max_members = _MAX_MEMBERS_PRIVILEGED if privileged else _MAX_MEMBERS
 
-    config = await get_full_auth_config(db, redis)
-
     allowed_exts: set[str] | None = None
-    if config.get("allowed_extensions"):
-        raw = config["allowed_extensions"]
-        parts = raw.split(",") if isinstance(raw, str) else list(raw)
+    if settings.allowed_extensions:
+        parts = settings.allowed_extensions.split(",")
         allowed_exts = {
             (e.strip().lower() if e.strip().startswith(".") else f".{e.strip().lower()}")
             for e in parts
@@ -270,9 +267,8 @@ async def upload_batch_zip(
         }
 
     allowed_mimes: set[str] | None = None
-    if config.get("allowed_mime_types"):
-        raw = config["allowed_mime_types"]
-        parts = raw.split(",") if isinstance(raw, str) else list(raw)
+    if settings.allowed_mime_types:
+        parts = settings.allowed_mime_types.split(",")
         allowed_mimes = {m.strip().lower() for m in parts if m.strip()}
 
     tmp_dir = tempfile.mkdtemp(prefix="wikint_bz_")
@@ -361,7 +357,7 @@ async def upload_batch_zip(
 
                     # Per-type size limit
                     try:
-                        _check_per_type_size(mime_type, pf.size, config=config)
+                        _check_per_type_size(mime_type, pf.size)
                     except BadRequestError as exc:
                         per_file_errors.append(f"{entry.filename}: {exc.detail}")
                         skipped_count += 1
@@ -369,7 +365,7 @@ async def upload_batch_zip(
 
                     # Global storage limit
                     try:
-                        await _check_storage_limit(pf.size, config=config)
+                        await _check_storage_limit(pf.size, db)
                     except BadRequestError as exc:
                         per_file_errors.append(f"{entry.filename}: {exc.detail}")
                         skipped_count += 1
@@ -378,8 +374,6 @@ async def upload_batch_zip(
                     # SVG safety check
                     if mime_type == "image/svg+xml":
                         try:
-                            from app.core.file_security import check_svg_safety_stream
-
                             with pf.open("rb") as fh:
                                 check_svg_safety_stream(fh, safe_name)
                         except SvgSecurityError as exc:
@@ -394,6 +388,7 @@ async def upload_batch_zip(
                         await _check_pending_cap(
                             user_id,
                             redis,
+                            db,
                             privileged=privileged,
                             reserve_key=quarantine_key,
                         )
@@ -405,12 +400,10 @@ async def upload_batch_zip(
                         return None
 
                     # Upload to quarantine
-                    from app.config import settings as _settings
-
                     async with get_s3_client() as s3:
                         await s3.upload_file(  # type: ignore[call-arg]
                             Filename=str(pf.path),
-                            Bucket=config.get("s3_bucket") or _settings.s3_bucket,
+                            Bucket=settings.s3_bucket,
                             Key=quarantine_key,
                             ExtraArgs={"ContentType": mime_type},
                         )
@@ -422,6 +415,7 @@ async def upload_batch_zip(
                         filename=safe_name,
                         mime_type=mime_type,
                         size_bytes=pf.size,
+                        db=db,
                     )
 
                     await _enqueue_processing(

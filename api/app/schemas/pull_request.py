@@ -326,15 +326,6 @@ Operation = Annotated[
     Discriminator(_get_op_discriminator),
 ]
 
-# Keep legacy aliases for migration period / reading old data
-CreateMaterialPayload = CreateMaterialOp
-EditMaterialPayload = EditMaterialOp
-DeleteMaterialPayload = DeleteMaterialOp
-CreateDirectoryPayload = CreateDirectoryOp
-EditDirectoryPayload = EditDirectoryOp
-DeleteDirectoryPayload = DeleteDirectoryOp
-MoveItemPayload = MoveItemOp
-
 MAX_OPERATIONS = 50
 
 

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from app.config import settings
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 async def reset_daily_views(ctx: dict[typing.Any, typing.Any]) -> None:

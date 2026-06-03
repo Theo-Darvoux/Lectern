@@ -1,19 +1,39 @@
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
-logger = logging.getLogger("wikint")
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
+
+from app.config import settings
+from app.core.database import async_session_factory
+from app.core.storage import abort_multipart_upload, get_s3_client, list_multipart_uploads
+from app.models.material import MaterialVersion
+from app.models.pull_request import PRStatus, PullRequest
+from app.models.upload import Upload
+
+logger = logging.getLogger(__name__)
 
 
 async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     logger.info("Running upload cleanup cron job")
-    from sqlalchemy import select, update
 
-    from app.config import settings
-    from app.core.database import async_session_factory
-    from app.core.storage import get_s3_client
-    from app.models.pull_request import PRStatus, PullRequest
+    # ── 1. Expire stale pending Uploads (2 hours) ────────────────────────────
+    pending_cutoff = datetime.now(UTC) - timedelta(hours=2)
 
-    # ── 1. Expire old Pull Requests (7 days) ─────────────────────────────────
+    async with async_session_factory() as db:
+        pending_stmt = (
+            update(Upload)
+            .where(Upload.status == "pending")
+            .where(Upload.created_at < pending_cutoff)
+            .values(status="failed", error_detail="Upload never completed (timed out)")
+        )
+        pending_res = cast(CursorResult, await db.execute(pending_stmt))  # type: ignore[type-arg]
+        await db.commit()
+        if pending_res.rowcount > 0:
+            logger.info("Expired %d stale pending uploads (older than 2h)", pending_res.rowcount)
+
+    # ── 2. Expire old Pull Requests (7 days) ─────────────────────────────────
     pr_cutoff = datetime.now(UTC) - timedelta(days=7)
 
     async with async_session_factory() as db:
@@ -23,18 +43,12 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
             .where(PullRequest.updated_at < pr_cutoff)
             .values(status=PRStatus.REJECTED)
         )
-        from typing import cast
-
-        from sqlalchemy.engine import CursorResult
-
         res = cast(CursorResult, await db.execute(expire_stmt))  # type: ignore[type-arg]
         await db.commit()
         if res.rowcount > 0:
             logger.info("Expired %d stale Pull Requests (older than 7 days)", res.rowcount)
 
-    # ── 1c. Abort stale Multipart Uploads (24 hours) ─────────────────────────
-    from app.core.storage import abort_multipart_upload, list_multipart_uploads
-
+    # ── 3. Abort stale Multipart Uploads (24 hours) ──────────────────────────
     mp_cutoff = datetime.now(UTC) - timedelta(hours=24)
     mp_aborted = 0
 
@@ -47,24 +61,7 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     if mp_aborted > 0:
         logger.info("Aborted %d stale S3 multipart uploads (older than 24h)", mp_aborted)
 
-    # ── 1b. Expire stale pending Uploads (2 hours) ───────────────────────────
-    pending_cutoff = datetime.now(UTC) - timedelta(hours=2)
-
-    async with async_session_factory() as db:
-        from app.models.upload import Upload
-
-        pending_stmt = (
-            update(Upload)
-            .where(Upload.status == "pending")
-            .where(Upload.created_at < pending_cutoff)
-            .values(status="failed", error_detail="Upload never completed (timed out)")
-        )
-        pending_res = cast(CursorResult, await db.execute(pending_stmt))  # type: ignore[type-arg]
-        await db.commit()
-        if pending_res.rowcount > 0:
-            logger.info("Expired %d stale pending uploads (older than 2h)", pending_res.rowcount)
-
-    # ── 2. Collect protected keys ────────────────────────────────────────────
+    # ── 4. Collect protected keys ────────────────────────────────────────────
     protected_keys: set[str] = set()
     async with async_session_factory() as db:
         result = await db.execute(
@@ -82,7 +79,7 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
                     if att_fk:
                         protected_keys.add(att_fk)
 
-    # ── 3. Clean terminal uploads ────────────────────────────────────────────
+    # ── 5. Clean terminal uploads ────────────────────────────────────────────
     # CAS V2: terminal uploads reference cas/ keys. We decrement the CAS ref
     # instead of deleting S3 objects (which are shared).
     orphan_cutoff = datetime.now(UTC) - timedelta(hours=48)
@@ -92,8 +89,6 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     cas_refs_to_decrement: list[str] = []  # SHA-256 values
 
     async with async_session_factory() as db:
-        from app.models.upload import Upload
-
         terminal_statuses = ["clean", "failed", "malicious", "applied"]
         upload_result = await db.execute(
             select(Upload).where(
@@ -148,13 +143,9 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
             await decrement_cas_ref(redis, sha256)
         logger.info("Decremented CAS refs for %d expired uploads", len(cas_refs_to_decrement))
 
-    # ── 4. Clean orphaned cas/ objects ───────────────────────────────────────
+    # ── 6. Clean orphaned cas/ objects ───────────────────────────────────────
     # CAS objects without a Redis ref entry are orphans. The 48h safety margin
     # prevents deleting objects that are mid-upload or mid-finalize.
-    from sqlalchemy import select
-
-    from app.models.material import MaterialVersion
-
     async with async_session_factory() as db:
         # Collect all active legacy file_keys to prevent deleting valid production data
         result = await db.execute(
@@ -203,12 +194,11 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     else:
         logger.info("No orphaned objects found to clean up")
 
-    # ── 5. Integrity: verify CAS objects referenced by MaterialVersions exist ─
+    # ── 7. Integrity: verify CAS objects referenced by MaterialVersions exist ─
     # If a CAS object is missing from S3 but still referenced in the DB, log
     # a warning. We do NOT delete the DB row automatically — this requires
     # manual investigation.
     from app.core.storage import object_exists
-    from app.models.material import MaterialVersion
 
     async with async_session_factory() as db:
         result = await db.execute(

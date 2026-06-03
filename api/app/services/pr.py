@@ -1,16 +1,14 @@
+import asyncio
+import contextlib
 import logging
 import re
 import typing
 import uuid
 from collections import defaultdict
-from datetime import UTC
-
-logger = logging.getLogger("wikint")
-
-import contextlib
+from datetime import UTC, datetime
 
 from redis.asyncio import Redis
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -18,7 +16,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
 from app.core.exceptions import BadRequestError, ConflictError, ForbiddenError, NotFoundError
-from app.core.storage import object_exists
+from app.core.storage import copy_object, get_object_info, object_exists
 from app.models.directory import Directory
 from app.models.material import Material, MaterialVersion
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
@@ -27,10 +25,11 @@ from app.models.tag import Tag
 from app.models.upload import Upload
 from app.models.user import User
 from app.schemas.pull_request import PullRequestCreate
-from app.services.auth import get_full_auth_config
 from app.services.directory import slugify
 from app.services.notification import notify_user
-from app.services.tag import get_or_create_tags
+from app.services.tag import get_or_create_tags, prune_orphan_tags
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -429,23 +428,13 @@ def topo_sort_operations(operations: list[dict[str, typing.Any]]) -> list[dict[s
     return [operations[i] for i in result]
 
 
-async def _resolve_mime_type(
+def _resolve_mime_type(
     file_key: str, payload: dict[str, typing.Any], s3_mime: str | None = None
 ) -> str:
     """Determine MIME type. Trusts S3 metadata or payload hint over re-scanning."""
     if s3_mime and s3_mime != "application/octet-stream":
         return s3_mime
-
-    # Fall back to client-provided hint if S3 mime is generic
     return payload.get("file_mime_type") or "application/octet-stream"
-
-
-async def _get_file_info(file_key: str) -> dict[str, typing.Any]:
-    """Read the actual file size and content type from object storage."""
-    from app.core.storage import get_object_info
-
-    info = await get_object_info(file_key)
-    return info
 
 
 async def _resolve_thumbnail_key(db: AsyncSession, cas_file_key: str) -> str | None:
@@ -466,6 +455,72 @@ async def _resolve_thumbnail_key(db: AsyncSession, cas_file_key: str) -> str | N
         .order_by(_Upload.updated_at.desc())
         .limit(1)
     )
+
+
+async def _make_version_for_file(
+    db: AsyncSession,
+    *,
+    file_key: str,
+    payload: dict[str, typing.Any],
+    material_id: uuid.UUID,
+    version_number: int,
+    author_id: uuid.UUID | None,
+    pr_id: uuid.UUID,
+    diff_summary: str | None = None,
+    version_lock: int = 0,
+) -> MaterialVersion:
+    """Resolve file metadata and create+flush a MaterialVersion.
+
+    Handles CAS V2 (cas/ prefix) and legacy V1 (uploads/ prefix) keys.
+    V1 keys are copied to the materials/ prefix and scheduled for deletion.
+    CAS keys get their content-addressed ref incremented.
+    """
+    if file_key.startswith("cas/"):
+        upload_size = await db.scalar(
+            select(Upload.size_bytes)
+            .where(Upload.final_key == file_key)
+            .order_by(Upload.updated_at.desc())
+            .limit(1)
+        )
+        real_size = upload_size if upload_size is not None else (payload.get("file_size") or 0)
+        mime_type = payload.get("file_mime_type") or "application/octet-stream"
+        thumbnail_key = await _resolve_thumbnail_key(db, file_key)
+    else:
+        info = await get_object_info(file_key)
+        real_size = info["size"]
+        mime_type = _resolve_mime_type(file_key, payload, s3_mime=info.get("content_type"))
+        new_key = file_key.replace("uploads/", "materials/", 1)
+        await copy_object(file_key, new_key)
+        db.info.setdefault("post_commit_jobs", []).append(("delete_storage_objects", [file_key]))
+        file_key = new_key
+        thumbnail_key = None
+
+    mv = MaterialVersion(
+        id=uuid.uuid4(),
+        material_id=material_id,
+        version_number=version_number,
+        file_key=file_key,
+        file_name=payload.get("file_name"),
+        file_size=real_size,
+        file_mime_type=mime_type,
+        cas_sha256=payload.get("content_sha256"),
+        author_id=author_id,
+        pr_id=pr_id,
+        virus_scan_result=VirusScanResult.CLEAN,
+        version_lock=version_lock,
+        diff_summary=diff_summary,
+        thumbnail_key=thumbnail_key,
+    )
+    db.add(mv)
+    await db.flush()
+
+    if mv.file_key and mv.file_key.startswith("cas/") and mv.cas_sha256:
+        from app.core.cas import increment_cas_ref
+        from app.core.redis import redis_client
+
+        await increment_cas_ref(redis_client, mv.cas_sha256)
+
+    return mv
 
 
 # ---------------------------------------------------------------------------
@@ -511,68 +566,15 @@ async def _exec_create_material(
     broadcasts.append((parent_topic, {"type": "child_added", "kind": "material", "id": str(m.id)}))
 
     if p.get("file_key"):
-        file_key = str(p["file_key"])
-
-        # CAS V2: file_key is already a cas/ key — no copy needed.
-        # Get size/mime from the payload (populated by the upload flow)
-        # with S3 HEAD fallback for legacy uploads/ keys.
-        if file_key.startswith("cas/"):
-            # Try to get the actual size from the upload record (updated by compression)
-            upload_size = await db.scalar(
-                select(Upload.size_bytes)
-                .where(Upload.final_key == file_key)
-                .order_by(Upload.updated_at.desc())
-                .limit(1)
-            )
-            real_size = upload_size if upload_size is not None else (p.get("file_size") or 0)
-            mime_type = p.get("file_mime_type") or "application/octet-stream"
-        else:
-            # Legacy V1 path: uploads/ key — copy to materials/
-            info = await _get_file_info(file_key)
-            real_size = info["size"]
-            mime_type = await _resolve_mime_type(file_key, p, s3_mime=info.get("content_type"))
-            from app.core.storage import copy_object
-
-            new_key = file_key.replace("uploads/", "materials/", 1)
-            await copy_object(file_key, new_key)
-            file_key = new_key
-            db.info.setdefault("post_commit_jobs", []).append(
-                ("delete_storage_objects", [str(p["file_key"])])
-            )
-
-        # Resolve thumbnail_key from the upload record (CAS V2: keyed by final_key)
-        thumbnail_key_val = (
-            await _resolve_thumbnail_key(db, file_key) if file_key.startswith("cas/") else None
-        )
-
-        mv = MaterialVersion(
-            id=uuid.uuid4(),
+        await _make_version_for_file(
+            db,
+            file_key=str(p["file_key"]),
+            payload=p,
             material_id=m.id,
             version_number=1,
-            file_key=file_key,
-            file_name=p.get("file_name"),
-            file_size=real_size,
-            file_mime_type=mime_type,
-            cas_sha256=p.get("content_sha256"),
             author_id=pr.author_id,
             pr_id=pr.id,
-            virus_scan_result=VirusScanResult.CLEAN,
-            thumbnail_key=thumbnail_key_val,
         )
-        db.add(mv)
-        await db.flush()
-
-        # CAS V2: increment ref for the MaterialVersion, then schedule
-        # decrement of the staging upload's ref post-commit.
-        if mv.file_key and mv.file_key.startswith("cas/"):
-            from app.core.cas import increment_cas_ref
-
-            if mv.cas_sha256:
-                from app.core.redis import redis_client
-
-                await increment_cas_ref(redis_client, mv.cas_sha256)
-            # The staging upload's CAS ref will be decremented when the
-            # upload row expires or is cleaned up by the cleanup worker.
 
     # attachments
     if p.get("attachments"):
@@ -606,64 +608,15 @@ async def _exec_create_material(
             await db.flush()
 
             if att.get("file_key"):
-                att_fk = str(att["file_key"])
-
-                if att_fk.startswith("cas/"):
-                    # Try to get actual size from upload record
-                    att_upload_size = await db.scalar(
-                        select(Upload.size_bytes)
-                        .where(Upload.final_key == att_fk)
-                        .order_by(Upload.updated_at.desc())
-                        .limit(1)
-                    )
-                    att_real_size = (
-                        att_upload_size
-                        if att_upload_size is not None
-                        else (att.get("file_size") or 0)
-                    )
-                    att_mime = att.get("file_mime_type") or "application/octet-stream"
-                else:
-                    att_info = await _get_file_info(att_fk)
-                    att_real_size = att_info["size"]
-                    att_mime = await _resolve_mime_type(
-                        att_fk, att, s3_mime=att_info.get("content_type")
-                    )
-                    from app.core.storage import copy_object
-
-                    new_att_fk = att_fk.replace("uploads/", "materials/", 1)
-                    await copy_object(att_fk, new_att_fk)
-                    db.info.setdefault("post_commit_jobs", []).append(
-                        ("delete_storage_objects", [att_fk])
-                    )
-                    att_fk = new_att_fk
-
-                # Resolve thumbnail_key from the upload record
-                att_thumb_key = (
-                    await _resolve_thumbnail_key(db, att_fk) if att_fk.startswith("cas/") else None
-                )
-
-                v = MaterialVersion(
-                    id=uuid.uuid4(),
+                await _make_version_for_file(
+                    db,
+                    file_key=str(att["file_key"]),
+                    payload=att,
                     material_id=att_m.id,
                     version_number=1,
-                    file_key=att_fk,
-                    file_name=att.get("file_name"),
-                    file_size=att_real_size,
-                    file_mime_type=att_mime,
-                    cas_sha256=att.get("content_sha256"),
                     author_id=pr.author_id,
                     pr_id=pr.id,
-                    virus_scan_result=VirusScanResult.CLEAN,
-                    thumbnail_key=att_thumb_key,
                 )
-                db.add(v)
-                await db.flush()
-
-                if v.file_key and v.file_key.startswith("cas/") and v.cas_sha256:
-                    from app.core.cas import increment_cas_ref
-                    from app.core.redis import redis_client
-
-                    await increment_cas_ref(redis_client, v.cas_sha256)
 
     seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
     key = ("index_material", str(mat_id))
@@ -696,42 +649,16 @@ async def _exec_edit_material(
         normalized = [t.strip().lower() for t in p["tags"] if t.strip()]
         tag_result = await db.execute(select(Tag).where(Tag.name.in_(normalized)))
         mat.tags = list(tag_result.scalars().all())
+        await db.flush()
+        await prune_orphan_tags(db)
     if p.get("metadata") is not None:
         mat.metadata_ = p["metadata"]
 
     if p.get("file_key"):
-        file_key = str(p["file_key"])
-
-        # CAS V2: file_key is already a cas/ key — no copy needed.
-        if file_key.startswith("cas/"):
-            # Try to get actual size from upload record
-            upload_size = await db.scalar(
-                select(Upload.size_bytes)
-                .where(Upload.final_key == file_key)
-                .order_by(Upload.updated_at.desc())
-                .limit(1)
-            )
-            real_size = upload_size if upload_size is not None else (p.get("file_size") or 0)
-            mime_type = p.get("file_mime_type") or "application/octet-stream"
-        else:
-            info = await _get_file_info(file_key)
-            real_size = info["size"]
-            mime_type = await _resolve_mime_type(file_key, p, s3_mime=info.get("content_type"))
-            from app.core.storage import copy_object
-
-            new_key = file_key.replace("uploads/", "materials/", 1)
-            await copy_object(file_key, new_key)
-            file_key = new_key
-            db.info.setdefault("post_commit_jobs", []).append(
-                ("delete_storage_objects", [str(p["file_key"])])
-            )
-
-        # Optimistic locking (3.11): fetch the latest MaterialVersion to check version_lock
-        # and to set the next value. Only enforced when the PR payload includes version_lock.
-        from sqlalchemy import select as _sel
-
+        # Optimistic locking: fetch the current head version before mutation.
+        # Only enforced when the PR payload includes version_lock.
         _latest_mv = await db.scalar(
-            _sel(MaterialVersion)
+            select(MaterialVersion)
             .where(MaterialVersion.material_id == mat.id)
             .order_by(MaterialVersion.version_number.desc())
             .limit(1)
@@ -746,37 +673,19 @@ async def _exec_edit_material(
                 )
 
         _next_version_lock = (_latest_mv.version_lock + 1) if _latest_mv is not None else 0
-
-        # Resolve thumbnail_key from the upload record (CAS V2: keyed by final_key)
-        edit_thumbnail_key = (
-            await _resolve_thumbnail_key(db, file_key) if file_key.startswith("cas/") else None
-        )
-
-        mv = MaterialVersion(
-            id=uuid.uuid4(),
-            material_id=mat.id,
-            version_number=mat.current_version + 1,
-            file_key=file_key,
-            file_name=p.get("file_name"),
-            file_size=real_size,
-            file_mime_type=mime_type,
-            cas_sha256=p.get("content_sha256"),
-            author_id=pr.author_id,
-            diff_summary=p.get("diff_summary"),
-            pr_id=pr.id,
-            virus_scan_result=VirusScanResult.CLEAN,
-            version_lock=_next_version_lock,
-            thumbnail_key=edit_thumbnail_key,
-        )
         mat.current_version += 1
-        db.add(mv)
-        await db.flush()
 
-        if mv.file_key and mv.file_key.startswith("cas/") and mv.cas_sha256:
-            from app.core.cas import increment_cas_ref
-            from app.core.redis import redis_client
-
-            await increment_cas_ref(redis_client, mv.cas_sha256)
+        await _make_version_for_file(
+            db,
+            file_key=str(p["file_key"]),
+            payload=p,
+            material_id=mat.id,
+            version_number=mat.current_version,
+            author_id=pr.author_id,
+            pr_id=pr.id,
+            diff_summary=p.get("diff_summary"),
+            version_lock=_next_version_lock,
+        )
 
     parent_topic = str(mat.directory_id) if mat.directory_id else "root"
     db.info.setdefault("post_commit_sse_broadcasts", []).append(
@@ -794,8 +703,6 @@ async def _exec_edit_material(
 
 async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
     """Soft-delete a material and its attachment subtree (system dir + child materials)."""
-    from datetime import datetime
-
     now = datetime.now(UTC)
     mat.deleted_at = now
 
@@ -918,6 +825,8 @@ async def _exec_edit_directory(
         dir_obj.metadata_ = p["metadata"]
 
     await db.flush()
+    if p.get("tags") is not None:
+        await prune_orphan_tags(db)
 
     if name_or_slug_changed:
         # Rename propagates ancestor_path to all descendants — reindex the whole subtree.
@@ -934,8 +843,6 @@ async def _exec_edit_directory(
 
 async def _soft_delete_directory_tree(db: AsyncSession, directory_id: uuid.UUID) -> None:
     """Soft-delete a directory and its entire subtree (children, materials, versions)."""
-    from datetime import datetime
-
     now = datetime.now(UTC)
 
     dir_cte = (
@@ -945,16 +852,20 @@ async def _soft_delete_directory_tree(db: AsyncSession, directory_id: uuid.UUID)
     )
     dir_alias = aliased(Directory)
     dir_cte = dir_cte.union_all(
-        select(dir_alias.id).join(dir_cte, dir_alias.parent_id == dir_cte.c.id)
+        select(dir_alias.id)
+        .join(dir_cte, dir_alias.parent_id == dir_cte.c.id)
+        .where(dir_alias.deleted_at.is_(None))
     )
     all_dir_ids = (await db.scalars(select(dir_cte.c.id))).all()
 
+    await db.execute(
+        update(Directory)
+        .where(Directory.id.in_(all_dir_ids), Directory.deleted_at.is_(None))
+        .values(deleted_at=now)
+    )
     broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
     for did in all_dir_ids:
-        d = await db.get(Directory, did)
-        if d:
-            d.deleted_at = now
-            broadcasts.append((str(did), {"type": "directory_deleted"}))
+        broadcasts.append((str(did), {"type": "directory_deleted"}))
 
     mat_rows = (
         await db.scalars(select(Material).where(Material.directory_id.in_(all_dir_ids)))
@@ -1220,12 +1131,7 @@ async def create_pull_request_service(
                 "Wait for one to be reviewed before submitting another."
             )
 
-    # Dynamic limit: diff_summary length vs max_file_size_mb
     max_bytes = settings.max_file_size_mb * 1024 * 1024
-    if redis:
-        config = await get_full_auth_config(db, redis)
-        if config.get("max_file_size_mb") is not None:
-            max_bytes = config["max_file_size_mb"] * 1024 * 1024
 
     for op in data.operations:
         ds = getattr(op, "diff_summary", None)
@@ -1262,14 +1168,12 @@ async def create_pull_request_service(
 
             pmid = getattr(op, "parent_material_id", None)
             if pmid:
-                import uuid as uuid_pkg
-
-                actual_pmid: uuid_pkg.UUID | None = None
-                if isinstance(pmid, uuid_pkg.UUID):
+                actual_pmid: uuid.UUID | None = None
+                if isinstance(pmid, uuid.UUID):
                     actual_pmid = pmid
                 elif isinstance(pmid, str) and not pmid.startswith("$"):
                     with contextlib.suppress(ValueError):
-                        actual_pmid = uuid_pkg.UUID(pmid)
+                        actual_pmid = uuid.UUID(pmid)
 
                 if actual_pmid:
                     parent_mat = await db.scalar(select(Material).where(Material.id == actual_pmid))
@@ -1277,8 +1181,6 @@ async def create_pull_request_service(
                         raise BadRequestError("Cannot attach a material to another attachment")
 
     if keys_to_check:
-        import asyncio
-
         existence_results = await asyncio.gather(*(object_exists(k) for k in keys_to_check))
         for key, exists in zip(keys_to_check, existence_results, strict=False):
             if not exists:
@@ -1406,8 +1308,6 @@ async def apply_pr(db: AsyncSession, pr: PullRequest) -> None:
     """
     if pr.applied_result is not None:
         return
-
-    from datetime import datetime
 
     sorted_ops = topo_sort_operations(list(pr.payload))
     id_map: dict[str, uuid.UUID] = {}
@@ -1626,6 +1526,8 @@ async def _exec_revert_edit_material(
         mat.current_version = pre["prev_version_number"]
 
     await db.flush()
+    if "tags" in pre:
+        await prune_orphan_tags(db)
 
     seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
     key = ("index_material", str(mat.id))
@@ -1665,6 +1567,8 @@ async def _exec_revert_edit_directory(
             d.tags = []
 
     await db.flush()
+    if "tags" in pre:
+        await prune_orphan_tags(db)
 
     if name_changed:
         await _enqueue_reindex_directory_recursive(db, d.id)
@@ -1710,23 +1614,6 @@ async def _exec_revert_move_item(
             seen.add(key)
             db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
         return mat.id
-
-
-_REVERT_EXECUTORS: dict[
-    str,
-    typing.Callable[
-        [AsyncSession, dict[str, typing.Any], PullRequest, dict[str, uuid.UUID]],
-        typing.Coroutine[typing.Any, typing.Any, uuid.UUID],
-    ],
-] = {
-    "create_material": _exec_delete_material,
-    "create_directory": _exec_delete_directory,
-    "edit_material": _exec_revert_edit_material,
-    "edit_directory": _exec_revert_edit_directory,
-    "delete_material": _exec_undelete_material,
-    "delete_directory": _exec_undelete_directory,
-    "move_item": _exec_revert_move_item,
-}
 
 
 def _build_reverse_ops(applied_result: list[dict[str, typing.Any]]) -> list[dict[str, typing.Any]]:
@@ -1802,14 +1689,11 @@ async def revert_pr(
     Create and immediately apply a revert PR that undoes all operations
     from the original PR. The original is marked as reverted.
     """
-    from datetime import datetime
-
     if original_pr.applied_result is None:
         raise BadRequestError(
             "PR has no applied_result — cannot revert (legacy PR without pre-state snapshot)"
         )
 
-    # Check that all edit/move ops have pre_state
     for enriched in original_pr.applied_result:
         op_type = str(enriched.get("op", ""))
         if op_type in ("edit_material", "edit_directory", "move_item") and not enriched.get(

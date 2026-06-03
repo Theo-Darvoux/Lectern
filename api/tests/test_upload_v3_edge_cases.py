@@ -50,9 +50,7 @@ async def test_tus_checksum_missing_header(
         patch("app.routers.tus.upload_part", new_callable=AsyncMock) as m_upload,
         patch("app.routers.tus.complete_multipart_upload", new_callable=AsyncMock),
         patch("app.routers.tus._enqueue_processing", new_callable=AsyncMock),
-        patch("app.services.auth.get_full_auth_config", new_callable=AsyncMock) as m_config,
     ):
-        m_config.return_value = {"max_file_size_mb": 1000}
         m_upload.return_value = "etag-123"
         import uuid
 
@@ -89,13 +87,7 @@ async def test_tus_concurrency_limit_hit(
 
     import uuid
 
-    with (
-        patch("app.services.auth.get_full_auth_config", new_callable=AsyncMock) as m_config,
-    ):
-        m_config.return_value = {"max_file_size_mb": 1000}
-        response = await tus_patch(
-            uuid.UUID(tus_id), mock_request, user, fake_redis_setup, db_session
-        )
+    response = await tus_patch(uuid.UUID(tus_id), mock_request, user, fake_redis_setup, db_session)
 
     assert response.status_code == 429
     assert response.headers["X-WikINT-Error"] == ERR_TUS_CONCURRENCY_LIMIT

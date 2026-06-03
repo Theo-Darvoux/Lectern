@@ -16,7 +16,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from app.config import settings
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # Retry policy for transient Redis errors (BGSAVE latency spikes, brief network
 # blips). Six attempts with exponential backoff capped at 10s covers ~60s of
@@ -88,7 +88,8 @@ async def redis_lock(
         expire: Lock TTL in seconds (auto-release if process dies).
     """
     lock_key = f"lock:{lock_name}"
-    deadline = asyncio.get_event_loop().time() + timeout
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
 
     while True:
         # SET with NX and EX (expire) is atomic in Redis 2.6.12+
@@ -99,7 +100,7 @@ async def redis_lock(
             finally:
                 await redis.delete(lock_key)
 
-        if asyncio.get_event_loop().time() >= deadline:
+        if loop.time() >= deadline:
             raise TimeoutError(f"Could not acquire lock {lock_name} within {timeout}s")
 
         await asyncio.sleep(retry_interval)
@@ -125,8 +126,9 @@ async def redis_semaphore(
         expire: Key TTL in seconds (auto-release if process dies).
     """
     sem_key = f"sem:{sem_name}"
-    holder_id = f"{settings.environment}:{asyncio.get_event_loop().time()}"
-    deadline = asyncio.get_event_loop().time() + timeout
+    loop = asyncio.get_running_loop()
+    holder_id = f"{settings.environment}:{loop.time()}"
+    deadline = loop.time() + timeout
 
     # Lua script for atomic semaphore acquisition
     # ARGV: [1] limit, [2] expire (ms), [3] holder_id
@@ -148,7 +150,7 @@ async def redis_semaphore(
     """
 
     while True:
-        now_ms = int(asyncio.get_event_loop().time() * 1000)
+        now_ms = int(loop.time() * 1000)
         expires_at = now_ms + (expire * 1000)
 
         # Run Lua script: keys=[sem_key], args=[limit, expire_ms, holder_id, now_ms, expires_at]
@@ -170,7 +172,7 @@ async def redis_semaphore(
             finally:
                 await redis.zrem(sem_key, holder_id)
 
-        if asyncio.get_event_loop().time() >= deadline:
+        if loop.time() >= deadline:
             raise TimeoutError(f"Could not acquire semaphore {sem_name} within {timeout}s")
 
         await asyncio.sleep(retry_interval)

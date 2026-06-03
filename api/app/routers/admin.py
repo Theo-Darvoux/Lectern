@@ -22,6 +22,8 @@ from app.models.dead_letter import DeadLetterJob
 from app.models.user import User, UserRole
 from app.schemas.common import DetailedHealthResponse, ServiceStatus
 from app.services.auth import get_full_auth_config
+from app.services.notification import notify_user
+from app.services.user import hard_delete_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -91,7 +93,7 @@ async def admin_list_users(
                 "display_name": u.display_name,
                 "role": u.role.value if u.role else None,
                 "onboarded": u.onboarded,
-                "created_at": u.created_at.isoformat() if u.created_at is not None else None,  # type: ignore[redundant-expr]
+                "created_at": u.created_at.isoformat(),
             }
             for u in users
         ],
@@ -130,8 +132,6 @@ async def admin_delete_user(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
-    from app.services.user import hard_delete_user
-
     target = await db.scalar(select(User).where(User.id == user_id))
     if not target:
         raise NotFoundError("User not found")
@@ -147,8 +147,6 @@ async def admin_approve_user(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
     """Approve a PENDING user — sets their role to STUDENT and notifies them."""
-    from app.services.notification import notify_user
-
     target = await db.scalar(select(User).where(User.id == user_id))
     if not target:
         raise NotFoundError("User not found")
@@ -177,8 +175,6 @@ async def admin_reject_user(
     reason: Annotated[str | None, Query(max_length=500)] = None,
 ) -> dict:  # type: ignore[type-arg]
     """Reject and hard-delete a PENDING user."""
-    from app.services.user import hard_delete_user
-
     target = await db.scalar(select(User).where(User.id == user_id))
     if not target:
         raise NotFoundError("User not found")
@@ -220,7 +216,7 @@ async def list_dead_letter_jobs(
                 "payload": j.payload,
                 "error_detail": j.error_detail,
                 "attempts": j.attempts,
-                "created_at": j.created_at.isoformat() if j.created_at is not None else None,  # type: ignore[redundant-expr]
+                "created_at": j.created_at.isoformat(),
                 "resolved_at": j.resolved_at.isoformat() if j.resolved_at else None,
             }
             for j in jobs
@@ -286,8 +282,6 @@ async def get_detailed_health(
     from app.core.scanner import MalwareScanner
     from app.models.material import Material, MaterialVersion
 
-    # Fetch full dynamic config for all checks
-    config = await get_full_auth_config(db, redis)
     services: dict[str, ServiceStatus] = {}
 
     # 1. Database Check
@@ -313,9 +307,8 @@ async def get_detailed_health(
     try:
         from app.core.storage import get_s3_client
 
-        # Use dynamic config values
-        bucket = config.get("s3_bucket") or settings.s3_bucket
-        endpoint = config.get("s3_endpoint") or settings.s3_endpoint
+        bucket = settings.s3_bucket
+        endpoint = settings.s3_endpoint
 
         async with get_s3_client() as s3:
             await s3.head_bucket(Bucket=bucket)  # type: ignore[attr-defined]
@@ -330,16 +323,9 @@ async def get_detailed_health(
             metadata={
                 "bucket": bucket,
                 "usage_bytes": usage_bytes,
-                "max_storage_bytes": (  # type: ignore[operator]
-                    config.get("max_storage_gb")
-                    if config.get("max_storage_gb") is not None
-                    else settings.max_storage_gb
-                )
-                * 1024
-                * 1024
-                * 1024,
+                "max_storage_bytes": settings.max_storage_gb * 1024 * 1024 * 1024,  # type: ignore[operator]
                 "endpoint": endpoint,
-                "ssl": config.get("s3_use_ssl", settings.s3_use_ssl),
+                "ssl": settings.s3_use_ssl,
             },
         )
     except Exception as e:
@@ -350,13 +336,13 @@ async def get_detailed_health(
     try:
         import aiosmtplib
 
-        host = config.get("smtp_host") or settings.smtp_host
-        port = config.get("smtp_port") or settings.smtp_port
+        host = settings.smtp_host
+        port = settings.smtp_port
 
-        if host or config.get("smtp_ip") or settings.smtp_ip:
+        if host or settings.smtp_ip:
             # Quick ping to SMTP port
             # Use IP if provided, otherwise hostname
-            connect_host = config.get("smtp_ip") or settings.smtp_ip or host
+            connect_host = settings.smtp_ip or host
             # Health check is a reachability probe only — disable cert validation
             # so connecting via IP address doesn't trigger SSL hostname mismatch.
             smtp = aiosmtplib.SMTP(
@@ -371,9 +357,9 @@ async def get_detailed_health(
                 latency_ms=latency,
                 metadata={
                     "host": host,
-                    "ip": config.get("smtp_ip") or settings.smtp_ip,
+                    "ip": settings.smtp_ip,
                     "port": port,
-                    "user": config.get("smtp_user") or settings.smtp_user,
+                    "user": settings.smtp_user,
                 },
             )
         else:
@@ -445,9 +431,7 @@ async def get_detailed_health(
             message=None if is_ready else "Scanner not initialized",
             metadata={
                 "yara_enabled": is_ready,
-                "malwarebazaar_enabled": bool(
-                    config.get("malwarebazaar_api_key") or settings.malwarebazaar_api_key
-                ),
+                "malwarebazaar_enabled": bool(settings.malwarebazaar_api_key),
                 "pending_scans": pending_scans,
             },
         )
@@ -475,8 +459,8 @@ async def get_detailed_health(
             "total_users": user_count,
             "total_materials": material_count,
             "pending_jobs": pending_dlq,
-            "max_upload_size_mb": config.get("max_file_size_mb") or settings.max_file_size_mb,
-            "google_auth_enabled": config.get("google_oauth_enabled", False),
+            "max_upload_size_mb": settings.max_file_size_mb,
+            "google_auth_enabled": settings.google_oauth_enabled,
         },
     )
 
@@ -513,9 +497,8 @@ def _redact_config_for_api(config: dict[str, Any]) -> dict[str, Any]:
 async def get_auth_config(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> dict:  # type: ignore[type-arg]
-    return _redact_config_for_api(await get_full_auth_config(db, redis))
+    return _redact_config_for_api(await get_full_auth_config(db))
 
 
 @router.get("/auth-config/domains")

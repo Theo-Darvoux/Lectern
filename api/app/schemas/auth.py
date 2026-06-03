@@ -71,5 +71,6 @@ class UserBrief(BaseModel):
     avatar_url: str | None
     role: str
     onboarded: bool
+    auto_approve: bool
 
     model_config = {"from_attributes": True}

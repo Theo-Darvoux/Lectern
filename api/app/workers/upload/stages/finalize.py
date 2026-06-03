@@ -12,7 +12,7 @@ from app.core.processing import ProcessingFile
 from app.core.storage import upload_file_multipart
 from app.workers.upload.constants import _SCAN_CACHE_PREFIX, _SHA256_CACHE_PREFIX
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -34,7 +34,6 @@ class FinalizeResult:
     final_key: str
     final_size: int
     content_sha256: str
-    cas_s3_key: str
     new_cas_ref: int
     db_cas_key: str
     safe_name: str
@@ -117,7 +116,6 @@ async def run_finalize_storage(
         final_key=cas_s3_key,
         final_size=final_size,
         content_sha256=content_sha256,
-        cas_s3_key=cas_s3_key,
         new_cas_ref=new_cas_ref,
         db_cas_key=db_cas_key,
         safe_name=safe_name,

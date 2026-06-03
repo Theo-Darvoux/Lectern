@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.download_audit import DownloadAudit
 from app.models.user import User
 
-logger = logging.getLogger("audit")
+logger = logging.getLogger(__name__)
 
 
 async def record_download(
@@ -44,7 +44,9 @@ async def record_download(
 
 
 async def flag_user_account(db: AsyncSession, user_id: uuid.UUID, reason: str) -> None:
-    await db.execute(update(User).where(User.id == user_id).values(is_flagged=True))
+    await db.execute(
+        update(User).where(User.id == user_id).values(is_flagged=True, flag_reason=reason)
+    )
 
     log_entry = {
         "event": "user_flagged",

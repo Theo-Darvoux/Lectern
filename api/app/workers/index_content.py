@@ -10,7 +10,7 @@ from app.core.meilisearch import meili_admin_client
 from app.models.directory import Directory
 from app.models.material import Material
 
-logger = logging.getLogger("wikint.workers.index_content")
+logger = logging.getLogger(__name__)
 
 # Precompiled patterns for identifier tokenization (e.g. "CS101" → "CS 101")
 _ALPHA_NUM = re.compile(r"([a-zA-Z]+)(\d+)")
@@ -99,7 +99,7 @@ async def index_material(ctx: dict, material_id: uuid.UUID) -> None:  # type: ig
                 selectinload(Material.author),
                 selectinload(Material.versions),
             )
-            .where(Material.id == material_id)
+            .where(Material.id == material_id, Material.deleted_at.is_(None))
         )
         material = result.scalar_one_or_none()
         if not material:
@@ -168,7 +168,7 @@ async def index_directory(ctx: dict, directory_id: uuid.UUID) -> None:  # type: 
         result = await db.execute(
             select(Directory)
             .options(selectinload(Directory.tags))
-            .where(Directory.id == directory_id)
+            .where(Directory.id == directory_id, Directory.deleted_at.is_(None))
         )
         directory = result.scalar_one_or_none()
         if not directory:

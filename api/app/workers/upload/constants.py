@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.core.mimetypes import ZIP_MIME_TYPES
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 _STATUS_CACHE_PREFIX = "upload:status:"
 _SCAN_CACHE_PREFIX = "upload:scanned:"

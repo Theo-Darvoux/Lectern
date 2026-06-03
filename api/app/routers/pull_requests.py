@@ -31,6 +31,7 @@ from app.schemas.pull_request import (
     PullRequestOut,
     RejectRequest,
 )
+from app.services.notification import notify_user
 from app.services.pr import (
     approve_pr_service,
     cancel_pr_service,
@@ -43,7 +44,7 @@ from app.services.pr import (
     revert_pr_service,
 )
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pull-requests", tags=["pull-requests"])
 
@@ -237,8 +238,6 @@ async def create_pull_request_comment(
     if data.parent_id:
         parent = await db.scalar(select(PRComment).where(PRComment.id == data.parent_id))
         if parent and parent.author_id and parent.author_id != current_user.id:
-            from app.services.notification import notify_user
-
             await notify_user(
                 db,
                 parent.author_id,

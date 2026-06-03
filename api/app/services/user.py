@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import typing
 import uuid
@@ -18,9 +19,9 @@ from app.models.pull_request import PRComment, PullRequest
 from app.models.upload import Upload
 from app.models.user import User
 from app.models.view_history import ViewHistory
-from app.services.material import material_orm_to_dict, version_orm_to_dict
+from app.services.material import material_orm_to_dict
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 async def onboard_user(
@@ -100,13 +101,10 @@ async def get_recently_viewed(
     )
     result = await db.execute(stmt)
 
-    materials_out = []
-    for material, version in result.all():
-        mat_dict = material_orm_to_dict(material, current_user_id=uid)
-        if version:
-            mat_dict["current_version_info"] = version_orm_to_dict(version)
-        materials_out.append(mat_dict)
-    return materials_out
+    return [
+        material_orm_to_dict(material, current_user_id=uid, current_version=version)
+        for material, version in result.all()
+    ]
 
 
 async def get_user_contributions(
@@ -150,12 +148,10 @@ async def get_user_contributions(
             .offset(offset)
             .limit(limit)
         )
-        materials_out = []
-        for material, version in result.all():
-            mat_dict = material_orm_to_dict(material, current_user_id=current_user_id)
-            if version:
-                mat_dict["current_version_info"] = version_orm_to_dict(version)
-            materials_out.append(mat_dict)
+        materials_out = [
+            material_orm_to_dict(material, current_user_id=current_user_id, current_version=version)
+            for material, version in result.all()
+        ]
         return materials_out, total
     elif contribution_type == "annotations":
         ann_base = select(Annotation).where(Annotation.author_id == uid)
@@ -224,7 +220,7 @@ async def update_user_profile(
                     await download_file(avatar_url, local_input)
 
                     try:
-                        processed_path = process_avatar(local_input)
+                        processed_path = await asyncio.to_thread(process_avatar, local_input)
                         try:
                             # 3. Upload to permanent avatars/ prefix
                             avatar_uuid = uuid_pkg.uuid4()
@@ -365,9 +361,6 @@ async def export_user_data(db: AsyncSession, user: User) -> dict[str, typing.Any
 async def hard_delete_user(db: AsyncSession, user: User) -> None:
     from sqlalchemy import delete
 
-    from app.core.storage import delete_object
-    from app.models.upload import Upload
-
     # 1. Delete avatar from storage
     if user.avatar_url:
         await delete_object(user.avatar_url)
@@ -375,8 +368,7 @@ async def hard_delete_user(db: AsyncSession, user: User) -> None:
     # 2. Cleanup orphaned Upload records (since they might not have a formal FK)
     await db.execute(delete(Upload).where(Upload.user_id == user.id))
 
-    # 3. Delete the user record (cascades to notifications, comments, annotations, etc. due to model configuration)
-    from sqlalchemy import delete
-
+    # 3. Delete the user — related rows (annotations, comments, PRs) are handled
+    #    by DB-level ON DELETE CASCADE / SET NULL constraints, not ORM cascade.
     await db.execute(delete(User).where(User.id == user.id))
     await db.flush()

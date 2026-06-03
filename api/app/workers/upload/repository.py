@@ -13,7 +13,7 @@ from app.models.upload import Upload
 from app.services.auth import get_full_auth_config
 from app.workers.upload.context import WorkerContext
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 
 async def _retry_db[T](
@@ -163,7 +163,7 @@ class UploadWorkerRepository:
 
         async def _do_get() -> dict[str, Any]:
             async with session_factory() as session:
-                return await get_full_auth_config(session, self._ctx.redis)  # type: ignore[arg-type]
+                return await get_full_auth_config(session)
 
         try:
             return await _retry_db(_do_get, context="get_auth_config in worker")

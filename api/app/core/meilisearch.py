@@ -11,7 +11,7 @@ from meilisearch_python_sdk.models.settings import (
 
 from app.config import settings
 
-logger = logging.getLogger("wikint.meilisearch")
+logger = logging.getLogger(__name__)
 
 _SEARCH_KEY_NAME = "wikint-search-key"
 

@@ -5,7 +5,7 @@ import pytest
 
 from app.config import settings
 from app.core.exceptions import BadRequestError, ServiceUnavailableError
-from app.core.scanner import MalwareScanner, scan_file
+from app.core.scanner import MalwareScanner
 
 # ── YARA tests ──
 
@@ -277,13 +277,3 @@ async def test_combined_scan_path_both_clean(tmp_path) -> None:
     # Should not raise
     with patch.object(settings, "bazaar_async_enabled", False):
         await scanner.scan_file_path(test_file, "test.pdf")
-
-
-# ── Backward compatibility wrapper tests ──
-
-
-@patch("app.core.scanner._global_scanner")
-async def test_scan_file_wrapper(mock_global: MagicMock) -> None:
-    mock_global.scan_file = AsyncMock()
-    await scan_file(b"data", "test.pdf")
-    mock_global.scan_file.assert_called_once()

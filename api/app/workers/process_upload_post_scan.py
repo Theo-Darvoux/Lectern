@@ -21,12 +21,20 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
+
+from app.core import redis as redis_core
+from app.core.database import _coalesce_index_jobs
 from app.core.metrics import mime_category as _mime_cat
 from app.core.metrics import upload_compression_ratio, upload_file_size
+from app.core.sse import broadcast_to_topic
 from app.core.storage import delete_object, upload_file_multipart
 from app.core.telemetry import get_tracer
+from app.models.material import MaterialVersion
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
 from app.models.upload import Upload
+from app.schemas.material import UploadStatus
 from app.services.notification import notify_user
 from app.services.pr import (
     _cleanup_pr_resources,
@@ -34,7 +42,8 @@ from app.services.pr import (
     apply_pr,
     get_pr_all_file_keys,
 )
-from app.workers.upload.constants import _compression_timeout
+from app.workers.upload.cache_repo import UploadCacheRepository
+from app.workers.upload.constants import _STATUS_CACHE_PREFIX, _compression_timeout
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.repository import UploadWorkerRepository
 from app.workers.upload.stages.compress import run_compress_stage
@@ -42,7 +51,7 @@ from app.workers.upload.stages.download import run_download_and_validate
 from app.workers.upload.stages.scan_strip import run_strip_only
 from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 _POST_MAX_RETRIES = 3
 # Settled processing statuses — a PR can auto-merge when all its files reach one of these.
@@ -211,10 +220,6 @@ async def process_upload_post_scan(
         # the pre-compression value).
         if worker_ctx.db_sessionmaker is not None:
             try:
-                from sqlalchemy import update as sa_update
-
-                from app.models.material import MaterialVersion
-
                 async with worker_ctx.db_sessionmaker() as db:
                     await db.execute(
                         sa_update(MaterialVersion)
@@ -230,10 +235,6 @@ async def process_upload_post_scan(
                 )
 
         # Update Redis status cache so frontend sees the compressed size
-        from app.schemas.material import UploadStatus
-        from app.workers.upload.cache_repo import UploadCacheRepository
-        from app.workers.upload.constants import _STATUS_CACHE_PREFIX
-
         cache = UploadCacheRepository(worker_ctx.redis)
         status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
         event_channel = f"upload:events:{quarantine_key}"
@@ -359,8 +360,6 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
 
     try:
         async with ctx.db_sessionmaker() as db:
-            from sqlalchemy import func, select
-
             # Find the open PR with auto_merge_pending that claims this file.
             pr = await db.scalar(
                 select(PullRequest)
@@ -413,8 +412,6 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
 
             await db.commit()
 
-            from app.core.sse import broadcast_to_topic
-
             for topic, event in sse_broadcasts:
                 broadcast_to_topic(topic, event)
 
@@ -442,9 +439,6 @@ async def _dispatch_post_commit_jobs(jobs: list[Any]) -> None:
     """Enqueue arq jobs accumulated in db.info['post_commit_jobs'] during apply_pr."""
     if not jobs:
         return
-
-    import app.core.redis as redis_core
-    from app.core.database import _coalesce_index_jobs
 
     coalesced = _coalesce_index_jobs(jobs)
     if redis_core.arq_pool is None:

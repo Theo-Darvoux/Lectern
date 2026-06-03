@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 from app.core.storage import abort_multipart_upload, list_multipart_uploads
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 _ORPHAN_AGE_SECONDS = 7200  # 2 hours
 

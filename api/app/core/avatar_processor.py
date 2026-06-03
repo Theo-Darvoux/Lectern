@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 # Guard against decompression bombs
 Image.MAX_IMAGE_PIXELS = 10_000_000  # 10MP is plenty for an avatar

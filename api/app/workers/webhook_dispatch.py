@@ -39,7 +39,7 @@ from app.config import settings
 from app.core.metrics import upload_webhook_total
 from app.core.url_validation import is_safe_url
 
-logger = logging.getLogger("wikint")
+logger = logging.getLogger(__name__)
 
 _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = (30, 120, 480)  # 30s, 2m, 8m — ARQ-deferred between attempts

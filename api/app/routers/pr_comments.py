@@ -29,8 +29,7 @@ async def update_pr_comment(
     if comment.author_id != current_user.id:
         raise ForbiddenError("Only the author can edit this comment")
 
-    if data.body is not None:
-        comment.body = data.body
+    comment.body = data.body
 
     await db.commit()
     await db.refresh(comment, ["author", "updated_at"])
@@ -42,7 +41,7 @@ async def delete_pr_comment(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> dict:  # type: ignore[type-arg]
+) -> dict[str, str]:
     comment = await db.scalar(select(PRComment).where(PRComment.id == id))
     if not comment:
         raise NotFoundError("PR comment not found")

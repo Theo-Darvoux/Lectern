@@ -76,10 +76,6 @@ export function parseSegments(raw: string | null | undefined): NameSegment[] | n
     return null;
 }
 
-export function segmentsToPlainText(segments: NameSegment[]): string {
-    return segments.map((s) => s.text).join("");
-}
-
 export function segmentStyle(seg: NameSegment): Record<string, string | number | undefined> {
     return {
         fontFamily: seg.font ? `'${seg.font}', sans-serif` : undefined,
