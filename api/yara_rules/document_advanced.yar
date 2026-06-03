@@ -139,8 +139,13 @@ rule DDE_In_OOXML
 
     strings:
         $pk = "PK\x03\x04"
+        // Real DDE attacks use Word field instructions: { DDEAUTO ... } or
+        // { DDE ... }. Match the field-code form (keyword followed by whitespace),
+        // not a bare "DDE" substring — the latter matches inside ordinary words
+        // (e.g. "a[dde]d", "la[dde]r") and would false-positive on course
+        // materials that discuss shell tooling (cmd.exe / powershell / …).
         $dde1 = "DDEAUTO" ascii nocase
-        $dde2 = "DDE" ascii nocase
+        $dde2 = /DDE[ \t\r\n]/ ascii nocase
         // DDE typically targets these executables
         $cmd1 = "cmd.exe" ascii nocase
         $cmd2 = "powershell" ascii nocase
