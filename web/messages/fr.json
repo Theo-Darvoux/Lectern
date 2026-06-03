@@ -429,6 +429,7 @@
     "attachments": "Pièces jointes",
     "supplementaryFilesCount": "{count, plural, =0 {0 fichier supplémentaire} =1 {1 fichier supplémentaire} other {# fichiers supplémentaires}}",
     "addSupplementaryFiles": "Ajouter des fichiers supplémentaires",
+    "download": "Télécharger",
     "noItemSelected": "Aucun élément sélectionné",
     "selectItemToViewDetails": "Sélectionnez un élément pour afficher ses détails ici.",
     "selectItemToViewEdits": "Sélectionnez un élément pour afficher les modifications.",

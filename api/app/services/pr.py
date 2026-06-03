@@ -282,8 +282,7 @@ async def _unique_directory_slug(
 
 
 async def _enqueue_deindex_material_recursive(db: AsyncSession, material_id: uuid.UUID) -> None:
-    """Recursively find all material attachments and their system directories to de-index them."""
-    # 1. Find all descendant materials (recursive attachments)
+    """Recursively find a material and all its attachments and enqueue de-indexing."""
     mat_cte = (
         select(Material.id)
         .where(Material.id == material_id)
@@ -296,21 +295,9 @@ async def _enqueue_deindex_material_recursive(db: AsyncSession, material_id: uui
 
     all_mat_ids = (await db.scalars(select(mat_cte.c.id))).all()
 
-    # 2. Find all associated system directories (attachments folders)
-    # These directories are named "attachments:{material_id}"
-    sys_dir_names = [f"attachments:{mid}" for mid in all_mat_ids]
-    sys_dir_ids = (
-        await db.scalars(select(Directory.id).where(Directory.name.in_(sys_dir_names)))
-    ).all()
-
-    # 3. Enqueue all discovered items
     for mid in all_mat_ids:
         db.info.setdefault("post_commit_jobs", []).append(
             ("delete_indexed_item", "materials", str(mid))
-        )
-    for did in sys_dir_ids:
-        db.info.setdefault("post_commit_jobs", []).append(
-            ("delete_indexed_item", "directories", str(did))
         )
 
 
@@ -576,47 +563,34 @@ async def _exec_create_material(
             pr_id=pr.id,
         )
 
-    # attachments
-    if p.get("attachments"):
-        sys_dir = Directory(
+    for att in p.get("attachments") or []:
+        att_tags = att.get("tags", [])
+        await get_or_create_tags(db, att_tags)
+        att_slug = await _unique_material_slug(db, None, att["title"])
+        att_m = Material(
             id=uuid.uuid4(),
-            name=f"attachments:{m.id}",
-            slug=f"sys-attach-{m.id}",
-            type="folder",
-            is_system=True,
-            created_by=pr.author_id,
+            directory_id=None,
+            title=att["title"],
+            slug=att_slug,
+            type=att["type"],
+            parent_material_id=m.id,
+            author_id=pr.author_id,
+            tags=att_tags,
+            metadata_=att.get("metadata", {}),
         )
-        db.add(sys_dir)
+        db.add(att_m)
         await db.flush()
 
-        for att in p["attachments"]:
-            att_tags = att.get("tags", [])
-            await get_or_create_tags(db, att_tags)
-            att_slug = await _unique_material_slug(db, sys_dir.id, att["title"])
-            att_m = Material(
-                id=uuid.uuid4(),
-                directory_id=sys_dir.id,
-                title=att["title"],
-                slug=att_slug,
-                type=att["type"],
-                parent_material_id=m.id,
+        if att.get("file_key"):
+            await _make_version_for_file(
+                db,
+                file_key=str(att["file_key"]),
+                payload=att,
+                material_id=att_m.id,
+                version_number=1,
                 author_id=pr.author_id,
-                tags=att_tags,
-                metadata_=att.get("metadata", {}),
+                pr_id=pr.id,
             )
-            db.add(att_m)
-            await db.flush()
-
-            if att.get("file_key"):
-                await _make_version_for_file(
-                    db,
-                    file_key=str(att["file_key"]),
-                    payload=att,
-                    material_id=att_m.id,
-                    version_number=1,
-                    author_id=pr.author_id,
-                    pr_id=pr.id,
-                )
 
     seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
     key = ("index_material", str(mat_id))
@@ -702,7 +676,7 @@ async def _exec_edit_material(
 
 
 async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
-    """Soft-delete a material and its attachment subtree (system dir + child materials)."""
+    """Soft-delete a material and all its attachments."""
     now = datetime.now(UTC)
     mat.deleted_at = now
 
@@ -721,22 +695,19 @@ async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
     for v in versions:
         v.deleted_at = now
 
-    sys_dir = await db.scalar(select(Directory).where(Directory.name == f"attachments:{mat.id}"))
-    if sys_dir:
-        sys_dir.deleted_at = now
-        att_mats = (
-            await db.scalars(select(Material).where(Material.directory_id == sys_dir.id))
-        ).all()
-        for att in att_mats:
-            att.deleted_at = now
-            broadcasts.append((str(att.id), {"type": "material_deleted"}))
-            att_versions = await db.scalars(
-                select(MaterialVersion)
-                .where(MaterialVersion.material_id == att.id)
-                .execution_options(include_deleted=True)
-            )
-            for av in att_versions:
-                av.deleted_at = now
+    att_mats = (
+        await db.scalars(select(Material).where(Material.parent_material_id == mat.id))
+    ).all()
+    for att in att_mats:
+        att.deleted_at = now
+        broadcasts.append((str(att.id), {"type": "material_deleted"}))
+        att_versions = await db.scalars(
+            select(MaterialVersion)
+            .where(MaterialVersion.material_id == att.id)
+            .execution_options(include_deleted=True)
+        )
+        for av in att_versions:
+            av.deleted_at = now
 
 
 async def _exec_delete_material(
@@ -1378,7 +1349,7 @@ async def apply_pr(db: AsyncSession, pr: PullRequest) -> None:
 async def _exec_undelete_material(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
-    """Restore a soft-deleted material and its attachment subtree."""
+    """Restore a soft-deleted material and all its attachments."""
     mat_id = _resolve(str(p["material_id"]), id_map)
     mat = await db.scalar(
         select(Material).where(Material.id == mat_id).execution_options(include_deleted=True)
@@ -1396,29 +1367,22 @@ async def _exec_undelete_material(
     for v in versions:
         v.deleted_at = None
 
-    sys_dir = await db.scalar(
-        select(Directory)
-        .where(Directory.name == f"attachments:{mat.id}")
-        .execution_options(include_deleted=True)
-    )
-    if sys_dir:
-        sys_dir.deleted_at = None
-        att_mats = (
-            await db.scalars(
-                select(Material)
-                .where(Material.directory_id == sys_dir.id)
-                .execution_options(include_deleted=True)
-            )
-        ).all()
-        for att in att_mats:
-            att.deleted_at = None
-            att_vs = await db.scalars(
-                select(MaterialVersion)
-                .where(MaterialVersion.material_id == att.id)
-                .execution_options(include_deleted=True)
-            )
-            for av in att_vs:
-                av.deleted_at = None
+    att_mats = (
+        await db.scalars(
+            select(Material)
+            .where(Material.parent_material_id == mat.id)
+            .execution_options(include_deleted=True)
+        )
+    ).all()
+    for att in att_mats:
+        att.deleted_at = None
+        att_vs = await db.scalars(
+            select(MaterialVersion)
+            .where(MaterialVersion.material_id == att.id)
+            .execution_options(include_deleted=True)
+        )
+        for av in att_vs:
+            av.deleted_at = None
 
     seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
     key = ("index_material", str(mat.id))

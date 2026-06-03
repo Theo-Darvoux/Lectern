@@ -225,8 +225,10 @@ class TestGetDirectoryDownloadEntries:
         _, entries = await get_directory_download_entries(db_session, directory.id)
         assert entries == []
 
-    async def test_attachment_materials_excluded(self, db_session: AsyncSession) -> None:
-        """Materials with parent_material_id (attachments) must not appear in the ZIP."""
+    async def test_attachment_materials_nested_under_parent_stem(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Attachments appear under a subfolder named after the parent file stem."""
         user = await _create_user(db_session)
         directory = await _create_directory(db_session, user)
         parent_mat, _ = await _create_material_with_version(
@@ -242,8 +244,10 @@ class TestGetDirectoryDownloadEntries:
         await db_session.commit()
 
         _, entries = await get_directory_download_entries(db_session, directory.id)
-        assert len(entries) == 1
-        assert entries[0][0] == "main.pdf"
+        arcnames = {a for a, _ in entries}
+        assert len(entries) == 2
+        assert "main.pdf" in arcnames
+        assert "main/attachment.pdf" in arcnames
 
     async def test_duplicate_filenames_are_deduplicated(self, db_session: AsyncSession) -> None:
         user = await _create_user(db_session)

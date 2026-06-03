@@ -53,8 +53,6 @@ interface UseAugmentedListingProps {
   directory: Record<string, unknown> | null;
   directories: Record<string, unknown>[];
   materials: Record<string, unknown>[];
-  isAttachmentListing: boolean;
-  parentMaterial: Record<string, unknown> | null;
   previewOperations: Operation[];
 }
 
@@ -62,8 +60,6 @@ export function useAugmentedListing({
   directory,
   directories,
   materials,
-  isAttachmentListing,
-  parentMaterial,
   previewOperations,
 }: UseAugmentedListingProps) {
   const rawOperations = useStagingStore((s) => s.operations);
@@ -134,20 +130,12 @@ export function useAugmentedListing({
 
   const ghostMaterials = allOps.filter((op) => {
     if (op.op === "create_material") {
-      const isCreatedHere = isAttachmentListing
-        ? op.parent_material_id === (parentMaterial?.id as string)
-        : isRoot
-          ? !op.directory_id
-          : op.directory_id === dirId;
+      const isCreatedHere = isRoot ? !op.directory_id : op.directory_id === dirId;
       if (isCreatedHere) return true;
     }
 
     if (op.op === "move_item" && op.target_type === "material") {
-      const isTarget = isAttachmentListing
-        ? op.new_parent_id === (parentMaterial?.id as string)
-        : isRoot
-          ? !op.new_parent_id
-          : op.new_parent_id === dirId;
+      const isTarget = isRoot ? !op.new_parent_id : op.new_parent_id === dirId;
       return isTarget;
     }
     return false;

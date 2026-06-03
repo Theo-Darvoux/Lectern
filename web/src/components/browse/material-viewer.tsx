@@ -269,7 +269,6 @@ export function MaterialViewer({
   const parentMaterialId = material.parent_material_id
     ? String(material.parent_material_id)
     : null;
-  const attachmentCount = Number(material.attachment_count ?? 0);
   const versionInfo = material.current_version_info as Record<
     string,
     unknown
@@ -605,8 +604,6 @@ export function MaterialViewer({
             materialId={materialId}
             materialTitle={title}
             directoryId={directoryId}
-            attachmentCount={attachmentCount}
-            isAttachment={!!parentMaterialId}
             viewerType={viewerType}
             mimeType={mimeType}
             fileName={fileName}

@@ -105,7 +105,6 @@ async def _rows_to_featured_out(
             "description": directory.description,
             "metadata_": directory.metadata_,
             "sort_order": directory.sort_order,
-            "is_system": directory.is_system,
             "tags": directory.tags,
             "full_path": paths.get(directory.id),
             "created_at": directory.created_at,
@@ -166,7 +165,6 @@ async def moderator_list_directories(
             "slug": d.slug,
             "type": d.type.value if d.type else None,
             "parent_id": str(d.parent_id) if d.parent_id else None,
-            "is_system": d.is_system,
         }
         for d in dirs
     ]

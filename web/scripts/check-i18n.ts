@@ -410,7 +410,7 @@ for (const file of files) {
                             if (Node.isIdentifier(nameNode)) funcIdentifier = nameNode;
                         }
                     }
-                    if (funcIdentifier) {
+                    if (funcIdentifier && Node.isIdentifier(funcIdentifier)) {
                         const namespaces = new Set<string>();
                         for (const ref of funcIdentifier.findReferencesAsNodes()) {
                             const refParent = ref.getParent();

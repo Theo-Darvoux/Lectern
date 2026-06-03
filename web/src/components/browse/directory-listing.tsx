@@ -31,8 +31,6 @@ import {
   FolderPlus,
   Folder,
   ArrowLeft,
-  Paperclip,
-  UploadCloud,
   CheckSquare,
   X,
   Trash2,
@@ -70,8 +68,6 @@ interface DirectoryListingProps {
   directories: Record<string, unknown>[];
   materials: Record<string, unknown>[];
   breadcrumbs?: { id: string; name: string; slug: string }[];
-  isAttachmentListing?: boolean;
-  parentMaterial?: Record<string, unknown> | null;
   previewOperations?: Operation[];
   previewPrId?: string;
 }
@@ -81,8 +77,6 @@ export function DirectoryListing({
   directories,
   materials,
   breadcrumbs = [],
-  isAttachmentListing = false,
-  parentMaterial = null,
   previewOperations = [],
   previewPrId,
 }: DirectoryListingProps) {
@@ -126,8 +120,6 @@ export function DirectoryListing({
     directory,
     directories,
     materials,
-    isAttachmentListing,
-    parentMaterial,
     previewOperations,
   });
 
@@ -590,8 +582,7 @@ export function DirectoryListing({
         </div>
       </div>
 
-      {!isAttachmentListing && (
-        <div className="mt-2">
+      <div className="mt-2">
           {!selectMode ? (
             <div className="flex items-center justify-between h-11">
               <div className="flex items-center gap-2">
@@ -766,71 +757,8 @@ export function DirectoryListing({
           </div>
         )}
       </div>
-    )}
 
-      {isAttachmentListing && (
-        <div className="flex items-center gap-3 rounded-lg border border-violet-200 bg-violet-50/60 px-4 py-3 dark:border-violet-800/40 dark:bg-violet-950/20">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/50">
-            <Paperclip className="h-5 w-5 text-violet-600 dark:text-violet-400" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-base font-semibold text-violet-900 dark:text-violet-200">
-              {t("attachments")}
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              {t("supplementaryFiles")}
-            </p>
-          </div>
-          <div className="flex items-center border rounded-md overflow-hidden h-8">
-            <button
-              onClick={() => setViewMode("list")}
-              className={`px-2 h-full flex items-center transition-colors ${viewMode === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted/50"}`}
-              title={t("listView")}
-              aria-label={t("listView")}
-            >
-              <LayoutList className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setViewMode("grid")}
-              className={`px-2 h-full flex items-center border-l transition-colors ${viewMode === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted/50"}`}
-              title={t("gridView")}
-              aria-label={t("gridView")}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </button>
-          </div>
-          <Button
-            size="sm"
-            className="gap-2 bg-violet-600 text-white hover:bg-violet-700 dark:bg-violet-700 dark:hover:bg-violet-600"
-            onClick={() => {
-              if (parentMaterial) {
-                requestUpload({
-                  directoryId: String(parentMaterial.directory_id ?? ""),
-                  directoryName: String(parentMaterial.title ?? t("material")),
-                  parentMaterialId: String(parentMaterial.id ?? ""),
-                });
-              }
-            }}
-          >
-            <UploadCloud className="w-4 h-4" />
-            {t("uploadAttachment")}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="gap-2 border-violet-300 text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-900/50"
-            onClick={() => {
-              const parentPath = pathname.replace(/\/attachments$/, "");
-              router.push(parentPath + window.location.search);
-            }}
-          >
-            <ArrowLeft className="w-4 h-4" />
-            {t("back")}
-          </Button>
-        </div>
-      )}
-
-      {!isAttachmentListing && !activeGhostDir && (
+      {!activeGhostDir && (
         <DirectoryOpenPRs directoryId={realDirId || "root"} />
       )}
 
@@ -869,21 +797,7 @@ export function DirectoryListing({
       )}
 
       {!activeGhostDir && isEmpty ? (
-        isAttachmentListing ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-violet-100/80 dark:bg-violet-950/30 mb-4">
-              <Paperclip className="h-8 w-8 text-violet-400 opacity-60" />
-            </div>
-            <p className="text-lg font-medium text-muted-foreground">
-              {t("noAttachmentsYet")}
-            </p>
-            <p className="text-sm text-muted-foreground/70 mt-1 max-w-xs">
-              {t("attachmentsDesc")}
-            </p>
-          </div>
-        ) : (
-          <EmptyDirectory />
-        )
+        <EmptyDirectory />
       ) : (
         !isEmpty && (
           viewMode === "list" ? (

@@ -13,7 +13,6 @@ class DirectoryOut(BaseModel):
     description: str | None
     metadata: dict[str, object] = Field(validation_alias=AliasChoices("metadata_", "metadata"))
     sort_order: int
-    is_system: bool
     tags: list[str] = []
     full_path: str | None = None
     created_at: datetime

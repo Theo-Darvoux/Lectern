@@ -17,12 +17,11 @@ import { browseCache, setPreviousBrowsePath, fetchBrowsePath } from "@/lib/brows
 import dynamic from "next/dynamic";
 
 interface BrowseResponse {
-  type: "directory_listing" | "material" | "attachment_listing";
+  type: "directory_listing" | "material";
   directory?: Record<string, unknown> | null;
   directories?: Record<string, unknown>[];
   materials?: Record<string, unknown>[];
   material?: Record<string, unknown>;
-  parent_material?: Record<string, unknown> | null;
   breadcrumbs?: { id: string; name: string; slug: string }[];
 }
 
@@ -336,8 +335,7 @@ function BrowseContent() {
 
   const isLikelyMaterial = path.split("/").filter(Boolean).length >= 3;
 
-  const isDirectoryView =
-    data?.type === "directory_listing" || data?.type === "attachment_listing";
+  const isDirectoryView = data?.type === "directory_listing";
 
   let inner: React.ReactNode;
   if (!data && isFetching) {
@@ -398,8 +396,6 @@ function BrowseContent() {
               directories={data.directories ?? []}
               materials={data.materials ?? []}
               breadcrumbs={data.breadcrumbs}
-              isAttachmentListing={data.type === "attachment_listing"}
-              parentMaterial={data.parent_material ?? null}
               previewOperations={previewPr?.payload}
               previewPrId={previewPr?.id}
             />

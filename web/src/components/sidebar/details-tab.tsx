@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
@@ -18,6 +18,8 @@ import {
   Star,
   Loader2,
   Info,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -31,6 +33,7 @@ import { ExpandableText } from "@/components/ui/expandable-text";
 import { useUIStore, useBrowseRefreshStore, useLikeOverrides } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
 import { useAuth } from "@/hooks/use-auth";
+import { useDownload } from "@/hooks/use-download";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { isRestrictedTarget } from "@/lib/utils";
@@ -483,6 +486,23 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
     : [];
   const attachmentCount = Number(data.attachment_count ?? 0);
 
+  const { downloadMaterial } = useDownload();
+  const [attachmentsOpen, setAttachmentsOpen] = useState(attachmentCount > 0);
+  const [attachments, setAttachments] = useState<Record<string, unknown>[] | null>(null);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+  const fetchedForRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!attachmentsOpen || parentMaterialId) return;
+    if (fetchedForRef.current === id) return;
+    fetchedForRef.current = id;
+    setAttachmentsLoading(true);
+    apiFetch<Record<string, unknown>[]>(`/materials/${id}/attachments`)
+      .then(setAttachments)
+      .catch(() => setAttachments([]))
+      .finally(() => setAttachmentsLoading(false));
+  }, [attachmentsOpen, id, parentMaterialId]);
+
   const versionInfo = data.current_version_info as Record<
     string,
     unknown
@@ -596,37 +616,77 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
         </div>
       )}
 
-      {/* Attachments card */}
+      {/* Attachments — inline, only shown for top-level materials */}
       {!parentMaterialId && (
-        <Link
-          href={`${(data.__path as string) || pathname}/attachments`}
-          className="group flex items-center gap-3 rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-3 transition-colors hover:bg-violet-100/70 dark:border-violet-800/50 dark:bg-violet-950/20 dark:hover:bg-violet-950/40"
-        >
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-violet-100 text-violet-600 dark:bg-violet-900/50 dark:text-violet-400">
-            <Paperclip className="h-4.5 w-4.5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-violet-900 dark:text-violet-200">
-                {t("attachments")}
-              </span>
-              {attachmentCount > 0 && (
-                <Badge
-                  variant="secondary"
-                  className="h-5 px-1.5 text-[10px] font-semibold bg-violet-200 text-violet-700 dark:bg-violet-800 dark:text-violet-200"
-                >
-                  {attachmentCount}
-                </Badge>
+        <div className="rounded-lg border border-violet-200 dark:border-violet-800/50 overflow-hidden">
+          <button
+            className="w-full flex items-center gap-3 px-3 py-2.5 bg-violet-50/50 dark:bg-violet-950/20 hover:bg-violet-100/70 dark:hover:bg-violet-950/40 transition-colors"
+            onClick={() => setAttachmentsOpen((o) => !o)}
+          >
+            <Paperclip className="h-4 w-4 shrink-0 text-violet-600 dark:text-violet-400" />
+            <span className="flex-1 text-left text-sm font-medium text-violet-900 dark:text-violet-200">
+              {t("attachments")}
+            </span>
+            {attachmentCount > 0 && (
+              <Badge
+                variant="secondary"
+                className="h-5 px-1.5 text-[10px] font-semibold bg-violet-200 text-violet-700 dark:bg-violet-800 dark:text-violet-200"
+              >
+                {attachmentCount}
+              </Badge>
+            )}
+            {attachmentsOpen
+              ? <ChevronDown className="h-3.5 w-3.5 text-violet-400" />
+              : <ChevronRight className="h-3.5 w-3.5 text-violet-400" />}
+          </button>
+          {attachmentsOpen && (
+            <div className="border-t border-violet-200 dark:border-violet-800/50">
+              {attachmentsLoading ? (
+                <div className="flex items-center justify-center py-4">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : attachments && attachments.length > 0 ? (
+                <ul className="divide-y divide-violet-100 dark:divide-violet-900/30">
+                  {attachments.map((att) => {
+                    const attId = String(att.id ?? "");
+                    const attTitle = String(att.title ?? "");
+                    const attVersion = att.current_version_info as Record<string, unknown> | null;
+                    const attFileName = attVersion ? String(attVersion.file_name ?? "") : "";
+                    const attSize = attVersion ? Number(attVersion.file_size ?? 0) : 0;
+                    const attMime = attVersion ? String(attVersion.file_mime_type ?? "") : "";
+                    return (
+                      <li key={attId} className="flex items-center gap-2 px-3 py-2 group">
+                        <FileText className="h-4 w-4 shrink-0 text-violet-400" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{attTitle}</p>
+                          {(attFileName || attMime) && (
+                            <p className="text-xs text-muted-foreground truncate">
+                              {attFileName || attMime}
+                              {attSize > 0 && ` · ${formatFileSize(attSize)}`}
+                            </p>
+                          )}
+                        </div>
+                        {attVersion && (
+                          <button
+                            className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title={t("download")}
+                            onClick={(e) => { e.stopPropagation(); downloadMaterial(attId); }}
+                          >
+                            <Download className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="px-3 py-3 text-xs text-muted-foreground">
+                  {t("addSupplementaryFiles")}
+                </p>
               )}
             </div>
-            <p className="text-xs text-muted-foreground">
-              {attachmentCount > 0
-                ? t("supplementaryFilesCount", { count: attachmentCount })
-                : t("addSupplementaryFiles")}
-            </p>
-          </div>
-          <ExternalLink className="h-3.5 w-3.5 text-violet-400 opacity-0 transition-opacity group-hover:opacity-100" />
-        </Link>
+          )}
+        </div>
       )}
     </div>
   );

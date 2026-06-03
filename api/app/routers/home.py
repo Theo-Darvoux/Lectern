@@ -114,7 +114,6 @@ async def _build_featured_out(
             "description": directory.description,
             "metadata_": directory.metadata_,
             "sort_order": directory.sort_order,
-            "is_system": directory.is_system,
             "tags": directory.tags,
             "full_path": paths.get(directory.id),
             "created_at": directory.created_at,

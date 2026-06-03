@@ -36,7 +36,6 @@ def directory_orm_to_dict(
         "description": d.description,
         "metadata": d.metadata_,
         "sort_order": d.sort_order,
-        "is_system": d.is_system,
         "tags": [t.name for t in d.tags],
         "full_path": full_path,
         "like_count": d.like_count,
@@ -133,7 +132,7 @@ async def get_root_directories(
     stmt = (
         select(Directory)
         .options(selectinload(Directory.tags))
-        .where(Directory.parent_id.is_(None), Directory.is_system.is_(False))
+        .where(Directory.parent_id.is_(None))
         .order_by(Directory.sort_order, Directory.name)
     )
     result = await db.execute(stmt)
@@ -144,7 +143,7 @@ async def get_root_directories(
     # Batch: child directory counts per parent
     dir_count_rows = await db.execute(
         select(Directory.parent_id, func.count().label("cnt"))
-        .where(Directory.parent_id.in_(dir_ids), Directory.is_system.is_(False))
+        .where(Directory.parent_id.in_(dir_ids))
         .group_by(Directory.parent_id)
     )
     dir_counts: dict[uuid.UUID, int] = {r.parent_id: r.cnt for r in dir_count_rows.all()}
@@ -314,7 +313,7 @@ async def get_directory_children(
     dir_stmt = (
         select(Directory)
         .options(selectinload(Directory.tags))
-        .where(Directory.parent_id == directory.id, Directory.is_system.is_(False))
+        .where(Directory.parent_id == directory.id)
         .order_by(Directory.sort_order, Directory.name)
     )
     dir_result = await db.execute(dir_stmt)
@@ -325,7 +324,7 @@ async def get_directory_children(
     # Batch: grandchild directory counts
     gc_dir_rows = await db.execute(
         select(Directory.parent_id, func.count().label("cnt"))
-        .where(Directory.parent_id.in_(child_dir_ids), Directory.is_system.is_(False))
+        .where(Directory.parent_id.in_(child_dir_ids))
         .group_by(Directory.parent_id)
     )
     gc_dir_counts: dict[uuid.UUID, int] = {r.parent_id: r.cnt for r in gc_dir_rows.all()}
@@ -431,89 +430,20 @@ async def resolve_browse_path(
     current_dir: Directory | None = None
     last_material: Material | None = None
 
-    from app.services.material import material_orm_to_dict
-
     # Resolve the directory chain in a single query rather than one round-trip
     # per segment: fetch every directory whose slug appears in the path, then
     # walk the chain in-memory keyed by (parent_id, slug). Unrelated directories
     # that happen to share a slug are simply never matched during the walk.
-    slug_set = {s for s in segments if s != "attachments"}
     dirs_by_parent_slug: dict[tuple[uuid.UUID | None, str], Directory] = {}
-    if slug_set:
+    if segments:
         dir_rows = await db.execute(
             select(Directory)
             .options(selectinload(Directory.tags))
-            .where(Directory.slug.in_(slug_set), Directory.is_system.is_(False))
+            .where(Directory.slug.in_(set(segments)))
         )
         dirs_by_parent_slug = {(d.parent_id, d.slug): d for d in dir_rows.scalars().all()}
 
     for i, segment in enumerate(segments):
-        if segment == "attachments" and last_material is not None:
-            # If there are more segments after 'attachments', resolve a specific attachment
-            remaining = segments[i + 1 :]
-            if remaining:
-                att_slug = remaining[0]
-                att_result = await db.execute(
-                    select(Material.id).where(
-                        Material.slug == att_slug,
-                        Material.parent_material_id == last_material.id,
-                    )
-                )
-                attachment_id = att_result.scalar_one_or_none()
-                if not attachment_id:
-                    raise NotFoundError(f"Attachment '{att_slug}' not found")
-                from app.services.material import get_material_with_version
-
-                detail = await get_material_with_version(
-                    db, str(attachment_id), current_user_id=current_user_id
-                )
-                return {"type": "material", "material": detail}
-
-            # No more segments — return the attachment listing
-            att_listing_result = await db.execute(
-                select(Material)
-                .options(selectinload(Material.tags))
-                .where(Material.parent_material_id == last_material.id)
-                .order_by(Material.title)
-            )
-            attachments = att_listing_result.scalars().all()
-            materials_out = await _attach_version_and_counts(db, attachments, current_user_id, None)
-
-            parent_liked = False
-            parent_favourited = False
-            if current_user_id:
-                parent_liked = bool(
-                    await db.scalar(
-                        select(
-                            exists().where(
-                                MaterialLike.material_id == last_material.id,
-                                MaterialLike.user_id == current_user_id,
-                            )
-                        )
-                    )
-                )
-                parent_favourited = bool(
-                    await db.scalar(
-                        select(
-                            exists().where(
-                                MaterialFavourite.material_id == last_material.id,
-                                MaterialFavourite.user_id == current_user_id,
-                            )
-                        )
-                    )
-                )
-
-            return {
-                "type": "attachment_listing",
-                "materials": materials_out,
-                "parent_material": material_orm_to_dict(
-                    last_material,
-                    current_user_id=current_user_id,
-                    is_liked=parent_liked,
-                    is_favourited=parent_favourited,
-                ),
-            }
-
         parent_key = current_dir.id if current_dir else None
         directory = dirs_by_parent_slug.get((parent_key, segment))
         if directory:
@@ -689,12 +619,57 @@ async def _build_zip_entries(
 
     rows = (await db.execute(stmt)).all()
 
-    if len(rows) > _DOWNLOAD_MAX_FILES:
+    # Fetch attachments (child materials) and place them under a subfolder
+    # named after the parent material's file stem.
+    parent_version = aliased(MaterialVersion)
+    attachment_material = aliased(Material)
+    attachment_version = aliased(MaterialVersion)
+
+    attach_stmt = (
+        select(
+            cte.c.rel_path,
+            parent_version.file_name.label("parent_file_name"),
+            attachment_version.file_key,
+            attachment_version.file_name,
+            attachment_version.file_size,
+        )
+        .join(Material, Material.directory_id == cte.c.id)
+        .join(
+            parent_version,
+            (parent_version.material_id == Material.id)
+            & (parent_version.version_number == Material.current_version),
+        )
+        .join(attachment_material, attachment_material.parent_material_id == Material.id)
+        .join(
+            attachment_version,
+            (attachment_version.material_id == attachment_material.id)
+            & (attachment_version.version_number == attachment_material.current_version),
+        )
+        .where(
+            Material.parent_material_id.is_(None),
+            Material.deleted_at.is_(None),
+            attachment_material.deleted_at.is_(None),
+            parent_version.deleted_at.is_(None),
+            attachment_version.file_key.isnot(None),
+            ~attachment_version.file_key.like("quarantine/%"),
+            attachment_version.deleted_at.is_(None),
+        )
+        .order_by(cte.c.rel_path, parent_version.file_name, attachment_version.file_name)
+        # Bypass the global soft-delete event listener: it generates unaliased
+        # `material_versions.deleted_at` in ON clauses which SQLite rejects.
+        # Explicit conditions above handle filtering instead.
+        .execution_options(include_deleted=True)
+    )
+
+    attachment_rows = (await db.execute(attach_stmt)).all()
+
+    total_count = len(rows) + len(attachment_rows)
+    if total_count > _DOWNLOAD_MAX_FILES:
         raise ValueError(
-            f"This directory contains too many files ({len(rows)}); limit is {_DOWNLOAD_MAX_FILES}."
+            f"This directory contains too many files ({total_count}); limit is {_DOWNLOAD_MAX_FILES}."
         )
 
-    total = sum(r.file_size or 0 for r in rows)
+    total = sum(r.file_size or 0 for r in rows) + sum(r.file_size or 0 for r in attachment_rows)
     if total > _DOWNLOAD_MAX_BYTES:
         limit_mb = _DOWNLOAD_MAX_BYTES // (1024 * 1024)
         raise ValueError(
@@ -703,9 +678,8 @@ async def _build_zip_entries(
 
     entries: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for row in rows:
-        fname = row.file_name or "file"
-        arcname = f"{row.rel_path}/{fname}" if row.rel_path else fname
+
+    def _add_entry(arcname: str, file_key: str) -> None:
         original = arcname
         n = 1
         while arcname in seen:
@@ -713,7 +687,19 @@ async def _build_zip_entries(
             arcname = f"{base}_{n}.{ext}" if ext else f"{original}_{n}"
             n += 1
         seen.add(arcname)
-        entries.append((arcname, row.file_key))
+        entries.append((arcname, file_key))
+
+    for row in rows:
+        fname = row.file_name or "file"
+        arcname = f"{row.rel_path}/{fname}" if row.rel_path else fname
+        _add_entry(arcname, row.file_key)
+
+    for row in attachment_rows:
+        fname = row.file_name or "file"
+        parent_name = row.parent_file_name or "attachments"
+        parent_stem = parent_name.rsplit(".", 1)[0] if "." in parent_name else parent_name
+        folder = f"{row.rel_path}/{parent_stem}" if row.rel_path else parent_stem
+        _add_entry(f"{folder}/{fname}", row.file_key)
 
     return entries
 
@@ -762,7 +748,7 @@ async def get_root_download_entries(
             Directory.id,
             Directory.name.cast(String).label("rel_path"),
         )
-        .where(Directory.parent_id.is_(None), Directory.is_system.is_(False))
+        .where(Directory.parent_id.is_(None))
         .cte(name="dir_tree", recursive=True)
     )
 

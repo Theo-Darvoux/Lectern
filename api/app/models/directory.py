@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
-    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -60,7 +59,6 @@ class Directory(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         "metadata", JSONB, default=dict, server_default="{}"
     )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     like_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")

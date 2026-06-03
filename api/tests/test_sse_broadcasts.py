@@ -57,14 +57,14 @@ async def _make_directory(
 async def _make_material(
     db: AsyncSession,
     user: User,
-    directory: Directory,
+    directory: Directory | None,
     *,
     title: str = "TestMat",
     parent_material_id: uuid.UUID | None = None,
 ) -> Material:
     m = Material(
         id=uuid.uuid4(),
-        directory_id=directory.id,
+        directory_id=directory.id if directory else None,
         title=title,
         slug=title.lower().replace(" ", "-"),
         type="document",
@@ -121,22 +121,11 @@ class TestSoftDeleteMaterialBroadcasts:
         directory = await _make_directory(db_session, user)
         parent_mat = await _make_material(db_session, user, directory, title="ParentMat")
 
-        # Create attachment system directory + child material manually
-        sys_dir = Directory(
-            id=uuid.uuid4(),
-            name=f"attachments:{parent_mat.id}",
-            slug=f"sys-attach-{parent_mat.id}",
-            type="folder",
-            is_system=True,
-            created_by=user.id,
-        )
-        db_session.add(sys_dir)
-        await db_session.flush()
-
+        # Attachments are linked via parent_material_id; directory_id is None.
         att_mat = await _make_material(
             db_session,
             user,
-            sys_dir,
+            None,
             title="Attachment",
             parent_material_id=parent_mat.id,
         )

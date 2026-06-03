@@ -3,10 +3,9 @@ import { useRouter } from "next/navigation";
 import { createSSEConnection } from "@/lib/sse-client";
 
 interface BrowseData {
-    type: "directory_listing" | "material" | "attachment_listing";
+    type: "directory_listing" | "material";
     directory?: Record<string, unknown> | null;
     material?: Record<string, unknown> | null;
-    parent_material?: Record<string, unknown> | null;
     breadcrumbs?: { id: string; name: string; slug: string }[];
 }
 
@@ -42,10 +41,6 @@ export function useBrowseSSE(
         sseUrl = `/directories/${dirId}/sse`;
     } else if (data?.type === "material" && data.material) {
         const matId = String(data.material.id);
-        sseEntityKey = `mat:${matId}`;
-        sseUrl = `/materials/${matId}/sse`;
-    } else if (data?.type === "attachment_listing" && data.parent_material) {
-        const matId = String((data.parent_material as Record<string, unknown>).id);
         sseEntityKey = `mat:${matId}`;
         sseUrl = `/materials/${matId}/sse`;
     }

@@ -6,7 +6,6 @@ import { useState, type ReactNode } from "react";
 import {
   Download,
   Share2,
-  Paperclip,
   Loader2,
   Printer,
   Info,
@@ -121,8 +120,6 @@ interface ViewerFabProps {
   materialId: string;
   materialTitle?: string;
   directoryId?: string;
-  attachmentCount?: number;
-  isAttachment?: boolean;
   viewerType?: string;
   mimeType?: string;
   fileName?: string;
@@ -137,8 +134,6 @@ export function ViewerFab({
   material,
   materialId,
   materialTitle,
-  attachmentCount = 0,
-  isAttachment = false,
   viewerType = "",
   mimeType = "",
   fileName = "",
@@ -422,17 +417,6 @@ export function ViewerFab({
               tint={isLiked ? "primary" : "default"}
               disabled={isRestricted}
               onClick={handleLike}
-            />
-          )}
-
-          {/* ── View attachments ── */}
-          {!isAttachment && (
-            <ActionCell
-              icon={<Paperclip className="h-5 w-5" />}
-              label={t("attachments")}
-              tint="violet"
-              href={`${pathname}/attachments`}
-              badge={attachmentCount}
             />
           )}
 

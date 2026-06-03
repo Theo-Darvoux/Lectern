@@ -4,7 +4,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token
-from app.models.directory import Directory, DirectoryFavourite, DirectoryLike, DirectoryType
+from app.models.directory import Directory, DirectoryLike, DirectoryType
 from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
 from app.models.user import User, UserRole
 
@@ -37,7 +37,6 @@ async def _create_directory(
     parent_id: uuid.UUID | None = None,
     dir_type: DirectoryType = DirectoryType.FOLDER,
     sort_order: int = 0,
-    is_system: bool = False,
 ) -> Directory:
     directory = Directory(
         id=uuid.uuid4(),
@@ -46,7 +45,6 @@ async def _create_directory(
         type=dir_type,
         parent_id=parent_id,
         sort_order=sort_order,
-        is_system=is_system,
         created_by=user.id,
     )
     db.add(directory)
@@ -126,21 +124,6 @@ async def test_browse_root_with_directories(client: AsyncClient, db_session: Asy
     assert data["directories"][1]["name"] == "Alpha"
 
 
-async def test_browse_root_excludes_system_dirs(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
-    user = await _create_user(db_session)
-    await _create_directory(db_session, user, name="Visible", slug="visible")
-    await _create_directory(db_session, user, name="System", slug="system", is_system=True)
-    await db_session.commit()
-
-    response = await client.get("/api/browse")
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["directories"]) == 1
-    assert data["directories"][0]["name"] == "Visible"
-
-
 async def test_browse_path_directory(client: AsyncClient, db_session: AsyncSession) -> None:
     user = await _create_user(db_session)
     parent = await _create_directory(db_session, user, name="Parent", slug="parent")
@@ -189,21 +172,16 @@ async def test_browse_path_material_no_version(
     assert data["material"]["current_version_info"] is None
 
 
-async def test_browse_path_attachments(client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_browse_path_attachments_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
     user = await _create_user(db_session)
     dir_ = await _create_directory(db_session, user, name="Cours", slug="cours")
-    parent_mat = await _create_material(db_session, dir_, user, title="Main", slug="main")
-    await _create_material(
-        db_session, dir_, user, title="Annex", slug="annex", parent_material_id=parent_mat.id
-    )
+    await _create_material(db_session, dir_, user, title="Main", slug="main")
     await db_session.commit()
 
     response = await client.get("/api/browse/cours/main/attachments")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["type"] == "attachment_listing"
-    assert len(data["materials"]) == 1
-    assert data["materials"][0]["title"] == "Annex"
+    assert response.status_code == 404
 
 
 async def test_browse_path_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
@@ -422,9 +400,7 @@ async def test_browse_listing_anonymous_has_no_likes(
     assert data["materials"][0]["is_favourited"] is False
 
 
-async def test_attachment_listing_has_versions_and_parent_like(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_material_attachments_endpoint(client: AsyncClient, db_session: AsyncSession) -> None:
     user = await _create_user(db_session)
     dir_ = await _create_directory(db_session, user, name="Cours", slug="cours")
     parent_mat = await _create_material(db_session, dir_, user, title="Main", slug="main")
@@ -432,15 +408,13 @@ async def test_attachment_listing_has_versions_and_parent_like(
         db_session, dir_, user, title="Annex", slug="annex", parent_material_id=parent_mat.id
     )
     await _create_version(db_session, annex)
-    db_session.add(MaterialLike(id=uuid.uuid4(), user_id=user.id, material_id=parent_mat.id))
-    db_session.add(DirectoryFavourite(id=uuid.uuid4(), user_id=user.id, directory_id=dir_.id))
     await db_session.commit()
 
-    response = await client.get("/api/browse/cours/main/attachments", headers=_auth_headers(user))
+    response = await client.get(
+        f"/api/materials/{parent_mat.id}/attachments", headers=_auth_headers(user)
+    )
     assert response.status_code == 200
     data = response.json()
-    assert data["type"] == "attachment_listing"
-    assert len(data["materials"]) == 1
-    # Version info is now batched in (previously an N+1 per-attachment query).
-    assert data["materials"][0]["current_version_info"] is not None
-    assert data["parent_material"]["is_liked"] is True
+    assert len(data) == 1
+    assert data[0]["title"] == "Annex"
+    assert data[0]["current_version_info"] is not None
