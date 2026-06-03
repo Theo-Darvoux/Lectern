@@ -73,6 +73,13 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const inView = useInView(containerRef);
+  // In lazy mode, gate loading on viewport intersection. In non-lazy mode we
+  // always load — collapsing to a constant `true` so the fetch effect below does
+  // NOT re-run when `inView` later flips false→true. A re-run would reset
+  // `pdfReady` to false while react-pdf's <Document file> prop stays unchanged
+  // (same URL), so onLoadSuccess never re-fires and a rendered PDF preview fades
+  // back to opacity-0 ("renders then disappears").
+  const shouldLoad = lazy ? inView : true;
 
   const versionInfo = material.current_version_info;
   const fileName = versionInfo?.file_name ?? "";
@@ -101,7 +108,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
 
   useEffect(() => {
     // In lazy mode, wait until the card is near the viewport before fetching.
-    if (lazy && !inView) return;
+    if (!shouldLoad) return;
 
     let mounted = true;
     setLoading(true);
@@ -189,7 +196,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
       mounted = false;
       clearTimeout(timer);
     };
-  }, [material.id, isText, isImage, isVideo, isMarkdown, isPDF, lazy, inView]);
+  }, [material.id, isText, isImage, isVideo, isMarkdown, isPDF, shouldLoad]);
 
   const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName, mimeType);
 
