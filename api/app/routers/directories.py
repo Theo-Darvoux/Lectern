@@ -328,6 +328,10 @@ class IconUpdateBody(BaseModel):
     icon: str | None
 
 
+class ColorUpdateBody(BaseModel):
+    color: str | None
+
+
 @router.patch("/{id}/icon")
 async def set_directory_icon(
     id: uuid.UUID,
@@ -339,6 +343,20 @@ async def set_directory_icon(
         raise ForbiddenError("Only staff can update directory icons")
     await directory_service.update_directory_icon(db, id, body.icon)
     broadcast_to_topic(str(id), {"type": "directory_icon_updated", "icon": body.icon})
+    return {"ok": True}
+
+
+@router.patch("/{id}/color")
+async def set_directory_color(
+    id: uuid.UUID,
+    body: ColorUpdateBody,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, Any]:
+    if not current_user.is_staff:
+        raise ForbiddenError("Only staff can update directory colors")
+    await directory_service.update_directory_color(db, id, body.color)
+    broadcast_to_topic(str(id), {"type": "directory_color_updated", "color": body.color})
     return {"ok": True}
 
 

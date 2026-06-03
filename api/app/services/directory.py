@@ -92,19 +92,31 @@ async def get_preview_material_ids(
     return result
 
 
-async def update_directory_icon(
-    db: AsyncSession, directory_id: uuid.UUID, icon: str | None
+async def _update_metadata_key(
+    db: AsyncSession, directory_id: uuid.UUID, key: str, value: str | None
 ) -> None:
     directory = await get_directory_by_id(db, directory_id)
     metadata = dict(directory.metadata_ or {})
-    if icon is None:
-        metadata.pop("thumbnail_icon", None)
+    if value is None:
+        metadata.pop(key, None)
     else:
-        metadata["thumbnail_icon"] = icon
+        metadata[key] = value
     await db.execute(
         update(Directory).where(Directory.id == directory_id).values(metadata_=metadata)
     )
     await db.commit()
+
+
+async def update_directory_icon(
+    db: AsyncSession, directory_id: uuid.UUID, icon: str | None
+) -> None:
+    await _update_metadata_key(db, directory_id, "thumbnail_icon", icon)
+
+
+async def update_directory_color(
+    db: AsyncSession, directory_id: uuid.UUID, color: str | None
+) -> None:
+    await _update_metadata_key(db, directory_id, "thumbnail_color", color)
 
 
 async def get_directory_paths(

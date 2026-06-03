@@ -167,6 +167,36 @@ export const useBrowseRefreshStore = create<BrowseRefreshState>((set) => ({
         set((state) => ({ refreshCount: state.refreshCount + 1 })),
 }));
 
+interface DirectoryIconOverrideState {
+    overrides: Map<string, string | null>;
+    setIconOverride: (directoryId: string, icon: string | null) => void;
+}
+
+export const useDirectoryIconOverrides = create<DirectoryIconOverrideState>((set) => ({
+    overrides: new Map(),
+    setIconOverride: (directoryId, icon) =>
+        set((state) => {
+            const next = new Map(state.overrides);
+            next.set(directoryId, icon);
+            return { overrides: next };
+        }),
+}));
+
+interface DirectoryColorOverrideState {
+    overrides: Map<string, string | null>;
+    setColorOverride: (directoryId: string, color: string | null) => void;
+}
+
+export const useDirectoryColorOverrides = create<DirectoryColorOverrideState>((set) => ({
+    overrides: new Map(),
+    setColorOverride: (directoryId, color) =>
+        set((state) => {
+            const next = new Map(state.overrides);
+            next.set(directoryId, color);
+            return { overrides: next };
+        }),
+}));
+
 interface NotificationState {
     unreadCount: number;
     setUnreadCount: (count: number) => void;

@@ -11,7 +11,9 @@ import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { getDirectoryIcon } from "@/lib/directory-icons";
+import { getDirectoryColor } from "@/lib/directory-colors";
 import { DirectoryPreviewCollage } from "./directory-preview-collage";
+import { useDirectoryIconOverrides, useDirectoryColorOverrides } from "@/lib/stores";
 
 interface DirectoryGridCardProps {
   directory: Record<string, unknown>;
@@ -52,11 +54,17 @@ function DirectoryGridCardImpl({
   const childMatCount = Number(directory.child_material_count ?? 0);
   const totalCount = childDirCount + childMatCount;
   const metadata = (directory.metadata ?? {}) as Record<string, unknown>;
-  const thumbnailIconId = metadata.thumbnail_icon ? String(metadata.thumbnail_icon) : null;
+  const iconOverrides = useDirectoryIconOverrides((s) => s.overrides);
+  const colorOverrides = useDirectoryColorOverrides((s) => s.overrides);
+  const rawIconId = metadata.thumbnail_icon ? String(metadata.thumbnail_icon) : null;
+  const rawColorId = metadata.thumbnail_color ? String(metadata.thumbnail_color) : null;
+  const thumbnailIconId = iconOverrides.has(id) ? (iconOverrides.get(id) ?? null) : rawIconId;
+  const thumbnailColorId = colorOverrides.has(id) ? (colorOverrides.get(id) ?? null) : rawColorId;
   const previewMaterialIds = Array.isArray(directory.preview_material_ids)
     ? (directory.preview_material_ids as string[])
     : [];
   const { Icon: ThumbnailIcon } = getDirectoryIcon(thumbnailIconId);
+  const { gradient: customGradient, iconClass: customIconClass } = getDirectoryColor(thumbnailColorId);
   const showCollage = !thumbnailIconId && previewMaterialIds.length > 0;
 
   const buildPath = () => {
@@ -86,7 +94,7 @@ function DirectoryGridCardImpl({
         ? "text-amber-400"
         : staged === "created" || staged === "edited"
           ? `text-${themeColor}-400`
-          : "text-blue-400";
+          : customIconClass;
 
   const bgGradient =
     staged === "deleted"
@@ -97,7 +105,7 @@ function DirectoryGridCardImpl({
           ? isExternal
             ? "from-blue-100 to-indigo-200 dark:from-blue-950/40 dark:to-indigo-900/30"
             : "from-green-100 to-emerald-200 dark:from-green-950/40 dark:to-emerald-900/30"
-          : "from-blue-50 to-indigo-100 dark:from-blue-950/30 dark:to-indigo-900/20";
+          : customGradient;
 
   const textColor =
     staged === "deleted"
@@ -181,17 +189,19 @@ function DirectoryGridCardImpl({
         {/* Icon area */}
         <div className={cn("aspect-[4/3] relative flex items-center justify-center bg-linear-to-br overflow-hidden", bgGradient)}>
           {showCollage ? (
-            /* Image collage from child materials */
-            <div className="absolute inset-0">
-              <DirectoryPreviewCollage materialIds={previewMaterialIds} />
-            </div>
+            <>
+              <div className="absolute inset-0">
+                <DirectoryPreviewCollage materialIds={previewMaterialIds} />
+              </div>
+              {/* Folder badge so collage cards are distinguishable from material cards */}
+              <div className="absolute bottom-2 left-2 z-10 flex items-center gap-1 rounded-md bg-black/50 backdrop-blur-sm px-1.5 py-0.5">
+                <Folder className="h-3 w-3 text-white/90" />
+              </div>
+            </>
           ) : (
             <>
               {/* Huge watermark */}
               <ThumbnailIcon className={cn("absolute h-48 w-48 opacity-[0.08] -rotate-12 translate-y-4 translate-x-4 pointer-events-none", iconColor)} />
-
-              {/* Decorative subtle background grid/pattern or glass pane */}
-              <div className="absolute inset-4 rounded-xl bg-white/10 dark:bg-black/5 backdrop-blur-sm border border-white/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] pointer-events-none" />
 
               {/* Main icon container with hover scale */}
               <div className="relative z-10 p-4 bg-white/40 dark:bg-black/20 rounded-2xl shadow-lg backdrop-blur-md ring-1 ring-white/50 dark:ring-white/10 group-hover:scale-110 group-hover:shadow-xl transition-all duration-500 ease-out">

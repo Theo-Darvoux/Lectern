@@ -38,7 +38,6 @@ export interface DirectoryIconDef {
 }
 
 export const DIRECTORY_ICONS: DirectoryIconDef[] = [
-  { id: "folder", label: "Folder", Icon: Folder },
   { id: "book-open", label: "Book", Icon: BookOpen },
   { id: "graduation-cap", label: "Graduation", Icon: GraduationCap },
   { id: "flask-conical", label: "Lab", Icon: FlaskConical },
@@ -69,7 +68,9 @@ export const DIRECTORY_ICONS: DirectoryIconDef[] = [
   { id: "cloud", label: "Cloud", Icon: Cloud },
 ];
 
+const FOLDER_DEFAULT: DirectoryIconDef = { id: "folder", label: "Folder", Icon: Folder };
+
 export function getDirectoryIcon(id: string | null | undefined): DirectoryIconDef {
-  if (!id) return DIRECTORY_ICONS[0];
-  return DIRECTORY_ICONS.find((d) => d.id === id) ?? DIRECTORY_ICONS[0];
+  if (!id) return FOLDER_DEFAULT;
+  return DIRECTORY_ICONS.find((d) => d.id === id) ?? FOLDER_DEFAULT;
 }
