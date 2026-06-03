@@ -53,6 +53,15 @@ async def startup(ctx: dict[str, Any]) -> None:
     except Exception as exc:
         logger.warning("ARQ pool init failed in worker (check_bazaar will be skipped): %s", exc)
 
+    # Workers produce SSE events (e.g. auto-merge -> pr_approved) but never hold
+    # client connections, so publish-only: no subscriber loop needed.
+    from app.core.sse import start_sse_pubsub
+
+    try:
+        await start_sse_pubsub(subscribe=False)
+    except Exception as exc:
+        logger.warning("SSE pub/sub init failed in worker (live updates degraded): %s", exc)
+
     scanner = MalwareScanner()
     scanner.initialize()
     ctx["scanner"] = scanner
@@ -69,6 +78,9 @@ async def startup(ctx: dict[str, Any]) -> None:
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
+    from app.core.sse import stop_sse_pubsub
+
+    await stop_sse_pubsub()
     await close_arq_pool()
 
     scanner = ctx.get("scanner")

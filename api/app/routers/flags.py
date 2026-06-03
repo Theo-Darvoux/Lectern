@@ -70,11 +70,16 @@ async def patch_flag(
 ) -> FlagOut:
     flag = await update_flag(db, flag_id, user, data.status)
     if flag.reporter_id:
+        link = (
+            f"/browse?material={flag.target_id}"
+            if flag.target_type == "material"
+            else "/notifications"
+        )
         await notify_user(
             db,
             flag.reporter_id,
             "flag_resolved",
             f"Your report was {data.status}",
-            link="/notifications",
+            link=link,
         )
     return FlagOut.model_validate(flag)

@@ -2,15 +2,11 @@
 
 import { useEffect, useRef } from "react";
 import { getAccessToken } from "@/lib/auth-tokens";
-import { apiFetch } from "@/lib/api-client";
+import { fetchUnreadCount } from "@/lib/notifications";
 import { useAuthStore, useNotificationStore } from "@/lib/stores";
 import { createSSEConnection, SSEConnection } from "@/lib/sse-client";
 
 const CHANNEL_NAME = "wikint-sse-leader";
-
-interface UnreadResponse {
-    total: number;
-}
 
 export function useSSE() {
     const { isAuthenticated } = useAuthStore();
@@ -22,9 +18,20 @@ export function useSSE() {
     useEffect(() => {
         if (!isAuthenticated) return;
 
-        apiFetch<UnreadResponse>("/notifications?read=false&limit=1")
-            .then((data) => setUnreadCount(data.total))
-            .catch(() => { });
+        const reconcileUnread = () => {
+            fetchUnreadCount()
+                .then((count) => setUnreadCount(count))
+                .catch(() => { });
+        };
+
+        reconcileUnread();
+
+        // SSE events only ever bump the badge; reconcile against the server when
+        // the tab regains focus so the count can't drift over a long session.
+        const onVisible = () => {
+            if (document.visibilityState === "visible") reconcileUnread();
+        };
+        document.addEventListener("visibilitychange", onVisible);
 
         const channel = new BroadcastChannel(CHANNEL_NAME);
         channelRef.current = channel;
@@ -99,6 +106,7 @@ export function useSSE() {
         }
 
         return () => {
+            document.removeEventListener("visibilitychange", onVisible);
             clearTimeout(leaderTimeout);
             if (fallbackTimeout) clearTimeout(fallbackTimeout);
             if (heartbeatInterval) clearInterval(heartbeatInterval);

@@ -1110,10 +1110,14 @@
     "title": "Notifications",
     "markAllRead": "Mark all as read",
     "noNotifications": "No notifications yet.",
+    "noUnreadNotifications": "You're all caught up.",
     "viewDetails": "View details",
     "loadError": "Failed to load notifications",
     "markReadError": "Failed to mark as read",
-    "markAllReadError": "Failed to mark all as read"
+    "markAllReadError": "Failed to mark all as read",
+    "filterAll": "All",
+    "filterUnread": "Unread",
+    "loadMore": "Load more"
   },
   "Popular": {
     "title": "Popular Materials",

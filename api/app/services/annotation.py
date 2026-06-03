@@ -212,7 +212,7 @@ async def create_annotation(
                 reply_target.author_id,
                 "annotation_reply",
                 "Someone replied to your annotation",
-                link="/browse",
+                link=f"/browse?material={mid}",
             )
         except Exception:
             logger.exception("Failed to send annotation_reply notification")

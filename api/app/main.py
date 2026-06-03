@@ -74,6 +74,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         logger.error("ARQ pool setup failed (background jobs degraded): %s", e)
 
+    # SSE fan-out: deliver real-time events across API replicas and from workers.
+    from app.core.sse import start_sse_pubsub
+
+    try:
+        await start_sse_pubsub(subscribe=True)
+    except Exception as e:
+        logger.error("SSE pub/sub setup failed (live updates degraded): %s", e)
+
     # Ensure backup directory exists
     from pathlib import Path
 
@@ -88,6 +96,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
     logger.info("WikINT API shutting down")
+    from app.core.sse import stop_sse_pubsub
+
+    await stop_sse_pubsub()
     await scanner.close()
     await close_arq_pool()
     await close_s3_client()

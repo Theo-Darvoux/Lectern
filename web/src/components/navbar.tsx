@@ -35,22 +35,15 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { apiFetch, API_BASE } from "@/lib/api-client";
+import { API_BASE } from "@/lib/api-client";
+import {
+  fetchNotifications,
+  fetchUnreadCount,
+  markNotificationRead,
+  type NotificationItem,
+} from "@/lib/notifications";
 import { formatDistanceToNow } from "date-fns/formatDistanceToNow";
 import { useTranslations } from "next-intl";
-
-interface NavbarNotification {
-  id: string;
-  title: string;
-  link?: string;
-  read: boolean;
-  created_at: string;
-}
-
-interface NotificationsResponse {
-  items: NavbarNotification[];
-  total: number;
-}
 
 export function Navbar() {
   const t = useTranslations("Navigation");
@@ -58,13 +51,13 @@ export function Navbar() {
   const { user, isAuthenticated, logout } = useAuth();
   const guest = isGuest(user);
   const [searchOpen, setSearchOpen] = useState(false);
-  const { unreadCount, setUnreadCount } = useNotificationStore();
+  const { unreadCount, setUnreadCount, decrement } = useNotificationStore();
   const { config } = useConfigStore();
   const pathname = usePathname();
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [recentNotifications, setRecentNotifications] = useState<
-    NavbarNotification[]
+    NotificationItem[]
   >([]);
   const [loadingNotifications, setLoadingNotifications] = useState(false);
 
@@ -87,16 +80,12 @@ export function Navbar() {
   const fetchRecentNotifications = useCallback(async () => {
     setLoadingNotifications(true);
     try {
-      // Fetch unread count first to sync badge
-      const unreadData = await apiFetch<NotificationsResponse>(
-        "/notifications?read=false&limit=1",
-      );
-      setUnreadCount(unreadData.total);
-
-      // Fetch recent 5 for popover
-      const data = await apiFetch<NotificationsResponse>(
-        "/notifications?limit=5",
-      );
+      // Sync badge against the authoritative unread count, then load recent 5.
+      const [count, data] = await Promise.all([
+        fetchUnreadCount(),
+        fetchNotifications({ limit: 5 }),
+      ]);
+      setUnreadCount(count);
       setRecentNotifications(data.items || []);
     } catch {
       // Ignore for popover
@@ -104,6 +93,22 @@ export function Navbar() {
       setLoadingNotifications(false);
     }
   }, [setUnreadCount]);
+
+  const handleNotificationClick = useCallback(
+    (n: NotificationItem) => {
+      setPopoverOpen(false);
+      if (n.read) return;
+      // Optimistically clear it; reconcile happens on next focus/open.
+      setRecentNotifications((prev) =>
+        prev.map((item) =>
+          item.id === n.id ? { ...item, read: true } : item,
+        ),
+      );
+      decrement();
+      markNotificationRead(n.id).catch(() => {});
+    },
+    [decrement],
+  );
 
   useEffect(() => {
     if (popoverOpen) {
@@ -251,7 +256,7 @@ export function Navbar() {
                             <Link
                               key={n.id}
                               href={n.link || "/notifications"}
-                              onClick={() => setPopoverOpen(false)}
+                              onClick={() => handleNotificationClick(n)}
                               className={`flex flex-col gap-1 border-b p-3 text-sm transition-colors hover:bg-muted/50 ${n.read ? "opacity-70" : "bg-muted/10 font-medium"}`}
                             >
                               <span className="line-clamp-2">{n.title}</span>

@@ -1110,10 +1110,14 @@
     "title": "Notifications",
     "markAllRead": "Tout marquer comme lu",
     "noNotifications": "Aucune notification pour le moment.",
+    "noUnreadNotifications": "Vous êtes à jour.",
     "viewDetails": "Voir les détails",
     "loadError": "Échec du chargement des notifications",
     "markReadError": "Échec du marquage comme lu",
-    "markAllReadError": "Échec du marquage de tout comme lu"
+    "markAllReadError": "Échec du marquage de tout comme lu",
+    "filterAll": "Toutes",
+    "filterUnread": "Non lues",
+    "loadMore": "Charger plus"
   },
   "Popular": {
     "title": "Matériels populaires",
