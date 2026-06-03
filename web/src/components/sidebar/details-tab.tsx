@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
   Folder,
   FileText,
@@ -21,6 +21,8 @@ import {
   ChevronDown,
   ChevronRight,
   Plus,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -37,6 +39,9 @@ import { useAuth } from "@/hooks/use-auth";
 import { useDownload } from "@/hooks/use-download";
 import { AttachmentPreviewDialog } from "@/components/sidebar/attachment-preview-dialog";
 import { UploadDrawer } from "@/components/pr/upload-drawer";
+import { FileEditDialog } from "@/components/pr/file-edit-dialog";
+import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
+import { submitDirectOperations } from "@/lib/pr-client";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { isRestrictedTarget } from "@/lib/utils";
@@ -489,6 +494,7 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
     : [];
   const attachmentCount = Number(data.attachment_count ?? 0);
 
+  const tAuto = useTranslations("AutoTitle");
   const { downloadMaterial } = useDownload();
   const { user } = useAuth();
   const [attachmentsOpen, setAttachmentsOpen] = useState(attachmentCount > 0);
@@ -496,18 +502,19 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [previewAtt, setPreviewAtt] = useState<Record<string, unknown> | null>(null);
-  const fetchedForRef = useRef<string | null>(null);
+  const [editAtt, setEditAtt] = useState<Record<string, unknown> | null>(null);
+  const [fetchRevision, setFetchRevision] = useState(0);
+
+  const refreshAttachments = () => setFetchRevision((r) => r + 1);
 
   useEffect(() => {
     if (!attachmentsOpen || parentMaterialId) return;
-    if (fetchedForRef.current === id) return;
-    fetchedForRef.current = id;
     setAttachmentsLoading(true);
     apiFetch<Record<string, unknown>[]>(`/materials/${id}/attachments`)
       .then(setAttachments)
       .catch(() => setAttachments([]))
       .finally(() => setAttachmentsLoading(false));
-  }, [attachmentsOpen, id, parentMaterialId]);
+  }, [attachmentsOpen, id, parentMaterialId, fetchRevision]);
 
   const versionInfo = data.current_version_info as Record<
     string,
@@ -523,7 +530,6 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const likeCount = Number(data.like_count ?? 0);
   const isFavourited = Boolean(data.is_favourited);
   const searchParams = useSearchParams();
-  const pathname = usePathname();
   const isRestricted = isRestrictedTarget(String(data.id ?? ""), searchParams.get("preview_pr"));
 
   const previewAttVersion = previewAtt
@@ -632,9 +638,8 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
         onOpenChange={(open) => {
           setUploadOpen(open);
           if (!open) {
-            fetchedForRef.current = null;
-            setAttachments(null);
             setAttachmentsOpen(true);
+            refreshAttachments();
           }
         }}
         directoryId={null}
@@ -653,6 +658,20 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
           fileName={previewAttVersion ? String(previewAttVersion.file_name ?? "") : ""}
           mimeType={previewAttVersion ? String(previewAttVersion.file_mime_type ?? "") : ""}
           material={previewAtt}
+        />
+      )}
+
+      {/* Attachment edit dialog */}
+      {editAtt && (
+        <FileEditDialog
+          open={!!editAtt}
+          onOpenChange={(open) => {
+            if (!open) {
+              setEditAtt(null);
+              refreshAttachments();
+            }
+          }}
+          target={{ type: "material", id: String(editAtt.id ?? ""), data: editAtt }}
         />
       )}
 
@@ -721,22 +740,52 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
                             </p>
                           )}
                         </div>
-                        {attVersion && (
-                          <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              title={t("preview")}
-                              onClick={(e) => { e.stopPropagation(); setPreviewAtt(att); }}
-                            >
-                              <Eye className="h-4 w-4 text-muted-foreground hover:text-foreground" />
-                            </button>
-                            <button
-                              title={t("download")}
-                              onClick={(e) => { e.stopPropagation(); downloadMaterial(attId); }}
-                            >
-                              <Download className="h-4 w-4 text-muted-foreground hover:text-foreground" />
-                            </button>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {attVersion && (
+                            <>
+                              <button
+                                title={t("preview")}
+                                onClick={(e) => { e.stopPropagation(); setPreviewAtt(att); }}
+                              >
+                                <Eye className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                              </button>
+                              <button
+                                title={t("download")}
+                                onClick={(e) => { e.stopPropagation(); downloadMaterial(attId); }}
+                              >
+                                <Download className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                              </button>
+                            </>
+                          )}
+                          {!isGuest(user) && !isRestricted && (
+                            <>
+                              <button
+                                title={t("edit")}
+                                onClick={(e) => { e.stopPropagation(); setEditAtt(att); }}
+                              >
+                                <Pencil className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                              </button>
+                              <span onClick={(e) => e.stopPropagation()}>
+                                <ConfirmDeleteDialog
+                                  onConfirm={async () => {
+                                    await submitDirectOperations(
+                                      [{ op: "delete_material", material_id: attId }],
+                                      undefined,
+                                      undefined,
+                                      tAuto,
+                                    );
+                                    refreshAttachments();
+                                  }}
+                                  trigger={
+                                    <button title={t("deleteAttachment")}>
+                                      <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                                    </button>
+                                  }
+                                />
+                              </span>
+                            </>
+                          )}
+                        </div>
                       </li>
                     );
                   })}

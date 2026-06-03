@@ -17,6 +17,7 @@ import {
   ThumbsUp,
   FileText,
   Code2,
+  Paperclip,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -336,6 +337,24 @@ export function ViewerFab({
               });
             }}
           />
+
+          {/* ── Attachments — only for top-level materials ── */}
+          {!material.parent_material_id && (
+            <ActionCell
+              icon={<Paperclip className="h-5 w-5" />}
+              label={t("attachments")}
+              tint={Number(material.attachment_count ?? 0) > 0 ? "violet" : "default"}
+              badge={Number(material.attachment_count ?? 0) || undefined}
+              onClick={() => {
+                close();
+                openSidebar("details", {
+                  type: "material",
+                  id: materialId,
+                  data: { ...material, __viewerType: viewerType },
+                });
+              }}
+            />
+          )}
 
           {/* ── Chat ── */}
           <ActionCell

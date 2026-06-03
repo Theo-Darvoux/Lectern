@@ -432,6 +432,7 @@
     "download": "Télécharger",
     "preview": "Aperçu",
     "uploadAttachment": "Téléverser une pièce jointe",
+    "deleteAttachment": "Supprimer la pièce jointe",
     "noItemSelected": "Aucun élément sélectionné",
     "selectItemToViewDetails": "Sélectionnez un élément pour afficher ses détails ici.",
     "selectItemToViewEdits": "Sélectionnez un élément pour afficher les modifications.",

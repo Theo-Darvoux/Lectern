@@ -11,6 +11,7 @@ import {
   PanelRight,
   FileText,
   Code2,
+  Paperclip,
 } from "lucide-react";
 import { useIsMobile, useIsDesktop } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
@@ -481,6 +482,29 @@ export function MaterialViewer({
                       )}
                     </div>
                 </ItemActionsMenu>
+
+                {!parentMaterialId && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 relative"
+                    title={t("attachments")}
+                    onClick={() =>
+                      openSidebar("details", {
+                        type: "material",
+                        id: materialId,
+                        data: { ...displayMaterial, __viewerType: viewerType, __path: pathname },
+                      })
+                    }
+                  >
+                    <Paperclip className="h-4 w-4" />
+                    {Number(material.attachment_count ?? 0) > 0 && (
+                      <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-violet-600 px-0.5 text-[9px] font-bold text-white">
+                        {Number(material.attachment_count) > 99 ? "99+" : Number(material.attachment_count)}
+                      </span>
+                    )}
+                  </Button>
+                )}
 
                 <Button
                   variant={sidebarOpen ? "secondary" : "outline"}
