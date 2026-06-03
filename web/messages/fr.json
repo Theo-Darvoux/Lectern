@@ -7,7 +7,7 @@
     "googleFailed": "Échec de la connexion Google",
     "orContinue": "Ou continuer avec l'email",
     "emailLabel": "Email",
-    "emailPlaceholder": "prenom.nom@telecom-sudparis.eu",
+    "emailPlaceholder": "prenom.nom@exemple.org",
     "sendCode": "Envoyer le code",
     "password": "Mot de passe",
     "sending": "Envoi en cours...",

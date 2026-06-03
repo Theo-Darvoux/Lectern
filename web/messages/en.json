@@ -7,7 +7,7 @@
     "googleFailed": "Google login failed",
     "orContinue": "Or continue with email",
     "emailLabel": "Email",
-    "emailPlaceholder": "prenom.nom@telecom-sudparis.eu",
+    "emailPlaceholder": "firstname.lastname@example.org",
     "sendCode": "Send code",
     "password": "Password",
     "sending": "Sending...",

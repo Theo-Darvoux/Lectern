@@ -14,6 +14,14 @@ Course-materials platform for Telecom SudParis / IMT-BS. Students and staff uplo
 | File safety | YARA · MalwareBazaar · pikepdf · oletools |
 | Background jobs | ARQ : fast queue (images/text) and slow queue (video/PDF) |
 
+## Prerequisites
+
+- **Docker Engine ≥ 24** with the **Compose v2 plugin** (`docker compose version` should print `v2.20+`)
+- **4 GB RAM** minimum (8 GB recommended for video processing)
+- **Ports 80** (and 443 if you terminate TLS at the host) available on the machine
+- **S3-compatible object storage** — Cloudflare R2, AWS S3, or MinIO (MinIO is started automatically in dev via Docker Compose)
+- A domain name and reverse proxy (nginx, Caddy…) for production; the included `infra/` configs provide a starting point
+
 ## Quick start
 
 ```bash
