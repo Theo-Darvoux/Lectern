@@ -20,6 +20,7 @@ import {
   Info,
   ChevronDown,
   ChevronRight,
+  Plus,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -35,6 +36,7 @@ import { isGuest } from "@/lib/guest";
 import { useAuth } from "@/hooks/use-auth";
 import { useDownload } from "@/hooks/use-download";
 import { AttachmentPreviewDialog } from "@/components/sidebar/attachment-preview-dialog";
+import { UploadDrawer } from "@/components/pr/upload-drawer";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { isRestrictedTarget } from "@/lib/utils";
@@ -488,9 +490,11 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const attachmentCount = Number(data.attachment_count ?? 0);
 
   const { downloadMaterial } = useDownload();
+  const { user } = useAuth();
   const [attachmentsOpen, setAttachmentsOpen] = useState(attachmentCount > 0);
   const [attachments, setAttachments] = useState<Record<string, unknown>[] | null>(null);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const [previewAtt, setPreviewAtt] = useState<Record<string, unknown> | null>(null);
   const fetchedForRef = useRef<string | null>(null);
 
@@ -622,6 +626,22 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
         </div>
       )}
 
+      {/* Attachment upload drawer */}
+      <UploadDrawer
+        open={uploadOpen}
+        onOpenChange={(open) => {
+          setUploadOpen(open);
+          if (!open) {
+            fetchedForRef.current = null;
+            setAttachments(null);
+            setAttachmentsOpen(true);
+          }
+        }}
+        directoryId={null}
+        directoryName={title}
+        parentMaterialId={id}
+      />
+
       {/* Attachment preview dialog */}
       {previewAtt && (
         <AttachmentPreviewDialog
@@ -639,26 +659,37 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
       {/* Attachments — inline, only shown for top-level materials */}
       {!parentMaterialId && (
         <div className="rounded-lg border border-violet-200 dark:border-violet-800/50 overflow-hidden">
-          <button
-            className="w-full flex items-center gap-3 px-3 py-2.5 bg-violet-50/50 dark:bg-violet-950/20 hover:bg-violet-100/70 dark:hover:bg-violet-950/40 transition-colors"
-            onClick={() => setAttachmentsOpen((o) => !o)}
-          >
-            <Paperclip className="h-4 w-4 shrink-0 text-violet-600 dark:text-violet-400" />
-            <span className="flex-1 text-left text-sm font-medium text-violet-900 dark:text-violet-200">
-              {t("attachments")}
-            </span>
-            {attachmentCount > 0 && (
-              <Badge
-                variant="secondary"
-                className="h-5 px-1.5 text-[10px] font-semibold bg-violet-200 text-violet-700 dark:bg-violet-800 dark:text-violet-200"
+          <div className="flex items-center bg-violet-50/50 dark:bg-violet-950/20 hover:bg-violet-100/70 dark:hover:bg-violet-950/40 transition-colors">
+            <button
+              className="flex-1 flex items-center gap-3 px-3 py-2.5"
+              onClick={() => setAttachmentsOpen((o) => !o)}
+            >
+              <Paperclip className="h-4 w-4 shrink-0 text-violet-600 dark:text-violet-400" />
+              <span className="flex-1 text-left text-sm font-medium text-violet-900 dark:text-violet-200">
+                {t("attachments")}
+              </span>
+              {attachmentCount > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="h-5 px-1.5 text-[10px] font-semibold bg-violet-200 text-violet-700 dark:bg-violet-800 dark:text-violet-200"
+                >
+                  {attachmentCount}
+                </Badge>
+              )}
+              {attachmentsOpen
+                ? <ChevronDown className="h-3.5 w-3.5 text-violet-400" />
+                : <ChevronRight className="h-3.5 w-3.5 text-violet-400" />}
+            </button>
+            {!isGuest(user) && !isRestricted && (
+              <button
+                className="px-2 py-2.5 text-violet-600 dark:text-violet-400 hover:text-violet-800 dark:hover:text-violet-200 transition-colors"
+                title={t("uploadAttachment")}
+                onClick={(e) => { e.stopPropagation(); setUploadOpen(true); }}
               >
-                {attachmentCount}
-              </Badge>
+                <Plus className="h-4 w-4" />
+              </button>
             )}
-            {attachmentsOpen
-              ? <ChevronDown className="h-3.5 w-3.5 text-violet-400" />
-              : <ChevronRight className="h-3.5 w-3.5 text-violet-400" />}
-          </button>
+          </div>
           {attachmentsOpen && (
             <div className="border-t border-violet-200 dark:border-violet-800/50">
               {attachmentsLoading ? (
