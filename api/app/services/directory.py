@@ -26,6 +26,7 @@ def directory_orm_to_dict(
     is_favourited: bool = False,
     child_directory_count: int | None = None,
     child_material_count: int | None = None,
+    preview_material_ids: list[str] | None = None,
 ) -> dict[str, typing.Any]:
     out: dict[str, typing.Any] = {
         "id": str(d.id),
@@ -42,12 +43,68 @@ def directory_orm_to_dict(
         "is_liked": is_liked,
         "is_favourited": is_favourited,
         "created_at": d.created_at,
+        "preview_material_ids": preview_material_ids or [],
     }
     if child_directory_count is not None:
         out["child_directory_count"] = child_directory_count
     if child_material_count is not None:
         out["child_material_count"] = child_material_count
     return out
+
+
+async def get_preview_material_ids(
+    db: AsyncSession, dir_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[str]]:
+    """Return up to 4 image material IDs per directory (latest version, image MIME type)."""
+    if not dir_ids:
+        return {}
+
+    latest_ver_subq = (
+        select(
+            MaterialVersion.material_id,
+            func.max(MaterialVersion.version_number).label("max_ver"),
+        )
+        .group_by(MaterialVersion.material_id)
+        .subquery()
+    )
+
+    rows = await db.execute(
+        select(Material.directory_id, Material.id)
+        .join(latest_ver_subq, Material.id == latest_ver_subq.c.material_id)
+        .join(
+            MaterialVersion,
+            (MaterialVersion.material_id == Material.id)
+            & (MaterialVersion.version_number == latest_ver_subq.c.max_ver),
+        )
+        .where(
+            Material.directory_id.in_(dir_ids),
+            Material.parent_material_id.is_(None),
+            MaterialVersion.file_mime_type.like("image/%"),
+        )
+        .order_by(Material.directory_id, Material.title)
+    )
+
+    result: dict[uuid.UUID, list[str]] = {}
+    for row in rows.all():
+        lst = result.setdefault(row.directory_id, [])
+        if len(lst) < 4:
+            lst.append(str(row.id))
+    return result
+
+
+async def update_directory_icon(
+    db: AsyncSession, directory_id: uuid.UUID, icon: str | None
+) -> None:
+    directory = await get_directory_by_id(db, directory_id)
+    metadata = dict(directory.metadata_ or {})
+    if icon is None:
+        metadata.pop("thumbnail_icon", None)
+    else:
+        metadata["thumbnail_icon"] = icon
+    await db.execute(
+        update(Directory).where(Directory.id == directory_id).values(metadata_=metadata)
+    )
+    await db.commit()
 
 
 async def get_directory_paths(
@@ -175,6 +232,8 @@ async def get_root_directories(
         )
         favourited_ids = {r.directory_id for r in fav_rows.all()}
 
+    preview_ids = await get_preview_material_ids(db, dir_ids)
+
     items = [
         directory_orm_to_dict(
             d,
@@ -183,6 +242,7 @@ async def get_root_directories(
             is_favourited=d.id in favourited_ids,
             child_directory_count=dir_counts.get(d.id, 0),
             child_material_count=mat_counts.get(d.id, 0),
+            preview_material_ids=preview_ids.get(d.id, []),
         )
         for d in directories
     ]
@@ -357,6 +417,8 @@ async def get_directory_children(
         )
         favourited_dir_ids = {r.directory_id for r in fav_rows.all()}
 
+    preview_ids = await get_preview_material_ids(db, child_dir_ids)
+
     dirs_with_counts = [
         directory_orm_to_dict(
             d,
@@ -365,6 +427,7 @@ async def get_directory_children(
             is_favourited=d.id in favourited_dir_ids,
             child_directory_count=gc_dir_counts.get(d.id, 0),
             child_material_count=gc_mat_counts.get(d.id, 0),
+            preview_material_ids=preview_ids.get(d.id, []),
         )
         for d in child_dirs
     ]

@@ -17,9 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.database import get_db
-from app.core.exceptions import BadRequestError, UnauthorizedError
+from app.core.exceptions import BadRequestError, ForbiddenError, UnauthorizedError
 from app.core.redis import get_redis, redis_client
-from app.core.sse import register_topic_queue, sse_event_stream, unregister_topic_queue
+from app.core.sse import (
+    broadcast_to_topic,
+    register_topic_queue,
+    sse_event_stream,
+    unregister_topic_queue,
+)
 from app.core.storage import stream_object
 from app.dependencies.auth import get_current_user, get_user_from_token, security
 from app.dependencies.rate_limit import rate_limit_downloads
@@ -317,6 +322,24 @@ async def download_directory_zip(
         media_type="application/zip",
         headers={"Content-Disposition": disposition},
     )
+
+
+class IconUpdateBody(BaseModel):
+    icon: str | None
+
+
+@router.patch("/{id}/icon")
+async def set_directory_icon(
+    id: uuid.UUID,
+    body: IconUpdateBody,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, Any]:
+    if not current_user.is_staff:
+        raise ForbiddenError("Only staff can update directory icons")
+    await directory_service.update_directory_icon(db, id, body.icon)
+    broadcast_to_topic(str(id), {"type": "directory_icon_updated", "icon": body.icon})
+    return {"ok": True}
 
 
 @router.post("/{id}/like")

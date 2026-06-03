@@ -34,7 +34,8 @@ import {
 import { apiFetch } from "@/lib/api-client";
 import { ExpandableText } from "@/components/ui/expandable-text";
 import { useUIStore, useBrowseRefreshStore, useLikeOverrides } from "@/lib/stores";
-import { isGuest } from "@/lib/guest";
+import { isGuest, isStaff } from "@/lib/guest";
+import { DIRECTORY_ICONS, getDirectoryIcon } from "@/lib/directory-icons";
 import { useAuth } from "@/hooks/use-auth";
 import { useDownload } from "@/hooks/use-download";
 import { AttachmentPreviewDialog } from "@/components/sidebar/attachment-preview-dialog";
@@ -288,6 +289,10 @@ function InteractionBar({
 
 function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations("Sidebar");
+  const { user } = useAuth();
+  const { updateSidebarData } = useUIStore();
+  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
+
   const name = String(data.name ?? "");
   const description = data.description ? String(data.description) : null;
   const dirType = String(data.type ?? "folder");
@@ -316,12 +321,38 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
   const searchParams = useSearchParams();
   const isRestricted = isRestrictedTarget(String(data.id ?? ""), searchParams.get("preview_pr"));
 
+  const currentIconId = metadata.thumbnail_icon ? String(metadata.thumbnail_icon) : null;
+  const [iconUpdating, setIconUpdating] = useState(false);
+  const dirId = String(data.id ?? "");
+
+  const handleSetIcon = async (iconId: string | null) => {
+    if (iconUpdating) return;
+    setIconUpdating(true);
+    try {
+      await apiFetch(`/directories/${dirId}/icon`, {
+        method: "PATCH",
+        body: JSON.stringify({ icon: iconId }),
+        headers: { "Content-Type": "application/json" },
+      });
+      const newMetadata = { ...metadata, thumbnail_icon: iconId ?? undefined };
+      if (iconId === null) delete newMetadata.thumbnail_icon;
+      updateSidebarData({ metadata: newMetadata });
+      triggerBrowseRefresh();
+    } catch {
+      toast.error(t("failedToUpdateIcon"));
+    } finally {
+      setIconUpdating(false);
+    }
+  };
+
+  const { Icon: CurrentIcon } = getDirectoryIcon(currentIconId);
+
   return (
     <div className="space-y-3">
       {/* Header */}
       <div className="flex items-start gap-3 min-w-0">
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/40">
-          <Folder className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+          <CurrentIcon className="h-6 w-6 text-blue-600 dark:text-blue-400" />
         </div>
         <div className="min-w-0 flex-1">
           <h3 className="font-semibold leading-tight break-all">{name}</h3>
@@ -413,6 +444,44 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
             ))}
           </div>
         </div>
+      )}
+
+      {/* Icon picker — staff only */}
+      {isStaff(user) && !isRestricted && (
+        <SidebarSection className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {t("folderIcon")}
+            </span>
+            {currentIconId && (
+              <button
+                onClick={() => handleSetIcon(null)}
+                disabled={iconUpdating}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+              >
+                {t("resetIcon")}
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-5 gap-1.5">
+            {DIRECTORY_ICONS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                title={label}
+                onClick={() => handleSetIcon(id === "folder" && !currentIconId ? null : id)}
+                disabled={iconUpdating}
+                className={cn(
+                  "flex items-center justify-center rounded-lg p-2 transition-all disabled:opacity-50",
+                  (currentIconId === id || (!currentIconId && id === "folder"))
+                    ? "bg-primary/15 ring-2 ring-primary text-primary"
+                    : "hover:bg-muted text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Icon className="h-4 w-4" />
+              </button>
+            ))}
+          </div>
+        </SidebarSection>
       )}
     </div>
   );

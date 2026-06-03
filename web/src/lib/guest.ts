@@ -15,6 +15,11 @@ export function isGuest(user: UserBrief | null | undefined): boolean {
     return user?.role === GUEST_ROLE;
 }
 
+/** Staff members (moderator, bureau, vieux) have content management rights. */
+export function isStaff(user: UserBrief | null | undefined): boolean {
+    return user?.role === "moderator" || user?.role === "bureau" || user?.role === "vieux";
+}
+
 /**
  * Routes a read-only guest may not visit: their own profile, settings,
  * notifications, pull requests, onboarding, and QCM authoring. Other users'

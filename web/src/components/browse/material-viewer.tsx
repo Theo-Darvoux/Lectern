@@ -208,6 +208,9 @@ export function MaterialViewer({
   const viewerContainerRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const [headerHeight, setHeaderHeight] = useState(0);
+  const navbarVisibleRef = useRef(navbarVisible);
+  const hoveredOpen = useRef(false);
+  useEffect(() => { navbarVisibleRef.current = navbarVisible; }, [navbarVisible]);
 
   // Hide footer, enter immersive mode, and prevent page scroll while viewer is active
   useEffect(() => {
@@ -234,6 +237,27 @@ export function MaterialViewer({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Show navbar on mouse proximity to top edge; hide again when mouse leaves (only if we opened it).
+  useEffect(() => {
+    if (isMobile) return;
+    const THRESHOLD = 20;
+    const onMouseMove = (e: MouseEvent) => {
+      if (e.clientY < THRESHOLD) {
+        if (!navbarVisibleRef.current) {
+          hoveredOpen.current = true;
+          setNavbarVisible(true);
+        }
+      } else {
+        if (hoveredOpen.current) {
+          hoveredOpen.current = false;
+          setNavbarVisible(false);
+        }
+      }
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    return () => window.removeEventListener("mousemove", onMouseMove);
+  }, [isMobile, setNavbarVisible]);
 
 
 
