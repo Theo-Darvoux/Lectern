@@ -1,12 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import {
-  FolderTree,
-  GitPullRequest,
-  ListChecks,
-  Bell,
-} from "lucide-react";
+import { FolderTree, Bell } from "lucide-react";
 import { SearchInline } from "@/components/search/search-inline";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -46,20 +41,6 @@ export function HeroBar({
     },
     ...(showContributorActions
       ? [
-          {
-            href: "/pull-requests",
-            label: t("quickPullRequests"),
-            icon: <GitPullRequest className="h-4 w-4" />,
-            className:
-              "bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/15 ring-green-500/20",
-          },
-          {
-            href: "/qcm",
-            label: t("quickQcm"),
-            icon: <ListChecks className="h-4 w-4" />,
-            className:
-              "bg-violet-500/10 text-violet-600 dark:text-violet-400 hover:bg-violet-500/15 ring-violet-500/20",
-          },
           {
             href: "/notifications",
             label: t("quickNotifications"),
