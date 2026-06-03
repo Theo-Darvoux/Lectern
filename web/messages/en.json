@@ -338,7 +338,16 @@
     "downloadZipTooltip": "Download all files in this directory as a ZIP archive",
     "downloadZipTooLarge": "This directory is too large to download as a ZIP",
     "downloadZipPart": "Downloading \"{dirName}\" — part {part} of {total}",
-    "downloadZipAllStarted": "All {total} parts queued — unzip each one to get the complete directory"
+    "downloadZipAllStarted": "All {total} parts queued — unzip each one to get the complete directory",
+    "materialActions": "Material actions",
+    "folderActions": "Folder actions",
+    "downloadZip": "Download as ZIP",
+    "discardDraft": "Discard Draft",
+    "deleteTitle": "Delete {type}",
+    "discardDraftConfirm": "Are you sure you want to discard this {type} draft? This action cannot be undone.",
+    "deletePermanentlyConfirm": "Permanently delete",
+    "deleteNow": "Delete Now",
+    "discard": "Discard"
   },
   "Search": {
     "searchMaterials": "Search materials...",

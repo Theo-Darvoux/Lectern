@@ -26,11 +26,25 @@ logger = logging.getLogger(__name__)
 
 _PDF_DANGEROUS_ACTION_KEYS = frozenset(
     {
-        "/OpenAction",
         "/AA",
         "/Launch",
         "/SubmitForm",
         "/ImportData",
+    }
+)
+
+# Action subtypes that make an /OpenAction dangerous.
+# /GoTo and /GoToR are navigation-only; everything else that can execute code or
+# open external resources is blocked.
+_DANGEROUS_OPEN_ACTION_SUBTYPES = frozenset(
+    {
+        "/JavaScript",
+        "/JS",
+        "/Launch",
+        "/URI",
+        "/SubmitForm",
+        "/ImportData",
+        "/RichMediaExecute",
     }
 )
 
@@ -78,6 +92,16 @@ def check_pdf_safety(file_path: Path) -> None:
                 if pikepdf.Name(key) in root:
                     raise ValueError(
                         f"PDF contains auto-executing action ({key}) and cannot be uploaded."
+                    )
+            if pikepdf.Name("/OpenAction") in root:
+                action = root["/OpenAction"]
+                subtype = None
+                if isinstance(action, pikepdf.Dictionary):
+                    s = action.get("/S")
+                    subtype = str(s) if s is not None else None
+                if subtype is None or subtype in _DANGEROUS_OPEN_ACTION_SUBTYPES:
+                    raise ValueError(
+                        f"PDF contains a dangerous /OpenAction ({subtype}) and cannot be uploaded."
                     )
             if pikepdf.Name("/Names") in root:
                 names_tree = root["/Names"]

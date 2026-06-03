@@ -338,7 +338,16 @@
     "downloadZipTooltip": "Télécharger tous les fichiers de ce répertoire en archive ZIP",
     "downloadZipTooLarge": "Ce répertoire est trop volumineux pour être téléchargé en ZIP",
     "downloadZipPart": "Téléchargement de « {dirName} » — partie {part} sur {total}",
-    "downloadZipAllStarted": "{total} parties en file — dézippez-les toutes pour obtenir le dossier complet"
+    "downloadZipAllStarted": "{total} parties en file — dézippez-les toutes pour obtenir le dossier complet",
+    "materialActions": "Actions sur le document",
+    "folderActions": "Actions sur le dossier",
+    "downloadZip": "Télécharger en ZIP",
+    "discardDraft": "Abandonner le brouillon",
+    "deleteTitle": "Supprimer {type}",
+    "discardDraftConfirm": "Voulez-vous vraiment abandonner ce brouillon de {type} ? Cette action est irréversible.",
+    "deletePermanentlyConfirm": "Supprimer définitivement",
+    "deleteNow": "Supprimer maintenant",
+    "discard": "Abandonner"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",

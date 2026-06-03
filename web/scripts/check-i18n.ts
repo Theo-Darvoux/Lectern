@@ -261,6 +261,107 @@ for (const file of files) {
     /* Global t() check removed to avoid false positives with local translators */
 
 
+    // 2b. Handle destructured t: const { t } = someObject (e.g., const { t } = actions)
+    if (Node.isVariableDeclaration(node)) {
+        const bindingPattern = node.getNameNode();
+        const initializer = node.getInitializer();
+        if (Node.isObjectBindingPattern(bindingPattern) && initializer) {
+            for (const element of bindingPattern.getElements()) {
+                const elName = element.getNameNode();
+                const propNameNode = element.getPropertyNameNode();
+                const propKey = propNameNode
+                    ? propNameNode.getText()
+                    : Node.isIdentifier(elName) ? elName.getText() : null;
+                if (propKey !== 't' || !Node.isIdentifier(elName)) continue;
+
+                // Resolve the namespace by tracing initializer.t -> its declaration -> useTranslations
+                let namespace: string | null = null;
+                const tSymbol = initializer.getType().getProperty('t');
+                if (tSymbol) {
+                    outer:
+                    for (const decl of tSymbol.getDeclarations()) {
+                        if (Node.isVariableDeclaration(decl)) {
+                            // Direct: const t = useTranslations("Browse")
+                            const tInit = decl.getInitializer();
+                            if (tInit && Node.isCallExpression(tInit) && tInit.getExpression().getText() === 'useTranslations') {
+                                const nsArg = tInit.getArguments()[0];
+                                if (nsArg && (Node.isStringLiteral(nsArg) || Node.isNoSubstitutionTemplateLiteral(nsArg))) {
+                                    namespace = nsArg.getLiteralValue();
+                                    break;
+                                }
+                            }
+                        } else if (Node.isShorthandPropertyAssignment(decl)) {
+                            // Shorthand in return { t, ... } — walk up to the enclosing function
+                            // and find const t = useTranslations(ns) inside it
+                            let ancestor: Node | undefined = decl.getParent();
+                            while (ancestor) {
+                                if (
+                                    Node.isFunctionDeclaration(ancestor) ||
+                                    Node.isArrowFunction(ancestor) ||
+                                    Node.isFunctionExpression(ancestor)
+                                ) {
+                                    ancestor.forEachDescendant((n) => {
+                                        if (namespace || !Node.isVariableDeclaration(n)) return;
+                                        const nName = n.getNameNode();
+                                        if (!Node.isIdentifier(nName) || nName.getText() !== 't') return;
+                                        const nInit = n.getInitializer();
+                                        if (nInit && Node.isCallExpression(nInit) && nInit.getExpression().getText() === 'useTranslations') {
+                                            const nsArg = nInit.getArguments()[0];
+                                            if (nsArg && (Node.isStringLiteral(nsArg) || Node.isNoSubstitutionTemplateLiteral(nsArg))) {
+                                                namespace = nsArg.getLiteralValue();
+                                            }
+                                        }
+                                    });
+                                    break;
+                                }
+                                ancestor = ancestor.getParent();
+                            }
+                            if (namespace) break outer;
+                        }
+                    }
+                }
+
+                const references = elName.findReferencesAsNodes();
+                for (const ref of references) {
+                    if (ref.getSourceFile() !== file) continue;
+                    let child: Node | undefined = ref;
+                    while (child && !Node.isCallExpression(child)) {
+                        child = child.getParent();
+                    }
+                    if (child) {
+                        const expr = child.getExpression();
+                        const isDirectCall = expr === ref;
+                        const isPropertyCall = Node.isPropertyAccessExpression(expr) && expr.getExpression() === ref;
+                        if (isDirectCall || isPropertyCall) {
+                            const tArgs = child.getArguments();
+                            if (tArgs.length > 0) {
+                                const arg = tArgs[0];
+                                const line = child.getStartLineNumber();
+                                const unwrapped = unwrapAssertions(arg);
+                                const resolvedValues = getPossibleStringValues(unwrapped);
+                                if (Node.isStringLiteral(unwrapped) || Node.isNoSubstitutionTemplateLiteral(unwrapped)) {
+                                    const subKey = unwrapped.getLiteralValue();
+                                    addUsedKey(namespace ? `${namespace}.${subKey}` : subKey, filePath, line);
+                                } else if (resolvedValues && resolvedValues.length > 0) {
+                                    resolvedValues.forEach((val) => {
+                                        addUsedKey(namespace ? `${namespace}.${val}` : val, filePath, line);
+                                    });
+                                } else if (Node.isTemplateExpression(unwrapped)) {
+                                    const head = unwrapped.getHead().getLiteralText();
+                                    protectNamespace(namespace ? `${namespace}.${head}` : head);
+                                    dynamicUsages.push({ file: filePath, line, text: child.getText() });
+                                } else {
+                                    if (namespace) protectNamespace(namespace);
+                                    dynamicUsages.push({ file: filePath, line, text: child.getText() });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 3. Special case for _onStatusUpdate wrapper in upload-client.ts
     if (Node.isCallExpression(node) && node.getExpression().getText() === "_onStatusUpdate") {
         const args = node.getArguments();
