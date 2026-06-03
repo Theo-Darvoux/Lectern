@@ -202,7 +202,6 @@ function useItemActions(item: ItemData, itemPath?: string) {
       dirDownloadCancelRef.current = true;
       toast.dismiss(dirToastId);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleDownloadDirectory = useCallback(async () => {
@@ -503,7 +502,7 @@ function ArmedMenuBody({ item, onAddAttachment, itemPath, actionsRef, onReady }:
 
   // Signal the parent to flip its "ready" flag once, before the first paint,
   // so ItemActionsDropdownTrigger renders the real dropdown on the same frame.
-  useLayoutEffect(onReady, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(onReady, []);
 
   return (
     <>
@@ -606,7 +605,6 @@ export function ItemActionsMenu({
       onAddAttachment,
       itemPath,
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextReady]); // intentionally omit item/onAddAttachment/itemPath — they're read via closure/getter
 
   const arm = useCallback(() => {

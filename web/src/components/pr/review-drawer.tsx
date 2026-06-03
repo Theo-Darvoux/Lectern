@@ -367,8 +367,7 @@ export function ReviewDrawer() {
             resolveAllPaths();
             return () => { cancelled = true; };
         }
-         
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     }, [operations, tAuto]);
 
     const { user } = useAuth();

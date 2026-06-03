@@ -45,31 +45,27 @@ export function useBrowseSSE(
         sseUrl = `/materials/${matId}/sse`;
     }
 
-    // Mutable refs — updated every render so listeners always see fresh values.
+    // Mutable refs — updated after each render so listeners always see fresh values.
     const pathRef = useRef(path);
-    pathRef.current = path;
     const browseCacheRef = useRef(browseCache);
-    browseCacheRef.current = browseCache;
     const fetchDataRef = useRef(fetchData);
-    fetchDataRef.current = fetchData;
     const triggerRefreshRef = useRef(triggerBrowseRefresh);
-    triggerRefreshRef.current = triggerBrowseRefresh;
     const routerRef = useRef(router);
-    routerRef.current = router;
-    // Breadcrumbs determine the parent path for navigation after a delete event.
     const breadcrumbSlugsRef = useRef<string[]>([]);
-    breadcrumbSlugsRef.current = data?.breadcrumbs?.map((b) => b.slug) ?? [];
 
-    // Capture sseUrl at the point the entity key changes so the effect closure
-    // always holds the correct URL for the entity it opened.
-    const sseUrlRef = useRef(sseUrl);
-    if (sseEntityKey !== null) sseUrlRef.current = sseUrl;
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
-        if (!sseEntityKey || !sseUrlRef.current) return;
+        pathRef.current = path;
+        browseCacheRef.current = browseCache;
+        fetchDataRef.current = fetchData;
+        triggerRefreshRef.current = triggerBrowseRefresh;
+        routerRef.current = router;
+        breadcrumbSlugsRef.current = data?.breadcrumbs?.map((b) => b.slug) ?? [];
+    });
 
-        const capturedUrl = sseUrlRef.current;
+    useEffect(() => {
+        if (!sseEntityKey || !sseUrl) return;
+
+        const capturedUrl = sseUrl;
         const listeners: Record<string, () => void> = {};
 
         if (sseEntityKey.startsWith("dir:")) {
@@ -99,7 +95,7 @@ export function useBrowseSSE(
             listeners["child_removed"] = refreshDir;
             listeners["pr_closed"] = refreshDir;
         } else {
-            // mat: key — both material view and attachment listing
+            // mat: key — material view
             listeners["material_deleted"] = () => {
                 const slugs = breadcrumbSlugsRef.current;
                 const parentPath =
@@ -121,5 +117,5 @@ export function useBrowseSSE(
         });
 
         return () => connection.close();
-    }, [sseEntityKey]); // only reconnect when the entity changes
+    }, [sseEntityKey, sseUrl]); // reconnect when entity changes
 }

@@ -34,6 +34,7 @@ import { useUIStore, useBrowseRefreshStore, useLikeOverrides } from "@/lib/store
 import { isGuest } from "@/lib/guest";
 import { useAuth } from "@/hooks/use-auth";
 import { useDownload } from "@/hooks/use-download";
+import { AttachmentPreviewDialog } from "@/components/sidebar/attachment-preview-dialog";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { isRestrictedTarget } from "@/lib/utils";
@@ -490,6 +491,7 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const [attachmentsOpen, setAttachmentsOpen] = useState(attachmentCount > 0);
   const [attachments, setAttachments] = useState<Record<string, unknown>[] | null>(null);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+  const [previewAtt, setPreviewAtt] = useState<Record<string, unknown> | null>(null);
   const fetchedForRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -519,6 +521,10 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isRestricted = isRestrictedTarget(String(data.id ?? ""), searchParams.get("preview_pr"));
+
+  const previewAttVersion = previewAtt
+    ? (previewAtt.current_version_info as Record<string, unknown> | null)
+    : null;
 
   return (
     <div className="space-y-3">
@@ -616,6 +622,20 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
         </div>
       )}
 
+      {/* Attachment preview dialog */}
+      {previewAtt && (
+        <AttachmentPreviewDialog
+          open={!!previewAtt}
+          onOpenChange={(open) => { if (!open) setPreviewAtt(null); }}
+          materialId={String(previewAtt.id ?? "")}
+          title={String(previewAtt.title ?? "")}
+          fileKey={previewAttVersion ? String(previewAttVersion.file_key ?? "") : ""}
+          fileName={previewAttVersion ? String(previewAttVersion.file_name ?? "") : ""}
+          mimeType={previewAttVersion ? String(previewAttVersion.file_mime_type ?? "") : ""}
+          material={previewAtt}
+        />
+      )}
+
       {/* Attachments — inline, only shown for top-level materials */}
       {!parentMaterialId && (
         <div className="rounded-lg border border-violet-200 dark:border-violet-800/50 overflow-hidden">
@@ -655,7 +675,11 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
                     const attSize = attVersion ? Number(attVersion.file_size ?? 0) : 0;
                     const attMime = attVersion ? String(attVersion.file_mime_type ?? "") : "";
                     return (
-                      <li key={attId} className="flex items-center gap-2 px-3 py-2 group">
+                      <li
+                        key={attId}
+                        className="flex items-center gap-2 px-3 py-2 group cursor-pointer hover:bg-violet-50/60 dark:hover:bg-violet-950/30 transition-colors"
+                        onClick={() => attVersion && setPreviewAtt(att)}
+                      >
                         <FileText className="h-4 w-4 shrink-0 text-violet-400" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium truncate">{attTitle}</p>
@@ -667,13 +691,20 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
                           )}
                         </div>
                         {attVersion && (
-                          <button
-                            className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                            title={t("download")}
-                            onClick={(e) => { e.stopPropagation(); downloadMaterial(attId); }}
-                          >
-                            <Download className="h-4 w-4 text-muted-foreground hover:text-foreground" />
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              title={t("preview")}
+                              onClick={(e) => { e.stopPropagation(); setPreviewAtt(att); }}
+                            >
+                              <Eye className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                            </button>
+                            <button
+                              title={t("download")}
+                              onClick={(e) => { e.stopPropagation(); downloadMaterial(attId); }}
+                            >
+                              <Download className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                            </button>
+                          </div>
                         )}
                       </li>
                     );

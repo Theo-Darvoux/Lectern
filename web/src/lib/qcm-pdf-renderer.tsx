@@ -397,7 +397,6 @@ function RichText({
 
   if (hasDisplayMath) {
     return (
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       <View style={outerStyle as any}>
         {segments.map((seg, i) => {
           if (seg.kind === "math" && seg.display) {
