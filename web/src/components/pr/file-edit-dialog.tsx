@@ -899,7 +899,7 @@ export function FileEditDialog({
                     )}
                 </Tabs>
 
-                <DialogFooter className="mt-2 shrink-0 gap-2 sm:gap-0">
+                <DialogFooter className="mt-2 shrink-0 flex-wrap gap-2">
                     <Button
                         variant="ghost"
                         onClick={() => onOpenChange(false)}
