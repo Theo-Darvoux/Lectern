@@ -79,7 +79,6 @@ async def get_preview_material_ids(
         .where(
             Material.directory_id.in_(dir_ids),
             Material.parent_material_id.is_(None),
-            MaterialVersion.file_mime_type.like("image/%"),
         )
         .order_by(Material.directory_id, Material.title)
     )

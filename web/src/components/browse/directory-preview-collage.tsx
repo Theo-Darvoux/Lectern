@@ -2,11 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
+import { File } from "lucide-react";
 
 interface ThumbnailInfo {
   url: string;
   thumbnail_type: "webp" | "fallback";
 }
+
+type CellInfo = { url: string; type: "webp" | "fallback" } | null | false;
 
 interface DirectoryPreviewCollageProps {
   materialIds: string[];
@@ -14,7 +17,7 @@ interface DirectoryPreviewCollageProps {
 
 export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollageProps) {
   const ids = materialIds.slice(0, 4);
-  const [urls, setUrls] = useState<(string | null)[]>(Array(ids.length).fill(null));
+  const [cells, setCells] = useState<CellInfo[]>(Array(ids.length).fill(null));
   const [visible, setVisible] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -34,14 +37,15 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
   useEffect(() => {
     if (!visible || ids.length === 0) return;
     let cancelled = false;
+    setCells(Array(ids.length).fill(null));
     Promise.all(
       ids.map((id) =>
         apiFetch<ThumbnailInfo>(`/materials/${id}/thumbnail`)
-          .then((info) => info.url)
-          .catch(() => null),
+          .then((info): CellInfo => ({ url: info.url, type: info.thumbnail_type }))
+          .catch((): CellInfo => false),
       ),
     ).then((results) => {
-      if (!cancelled) setUrls(results);
+      if (!cancelled) setCells(results);
     });
     return () => {
       cancelled = true;
@@ -52,21 +56,38 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
 
   return (
     <div ref={ref} className={`grid ${gridClass} gap-0.5 w-full h-full`}>
-      {ids.map((id, i) => (
-        <div key={id} className="relative overflow-hidden">
-          {urls[i] ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={urls[i]!}
-              alt=""
-              className="w-full h-full object-cover"
-              draggable={false}
-            />
-          ) : (
-            <div className="w-full h-full animate-pulse bg-white/10" />
-          )}
-        </div>
-      ))}
+      {ids.map((id, i) => {
+        const cell = cells[i];
+        return (
+          <div key={id} className="relative overflow-hidden">
+            {cell === null ? (
+              <div className="w-full h-full animate-pulse bg-white/10" />
+            ) : cell === false ? (
+              <div className="w-full h-full flex items-center justify-center bg-white/5">
+                <File className="h-6 w-6 text-white/40" />
+              </div>
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={cell.url}
+                alt=""
+                className="w-full h-full object-cover"
+                draggable={false}
+                onError={
+                  cell.type === "fallback"
+                    ? () =>
+                        setCells((prev) => {
+                          const next = [...prev];
+                          next[i] = false;
+                          return next;
+                        })
+                    : undefined
+                }
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
