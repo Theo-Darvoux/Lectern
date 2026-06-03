@@ -555,7 +555,13 @@
     "mimeSelectTitle": "Sélectionner le type de fichier",
     "mimeSelectDesc": "Le type du ou des fichiers suivants n'a pas pu être détecté automatiquement. Veuillez sélectionner le type de fichier texte approprié pour continuer.",
     "mimeSelectConfirm": "Continuer",
-    "mimeSelectSkip": "Ignorer ces fichiers"
+    "mimeSelectSkip": "Ignorer ces fichiers",
+    "units": {
+      "b": "{count} o",
+      "kb": "{count} Ko",
+      "mb": "{count} Mo",
+      "gb": "{count} Go"
+    }
   },
   "PRWizard": {
     "createDirectory": "Créer un dossier",
@@ -893,7 +899,10 @@
       "folder": "le dossier"
     },
     "overLimitTitle": "overLimitTitle",
-    "overLimitText": "overLimitText"
+    "overLimitText": "overLimitText",
+    "expired": "expiré",
+    "hours": "h",
+    "minutes": "min"
   },
   "AutoTitle": {
     "draft": "Brouillon de contribution",

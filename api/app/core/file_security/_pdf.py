@@ -95,14 +95,17 @@ def check_pdf_safety(file_path: Path) -> None:
                     )
             if pikepdf.Name("/OpenAction") in root:
                 action = root["/OpenAction"]
-                subtype = None
                 if isinstance(action, pikepdf.Dictionary):
+                    # Action dict: check the /S subtype. A missing /S is treated as dangerous
+                    # (malformed action with unknown behaviour).
                     s = action.get("/S")
                     subtype = str(s) if s is not None else None
-                if subtype is None or subtype in _DANGEROUS_OPEN_ACTION_SUBTYPES:
-                    raise ValueError(
-                        f"PDF contains a dangerous /OpenAction ({subtype}) and cannot be uploaded."
-                    )
+                    if subtype is None or subtype in _DANGEROUS_OPEN_ACTION_SUBTYPES:
+                        raise ValueError(
+                            f"PDF contains a dangerous /OpenAction ({subtype}) and cannot be uploaded."
+                        )
+                # Non-dictionary /OpenAction is a destination reference (array or name string)
+                # that scrolls to a page — it cannot execute code and is safe to allow.
             if pikepdf.Name("/Names") in root:
                 names_tree = root["/Names"]
                 if pikepdf.Name("/JavaScript") in names_tree:

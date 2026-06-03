@@ -362,6 +362,100 @@ for (const file of files) {
         }
     }
 
+    // 2c. Handle t passed as argument to utility functions (e.g., fileSize(bytes, t))
+    if (Node.isFunctionDeclaration(node) || Node.isArrowFunction(node) || Node.isFunctionExpression(node)) {
+        const funcParams = node.getParameters();
+        const tParamIdx = funcParams.findIndex((p) => {
+            const pName = p.getNameNode();
+            return Node.isIdentifier(pName) && pName.getText() === 't';
+        });
+        if (tParamIdx !== -1) {
+            const tParamNameNode = funcParams[tParamIdx].getNameNode();
+            if (Node.isIdentifier(tParamNameNode)) {
+                const tParamSymbol = tParamNameNode.getSymbol();
+                const tCalls: Array<{ key: string | null; head?: string; line: number; text: string }> = [];
+                node.forEachDescendant((inner) => {
+                    if (!Node.isCallExpression(inner)) return;
+                    const callExpr = inner.getExpression();
+                    if (Node.isIdentifier(callExpr) && callExpr.getText() === 't' && callExpr.getSymbol() === tParamSymbol) {
+                        const innerArgs = inner.getArguments();
+                        if (innerArgs.length > 0) {
+                            const arg = unwrapAssertions(innerArgs[0]);
+                            const line = inner.getStartLineNumber();
+                            const text = inner.getText();
+                            if (Node.isStringLiteral(arg) || Node.isNoSubstitutionTemplateLiteral(arg)) {
+                                tCalls.push({ key: arg.getLiteralValue(), line, text });
+                            } else if (Node.isTemplateExpression(arg)) {
+                                tCalls.push({ key: null, head: arg.getHead().getLiteralText(), line, text });
+                            } else {
+                                const resolved = getPossibleStringValues(arg);
+                                if (resolved && resolved.length > 0) {
+                                    resolved.forEach((v) => tCalls.push({ key: v, line, text }));
+                                } else {
+                                    tCalls.push({ key: null, line, text });
+                                }
+                            }
+                        }
+                    }
+                });
+                if (tCalls.length > 0) {
+                    let funcIdentifier: Node | undefined;
+                    if (Node.isFunctionDeclaration(node)) {
+                        const nameNode = node.getNameNode();
+                        if (nameNode) funcIdentifier = nameNode;
+                    } else {
+                        const parent = node.getParent();
+                        if (parent && Node.isVariableDeclaration(parent)) {
+                            const nameNode = parent.getNameNode();
+                            if (Node.isIdentifier(nameNode)) funcIdentifier = nameNode;
+                        }
+                    }
+                    if (funcIdentifier) {
+                        const namespaces = new Set<string>();
+                        for (const ref of funcIdentifier.findReferencesAsNodes()) {
+                            const refParent = ref.getParent();
+                            if (refParent && Node.isCallExpression(refParent) && refParent.getExpression() === ref) {
+                                const callArgs = refParent.getArguments();
+                                if (callArgs.length > tParamIdx) {
+                                    const passedArg = unwrapAssertions(callArgs[tParamIdx]);
+                                    if (Node.isIdentifier(passedArg)) {
+                                        const passedSymbol = passedArg.getSymbol();
+                                        if (passedSymbol) {
+                                            for (const decl of passedSymbol.getDeclarations()) {
+                                                if (Node.isVariableDeclaration(decl)) {
+                                                    const init = decl.getInitializer();
+                                                    if (init && Node.isCallExpression(init) && init.getExpression().getText() === 'useTranslations') {
+                                                        const nsArg = init.getArguments()[0];
+                                                        if (nsArg && (Node.isStringLiteral(nsArg) || Node.isNoSubstitutionTemplateLiteral(nsArg))) {
+                                                            namespaces.add(nsArg.getLiteralValue());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        for (const ns of namespaces) {
+                            for (const call of tCalls) {
+                                if (call.key !== null) {
+                                    addUsedKey(`${ns}.${call.key}`, filePath, call.line);
+                                } else if (call.head != null) {
+                                    protectNamespace(`${ns}.${call.head}`);
+                                    dynamicUsages.push({ file: filePath, line: call.line, text: call.text });
+                                } else {
+                                    protectNamespace(ns);
+                                    dynamicUsages.push({ file: filePath, line: call.line, text: call.text });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 3. Special case for _onStatusUpdate wrapper in upload-client.ts
     if (Node.isCallExpression(node) && node.getExpression().getText() === "_onStatusUpdate") {
         const args = node.getArguments();

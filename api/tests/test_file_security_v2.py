@@ -47,7 +47,6 @@ class TestCheckPdfSafety:
     @pytest.mark.parametrize(
         "action_key",
         [
-            "/OpenAction",
             "/AA",
             "/Launch",
             "/SubmitForm",
@@ -86,8 +85,8 @@ class TestCheckPdfSafety:
 
 
 class TestPdfDangerousActionKeys:
-    def test_all_five_keys_present(self):
-        expected = {"/OpenAction", "/AA", "/Launch", "/SubmitForm", "/ImportData"}
+    def test_flat_keys_present(self):
+        expected = {"/AA", "/Launch", "/SubmitForm", "/ImportData"}
         assert expected == _PDF_DANGEROUS_ACTION_KEYS
 
 

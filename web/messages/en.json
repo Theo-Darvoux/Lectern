@@ -555,7 +555,13 @@
     "mimeSelectTitle": "Select file type",
     "mimeSelectDesc": "The type of the following file(s) could not be detected automatically. Please select the correct text-based file type to continue.",
     "mimeSelectConfirm": "Continue",
-    "mimeSelectSkip": "Skip these files"
+    "mimeSelectSkip": "Skip these files",
+    "units": {
+      "b": "{count} B",
+      "kb": "{count} KB",
+      "mb": "{count} MB",
+      "gb": "{count} GB"
+    }
   },
   "PRWizard": {
     "createDirectory": "Create Folder",
@@ -893,7 +899,10 @@
       "folder": "folder"
     },
     "overLimitTitle": "overLimitTitle",
-    "overLimitText": "overLimitText"
+    "overLimitText": "overLimitText",
+    "expired": "expired",
+    "hours": "h",
+    "minutes": "m"
   },
   "AutoTitle": {
     "draft": "Contribution draft",

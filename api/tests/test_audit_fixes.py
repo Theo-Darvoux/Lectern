@@ -325,7 +325,7 @@ class TestPDFSafetyBypass:
     """Attempt to bypass PDF safety checks with crafted files."""
 
     def test_pdf_with_openaction(self, tmp_path):
-        """PDF with /OpenAction in catalog should be rejected."""
+        """PDF with /OpenAction JavaScript action should be rejected."""
         pdf = pikepdf.new()
         page = pdf.make_indirect(
             pikepdf.Dictionary(
@@ -341,8 +341,25 @@ class TestPDFSafetyBypass:
         p = tmp_path / "dangerous.pdf"
         pdf.save(str(p))
 
-        with pytest.raises(ValueError, match="auto-executing"):
+        with pytest.raises(ValueError, match="dangerous /OpenAction"):
             check_pdf_safety(p)
+
+    def test_pdf_with_openaction_destination_allowed(self, tmp_path):
+        """PDF with /OpenAction as a destination array (not an action dict) should be allowed."""
+        pdf = pikepdf.new()
+        page = pdf.make_indirect(
+            pikepdf.Dictionary(
+                Type=pikepdf.Name("/Page"),
+                MediaBox=pikepdf.Array([0, 0, 612, 792]),
+            )
+        )
+        pdf.pages.append(pikepdf.Page(page))
+        # Destination array: [page_ref, /Fit] — scrolls to a page, cannot execute code
+        pdf.Root["/OpenAction"] = pikepdf.Array([page, pikepdf.Name("/Fit")])
+        p = tmp_path / "dest.pdf"
+        pdf.save(str(p))
+
+        check_pdf_safety(p)  # must not raise
 
     def test_pdf_with_javascript_in_names(self, tmp_path):
         """PDF with /JavaScript in Names tree should be rejected."""

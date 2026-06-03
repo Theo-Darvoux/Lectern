@@ -436,9 +436,9 @@ def _make_clean_pdf(tmp_path: Path) -> Path:
 
 
 def test_pdf_with_openaction_rejected(tmp_path: Path) -> None:
-    """check_pdf_safety must raise ValueError for PDFs with /OpenAction."""
+    """check_pdf_safety must raise ValueError for PDFs with a dangerous /OpenAction action dict."""
     pdf_path = _make_pdf_with_openaction(tmp_path)
-    with pytest.raises(ValueError, match="auto-executing"):
+    with pytest.raises(ValueError, match="dangerous /OpenAction"):
         check_pdf_safety(pdf_path)
 
 
