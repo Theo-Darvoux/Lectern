@@ -92,6 +92,7 @@ export function useBrowseSSE(
             };
 
             listeners["child_added"] = refreshDir;
+            listeners["child_updated"] = refreshDir;
             listeners["child_removed"] = refreshDir;
             listeners["pr_closed"] = refreshDir;
         } else {

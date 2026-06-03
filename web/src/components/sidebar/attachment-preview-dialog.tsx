@@ -83,7 +83,7 @@ export function AttachmentPreviewDialog({
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent
-                className="max-w-4xl h-[85vh] flex flex-col p-0 gap-0 overflow-hidden"
+                className="max-w-5xl sm:max-w-5xl w-[90vw] h-[90vh] flex flex-col p-0 gap-0 overflow-hidden"
                 showCloseButton={false}
             >
                 <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">

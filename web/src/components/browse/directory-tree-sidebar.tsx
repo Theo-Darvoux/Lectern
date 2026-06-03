@@ -596,7 +596,12 @@ export function DirectoryTreeSidebar() {
         };
         const conn = createSSEConnection({
           url: `/directories/${id}/sse`,
-          listeners: { child_added: handleChange, child_removed: handleChange },
+          listeners: {
+            child_added: handleChange,
+            child_updated: handleChange,
+            child_removed: handleChange,
+            pr_closed: handleChange,
+          },
           startupDelay: 50,
         });
         existing.set(id, conn);

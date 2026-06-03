@@ -11,6 +11,7 @@ from app.models.user import User, UserRole
 from app.services.pr import (
     _exec_create_directory,
     _exec_create_material,
+    _exec_edit_material,
     _soft_delete_directory_tree,
     _soft_delete_material_tree,
 )
@@ -281,6 +282,62 @@ class TestCreateMaterialBroadcasts:
         broadcasts = _broadcasts(db_session)
         child_broadcasts = [b for b in broadcasts if b[1].get("type") == "child_added"]
         assert child_broadcasts[0][1]["id"] == str(new_id)
+
+
+# ---------------------------------------------------------------------------
+# Edit: material
+# ---------------------------------------------------------------------------
+
+
+class TestEditMaterialBroadcasts:
+    async def test_child_updated_broadcast_to_parent_directory(
+        self, db_session: AsyncSession
+    ) -> None:
+        user = await _make_user(db_session)
+        directory = await _make_directory(db_session, user)
+        mat = await _make_material(db_session, user, directory)
+        pr = await _make_pr(db_session, user)
+        db_session.info["post_commit_sse_broadcasts"] = []
+
+        payload = {"material_id": str(mat.id), "title": "Renamed Title"}
+        await _exec_edit_material(db_session, payload, pr, {})
+
+        broadcasts = _broadcasts(db_session)
+        updated = [b for b in broadcasts if b[1].get("type") == "child_updated"]
+        assert len(updated) == 1
+        assert updated[0][0] == str(directory.id)
+        assert updated[0][1]["kind"] == "material"
+        assert updated[0][1]["id"] == str(mat.id)
+
+    async def test_child_updated_broadcast_to_root_when_no_directory(
+        self, db_session: AsyncSession
+    ) -> None:
+        user = await _make_user(db_session)
+        mat = await _make_material(db_session, user, None)
+        pr = await _make_pr(db_session, user)
+        db_session.info["post_commit_sse_broadcasts"] = []
+
+        payload = {"material_id": str(mat.id), "title": "Renamed Root Material"}
+        await _exec_edit_material(db_session, payload, pr, {})
+
+        broadcasts = _broadcasts(db_session)
+        updated = [b for b in broadcasts if b[1].get("type") == "child_updated"]
+        assert len(updated) == 1
+        assert updated[0][0] == "root"
+
+    async def test_no_child_added_on_edit(self, db_session: AsyncSession) -> None:
+        """Editing a material must NOT emit child_added — only child_updated."""
+        user = await _make_user(db_session)
+        directory = await _make_directory(db_session, user)
+        mat = await _make_material(db_session, user, directory)
+        pr = await _make_pr(db_session, user)
+        db_session.info["post_commit_sse_broadcasts"] = []
+
+        payload = {"material_id": str(mat.id), "title": "Changed"}
+        await _exec_edit_material(db_session, payload, pr, {})
+
+        broadcasts = _broadcasts(db_session)
+        assert not any(b[1].get("type") == "child_added" for b in broadcasts)
 
 
 # ---------------------------------------------------------------------------
