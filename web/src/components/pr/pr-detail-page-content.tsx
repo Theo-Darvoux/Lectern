@@ -500,11 +500,13 @@ function OperationRow({
         setPreviewLoading(true);
         try {
             const res = await apiFetch<{ url: string }>(`/materials/${matId}/inline`);
-            setExistingPreview({
-                url: res.url,
-                mimeType: itemDetails?.mimeType,
-                fileName: itemDetails?.fileName,
-            });
+            if (res && res.url) {
+                setExistingPreview({
+                    url: res.url,
+                    mimeType: itemDetails?.mimeType,
+                    fileName: itemDetails?.fileName,
+                });
+            }
         } catch {
             // ignore
         } finally {

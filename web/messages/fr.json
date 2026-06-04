@@ -45,6 +45,7 @@
   },
   "Common": {
     "loading": "Chargement...",
+    "edit": "Modifier",
     "save": "Enregistrer",
     "cancel": "Annuler",
     "delete": "Supprimer",

@@ -124,7 +124,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
               `/materials/${material.id}/thumbnail`
             )
           );
-          if (mounted && thumbData.url) {
+          if (mounted && thumbData && thumbData.url) {
             setUrl(thumbData.url);
             setThumbnailType(thumbData.thumbnail_type ?? "webp");
             setLoading(false);
@@ -149,11 +149,12 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         );
         if (!mounted) return;
 
-        setUrl(data.url);
-        setThumbnailType(null);  // plain inline URL
+        if (data && data.url) {
+          setUrl(data.url);
+          setThumbnailType(null);  // plain inline URL
 
-        // Fetch text snippet for text/markdown files
-        if ((isText || isMarkdown) && data.url) {
+          // Fetch text snippet for text/markdown files
+          if (isText || isMarkdown) {
           try {
             const res = await fetch(data.url);
             const contentEncoding = res.headers.get("Content-Encoding");
@@ -184,7 +185,8 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
             // ignore
           }
         }
-      } catch {
+      }
+    } catch {
         // ignore
       } finally {
         if (mounted) setLoading(false);

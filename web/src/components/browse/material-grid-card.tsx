@@ -65,7 +65,7 @@ function GhostMaterialPreview({
       if (cancelled) return;
       apiFetch<{ url: string }>(`/upload/preview?file_key=${encodeURIComponent(fileKey)}`)
         .then((res) => {
-          if (!cancelled && res.url) setImgUrl(res.url);
+          if (!cancelled && res && res.url) setImgUrl(res.url);
         })
         .catch(() => {});
     });

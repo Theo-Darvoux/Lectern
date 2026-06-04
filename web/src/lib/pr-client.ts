@@ -1,6 +1,28 @@
 import { apiFetch } from "@/lib/api-client";
 import { type Operation } from "@/lib/staging-store";
+import { useConfigStore } from "@/lib/stores";
 import { toast } from "sonner";
+
+/**
+ * Maximum length of a PR description / moderator note.
+ *
+ * The single source of truth lives in the backend (`MAX_PR_DESCRIPTION_LENGTH`
+ * in api/app/schemas/pull_request.py) and is delivered to the client via the
+ * public config endpoint. We read it from the config store here so the UI and
+ * the server can never disagree — a mismatch would make the API reject the POST
+ * with a 422 and the contribution would silently fail to be created (and thus
+ * never auto-approved).
+ */
+export function getMaxDescriptionLength(): number | null {
+    return useConfigStore.getState().config?.max_contribution_note_length ?? null;
+}
+
+/** Truncate a description so it never exceeds the server-enforced maximum. */
+export function truncateDescription(text: string): string {
+    const max = getMaxDescriptionLength();
+    if (max === null || text.length <= max) return text;
+    return text.slice(0, max);
+}
 
 /** Generate a sensible auto-title from one or multiple operations. */
 export function autoTitle(ops: Operation[], t: any): string {
@@ -63,7 +85,7 @@ export async function submitDirectOperations(
             method: "POST",
             body: JSON.stringify({
                 title: title.trim(),
-                description: manualDescription ?? null,
+                description: manualDescription ? truncateDescription(manualDescription) : null,
                 operations: ops,
             }),
         }

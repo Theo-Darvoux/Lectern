@@ -195,10 +195,12 @@ export function PRPreviewPageContent() {
                 if (cancelled) return;
 
                 const op = pr.payload?.[opIndex] ?? {};
-                setFileName(String(preview.file_name ?? op.file_name ?? "File"));
-                setMimeType(String(preview.file_mime_type ?? op.file_mime_type ?? ""));
+                if (preview) {
+                    setFileName(String(preview.file_name ?? op.file_name ?? "File"));
+                    setMimeType(String(preview.file_mime_type ?? op.file_mime_type ?? ""));
+                    setPresignedUrl(preview.url);
+                }
                 setPrTitle(pr.title);
-                setPresignedUrl(preview.url);
             } catch (e: unknown) {
                 if (!cancelled) setError(e instanceof Error ? e.message : t("failedToLoadPreview"));
             } finally {

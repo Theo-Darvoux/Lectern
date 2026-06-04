@@ -41,7 +41,7 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
     Promise.all(
       ids.map((id) =>
         apiFetch<ThumbnailInfo>(`/materials/${id}/thumbnail`)
-          .then((info): CellInfo => ({ url: info.url, type: info.thumbnail_type }))
+          .then((info): CellInfo => info ? { url: info.url, type: info.thumbnail_type } : false)
           .catch((): CellInfo => false),
       ),
     ).then((results) => {

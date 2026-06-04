@@ -221,10 +221,9 @@ async def _thumbnail_svg(
         with Image.open(temp_png) as img:
             img.thumbnail(size, Image.Resampling.LANCZOS)
             if img.mode in ("RGBA", "LA", "PA"):
-                if img.mode == "PA":
-                    img = img.convert("RGBA")
-                bg = Image.new("RGB", img.size, "white")
-                bg.paste(img, mask=img.split()[-1])
+                rgba_img = img.convert("RGBA") if img.mode == "PA" else img
+                bg = Image.new("RGB", rgba_img.size, "white")
+                bg.paste(rgba_img, mask=rgba_img.split()[-1])
                 bg.save(output_path, "WEBP", quality=quality)
             else:
                 img.convert("RGB").save(output_path, "WEBP", quality=quality)

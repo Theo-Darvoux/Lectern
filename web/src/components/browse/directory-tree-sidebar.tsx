@@ -106,6 +106,10 @@ const rootsCache: { dirs: DirNode[] | null; mats: MaterialNode[] } = {
   mats: [],
 };
 const childrenCache = new Map<string, ChildrenPayload>();
+// Expanded node ids also survive remounts, so navigating between directories
+// keeps previously-opened folders open instead of collapsing everything except
+// the path that was just navigated to.
+let expandedCache = new Set<string>();
 
 function clearTreeCaches() {
   rootsCache.dirs = null;
@@ -422,7 +426,7 @@ export function DirectoryTreeSidebar() {
   const [childrenMap, setChildrenMap] = useState<Map<string, ChildrenPayload>>(
     () => new Map(childrenCache),
   );
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(expandedCache));
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
@@ -461,6 +465,10 @@ export function DirectoryTreeSidebar() {
   const expandedRef = useRef(expanded);
   useEffect(() => {
     expandedRef.current = expanded;
+    // Persist to the module-level cache so a remount during navigation restores
+    // the same open folders. `expanded` is always replaced immutably, so sharing
+    // the reference is safe.
+    expandedCache = expanded;
   }, [expanded]);
 
   const fetchChildren = useCallback(

@@ -562,12 +562,16 @@ class TestPullRequestCreate:
             PullRequestCreate(title="Valid Title", operations=[])
 
     def test_description_max_length_ok(self):
-        m = self._make(description="d" * 1000)
-        assert len(m.description) == 1000
+        from app.schemas.pull_request import MAX_PR_DESCRIPTION_LENGTH
+
+        m = self._make(description="d" * MAX_PR_DESCRIPTION_LENGTH)
+        assert len(m.description) == MAX_PR_DESCRIPTION_LENGTH
 
     def test_rejects_description_too_long(self):
+        from app.schemas.pull_request import MAX_PR_DESCRIPTION_LENGTH
+
         with pytest.raises(ValidationError):
-            self._make(description="d" * 1001)
+            self._make(description="d" * (MAX_PR_DESCRIPTION_LENGTH + 1))
 
     @pytest.mark.parametrize("payload", SQL_INJECTIONS + XSS_PAYLOADS)
     def test_injection_payload_passes_through_sanitized(self, payload):

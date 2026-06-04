@@ -240,6 +240,7 @@ export interface PublicConfig {
     classic_enabled: boolean;
     allow_all_domains: boolean;
     guest_access_enabled: boolean;
+    max_contribution_note_length: number;
 }
 
 interface ConfigState {

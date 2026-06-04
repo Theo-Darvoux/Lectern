@@ -50,9 +50,9 @@ import {
     hasFileKey,
     unwrapOp,
 } from "@/lib/staging-store";
-import { autoTitle, submitDirectOperations } from "@/lib/pr-client";
+import { autoTitle, submitDirectOperations, truncateDescription } from "@/lib/pr-client";
 import { StagedItemEditDialog } from "./staged-item-edit-dialog";
-import { useBrowseRefreshStore } from "@/lib/stores";
+import { useBrowseRefreshStore, useConfigStore } from "@/lib/stores";
 import { PreviewDialog } from "./preview-dialog";
 import { apiFetch } from "@/lib/api-client";
 import { useTranslations } from "next-intl";
@@ -251,7 +251,7 @@ export function ReviewDrawer() {
 
         try {
             const res = await apiFetch<{ url: string }>(`/upload/preview?file_key=${encodeURIComponent(op.file_key)}`);
-            if (res.url) {
+            if (res && res.url) {
                 setPreviewUrl(res.url);
                 setPreviewName(displayName);
                 setPreviewMime(op.file_mime_type || undefined);
@@ -360,7 +360,7 @@ export function ReviewDrawer() {
                 }
 
                 if (!cancelled && paths.length > 0) {
-                    setDescription(paths.join("\n"));
+                    setDescription(truncateDescription(paths.join("\n")));
                 }
             }
 
@@ -371,6 +371,7 @@ export function ReviewDrawer() {
     }, [operations, tAuto]);
 
     const { user } = useAuth();
+    const maxDescriptionLength = useConfigStore((s) => s.config?.max_contribution_note_length ?? 10000);
     const isPrivileged = PRIVILEGED_ROLES.has(user?.role ?? "");
     const maxOps = isPrivileged ? LIMIT_PRIVILEGED : LIMIT_REGULAR;
     const overLimit = operations.length > maxOps;
@@ -579,9 +580,9 @@ export function ReviewDrawer() {
                                 </span>
                                 <span className={cn(
                                     "text-[10px] font-mono",
-                                    description.length > 9500 ? "text-destructive font-bold" : "text-muted-foreground"
+                                    description.length > maxDescriptionLength * 0.95 ? "text-destructive font-bold" : "text-muted-foreground"
                                 )}>
-                                    {description.length}/10000
+                                    {description.length}/{maxDescriptionLength}
                                 </span>
                             </label>
                             <Textarea
@@ -589,7 +590,7 @@ export function ReviewDrawer() {
                                 placeholder={t("moderatorNotePlaceholder")}
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
-                                maxLength={10000}
+                                maxLength={maxDescriptionLength}
                                 rows={4}
                             />
                         </div>

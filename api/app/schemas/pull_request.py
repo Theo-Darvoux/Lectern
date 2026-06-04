@@ -29,6 +29,10 @@ MAX_TAGS = 20
 MAX_TAG_LENGTH = 20
 MAX_METADATA_KEYS = 20
 MAX_FILE_NAME_LENGTH = 255
+# Maximum length of a PR description / moderator note. This is the single source
+# of truth: it is enforced here and surfaced to the frontend via the public
+# config endpoint (GET /auth/methods) so the UI can mirror and pre-truncate it.
+MAX_PR_DESCRIPTION_LENGTH = 10000
 
 
 def _validate_tags(tags: list[str] | None) -> list[str] | None:
@@ -331,7 +335,7 @@ MAX_OPERATIONS = 50
 
 class PullRequestCreate(BaseModel):
     title: SanitizedStr = Field(..., min_length=3, max_length=300, pattern=r"^\s*\S.*$")
-    description: SanitizedStr | None = Field(None, max_length=1000)
+    description: SanitizedStr | None = Field(None, max_length=MAX_PR_DESCRIPTION_LENGTH)
     operations: Annotated[list[Operation], BeforeValidator(strip_null_chars)] = Field(
         ..., min_length=1
     )

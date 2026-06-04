@@ -636,6 +636,7 @@ class TestCompressEdgeCases:
         # valid gzip so the Worker can decompress it.
         if result.content_encoding == "gzip":
             import gzip as _gzip
+
             with _gzip.open(result.path, "rb") as f:
                 f.read()  # raises if not valid gzip
         else:

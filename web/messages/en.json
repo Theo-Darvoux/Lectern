@@ -45,6 +45,7 @@
   },
   "Common": {
     "loading": "Loading...",
+    "edit": "Edit",
     "save": "Save",
     "cancel": "Cancel",
     "delete": "Delete",

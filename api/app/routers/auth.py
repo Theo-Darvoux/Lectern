@@ -30,6 +30,7 @@ from app.schemas.auth import (
     VerifyCodeIn,
     VerifyMagicLinkIn,
 )
+from app.schemas.pull_request import MAX_PR_DESCRIPTION_LENGTH
 from app.services import auth as auth_service
 from app.services.email import send_verification_email
 from app.services.notification import notify_admins_pending_user
@@ -116,6 +117,7 @@ async def get_auth_methods() -> dict[str, Any]:
         "dpo_address": settings.dpo_address,
         "data_transfers": settings.data_transfers,
         "legal_version": settings.legal_version,
+        "max_contribution_note_length": MAX_PR_DESCRIPTION_LENGTH,
     }
 
 
