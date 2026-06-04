@@ -6,7 +6,10 @@ export const API_BASE = (() => {
         return process.env.API_INTERNAL_URL ?? "http://api:8000";
     }
 
-    const base = process.env.NEXT_PUBLIC_API_URL ?? "/api";
+    // Default to the same-origin "/api" path that Nginx proxies. Use `||` (not
+    // `??`) so an empty-string env var — e.g. an unset build-arg inlined as "" —
+    // still falls back to the default instead of becoming an invalid base.
+    const base = process.env.NEXT_PUBLIC_API_URL || "/api";
     // Self-healing: Upgrade http to https if the page is HTTPS and it's the same host
     const isHttps = window.location.protocol === "https:";
     if (isHttps && base.startsWith("http://") && base.includes(window.location.host)) {

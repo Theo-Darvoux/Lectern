@@ -10,14 +10,12 @@ FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# NEXT_PUBLIC_* vars must be present as env at build time so Next.js inlines them
-# into the static export. The commit SHA identifies the running web image.
-ARG NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_EUROOFFICE_URL
+# The commit SHA identifies the running web image. It must be present as env at
+# build time so Next.js inlines it into the static export. Note: we deliberately
+# do NOT declare ARGs for the other NEXT_PUBLIC_* vars — leaving them undefined
+# lets the app fall back to its defaults (e.g. NEXT_PUBLIC_API_URL -> "/api").
 ARG NEXT_PUBLIC_COMMIT_SHA
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
-    NEXT_PUBLIC_EUROOFFICE_URL=$NEXT_PUBLIC_EUROOFFICE_URL \
-    NEXT_PUBLIC_COMMIT_SHA=$NEXT_PUBLIC_COMMIT_SHA
+ENV NEXT_PUBLIC_COMMIT_SHA=$NEXT_PUBLIC_COMMIT_SHA
 RUN pnpm build
 
 FROM nginx:alpine AS runner
