@@ -5,18 +5,107 @@ on:
     branches: [main]
     tags: ['alpha-*']
 
+# Cancel superseded runs on the same ref so rapid merges to main don't race to
+# overwrite :latest. Tag builds (releases) are namespaced by their own ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   API_IMAGE: ghcr.io/theo-darvoux/wikint/api
+  WORKER_IMAGE: ghcr.io/theo-darvoux/wikint/worker
   WEB_IMAGE: ghcr.io/theo-darvoux/wikint/web
+  PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
+  # ── Detect which part of the monorepo changed ──────────────────────────────
+  # On a tag push (release) everything rebuilds regardless; on branch pushes we
+  # skip the half that didn't change.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'api/**'
+            web:
+              - 'web/**'
+
+  # ── Test gates (must pass before the matching image is published) ──────────
+  test-api:
+    needs: changes
+    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - run: uv sync --frozen
+      - name: Lint (ruff)
+        run: uv run ruff check .
+      - name: Type-check (mypy)
+        run: uv run mypy app/
+      - name: Tests (pytest, in-memory SQLite)
+        run: uv run pytest
+
+  test-web:
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Lint (eslint)
+        run: pnpm lint
+      - name: Type-check (tsc)
+        run: pnpm tsc --noEmit
+      - name: i18n key check
+        run: pnpm i18n:check
+      - name: Tests (vitest)
+        run: pnpm test
+
+  # ── Build & push API + Worker images (shared layers) ───────────────────────
   build-api:
+    needs: [changes, test-api]
+    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      security-events: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
         with:
@@ -24,21 +113,99 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - name: Metadata (api)
+        id: meta-api
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.API_IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+            type=ref,event=tag
+
+      - name: Metadata (worker)
+        id: meta-worker
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.WORKER_IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+            type=ref,event=tag
+
+      # Slim web-facing image (no document/media toolchain).
+      - name: Build & push api
+        uses: docker/build-push-action@v6
         with:
           context: ./api
+          target: api
+          platforms: ${{ env.PLATFORMS }}
           push: true
-          tags: |
-            ${{ env.API_IMAGE }}:latest
-            ${{ env.API_IMAGE }}:${{ github.sha }}
+          tags: ${{ steps.meta-api.outputs.tags }}
+          labels: ${{ steps.meta-api.outputs.labels }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
 
+      # Full-capability worker image (ghostscript, ffmpeg, libreoffice, …).
+      # Reuses the builder + runtime-base layers from the api build via the gha
+      # cache, so this build is mostly the extra apt layer.
+      - name: Build & push worker
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          target: worker
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta-worker.outputs.tags }}
+          labels: ${{ steps.meta-worker.outputs.labels }}
+          cache-from: |
+            type=gha,scope=worker
+            type=gha,scope=api
+          cache-to: type=gha,scope=worker,mode=max
+
+      # ── Vulnerability scan (report-only; results in the Security tab) ───────
+      - name: Scan api image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.API_IMAGE }}:sha-${{ github.sha }}
+          format: sarif
+          output: trivy-api.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - name: Upload api scan
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-api.sarif
+          category: trivy-api
+
+      - name: Scan worker image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.WORKER_IMAGE }}:sha-${{ github.sha }}
+          format: sarif
+          output: trivy-worker.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - name: Upload worker scan
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-worker.sarif
+          category: trivy-worker
+
+  # ── Build & push Web image ─────────────────────────────────────────────────
   build-web:
+    needs: [changes, test-web]
+    if: ${{ needs.changes.outputs.web == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      security-events: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
         with:
@@ -46,14 +213,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - name: Metadata (web)
+        id: meta-web
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.WEB_IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+            type=ref,event=tag
+
+      - name: Build & push web
+        uses: docker/build-push-action@v6
         with:
           context: ./web
+          platforms: ${{ env.PLATFORMS }}
           push: true
           build-args: |
             NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
             NEXT_PUBLIC_EUROOFFICE_URL=${{ vars.NEXT_PUBLIC_EUROOFFICE_URL }}
             NEXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
-          tags: |
-            ${{ env.WEB_IMAGE }}:latest
-            ${{ env.WEB_IMAGE }}:${{ github.sha }}
+          tags: ${{ steps.meta-web.outputs.tags }}
+          labels: ${{ steps.meta-web.outputs.labels }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+      - name: Scan web image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.WEB_IMAGE }}:sha-${{ github.sha }}
+          format: sarif
+          output: trivy-web.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - name: Upload web scan
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-web.sarif
+          category: trivy-web

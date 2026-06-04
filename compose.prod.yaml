@@ -45,7 +45,7 @@ services:
           memory: 512M
 
   worker:
-    image: ghcr.io/theo-darvoux/wikint/api:latest
+    image: ghcr.io/theo-darvoux/wikint/worker:latest
     command: arq app.workers.settings.WorkerSettings
     env_file: .env
     environment:
@@ -60,7 +60,7 @@ services:
           memory: 256M
 
   worker-fast:
-    image: ghcr.io/theo-darvoux/wikint/api:latest
+    image: ghcr.io/theo-darvoux/wikint/worker:latest
     command: arq app.workers.settings.UploadFastWorkerSettings
     env_file: .env
     environment:
@@ -79,7 +79,7 @@ services:
           memory: 256M
 
   worker-slow:
-    image: ghcr.io/theo-darvoux/wikint/api:latest
+    image: ghcr.io/theo-darvoux/wikint/worker:latest
     command: arq app.workers.settings.UploadSlowWorkerSettings
     env_file: .env
     environment:

@@ -46,6 +46,7 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
+      target: api
     env_file:
       - .env
     depends_on:
@@ -63,6 +64,7 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
+      target: worker
     env_file:
       - .env
     command: ["arq", "app.workers.settings.WorkerSettings"]
@@ -75,6 +77,7 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
+      target: worker
     env_file:
       - .env
     command: ["arq", "app.workers.settings.UploadFastWorkerSettings"]
@@ -87,6 +90,7 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
+      target: worker
     env_file:
       - .env
     command: ["arq", "app.workers.settings.UploadSlowWorkerSettings"]

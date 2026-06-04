@@ -1,5 +1,6 @@
 FROM node:22-alpine AS base
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pin pnpm to match `packageManager` in package.json for reproducible builds.
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
 
 FROM base AS deps
 WORKDIR /app
