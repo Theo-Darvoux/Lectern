@@ -151,6 +151,7 @@ class MaterialVersion(UUIDMixin, SoftDeleteMixin, Base):
     )
     cas_sha256: Mapped[str | None] = mapped_column(String(64))
     thumbnail_key: Mapped[str | None] = mapped_column(String(500))
+    thumbnail_status: Mapped[str | None] = mapped_column(String(10), nullable=True)
     virus_scan_result: Mapped[VirusScanResult] = mapped_column(
         String(20),
         default=VirusScanResult.PENDING,

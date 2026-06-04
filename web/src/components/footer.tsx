@@ -23,9 +23,14 @@ export function Footer() {
                             {t("privacyPolicy")}
                         </Link>
                         <span aria-hidden>•</span>
-                        <Link href="/terms" className="hover:text-foreground transition-colors">
-                            {t("termsOfUse")}
-                        </Link>
+                        <div className="flex flex-col items-center gap-1.5">
+                            <Link href="/terms" className="hover:text-foreground transition-colors">
+                                {t("termsOfUse")}
+                            </Link>
+                            {config?.footer_text && (
+                                <p className="text-xs whitespace-nowrap">{config.footer_text}</p>
+                            )}
+                        </div>
                         <span aria-hidden>•</span>
                         <a
                             href={config?.organization_url || "https://github.com/Theo-Darvoux/WikINT"}
@@ -36,7 +41,6 @@ export function Footer() {
                             {config?.organization_url ? t("organization") : t("github")}
                         </a>
                     </div>
-                    {config?.footer_text && <p className="text-xs">{config.footer_text}</p>}
                 </div>
             </div>
         </footer>

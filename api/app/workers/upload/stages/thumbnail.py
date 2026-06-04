@@ -33,71 +33,81 @@ async def run_thumbnail_stage(
         # Create a temp path for the thumbnail
         thumb_path = pf.path.parent / f"thumb_{pf.path.name}.webp"
 
-        try:
-            _size_cfg = (config or {}).get("thumbnail_size_px")
-            size_px = int(_size_cfg) if _size_cfg is not None else 640
-            _qual_cfg = (config or {}).get("thumbnail_quality")
-            quality = int(_qual_cfg) if _qual_cfg is not None else 85
-            size = (size_px, size_px)
+        _size_cfg = (config or {}).get("thumbnail_size_px")
+        size_px = int(_size_cfg) if _size_cfg is not None else 640
+        _qual_cfg = (config or {}).get("thumbnail_quality")
+        quality = int(_qual_cfg) if _qual_cfg is not None else 85
+        size = (size_px, size_px)
 
-            if mime_type.startswith("image/"):
-                await _thumbnail_image(pf.path, thumb_path, size, quality)
-            elif mime_type.startswith("video/"):
-                await _thumbnail_video(pf.path, thumb_path, size, quality)
-            elif mime_type == "application/pdf":
-                await _thumbnail_pdf(pf.path, thumb_path, size, quality)
-            elif _is_office_mime(mime_type):
-                await _thumbnail_office(pf.path, thumb_path, size, quality)
-            elif mime_type in (
-                "text/markdown",
-                "text/x-markdown",
-            ) or original_filename.lower().endswith((".md", ".markdown")):
-                await _thumbnail_via_soffice(pf.path, thumb_path, size, quality, suffix=".md")
-            elif mime_type.startswith("text/") or original_filename.lower().endswith(
-                (
-                    ".txt",
-                    ".tex",
-                    ".py",
-                    ".js",
-                    ".ts",
-                    ".json",
-                    ".html",
-                    ".css",
-                    ".sh",
-                    ".yaml",
-                    ".yml",
-                    ".ini",
-                    ".conf",
-                    ".sql",
+        # Return None early for unsupported types — no exception, no retry needed.
+        if mime_type.startswith("image/"):
+            generator_coro = _thumbnail_image(pf.path, thumb_path, size, quality)
+        elif mime_type.startswith("video/"):
+            generator_coro = _thumbnail_video(pf.path, thumb_path, size, quality)
+        elif mime_type == "application/pdf":
+            generator_coro = _thumbnail_pdf(pf.path, thumb_path, size, quality)
+        elif _is_office_mime(mime_type):
+            generator_coro = _thumbnail_office(pf.path, thumb_path, size, quality)
+        elif mime_type in (
+            "text/markdown",
+            "text/x-markdown",
+        ) or original_filename.lower().endswith((".md", ".markdown")):
+            generator_coro = _thumbnail_via_soffice(
+                pf.path, thumb_path, size, quality, suffix=".md"
+            )
+        elif mime_type.startswith("text/") or original_filename.lower().endswith(
+            (
+                ".txt",
+                ".tex",
+                ".py",
+                ".js",
+                ".ts",
+                ".json",
+                ".html",
+                ".css",
+                ".sh",
+                ".yaml",
+                ".yml",
+                ".ini",
+                ".conf",
+                ".sql",
+            )
+        ):
+            generator_coro = _thumbnail_via_soffice(
+                pf.path, thumb_path, size, quality, suffix=".txt"
+            )
+        else:
+            logger.info("Skipping thumbnail for unsupported MIME type: %s", mime_type)
+            return None
+
+        try:
+            await generator_coro
+
+            if not thumb_path.exists():
+                raise RuntimeError(
+                    f"Thumbnail generator produced no output for {original_filename!r}"
                 )
-            ):
-                await _thumbnail_via_soffice(pf.path, thumb_path, size, quality, suffix=".txt")
-            else:
-                logger.info("Skipping thumbnail for unsupported MIME type: %s", mime_type)
+
+            # Only discard near-blank thumbnails for raster images, where an
+            # all-white result genuinely means there is nothing to show. For
+            # PDF/Office/video the dedicated pipelines already select the best
+            # available page/frame (and fall back across pages), so we keep
+            # their output as best effort — otherwise single-page or pale
+            # documents (e.g. featured PDFs) end up with no thumbnail at all.
+            if mime_type.startswith("image/") and _is_blank_thumbnail(thumb_path):
+                logger.info(
+                    "Thumbnail for %s is nearly blank — discarding to allow native fallback",
+                    original_filename,
+                )
+                thumb_path.unlink()
                 return None
 
-            if thumb_path.exists():
-                # Only discard near-blank thumbnails for raster images, where an
-                # all-white result genuinely means there is nothing to show. For
-                # PDF/Office/video the dedicated pipelines already select the best
-                # available page/frame (and fall back across pages), so we keep
-                # their output as best effort — otherwise single-page or pale
-                # documents (e.g. featured PDFs) end up with no thumbnail at all.
-                if mime_type.startswith("image/") and _is_blank_thumbnail(thumb_path):
-                    logger.info(
-                        "Thumbnail for %s is nearly blank — discarding to allow native fallback",
-                        original_filename,
-                    )
-                    thumb_path.unlink()
-                    return None
-                logger.info("Generated thumbnail for %s: %s", original_filename, thumb_path)
-                return str(thumb_path)
-        except Exception as e:
-            logger.error("Failed to generate thumbnail for %s: %s", original_filename, e)
+            logger.info("Generated thumbnail for %s: %s", original_filename, thumb_path)
+            return str(thumb_path)
+        except Exception:
             if thumb_path.exists():
                 thumb_path.unlink()
-
-        return None
+            raise
 
 
 def _is_blank_thumbnail(
@@ -339,6 +349,7 @@ async def _thumbnail_office(
         process.kill()
         await process.wait()
         logger.error("soffice timed out converting %s", input_path.name)
+        raise
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

@@ -422,11 +422,14 @@ async def test_post_scan_happy_path_marks_complete() -> None:
     # Must set running first, then complete
     status_calls = [c.args[1] for c in repo.update_processing_status.call_args_list]
     assert "running" in status_calls
-    # update_upload_status must include processing_status=complete
     update_calls = repo.update_upload_status.call_args_list
     assert any(
         kw.get("processing_status") == "complete" for c in update_calls for kw in [c.kwargs]
     ), "processing_status must be set to 'complete' on success"
+    final_kwargs = update_calls[-1].kwargs
+    assert final_kwargs.get("thumbnail_status") == "ok", (
+        "thumbnail_status must be 'ok' when thumbnail is successfully generated and uploaded"
+    )
 
 
 @pytest.mark.asyncio
@@ -476,7 +479,7 @@ async def test_post_scan_compress_failure_degrades_gracefully() -> None:
 
 @pytest.mark.asyncio
 async def test_post_scan_thumbnail_failure_yields_no_thumbnail() -> None:
-    """If thumbnail generation raises, upload completes without thumbnail_key."""
+    """If thumbnail generation raises on all attempts, upload completes with thumbnail_status=failed."""
     from app.workers.process_upload_post_scan import process_upload_post_scan
 
     ctx = _make_ctx()
@@ -502,6 +505,7 @@ async def test_post_scan_thumbnail_failure_yields_no_thumbnail() -> None:
         patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
         patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
+        patch("app.workers.process_upload_post_scan.asyncio.sleep", AsyncMock()),
     ):
         repo = mock_repo.return_value
         repo.update_processing_status = AsyncMock()
@@ -518,6 +522,106 @@ async def test_post_scan_thumbnail_failure_yields_no_thumbnail() -> None:
     assert final_kwargs.get("processing_status") == "complete"
     assert "thumbnail_key" not in final_kwargs or final_kwargs.get("thumbnail_key") is None, (
         "thumbnail_key must not be set when thumbnail generation fails"
+    )
+    assert final_kwargs.get("thumbnail_status") == "failed", (
+        "thumbnail_status must be 'failed' when generation raises on all attempts"
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_scan_thumbnail_retried_once_then_succeeds() -> None:
+    """If thumbnail raises on the first attempt but succeeds on retry, status is 'ok'."""
+    from app.workers.process_upload_post_scan import process_upload_post_scan
+
+    ctx = _make_ctx()
+    pf = _make_pf()
+    dr = _make_download_result(pf=pf)
+    comp_res = MagicMock(final_mime="application/pdf", content_encoding=None)
+
+    call_count = 0
+
+    async def _thumb_fail_once(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise OSError("transient failure")
+        return "/tmp/thumb.webp"
+
+    with (
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=dr),
+        ),
+        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
+        patch(
+            "app.workers.process_upload_post_scan.run_compress_stage",
+            AsyncMock(return_value=comp_res),
+        ),
+        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", _thumb_fail_once),
+        patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock()),
+        patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
+        patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
+        patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
+        patch("app.workers.process_upload_post_scan.asyncio.sleep", AsyncMock()),
+        patch("pathlib.Path.unlink", MagicMock()),
+    ):
+        repo = mock_repo.return_value
+        repo.update_processing_status = AsyncMock()
+        repo.update_upload_status = AsyncMock()
+        repo.get_auth_config = AsyncMock(return_value={})
+        repo.maybe_dispatch_webhook = AsyncMock()
+        repo.insert_dead_letter = AsyncMock()
+
+        await process_upload_post_scan(ctx, **_post_scan_kwargs())
+
+    assert call_count == 2, "run_thumbnail_stage must be called twice (fail + retry)"
+    final_kwargs = repo.update_upload_status.call_args_list[-1].kwargs
+    assert final_kwargs.get("thumbnail_status") == "ok", (
+        "thumbnail_status must be 'ok' when retry succeeds"
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_scan_thumbnail_skipped_for_unsupported_type() -> None:
+    """If run_thumbnail_stage returns None (unsupported type), thumbnail_status is 'skipped'."""
+    from app.workers.process_upload_post_scan import process_upload_post_scan
+
+    ctx = _make_ctx()
+    pf = _make_pf()
+    dr = _make_download_result(pf=pf, mime="audio/mpeg")
+    comp_res = MagicMock(final_mime="audio/mpeg", content_encoding=None)
+
+    with (
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=dr),
+        ),
+        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
+        patch(
+            "app.workers.process_upload_post_scan.run_compress_stage",
+            AsyncMock(return_value=comp_res),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage",
+            AsyncMock(return_value=None),
+        ),
+        patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock()),
+        patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
+        patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
+        patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
+    ):
+        repo = mock_repo.return_value
+        repo.update_processing_status = AsyncMock()
+        repo.update_upload_status = AsyncMock()
+        repo.get_auth_config = AsyncMock(return_value={})
+        repo.maybe_dispatch_webhook = AsyncMock()
+        repo.insert_dead_letter = AsyncMock()
+
+        await process_upload_post_scan(ctx, **_post_scan_kwargs(mime_type="audio/mpeg"))
+
+    final_kwargs = repo.update_upload_status.call_args_list[-1].kwargs
+    assert final_kwargs.get("thumbnail_status") == "skipped", (
+        "thumbnail_status must be 'skipped' for unsupported MIME types"
     )
 
 

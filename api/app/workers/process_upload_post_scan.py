@@ -54,6 +54,8 @@ from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 logger = logging.getLogger(__name__)
 
 _POST_MAX_RETRIES = 3
+# Max total attempts for thumbnail generation (includes initial attempt + retries).
+_THUMB_MAX_ATTEMPTS = 2
 # Settled processing statuses — a PR can auto-merge when all its files reach one of these.
 _SETTLED_STATUSES = frozenset({"complete", "degraded"})
 
@@ -127,17 +129,35 @@ async def process_upload_post_scan(
                 "Post-scan metadata strip failed for upload %s: %s — continuing.", upload_id, exc
             )
 
-        # ── 3. Generate thumbnail (soft failure — no thumbnail is acceptable) ─
-        try:
-            thumbnail_path = await run_thumbnail_stage(
-                pf, actual_mime, original_filename, tracer, config=auth_config
-            )
-        except Exception as exc:
-            logger.warning(
-                "Post-scan thumbnail generation failed for upload %s: %s — no thumbnail.",
-                upload_id,
-                exc,
-            )
+        # ── 3. Generate thumbnail (soft failure — retried, then accepted without) ─
+        thumbnail_status: str = "skipped"
+        for _thumb_attempt in range(1, _THUMB_MAX_ATTEMPTS + 1):
+            try:
+                thumbnail_path = await run_thumbnail_stage(
+                    pf, actual_mime, original_filename, tracer, config=auth_config
+                )
+                # None means unsupported type — not a failure, no retry needed.
+                thumbnail_status = "ok" if thumbnail_path else "skipped"
+                break
+            except Exception as exc:
+                if _thumb_attempt < _THUMB_MAX_ATTEMPTS:
+                    logger.warning(
+                        "Thumbnail attempt %d/%d failed for upload %s: %s — retrying in 2s.",
+                        _thumb_attempt,
+                        _THUMB_MAX_ATTEMPTS,
+                        upload_id,
+                        exc,
+                    )
+                    await asyncio.sleep(2)
+                else:
+                    logger.warning(
+                        "Thumbnail generation failed for upload %s after %d attempts: %s"
+                        " — proceeding without thumbnail.",
+                        upload_id,
+                        _THUMB_MAX_ATTEMPTS,
+                        exc,
+                    )
+                    thumbnail_status = "failed"
 
         # ── 4. Compress (soft failure — degrade gracefully) ──────────────────
         final_mime = actual_mime
@@ -180,23 +200,24 @@ async def process_upload_post_scan(
         thumbnail_key: str | None = None
         if thumbnail_path:
             cas_id = cas_s3_key.split("/", 1)[-1]
-            thumbnail_key = f"thumbnails/{cas_id}.webp"
+            _candidate_key = f"thumbnails/{cas_id}.webp"
             try:
                 await asyncio.wait_for(
                     upload_file_multipart(
                         Path(thumbnail_path),
-                        thumbnail_key,
+                        _candidate_key,
                         content_type="image/webp",
                     ),
                     timeout=30.0,
                 )
+                thumbnail_key = _candidate_key
             except Exception as exc:
                 logger.warning(
                     "Thumbnail upload failed for upload %s: %s — skipping thumbnail.",
                     upload_id,
                     exc,
                 )
-                thumbnail_key = None
+                thumbnail_status = "failed"
             finally:
                 with contextlib.suppress(Exception):
                     Path(thumbnail_path).unlink(missing_ok=True)
@@ -207,6 +228,7 @@ async def process_upload_post_scan(
             "content_sha256": content_sha256,
             "processing_status": "complete",
             "size_bytes": pf.size,
+            "thumbnail_status": thumbnail_status,
         }
         if thumbnail_key:
             update_kwargs["thumbnail_key"] = thumbnail_key

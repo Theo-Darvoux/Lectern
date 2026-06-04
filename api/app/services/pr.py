@@ -424,24 +424,22 @@ def _resolve_mime_type(
     return payload.get("file_mime_type") or "application/octet-stream"
 
 
-async def _resolve_thumbnail_key(db: AsyncSession, cas_file_key: str) -> str | None:
-    """Return the thumbnail_key stored in the uploads table for the given CAS file key.
-
-    When a file is processed by the upload pipeline the resulting WebP thumbnail
-    path is persisted in `uploads.thumbnail_key` (e.g. ``thumbnails/<sha256>.webp``).
-    This key must be copied to `MaterialVersion.thumbnail_key` so the thumbnail
-    endpoint can serve it — previously this step was missing, causing all newly
-    uploaded materials to have no thumbnail.
-    """
+async def _resolve_thumbnail_info(
+    db: AsyncSession, cas_file_key: str
+) -> tuple[str | None, str | None]:
+    """Return (thumbnail_key, thumbnail_status) from the uploads table for the given CAS key."""
     from app.models.upload import Upload as _Upload
 
-    return await db.scalar(
-        select(_Upload.thumbnail_key)
+    row = await db.execute(
+        select(_Upload.thumbnail_key, _Upload.thumbnail_status)
         .where(_Upload.final_key == cas_file_key)
-        .where(_Upload.thumbnail_key.isnot(None))
         .order_by(_Upload.updated_at.desc())
         .limit(1)
     )
+    result = row.one_or_none()
+    if result is None:
+        return None, None
+    return result[0], result[1]
 
 
 async def _make_version_for_file(
@@ -471,7 +469,7 @@ async def _make_version_for_file(
         )
         real_size = upload_size if upload_size is not None else (payload.get("file_size") or 0)
         mime_type = payload.get("file_mime_type") or "application/octet-stream"
-        thumbnail_key = await _resolve_thumbnail_key(db, file_key)
+        thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key)
     else:
         info = await get_object_info(file_key)
         real_size = info["size"]
@@ -481,6 +479,7 @@ async def _make_version_for_file(
         db.info.setdefault("post_commit_jobs", []).append(("delete_storage_objects", [file_key]))
         file_key = new_key
         thumbnail_key = None
+        thumbnail_status = None
 
     mv = MaterialVersion(
         id=uuid.uuid4(),
@@ -497,6 +496,7 @@ async def _make_version_for_file(
         version_lock=version_lock,
         diff_summary=diff_summary,
         thumbnail_key=thumbnail_key,
+        thumbnail_status=thumbnail_status,
     )
     db.add(mv)
     await db.flush()

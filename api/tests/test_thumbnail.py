@@ -1,5 +1,6 @@
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from PIL import Image, ImageDraw
@@ -102,3 +103,80 @@ async def test_run_thumbnail_stage_text() -> None:
         pf.cleanup()
         if thumb_path_str:
             Path(thumb_path_str).unlink(missing_ok=True)
+
+
+# ── New behaviour: raise on failure, None only for unsupported types ──────────
+
+
+@pytest.mark.asyncio
+async def test_run_thumbnail_stage_unsupported_mime_returns_none() -> None:
+    """Unsupported MIME types return None without raising — no retry needed."""
+    from app.core.processing import ProcessingFile
+    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
+
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(b"\x00" * 64)
+        temp_path = Path(f.name)
+
+    pf = ProcessingFile(temp_path, 64)
+    try:
+        result = await run_thumbnail_stage(pf, "application/octet-stream", "file.bin")
+        assert result is None, "Unsupported MIME type must return None, not raise"
+    finally:
+        pf.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_run_thumbnail_stage_raises_on_generator_failure() -> None:
+    """A failing generator now raises instead of silently returning None."""
+    from app.core.processing import ProcessingFile
+    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+        f.write(b"\xff\xd8\xff" + b"\x00" * 64)
+        temp_path = Path(f.name)
+
+    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
+    try:
+        with patch(
+            "app.workers.upload.stages.thumbnail._thumbnail_image",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("simulated Pillow failure"),
+        ):
+            with pytest.raises(RuntimeError, match="simulated Pillow failure"):
+                await run_thumbnail_stage(pf, "image/jpeg", "photo.jpg")
+    finally:
+        pf.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_run_thumbnail_stage_cleans_up_partial_file_on_failure() -> None:
+    """The partial thumb file is deleted even when the generator raises mid-write."""
+    from app.core.processing import ProcessingFile
+    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+        f.write(b"\xff\xd8\xff" + b"\x00" * 64)
+        temp_path = Path(f.name)
+
+    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
+    expected_thumb = pf.path.parent / f"thumb_{pf.path.name}.webp"
+
+    async def _write_then_fail(input_path, output_path, size, quality):
+        output_path.write_bytes(b"partial")
+        raise OSError("disk full")
+
+    try:
+        with patch(
+            "app.workers.upload.stages.thumbnail._thumbnail_image",
+            side_effect=_write_then_fail,
+        ):
+            with pytest.raises(OSError):
+                await run_thumbnail_stage(pf, "image/jpeg", "photo.jpg")
+
+        assert not expected_thumb.exists(), (
+            "Partial thumb file must be deleted after a generator failure"
+        )
+    finally:
+        pf.cleanup()
+        expected_thumb.unlink(missing_ok=True)

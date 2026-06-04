@@ -208,6 +208,8 @@ export function MaterialViewer({
   const viewerContainerRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const [headerHeight, setHeaderHeight] = useState(0);
+  const headerHeightRef = useRef(0);
+  useEffect(() => { headerHeightRef.current = headerHeight; }, [headerHeight]);
   const navbarVisibleRef = useRef(navbarVisible);
   const hoveredOpen = useRef(false);
   useEffect(() => { navbarVisibleRef.current = navbarVisible; }, [navbarVisible]);
@@ -248,11 +250,11 @@ export function MaterialViewer({
           hoveredOpen.current = true;
           setNavbarVisible(true);
         }
-      } else {
-        if (hoveredOpen.current) {
-          hoveredOpen.current = false;
-          setNavbarVisible(false);
-        }
+      } else if (hoveredOpen.current && e.clientY > (headerHeightRef.current || THRESHOLD)) {
+        // Only hide once the cursor drops below the navbar itself, so the user
+        // can move down onto the breadcrumbs / download button without it closing.
+        hoveredOpen.current = false;
+        setNavbarVisible(false);
       }
     };
     window.addEventListener("mousemove", onMouseMove);
