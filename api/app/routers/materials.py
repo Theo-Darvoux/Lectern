@@ -52,6 +52,9 @@ _TEXT_MIME_EXACT = frozenset(
         "application/sql",
     }
 )
+# MIME types that can be read as UTF-8 text but must NOT be edited via the text endpoint
+# (they have their own security-checked upload paths).
+_TEXT_READABLE_EXACT = frozenset({"image/svg+xml"})
 _TEXT_EDIT_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB cap on raw text body
 
 router = APIRouter(prefix="/api/materials", tags=["materials"])
@@ -440,7 +443,7 @@ async def get_material_text_content(
     # Allow gzip-wrapped text files (e.g. original.md.gz)
     is_gzip_wrapped = mime == "application/gzip" or filename.endswith(".gz")
 
-    if not is_gzip_wrapped and not _is_text_mime(mime):
+    if not is_gzip_wrapped and not _is_text_mime(mime) and mime not in _TEXT_READABLE_EXACT:
         raise BadRequestError("This file is not a text-based document and cannot be edited as text")
 
     raw_bytes = await read_full_object(version["file_key"])
