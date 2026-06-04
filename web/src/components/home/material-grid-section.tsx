@@ -38,7 +38,7 @@ function SkeletonCard() {
 }
 
 const GRID =
-  "grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4";
+  "grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4";
 
 export function MaterialGridSection({
   title,
@@ -80,7 +80,7 @@ export function MaterialGridSection({
         ) : (
           <div className={GRID}>
             {visible.map((material) => (
-              <MaterialCard key={material.id} material={material} hideViewsOnMobile />
+              <MaterialCard key={material.id} material={material} />
             ))}
           </div>
         )}

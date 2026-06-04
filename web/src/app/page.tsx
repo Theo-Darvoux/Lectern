@@ -95,18 +95,6 @@ export default function HomePage() {
           <div className="grid grid-cols-1 gap-8 xl:grid-cols-3">
             {/* Main column */}
             <div className="space-y-10 xl:col-span-2">
-              {showContinue && (
-                <MaterialGridSection
-                  title={t("continueTitle")}
-                  subtitle={t("continueSubtitle")}
-                  icon={<History className="h-4 w-4" />}
-                  materials={data?.recently_viewed ?? []}
-                  isLoading={isLoading}
-                  emptyText={t("nothingHereYet")}
-                  emptyIcon={<History className="h-8 w-8 text-muted-foreground/30" />}
-                />
-              )}
-
               <PopularSection
                 today={data?.popular_today ?? []}
                 fortnight={data?.popular_14d ?? []}
@@ -123,6 +111,18 @@ export default function HomePage() {
                 emptyText={t("nothingHereYet")}
                 emptyIcon={<Sparkles className="h-8 w-8 text-muted-foreground/30" />}
               />
+
+              {showContinue && (
+                <MaterialGridSection
+                  title={t("continueTitle")}
+                  subtitle={t("continueSubtitle")}
+                  icon={<History className="h-4 w-4" />}
+                  materials={data?.recently_viewed ?? []}
+                  isLoading={isLoading}
+                  emptyText={t("nothingHereYet")}
+                  emptyIcon={<History className="h-8 w-8 text-muted-foreground/30" />}
+                />
+              )}
             </div>
 
             {/* Right rail */}

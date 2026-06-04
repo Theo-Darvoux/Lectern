@@ -74,6 +74,18 @@ function DirectoryGridCardImpl({
   const { gradient: customGradient, iconClass: customIconClass, swatchClass: customSwatch } = getDirectoryColor(thumbnailColorId);
   const showCollage = !thumbnailIconId && previewMaterialIds.length > 0;
 
+  // Tab colour tracks the staged state so it never clashes with the body gradient.
+  const tabColorClass =
+    staged === "deleted"
+      ? "bg-red-400"
+      : staged === "moved"
+        ? "bg-amber-400"
+        : staged === "created" || staged === "edited"
+          ? isExternal
+            ? "bg-blue-400"
+            : "bg-green-400"
+          : customSwatch;
+
   const buildPath = () => {
     const dirPath = `${pathBase}/${slug}`;
     return previewPrId ? `${dirPath}?preview_pr=${previewPrId}` : dirPath;
@@ -200,20 +212,26 @@ function DirectoryGridCardImpl({
         {/* Icon area */}
         <div className={cn("aspect-[4/3] relative flex items-center justify-center bg-linear-to-br overflow-hidden", bgGradient)}>
           {showCollage ? (
-            /* Folder metaphor: the preview thumbnail is rendered as the front
-               "sheet" of a folder — a coloured tab juts out top-left and a
-               couple of pages peek out behind it. This makes a directory read
-               as a folder at a glance, even when it holds a single thumbnail
-               (which would otherwise be indistinguishable from a material). */
-            <div className="absolute inset-0 px-3 pt-4 pb-3">
-              <div className="relative h-full w-full transition-transform duration-500 ease-out group-hover:scale-[1.02]">
-                {/* Stacked pages peeking out behind the front sheet */}
-                <div className="absolute -right-1.5 -top-1.5 h-full w-full rounded-lg bg-white/45 ring-1 ring-black/5 shadow-sm dark:bg-white/10" />
-                <div className="absolute -right-0.5 -top-0.5 h-full w-full rounded-lg bg-white/70 ring-1 ring-black/5 shadow-sm dark:bg-white/15" />
-                {/* Folder tab, coloured by the directory's theme colour */}
-                <div className={cn("absolute -top-2.5 left-1 h-3 w-11 rounded-t-md shadow-sm", customSwatch)} />
-                {/* Front sheet: the actual preview collage */}
-                <div className="relative h-full w-full overflow-hidden rounded-lg rounded-tl-none ring-1 ring-black/10 shadow-md">
+            /* macOS-style folder icon: a solid-coloured tab sits top-left above
+               the folder body, thumbnails are inset inside the body. This shape
+               is unmistakable as a folder even with a single thumbnail. */
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="relative w-[80%] h-[72%] transition-transform duration-500 ease-out group-hover:-translate-y-1.5">
+                {/* Tab — solid colour, rounded top corners, attached to body top-left */}
+                <div
+                  className={cn("absolute left-0 w-[40%] rounded-t-lg shadow-sm", tabColorClass)}
+                  style={{ bottom: "100%", height: "22%" }}
+                />
+                {/* Folder body — gradient background, rounded except top-left corner */}
+                <div
+                  className={cn(
+                    "absolute inset-0 rounded-b-xl rounded-tr-xl shadow-lg bg-linear-to-br",
+                    "ring-1 ring-black/8 dark:ring-white/8",
+                    bgGradient,
+                  )}
+                />
+                {/* Thumbnail collage inset inside the folder body */}
+                <div className="absolute inset-[9%] rounded-md overflow-hidden shadow-sm ring-1 ring-black/10 dark:ring-black/30">
                   <DirectoryPreviewCollage materialIds={previewMaterialIds} />
                 </div>
               </div>

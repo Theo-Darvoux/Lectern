@@ -86,7 +86,7 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
         {/* Thumbnail/Gradient panel */}
         <div
           className={cn(
-            "relative flex shrink-0 items-center justify-center sm:w-64 sm:rounded-none h-48 sm:h-auto sm:min-h-[220px] overflow-hidden",
+            "relative flex shrink-0 items-center justify-center sm:w-64 sm:rounded-none h-36 sm:h-auto sm:min-h-[220px] overflow-hidden",
           )}
         >
           {material ? (
@@ -111,9 +111,9 @@ function FeaturedHeroCard({ item }: { item: FeaturedItem }) {
         </div>
 
         {/* Content */}
-        <div className="flex flex-1 flex-col justify-between p-5 sm:p-6">
+        <div className="flex flex-1 flex-col justify-between p-4 sm:p-6">
           <div className="space-y-2.5">
-            <h2 className="text-xl font-bold leading-snug tracking-tight sm:text-2xl">
+            <h2 className="text-lg font-bold leading-snug tracking-tight sm:text-2xl">
               {title}
             </h2>
 
@@ -170,13 +170,13 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
   return (
     <Link
       href={browsePath}
-      className="group block w-72 flex-none sm:w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
+      className="group block w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
     >
       <div className="flex h-full flex-col rounded-xl border bg-card shadow-sm overflow-hidden transition-all duration-200 group-hover:shadow-md group-hover:-translate-y-0.5">
         {/* Thumbnail/Gradient banner */}
         <div
           className={cn(
-            "relative flex h-40 shrink-0 items-center justify-center overflow-hidden",
+            "relative flex h-28 shrink-0 items-center justify-center overflow-hidden sm:h-40",
           )}
         >
           {material ? (
@@ -186,23 +186,23 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
               lazy={false}
             />
           ) : directory ? (
-            <DirectoryThumbnail directory={directory} iconSize="h-16 w-16" />
+            <DirectoryThumbnail directory={directory} iconSize="h-12 w-12 sm:h-16 sm:w-16" />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center bg-linear-to-br from-amber-400 to-orange-500">
-              <Folder className="h-16 w-16 opacity-85 drop-shadow-sm text-white" />
+              <Folder className="h-12 w-12 opacity-85 drop-shadow-sm text-white sm:h-16 sm:w-16" />
             </div>
           )}
 
           {/* Featured pill */}
-          <span className="absolute left-3 top-3 z-20 inline-flex items-center gap-1 rounded-full border border-white/25 bg-black/55 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm shadow-sm">
+          <span className="absolute left-2 top-2 z-20 inline-flex items-center gap-1 rounded-full border border-white/25 bg-black/55 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur-sm shadow-sm sm:left-3 sm:top-3">
             <Star className="h-2.5 w-2.5 fill-amber-400 text-amber-400" />
             {t("featured")}
           </span>
         </div>
 
         {/* Content */}
-        <div className="flex flex-1 flex-col gap-2 p-4">
-          <h3 className="font-semibold leading-snug line-clamp-2 text-sm">
+        <div className="flex flex-1 flex-col gap-2 p-3 sm:p-4">
+          <h3 className="font-semibold leading-snug line-clamp-2 text-[13px] sm:text-sm">
             {title}
           </h3>
 
@@ -261,12 +261,10 @@ export function FeaturedSection({ items }: FeaturedSectionProps) {
         {items.length === 1 ? (
           <FeaturedHeroCard item={items[0]} />
         ) : (
-          <div>
-            <div className="flex gap-4 overflow-x-auto pb-3 scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] sm:grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 sm:overflow-x-visible sm:pb-0">
-              {items.map((item) => (
-                <FeaturedScrollCard key={item.id} item={item} />
-              ))}
-            </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+            {items.map((item) => (
+              <FeaturedScrollCard key={item.id} item={item} />
+            ))}
           </div>
         )}
       </div>

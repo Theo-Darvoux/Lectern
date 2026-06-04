@@ -19,7 +19,7 @@ interface PopularSectionProps {
 
 const MAX_CARDS = 8;
 const GRID =
-  "grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4";
+  "grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4";
 
 function SkeletonCard() {
   return (
@@ -93,7 +93,7 @@ export function PopularSection({
         ) : (
           <div className={GRID}>
             {visible.map((material) => (
-              <MaterialCard key={material.id} material={material} hideViewsOnMobile />
+              <MaterialCard key={material.id} material={material} />
             ))}
           </div>
         )}

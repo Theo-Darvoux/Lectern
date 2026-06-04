@@ -16,11 +16,9 @@ import { useTranslations } from "next-intl";
 interface MaterialCardProps {
   material: MaterialDetail;
   className?: string;
-  /** Hide the view-count stat on mobile (used on the home page to reduce clutter). */
-  hideViewsOnMobile?: boolean;
 }
 
-export function MaterialCard({ material, className, hideViewsOnMobile }: MaterialCardProps) {
+export function MaterialCard({ material, className }: MaterialCardProps) {
   const t = useTranslations("Home");
   const versionInfo = material.current_version_info;
   const fileName = versionInfo?.file_name ?? null;
@@ -56,25 +54,25 @@ export function MaterialCard({ material, className, hideViewsOnMobile }: Materia
         </div>
 
         {/* Card body */}
-        <div className="p-3 flex flex-col gap-1.5 flex-1 min-w-0">
+        <div className="p-2.5 sm:p-3 flex flex-col gap-1 sm:gap-1.5 flex-1 min-w-0">
           {/* Title */}
-          <p className="font-medium text-sm leading-snug line-clamp-2 text-foreground">
+          <p className="font-medium text-[13px] sm:text-sm leading-snug line-clamp-2 text-foreground">
             {material.title}
           </p>
 
-          {/* Filename */}
+          {/* Filename — hidden on mobile to keep cards compact */}
           {fileName && (
             <p
-              className="text-[11px] text-muted-foreground truncate"
+              className="hidden sm:block text-[11px] text-muted-foreground truncate"
               title={fileName}
             >
               {fileName}
             </p>
           )}
 
-          {/* File size */}
+          {/* File size — hidden on mobile to keep cards compact */}
           {fileSize !== null && (
-            <p className="text-[11px] text-muted-foreground/80">
+            <p className="hidden sm:block text-[11px] text-muted-foreground/80">
               {formatFileSize(fileSize)}
             </p>
           )}
@@ -92,13 +90,7 @@ export function MaterialCard({ material, className, hideViewsOnMobile }: Materia
 
           {/* Stats row — pushed to the bottom */}
           <div className="flex items-center gap-3 text-[11px] text-muted-foreground pt-1 mt-auto">
-            <span
-              className={cn(
-                "items-center gap-1",
-                hideViewsOnMobile ? "hidden sm:flex" : "flex",
-              )}
-              title={t("totalViews")}
-            >
+            <span className="flex items-center gap-1" title={t("totalViews")}>
               <Eye className="h-3 w-3" />
               {material.total_views.toLocaleString()}
             </span>
