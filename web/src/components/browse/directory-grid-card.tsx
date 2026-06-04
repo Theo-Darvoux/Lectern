@@ -3,7 +3,7 @@
 import { memo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
-import { Folder, Info, MessageSquare, ChevronRight } from "lucide-react";
+import { Info, MessageSquare, ChevronRight } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { useUIStore } from "@/lib/stores";
@@ -71,7 +71,7 @@ function DirectoryGridCardImpl({
     ? (directory.preview_material_ids as string[])
     : [];
   const { Icon: ThumbnailIcon } = getDirectoryIcon(thumbnailIconId);
-  const { gradient: customGradient, iconClass: customIconClass } = getDirectoryColor(thumbnailColorId);
+  const { gradient: customGradient, iconClass: customIconClass, swatchClass: customSwatch } = getDirectoryColor(thumbnailColorId);
   const showCollage = !thumbnailIconId && previewMaterialIds.length > 0;
 
   const buildPath = () => {
@@ -200,15 +200,24 @@ function DirectoryGridCardImpl({
         {/* Icon area */}
         <div className={cn("aspect-[4/3] relative flex items-center justify-center bg-linear-to-br overflow-hidden", bgGradient)}>
           {showCollage ? (
-            <>
-              <div className="absolute inset-0">
-                <DirectoryPreviewCollage materialIds={previewMaterialIds} />
+            /* Folder metaphor: the preview thumbnail is rendered as the front
+               "sheet" of a folder — a coloured tab juts out top-left and a
+               couple of pages peek out behind it. This makes a directory read
+               as a folder at a glance, even when it holds a single thumbnail
+               (which would otherwise be indistinguishable from a material). */
+            <div className="absolute inset-0 px-3 pt-4 pb-3">
+              <div className="relative h-full w-full transition-transform duration-500 ease-out group-hover:scale-[1.02]">
+                {/* Stacked pages peeking out behind the front sheet */}
+                <div className="absolute -right-1.5 -top-1.5 h-full w-full rounded-lg bg-white/45 ring-1 ring-black/5 shadow-sm dark:bg-white/10" />
+                <div className="absolute -right-0.5 -top-0.5 h-full w-full rounded-lg bg-white/70 ring-1 ring-black/5 shadow-sm dark:bg-white/15" />
+                {/* Folder tab, coloured by the directory's theme colour */}
+                <div className={cn("absolute -top-2.5 left-1 h-3 w-11 rounded-t-md shadow-sm", customSwatch)} />
+                {/* Front sheet: the actual preview collage */}
+                <div className="relative h-full w-full overflow-hidden rounded-lg rounded-tl-none ring-1 ring-black/10 shadow-md">
+                  <DirectoryPreviewCollage materialIds={previewMaterialIds} />
+                </div>
               </div>
-              {/* Folder badge so collage cards are distinguishable from material cards */}
-              <div className="absolute bottom-2 left-2 z-10 flex items-center gap-1 rounded-md bg-black/50 backdrop-blur-sm px-1.5 py-0.5">
-                <Folder className="h-3 w-3 text-white/90" />
-              </div>
-            </>
+            </div>
           ) : (
             <>
               {/* Huge watermark */}

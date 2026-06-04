@@ -93,7 +93,7 @@ export function PopularSection({
         ) : (
           <div className={GRID}>
             {visible.map((material) => (
-              <MaterialCard key={material.id} material={material} />
+              <MaterialCard key={material.id} material={material} hideViewsOnMobile />
             ))}
           </div>
         )}

@@ -16,9 +16,11 @@ import { useTranslations } from "next-intl";
 interface MaterialCardProps {
   material: MaterialDetail;
   className?: string;
+  /** Hide the view-count stat on mobile (used on the home page to reduce clutter). */
+  hideViewsOnMobile?: boolean;
 }
 
-export function MaterialCard({ material, className }: MaterialCardProps) {
+export function MaterialCard({ material, className, hideViewsOnMobile }: MaterialCardProps) {
   const t = useTranslations("Home");
   const versionInfo = material.current_version_info;
   const fileName = versionInfo?.file_name ?? null;
@@ -90,7 +92,13 @@ export function MaterialCard({ material, className }: MaterialCardProps) {
 
           {/* Stats row — pushed to the bottom */}
           <div className="flex items-center gap-3 text-[11px] text-muted-foreground pt-1 mt-auto">
-            <span className="flex items-center gap-1" title={t("totalViews")}>
+            <span
+              className={cn(
+                "items-center gap-1",
+                hideViewsOnMobile ? "hidden sm:flex" : "flex",
+              )}
+              title={t("totalViews")}
+            >
               <Eye className="h-3 w-3" />
               {material.total_views.toLocaleString()}
             </span>
