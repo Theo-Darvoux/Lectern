@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import hljs from "highlight.js/lib/common";
+import { List, type RowComponentProps } from "react-window";
 import { usePinchZoom } from "@/hooks/use-pinch-zoom";
 import { useMaterialFile } from "@/hooks/use-material-file";
 import { ViewerShell } from "./viewer-shell";
@@ -109,7 +110,18 @@ import "highlight.js/styles/github.css";
 const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
 const ZOOM_STEP = 10;
-const MAX_DISPLAY_BYTES = 512 * 1024; // 512 KiB
+
+// Base monospace metrics at 100% zoom. Row height and the horizontal content
+// width are derived from these so the virtualised list can size rows ahead of
+// time (no per-row measurement pass — far cheaper than dynamic heights).
+const BASE_FONT_PX = 13;
+const LINE_HEIGHT_RATIO = 1.5;
+const CHAR_WIDTH_RATIO = 0.62; // ~advance width of a monospace glyph per font px
+const OVERSCAN_ROWS = 8;
+
+function escapeHtml(s: string): string {
+    return s.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+}
 
 interface CodeViewerProps {
     fileKey: string;
@@ -145,15 +157,68 @@ function getLang(fileName: string): string {
     return EXT_TO_LANG[ext] ?? "";
 }
 
+interface CodeRowProps {
+    lines: string[];
+    lang: string;
+    rowHeight: number;
+    gutterWidth: number;
+    contentWidth: number;
+    /** Per-line highlight cache, keyed by line index. Reset when content/lang change. */
+    cache: Map<number, string>;
+}
+
+// Top-level component so react-window never remounts rows on parent re-render.
+// Each line is highlighted lazily on first paint and memoised in `cache`, so
+// scrolling back over a line never re-tokenises it.
+function CodeRow({
+    index,
+    style,
+    lines,
+    lang,
+    rowHeight,
+    gutterWidth,
+    contentWidth,
+    cache,
+}: RowComponentProps<CodeRowProps>) {
+    const line = lines[index] ?? "";
+
+    let html = cache.get(index);
+    if (html === undefined) {
+        html =
+            lang && hljs.getLanguage(lang)
+                ? hljs.highlight(line, { language: lang, ignoreIllegals: true }).value
+                : escapeHtml(line);
+        cache.set(index, html);
+    }
+
+    return (
+        <div
+            style={{ ...style, width: contentWidth, minWidth: "100%", display: "flex" }}
+        >
+            <span
+                className="sticky left-0 z-10 shrink-0 select-none bg-background px-3 text-right text-muted-foreground tabular-nums"
+                style={{ width: gutterWidth, lineHeight: `${rowHeight}px` }}
+            >
+                {index + 1}
+            </span>
+            <code
+                className="block pr-4"
+                style={{ whiteSpace: "pre", lineHeight: `${rowHeight}px` }}
+                // hljs output is already HTML-escaped; plain lines go through escapeHtml.
+                // Zero-width space keeps empty lines from collapsing.
+                dangerouslySetInnerHTML={{ __html: html || "​" }}
+            />
+        </div>
+    );
+}
+
 export function CodeViewer({ materialId, fileKey, fileName }: CodeViewerProps) {
     const scrollRef = useRef<HTMLDivElement>(null);
-    const codeRef = useRef<HTMLElement>(null);
 
-    const { content, loading, error, truncated } = useMaterialFile({
+    const { content, loading, error } = useMaterialFile({
         materialId,
         fileKey,
         mode: "text",
-        maxBytes: MAX_DISPLAY_BYTES,
     });
 
     const { zoom, zoomIn, zoomOut, resetZoom } = usePinchZoom({
@@ -166,20 +231,37 @@ export function CodeViewer({ materialId, fileKey, fileName }: CodeViewerProps) {
     });
 
     const lang = useMemo(() => getLang(fileName), [fileName]);
+    const lines = useMemo(() => content.split("\n"), [content]);
 
-    // Apply highlight.js after content renders
-    useEffect(() => {
-        if (!content || !codeRef.current) return;
-        codeRef.current.removeAttribute("data-highlighted");
-        hljs.highlightElement(codeRef.current);
-    }, [content, lang]);
+    // Highlight results are independent of zoom, so the cache only needs to be
+    // recreated when the source text or the detected language changes.
+    const cache = useMemo<Map<number, string>>(() => new Map(), [content, lang]);
+
+    // Derive sizing from the zoom level. A fixed row height lets react-window
+    // place every row without measuring it.
+    const fontSize = (BASE_FONT_PX * zoom) / 100;
+    const rowHeight = Math.round(fontSize * LINE_HEIGHT_RATIO);
+    const charWidth = fontSize * CHAR_WIDTH_RATIO;
+
+    // Gutter is wide enough for the largest line number; content width spans the
+    // longest line so the list scrolls horizontally instead of wrapping.
+    const gutterWidth = Math.ceil(String(lines.length).length * charWidth) + 24;
+    const maxLineLen = useMemo(
+        () => lines.reduce((max, l) => Math.max(max, l.length), 0),
+        [lines],
+    );
+    const contentWidth = gutterWidth + Math.ceil(maxLineLen * charWidth) + 16;
+
+    const rowProps = useMemo<CodeRowProps>(
+        () => ({ lines, lang, rowHeight, gutterWidth, contentWidth, cache }),
+        [lines, lang, rowHeight, gutterWidth, contentWidth, cache],
+    );
 
     return (
         <ViewerShell
             scrollRef={scrollRef}
             loading={loading}
             error={error}
-            truncatedMessage={truncated ? "File truncated — showing first 512 KiB. Download to view the full content." : null}
             toolbarLeft={
                 lang && (
                     <span className="text-xs font-medium uppercase text-muted-foreground px-1.5 py-0.5 bg-muted rounded truncate">
@@ -199,18 +281,17 @@ export function CodeViewer({ materialId, fileKey, fileName }: CodeViewerProps) {
                 />
             }
         >
-            <pre
-                className="!m-0 !rounded-none !bg-transparent p-0"
-                style={{ fontSize: `${zoom}%` }}
-            >
-                <code
-                    ref={codeRef}
-                    className={lang ? `language-${lang}` : ""}
-                    style={{ background: "transparent" }}
-                >
-                    {content}
-                </code>
-            </pre>
+            {!loading && !error && (
+                <List
+                    rowCount={lines.length}
+                    rowHeight={rowHeight}
+                    rowComponent={CodeRow}
+                    rowProps={rowProps}
+                    overscanCount={OVERSCAN_ROWS}
+                    className="h-full w-full bg-background font-mono"
+                    style={{ fontSize }}
+                />
+            )}
         </ViewerShell>
     );
 }

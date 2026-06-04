@@ -22,7 +22,7 @@ from app.core.storage import (
 )
 from app.core.storage import upload_file as storage_upload_file
 from app.dependencies.auth import CurrentUser, get_user_from_token, security
-from app.dependencies.rate_limit import rate_limit_downloads
+from app.dependencies.rate_limit import rate_limit_downloads, rate_limit_views
 from app.models.upload import Upload
 from app.models.user import User
 from app.schemas.material import MaterialDetail, MaterialVersionOut
@@ -377,6 +377,7 @@ async def view_material(
     material_id: str,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[None, Depends(rate_limit_views)],
 ) -> dict[str, str]:
     await record_view(db, str(user.id), material_id)
     return {"status": "ok"}

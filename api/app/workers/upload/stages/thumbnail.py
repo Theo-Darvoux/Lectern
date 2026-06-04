@@ -40,7 +40,9 @@ async def run_thumbnail_stage(
         size = (size_px, size_px)
 
         # Return None early for unsupported types — no exception, no retry needed.
-        if mime_type.startswith("image/"):
+        if mime_type == "image/svg+xml":
+            generator_coro = _thumbnail_svg(pf.path, thumb_path, size, quality)
+        elif mime_type.startswith("image/"):
             generator_coro = _thumbnail_image(pf.path, thumb_path, size, quality)
         elif mime_type.startswith("video/"):
             generator_coro = _thumbnail_video(pf.path, thumb_path, size, quality)
@@ -94,7 +96,13 @@ async def run_thumbnail_stage(
             # available page/frame (and fall back across pages), so we keep
             # their output as best effort — otherwise single-page or pale
             # documents (e.g. featured PDFs) end up with no thumbnail at all.
-            if mime_type.startswith("image/") and _is_blank_thumbnail(thumb_path):
+            # SVGs are excluded: vector art often has transparent/white fills
+            # that are legitimate and should not be discarded.
+            if (
+                mime_type.startswith("image/")
+                and mime_type != "image/svg+xml"
+                and _is_blank_thumbnail(thumb_path)
+            ):
                 logger.info(
                     "Thumbnail for %s is nearly blank — discarding to allow native fallback",
                     original_filename,
@@ -176,6 +184,37 @@ async def _thumbnail_image(
             img.save(output_path, "WEBP", quality=quality)
 
     await asyncio.to_thread(_sync)
+
+
+async def _thumbnail_svg(
+    input_path: Path, output_path: Path, size: tuple[int, int], quality: int
+) -> None:
+    """Render SVG to a WebP thumbnail via rsvg-convert → Pillow."""
+    temp_png = output_path.with_suffix(".svg_thumb.png")
+    cmd = [
+        "rsvg-convert",
+        "--width",
+        str(size[0]),
+        "--height",
+        str(size[1]),
+        "--keep-aspect-ratio",
+        "--output",
+        str(temp_png),
+        str(input_path),
+    ]
+    process = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    _, stderr_bytes = await process.communicate()
+    if process.returncode != 0 or not temp_png.exists():
+        raise RuntimeError(
+            f"rsvg-convert failed for {input_path.name}: "
+            f"{stderr_bytes.decode(errors='replace')[:300]}"
+        )
+    try:
+        await _thumbnail_image(temp_png, output_path, size, quality)
+    finally:
+        temp_png.unlink(missing_ok=True)
 
 
 async def _thumbnail_video(

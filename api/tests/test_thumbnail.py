@@ -40,6 +40,38 @@ def test_pale_page_with_title_bar_is_not_blank() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_thumbnail_stage_svg() -> None:
+    """SVG files should be rendered to a WebP thumbnail via rsvg-convert."""
+    from app.core.processing import ProcessingFile
+    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
+
+    svg_content = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">'
+        '<rect width="200" height="100" fill="#4a90d9"/>'
+        '<text x="10" y="60" font-size="24" fill="white">WikINT</text>'
+        "</svg>"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".svg", delete=False, mode="w") as f:
+        f.write(svg_content)
+        temp_path = Path(f.name)
+
+    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
+    thumb_path_str = None
+    try:
+        thumb_path_str = await run_thumbnail_stage(pf, "image/svg+xml", "diagram.svg")
+        assert thumb_path_str is not None
+        thumb_path = Path(thumb_path_str)
+        assert thumb_path.exists()
+        assert thumb_path.suffix == ".webp"
+        with Image.open(thumb_path) as img:
+            assert img.format == "WEBP"
+    finally:
+        pf.cleanup()
+        if thumb_path_str:
+            Path(thumb_path_str).unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
 async def test_run_thumbnail_stage_markdown() -> None:
     """Markdown files should be successfully converted to a WebP thumbnail."""
     from app.core.processing import ProcessingFile

@@ -133,6 +133,7 @@ export function MarkdownViewer({
 }: MarkdownViewerProps) {
     const proseRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
+    const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [highlights, setHighlights] = useState<HighlightRect[]>([]);
     const [activeAnnotation, setActiveAnnotation] = useState<{
         thread: ThreadData;
@@ -167,6 +168,17 @@ export function MarkdownViewer({
         return () => unregisterViewerPrint(materialId);
     }, [materialId]);
 
+    // `content-visibility: auto` lets the browser skip layout/paint for the
+    // markdown blocks scrolled out of view — the whole document stays in the DOM
+    // (so print and in-page search still see everything), but only the visible
+    // blocks cost rendering time. The `auto` keyword in `contain-intrinsic-size`
+    // makes the browser remember each block's real height after its first paint,
+    // so the scrollbar settles once a block has been seen.
+    //
+    // It is disabled while annotations are present: `buildHighlights` measures
+    // text ranges across the entire document, and offscreen blocks skipped by
+    // content-visibility report no client rects, which would misplace highlights.
+    const enableContentVis = annotations.length === 0;
     const rendered = useMemo(
         () =>
             parsedContent ? (
@@ -174,9 +186,14 @@ export function MarkdownViewer({
                     content={parsedContent}
                     materialId={materialId}
                     material={material}
+                    className={
+                        enableContentVis
+                            ? "[&>*]:[content-visibility:auto] [&>*]:[contain-intrinsic-size:auto_4rem]"
+                            : undefined
+                    }
                 />
             ) : null,
-        [parsedContent, materialId, material],
+        [parsedContent, materialId, material, enableContentVis],
     );
 
     const updateHighlights = useCallback(() => {
@@ -197,9 +214,17 @@ export function MarkdownViewer({
 
     useEffect(() => {
         if (!proseRef.current) return;
-        const ro = new ResizeObserver(updateHighlights);
+        // Recomputing highlights walks the whole document, so coalesce the bursts
+        // of resize callbacks (fonts loading, zoom, container reflow) into one run.
+        const ro = new ResizeObserver(() => {
+            if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
+            resizeTimerRef.current = setTimeout(updateHighlights, 100);
+        });
         ro.observe(proseRef.current);
-        return () => ro.disconnect();
+        return () => {
+            ro.disconnect();
+            if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
+        };
     }, [updateHighlights]);
 
     const handleHighlightClick = useCallback((threadId: string, e: React.MouseEvent) => {

@@ -179,6 +179,66 @@ class TestRateLimitUploads:
             await rate_limit_uploads(request, user, db, redis)
 
 
+# ── rate_limit_views unit tests ─────────────────────────────────────────────
+
+
+class TestRateLimitViews:
+    """Unit tests for rate_limit_views dependency, with a mocked Redis pipeline."""
+
+    def _make_user(self) -> MagicMock:
+        u = MagicMock()
+        u.id = uuid.uuid4()
+        return u
+
+    def _make_redis(self, minute_count: int = 0, daily_count: int = 0) -> AsyncMock:
+        """Build a mock Redis with a pipeline that returns specified counters."""
+        redis = AsyncMock()
+        pipe = AsyncMock()
+        pipe.incr = AsyncMock(return_value=pipe)
+        pipe.expire = AsyncMock(return_value=pipe)
+        pipe.execute = AsyncMock(return_value=[minute_count, True, daily_count, True])
+        pipe.__aenter__ = AsyncMock(return_value=pipe)
+        pipe.__aexit__ = AsyncMock(return_value=None)
+        redis.pipeline = MagicMock(return_value=pipe)
+        return redis
+
+    @pytest.mark.asyncio
+    async def test_views_under_limit_does_not_raise(self):
+        """No exception when view counts are within limits."""
+        from app.dependencies.rate_limit import rate_limit_views
+
+        redis = self._make_redis(minute_count=1, daily_count=1)
+        user = self._make_user()
+        request = MagicMock(spec=Request)
+
+        # Should not raise
+        await rate_limit_views(request, user, redis)
+
+    @pytest.mark.asyncio
+    async def test_views_minute_limit_exceeded_raises(self):
+        """RateLimitError raised when view minute limit exceeded."""
+        from app.dependencies.rate_limit import rate_limit_views
+
+        redis = self._make_redis(minute_count=601, daily_count=1)
+        user = self._make_user()
+        request = MagicMock(spec=Request)
+
+        with pytest.raises(RateLimitError, match="Too many view events"):
+            await rate_limit_views(request, user, redis)
+
+    @pytest.mark.asyncio
+    async def test_views_daily_limit_exceeded_raises(self):
+        """RateLimitError raised when view daily limit exceeded."""
+        from app.dependencies.rate_limit import rate_limit_views
+
+        redis = self._make_redis(minute_count=1, daily_count=5001)
+        user = self._make_user()
+        request = MagicMock(spec=Request)
+
+        with pytest.raises(RateLimitError, match="Too many view events"):
+            await rate_limit_views(request, user, redis)
+
+
 # ── ProcessingFile fast-path (disk copy) ─────────────────────────────────────
 
 

@@ -102,6 +102,38 @@ async def rate_limit_uploads(
         )
 
 
+async def rate_limit_views(
+    request: Request,
+    user: CurrentUser,
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+) -> None:
+    """Rate limit for view tracking.
+
+    View recording is fire-and-forget on the client (errors are swallowed), so
+    exceeding this limit has no user-visible effect — it only caps abusive
+    flooding of the endpoint. Limits are deliberately set far above any
+    realistic browsing rate, use dedicated counters (they don't consume the
+    download/upload budget), and do NOT flag the account, so regular users are
+    never impacted.
+    """
+    minute_limit = 600 if settings.is_dev else 60
+    daily_limit = 5000 if settings.is_dev else 1000
+
+    user_id = str(user.id)
+    minute_key = f"ratelimit:views:min:{user_id}"
+    daily_key = f"ratelimit:views:day:{user_id}"
+
+    async with redis.pipeline(transaction=True) as pipe:
+        await pipe.incr(minute_key)
+        await pipe.expire(minute_key, 60, nx=True)
+        await pipe.incr(daily_key)
+        await pipe.expire(daily_key, 86400, nx=True)
+        results = await pipe.execute()
+
+    if results[0] > minute_limit or results[2] > daily_limit:
+        raise RateLimitError("Too many view events. Please slow down.")
+
+
 async def rate_limit_search(
     request: Request,
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]

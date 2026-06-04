@@ -49,6 +49,7 @@ export function AudioPlayer({ materialId, fileKey }: AudioPlayerProps) {
  
     const audioRef = useRef<HTMLAudioElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const progressCanvasRef = useRef<HTMLCanvasElement>(null);
  
     const isDark = resolvedTheme === "dark";
  
@@ -135,6 +136,15 @@ export function AudioPlayer({ materialId, fileKey }: AudioPlayerProps) {
         const bgColor = isDark ? "rgba(148, 163, 184, 0.2)" : "rgba(100, 116, 139, 0.35)";
         drawWaveform(audioBuffer, bgColor, canvasRef.current);
     }, [audioBuffer, drawWaveform, isDark]);
+
+    // Progress (foreground) waveform: identical bars in the accent colour, drawn
+    // once. Playback progress is revealed purely by the clip-path overlay below,
+    // so the canvas pixels never change — there's no need to re-rasterise the
+    // whole PCM buffer on every `timeupdate` tick.
+    useEffect(() => {
+        if (!audioBuffer || !progressCanvasRef.current) return;
+        drawWaveform(audioBuffer, "#3b82f6", progressCanvasRef.current);
+    }, [audioBuffer, drawWaveform]);
 
     const togglePlay = () => {
         if (!audioRef.current) return;
@@ -244,12 +254,7 @@ export function AudioPlayer({ materialId, fileKey }: AudioPlayerProps) {
                                             className="absolute inset-0 pointer-events-none overflow-hidden transition-[clip-path] duration-150 ease-out"
                                             style={{ clipPath: `inset(0 ${100 - (currentTime / duration) * 100}% 0 0)` }}
                                         >
-                                            <canvas 
-                                                className="w-full h-full block" 
-                                                ref={(el) => {
-                                                    if (el && audioBuffer) drawWaveform(audioBuffer, "#3b82f6", el);
-                                                }} 
-                                            />
+                                            <canvas className="w-full h-full block" ref={progressCanvasRef} />
                                         </div>
                                     </>
                                 ) : (

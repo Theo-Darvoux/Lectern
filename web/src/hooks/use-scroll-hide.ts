@@ -13,9 +13,12 @@ export function useScrollHide(
   options?: ScrollHideOptions
 ) {
   const setNavbarVisible = useUIStore((s) => s.setNavbarVisible);
+  const materialActionsOpen = useUIStore((s) => s.materialActionsOpen);
   const isMobile = useIsMobile();
   const lastY = useRef(0);
   const accumulated = useRef(0);
+  const materialActionsOpenRef = useRef(materialActionsOpen);
+  useEffect(() => { materialActionsOpenRef.current = materialActionsOpen; }, [materialActionsOpen]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -50,7 +53,7 @@ export function useScrollHide(
         const clientHeight = scrollContainer.clientHeight;
 
         // Always show navbar when the user is at (or near) the top of the document and scrolls up
-        if (scrollTop < 40) {
+        if (scrollTop < 120) {
           accumulated.current = 0;
           if (delta < 0) {
             setNavbarVisible(true);
@@ -62,6 +65,9 @@ export function useScrollHide(
         if (scrollHeight - clientHeight < 150) {
           return;
         }
+
+        // Don't hide the navbar while the actions menu is open
+        if (materialActionsOpenRef.current) return;
 
         // Ignore micro-movements (e.g. touch jitter)
         if (Math.abs(delta) < 2) return;
@@ -92,6 +98,8 @@ export function useScrollHide(
       const onScroll = (e: Event) => {
         const target = e.target as HTMLElement;
         if (!target) return;
+        // Ignore scroll events from elements that only scroll horizontally
+        if (target.scrollHeight <= target.clientHeight) return;
         const y = target.scrollTop;
         const delta = y - lastY.current;
         lastY.current = y;
@@ -103,7 +111,7 @@ export function useScrollHide(
         }
 
         // Always show navbar when the user is at (or near) the top of the document and scrolls up
-        if (y < 40) {
+        if (y < 120) {
           accumulated.current = 0;
           if (delta < 0) {
             setNavbarVisible(true);
@@ -115,6 +123,9 @@ export function useScrollHide(
         if (target.scrollHeight - target.clientHeight < 150) {
           return;
         }
+
+        // Don't hide the navbar while the actions menu is open
+        if (materialActionsOpenRef.current) return;
 
         // Ignore micro-movements (e.g. trackpad jitter)
         if (Math.abs(delta) < 2) return;

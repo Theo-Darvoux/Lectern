@@ -1,7 +1,7 @@
 import json
 import typing
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -303,34 +303,53 @@ async def increment_download_count(db: AsyncSession, material_id: str | uuid.UUI
     return material
 
 
+VIEW_COOLDOWN = timedelta(minutes=10)
+
+
 async def record_view(db: AsyncSession, user_id: str, material_id: str) -> None:
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     uid = uuid.UUID(str(user_id))
     mid = uuid.UUID(str(material_id))
 
-    await get_material_by_id(db, mid)
+    # Lightweight existence check: preserves the 404 contract without hydrating
+    # the full Material ORM object and its tags on this hot, write-only path.
+    if await db.scalar(select(Material.id).where(Material.id == mid)) is None:
+        raise NotFoundError("Material not found")
 
-    await db.execute(
-        update(Material)
-        .where(Material.id == mid)
+    now = datetime.now(UTC)
+
+    # Upsert the per-user view record, but only refresh the timestamp when the
+    # previous view for this (user, material) pair is older than the cooldown.
+    # RETURNING yields a row only when an insert happened or the conditional
+    # update fired — i.e. only when this view should actually be counted.
+    stmt = (
+        pg_insert(ViewHistory)
         .values(
-            total_views=Material.total_views + 1,
-            views_today=Material.views_today + 1,
+            id=uuid.uuid4(),
+            user_id=uid,
+            material_id=mid,
+            viewed_at=now,
         )
+        .on_conflict_do_update(
+            constraint="uq_view_history_user_material",
+            set_={"viewed_at": now},
+            where=ViewHistory.viewed_at < now - VIEW_COOLDOWN,
+        )
+        .returning(ViewHistory.id)
     )
 
-    stmt = pg_insert(ViewHistory).values(
-        id=uuid.uuid4(),
-        user_id=uid,
-        material_id=mid,
-        viewed_at=datetime.now(UTC),
-    )
-    stmt = stmt.on_conflict_do_update(
-        constraint="uq_view_history_user_material",
-        set_={"viewed_at": stmt.excluded.viewed_at},
-    )
-    await db.execute(stmt)
+    counted = (await db.execute(stmt)).first() is not None
+
+    if counted:
+        await db.execute(
+            update(Material)
+            .where(Material.id == mid)
+            .values(
+                total_views=Material.total_views + 1,
+                views_today=Material.views_today + 1,
+            )
+        )
 
     await db.flush()
 
