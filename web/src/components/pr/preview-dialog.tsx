@@ -254,7 +254,7 @@ export function PreviewDialog({
                 <div className={`flex-1 min-h-0 ${!isLarge ? "px-4 pb-4" : "overflow-hidden"}`}>
                     {viewerType === "pdf" && <PdfPreview key={url} url={url} />}
 
-                    {viewerType === "image" && (
+                    {(viewerType === "image" || viewerType === "svg") && (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                             src={url}

@@ -277,7 +277,7 @@ export function PRPreviewPageContent() {
                         {viewerType === "pdf" && (
                             <PdfPreview key={presignedUrl} url={presignedUrl} />
                         )}
-                        {viewerType === "image" && (
+                        {(viewerType === "image" || viewerType === "svg") && (
                             <div className="flex h-full items-center justify-center bg-muted/10 p-4">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img

@@ -2,6 +2,7 @@
 const PRINTABLE_VIEWERS = new Set([
   "pdf",
   "image",
+  "svg",
   "code",
   "markdown",
   "office",

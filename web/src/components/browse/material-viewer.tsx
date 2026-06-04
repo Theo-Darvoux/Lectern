@@ -68,6 +68,15 @@ const ImageViewer = dynamic(
   },
 );
 
+const SvgViewer = dynamic(
+  () =>
+    import("@/components/viewers/svg-viewer").then((mod) => mod.SvgViewer),
+  {
+    loading: () => <Skeleton className="h-full w-full rounded-none" />,
+    ssr: false,
+  },
+);
+
 const VideoPlayer = dynamic(
   () =>
     import("@/components/viewers/video-player").then((mod) => mod.VideoPlayer),
@@ -586,6 +595,13 @@ export function MaterialViewer({
             )}
             {viewerType === "image" && (
               <ImageViewer
+                fileKey={fileKey}
+                materialId={materialId}
+                fileName={fileName}
+              />
+            )}
+            {viewerType === "svg" && (
+              <SvgViewer
                 fileKey={fileKey}
                 materialId={materialId}
                 fileName={fileName}

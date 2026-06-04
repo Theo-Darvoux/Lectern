@@ -49,6 +49,10 @@ const DjvuViewer = dynamic(
     () => import("@/components/viewers/djvu-viewer").then((m) => m.DjvuViewer),
     { loading: () => <Skeleton className="h-full w-full rounded-none" />, ssr: false },
 );
+const SvgViewer = dynamic(
+    () => import("@/components/viewers/svg-viewer").then((m) => m.SvgViewer),
+    { loading: () => <Skeleton className="h-full w-full rounded-none" />, ssr: false },
+);
 const GenericViewer = dynamic(
     () => import("@/components/viewers/generic-viewer").then((m) => m.GenericViewer),
     { loading: () => <Skeleton className="h-full w-full rounded-none" />, ssr: false },
@@ -122,6 +126,9 @@ export function AttachmentPreviewDialog({
                     )}
                     {viewerType === "image" && (
                         <ImageViewer fileKey={fileKey} materialId={materialId} fileName={fileName} />
+                    )}
+                    {viewerType === "svg" && (
+                        <SvgViewer fileKey={fileKey} materialId={materialId} fileName={fileName} />
                     )}
                     {viewerType === "video" && (
                         <VideoPlayer fileKey={fileKey} materialId={materialId} material={material ?? {}} />

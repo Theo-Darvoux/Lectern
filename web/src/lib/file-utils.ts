@@ -454,7 +454,7 @@ const MIME_TO_VIEWER: Record<string, string> = {
     "image/jpeg": "image",
     "image/gif": "image",
     "image/webp": "image",
-    "image/svg+xml": "image",
+    "image/svg+xml": "svg",
     // Video
     "video/mp4": "video",
     "video/webm": "video",
@@ -592,7 +592,7 @@ const EXT_TO_VIEWER: Record<string, string> = {
     jpeg: "image",
     gif: "image",
     webp: "image",
-    svg: "image",
+    svg: "svg",
     mp4: "video",
     webm: "video",
     ogg: "video",

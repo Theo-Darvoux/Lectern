@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { fetchMaterialBlob, fetchMaterialFile } from "@/lib/api-client";
+import { apiRequest, fetchMaterialBlob, fetchMaterialFile } from "@/lib/api-client";
 import { isPrintable, printInIframe } from "@/lib/print-utils";
 import { getViewerPrint } from "@/lib/viewer-print-registry";
 import { toast } from "sonner";
@@ -173,6 +173,21 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
 
         case "image": {
           const blob = await fetchMaterialBlob(materialId);
+          const blobUrl = URL.createObjectURL(blob);
+          const html = `
+            <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;">
+              <img src="${blobUrl}" alt="${fileName}" style="max-width:100%;max-height:100vh;object-fit:contain;" />
+            </div>
+          `;
+          printInIframe(html, { title: fileName });
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+          break;
+        }
+
+        case "svg": {
+          const response = await apiRequest(`/materials/${materialId}/text-content`);
+          const text = await response.text();
+          const blob = new Blob([text], { type: "image/svg+xml" });
           const blobUrl = URL.createObjectURL(blob);
           const html = `
             <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;">
