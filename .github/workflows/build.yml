@@ -55,7 +55,9 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
-      - run: uv sync --frozen
+      # --extra dev pulls ruff/pytest/factory-boy from [project.optional-dependencies];
+      # the default [dependency-groups] dev (mypy, aiosqlite, …) is installed too.
+      - run: uv sync --frozen --extra dev
       - name: Lint (ruff)
         run: uv run ruff check .
       - name: Type-check (mypy)
