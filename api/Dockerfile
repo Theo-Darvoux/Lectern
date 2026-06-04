@@ -29,6 +29,7 @@ WORKDIR /app
 
 # ghostscript (PDF), ffmpeg (video), bubblewrap (sandbox), exiftool (metadata)
 # libreoffice-nogui: headless soffice for Office→PDF thumbnail generation
+# librsvg2-bin: rsvg-convert for SVG→PNG thumbnail rendering
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libyara10 \
     ghostscript \
@@ -36,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bubblewrap \
     libimage-exiftool-perl \
     libreoffice-nogui \
+    librsvg2-bin \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r appuser && useradd -r -g appuser -m appuser && \
