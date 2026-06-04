@@ -164,12 +164,16 @@ function DirectoryGridCardImpl({
   const handleDetails = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // Drop focus so the buttons don't stay revealed via group-focus-within
+    // once the pointer leaves the card.
+    (e.currentTarget as HTMLElement).blur();
     openSidebar("details", { type: "directory", id, data: { ...directory, __path: buildPath() } });
   };
 
   const handleChat = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    (e.currentTarget as HTMLElement).blur();
     openSidebar("chat", { type: "directory", id, data: directory });
   };
 

@@ -18,16 +18,18 @@ async def test_preview_backpropagates_from_subfolders(db_session):
 
     by_id = {}
     for d, title in [(ch1, "A"), (ch1, "B"), (ch2, "C")]:
-        m = Material(title=title, slug=title.lower(), type="document",
-                     directory_id=d.id, current_version=1)
+        m = Material(
+            title=title, slug=title.lower(), type="document", directory_id=d.id, current_version=1
+        )
         db.add(m)
         await db.flush()
         db.add(MaterialVersion(material_id=m.id, version_number=1))
         by_id[str(m.id)] = title
 
     # a direct material on the course should win (depth 0)
-    direct = Material(title="Zdirect", slug="zdirect", type="document",
-                      directory_id=course.id, current_version=1)
+    direct = Material(
+        title="Zdirect", slug="zdirect", type="document", directory_id=course.id, current_version=1
+    )
     db.add(direct)
     await db.flush()
     db.add(MaterialVersion(material_id=direct.id, version_number=1))

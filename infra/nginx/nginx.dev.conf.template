@@ -41,6 +41,8 @@ http {
         default "";
         "~^/pull-requests/[^/]+/preview/[^/]+"  "/pull-requests/_/preview/0/";
         "~^/pull-requests/[^/]+"                "/pull-requests/_/";
+        "~^/qcm/new"                            "";
+        "~^/qcm/preview"                        "";
         "~^/qcm/[^/]+/edit"                     "/qcm/_/edit/";
         "~^/qcm/[^/]+"                          "/qcm/_/";
         "~^/profile/[^/]+"                      "/profile/_/";
@@ -202,6 +204,16 @@ http {
             }
             # Deep dynamic routes that next dev didn't prerender: serve the
             # matching shell upstream while keeping the browser URL intact.
+            #
+            # RSC payloads (*.txt) — full-page <path>/index.txt and Next 16
+            # segment-cache <path>/__next.<seg>.txt — must collapse to the
+            # shell's payload of the SAME basename, not the shell directory.
+            # Rewriting them to the directory returns the HTML shell, which the
+            # router rejects → full page reload (doMpaNavigation). This rewrite
+            # only fires for *.txt; the directory rewrite below handles HTML.
+            if ($spa_shell != "") {
+                rewrite "^.*/([^/]+\.txt)$" "${spa_shell}$1" break;
+            }
             if ($spa_shell != "") {
                 rewrite ^ $spa_shell break;
             }
