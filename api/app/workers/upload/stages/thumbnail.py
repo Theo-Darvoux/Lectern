@@ -189,7 +189,12 @@ async def _thumbnail_image(
 async def _thumbnail_svg(
     input_path: Path, output_path: Path, size: tuple[int, int], quality: int
 ) -> None:
-    """Render SVG to a WebP thumbnail via rsvg-convert → Pillow."""
+    """Render SVG to a WebP thumbnail via rsvg-convert → Pillow.
+
+    rsvg-convert produces RGBA PNGs for SVGs without an explicit background fill.
+    We composite against white so the WebP thumbnail always has a solid background
+    and renders correctly in the UI (no checkerboard transparency artefact).
+    """
     temp_png = output_path.with_suffix(".svg_thumb.png")
     cmd = [
         "rsvg-convert",
@@ -211,8 +216,21 @@ async def _thumbnail_svg(
             f"rsvg-convert failed for {input_path.name}: "
             f"{stderr_bytes.decode(errors='replace')[:300]}"
         )
+
+    def _flatten_and_save() -> None:
+        with Image.open(temp_png) as img:
+            img.thumbnail(size, Image.Resampling.LANCZOS)
+            if img.mode in ("RGBA", "LA", "PA"):
+                if img.mode == "PA":
+                    img = img.convert("RGBA")
+                bg = Image.new("RGB", img.size, "white")
+                bg.paste(img, mask=img.split()[-1])
+                bg.save(output_path, "WEBP", quality=quality)
+            else:
+                img.convert("RGB").save(output_path, "WEBP", quality=quality)
+
     try:
-        await _thumbnail_image(temp_png, output_path, size, quality)
+        await asyncio.to_thread(_flatten_and_save)
     finally:
         temp_png.unlink(missing_ok=True)
 

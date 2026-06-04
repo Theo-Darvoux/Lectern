@@ -91,9 +91,20 @@ async def compress_file_path(
 
             try:
                 compressed = await asyncio.to_thread(_gzip_compress_path, source_path)
-                if source_path != file_path:
+                # _gzip_compress_path returns source_path unchanged when gzip does not
+                # reduce the file size.  Only set content_encoding when a new .gz file
+                # was actually produced — otherwise we'd store plain bytes in R2 with
+                # ContentEncoding: gzip, causing the Worker to feed raw SVG into
+                # DecompressionStream and serve garbage to the browser.
+                gzip_helped = compressed != source_path
+                if gzip_helped and source_path != file_path:
                     source_path.unlink(missing_ok=True)
-                return CompressResultPath(compressed, compressed.stat().st_size, "gzip", mime_type)
+                return CompressResultPath(
+                    compressed,
+                    compressed.stat().st_size,
+                    "gzip" if gzip_helped else None,
+                    mime_type,
+                )
             except Exception as gz_err:
                 logger.warning("SVG gzip failed: %s", gz_err)
                 if source_path != file_path:

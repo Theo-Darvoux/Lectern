@@ -618,6 +618,29 @@ class TestCompressEdgeCases:
         assert result.content_encoding is None
         assert result.path == p
 
+    async def test_svg_gzip_no_help_returns_none_encoding(self, tmp_path):
+        """When gzip does not reduce an SVG's size, content_encoding must be None.
+
+        Previously the code returned content_encoding='gzip' even when
+        _gzip_compress_path fell back to the original path, causing R2 to store
+        plain SVG bytes labelled as gzip — the Cloudflare Worker would then pipe
+        raw SVG through DecompressionStream and serve garbage to the browser.
+        """
+        # A tiny SVG that gzip cannot make meaningfully smaller.
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'
+        p = tmp_path / "tiny.svg"
+        p.write_bytes(svg)
+        result = await compress_file_path(p, "image/svg+xml", "tiny.svg")
+        # Either gzip helped (and encoding is 'gzip') or it didn't (encoding is None).
+        # In either case, if encoding is 'gzip', the returned file MUST actually be
+        # valid gzip so the Worker can decompress it.
+        if result.content_encoding == "gzip":
+            import gzip as _gzip
+            with _gzip.open(result.path, "rb") as f:
+                f.read()  # raises if not valid gzip
+        else:
+            assert result.content_encoding is None
+
 
 # =============================================================================
 # FakeRedis correctness tests
