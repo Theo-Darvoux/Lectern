@@ -53,6 +53,7 @@ jobs:
           build-args: |
             NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
             NEXT_PUBLIC_EUROOFFICE_URL=${{ vars.NEXT_PUBLIC_EUROOFFICE_URL }}
+            NEXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
           tags: |
             ${{ env.WEB_IMAGE }}:latest
             ${{ env.WEB_IMAGE }}:${{ github.sha }}

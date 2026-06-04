@@ -10,6 +10,14 @@ FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# NEXT_PUBLIC_* vars must be present as env at build time so Next.js inlines them
+# into the static export. The commit SHA identifies the running web image.
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_EUROOFFICE_URL
+ARG NEXT_PUBLIC_COMMIT_SHA
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_EUROOFFICE_URL=$NEXT_PUBLIC_EUROOFFICE_URL \
+    NEXT_PUBLIC_COMMIT_SHA=$NEXT_PUBLIC_COMMIT_SHA
 RUN pnpm build
 
 FROM nginx:alpine AS runner

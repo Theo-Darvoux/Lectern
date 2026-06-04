@@ -170,7 +170,8 @@
     "redirectingToSetup": "Redirection vers la configuration...",
     "recoveringSession": "Récupération de la session...",
     "organization": "Organisation",
-    "github": "GitHub"
+    "github": "GitHub",
+    "commit": "Commit"
   },
   "Navigation": {
     "mainNavigationAria": "Navigation principale",

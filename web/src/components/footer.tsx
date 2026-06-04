@@ -2,9 +2,15 @@ import Link from "next/link";
 import { useConfigStore } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 
+// Baked in at build time from the Docker image's commit SHA (see web/Dockerfile
+// and the `NEXT_PUBLIC_COMMIT_SHA` build-arg in .github/workflows/build.yml).
+const commitSha = process.env.NEXT_PUBLIC_COMMIT_SHA;
+const repoUrl = "https://github.com/Theo-Darvoux/WikINT";
+
 export function Footer() {
     const t = useTranslations("Layout");
     const { config } = useConfigStore();
+    const shortCommit = commitSha?.slice(0, 7);
 
     return (
         <footer className={`border-t pt-6 ${config?.footer_text ? "pb-10" : "pb-6"} w-full`}>
@@ -42,6 +48,17 @@ export function Footer() {
                         {config?.organization_url ? t("organization") : t("github")}
                     </a>
                 </div>
+                {shortCommit && (
+                    <a
+                        href={`${repoUrl}/commit/${commitSha}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="absolute right-6 font-mono text-xs text-muted-foreground/60 hover:text-foreground transition-colors"
+                        title={commitSha}
+                    >
+                        {t("commit")}: #{shortCommit}
+                    </a>
+                )}
             </div>
         </footer>
     );
