@@ -39,6 +39,7 @@ def test_pale_page_with_title_bar_is_not_blank() -> None:
     assert _is_blank_thumbnail(_save(img)) is False
 
 
+@pytest.mark.integration  # needs rsvg-convert
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_svg() -> None:
     """SVG files should be rendered to a WebP thumbnail via rsvg-convert."""
@@ -71,6 +72,7 @@ async def test_run_thumbnail_stage_svg() -> None:
             Path(thumb_path_str).unlink(missing_ok=True)
 
 
+@pytest.mark.integration  # needs soffice (libreoffice)
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_markdown() -> None:
     """Markdown files should be successfully converted to a WebP thumbnail."""
@@ -104,6 +106,7 @@ async def test_run_thumbnail_stage_markdown() -> None:
             Path(thumb_path_str).unlink(missing_ok=True)
 
 
+@pytest.mark.integration  # needs soffice (libreoffice)
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_text() -> None:
     """Text/code files should be successfully converted to a WebP thumbnail."""

@@ -206,6 +206,7 @@ async def test_batch_upload_status_multiple_keys(
     assert "invalid/key" not in data
 
 
+@pytest.mark.integration  # needs a live S3/MinIO endpoint
 @pytest.mark.asyncio
 async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis_setup):
     user = await _create_user(db_session)

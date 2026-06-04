@@ -62,8 +62,10 @@ jobs:
         run: uv run ruff check .
       - name: Type-check (mypy)
         run: uv run mypy app/
+      # Hermetic gate: exclude integration tests needing soffice/rsvg/S3 (see
+      # the `integration` marker in pyproject.toml).
       - name: Tests (pytest, in-memory SQLite)
-        run: uv run pytest
+        run: uv run pytest -m "not integration"
 
   test-web:
     needs: changes

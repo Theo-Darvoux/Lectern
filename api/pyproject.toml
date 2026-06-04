@@ -88,6 +88,9 @@ exclude = ["app/migrations/"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "integration: requires external tools (soffice, rsvg-convert) or a live S3/MinIO endpoint; deselected in the hermetic CI gate with -m 'not integration'",
+]
 filterwarnings = [
     "ignore::pytest.PytestRemovedIn9Warning",
     "ignore::DeprecationWarning",
