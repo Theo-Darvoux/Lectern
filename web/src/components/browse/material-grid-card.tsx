@@ -345,7 +345,7 @@ function MaterialGridCardImpl({
           {selectMode && (
             <div
               className="absolute top-2 right-2 z-20"
-              onClick={(e) => { e.stopPropagation(); onToggleSelect?.(navIndex ?? 0, e); }}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleSelect?.(navIndex ?? 0, e); }}
             >
               <Checkbox checked={!!selected} onCheckedChange={() => {}} className="h-5 w-5 bg-background/95" />
             </div>

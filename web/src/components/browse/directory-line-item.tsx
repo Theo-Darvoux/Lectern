@@ -165,6 +165,7 @@ function DirectoryLineItemImpl({
                         checked={!!selected}
                         onCheckedChange={() => {}} // Handled by onClick below
                         onClick={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
                             onToggleSelect?.(navIndex ?? 0, e);
                         }}

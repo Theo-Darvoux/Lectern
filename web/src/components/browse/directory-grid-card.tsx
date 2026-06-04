@@ -71,20 +71,24 @@ function DirectoryGridCardImpl({
     ? (directory.preview_material_ids as string[])
     : [];
   const { Icon: ThumbnailIcon } = getDirectoryIcon(thumbnailIconId);
-  const { gradient: customGradient, iconClass: customIconClass, swatchClass: customSwatch } = getDirectoryColor(thumbnailColorId);
+  const { gradient: customGradient, iconClass: customIconClass, folderBodyClass: customFolderBody, folderTabClass: customFolderTab } = getDirectoryColor(thumbnailColorId);
   const showCollage = !thumbnailIconId && previewMaterialIds.length > 0;
 
-  // Tab colour tracks the staged state so it never clashes with the body gradient.
-  const tabColorClass =
-    staged === "deleted"
-      ? "bg-red-400"
-      : staged === "moved"
-        ? "bg-amber-400"
-        : staged === "created" || staged === "edited"
-          ? isExternal
-            ? "bg-blue-400"
-            : "bg-green-400"
-          : customSwatch;
+  // Folder body and tab use same-hue pairs (tab is darker) so they read as
+  // one unified object. Staged states override the directory's own color.
+  const folderBodyColor =
+    staged === "deleted" ? "bg-red-300 dark:bg-red-700"
+    : staged === "moved" ? "bg-amber-300 dark:bg-amber-700"
+    : staged === "created" || staged === "edited"
+      ? isExternal ? "bg-blue-300 dark:bg-blue-700" : "bg-green-300 dark:bg-green-700"
+      : customFolderBody;
+
+  const folderTabColor =
+    staged === "deleted" ? "bg-red-500 dark:bg-red-800"
+    : staged === "moved" ? "bg-amber-500 dark:bg-amber-800"
+    : staged === "created" || staged === "edited"
+      ? isExternal ? "bg-blue-500 dark:bg-blue-800" : "bg-green-500 dark:bg-green-800"
+      : customFolderTab;
 
   const buildPath = () => {
     const dirPath = `${pathBase}/${slug}`;
@@ -212,27 +216,28 @@ function DirectoryGridCardImpl({
         {/* Icon area */}
         <div className={cn("aspect-[4/3] relative flex items-center justify-center bg-linear-to-br overflow-hidden", bgGradient)}>
           {showCollage ? (
-            /* macOS-style folder icon: a solid-coloured tab sits top-left above
-               the folder body, thumbnails are inset inside the body. This shape
-               is unmistakable as a folder even with a single thumbnail. */
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="relative w-[80%] h-[72%] transition-transform duration-500 ease-out group-hover:-translate-y-1.5">
-                {/* Tab — solid colour, rounded top corners, attached to body top-left */}
+              <div className="relative w-[78%] h-[70%] transition-transform duration-500 ease-out group-hover:-translate-y-2 drop-shadow-xl">
+                {/* Tab — darker shade of body, flush to body's top-left */}
                 <div
-                  className={cn("absolute left-0 w-[40%] rounded-t-lg shadow-sm", tabColorClass)}
-                  style={{ bottom: "100%", height: "22%" }}
+                  className={cn("absolute left-0 w-[36%] rounded-t-[7px]", folderTabColor)}
+                  style={{ bottom: "100%", height: "19%" }}
                 />
-                {/* Folder body — gradient background, rounded except top-left corner */}
+                {/* Folder body — solid saturated color, square top-left, rounded elsewhere */}
                 <div
                   className={cn(
-                    "absolute inset-0 rounded-b-xl rounded-tr-xl shadow-lg bg-linear-to-br",
-                    "ring-1 ring-black/8 dark:ring-white/8",
-                    bgGradient,
+                    "absolute inset-0 rounded-b-2xl rounded-tr-2xl overflow-hidden",
+                    folderBodyColor,
                   )}
-                />
-                {/* Thumbnail collage inset inside the folder body */}
-                <div className="absolute inset-[9%] rounded-md overflow-hidden shadow-sm ring-1 ring-black/10 dark:ring-black/30">
-                  <DirectoryPreviewCollage materialIds={previewMaterialIds} />
+                >
+                  {/* Subtle top-edge highlight to give the folder a lit, 3-D feel */}
+                  <div className="absolute inset-x-0 top-0 h-[38%] bg-white/20 pointer-events-none rounded-tr-2xl" />
+                  {/* Bottom-edge shadow stripe for depth */}
+                  <div className="absolute inset-x-0 bottom-0 h-[15%] bg-black/10 pointer-events-none" />
+                  {/* Thumbnail collage inset inside the folder */}
+                  <div className="absolute inset-[9%] rounded-lg overflow-hidden ring-1 ring-black/15 dark:ring-black/40 shadow-md">
+                    <DirectoryPreviewCollage materialIds={previewMaterialIds} />
+                  </div>
                 </div>
               </div>
             </div>
@@ -278,7 +283,7 @@ function DirectoryGridCardImpl({
           {selectMode && (
             <div
               className="absolute top-2 right-2 z-20"
-              onClick={(e) => { e.stopPropagation(); onToggleSelect?.(navIndex ?? 0, e); }}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleSelect?.(navIndex ?? 0, e); }}
             >
               <Checkbox checked={!!selected} onCheckedChange={() => {}} className="h-5 w-5 bg-background/95" />
             </div>

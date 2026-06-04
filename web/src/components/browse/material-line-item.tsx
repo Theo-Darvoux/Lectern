@@ -234,6 +234,7 @@ function MaterialLineItemImpl({
                         checked={!!selected}
                         onCheckedChange={() => {}}
                         onClick={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
                             onToggleSelect?.(navIndex ?? 0, e);
                         }}

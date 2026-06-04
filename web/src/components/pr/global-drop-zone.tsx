@@ -128,6 +128,14 @@ export function GlobalDropZone() {
         [browseContext, pathname, t],
     );
 
+    // Keep a live ref to the latest handler so the document-level listeners
+    // (registered once below) never invoke a stale closure with an outdated
+    // browse context / pathname — otherwise fallback drops target the root.
+    const handleItemsDropRef = useRef(handleItemsDrop);
+    useEffect(() => {
+        handleItemsDropRef.current = handleItemsDrop;
+    }, [handleItemsDrop]);
+
     // Listen for drag events on the document (show/hide overlay)
     useEffect(() => {
         const onDragEnter = (e: DragEvent) => {
@@ -174,7 +182,7 @@ export function GlobalDropZone() {
             if (e.dataTransfer?.items?.length) {
                 collectDroppedItems(e.dataTransfer.items).then((dropped) => {
                     if (dropped.files.length > 0 || dropped.folders.length > 0) {
-                        handleItemsDrop(dropped);
+                        handleItemsDropRef.current(dropped);
                     }
                 });
             }
