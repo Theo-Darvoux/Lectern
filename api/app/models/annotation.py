@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     Text,
 )
+
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 

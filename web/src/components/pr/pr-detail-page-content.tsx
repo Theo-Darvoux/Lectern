@@ -487,7 +487,7 @@ function OperationRow({
                         sourceUrl: parentSlugs ? `/browse/${parentSlugs}` : "/browse",
                     });
                 }
-            } catch { /* Silently ignore */ }
+            } catch { /* Silently ignore  */ }
         }
 
         resolveDetails();
@@ -522,8 +522,8 @@ function OperationRow({
         switch (opType) {
             case "delete_material": return t("summary.delete_material", { name: finalName });
             case "delete_directory": return t("summary.delete_directory", { name: finalName });
-            case "edit_material":   return t("summary.edit_material", { name: finalName });
-            case "edit_directory":   return t("summary.edit_directory", { name: finalName });
+            case "edit_material": return t("summary.edit_material", { name: finalName });
+            case "edit_directory": return t("summary.edit_directory", { name: finalName });
             case "move_item":
                 const isDir = rawOp.target_type === "directory";
                 return t("summary.move_item", { isDir: String(isDir), name: finalName });
@@ -1049,11 +1049,11 @@ function PRDetailContent() {
                                     <Clock className="h-3 w-3" />
                                     {isExpiringSoon
                                         ? t("expiresSoon", {
-                                              time: formatDistanceToNow(expiresDate, {
-                                                  addSuffix: true,
-                                                  locale: dateLocale,
-                                              }),
-                                          })
+                                            time: formatDistanceToNow(expiresDate, {
+                                                addSuffix: true,
+                                                locale: dateLocale,
+                                            }),
+                                        })
                                         : t("expiresDefault")}
                                 </span>
                             </>
@@ -1388,5 +1388,5 @@ function PRDetailContent() {
 }
 
 export function PRDetailPageContent() {
-  return <PRDetailContent />;
+    return <PRDetailContent />;
 }

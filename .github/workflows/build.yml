@@ -167,7 +167,8 @@ jobs:
 
       # ── Vulnerability scan (report-only; results in the Security tab) ───────
       - name: Scan api image (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true # advisory: never block a published image
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.API_IMAGE }}:sha-${{ github.sha }}
           format: sarif
@@ -175,13 +176,15 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
       - name: Upload api scan
+        continue-on-error: true # tolerate code scanning being disabled
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-api.sarif
           category: trivy-api
 
       - name: Scan worker image (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true # advisory: never block a published image
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.WORKER_IMAGE }}:sha-${{ github.sha }}
           format: sarif
@@ -189,6 +192,7 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
       - name: Upload worker scan
+        continue-on-error: true # tolerate code scanning being disabled
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-worker.sarif
@@ -241,7 +245,8 @@ jobs:
           cache-to: type=gha,scope=web,mode=max
 
       - name: Scan web image (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true # advisory: never block a published image
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.WEB_IMAGE }}:sha-${{ github.sha }}
           format: sarif
@@ -249,6 +254,7 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
       - name: Upload web scan
+        continue-on-error: true # tolerate code scanning being disabled
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-web.sarif
