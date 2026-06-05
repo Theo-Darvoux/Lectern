@@ -1,44 +1,50 @@
 services:
-  # MinIO for local S3-compatible storage (production uses Cloudflare R2).
-  minio:
+  # SeaweedFS for local S3-compatible storage. Validated drop-in for MinIO
+  # (Phase 0, docs/seaweedfs-migration-plan.md). Production can use the same
+  # backend (STORAGE_BACKEND=seaweedfs) or Cloudflare R2 (STORAGE_BACKEND=r2).
+  seaweedfs:
     restart: unless-stopped
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    image: chrislusf/seaweedfs:latest
     networks:
       - backend
-    environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    command: >
+      server -dir=/data -ip.bind=0.0.0.0
+      -master.volumeSizeLimitMB=1024
+      -s3 -s3.config=/etc/seaweedfs/s3.json
     volumes:
-      - minio_data:/data
+      - seaweedfs_data:/data
+      - ./infra/docker/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
     ports:
-      - "9000:9000"
-      - "9001:9001"
-    command: server /data --console-address ":9001"
+      - "8333:8333" # S3 gateway
+      - "8888:8888" # filer
+      - "9333:9333" # master UI
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9333/cluster/healthz || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     deploy:
       resources:
         reservations:
           cpus: "0.25"
           memory: 256M
 
-  minio-setup:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+  seaweedfs-setup:
+    image: amazon/aws-cli:latest
     networks:
       - backend
     depends_on:
-      minio:
+      seaweedfs:
         condition: service_healthy
     entrypoint: /bin/sh
     volumes:
-      - ./infra/docker/minio/setup.sh:/setup.sh
+      - ./infra/docker/seaweedfs/setup.sh:/setup.sh:ro
     command: /setup.sh
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-wikint}
+      S3_REGION: ${S3_REGION:-us-east-1}
 
   api:
     networks:
@@ -50,7 +56,7 @@ services:
     env_file:
       - .env
     depends_on:
-      minio:
+      seaweedfs:
         condition: service_healthy
     volumes:
       - ./api:/app
@@ -150,4 +156,4 @@ services:
       - ./infra/nginx/nginx.dev.conf.template:/etc/nginx/templates/nginx.conf.template:ro
 
 volumes:
-  minio_data:
+  seaweedfs_data:

@@ -1,0 +1,851 @@
+"""``S3Backend`` — the aioboto3 implementation of :class:`ObjectStorage`.
+
+All supported backends are S3-compatible, so this single class drives every one
+of them. Backend-specific behaviour lives entirely in :class:`BackendQuirks`
+(see ``backends.py``); this module contains no R2/SeaweedFS/Garage conditionals
+beyond consulting ``self.quirks``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import logging
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, cast
+from urllib.parse import quote, urlparse, urlunparse
+
+import aioboto3
+from botocore.config import Config as BotocoreConfig
+
+from app.config import settings
+from app.core.constants import MAGIC_HEADER_SIZE
+from app.core.typing_ext import S3Client
+
+from .base import BackendQuirks
+from .delivery import get_delivery
+
+logger = logging.getLogger(__name__)
+
+MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5 MiB — use multipart above this size
+_MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB default
+_MULTIPART_CONCURRENCY = 4  # max concurrent S3 part uploads
+
+# ─── Redis-backed presigned URL cache ────────────────────────────────────────
+# Cloudflare CDN caches by full URL. Generating a fresh presigned URL on every
+# request always changes the signature (X-Amz-Date / X-Amz-Signature), causing
+# a CDN cache miss and falling back to the raw R2 origin (~10 Mbps cap).
+#
+# By caching the URL in Redis for 12 min (URL TTL is 15 min) all users share
+# the same URL string → CDN sees the same URL → caches the response at the
+# edge after the first download → subsequent downloads hit CDN at full speed.
+_PRESIGN_CACHE_TTL = 12 * 60  # seconds — refresh before the 15-min R2 TTL
+_PRESIGN_CACHE_PREFIX = "presign:"
+
+_READ_FULL_OBJECT_MAX_BYTES = 50 * 1024 * 1024  # 50 MB safety guard (4.14)
+
+
+def dynamic_part_size(file_size: int) -> int:
+    """Return optimal S3 multipart part size for the given file size (4.8).
+
+    Keeps part count manageable for large files without over-splitting small ones.
+    """
+    if file_size > 500 * 1024 * 1024:  # > 500 MiB → 32 MiB parts (max ~16 parts/GiB)
+        return 32 * 1024 * 1024
+    if file_size > 100 * 1024 * 1024:  # > 100 MiB → 16 MiB parts
+        return 16 * 1024 * 1024
+    return 8 * 1024 * 1024  # default
+
+
+def _decompress_gzip_file(file_path: Path | str) -> None:
+    import gzip
+    import shutil
+
+    path = Path(file_path)
+    temp_path = path.with_suffix(path.suffix + ".decompressed.tmp")
+    try:
+        with gzip.open(path, "rb") as f_in:
+            with open(temp_path, "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        temp_path.replace(path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        # Keep the original file on failure
+        pass
+
+
+class S3Backend:
+    """aioboto3-backed object storage. Subclassed in ``backends.py`` per store."""
+
+    name: str = "s3"
+    quirks: BackendQuirks = BackendQuirks()
+
+    def __init__(self) -> None:
+        self._session = aioboto3.Session()
+        self._s3: S3Client | None = None  # persistent client, set by init_s3_client()
+        # Force SigV4 for all requests (required by R2 and MinIO/SeaweedFS).
+        self._s3_config = BotocoreConfig(
+            signature_version="s3v4",
+            s3={"use_accelerate_endpoint": settings.s3_use_accelerate_endpoint},
+            request_checksum_calculation=self.quirks.request_checksum_calculation,
+            response_checksum_validation=self.quirks.response_checksum_validation,
+        )
+
+    # ── client / config plumbing ────────────────────────────────────────────
+
+    def _settings(self) -> dict[str, Any]:
+        """Return S3 settings from environment variables."""
+        return {
+            "endpoint": settings.s3_endpoint,
+            "access_key": settings.s3_access_key,
+            "secret_key": settings.s3_secret_key,
+            "bucket": settings.s3_bucket,
+            "region": settings.s3_region,
+            "use_ssl": settings.s3_use_ssl,
+            "public_endpoint": settings.s3_public_endpoint,
+        }
+
+    # Internal calls go through the package facade (``_get_s3_settings`` /
+    # ``get_s3_client``) rather than ``self`` directly, so test suites can patch
+    # ``app.core.storage.get_s3_client`` / ``_get_s3_settings`` and have the
+    # patches reach this implementation — exactly as they did when this module
+    # was a flat set of free functions. The facade resolves back to the real
+    # ``_settings`` / ``get_s3_client`` below, so there is no recursion.
+    def _cfg(self) -> dict[str, Any]:
+        from app.core import storage as _facade
+
+        return _facade._get_s3_settings()
+
+    def _client(self, cfg: dict[str, Any] | None = None) -> Any:
+        from app.core import storage as _facade
+
+        return _facade.get_s3_client(cfg)
+
+    async def init_s3_client(self) -> None:
+        cfg = self._cfg()
+        self._s3 = await self._session.client(  # type: ignore[call-overload]
+            "s3",
+            endpoint_url=f"{'https' if cfg['use_ssl'] else 'http'}://{cfg['endpoint']}",
+            aws_access_key_id=cfg["access_key"],
+            aws_secret_access_key=cfg["secret_key"],
+            region_name=cfg["region"],
+            config=self._s3_config,
+        ).__aenter__()
+
+    async def close_s3_client(self) -> None:
+        if self._s3:
+            await self._s3.__aexit__(None, None, None)
+            self._s3 = None
+
+    @asynccontextmanager
+    async def get_s3_client(
+        self, cfg: dict[str, Any] | None = None
+    ) -> AsyncGenerator[S3Client, None]:
+        """Yield an S3 client.
+
+        Accept an optional pre-fetched ``cfg`` dict to avoid a second Redis
+        round-trip when the caller already called ``_settings()``.
+        """
+        if cfg is None:
+            cfg = self._cfg()
+
+        # In development or if using exactly settings, we can reuse the global _s3
+        is_default = (
+            cfg["endpoint"] == settings.s3_endpoint
+            and cfg["access_key"] == settings.s3_access_key
+            and cfg["secret_key"] == settings.s3_secret_key
+            and cfg["use_ssl"] == settings.s3_use_ssl
+        )
+
+        if is_default and self._s3:
+            yield self._s3
+            return
+
+        async with self._session.client(  # type: ignore[call-overload]
+            "s3",
+            endpoint_url=f"{'https' if cfg['use_ssl'] else 'http'}://{cfg['endpoint']}",
+            aws_access_key_id=cfg["access_key"],
+            aws_secret_access_key=cfg["secret_key"],
+            region_name=cfg["region"],
+            config=self._s3_config,
+        ) as client:
+            yield client
+
+    def _rewrite_host(
+        self, url: str, is_put: bool = False, cfg: dict[str, Any] | None = None
+    ) -> str:
+        """Rewrite the presigned URL host to the public endpoint.
+
+        For local development the S3 endpoint is rewritten to the public host so
+        browsers can reach it. Two R2-specific carve-outs are gated on quirks:
+        custom domains don't support presigned PUT, and they map to the bucket
+        root so the bucket prefix must be stripped.
+        """
+        if cfg is None:
+            cfg = self._cfg()
+        public_endpoint = cfg["public_endpoint"]
+        bucket = cfg["bucket"]
+
+        if not public_endpoint:
+            return url
+
+        # R2 custom domains do not support presigned PUTs — keep the raw S3 host.
+        if (
+            is_put
+            and "localhost" not in public_endpoint
+            and self.quirks.presign_put_unsupported_on_custom_domain
+        ):
+            return url
+
+        if "://" in public_endpoint:
+            public_endpoint = urlparse(public_endpoint).netloc
+
+        parsed = urlparse(url)
+        # If the public endpoint contains "localhost", we assume HTTP; otherwise HTTPS.
+        scheme = "http" if "localhost" in public_endpoint else "https"
+
+        # On R2 custom domains the bucket maps to the domain root, so the bucket
+        # segment must be stripped from the path.
+        path = parsed.path
+        if "localhost" not in public_endpoint and self.quirks.strip_bucket_prefix_on_custom_domain:
+            bucket_prefix = f"/{bucket}/"
+            if path.startswith(bucket_prefix):
+                path = path[len(bucket_prefix) - 1 :]  # Keep the leading slash: /uploads/...
+
+        return urlunparse(parsed._replace(netloc=public_endpoint, scheme=scheme, path=path))
+
+    # ── multipart ───────────────────────────────────────────────────────────
+
+    async def create_multipart_upload(
+        self,
+        file_key: str,
+        content_type: str = "application/octet-stream",
+        content_encoding: str | None = None,
+        content_disposition: str | None = "attachment",
+    ) -> str:
+        """Initiate an S3 multipart upload. Returns the UploadId."""
+        cfg = self._cfg()
+        params: dict[str, Any] = {
+            "Bucket": cfg["bucket"],
+            "Key": file_key,
+            "ContentType": content_type,
+            "CacheControl": "public, max-age=86400",
+        }
+        if content_encoding:
+            params["ContentEncoding"] = content_encoding
+        if content_disposition:
+            params["ContentDisposition"] = content_disposition
+        async with self._client(cfg) as client:
+            resp = await client.create_multipart_upload(**params)
+            return str(resp["UploadId"])
+
+    async def upload_part(
+        self,
+        file_key: str,
+        s3_upload_id: str,
+        part_number: int,
+        body: bytes,
+    ) -> str:
+        """Upload one part of a multipart upload. Returns the ETag."""
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            resp = await client.upload_part(  # type: ignore[call-arg]
+                Bucket=cfg["bucket"],
+                Key=file_key,
+                UploadId=s3_upload_id,
+                PartNumber=part_number,
+                Body=body,
+            )
+            return str(resp["ETag"])
+
+    async def complete_multipart_upload(
+        self,
+        file_key: str,
+        s3_upload_id: str,
+        parts: list[dict[str, int | str]],
+    ) -> None:
+        """Complete a multipart upload. ``parts`` is a list of ``{PartNumber, ETag}`` dicts."""
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            await client.complete_multipart_upload(  # type: ignore[call-arg]
+                Bucket=cfg["bucket"],
+                Key=file_key,
+                UploadId=s3_upload_id,
+                MultipartUpload={"Parts": parts},
+            )
+
+    async def abort_multipart_upload(self, file_key: str, s3_upload_id: str) -> None:
+        """Abort a multipart upload, freeing all uploaded parts."""
+        cfg = self._cfg()
+        try:
+            async with self._client(cfg) as client:
+                await client.abort_multipart_upload(  # type: ignore[call-arg]
+                    Bucket=cfg["bucket"],
+                    Key=file_key,
+                    UploadId=s3_upload_id,
+                )
+        except Exception:
+            pass  # Best-effort cleanup
+
+    async def upload_file_multipart(
+        self,
+        file_path: Path,
+        file_key: str,
+        content_type: str = "application/octet-stream",
+        content_encoding: str | None = None,
+        content_disposition: str | None = "attachment",
+        chunk_size: int = _MULTIPART_CHUNK_SIZE,
+    ) -> None:
+        """Upload a file from disk using S3 multipart upload.
+
+        For files below ``MULTIPART_THRESHOLD`` this falls back to single
+        ``put_object`` to avoid the multipart overhead.  Above the threshold,
+        parts are uploaded concurrently (minimum S3 part size is 5 MiB).
+        """
+        path = Path(file_path) if not hasattr(file_path, "stat") else file_path
+        file_size = path.stat().st_size
+
+        if file_size < MULTIPART_THRESHOLD:
+            # Small file — single put_object
+            with open(path, "rb") as fh:
+                await self.upload_file(
+                    fh.read(),
+                    file_key,
+                    content_type=content_type,
+                    content_encoding=content_encoding,
+                    content_disposition=content_disposition,
+                )
+            return
+
+        # Large file — multipart with concurrent part uploads
+        s3_upload_id = await self.create_multipart_upload(
+            file_key,
+            content_type=content_type,
+            content_encoding=content_encoding,
+            content_disposition=content_disposition,
+        )
+
+        try:
+            sem = asyncio.Semaphore(_MULTIPART_CONCURRENCY)
+
+            async def _upload_one(pnum: int, data: bytes) -> dict[str, int | str]:
+                async with sem:
+                    etag = await self.upload_part(file_key, s3_upload_id, pnum, data)
+                    return {"PartNumber": pnum, "ETag": etag}
+
+            tasks: list[asyncio.Task[dict[str, int | str]]] = []
+            part_number = 1
+            with open(path, "rb") as fh:
+                while True:
+                    chunk = await asyncio.to_thread(fh.read, chunk_size)
+                    if not chunk:
+                        break
+                    tasks.append(asyncio.create_task(_upload_one(part_number, chunk)))
+                    part_number += 1
+
+            results = await asyncio.gather(*tasks)
+            parts: list[dict[str, int | str]] = sorted(results, key=lambda p: int(p["PartNumber"]))
+            await self.complete_multipart_upload(file_key, s3_upload_id, parts)
+        except Exception:
+            await self.abort_multipart_upload(file_key, s3_upload_id)
+            raise
+
+    async def generate_presigned_upload_part(
+        self,
+        file_key: str,
+        s3_upload_id: str,
+        part_number: int,
+        ttl: int = 3600,
+    ) -> str:
+        """Generate a presigned URL for uploading one part of a multipart upload."""
+        cfg = self._cfg()
+        async with self._client(cfg) as s3:
+            url = await s3.generate_presigned_url(  # type: ignore[call-arg]
+                "upload_part",
+                Params={
+                    "Bucket": cfg["bucket"],
+                    "Key": file_key,
+                    "UploadId": s3_upload_id,
+                    "PartNumber": part_number,
+                },
+                ExpiresIn=ttl,
+            )
+        return self._rewrite_host(url, cfg=cfg)
+
+    # ── single-object upload / download ─────────────────────────────────────
+
+    async def upload_file(
+        self,
+        file_obj: bytes | AsyncIterator[bytes],
+        file_key: str,
+        content_type: str | None = None,
+        content_encoding: str | None = None,
+        content_disposition: str | None = "attachment",
+    ) -> None:
+        """Upload a file-like object to storage.
+
+        ``content_disposition`` defaults to ``"attachment"`` so browsers never
+        render uploaded content inline — they must download it.  Pass
+        ``content_disposition=None`` to omit the header (e.g. for internal
+        quarantine objects that are never served to end-users).
+        """
+        extra_args: dict[str, Any] = {}
+        if content_type:
+            extra_args["ContentType"] = content_type
+        if content_encoding:
+            extra_args["ContentEncoding"] = content_encoding
+        if content_disposition:
+            extra_args["ContentDisposition"] = content_disposition
+        # Let the CDN cache the object for 24 h. Presigned URLs remain stable for
+        # 12 min (Redis cache) so the CDN can serve repeat requests from edge.
+        extra_args.setdefault("CacheControl", "public, max-age=86400")
+
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            await client.put_object(
+                Bucket=cfg["bucket"],
+                Key=file_key,
+                Body=file_obj,
+                **extra_args,
+            )
+
+    async def download_file(self, file_key: str, dest_path: str | Path) -> None:
+        """Download an object from storage to a local path."""
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            body: Any = response["Body"]
+            try:
+                with open(dest_path, "wb") as f:
+                    while True:
+                        chunk = await body.read(64 * 1024)
+                        if not chunk:
+                            break
+                        await asyncio.to_thread(f.write, chunk)
+            finally:
+                body.close()
+
+            if response.get("ContentEncoding") == "gzip":
+                await asyncio.to_thread(_decompress_gzip_file, dest_path)
+
+    async def download_file_raw(self, file_key: str, dest_path: str | Path) -> None:
+        """Download an object's raw bytes to a local path without any post-processing.
+
+        Unlike :meth:`download_file`, this method never decompresses gzip-encoded
+        objects.  Use it when you need the exact bytes that are stored in S3 —
+        for example when creating a backup that must round-trip the object
+        faithfully back to another bucket.
+        """
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            body: Any = response["Body"]
+            try:
+                with open(dest_path, "wb") as f:
+                    while True:
+                        chunk = await body.read(64 * 1024)
+                        if not chunk:
+                            break
+                        await asyncio.to_thread(f.write, chunk)
+            finally:
+                body.close()
+
+    async def get_object_headers(self, file_key: str) -> dict[str, str | None]:
+        """Return the HTTP metadata headers stored on an S3 object.
+
+        Returns a dict with keys ``content_type``, ``content_encoding``,
+        ``content_disposition``, and ``cache_control``.  Missing headers are
+        represented as ``None`` so callers can skip setting them on restore.
+        """
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            response = await client.head_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            return {
+                "content_type": response.get("ContentType"),
+                "content_encoding": response.get("ContentEncoding"),
+                "content_disposition": response.get("ContentDisposition"),
+                "cache_control": response.get("CacheControl"),
+            }
+
+    async def download_file_with_hash(self, file_key: str, dest_path: str | Path) -> str:
+        """Download an object to a local path and compute its SHA-256 in one pass."""
+        hasher = hashlib.sha256()
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            body: Any = response["Body"]
+            try:
+                with open(dest_path, "wb") as f:
+                    while True:
+                        chunk = await body.read(64 * 1024)
+                        if not chunk:
+                            break
+
+                        # Batch disk write and SHA-256 hash in the same thread
+                        # call to keep both CPU-bound hashing and I/O off the
+                        # event loop (audit review fix).
+                        def _write_and_hash(c: bytes = chunk) -> None:
+                            f.write(c)
+                            hasher.update(c)
+
+                        await asyncio.to_thread(_write_and_hash)
+            finally:
+                body.close()
+        return hasher.hexdigest()
+
+    async def read_full_object(self, file_key: str) -> bytes:
+        """Read the entire object from storage into memory.
+
+        Raises ``ValueError`` if the object exceeds 50 MB to prevent OOM errors.
+        Use ``download_file_with_hash`` for large objects.
+        """
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            content_length = int(cast(Any, response.get("ContentLength")) or 0)
+            if content_length > _READ_FULL_OBJECT_MAX_BYTES:
+                raise ValueError(
+                    f"Object {file_key!r} ({content_length} bytes) exceeds the "
+                    f"{_READ_FULL_OBJECT_MAX_BYTES // 1024 // 1024} MiB limit for "
+                    "read_full_object. Use download_file_with_hash for large files."
+                )
+            body: Any = response["Body"]
+            return await body.read()  # type: ignore[no-any-return]
+
+    async def read_object_bytes(self, file_key: str, byte_count: int = MAGIC_HEADER_SIZE) -> bytes:
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            try:
+                response = await client.get_object(  # type: ignore[call-arg]
+                    Bucket=cfg["bucket"], Key=file_key, Range=f"bytes=0-{byte_count - 1}"
+                )
+                body: Any = response["Body"]
+                return await body.read()  # type: ignore[no-any-return]
+            except client.exceptions.ClientError as e:
+                if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                    return b""
+                raise
+
+    @asynccontextmanager
+    async def stream_object(self, file_key: str) -> AsyncGenerator[Any, None]:
+        """Yield S3 response body for chunked reading via ``await body.read(size)``."""
+        cfg = self._cfg()
+        if self._s3:
+            response = await self._s3.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            body: Any = response["Body"]
+            try:
+                yield body
+            finally:
+                body.close()
+            return
+
+        async with self._client(cfg) as client:
+            response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            body: Any = response["Body"]  # type: ignore[no-redef]
+            try:
+                yield body
+            finally:
+                body.close()
+
+    # ── presigned URLs ──────────────────────────────────────────────────────
+
+    async def generate_presigned_put(
+        self,
+        file_key: str,
+        content_type: str,
+        ttl: int = 3600,
+        content_length: int | None = None,
+        checksum_sha256: str | None = None,
+    ) -> str:
+        cfg = self._cfg()
+        params: dict[str, Any] = {
+            "Bucket": cfg["bucket"],
+            "Key": file_key,
+            "ContentType": content_type,
+        }
+        if content_length is not None:
+            params["ContentLength"] = content_length
+
+        async with self._client(cfg) as client:
+            if checksum_sha256 is not None:
+                params["ChecksumAlgorithm"] = "SHA256"
+                params["ChecksumSHA256"] = base64.b64encode(bytes.fromhex(checksum_sha256)).decode()
+            url: str = await client.generate_presigned_url(  # type: ignore[call-arg]
+                "put_object",
+                Params=params,
+                ExpiresIn=ttl,
+            )
+            return self._rewrite_host(url, is_put=True, cfg=cfg)
+
+    async def generate_presigned_get(
+        self,
+        file_key: str,
+        ttl: int = 900,
+        force_download: bool = True,
+        filename: str | None = None,
+        content_type: str | None = None,
+    ) -> str:
+        """Generate a presigned GET URL for a stored object.
+
+        Args:
+            file_key: S3 object key.  Must NOT be a quarantine/ key — those are
+                unscanned and must never be served to end-users.
+            ttl: URL lifetime in seconds (default 15 min).
+            force_download: When True (default) sets ``ResponseContentDisposition``
+                to ``attachment`` so browsers download rather than render the file.
+                Pass False only for inline viewing (e.g. OnlyOffice integration).
+            filename: Override the download filename via ResponseContentDisposition.
+                Essential for CAS keys (``cas/{hmac}``) which are opaque hashes.
+            content_type: Override the response Content-Type via ResponseContentType.
+        """
+        if file_key.startswith("quarantine/"):
+            raise ValueError(
+                f"Refusing to generate presigned GET for unscanned quarantine key: {file_key}"
+            )
+
+        # Delivery seam: a worker (Cloudflare or self-hosted) signs + edge-caches
+        # single-file serving. Returns None when no worker is configured, in
+        # which case we fall back to a presigned S3 GET below.
+        worker_url = get_delivery().file_url(
+            file_key,
+            ttl=ttl,
+            force_download=force_download,
+            filename=filename,
+            content_type=content_type,
+        )
+        if worker_url is not None:
+            return worker_url
+
+        cfg = self._cfg()
+        params: dict[str, Any] = {
+            "Bucket": cfg["bucket"],
+            "Key": file_key,
+        }
+
+        if filename:
+            ascii_safe = filename.encode("ascii", "replace").decode()
+            utf8_encoded = quote(filename)
+            disposition = "attachment" if force_download else "inline"
+            params["ResponseContentDisposition"] = (
+                f"{disposition}; filename=\"{ascii_safe}\"; filename*=UTF-8''{utf8_encoded}"
+            )
+        elif force_download:
+            params["ResponseContentDisposition"] = "attachment"
+
+        if content_type:
+            params["ResponseContentType"] = content_type
+
+        async with self._client(cfg) as client:
+            url: str = await client.generate_presigned_url(  # type: ignore[call-arg]
+                "get_object",
+                Params=params,
+                ExpiresIn=ttl,
+            )
+            return self._rewrite_host(url, is_put=False, cfg=cfg)
+
+    @staticmethod
+    def _presign_cache_key(
+        file_key: str,
+        force_download: bool,
+        filename: str | None = None,
+        content_type: str | None = None,
+    ) -> str:
+        variant = hashlib.sha256(f"{filename or ''}:{content_type or ''}".encode()).hexdigest()[:12]
+        return f"{_PRESIGN_CACHE_PREFIX}{file_key}:{int(force_download)}:{variant}"
+
+    async def generate_presigned_get_cached(
+        self,
+        file_key: str,
+        redis: Any,
+        ttl: int = 900,
+        force_download: bool = True,
+        filename: str | None = None,
+        content_type: str | None = None,
+    ) -> str:
+        """Like generate_presigned_get but caches the result in Redis.
+
+        All callers that request the same (file_key, force_download) pair receive
+        the *same* URL string for up to 12 minutes. This lets the CDN cache the
+        underlying object at the edge after the first download, eliminating the
+        ~10 Mbps R2 origin bandwidth cap for subsequent requests.
+
+        Args:
+            file_key: S3 object key.
+            redis: An active Redis client (``redis.asyncio.Redis``).
+            ttl: Presigned URL lifetime in seconds passed to R2 (default 15 min).
+            force_download: Controls Content-Disposition (attachment vs inline).
+            filename: Override download filename.
+            content_type: Override response Content-Type.
+        """
+        cache_key = self._presign_cache_key(
+            file_key, force_download, filename=filename, content_type=content_type
+        )
+
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                return cached.decode() if isinstance(cached, bytes) else cached
+        except Exception:
+            pass  # Redis unavailable — fall through to generate fresh URL
+
+        url = await self.generate_presigned_get(
+            file_key,
+            ttl=ttl,
+            force_download=force_download,
+            filename=filename,
+            content_type=content_type,
+        )
+
+        try:
+            await redis.set(cache_key, url, ex=_PRESIGN_CACHE_TTL)
+        except Exception:
+            pass  # Best-effort cache write
+
+        return url
+
+    async def bust_presign_cache(self, file_key: str, redis: Any) -> None:
+        """Invalidate all cached presigned URLs for a file (e.g. after a new version)."""
+        pattern = f"{_PRESIGN_CACHE_PREFIX}{file_key}:*"
+        try:
+            keys = [key async for key in redis.scan_iter(pattern)]
+            if keys:
+                await redis.delete(*keys)
+        except Exception:
+            pass
+
+    # ── metadata / existence ────────────────────────────────────────────────
+
+    async def object_exists(self, file_key: str) -> bool:
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            try:
+                await client.head_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+                return True
+            except client.exceptions.ClientError as e:
+                if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                    return False
+                raise
+
+    async def cas_object_exists(self, sha256: str) -> bool:
+        """Check if a file with the given SHA-256 exists in the CAS prefix."""
+        from app.core.cas import hmac_cas_key
+
+        # We use the HMAC as the key name in the cas/ prefix
+        cas_id = hmac_cas_key(sha256).split(":")[-1]
+        return await self.object_exists(f"cas/{cas_id}")
+
+    async def get_object_info(self, file_key: str) -> dict[str, Any]:
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            response = await client.head_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            return {
+                "size": response["ContentLength"],
+                "content_type": response["ContentType"],
+            }
+
+    async def update_object_content_type(self, file_key: str, content_type: str) -> None:
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            await client.copy_object(  # type: ignore[call-arg]
+                Bucket=cfg["bucket"],
+                CopySource={"Bucket": cfg["bucket"], "Key": file_key},
+                Key=file_key,
+                MetadataDirective="REPLACE",
+                ContentType=content_type,
+            )
+
+    # ── copy / move / delete ────────────────────────────────────────────────
+
+    async def move_object(self, source_key: str, dest_key: str) -> None:
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            await client.copy_object(  # type: ignore[call-arg]
+                Bucket=cfg["bucket"],
+                CopySource={"Bucket": cfg["bucket"], "Key": source_key},
+                Key=dest_key,
+            )
+        await self.delete_object(source_key)
+
+    async def copy_object(self, source_key: str, dest_key: str) -> None:
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            await client.copy_object(  # type: ignore[call-arg]
+                Bucket=cfg["bucket"],
+                CopySource={"Bucket": cfg["bucket"], "Key": source_key},
+                Key=dest_key,
+            )
+
+    async def delete_object(self, file_key: str) -> None:
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            await client.delete_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+
+        # Remove from quota sorted set for both staging prefixes.
+        # quarantine/ keys are added on upload; uploads/ keys are added after clean processing.
+        try:
+            if file_key.startswith("uploads/") or file_key.startswith("quarantine/"):
+                parts = file_key.split("/")
+                if len(parts) >= 3:
+                    user_id = parts[1]
+                    from app.core.redis import redis_client
+
+                    await redis_client.zrem(f"quota:uploads:{user_id}", file_key)
+        except Exception as e:
+            logger.warning("Failed to remove deleted object %s from Redis quota: %s", file_key, e)
+
+    # ── listing ─────────────────────────────────────────────────────────────
+
+    async def list_multipart_uploads(self, prefix: str = "") -> AsyncIterator[dict[str, Any]]:
+        """Yield all in-progress S3 multipart uploads under the given prefix."""
+        cfg = self._cfg()
+        async with self._client(cfg) as s3:
+            paginator = s3.get_paginator("list_multipart_uploads")
+            kwargs: dict[str, Any] = {"Bucket": cfg["bucket"]}
+            if prefix:
+                kwargs["Prefix"] = prefix
+            async for page in paginator.paginate(**kwargs):
+                uploads: list[dict[str, Any]] = page.get("Uploads", [])
+                for mp in uploads:
+                    yield mp
+
+    async def list_objects(self, prefix: str = "") -> AsyncIterator[dict[str, Any]]:
+        """Yield all objects in the bucket, optionally under a prefix."""
+        cfg = self._cfg()
+        async with self._client(cfg) as s3:
+            paginator = s3.get_paginator("list_objects_v2")
+            kwargs: dict[str, Any] = {"Bucket": cfg["bucket"]}
+            if prefix:
+                kwargs["Prefix"] = prefix
+            async for page in paginator.paginate(**kwargs):
+                contents: list[dict[str, Any]] = page.get("Contents", [])
+                for obj in contents:
+                    yield obj
+
+    # ── public URL ──────────────────────────────────────────────────────────
+
+    async def get_public_url(self, file_key: str) -> str:
+        """Return the permanent public URL for an object readable without auth."""
+        # Worker takes priority — branding assets are served via its /branding/* route.
+        worker_url = get_delivery().public_url(file_key)
+        if worker_url is not None:
+            return worker_url
+
+        cfg = self._cfg()
+        public_endpoint = cfg["public_endpoint"]
+        bucket = cfg["bucket"]
+        endpoint = cfg["endpoint"]
+        use_ssl = cfg["use_ssl"]
+
+        if public_endpoint:
+            if "://" in public_endpoint:
+                public_endpoint = urlparse(public_endpoint).netloc
+            scheme = "http" if "localhost" in public_endpoint else "https"
+            if "localhost" in public_endpoint:
+                return f"{scheme}://{public_endpoint}/{bucket}/{file_key}"
+            return f"{scheme}://{public_endpoint}/{file_key}"
+
+        scheme = "https" if use_ssl else "http"
+        return f"{scheme}://{endpoint}/{bucket}/{file_key}"

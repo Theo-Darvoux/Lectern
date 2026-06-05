@@ -1,267 +1,43 @@
-import { downloadZip } from "client-zip";
+/**
+ * Cloudflare Worker entry point.
+ *
+ * Thin adapter: it wraps the R2 bucket binding as an {@link ObjectSource} and
+ * the global edge cache as the handler's {@link EdgeCache}, then defers to the
+ * runtime-agnostic {@link handleRequest} in handler.ts (shared with the
+ * self-hosted Node deployment in server.ts).
+ */
+
+import { handleRequest, ObjectSource, StoredObject } from "./handler.js";
 
 export interface Env {
   BUCKET: R2Bucket;
   HMAC_SECRET: string;
 }
 
-interface ZipEntry {
-  arcname: string;
-  r2_key: string;
-}
-
-interface TokenPayload {
-  exp: number;
-  
-  // ZIP fields
-  dir_name?: string;
-  entries?: ZipEntry[];
-  part?: number;
-  total?: number;
-
-  // Single file fields
-  r2_key?: string;
-  force_download?: boolean;
-  filename?: string;
-  content_type?: string;
-}
-
-function b64urlDecode(s: string): ArrayBuffer {
-  const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = b64 + "==".slice(0, (4 - (b64.length % 4)) % 4);
-  const raw = atob(padded);
-  const buf = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
-  return buf.buffer;
-}
-
-async function verifyToken(
-  token: string,
-  secret: string
-): Promise<TokenPayload | null> {
-  const dot = token.lastIndexOf(".");
-  if (dot === -1) return null;
-
-  const payloadPart = token.slice(0, dot);
-  const sigPart = token.slice(dot + 1);
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"]
-  );
-
-  let sig: ArrayBuffer;
-  try {
-    sig = b64urlDecode(sigPart);
-  } catch {
-    return null;
-  }
-
-  const valid = await crypto.subtle.verify(
-    "HMAC",
-    key,
-    sig,
-    new TextEncoder().encode(payloadPart)
-  );
-  if (!valid) return null;
-
-  let payload: TokenPayload;
-  try {
-    // b64urlDecode re-adds stripped padding and returns raw bytes.
-    // TextDecoder handles non-ASCII dir_name values (e.g. French accents).
-    const payloadBytes = new Uint8Array(b64urlDecode(payloadPart));
-    payload = JSON.parse(new TextDecoder().decode(payloadBytes));
-  } catch {
-    return null;
-  }
-
-  if (payload.exp < Date.now() / 1000) return null;
-  return payload;
+/** Adapt the R2 bucket binding to the runtime-agnostic ObjectSource. */
+function r2Source(bucket: R2Bucket): ObjectSource {
+  return {
+    async get(key: string): Promise<StoredObject | null> {
+      const object = await bucket.get(key);
+      if (!object) return null;
+      return {
+        body: object.body,
+        size: object.size,
+        contentEncoding: object.httpMetadata?.contentEncoding,
+        etag: object.httpEtag,
+        writeHttpMetadata: (headers: Headers) => object.writeHttpMetadata(headers),
+      };
+    },
+  };
 }
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url);
-
-    const isBranding = url.pathname.startsWith("/branding/");
-    if (!url.pathname.startsWith("/zip") && !url.pathname.startsWith("/file/") && !isBranding) {
-      return new Response("Not found", { status: 404 });
-    }
-
-    // CORS preflight
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET",
-          "Access-Control-Max-Age": "86400",
-        },
-      });
-    }
-
-    if (request.method !== "GET") {
-      return new Response("Method not allowed", { status: 405 });
-    }
-
-    // ==========================================
-    // PUBLIC ROUTE: Branding assets (no token)
-    // ==========================================
-    if (isBranding) {
-      const key = url.pathname.slice(1); // strip leading /  →  branding/logo.webp
-      const object = await env.BUCKET.get(key);
-      if (!object) return new Response("Not found", { status: 404 });
-
-      const headers = new Headers();
-      object.writeHttpMetadata(headers);
-      headers.set("Cache-Control", "public, max-age=86400");
-      headers.set("Access-Control-Allow-Origin", "*");
-
-      return new Response(object.body as ReadableStream, { headers });
-    }
-
-    const token = url.searchParams.get("token");
-    if (!token) {
-      return new Response("Missing token", { status: 401 });
-    }
-
-    const payload = await verifyToken(token, env.HMAC_SECRET);
-    if (!payload) {
-      return new Response("Invalid or expired token", { status: 401 });
-    }
-
-    // ==========================================
-    // NEW ROUTE: Single File Secure Caching
-    // ==========================================
-    if (url.pathname.startsWith("/file/")) {
-      const cacheUrl = new URL(request.url);
-      cacheUrl.search = ''; 
-      const cacheKey = new Request(cacheUrl.toString(), request);
-      
-      const cache = caches.default;
-      let response = await cache.match(cacheKey);
-
-      if (!response) {
-        if (!payload.r2_key) {
-          return new Response("Invalid token payload for file", { status: 400 });
-        }
-        const object = await env.BUCKET.get(payload.r2_key);
-
-        if (!object) return new Response("Not found", { status: 404 });
-
-        const isGzip = object.httpMetadata?.contentEncoding === "gzip";
-
-        const headers = new Headers();
-        object.writeHttpMetadata(headers);
-        headers.set("etag", object.httpEtag);
-        // Force edge caching for 1 month
-        headers.set("Cache-Control", "public, max-age=2592000");
-
-        // Handle overrides
-        if (payload.content_type) {
-          headers.set("Content-Type", payload.content_type);
-        }
-
-        if (payload.filename) {
-          const encodedName = encodeURIComponent(payload.filename);
-          const asciiFallback = payload.filename.replace(/[^\x20-\x7E]/g, "_");
-          const disposition = payload.force_download ? "attachment" : "inline";
-          headers.set("Content-Disposition", `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encodedName}`);
-        } else if (payload.force_download) {
-          headers.set("Content-Disposition", "attachment");
-        } else {
-          headers.set("Content-Disposition", "inline");
-        }
-
-        // Decompress gzip on fresh R2 fetches so the browser receives raw bytes.
-        // We check httpMetadata directly (not the HTTP header) because Cloudflare's
-        // cache can strip the gzip body while keeping the content-encoding header,
-        // which would cause double-decompression garbage on cached responses.
-        let body: ReadableStream = object.body;
-        if (isGzip) {
-          body = body.pipeThrough(new DecompressionStream("gzip"));
-          headers.delete("content-encoding");
-          headers.delete("content-length");
-        }
-
-        headers.set("Access-Control-Allow-Origin", "*");
-
-        response = new Response(body, { headers });
-
-        // Cache the already-decompressed response so cache hits are safe.
-        ctx.waitUntil(cache.put(cacheKey, response.clone()));
-      }
-
-      // Cache hit: serve directly. The cached response is already decompressed.
-      const headers = new Headers(response.headers);
-      headers.set("Access-Control-Allow-Origin", "*");
-      return new Response(response.body as ReadableStream, {
-        status: response.status,
-        statusText: response.statusText,
-        headers,
-      });
-    }
-
-    // ==========================================
-    // EXISTING ROUTE: ZIP Generation
-    // ==========================================
-    if (url.pathname === "/zip") {
-      if (!payload.entries || !payload.dir_name) {
-        return new Response("Invalid token payload for zip", { status: 400 });
-      }
-
-      const entries = payload.entries;
-      const dirName = payload.dir_name;
-
-      // Async generator so R2 fetches happen one at a time (lazy) but each
-      // yielded item has a concrete ReadableStream — client-zip does not
-      // accept functions.
-      async function* streamFiles() {
-        for (const { arcname, r2_key } of entries) {
-          const obj = await env.BUCKET.get(r2_key);
-          if (!obj) {
-            // R2 key missing — skip rather than yielding a corrupt empty file.
-            console.error(`ZIP: missing R2 key ${r2_key}, skipping ${arcname}`);
-            continue;
-          }
-          let input = obj.body;
-          let size: number | undefined = obj.size;
-          if (obj.httpMetadata?.contentEncoding === "gzip") {
-            input = obj.body.pipeThrough(new DecompressionStream("gzip"));
-            size = undefined;
-          }
-          yield { name: arcname, input, size };
-        }
-      }
-
-      const files = streamFiles();
-
-      // Part suffix is omitted for part 1 so a single-part download has a
-      // clean filename; subsequent parts append " (N)" for disambiguation.
-      const suffix =
-        payload.part && payload.total && payload.total > 1 && payload.part > 1
-          ? ` (${payload.part})`
-          : "";
-      const baseName =
-        dirName.replace(/[^\x20-\x7E]/g, "_").replace(/\//g, "_") ||
-        "directory";
-      const asciiFallback = baseName + suffix;
-      const encodedName = encodeURIComponent(dirName + suffix);
-      const disposition = `attachment; filename="${asciiFallback}.zip"; filename*=UTF-8''${encodedName}.zip`;
-
-      const zipResponse = downloadZip(files);
-
-      return new Response(zipResponse.body, {
-        headers: {
-          "Content-Type": "application/zip",
-          "Content-Disposition": disposition,
-          "Access-Control-Allow-Origin": "*",
-        },
-      });
-    }
-
-    return new Response("Not found", { status: 404 });
+    return handleRequest(request, {
+      source: r2Source(env.BUCKET),
+      secret: env.HMAC_SECRET,
+      cache: caches.default,
+      waitUntil: (p) => ctx.waitUntil(p),
+    });
   },
 };

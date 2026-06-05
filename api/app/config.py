@@ -55,6 +55,15 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
+    # Object-storage backend selector. All backends speak S3, but each carries a
+    # few quirks (checksum handling, presigned-PUT host rewriting). Switching is
+    # env-only — see app/core/storage/backends.py.
+    #   r2        — Cloudflare R2 (default; current production)
+    #   seaweedfs — self-hosted SeaweedFS
+    #   garage    — self-hosted Garage
+    #   rustfs    — self-hosted RustFS
+    storage_backend: str = "r2"
+
     s3_endpoint: str = "localhost:9000"
     s3_public_endpoint: str | None = None
     s3_access_key: str = "minioadmin"
