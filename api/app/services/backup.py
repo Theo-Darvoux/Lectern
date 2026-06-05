@@ -1,15 +1,18 @@
 """Backup and restore service.
 
 Creates ZIP snapshots of the platform state:
-  - DB tables: users, tags, directories, materials, pull_requests,
-    material_versions, material_tags, directory_tags, pr_file_claims,
-    pr_comments
-  - S3 prefixes: cas/, uploads/, thumbnails/
+  - DB tables: all 24 application tables in FK-safe insertion order
+  - S3 prefixes: cas/, uploads/, thumbnails/, branding/
 
-ZIP layout:
-  manifest.json
-  db/{table_name}.json
-  s3/{key}
+ZIP layout (v2):
+  manifest.json          – summary + version
+  s3_metadata.json       – per-object HTTP headers (ContentType, ContentEncoding, …)
+  db/{table_name}.json   – rows for every table
+  s3/{key}               – raw object bytes (gzip-encoded objects are NOT decompressed)
+
+Version history:
+  1.0  – original: 10 tables, 3 prefixes, no metadata sidecar, gzip decompressed
+  2.0  – lossless:  24 tables, 4 prefixes, metadata sidecar, raw bytes preserved
 """
 
 from __future__ import annotations
@@ -28,28 +31,59 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.storage import delete_object, download_file, list_objects, upload_file
+from app.core.storage import (
+    delete_object,
+    download_file_raw,
+    get_object_headers,
+    list_objects,
+    upload_file,
+    upload_file_multipart,
+)
 
 logger = logging.getLogger(__name__)
 
-BACKUP_VERSION = "1.0"
-BACKUP_PREFIXES = ("cas/", "uploads/", "thumbnails/")
+BACKUP_VERSION = "2.0"
+BACKUP_PREFIXES = ("cas/", "uploads/", "thumbnails/", "branding/")
 MAX_LOCAL_BACKUPS = 3
 BACKUP_FILENAME_PREFIX = "backup_"
 
-# Tables included in the backup, in FK-safe insertion order.
-# pull_requests must come before material_versions (pr_id FK).
+# All application tables in FK-safe insertion order.
+# Rules:
+#   • parent tables precede child tables
+#   • self-referential tables come after all their non-self dependencies
+#   • junction/audit tables that depend on two parents come last among those parents
 _TABLE_INSERT_ORDER = [
+    # ── no FK dependencies ───────────────────────────────────────────────────
     "users",
     "tags",
-    "directories",
-    "materials",
-    "pull_requests",
-    "material_versions",
-    "material_tags",
-    "directory_tags",
-    "pr_file_claims",
-    "pr_comments",
+    "allowed_domains",
+    "dead_letter_jobs",
+    # ── depend only on users / tags ──────────────────────────────────────────
+    "directories",          # self-ref: parent_id → topological sort on restore
+    "notifications",        # FK: users
+    "uploads",              # FK: none (standalone tracking table)
+    # ── depend on directories (and optionally users) ─────────────────────────
+    "materials",            # FK: directories, users; self-ref: parent_material_id
+    "directory_tags",       # FK: directories, tags
+    "directory_likes",      # FK: users, directories
+    "directory_favourites", # FK: users, directories
+    # ── depend on materials ──────────────────────────────────────────────────
+    "pull_requests",        # FK: materials; self-ref: reverts_pr_id / reverted_by_pr_id
+    "material_tags",        # FK: materials, tags
+    "material_likes",       # FK: users, materials
+    "material_favourites",  # FK: users, materials
+    "featured_items",       # FK: materials, directories, users
+    "flags",                # FK: users (target_id is a polymorphic UUID, no FK constraint)
+    "view_history",         # FK: users, materials
+    "download_audit",       # FK: users, materials
+    "comments",             # FK: users (standalone threaded comments, no material FK)
+    # ── depend on materials + pull_requests ──────────────────────────────────
+    "material_versions",    # FK: materials, pull_requests
+    # ── depend on materials + material_versions ──────────────────────────────
+    "annotations",          # FK: materials, material_versions, users; self-ref: parent_id / thread_root_id
+    # ── depend on pull_requests + material_versions ──────────────────────────
+    "pr_file_claims",       # FK: pull_requests, material_versions
+    "pr_comments",          # FK: pull_requests; self-ref: parent_id
 ]
 _TABLE_DELETE_ORDER = list(reversed(_TABLE_INSERT_ORDER))
 
@@ -58,6 +92,7 @@ _TABLE_DELETE_ORDER = list(reversed(_TABLE_INSERT_ORDER))
 _SELF_REF_FK: dict[str, tuple[str, str]] = {
     "directories": ("parent_id", "id"),
     "materials": ("parent_material_id", "id"),
+    "annotations": ("thread_id", "id"),   # thread_id → self-referential thread root
     "pr_comments": ("parent_id", "id"),
 }
 
@@ -71,6 +106,10 @@ _UUID_RE = re.compile(
 # SQLite stores UUIDs as 32-char hex without dashes.
 _BARE_UUID_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
 _ISO_DT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+
+# Multipart threshold for restore uploads — objects larger than this are streamed
+# via upload_file_multipart rather than buffered in RAM.
+_RESTORE_MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5 MiB
 
 
 # ── Serialization helpers ─────────────────────────────────────────────────────
@@ -213,15 +252,36 @@ async def _restore_table(db: AsyncSession, table_name: str, rows: list[dict[str,
 
 
 async def create_backup_zip(db: AsyncSession, dest_path: Path) -> dict[str, Any]:
-    """Create a backup ZIP at dest_path. Returns the manifest dict."""
+    """Create a lossless backup ZIP at dest_path. Returns the manifest dict.
+
+    S3 objects are downloaded via :func:`download_file_raw` so gzip-encoded
+    objects are stored as-is (no silent decompression).  Per-object metadata
+    (ContentType, ContentEncoding, ContentDisposition, CacheControl) is written
+    to ``s3_metadata.json`` inside the ZIP so restore can reproduce the exact
+    HTTP headers.
+    """
     db_data: dict[str, list[dict[str, Any]]] = {}
     for table_name in _TABLE_INSERT_ORDER:
-        db_data[table_name] = await _dump_table(db, table_name)
+        try:
+            db_data[table_name] = await _dump_table(db, table_name)
+        except Exception:
+            # Table may not exist yet (e.g. pre-migration instance). Log and skip.
+            logger.warning("Backup: could not dump table %r — skipping", table_name)
+            db_data[table_name] = []
 
     s3_keys: list[str] = []
     for prefix in BACKUP_PREFIXES:
         async for obj in list_objects(prefix):
             s3_keys.append(obj["Key"])
+
+    # Collect per-object metadata and raw bytes concurrently.
+    # We use a semaphore to avoid opening hundreds of S3 connections at once.
+    _SEM = asyncio.Semaphore(10)
+
+    async def _fetch_one(key: str, local: Path) -> dict[str, str | None]:
+        async with _SEM:
+            await download_file_raw(key, local)
+            return await get_object_headers(key)
 
     manifest: dict[str, Any] = {
         "version": BACKUP_VERSION,
@@ -234,20 +294,33 @@ async def create_backup_zip(db: AsyncSession, dest_path: Path) -> dict[str, Any]
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
+
+        # Download all objects and their metadata.
         s3_local: dict[str, Path] = {}
+        tasks: dict[str, asyncio.Task[dict[str, str | None]]] = {}
         for key in s3_keys:
             safe_name = key.replace("/", "__")
             local = tmp / safe_name
-            await download_file(key, local)
             s3_local[key] = local
+            tasks[key] = asyncio.create_task(_fetch_one(key, local))
+
+        s3_metadata: dict[str, dict[str, str | None]] = {}
+        for key, task in tasks.items():
+            try:
+                s3_metadata[key] = await task
+            except Exception as exc:
+                logger.warning("Backup: failed to fetch metadata for %r: %s", key, exc)
+                s3_metadata[key] = {}
 
         def _write() -> None:
-            with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
                 zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+                zf.writestr("s3_metadata.json", json.dumps(s3_metadata, indent=2))
                 for tbl, rows in db_data.items():
                     zf.writestr(f"db/{tbl}.json", json.dumps(rows))
                 for key, local in s3_local.items():
-                    zf.write(str(local), f"s3/{key}")
+                    if local.exists():
+                        zf.write(str(local), f"s3/{key}")
 
         await asyncio.to_thread(_write)
 
@@ -255,29 +328,56 @@ async def create_backup_zip(db: AsyncSession, dest_path: Path) -> dict[str, Any]
 
 
 async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, Any]:
-    """Full-replacement restore from a local ZIP file. Returns the manifest."""
+    """Full-replacement restore from a local ZIP file. Returns the manifest.
 
-    def _read_metadata() -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], list[str]]:
+    Supports both v1.0 and v2.0 backup archives.  v1 archives lack the
+    ``s3_metadata.json`` sidecar; objects are restored with safe defaults
+    (``application/octet-stream``, no encoding override).
+
+    S3 objects above 5 MiB are restored via multipart upload to avoid buffering
+    the entire object in RAM.
+    """
+
+    def _read_metadata() -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], list[str], dict[str, dict[str, str | None]]]:
         with zipfile.ZipFile(zip_path, "r") as zf:
             namelist = zf.namelist()
             manifest = json.loads(zf.read("manifest.json"))
+
             db_data: dict[str, list[dict[str, Any]]] = {}
             for tbl in _TABLE_INSERT_ORDER:
                 entry = f"db/{tbl}.json"
                 db_data[tbl] = json.loads(zf.read(entry)) if entry in namelist else []
+
             s3_entries = [n for n in namelist if n.startswith("s3/")]
-        return manifest, db_data, s3_entries
 
-    manifest, db_data, s3_entry_names = await asyncio.to_thread(_read_metadata)
+            # v2 backups include per-object metadata; v1 backups do not.
+            if "s3_metadata.json" in namelist:
+                s3_meta: dict[str, dict[str, str | None]] = json.loads(zf.read("s3_metadata.json"))
+            else:
+                s3_meta = {}
 
-    if manifest.get("version") != BACKUP_VERSION:
+        return manifest, db_data, s3_entries, s3_meta
+
+    manifest, db_data, s3_entry_names, s3_metadata = await asyncio.to_thread(_read_metadata)
+
+    version = manifest.get("version", "1.0")
+    if version not in ("1.0", "2.0"):
         raise ValueError(
-            f"Incompatible backup version {manifest.get('version')!r} (expected {BACKUP_VERSION!r})"
+            f"Incompatible backup version {version!r} (supported: '1.0', '2.0')"
+        )
+    if version == "1.0":
+        logger.warning(
+            "Restoring a v1.0 backup: S3 object metadata (Content-Type, Content-Encoding, "
+            "Content-Disposition) will use safe defaults. Re-backup after restore to capture "
+            "full metadata."
         )
 
     # Wipe existing DB rows (reverse FK order)
     for tbl in _TABLE_DELETE_ORDER:
-        await db.execute(text(f'DELETE FROM "{tbl}"'))
+        try:
+            await db.execute(text(f'DELETE FROM "{tbl}"'))
+        except Exception:
+            logger.warning("Restore: could not truncate table %r — skipping", tbl)
 
     # Restore DB rows (forward FK order)
     for tbl in _TABLE_INSERT_ORDER:
@@ -285,25 +385,61 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
 
     await db.flush()
 
-    # Wipe existing S3 objects in backup prefixes
+    # Wipe existing S3 objects in all backup prefixes
     for prefix in BACKUP_PREFIXES:
         async for obj in list_objects(prefix):
             await delete_object(obj["Key"])
 
-    # Restore S3 objects one at a time to keep memory bounded
-    for entry_name in s3_entry_names:
+    # Restore S3 objects.  Objects ≥ 5 MiB are streamed via a temp file to
+    # avoid loading the full object into RAM.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
 
-        def _read_s3_entry(name: str = entry_name) -> bytes:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                return zf.read(name)
+        for entry_name in s3_entry_names:
+            key = entry_name[3:]  # strip leading "s3/"
+            meta = s3_metadata.get(key, {})
 
-        data = await asyncio.to_thread(_read_s3_entry)
-        key = entry_name[3:]  # strip leading "s3/"
-        await upload_file(
-            data,
-            key,
-            content_type="application/octet-stream",
-        )
+            content_type: str = meta.get("content_type") or "application/octet-stream"
+            content_encoding: str | None = meta.get("content_encoding")
+            content_disposition: str | None = meta.get("content_disposition") or "attachment"
+
+            def _extract_entry(name: str = entry_name, dest: Path = tmp / key.replace("/", "__")) -> tuple[Path, int]:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    info = zf.getinfo(name)
+                    file_size = info.file_size
+                    with zf.open(name) as src, open(dest, "wb") as dst:
+                        while True:
+                            chunk = src.read(64 * 1024)
+                            if not chunk:
+                                break
+                            dst.write(chunk)
+                return dest, file_size
+
+            local_path, file_size = await asyncio.to_thread(_extract_entry)
+
+            try:
+                if file_size >= _RESTORE_MULTIPART_THRESHOLD:
+                    # Large object — stream via multipart to avoid RAM spike.
+                    await upload_file_multipart(
+                        local_path,
+                        key,
+                        content_type=content_type,
+                        content_encoding=content_encoding,
+                        content_disposition=content_disposition,
+                    )
+                else:
+                    # Small object — single PUT.
+                    data = await asyncio.to_thread(local_path.read_bytes)
+                    await upload_file(
+                        data,
+                        key,
+                        content_type=content_type,
+                        content_encoding=content_encoding,
+                        content_disposition=content_disposition,
+                    )
+            finally:
+                local_path.unlink(missing_ok=True)
 
     return manifest
 

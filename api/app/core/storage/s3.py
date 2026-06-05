@@ -431,6 +431,45 @@ class S3Backend:
             if response.get("ContentEncoding") == "gzip":
                 await asyncio.to_thread(_decompress_gzip_file, dest_path)
 
+    async def download_file_raw(self, file_key: str, dest_path: str | Path) -> None:
+        """Download an object's raw bytes to a local path without any post-processing.
+
+        Unlike :meth:`download_file`, this method never decompresses gzip-encoded
+        objects.  Use it when you need the exact bytes that are stored in S3 —
+        for example when creating a backup that must round-trip the object
+        faithfully back to another bucket.
+        """
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            body: Any = response["Body"]
+            try:
+                with open(dest_path, "wb") as f:
+                    while True:
+                        chunk = await body.read(64 * 1024)
+                        if not chunk:
+                            break
+                        await asyncio.to_thread(f.write, chunk)
+            finally:
+                body.close()
+
+    async def get_object_headers(self, file_key: str) -> dict[str, str | None]:
+        """Return the HTTP metadata headers stored on an S3 object.
+
+        Returns a dict with keys ``content_type``, ``content_encoding``,
+        ``content_disposition``, and ``cache_control``.  Missing headers are
+        represented as ``None`` so callers can skip setting them on restore.
+        """
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            response = await client.head_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
+            return {
+                "content_type": response.get("ContentType"),
+                "content_encoding": response.get("ContentEncoding"),
+                "content_disposition": response.get("ContentDisposition"),
+                "cache_control": response.get("CacheControl"),
+            }
+
     async def download_file_with_hash(self, file_key: str, dest_path: str | Path) -> str:
         """Download an object to a local path and compute its SHA-256 in one pass."""
         hasher = hashlib.sha256()

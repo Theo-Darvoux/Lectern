@@ -118,18 +118,19 @@ async def _make_pull_request(db: AsyncSession, user: User) -> PullRequest:
     return pr
 
 
-def _make_mock_s3() -> tuple[AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
-    """Return (mock_list_objects, mock_download, mock_delete, mock_upload) mocks."""
+def _make_mock_s3() -> tuple[AsyncMock, AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
+    """Return (mock_list_objects, mock_download_raw, mock_get_headers, mock_delete, mock_upload) mocks."""
 
     async def _empty_gen(*args, **kwargs):
         if False:
             yield  # make it an async generator
 
     list_mock = MagicMock(return_value=_empty_gen())
-    download_mock = AsyncMock()
+    download_raw_mock = AsyncMock()
+    get_headers_mock = AsyncMock(return_value={})
     delete_mock = AsyncMock()
     upload_mock = AsyncMock()
-    return list_mock, download_mock, delete_mock, upload_mock
+    return list_mock, download_raw_mock, get_headers_mock, delete_mock, upload_mock
 
 
 # ── Unit tests: serialization ─────────────────────────────────────────────────
@@ -314,7 +315,8 @@ async def test_create_backup_zip_structure(db_session: AsyncSession, tmp_path: P
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
-        patch("app.services.backup.download_file", new_callable=AsyncMock),
+        patch("app.services.backup.download_file_raw", new_callable=AsyncMock),
+        patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
     ):
         manifest = await create_backup_zip(db_session, dest)
 
@@ -346,7 +348,8 @@ async def test_create_backup_zip_includes_db_rows(db_session: AsyncSession, tmp_
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
-        patch("app.services.backup.download_file", new_callable=AsyncMock),
+        patch("app.services.backup.download_file_raw", new_callable=AsyncMock),
+        patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
     ):
         manifest = await create_backup_zip(db_session, dest)
 
@@ -382,12 +385,13 @@ async def test_create_backup_zip_includes_s3_objects(
             if False:
                 yield
 
-    async def _fake_download(key: str, dest_path: str | Path) -> None:
+    async def _fake_download_raw(key: str, dest_path: str | Path) -> None:
         Path(dest_path).write_bytes(s3_file_content)
 
     with (
         patch("app.services.backup.list_objects", side_effect=_fake_list),
-        patch("app.services.backup.download_file", side_effect=_fake_download),
+        patch("app.services.backup.download_file_raw", side_effect=_fake_download_raw),
+        patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
     ):
         manifest = await create_backup_zip(db_session, dest)
 
@@ -787,7 +791,8 @@ async def test_save_backup_creates_file(client: AsyncClient, db_session: AsyncSe
         with (
             patch("app.routers.admin_backup.settings") as mock_settings,
             patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
-            patch("app.services.backup.download_file", new_callable=AsyncMock),
+            patch("app.services.backup.download_file_raw", new_callable=AsyncMock),
+            patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
         ):
             mock_settings.backup_dir = tmp
             r = await client.post("/api/admin/backup/save", headers=_auth(admin))
@@ -818,7 +823,8 @@ async def test_save_backup_enforces_rotation(client: AsyncClient, db_session: As
         with (
             patch("app.routers.admin_backup.settings") as mock_settings,
             patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
-            patch("app.services.backup.download_file", new_callable=AsyncMock),
+            patch("app.services.backup.download_file_raw", new_callable=AsyncMock),
+            patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
         ):
             mock_settings.backup_dir = tmp
             r = await client.post("/api/admin/backup/save", headers=_auth(admin))
@@ -848,7 +854,8 @@ async def test_export_backup_streams_zip(client: AsyncClient, db_session: AsyncS
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
-        patch("app.services.backup.download_file", new_callable=AsyncMock),
+        patch("app.services.backup.download_file_raw", new_callable=AsyncMock),
+        patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
     ):
         r = await client.get("/api/admin/backup/export", headers=_auth(admin))
 
@@ -1151,7 +1158,8 @@ async def test_roundtrip_backup_and_restore(db_session: AsyncSession, tmp_path: 
     # Step 1: Create backup
     with (
         patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
-        patch("app.services.backup.download_file", new_callable=AsyncMock),
+        patch("app.services.backup.download_file_raw", new_callable=AsyncMock),
+        patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
     ):
         await create_backup_zip(db_session, dest)
 

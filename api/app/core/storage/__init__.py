@@ -168,6 +168,16 @@ async def download_file(file_key: str, dest_path: str | Path) -> None:
     await get_storage().download_file(file_key, dest_path)
 
 
+async def download_file_raw(file_key: str, dest_path: str | Path) -> None:
+    """Download raw S3 bytes without gzip decompression or any other post-processing."""
+    await get_storage().download_file_raw(file_key, dest_path)
+
+
+async def get_object_headers(file_key: str) -> dict[str, str | None]:
+    """Return ContentType / ContentEncoding / ContentDisposition / CacheControl for a key."""
+    return await get_storage().get_object_headers(file_key)
+
+
 async def download_file_with_hash(file_key: str, dest_path: str | Path) -> str:
     return await get_storage().download_file_with_hash(file_key, dest_path)
 
@@ -309,6 +319,7 @@ __all__ += [
     "create_multipart_upload",
     "delete_object",
     "download_file",
+    "download_file_raw",
     "download_file_with_hash",
     "generate_presigned_get",
     "generate_presigned_get_cached",
@@ -317,6 +328,7 @@ __all__ += [
     "generate_presigned_put",
     "generate_presigned_put_url",
     "generate_presigned_upload_part",
+    "get_object_headers",
     "get_object_info",
     "get_public_url",
     "get_s3_client",
