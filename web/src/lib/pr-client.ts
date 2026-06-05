@@ -1,7 +1,19 @@
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, apiFetchWithResponse } from "@/lib/api-client";
 import { type Operation } from "@/lib/staging-store";
 import { useConfigStore } from "@/lib/stores";
 import { toast } from "sonner";
+
+export async function fetchOpenPRCount(): Promise<number> {
+    try {
+        const res = await apiFetchWithResponse<unknown[]>(
+            "/pull-requests?status=open&page=1&limit=1"
+        );
+        const total = res.response.headers.get("X-Total-Count");
+        return total ? parseInt(total, 10) : 0;
+    } catch {
+        return 0;
+    }
+}
 
 /**
  * Maximum length of a PR description / moderator note.

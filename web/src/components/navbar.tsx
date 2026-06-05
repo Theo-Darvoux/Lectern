@@ -20,7 +20,7 @@ import {
 import { useState, useEffect, useCallback } from "react";
 import { SearchModal } from "@/components/search/search-modal";
 import { SearchInline } from "@/components/search/search-inline";
-import { useNotificationStore, useConfigStore } from "@/lib/stores";
+import { useNotificationStore, useConfigStore, usePRStore } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
 import { useSSE } from "@/hooks/use-sse";
 import { usePathname } from "next/navigation";
@@ -46,6 +46,7 @@ import {
   notificationIcon,
   type NotificationItem,
 } from "@/lib/notifications";
+import { fetchOpenPRCount } from "@/lib/pr-client";
 import { formatDistanceToNow } from "date-fns/formatDistanceToNow";
 import { useTranslations } from "next-intl";
 
@@ -56,6 +57,7 @@ export function Navbar() {
   const guest = isGuest(user);
   const [searchOpen, setSearchOpen] = useState(false);
   const { unreadCount, setUnreadCount, decrement } = useNotificationStore();
+  const { openPRCount, setOpenPRCount } = usePRStore();
   const { config } = useConfigStore();
   const pathname = usePathname();
 
@@ -66,6 +68,14 @@ export function Navbar() {
   const [loadingNotifications, setLoadingNotifications] = useState(false);
 
   useSSE();
+
+  useEffect(() => {
+    if (isAuthenticated && user && !guest) {
+      fetchOpenPRCount()
+        .then((count) => setOpenPRCount(count))
+        .catch(() => {});
+    }
+  }, [pathname, isAuthenticated, user, guest, setOpenPRCount]);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -114,7 +124,6 @@ export function Navbar() {
     [decrement],
   );
 
-  // Mark a single notification read in place, without navigating away.
   const markOneRead = useCallback(
     (e: React.MouseEvent, n: NotificationItem) => {
       e.preventDefault();
@@ -242,9 +251,14 @@ export function Navbar() {
                   variant="ghost"
                   size="icon"
                   title={t("contributions")}
-                  className={`rounded-full ${pathname.startsWith("/pull-requests") ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`relative rounded-full ${pathname.startsWith("/pull-requests") ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   <Inbox className="h-4 w-4" />
+                  {openPRCount > 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium text-destructive-foreground border-2 border-background">
+                      {openPRCount > 99 ? "99+" : openPRCount}
+                    </span>
+                  )}
                 </Button>
               </Link>
 

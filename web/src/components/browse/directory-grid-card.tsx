@@ -215,7 +215,7 @@ function DirectoryGridCardImpl({
         {/* Icon area */}
         <div className="aspect-[4/3] relative flex items-center justify-center">
           <div className="absolute inset-x-0 bottom-0 top-[16%]">
-            <div className="relative w-full h-full transition-transform duration-500 ease-out group-hover:-translate-y-1 drop-shadow-md group-hover:drop-shadow-xl">
+            <div className="relative w-full h-full transition-all duration-500 ease-out drop-shadow-md group-hover:drop-shadow-xl">
               {/* Tab — darker shade of body, sits above the body's top-left */}
               <div
                 className={cn("absolute left-0 w-[34%] rounded-t-[7px]", folderTabColor)}

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { useAuth } from "@/hooks/use-auth";
-import { useNotificationStore, useUIStore } from "@/lib/stores";
+import { useNotificationStore, useUIStore, usePRStore } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
@@ -25,7 +25,7 @@ interface NavItem {
   labelKey: "home" | "browse" | "prs" | "inbox" | "profile";
   Icon: LucideIcon;
   match: (pathname: string) => boolean;
-  hasBadge?: boolean;
+  badgeCount?: (unreadCount: number, openPRCount: number) => number;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -46,13 +46,14 @@ const NAV_ITEMS: NavItem[] = [
     labelKey: "prs",
     Icon: Send,
     match: (p) => p.startsWith("/pull-requests"),
+    badgeCount: (_, openPRCount) => openPRCount,
   },
   {
     href: "/notifications",
     labelKey: "inbox",
     Icon: Bell,
     match: (p) => p.startsWith("/notifications"),
-    hasBadge: true,
+    badgeCount: (unreadCount) => unreadCount,
   },
   {
     href: "/profile",
@@ -67,6 +68,7 @@ export function MobileBottomBar() {
   const isMobile = useIsMobile();
   const { isAuthenticated, user } = useAuth();
   const { unreadCount } = useNotificationStore();
+  const { openPRCount } = usePRStore();
   const { hideFooter, navbarVisible, setMaterialActionsOpen } = useUIStore();
   const pathname = usePathname();
   const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
@@ -120,9 +122,10 @@ export function MobileBottomBar() {
           "ring-1 ring-inset ring-white/20 dark:ring-white/4",
         )}
       >
-        {navItems.map(({ href, labelKey, Icon, match, hasBadge }) => {
+        {navItems.map(({ href, labelKey, Icon, match, badgeCount }) => {
           const isActive = match(pathname);
-          const showBadge = !!hasBadge && unreadCount > 0;
+          const count = badgeCount ? badgeCount(unreadCount, openPRCount) : 0;
+          const showBadge = count > 0;
           const label = t(labelKey);
 
           return (
@@ -168,7 +171,7 @@ export function MobileBottomBar() {
                         : "bg-destructive text-white ring-background dark:ring-background",
                     )}
                   >
-                    {unreadCount > 99 ? "99+" : unreadCount}
+                    {count > 99 ? "99+" : count}
                   </span>
                 )}
               </span>

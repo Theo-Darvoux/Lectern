@@ -212,6 +212,16 @@ export const useNotificationStore = create<NotificationState>((set) => ({
         set((state) => ({ unreadCount: Math.max(0, state.unreadCount - by) })),
 }));
 
+interface PRState {
+    openPRCount: number;
+    setOpenPRCount: (count: number) => void;
+}
+
+export const usePRStore = create<PRState>((set) => ({
+    openPRCount: 0,
+    setOpenPRCount: (count) => set({ openPRCount: Math.max(0, count) }),
+}));
+
 export interface PublicConfig {
     site_name: string;
     site_name_style: string | null;

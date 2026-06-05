@@ -3,15 +3,19 @@
 import { useEffect, useRef } from "react";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { fetchUnreadCount } from "@/lib/notifications";
-import { useAuthStore, useNotificationStore } from "@/lib/stores";
+import { useAuthStore, useNotificationStore, usePRStore } from "@/lib/stores";
 import { createSSEConnection, SSEConnection } from "@/lib/sse-client";
+import { isGuest } from "@/lib/guest";
+import { fetchOpenPRCount } from "@/lib/pr-client";
 
 const CHANNEL_NAME = "wikint-sse-leader";
 
 export function useSSE() {
-    const { isAuthenticated } = useAuthStore();
+    const { isAuthenticated, user } = useAuthStore();
     const { increment, setUnreadCount } = useNotificationStore();
+    const { setOpenPRCount } = usePRStore();
     const connectionRef = useRef<SSEConnection | null>(null);
+    const prConnectionRef = useRef<SSEConnection | null>(null);
     const channelRef = useRef<BroadcastChannel | null>(null);
     const isLeaderRef = useRef(false);
 
@@ -22,6 +26,11 @@ export function useSSE() {
             fetchUnreadCount()
                 .then((count) => setUnreadCount(count))
                 .catch(() => { });
+            if (user && !isGuest(user)) {
+                fetchOpenPRCount()
+                    .then((count) => setOpenPRCount(count))
+                    .catch(() => { });
+            }
         };
 
         reconcileUnread();
@@ -78,6 +87,9 @@ export function useSSE() {
             if (event.data?.type === "notification") {
                 increment();
             }
+            if (event.data?.type === "pr-count") {
+                setOpenPRCount(event.data.count);
+            }
         };
 
         let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -98,6 +110,31 @@ export function useSSE() {
                 },
             });
 
+            if (user && !isGuest(user)) {
+                prConnectionRef.current?.close();
+                prConnectionRef.current = createSSEConnection({
+                    url: `/pull-requests/sse?token=${encodeURIComponent(token)}`,
+                    listeners: {
+                        pr_opened: () => {
+                            fetchOpenPRCount()
+                                .then((count) => {
+                                    setOpenPRCount(count);
+                                    channelRef.current?.postMessage({ type: "pr-count", count });
+                                })
+                                .catch(() => {});
+                        },
+                        pr_closed: () => {
+                            fetchOpenPRCount()
+                                .then((count) => {
+                                    setOpenPRCount(count);
+                                    channelRef.current?.postMessage({ type: "pr-count", count });
+                                })
+                                .catch(() => {});
+                        },
+                    },
+                });
+            }
+
             // Set up heartbeat
             if (heartbeatInterval) clearInterval(heartbeatInterval);
             heartbeatInterval = setInterval(() => {
@@ -116,8 +153,10 @@ export function useSSE() {
             isLeaderRef.current = false;
             connectionRef.current?.close();
             connectionRef.current = null;
+            prConnectionRef.current?.close();
+            prConnectionRef.current = null;
             channel.close();
             channelRef.current = null;
         };
-    }, [isAuthenticated, increment, setUnreadCount]);
+    }, [isAuthenticated, user, increment, setUnreadCount, setOpenPRCount]);
 }

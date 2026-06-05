@@ -6,6 +6,7 @@ import { getAccessToken } from "@/lib/auth-tokens";
 import { createSSEConnection } from "@/lib/sse-client";
 import { PRCard } from "./pr-card";
 import { type PullRequestOut } from "@/components/home/types";
+import { usePRStore } from "@/lib/stores";
 import {
   Loader2,
   Inbox,
@@ -67,6 +68,9 @@ export function PRList() {
         next[s] = r.status === "fulfilled" ? r.value : null;
       });
       setCounts(next);
+      if (next["open"] !== null) {
+        usePRStore.getState().setOpenPRCount(next["open"]);
+      }
     });
   }, []);
 
