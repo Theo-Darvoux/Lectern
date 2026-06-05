@@ -212,8 +212,11 @@ function DirectoryGridCardImpl({
           focused ? "ring-2 ring-primary/40 p-2 -m-2" : "",
         )}
       >
-        {/* Icon area */}
-        <div className="aspect-[4/3] relative flex items-center justify-center overflow-hidden rounded-xl">
+        {/* Icon area — `contain:paint` is a hard clip that also contains
+            composited descendants (a plain `overflow-hidden` is escaped by
+            GPU-promoted children in Chromium, which leaked drop-shadow tearing
+            outside the card). */}
+        <div className="aspect-[4/3] relative flex items-center justify-center overflow-hidden rounded-xl [contain:paint]">
           <div className="absolute inset-x-0 bottom-0 top-[16%]">
             <div className="relative w-full h-full transition-all duration-500 ease-out drop-shadow-md group-hover:drop-shadow-xl">
               {/* Tab — darker shade of body, sits above the body's top-left */}
@@ -224,7 +227,7 @@ function DirectoryGridCardImpl({
               {/* Folder body — fills the card's preview area; the box IS the folder */}
               <div
                 className={cn(
-                  "absolute inset-0 rounded-b-2xl rounded-tr-2xl overflow-hidden flex items-center justify-center isolate [transform:translate3d(0,0,0)]",
+                  "absolute inset-0 rounded-b-2xl rounded-tr-2xl overflow-hidden flex items-center justify-center isolate",
                   folderBodyColor,
                 )}
               >
