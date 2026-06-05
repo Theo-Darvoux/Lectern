@@ -252,9 +252,17 @@ async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis
     # Force it to be a sync MagicMock so it doesn't return a coroutine
     mock_s3.get_paginator = MagicMock(return_value=mock_paginator)
 
-    with patch("app.core.storage.get_s3_client", return_value=mock_cm):
-        with patch("app.workers.storage_ops.delete_storage_objects", AsyncMock()):
-            await cleanup_uploads({"redis": fake_redis_setup})
+    async def mock_list_multipart():
+        if False:
+            yield
+
+    with (
+        patch("app.workers.cleanup_uploads.get_s3_client", return_value=mock_cm),
+        patch("app.workers.cleanup_uploads.list_multipart_uploads", mock_list_multipart),
+        patch("app.core.storage.object_exists", AsyncMock(return_value=True)),
+        patch("app.workers.storage_ops.delete_storage_objects", AsyncMock()),
+    ):
+        await cleanup_uploads({"redis": fake_redis_setup})
 
     await db_session.refresh(up1)
     await db_session.refresh(up2)

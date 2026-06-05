@@ -358,8 +358,12 @@ function MaterialGridCardImpl({
               onClick={(e) => e.stopPropagation()}
               className="absolute bottom-2 right-2 z-10 flex items-center gap-1.5"
             >
-              {/* Secondary actions — hidden until hover / focus */}
-              <div className="flex items-center gap-1.5 opacity-0 translate-x-1.5 pointer-events-none transition-all duration-200 ease-out group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-x-0 group-focus-within:pointer-events-auto">
+              {/* Secondary actions — revealed on hover / focus, and only on
+                  hover-capable devices. On touch (no hover) they're removed
+                  entirely so they neither occupy tappable space nor get
+                  revealed by the card's focus when tapped — only the kebab
+                  stays. */}
+              <div className="hidden [@media(hover:hover)]:flex items-center gap-1.5 opacity-0 translate-x-1.5 pointer-events-none transition-all duration-200 ease-out group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-x-0 group-focus-within:pointer-events-auto">
                 {!isRestricted && (
                   <button
                     onClick={handleChat}

@@ -1176,6 +1176,10 @@
       "success": "Account deactivated. Data will be deleted in 30 days.",
       "error": "Failed to delete account"
     },
+    "about": {
+      "title": "About",
+      "description": "Legal information and app version."
+    },
     "updateFailed": "Update failed"
   },
   "Admin": {

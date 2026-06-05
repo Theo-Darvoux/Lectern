@@ -1176,6 +1176,10 @@
       "success": "Compte désactivé. Les données seront supprimées dans 30 jours.",
       "error": "Échec de la suppression du compte"
     },
+    "about": {
+      "title": "À propos",
+      "description": "Informations légales et version de l'application."
+    },
     "updateFailed": "Échec de la mise à jour"
   },
   "Admin": {

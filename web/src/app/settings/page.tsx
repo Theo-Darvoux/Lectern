@@ -11,7 +11,11 @@ import {
   Monitor,
   Zap,
   Globe,
+  Info,
+  ExternalLink,
+  ChevronRight,
 } from "lucide-react";
+import Link from "next/link";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,7 +31,7 @@ import { apiFetch } from "@/lib/api-client";
 import { performLogout } from "@/lib/auth-sync";
 import { useTranslations } from "next-intl";
 import { useChangeLocale } from "@/hooks/use-change-locale";
-import { useAuthStore } from "@/lib/stores";
+import { useAuthStore, useConfigStore } from "@/lib/stores";
 import { toast } from "sonner";
 import {
   Select,
@@ -37,9 +41,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+// Baked in at build time from the Docker image's commit SHA (see web/Dockerfile
+// and the `NEXT_PUBLIC_COMMIT_SHA` build-arg in .github/workflows/build.yml).
+const commitSha = process.env.NEXT_PUBLIC_COMMIT_SHA;
+const repoUrl = "https://github.com/Theo-Darvoux/WikINT";
+
 export default function SettingsPage() {
   const t = useTranslations("Settings");
+  const tLayout = useTranslations("Layout");
   const tLanguages = useTranslations("Languages");
+  const { config } = useConfigStore();
+  const shortCommit = commitSha?.slice(0, 7);
   const { locale, changeLocale, isPending: localePending } = useChangeLocale();
   const [exporting, setExporting] = useState(false);
   const { show } = useConfirmDialog();
@@ -234,6 +246,59 @@ export default function SettingsPage() {
           <Button variant="outline" onClick={handleExport} disabled={exporting}>
             {exporting ? t("export.preparing") : t("export.button")}
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Info className="h-4 w-4" />
+            {t("about.title")}
+          </CardTitle>
+          <CardDescription>{t("about.description")}</CardDescription>
+        </CardHeader>
+        <CardContent className="divide-y">
+          <Link
+            href="/privacy"
+            className="flex items-center justify-between py-3 text-sm transition-colors hover:text-foreground text-muted-foreground first:pt-0"
+          >
+            <span>{tLayout("privacyPolicy")}</span>
+            <ChevronRight className="h-4 w-4 shrink-0" />
+          </Link>
+          <Link
+            href="/terms"
+            className="flex items-center justify-between py-3 text-sm transition-colors hover:text-foreground text-muted-foreground"
+          >
+            <span>{tLayout("termsOfUse")}</span>
+            <ChevronRight className="h-4 w-4 shrink-0" />
+          </Link>
+          <a
+            href={config?.organization_url || repoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-between py-3 text-sm transition-colors hover:text-foreground text-muted-foreground"
+          >
+            <span>{config?.organization_url ? tLayout("organization") : tLayout("github")}</span>
+            <ExternalLink className="h-4 w-4 shrink-0" />
+          </a>
+          {shortCommit && (
+            <a
+              href={`${repoUrl}/commit/${commitSha}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={commitSha}
+              className="flex items-center justify-between py-3 text-sm transition-colors hover:text-foreground text-muted-foreground last:pb-0"
+            >
+              <span>{tLayout("commit")}</span>
+              <span className="flex items-center gap-1.5 font-mono text-xs">
+                #{shortCommit}
+                <ExternalLink className="h-4 w-4 shrink-0" />
+              </span>
+            </a>
+          )}
+          {config?.footer_text && (
+            <p className="pt-3 text-xs text-muted-foreground">{config.footer_text}</p>
+          )}
         </CardContent>
       </Card>
 
