@@ -26,7 +26,7 @@ function titleFromFilename(name: string): string {
     return name
         .replace(/\.[^.]+$/, "")
         .replace(/[-_]+/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .replace(/(^|\s)(\p{L})/gu, (_, sep, ch) => sep + ch.toUpperCase())
         .trim();
 }
 

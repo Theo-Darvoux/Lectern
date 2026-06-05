@@ -172,7 +172,7 @@ const MaterialLeaf = memo(function MaterialLeaf({
             isActive ? "text-primary" : pickMaterialIconColor(material),
           ),
         })}
-        <span className={cn("truncate", isActive && "font-medium")}>
+        <span className={cn("truncate font-mono", isActive && "font-medium")}>
           {title}
         </span>
       </Link>
@@ -321,7 +321,7 @@ const TreeNode = memo(function TreeNode({
               )}
             />
           )}
-          <span className={cn("truncate", isActive && "font-medium")}>
+          <span className={cn("truncate font-mono", isActive && "font-medium")}>
             {node.name}
           </span>
         </button>
