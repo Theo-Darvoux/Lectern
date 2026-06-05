@@ -204,7 +204,6 @@ function DirectoryGridCardImpl({
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
         data-nav-index={navIndex}
-        style={{ contentVisibility: "auto", containIntrinsicSize: "0 240px" }}
         className={cn(
           "group relative flex flex-col gap-2 cursor-pointer rounded-xl transition-colors",
           stagedRing,
@@ -212,11 +211,8 @@ function DirectoryGridCardImpl({
           focused ? "ring-2 ring-primary/40 p-2 -m-2" : "",
         )}
       >
-        {/* Icon area — `contain:paint` is a hard clip that also contains
-            composited descendants (a plain `overflow-hidden` is escaped by
-            GPU-promoted children in Chromium, which leaked drop-shadow tearing
-            outside the card). */}
-        <div className="aspect-[4/3] relative flex items-center justify-center overflow-hidden rounded-xl [contain:paint]">
+        {/* Icon area */}
+        <div className="aspect-[4/3] relative flex items-center justify-center overflow-hidden rounded-xl">
           <div className="absolute inset-x-0 bottom-0 top-[16%]">
             <div className="relative w-full h-full transition-all duration-500 ease-out drop-shadow-md group-hover:drop-shadow-xl">
               {/* Tab — darker shade of body, sits above the body's top-left */}
