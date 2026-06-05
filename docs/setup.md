@@ -34,10 +34,10 @@ docker compose up
 ```
 
 What `compose.override.yaml` adds in development:
-- **MinIO** : local S3-compatible storage replacing Cloudflare R2 (auto-configured bucket via `minio-setup`)
+- **SeaweedFS** : local S3-compatible storage (auto-configured bucket via `seaweedfs-setup`). Production can use the same (`STORAGE_BACKEND=seaweedfs`) or Cloudflare R2 (`STORAGE_BACKEND=r2`).
 - Source bind-mounts on `api/` and `web/` for hot reload
 - `uvicorn --reload` for the API, `next dev --turbopack` for the frontend
-- Port exposure: API on `8000`, web on `3000`, MinIO console on `9001`
+- Port exposure: API on `8000`, web on `3000`, SeaweedFS S3 on `8333` (filer UI `8888`, master UI `9333`)
 - Dev Nginx config (`infra/nginx/nginx.dev.conf.template`) with CORS handling
 
 Services available after `docker compose up`:
@@ -50,7 +50,7 @@ Services available after `docker compose up`:
 | postgres | 5432 | PostgreSQL 16 |
 | redis | 6379 | Cache, rate limiting, ARQ queues |
 | meilisearch | 7700 | Full-text search |
-| minio | 9000 / 9001 | Local S3 storage / admin console |
+| seaweedfs | 8333 / 8888 / 9333 | Local S3 storage / filer UI / master UI |
 | eurooffice | — | ONLYOFFICE document server (internal only) |
 | worker | — | ARQ worker (non-upload tasks + fallback) |
 | worker-fast | — | ARQ worker for small uploads (text, images) |
@@ -103,7 +103,7 @@ cd api
 uv sync                           # install dependencies
 
 # Start backing services from the root
-docker compose up postgres redis meilisearch minio minio-setup -d
+docker compose up postgres redis meilisearch seaweedfs seaweedfs-setup -d
 
 uv run alembic upgrade head       # apply migrations
 uv run python -m app.cli seed --email admin@example.com
@@ -136,7 +136,8 @@ All variables live in a single `.env` at the project root. There are no per-comp
 | `MEILI_MASTER_KEY` | `<random string>` | Meilisearch admin key |
 | `MEILI_SEARCH_KEY` | `<random string>` | Meilisearch search-only key |
 | `MEILI_URL` | `http://meilisearch:7700` | Meilisearch URL |
-| `S3_ENDPOINT` | `minio:9000` | S3-compatible storage endpoint |
+| `STORAGE_BACKEND` | `seaweedfs` | Storage backend: `seaweedfs` / `r2` / `garage` / `rustfs` |
+| `S3_ENDPOINT` | `seaweedfs:8333` | S3-compatible storage endpoint |
 | `S3_ACCESS_KEY` | `minioadmin` | S3 access key |
 | `S3_SECRET_KEY` | `minioadmin` | S3 secret key |
 | `S3_BUCKET` | `wikint` | Bucket name |
@@ -234,4 +235,4 @@ pnpm knip                              # dead-code detection
 
 **MeiliSearch index out of sync** : re-index with `uv run python -m app.cli reindex`.
 
-**MinIO bucket missing in dev** : the `minio-setup` one-shot container creates the bucket on first start. If it failed, run `docker compose up minio-setup` again.
+**SeaweedFS bucket missing in dev** : the `seaweedfs-setup` one-shot container creates the bucket on first start. If it failed, run `docker compose up seaweedfs-setup` again.

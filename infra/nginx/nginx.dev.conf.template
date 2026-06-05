@@ -71,8 +71,8 @@ http {
         server eurooffice:80;
     }
 
-    upstream minio {
-        server minio:9000;
+    upstream seaweedfs {
+        server seaweedfs:8333;
     }
 
     server {
@@ -257,8 +257,10 @@ http {
 
         # S3 Proxy with clean error handling
         location /s3/ {
-            proxy_pass http://minio/;
-            proxy_set_header Host "minio:9000";
+            # Host is restored to the signed S3 endpoint so the SigV4 signature
+            # (computed by the API against seaweedfs:8333) still validates.
+            proxy_pass http://seaweedfs/;
+            proxy_set_header Host "seaweedfs:8333";
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;

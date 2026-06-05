@@ -1,0 +1,19 @@
+{
+  "_comment": "SeaweedFS S3 identities for local dev. Credentials match the .env.example defaults (minioadmin). For production, template this file from S3_ACCESS_KEY/S3_SECRET_KEY (e.g. envsubst at deploy time) and keep the anonymous identity restricted to branding/ reads only.",
+  "identities": [
+    {
+      "name": "wikint",
+      "credentials": [
+        {
+          "accessKey": "minioadmin",
+          "secretKey": "minioadmin"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    },
+    {
+      "name": "anonymous",
+      "actions": ["Read:wikint/branding"]
+    }
+  ]
+}
