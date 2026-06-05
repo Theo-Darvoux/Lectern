@@ -4,7 +4,7 @@ import { memo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
-import { Folder, Info, ChevronRight, ThumbsUp, MessageSquare } from "lucide-react";
+import { Folder, Info, ThumbsUp, MessageSquare } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { useUIStore, useLikeOverrides } from "@/lib/stores";
@@ -238,24 +238,7 @@ function DirectoryLineItemImpl({
                             </button>
                         )}
                         <ItemActionsDropdownTrigger />
-                        {!isMobile && (
-                            <button
-                                className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
-                                title={t("openItem")}
-                                onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    if (onNavigate) {
-                                        onNavigate();
-                                    } else {
-                                        router.push(buildPath());
-                                    }
-                                }}
-                                aria-label={t("openItemFor", { title: name })}
-                            >
-                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                            </button>
-                        )}
+
                     </div>
             </Link>
         </ItemActionsMenu>

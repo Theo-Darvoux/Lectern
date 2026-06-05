@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import {
-    Eye,
     File,
     FileText,
     Info,
@@ -328,22 +327,7 @@ function MaterialLineItemImpl({
                         </button>
                     )}
                     <ItemActionsDropdownTrigger />
-                    <button
-                        className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
-                        title={isMobile ? t("view") || "View" : t("preview") || "Preview"}
-                        onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            if (onNavigate) {
-                                onNavigate();
-                            } else {
-                                router.push(buildPath());
-                            }
-                        }}
-                        aria-label={t("viewOrPreviewFor", { title, action: isMobile ? (t("view") || "View") : (t("preview") || "Preview") })}
-                    >
-                        <Eye className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
-                    </button>
+
                 </div>
             </Link>
         </ItemActionsMenu>

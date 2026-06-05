@@ -719,11 +719,12 @@ export function ItemActionsDropdownTrigger({
             variant="ghost"
             size="icon"
             className={btnClass}
+            onPointerUp={(e) => e.currentTarget.blur()}
           >
             <MoreVertical className={iconClass} />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent align="end" className="w-56" onCloseAutoFocus={(e) => e.preventDefault()}>
           <MenuItemsList />
         </DropdownMenuContent>
       </DropdownMenu>

@@ -3,7 +3,7 @@
 import { memo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
-import { Info, MessageSquare, ChevronRight } from "lucide-react";
+import { Info, MessageSquare } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { useUIStore } from "@/lib/stores";
@@ -206,52 +206,52 @@ function DirectoryGridCardImpl({
         data-nav-index={navIndex}
         style={{ contentVisibility: "auto", containIntrinsicSize: "0 240px" }}
         className={cn(
-          "group relative rounded-xl border bg-card shadow-sm overflow-hidden cursor-pointer",
-          "ring-1 ring-border/50 hover:ring-primary/30",
+          "group relative flex flex-col gap-2 cursor-pointer rounded-xl transition-colors",
           stagedRing,
-          selectMode && selected ? "bg-primary/5 dark:bg-primary/10 ring-primary" : "",
-          focused ? "ring-2 ring-primary/40" : "",
+          selectMode && selected ? "bg-primary/5 dark:bg-primary/10 ring-1 ring-primary p-2 -m-2" : "",
+          focused ? "ring-2 ring-primary/40 p-2 -m-2" : "",
         )}
       >
         {/* Icon area */}
-        <div className={cn("aspect-[4/3] relative flex items-center justify-center bg-linear-to-br overflow-hidden", bgGradient)}>
-          {showCollage ? (
-            <div className="absolute inset-x-0 bottom-0 top-[16%]">
-              <div className="relative w-full h-full transition-transform duration-500 ease-out group-hover:-translate-y-1 drop-shadow-xl">
-                {/* Tab — darker shade of body, sits above the body's top-left */}
-                <div
-                  className={cn("absolute left-0 w-[34%] rounded-t-[7px]", folderTabColor)}
-                  style={{ bottom: "100%", height: "16%" }}
-                />
-                {/* Folder body — fills the card's preview area; the box IS the folder */}
-                <div
-                  className={cn(
-                    "absolute inset-0 rounded-b-2xl rounded-tr-2xl overflow-hidden",
-                    folderBodyColor,
-                  )}
-                >
-                  {/* Subtle top-edge highlight to give the folder a lit, 3-D feel */}
-                  <div className="absolute inset-x-0 top-0 h-[20%] bg-white/20 pointer-events-none rounded-tr-2xl" />
-                  {/* Bottom-edge shadow stripe for depth */}
-                  <div className="absolute inset-x-0 bottom-0 h-[8%] bg-black/10 pointer-events-none" />
+        <div className="aspect-[4/3] relative flex items-center justify-center">
+          <div className="absolute inset-x-0 bottom-0 top-[16%]">
+            <div className="relative w-full h-full transition-transform duration-500 ease-out group-hover:-translate-y-1 drop-shadow-md group-hover:drop-shadow-xl">
+              {/* Tab — darker shade of body, sits above the body's top-left */}
+              <div
+                className={cn("absolute left-0 w-[34%] rounded-t-[7px]", folderTabColor)}
+                style={{ bottom: "100%", height: "16%" }}
+              />
+              {/* Folder body — fills the card's preview area; the box IS the folder */}
+              <div
+                className={cn(
+                  "absolute inset-0 rounded-b-2xl rounded-tr-2xl overflow-hidden flex items-center justify-center",
+                  folderBodyColor,
+                )}
+              >
+                {/* Subtle top-edge highlight to give the folder a lit, 3-D feel */}
+                <div className="absolute inset-x-0 top-0 h-[20%] bg-white/20 pointer-events-none rounded-tr-2xl" />
+                {/* Bottom-edge shadow stripe for depth */}
+                <div className="absolute inset-x-0 bottom-0 h-[8%] bg-black/10 pointer-events-none" />
+                
+                {showCollage ? (
                   {/* Thumbnail collage inset inside the folder — gaps kept around it */}
                   <div className="absolute inset-[6%] rounded-lg overflow-hidden ring-1 ring-black/15 dark:ring-black/40 shadow-md">
                     <DirectoryPreviewCollage materialIds={previewMaterialIds} />
                   </div>
-                </div>
+                ) : (
+                  <>
+                    {/* Huge watermark */}
+                    <ThumbnailIcon className={cn("absolute h-48 w-48 opacity-[0.15] -rotate-12 translate-y-4 translate-x-4 pointer-events-none", iconColor)} />
+
+                    {/* Main icon container with hover scale */}
+                    <div className="relative z-10 p-4 bg-white/40 dark:bg-black/20 rounded-2xl shadow-lg backdrop-blur-md ring-1 ring-white/50 dark:ring-white/10 group-hover:scale-110 group-hover:shadow-xl transition-all duration-500 ease-out">
+                      <ThumbnailIcon className={cn("h-12 w-12 sm:h-14 sm:w-14 drop-shadow-sm", iconColor)} />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
-          ) : (
-            <>
-              {/* Huge watermark */}
-              <ThumbnailIcon className={cn("absolute h-48 w-48 opacity-[0.08] -rotate-12 translate-y-4 translate-x-4 pointer-events-none", iconColor)} />
-
-              {/* Main icon container with hover scale */}
-              <div className="relative z-10 p-4 bg-white/40 dark:bg-black/20 rounded-2xl shadow-lg backdrop-blur-md ring-1 ring-white/50 dark:ring-white/10 group-hover:scale-110 group-hover:shadow-xl transition-all duration-500 ease-out">
-                <ThumbnailIcon className={cn("h-12 w-12 sm:h-14 sm:w-14 drop-shadow-sm", iconColor)} />
-              </div>
-            </>
-          )}
+          </div>
 
           {/* Staged badge */}
           {staged && (
@@ -318,22 +318,7 @@ function DirectoryGridCardImpl({
                 >
                   <Info className="h-4 w-4" />
                 </button>
-                <button
-                  className={FLOATING_ACTION_BTN}
-                  title={t("openItem")}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (onNavigate) {
-                      onNavigate();
-                    } else {
-                      router.push(buildPath());
-                    }
-                  }}
-                  aria-label={t("openItemFor", { title: name })}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
+
               </div>
 
               {/* Always-visible kebab */}
@@ -346,7 +331,7 @@ function DirectoryGridCardImpl({
         </div>
 
         {/* Footer */}
-        <div className="p-2.5 flex flex-col gap-0.5 min-w-0">
+        <div className="px-1 flex flex-col gap-0.5 min-w-0">
           <p className={cn("text-sm font-medium leading-snug line-clamp-2", textColor || "text-foreground")}>
             {name}
           </p>

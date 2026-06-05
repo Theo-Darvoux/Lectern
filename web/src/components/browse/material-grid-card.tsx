@@ -4,9 +4,7 @@ import { memo, useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
-import {
-  Info, MessageSquare, Eye, Paperclip, File,
-} from "lucide-react";
+import { Info, MessageSquare, Paperclip, File } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { useUIStore } from "@/lib/stores";
@@ -389,22 +387,7 @@ function MaterialGridCardImpl({
                     <Paperclip className="h-4 w-4" />
                   </button>
                 )}
-                <button
-                  className={FLOATING_ACTION_BTN}
-                  title={t("preview")}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (onNavigate) {
-                      onNavigate();
-                    } else {
-                      router.push(buildPath());
-                    }
-                  }}
-                  aria-label={t("viewOrPreviewFor", { title, action: t("preview") })}
-                >
-                  <Eye className="h-4 w-4" />
-                </button>
+
               </div>
 
               {/* Always-visible kebab */}
