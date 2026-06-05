@@ -792,7 +792,9 @@ async def test_save_backup_creates_file(client: AsyncClient, db_session: AsyncSe
             patch("app.routers.admin_backup.settings") as mock_settings,
             patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
             patch("app.services.backup.download_file_raw", new_callable=AsyncMock),
-            patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
+            patch(
+                "app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}
+            ),
         ):
             mock_settings.backup_dir = tmp
             r = await client.post("/api/admin/backup/save", headers=_auth(admin))
@@ -824,7 +826,9 @@ async def test_save_backup_enforces_rotation(client: AsyncClient, db_session: As
             patch("app.routers.admin_backup.settings") as mock_settings,
             patch("app.services.backup.list_objects", side_effect=lambda prefix: _empty_gen()),
             patch("app.services.backup.download_file_raw", new_callable=AsyncMock),
-            patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
+            patch(
+                "app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}
+            ),
         ):
             mock_settings.backup_dir = tmp
             r = await client.post("/api/admin/backup/save", headers=_auth(admin))

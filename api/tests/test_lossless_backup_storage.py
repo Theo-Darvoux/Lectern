@@ -176,7 +176,7 @@ async def test_get_object_headers_all_present() -> None:
         return_value={
             "ContentType": "application/pdf",
             "ContentEncoding": "gzip",
-            "ContentDisposition": "attachment; filename=\"file.pdf\"",
+            "ContentDisposition": 'attachment; filename="file.pdf"',
             "CacheControl": "public, max-age=86400",
         }
     )
@@ -189,7 +189,7 @@ async def test_get_object_headers_all_present() -> None:
 
     assert headers["content_type"] == "application/pdf"
     assert headers["content_encoding"] == "gzip"
-    assert headers["content_disposition"] == "attachment; filename=\"file.pdf\""
+    assert headers["content_disposition"] == 'attachment; filename="file.pdf"'
     assert headers["cache_control"] == "public, max-age=86400"
 
 

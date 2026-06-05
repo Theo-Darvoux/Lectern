@@ -234,8 +234,8 @@ function DirectoryGridCardImpl({
                 <div className="absolute inset-x-0 bottom-0 h-[8%] bg-black/10 pointer-events-none" />
                 
                 {showCollage ? (
-                  {/* Thumbnail collage inset inside the folder — gaps kept around it */}
                   <div className="absolute inset-[6%] rounded-lg overflow-hidden ring-1 ring-black/15 dark:ring-black/40 shadow-md">
+                    {/* Thumbnail collage inset inside the folder — gaps kept around it */}
                     <DirectoryPreviewCollage materialIds={previewMaterialIds} />
                   </div>
                 ) : (

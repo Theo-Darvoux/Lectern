@@ -80,7 +80,14 @@ async def test_restore_applies_content_type_from_sidecar(
     zip_path = _make_zip(
         tmp_path,
         s3_entries={"cas/abc": b"bytes"},
-        s3_metadata={"cas/abc": {"content_type": "application/pdf", "content_encoding": None, "content_disposition": "attachment", "cache_control": None}},
+        s3_metadata={
+            "cas/abc": {
+                "content_type": "application/pdf",
+                "content_encoding": None,
+                "content_disposition": "attachment",
+                "cache_control": None,
+            }
+        },
     )
     upload_mock = AsyncMock()
     with (
@@ -103,7 +110,14 @@ async def test_restore_applies_content_encoding_from_sidecar(
     zip_path = _make_zip(
         tmp_path,
         s3_entries={"cas/gz": b"\x1f\x8b fake gzip"},
-        s3_metadata={"cas/gz": {"content_type": "application/octet-stream", "content_encoding": "gzip", "content_disposition": "attachment", "cache_control": None}},
+        s3_metadata={
+            "cas/gz": {
+                "content_type": "application/octet-stream",
+                "content_encoding": "gzip",
+                "content_disposition": "attachment",
+                "cache_control": None,
+            }
+        },
     )
     upload_mock = AsyncMock()
     with (
@@ -123,7 +137,14 @@ async def test_restore_applies_content_disposition_from_sidecar(
     zip_path = _make_zip(
         tmp_path,
         s3_entries={"uploads/u1/f": b"data"},
-        s3_metadata={"uploads/u1/f": {"content_type": "image/png", "content_encoding": None, "content_disposition": "attachment; filename=\"img.png\"", "cache_control": None}},
+        s3_metadata={
+            "uploads/u1/f": {
+                "content_type": "image/png",
+                "content_encoding": None,
+                "content_disposition": 'attachment; filename="img.png"',
+                "cache_control": None,
+            }
+        },
     )
     upload_mock = AsyncMock()
     with (
@@ -133,7 +154,7 @@ async def test_restore_applies_content_disposition_from_sidecar(
     ):
         await restore_from_zip_path(db_session, zip_path)
 
-    assert upload_mock.call_args[1]["content_disposition"] == "attachment; filename=\"img.png\""
+    assert upload_mock.call_args[1]["content_disposition"] == 'attachment; filename="img.png"'
 
 
 @pytest.mark.asyncio
@@ -163,9 +184,7 @@ async def test_restore_missing_key_in_sidecar_uses_defaults(
 
 
 @pytest.mark.asyncio
-async def test_restore_v1_backup_accepted(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_restore_v1_backup_accepted(db_session: AsyncSession, tmp_path: Path) -> None:
     """v1.0 backups must be accepted (no ValueError)."""
     zip_path = _make_zip(tmp_path, version="1.0", include_metadata_sidecar=False)
     with (
@@ -179,9 +198,7 @@ async def test_restore_v1_backup_accepted(
 
 
 @pytest.mark.asyncio
-async def test_restore_v1_backup_logs_warning(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_restore_v1_backup_logs_warning(db_session: AsyncSession, tmp_path: Path) -> None:
     """v1.0 restore must emit a warning about missing metadata."""
     zip_path = _make_zip(tmp_path, version="1.0", include_metadata_sidecar=False)
     with (
@@ -238,15 +255,20 @@ async def test_restore_v99_rejected(db_session: AsyncSession, tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_large_object_uses_multipart(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_large_object_uses_multipart(db_session: AsyncSession, tmp_path: Path) -> None:
     """Objects ≥ RESTORE_MULTIPART_THRESHOLD bytes must use upload_file_multipart."""
     large_data = b"x" * _RESTORE_MULTIPART_THRESHOLD  # exactly at threshold
     zip_path = _make_zip(
         tmp_path,
         s3_entries={"cas/large": large_data},
-        s3_metadata={"cas/large": {"content_type": "application/octet-stream", "content_encoding": None, "content_disposition": "attachment", "cache_control": None}},
+        s3_metadata={
+            "cas/large": {
+                "content_type": "application/octet-stream",
+                "content_encoding": None,
+                "content_disposition": "attachment",
+                "cache_control": None,
+            }
+        },
     )
     upload_mock = AsyncMock()
     multipart_mock = AsyncMock()
@@ -263,15 +285,20 @@ async def test_large_object_uses_multipart(
 
 
 @pytest.mark.asyncio
-async def test_small_object_uses_single_put(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_small_object_uses_single_put(db_session: AsyncSession, tmp_path: Path) -> None:
     """Objects < RESTORE_MULTIPART_THRESHOLD must use upload_file (single PUT)."""
     small_data = b"y" * (_RESTORE_MULTIPART_THRESHOLD - 1)
     zip_path = _make_zip(
         tmp_path,
         s3_entries={"cas/small": small_data},
-        s3_metadata={"cas/small": {"content_type": "application/octet-stream", "content_encoding": None, "content_disposition": "attachment", "cache_control": None}},
+        s3_metadata={
+            "cas/small": {
+                "content_type": "application/octet-stream",
+                "content_encoding": None,
+                "content_disposition": "attachment",
+                "cache_control": None,
+            }
+        },
     )
     upload_mock = AsyncMock()
     multipart_mock = AsyncMock()
@@ -296,7 +323,14 @@ async def test_multipart_receives_correct_metadata(
     zip_path = _make_zip(
         tmp_path,
         s3_entries={"cas/lg": large_data},
-        s3_metadata={"cas/lg": {"content_type": "video/mp4", "content_encoding": "gzip", "content_disposition": "attachment", "cache_control": None}},
+        s3_metadata={
+            "cas/lg": {
+                "content_type": "video/mp4",
+                "content_encoding": "gzip",
+                "content_disposition": "attachment",
+                "cache_control": None,
+            }
+        },
     )
     multipart_mock = AsyncMock()
     with (
@@ -316,9 +350,7 @@ async def test_multipart_receives_correct_metadata(
 
 
 @pytest.mark.asyncio
-async def test_branding_objects_wiped_on_restore(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_branding_objects_wiped_on_restore(db_session: AsyncSession, tmp_path: Path) -> None:
     """Existing branding/ objects must be deleted before restore."""
     zip_path = _make_zip(tmp_path, s3_metadata={})
     delete_mock = AsyncMock()
@@ -345,7 +377,14 @@ async def test_branding_object_reuploaded_on_restore(
     zip_path = _make_zip(
         tmp_path,
         s3_entries={"branding/logo.svg": b"<svg/>"},
-        s3_metadata={"branding/logo.svg": {"content_type": "image/svg+xml", "content_encoding": None, "content_disposition": None, "cache_control": None}},
+        s3_metadata={
+            "branding/logo.svg": {
+                "content_type": "image/svg+xml",
+                "content_encoding": None,
+                "content_disposition": None,
+                "cache_control": None,
+            }
+        },
     )
     upload_mock = AsyncMock()
     with (
@@ -412,7 +451,14 @@ async def test_gzip_bytes_restored_without_decompression(
     zip_path = _make_zip(
         tmp_path,
         s3_entries={"cas/gz_obj": gz_bytes},
-        s3_metadata={"cas/gz_obj": {"content_type": "application/octet-stream", "content_encoding": "gzip", "content_disposition": "attachment", "cache_control": None}},
+        s3_metadata={
+            "cas/gz_obj": {
+                "content_type": "application/octet-stream",
+                "content_encoding": "gzip",
+                "content_disposition": "attachment",
+                "cache_control": None,
+            }
+        },
     )
     upload_mock = AsyncMock()
     with (

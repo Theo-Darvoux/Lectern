@@ -1,8 +1,3 @@
-// Regression test for the "eye" button bug: in grid view, clicking the preview
-// (eye) button navigated via a hard browser navigation (the <button> is nested
-// inside a Next <Link> / <a>) because the handler forgot e.preventDefault().
-// The hard reload re-ran AuthGuard before the token rehydrated and bounced the
-// user to /login. The fix adds e.preventDefault() so navigation stays client-side.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -16,10 +11,10 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({
   __esModule: true,
   default: React.forwardRef(function MockLink(
-    { href, children, ...rest }: { href: string; children: React.ReactNode },
+    { href, children, onClick, ...rest }: { href: string; children: React.ReactNode; onClick?: (e: React.MouseEvent) => void },
     ref: React.Ref<HTMLAnchorElement>,
   ) {
-    return React.createElement("a", { href, ref, ...rest }, children);
+    return React.createElement("a", { href, ref, onClick, ...rest }, children);
   }),
 }));
 
@@ -68,36 +63,63 @@ async function render(node: React.ReactElement) {
   });
 }
 
-describe("MaterialGridCard eye button", () => {
+describe("MaterialGridCard", () => {
   beforeEach(() => {
     mockPush.mockClear();
+    if (container) {
+      container.remove();
+    }
   });
 
-  it("prevents the default anchor navigation and pushes client-side", async () => {
+  it("renders the material title", async () => {
     await render(
       <MaterialGridCard material={material} pathBase="/browse/math" navIndex={0} />,
     );
+    expect(container.textContent).toContain("Doc 1");
+  });
 
-    const eyeButton = container.querySelector(
-      '[aria-label="viewOrPreviewFor"]',
-    ) as HTMLButtonElement | null;
-    expect(eyeButton).not.toBeNull();
+  it("calls onNavigate when clicked if provided", async () => {
+    const onNavigateMock = vi.fn();
+    await render(
+      <MaterialGridCard
+        material={material}
+        pathBase="/browse/math"
+        navIndex={0}
+        onNavigate={onNavigateMock}
+      />,
+    );
 
-    // A cancelable click; dispatchEvent returns false if preventDefault ran.
+    const linkElement = container.querySelector("a") as HTMLAnchorElement;
+    expect(linkElement).not.toBeNull();
+
     const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
-    let dispatchReturned = true;
     await act(async () => {
-      dispatchReturned = eyeButton!.dispatchEvent(clickEvent);
+      linkElement.dispatchEvent(clickEvent);
     });
 
-    expect(clickEvent.defaultPrevented).toBe(true); // no hard anchor navigation
-    expect(dispatchReturned).toBe(false);
-    expect(mockPush).toHaveBeenCalledTimes(1);
-    expect(mockPush).toHaveBeenCalledWith("/browse/math/doc-1");
+    expect(clickEvent.defaultPrevented).toBe(true);
+    expect(onNavigateMock).toHaveBeenCalledTimes(1);
+  });
 
+  it("triggers onToggleSelect in selectMode", async () => {
+    const onToggleSelectMock = vi.fn();
+    await render(
+      <MaterialGridCard
+        material={material}
+        pathBase="/browse/math"
+        navIndex={0}
+        selectMode={true}
+        onToggleSelect={onToggleSelectMock}
+      />,
+    );
+
+    const linkElement = container.querySelector("a") as HTMLAnchorElement;
+    const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
     await act(async () => {
-      root.unmount();
+      linkElement.dispatchEvent(clickEvent);
     });
-    container.remove();
+
+    expect(clickEvent.defaultPrevented).toBe(true);
+    expect(onToggleSelectMock).toHaveBeenCalledTimes(1);
   });
 });

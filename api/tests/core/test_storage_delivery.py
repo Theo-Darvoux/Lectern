@@ -46,10 +46,7 @@ def test_get_delivery_worker_when_configured(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_direct_delivery_returns_none() -> None:
     d = DirectDelivery()
-    assert (
-        d.file_url("k", ttl=60, force_download=True, filename=None, content_type=None)
-        is None
-    )
+    assert d.file_url("k", ttl=60, force_download=True, filename=None, content_type=None) is None
     assert d.public_url("branding/logo.webp") is None
 
 
@@ -75,10 +72,7 @@ def test_worker_delivery_file_url_signs_token() -> None:
 def test_worker_delivery_file_url_without_secret_falls_back() -> None:
     # No secret → cannot sign → defer to presigned S3 (None).
     d = WorkerDelivery("https://cdn.example.com", "")
-    assert (
-        d.file_url("k", ttl=60, force_download=True, filename=None, content_type=None)
-        is None
-    )
+    assert d.file_url("k", ttl=60, force_download=True, filename=None, content_type=None) is None
 
 
 def test_worker_delivery_public_url_is_unsigned_root() -> None:

@@ -37,6 +37,7 @@ async def _empty_gen(*_a, **_kw):
 def _one_object_gen(key: str, size: int = 10):
     async def _gen(*_a, **_kw):
         yield {"Key": key, "Size": size}
+
     return _gen
 
 
@@ -44,9 +45,7 @@ def _one_object_gen(key: str, size: int = 10):
 
 
 @pytest.mark.asyncio
-async def test_s3_metadata_sidecar_present_in_zip(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_s3_metadata_sidecar_present_in_zip(db_session: AsyncSession, tmp_path: Path) -> None:
     """ZIP must contain s3_metadata.json."""
     dest = tmp_path / "b.zip"
     with (
@@ -69,7 +68,7 @@ async def test_s3_metadata_sidecar_contains_per_object_headers(
     fake_meta = {
         "content_type": "application/pdf",
         "content_encoding": "gzip",
-        "content_disposition": "attachment; filename=\"doc.pdf\"",
+        "content_disposition": 'attachment; filename="doc.pdf"',
         "cache_control": "public, max-age=86400",
     }
 
@@ -83,7 +82,9 @@ async def test_s3_metadata_sidecar_contains_per_object_headers(
     with (
         patch("app.services.backup.list_objects", side_effect=_fake_list),
         patch("app.services.backup.download_file_raw", side_effect=_fake_download),
-        patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value=fake_meta),
+        patch(
+            "app.services.backup.get_object_headers", new_callable=AsyncMock, return_value=fake_meta
+        ),
     ):
         await create_backup_zip(db_session, dest)
 
@@ -155,9 +156,7 @@ async def test_download_file_raw_called_for_each_key(
 
 
 @pytest.mark.asyncio
-async def test_branding_prefix_included_in_backup(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_branding_prefix_included_in_backup(db_session: AsyncSession, tmp_path: Path) -> None:
     """branding/ objects must appear in the ZIP."""
     dest = tmp_path / "b.zip"
     branding_content = b"logo bytes"
@@ -193,9 +192,7 @@ def test_backup_prefixes_excludes_quarantine() -> None:
 
 
 @pytest.mark.asyncio
-async def test_all_four_prefixes_are_listed(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_all_four_prefixes_are_listed(db_session: AsyncSession, tmp_path: Path) -> None:
     """list_objects must be called for each of the four backup prefixes."""
     dest = tmp_path / "b.zip"
     listed: list[str] = []
@@ -239,12 +236,30 @@ async def test_all_24_tables_in_zip(db_session: AsyncSession, tmp_path: Path) ->
 def test_table_order_has_24_entries() -> None:
     """_TABLE_INSERT_ORDER must list all 24 application tables."""
     expected = {
-        "users", "tags", "allowed_domains", "dead_letter_jobs",
-        "directories", "notifications", "uploads",
-        "materials", "directory_tags", "directory_likes", "directory_favourites",
-        "pull_requests", "material_tags", "material_likes", "material_favourites",
-        "featured_items", "flags", "view_history", "download_audit", "comments",
-        "material_versions", "annotations", "pr_file_claims", "pr_comments",
+        "users",
+        "tags",
+        "allowed_domains",
+        "dead_letter_jobs",
+        "directories",
+        "notifications",
+        "uploads",
+        "materials",
+        "directory_tags",
+        "directory_likes",
+        "directory_favourites",
+        "pull_requests",
+        "material_tags",
+        "material_likes",
+        "material_favourites",
+        "featured_items",
+        "flags",
+        "view_history",
+        "download_audit",
+        "comments",
+        "material_versions",
+        "annotations",
+        "pr_file_claims",
+        "pr_comments",
     }
     assert set(_TABLE_INSERT_ORDER) == expected
     assert len(_TABLE_INSERT_ORDER) == 24  # no duplicates

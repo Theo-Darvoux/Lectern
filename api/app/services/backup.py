@@ -59,31 +59,31 @@ _TABLE_INSERT_ORDER = [
     "allowed_domains",
     "dead_letter_jobs",
     # ── depend only on users / tags ──────────────────────────────────────────
-    "directories",          # self-ref: parent_id → topological sort on restore
-    "notifications",        # FK: users
-    "uploads",              # FK: none (standalone tracking table)
+    "directories",  # self-ref: parent_id → topological sort on restore
+    "notifications",  # FK: users
+    "uploads",  # FK: none (standalone tracking table)
     # ── depend on directories (and optionally users) ─────────────────────────
-    "materials",            # FK: directories, users; self-ref: parent_material_id
-    "directory_tags",       # FK: directories, tags
-    "directory_likes",      # FK: users, directories
-    "directory_favourites", # FK: users, directories
+    "materials",  # FK: directories, users; self-ref: parent_material_id
+    "directory_tags",  # FK: directories, tags
+    "directory_likes",  # FK: users, directories
+    "directory_favourites",  # FK: users, directories
     # ── depend on materials ──────────────────────────────────────────────────
-    "pull_requests",        # FK: materials; self-ref: reverts_pr_id / reverted_by_pr_id
-    "material_tags",        # FK: materials, tags
-    "material_likes",       # FK: users, materials
+    "pull_requests",  # FK: materials; self-ref: reverts_pr_id / reverted_by_pr_id
+    "material_tags",  # FK: materials, tags
+    "material_likes",  # FK: users, materials
     "material_favourites",  # FK: users, materials
-    "featured_items",       # FK: materials, directories, users
-    "flags",                # FK: users (target_id is a polymorphic UUID, no FK constraint)
-    "view_history",         # FK: users, materials
-    "download_audit",       # FK: users, materials
-    "comments",             # FK: users (standalone threaded comments, no material FK)
+    "featured_items",  # FK: materials, directories, users
+    "flags",  # FK: users (target_id is a polymorphic UUID, no FK constraint)
+    "view_history",  # FK: users, materials
+    "download_audit",  # FK: users, materials
+    "comments",  # FK: users (standalone threaded comments, no material FK)
     # ── depend on materials + pull_requests ──────────────────────────────────
-    "material_versions",    # FK: materials, pull_requests
+    "material_versions",  # FK: materials, pull_requests
     # ── depend on materials + material_versions ──────────────────────────────
-    "annotations",          # FK: materials, material_versions, users; self-ref: parent_id / thread_root_id
+    "annotations",  # FK: materials, material_versions, users; self-ref: parent_id / thread_root_id
     # ── depend on pull_requests + material_versions ──────────────────────────
-    "pr_file_claims",       # FK: pull_requests, material_versions
-    "pr_comments",          # FK: pull_requests; self-ref: parent_id
+    "pr_file_claims",  # FK: pull_requests, material_versions
+    "pr_comments",  # FK: pull_requests; self-ref: parent_id
 ]
 _TABLE_DELETE_ORDER = list(reversed(_TABLE_INSERT_ORDER))
 
@@ -92,7 +92,7 @@ _TABLE_DELETE_ORDER = list(reversed(_TABLE_INSERT_ORDER))
 _SELF_REF_FK: dict[str, tuple[str, str]] = {
     "directories": ("parent_id", "id"),
     "materials": ("parent_material_id", "id"),
-    "annotations": ("thread_id", "id"),   # thread_id → self-referential thread root
+    "annotations": ("thread_id", "id"),  # thread_id → self-referential thread root
     "pr_comments": ("parent_id", "id"),
 }
 
@@ -338,7 +338,9 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
     the entire object in RAM.
     """
 
-    def _read_metadata() -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], list[str], dict[str, dict[str, str | None]]]:
+    def _read_metadata() -> tuple[
+        dict[str, Any], dict[str, list[dict[str, Any]]], list[str], dict[str, dict[str, str | None]]
+    ]:
         with zipfile.ZipFile(zip_path, "r") as zf:
             namelist = zf.namelist()
             manifest = json.loads(zf.read("manifest.json"))
@@ -362,9 +364,7 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
 
     version = manifest.get("version", "1.0")
     if version not in ("1.0", "2.0"):
-        raise ValueError(
-            f"Incompatible backup version {version!r} (supported: '1.0', '2.0')"
-        )
+        raise ValueError(f"Incompatible backup version {version!r} (supported: '1.0', '2.0')")
     if version == "1.0":
         logger.warning(
             "Restoring a v1.0 backup: S3 object metadata (Content-Type, Content-Encoding, "
@@ -403,7 +403,9 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
             content_encoding: str | None = meta.get("content_encoding")
             content_disposition: str | None = meta.get("content_disposition") or "attachment"
 
-            def _extract_entry(name: str = entry_name, dest: Path = tmp / key.replace("/", "__")) -> tuple[Path, int]:
+            def _extract_entry(
+                name: str = entry_name, dest: Path = tmp / key.replace("/", "__")
+            ) -> tuple[Path, int]:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zipfile.ZipFile(zip_path, "r") as zf:
                     info = zf.getinfo(name)
