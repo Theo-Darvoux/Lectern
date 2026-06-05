@@ -216,14 +216,14 @@ function DirectoryGridCardImpl({
         {/* Icon area */}
         <div className={cn("aspect-[4/3] relative flex items-center justify-center bg-linear-to-br overflow-hidden", bgGradient)}>
           {showCollage ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="relative w-[78%] h-[70%] transition-transform duration-500 ease-out group-hover:-translate-y-2 drop-shadow-xl">
-                {/* Tab — darker shade of body, flush to body's top-left */}
+            <div className="absolute inset-x-0 bottom-0 top-[16%]">
+              <div className="relative w-full h-full transition-transform duration-500 ease-out group-hover:-translate-y-1 drop-shadow-xl">
+                {/* Tab — darker shade of body, sits above the body's top-left */}
                 <div
-                  className={cn("absolute left-0 w-[36%] rounded-t-[7px]", folderTabColor)}
-                  style={{ bottom: "100%", height: "19%" }}
+                  className={cn("absolute left-0 w-[34%] rounded-t-[7px]", folderTabColor)}
+                  style={{ bottom: "100%", height: "16%" }}
                 />
-                {/* Folder body — solid saturated color, square top-left, rounded elsewhere */}
+                {/* Folder body — fills the card's preview area; the box IS the folder */}
                 <div
                   className={cn(
                     "absolute inset-0 rounded-b-2xl rounded-tr-2xl overflow-hidden",
@@ -231,11 +231,11 @@ function DirectoryGridCardImpl({
                   )}
                 >
                   {/* Subtle top-edge highlight to give the folder a lit, 3-D feel */}
-                  <div className="absolute inset-x-0 top-0 h-[38%] bg-white/20 pointer-events-none rounded-tr-2xl" />
+                  <div className="absolute inset-x-0 top-0 h-[20%] bg-white/20 pointer-events-none rounded-tr-2xl" />
                   {/* Bottom-edge shadow stripe for depth */}
-                  <div className="absolute inset-x-0 bottom-0 h-[15%] bg-black/10 pointer-events-none" />
-                  {/* Thumbnail collage inset inside the folder */}
-                  <div className="absolute inset-[9%] rounded-lg overflow-hidden ring-1 ring-black/15 dark:ring-black/40 shadow-md">
+                  <div className="absolute inset-x-0 bottom-0 h-[8%] bg-black/10 pointer-events-none" />
+                  {/* Thumbnail collage inset inside the folder — gaps kept around it */}
+                  <div className="absolute inset-[6%] rounded-lg overflow-hidden ring-1 ring-black/15 dark:ring-black/40 shadow-md">
                     <DirectoryPreviewCollage materialIds={previewMaterialIds} />
                   </div>
                 </div>
