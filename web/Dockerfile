@@ -1,4 +1,4 @@
-FROM node:22-alpine AS base
+FROM --platform=$BUILDPLATFORM node:22-alpine AS base
 # Pin pnpm to match `packageManager` in package.json for reproducible builds.
 RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
 
