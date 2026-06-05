@@ -224,7 +224,7 @@ function DirectoryGridCardImpl({
               {/* Folder body — fills the card's preview area; the box IS the folder */}
               <div
                 className={cn(
-                  "absolute inset-0 rounded-b-2xl rounded-tr-2xl overflow-hidden flex items-center justify-center",
+                  "absolute inset-0 rounded-b-2xl rounded-tr-2xl overflow-hidden flex items-center justify-center isolate [transform:translate3d(0,0,0)]",
                   folderBodyColor,
                 )}
               >
