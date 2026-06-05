@@ -32,12 +32,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.backup import (
-    BACKUP_VERSION,
     _TABLE_INSERT_ORDER,
+    BACKUP_VERSION,
     create_backup_zip,
     restore_from_zip_path,
 )
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

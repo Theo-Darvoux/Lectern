@@ -16,15 +16,15 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.backup import (
+    _TABLE_INSERT_ORDER,
     BACKUP_PREFIXES,
     BACKUP_VERSION,
-    _TABLE_INSERT_ORDER,
     create_backup_zip,
 )
 

@@ -18,21 +18,19 @@ from __future__ import annotations
 
 import json
 import zipfile
-from io import BytesIO
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.backup import (
-    BACKUP_PREFIXES,
-    BACKUP_VERSION,
     _RESTORE_MULTIPART_THRESHOLD,
     _TABLE_INSERT_ORDER,
+    BACKUP_PREFIXES,
+    BACKUP_VERSION,
     restore_from_zip_path,
 )
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -402,7 +400,8 @@ async def test_gzip_bytes_restored_without_decompression(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
     """Raw gzip bytes in the ZIP must be sent as-is to upload_file, not decompressed."""
-    import gzip, io
+    import gzip
+    import io
 
     original = b"secret content"
     buf = io.BytesIO()

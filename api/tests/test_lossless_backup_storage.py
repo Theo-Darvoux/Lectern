@@ -9,14 +9,12 @@ from __future__ import annotations
 
 import gzip
 import io
-import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.core.storage import download_file, download_file_raw, get_object_headers
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

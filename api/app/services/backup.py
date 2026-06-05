@@ -276,10 +276,10 @@ async def create_backup_zip(db: AsyncSession, dest_path: Path) -> dict[str, Any]
 
     # Collect per-object metadata and raw bytes concurrently.
     # We use a semaphore to avoid opening hundreds of S3 connections at once.
-    _SEM = asyncio.Semaphore(10)
+    _sem = asyncio.Semaphore(10)
 
     async def _fetch_one(key: str, local: Path) -> dict[str, str | None]:
-        async with _SEM:
+        async with _sem:
             await download_file_raw(key, local)
             return await get_object_headers(key)
 
