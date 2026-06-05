@@ -2,6 +2,8 @@
  * Utilities for handling drag and drop of files and folders using the FileSystem API.
  */
 
+import { compareNatural } from "@/lib/utils";
+
 export interface ScannedFile {
     file: File;
     /** Relative path from the drop root including filename, e.g. "FolderA/sub/file.pdf" */
@@ -153,7 +155,7 @@ export function extractDirPaths(scanned: ScannedFile[]): string[] {
     return [...dirs].sort((a, b) => {
         const da = a.split("/").length;
         const db = b.split("/").length;
-        return da !== db ? da - db : a.localeCompare(b);
+        return da !== db ? da - db : compareNatural(a, b);
     });
 }
 

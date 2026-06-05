@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
 from app.core.exceptions import NotFoundError
+from app.core.sorting import natural_sort_key
 from app.models.directory import Directory, DirectoryFavourite, DirectoryLike
 from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
 
@@ -95,15 +96,18 @@ async def get_preview_material_ids(
     )
 
     rows = await db.execute(
-        select(subtree.c.root_id, Material.id)
+        select(subtree.c.root_id, subtree.c.depth, Material.id, Material.title)
         .join(Material, Material.directory_id == subtree.c.dir_id)
         .join(latest_ver_subq, Material.id == latest_ver_subq.c.material_id)
         .where(Material.parent_material_id.is_(None))
-        .order_by(subtree.c.root_id, subtree.c.depth, Material.title)
     )
 
+    # Direct children win (depth first), then natural order by title. sorted() is
+    # stable, so per-root ordering is preserved when bucketing below.
+    ordered = sorted(rows.all(), key=lambda r: (r.depth, natural_sort_key(r.title)))
+
     result: dict[uuid.UUID, list[str]] = {}
-    for row in rows.all():
+    for row in ordered:
         lst = result.setdefault(row.root_id, [])
         if len(lst) < 4:
             lst.append(str(row.id))
@@ -217,13 +221,15 @@ async def get_root_directories(
     db: AsyncSession, current_user_id: uuid.UUID | None = None
 ) -> dict[str, list[dict[str, typing.Any]]]:
     stmt = (
-        select(Directory)
-        .options(selectinload(Directory.tags))
-        .where(Directory.parent_id.is_(None))
-        .order_by(Directory.sort_order, Directory.name)
+        select(Directory).options(selectinload(Directory.tags)).where(Directory.parent_id.is_(None))
     )
     result = await db.execute(stmt)
-    directories = result.scalars().all()
+    # sort_order stays primary; natural order on name breaks ties ("Chapitre 2"
+    # before "Chapitre 10"). Natural sort has no portable SQL form, so order here.
+    directories = sorted(
+        result.scalars().all(),
+        key=lambda d: (d.sort_order, natural_sort_key(d.name)),
+    )
 
     dir_ids = [d.id for d in directories]
 
@@ -284,10 +290,9 @@ async def get_root_directories(
         select(Material)
         .options(selectinload(Material.tags))
         .where(Material.directory_id.is_(None), Material.parent_material_id.is_(None))
-        .order_by(Material.title)
     )
     mat_result = await db.execute(mat_stmt)
-    root_materials = mat_result.scalars().all()
+    root_materials = sorted(mat_result.scalars().all(), key=lambda m: natural_sort_key(m.title))
 
     materials_out = await _attach_version_and_counts(db, root_materials, current_user_id, "")
     return {"directories": items, "materials": materials_out}
@@ -404,10 +409,12 @@ async def get_directory_children(
         select(Directory)
         .options(selectinload(Directory.tags))
         .where(Directory.parent_id == directory.id)
-        .order_by(Directory.sort_order, Directory.name)
     )
     dir_result = await db.execute(dir_stmt)
-    child_dirs = dir_result.scalars().all()
+    child_dirs = sorted(
+        dir_result.scalars().all(),
+        key=lambda d: (d.sort_order, natural_sort_key(d.name)),
+    )
 
     child_dir_ids = [d.id for d in child_dirs]
 
@@ -466,11 +473,11 @@ async def get_directory_children(
         select(Material)
         .options(selectinload(Material.tags))
         .where(Material.directory_id == directory.id, Material.parent_material_id.is_(None))
-        .order_by(Material.title)
     )
     mat_result = await db.execute(mat_stmt)
+    sorted_mats = sorted(mat_result.scalars().all(), key=lambda m: natural_sort_key(m.title))
     materials_out = await _attach_version_and_counts(
-        db, mat_result.scalars().all(), current_user_id, parent_full_path
+        db, sorted_mats, current_user_id, parent_full_path
     )
 
     return {"directories": dirs_with_counts, "materials": materials_out}
@@ -707,10 +714,12 @@ async def _build_zip_entries(
             MaterialVersion.file_key.isnot(None),
             ~MaterialVersion.file_key.like("quarantine/%"),
         )
-        .order_by(cte.c.rel_path, MaterialVersion.file_name)
     )
 
-    rows = (await db.execute(stmt)).all()
+    rows = sorted(
+        (await db.execute(stmt)).all(),
+        key=lambda r: (natural_sort_key(r.rel_path), natural_sort_key(r.file_name)),
+    )
 
     # Fetch attachments (child materials) and place them under a subfolder
     # named after the parent material's file stem.
@@ -747,14 +756,20 @@ async def _build_zip_entries(
             ~attachment_version.file_key.like("quarantine/%"),
             attachment_version.deleted_at.is_(None),
         )
-        .order_by(cte.c.rel_path, parent_version.file_name, attachment_version.file_name)
         # Bypass the global soft-delete event listener: it generates unaliased
         # `material_versions.deleted_at` in ON clauses which SQLite rejects.
         # Explicit conditions above handle filtering instead.
         .execution_options(include_deleted=True)
     )
 
-    attachment_rows = (await db.execute(attach_stmt)).all()
+    attachment_rows = sorted(
+        (await db.execute(attach_stmt)).all(),
+        key=lambda r: (
+            natural_sort_key(r.rel_path),
+            natural_sort_key(r.parent_file_name),
+            natural_sort_key(r.file_name),
+        ),
+    )
 
     total_count = len(rows) + len(attachment_rows)
     if total_count > _DOWNLOAD_MAX_FILES:

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundError
+from app.core.sorting import natural_sort_key
 from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
 from app.models.view_history import ViewHistory
 
@@ -286,12 +287,12 @@ async def get_material_attachments(
             & (Material.current_version == MaterialVersion.version_number),
         )
         .where(Material.parent_material_id == material_id)
-        .order_by(Material.title)
     )
 
+    rows = sorted(result.all(), key=lambda row: natural_sort_key(row[0].title))
     return [
         material_orm_to_dict(material, current_user_id=current_user_id, current_version=version)
-        for material, version in result.all()
+        for material, version in rows
     ]
 
 

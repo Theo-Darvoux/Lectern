@@ -1,6 +1,7 @@
 import React from "react";
 import { Folder, ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import { useTranslations } from "next-intl";
+import { compareNatural } from "@/lib/utils";
 
 interface PendingFoldersProps {
     pendingDirPaths: Map<string, string>;
@@ -50,7 +51,7 @@ export function PendingFolders({
                         .sort((a, b) => {
                             const da = a.split("/").length;
                             const db = b.split("/").length;
-                            return da !== db ? da - db : a.localeCompare(b);
+                            return da !== db ? da - db : compareNatural(a, b);
                         })
                         .map((path) => {
                             const parts = path.split("/");

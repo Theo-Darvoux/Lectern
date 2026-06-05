@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { compareNatural } from "@/lib/utils";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import type {
   CreateMaterialOp,
@@ -152,13 +153,13 @@ export function useAugmentedListing({
 
   const sortedDirs = useMemo(() => {
     return [...effectiveDirs].sort((a, b) =>
-      String(a.name ?? "").localeCompare(String(b.name ?? "")),
+      compareNatural(String(a.name ?? ""), String(b.name ?? "")),
     );
   }, [effectiveDirs]);
 
   const sortedMats = useMemo(() => {
     return [...effectiveMats].sort((a, b) =>
-      String(a.title ?? "").localeCompare(String(b.title ?? "")),
+      compareNatural(String(a.title ?? ""), String(b.title ?? "")),
     );
   }, [effectiveMats]);
 

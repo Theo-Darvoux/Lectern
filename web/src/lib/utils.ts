@@ -35,6 +35,21 @@ export function sanitizeNext(next: string | null | undefined): string | null {
   return next;
 }
 
+/**
+ * Locale-aware natural-order string comparator. Numeric runs are compared by
+ * value, so "Chapitre 2" sorts before "Chapitre 10" (instead of lexicographic
+ * "10" < "2"). `sensitivity: "base"` keeps accents/case from splitting groups.
+ */
+const naturalCollator = new Intl.Collator("fr", {
+  numeric: true,
+  sensitivity: "base",
+});
+
+/** Compare two strings in natural order (see {@link naturalCollator}). */
+export function compareNatural(a: string, b: string): number {
+  return naturalCollator.compare(a, b);
+}
+
 export function formatBytes(bytes?: number, decimals: number = 2) {
   if (!bytes) return "0 B";
   const k = 1024;

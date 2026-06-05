@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.sorting import natural_sort_key
 from app.dependencies.auth import require_moderator
 from app.models.directory import Directory
 from app.models.featured import FeaturedItem
@@ -156,8 +157,11 @@ async def moderator_list_directories(
     _user: Annotated[User, Depends(require_moderator())],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[dict[str, Any]]:
-    result = await db.execute(select(Directory).order_by(Directory.sort_order, Directory.name))
-    dirs = result.scalars().all()
+    result = await db.execute(select(Directory))
+    dirs = sorted(
+        result.scalars().all(),
+        key=lambda d: (d.sort_order, natural_sort_key(d.name)),
+    )
     return [
         {
             "id": str(d.id),

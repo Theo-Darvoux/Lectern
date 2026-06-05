@@ -6,6 +6,7 @@ import { MAX_FILE_SIZE_MB, ACCEPTED_FILE_TYPES, guessFileMime } from "@/lib/file
 import { uploadFile, getUploadConfig, logicalFileSize, trackExistingUpload, uploadBatchZip, type UploadConfig, type TusUploadHandle } from "@/lib/upload-client";
 import { ApiError } from "@/lib/api-client";
 import { collectDroppedItems, extractDirPaths, traverseFolder, zipScannedFiles, type ScannedFile } from "@/lib/drop-utils";
+import { compareNatural } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTranslations } from "next-intl";
 import { useUploadQueue, type QueueItem } from "@/lib/upload-queue";
@@ -767,7 +768,7 @@ export function useUploadEngine({
         }
 
         const dirPaths = [...pendingDirPaths.keys()].sort(
-            (a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b),
+            (a, b) => a.split("/").length - b.split("/").length || compareNatural(a, b),
         );
 
         const dirOps = dirPaths.map((path) => {
