@@ -265,6 +265,7 @@
     "download": "Download",
     "print": "Print",
     "edit": "Edit",
+    "editFolder": "Edit folder",
     "copyLink": "Copy Link",
     "deletePermanentlyConfirm": "Are you sure you want to permanently delete",
     "likes": "Likes",

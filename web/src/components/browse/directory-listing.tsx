@@ -8,6 +8,7 @@ import { Breadcrumbs } from "@/components/browse/breadcrumbs";
 import { EmptyDirectory } from "@/components/browse/empty-directory";
 import { UploadDrawer } from "@/components/pr/upload-drawer";
 import { NewFolderDialog } from "@/components/pr/new-folder-dialog";
+import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import { DirectoryOpenPRs } from "@/components/browse/directory-open-prs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +44,7 @@ import {
   LayoutList,
   LayoutGrid,
   Download,
+  FolderPen,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -94,6 +96,7 @@ export function DirectoryListing({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadParentMat, setUploadParentMat] = useState<{ id: string; name: string } | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [editFolderOpen, setEditFolderOpen] = useState(false);
   const requestUpload = useDropZoneStore((s) => s.requestUpload);
   const setBrowseContext = useDropZoneStore((s) => s.setBrowseContext);
 
@@ -613,6 +616,18 @@ export function DirectoryListing({
                     ) : (
                       <Download className="w-4 h-4 opacity-50 group-hover:opacity-100" />
                     )}
+                  </Button>
+                )}
+                {!guest && !activeGhostDir && !previewPrId && directory && (
+                  <Button
+                    key="edit-folder-btn"
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent/50 group"
+                    onClick={() => setEditFolderOpen(true)}
+                    title={t("editFolder")}
+                  >
+                    <FolderPen className="w-4 h-4 opacity-50 group-hover:opacity-100" />
                   </Button>
                 )}
                 <div className="flex items-center border rounded-md overflow-hidden h-8">
@@ -1177,6 +1192,17 @@ export function DirectoryListing({
         parentId={dirId || null}
         parentName={dirName}
       />
+      {directory && editFolderOpen && (
+        <FileEditDialog
+          open={editFolderOpen}
+          onOpenChange={setEditFolderOpen}
+          target={{
+            type: "directory",
+            id: String(directory.id),
+            data: directory,
+          }}
+        />
+      )}
       <Dialog
         open={batchDeleteOps !== null}
         onOpenChange={(open) => !open && setBatchDeleteOps(null)}

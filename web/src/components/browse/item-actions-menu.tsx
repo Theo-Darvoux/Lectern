@@ -433,6 +433,12 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
                 <span>{t("edit")}</span>
               </Item>
             ))}
+          {!guest && !actions.isMaterial && (
+            <Item onClick={() => actions.setEditDialogOpen(true)} className="cursor-pointer">
+              <Edit2 className="mr-2 h-4 w-4" />
+              <span>{t("edit")}</span>
+            </Item>
+          )}
           <Item onClick={actions.handleShare} className="cursor-pointer">
             <LinkIcon className="mr-2 h-4 w-4" />
             <span>{t("copyLink")}</span>
