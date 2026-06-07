@@ -369,7 +369,8 @@
     "discardDraftConfirm": "Voulez-vous vraiment abandonner ce brouillon de {type} ? Cette action est irréversible.",
     "deletePermanentlyConfirm": "Supprimer définitivement",
     "deleteNow": "Supprimer maintenant",
-    "discard": "Abandonner"
+    "discard": "Abandonner",
+    "retry": "Réessayer"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",
@@ -846,7 +847,9 @@
       "initFailed": "Échec de l'initialisation : {message}",
       "configError": "Échec de la récupération de la configuration de l'éditeur : {message}",
       "loadScriptError": "Échec du chargement du script de l'API Office"
-    }
+    },
+    "retry": "Réessayer",
+    "imageLoadFailed": "Cette image n'a pas pu être affichée. Elle n'a peut-être pas été téléchargée entièrement."
   },
   "MissingImage": {
     "title": "Télécharger l'image manquante",

@@ -369,7 +369,8 @@
     "discardDraftConfirm": "Are you sure you want to discard this {type} draft? This action cannot be undone.",
     "deletePermanentlyConfirm": "Permanently delete",
     "deleteNow": "Delete Now",
-    "discard": "Discard"
+    "discard": "Discard",
+    "retry": "Retry"
   },
   "Search": {
     "searchMaterials": "Search materials...",
@@ -846,7 +847,9 @@
       "initFailed": "Initialization failed: {message}",
       "configError": "Failed to fetch editor configuration: {message}",
       "loadScriptError": "Failed to load Office API script"
-    }
+    },
+    "retry": "Retry",
+    "imageLoadFailed": "This image could not be displayed. It may not have downloaded fully."
   },
   "MissingImage": {
     "title": "Upload missing image",

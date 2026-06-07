@@ -215,7 +215,7 @@ function CodeRow({
 export function CodeViewer({ materialId, fileKey, fileName }: CodeViewerProps) {
     const scrollRef = useRef<HTMLDivElement>(null);
 
-    const { content, loading, error } = useMaterialFile({
+    const { content, loading, error, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "text",
@@ -262,6 +262,7 @@ export function CodeViewer({ materialId, fileKey, fileName }: CodeViewerProps) {
             scrollRef={scrollRef}
             loading={loading}
             error={error}
+            onRetry={reload}
             toolbarLeft={
                 lang && (
                     <span className="text-xs font-medium uppercase text-muted-foreground px-1.5 py-0.5 bg-muted rounded truncate">

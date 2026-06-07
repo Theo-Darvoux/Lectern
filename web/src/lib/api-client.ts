@@ -21,7 +21,58 @@ export const API_BASE = (() => {
 
 type FetchOptions = RequestInit & {
     skipAuth?: boolean;
+    /** Abort the request after this many ms. Prevents a stalled connection
+     *  (e.g. bad wifi: socket alive but no response) from hanging forever. */
+    timeoutMs?: number;
 };
+
+/** Combine an optional caller signal with an optional per-request timeout. */
+function withTimeout(signal: AbortSignal | null | undefined, timeoutMs?: number): AbortSignal | undefined {
+    if (!timeoutMs || typeof AbortSignal === "undefined" || !("timeout" in AbortSignal)) {
+        return signal ?? undefined;
+    }
+    const timeout = AbortSignal.timeout(timeoutMs);
+    if (!signal) return timeout;
+    if ("any" in AbortSignal) return AbortSignal.any([signal, timeout]);
+    return signal;
+}
+
+/** Whether a failed request is worth retrying (transient infra/network), as
+ *  opposed to a deterministic 4xx that will fail again. Real cancellations are
+ *  the caller's responsibility to filter out before calling this. */
+export function isRetriableError(err: unknown): boolean {
+    if (err instanceof TypeError) return true; // fetch network failure
+    if (err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError")) {
+        return true;
+    }
+    if (err instanceof ApiError) return err.status >= 500 || err.status === 0;
+    return false;
+}
+
+/** apiFetch with a bounded, backed-off retry for transient failures. Use only
+ *  for idempotent (GET) requests. */
+export async function apiFetchRetry<T>(
+    path: string,
+    options: FetchOptions & { retries?: number; retryBaseDelayMs?: number } = {},
+): Promise<T> {
+    const { retries = 2, retryBaseDelayMs = 400, ...fetchOptions } = options;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            return await apiFetch<T>(path, fetchOptions);
+        } catch (err) {
+            lastErr = err;
+            // Stop early if the caller's own signal aborted (navigation/unmount).
+            if (fetchOptions.signal?.aborted) throw err;
+            if (attempt < retries && isRetriableError(err)) {
+                await new Promise((r) => setTimeout(r, retryBaseDelayMs * 2 ** attempt));
+                continue;
+            }
+            throw err;
+        }
+    }
+    throw lastErr;
+}
 
 async function refreshToken(): Promise<string | null> {
     const res = await fetch(`${API_BASE}/auth/refresh`, {
@@ -82,8 +133,9 @@ export async function apiRequest(
     path: string,
     options: FetchOptions = {},
 ): Promise<Response> {
-    const { skipAuth, ...fetchOptions } = options;
+    const { skipAuth, timeoutMs, ...fetchOptions } = options;
     const headers = new Headers(fetchOptions.headers);
+    const signal = withTimeout(fetchOptions.signal, timeoutMs);
 
     headers.set("X-Client-ID", getClientId());
 
@@ -101,7 +153,7 @@ export async function apiRequest(
     const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
     let res: Response;
     try {
-        res = await fetch(url, { ...fetchOptions, headers, credentials: "include" });
+        res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
         // If we got a response (any response), the API is reachable.
         if (typeof window !== "undefined") {
             window.dispatchEvent(new CustomEvent("wikint-api-reachable"));
@@ -122,7 +174,7 @@ export async function apiRequest(
             setAccessToken(newToken);
             _onTokenRefreshed?.(newToken);
             headers.set("Authorization", `Bearer ${newToken}`);
-            res = await fetch(url, { ...fetchOptions, headers, credentials: "include" });
+            res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
             if (typeof window !== "undefined") {
                 window.dispatchEvent(new CustomEvent("wikint-api-reachable"));
             }
@@ -190,10 +242,15 @@ export async function getMaterialFileUrl(materialId: string): Promise<string> {
     return url;
 }
 
-export async function fetchMaterialFile(materialId: string): Promise<Response> {
+export async function fetchMaterialFile(materialId: string, signal?: AbortSignal): Promise<Response> {
     const url = await getMaterialFileUrl(materialId);
-    const res = await fetch(url);
-    if (!res.ok) throw new ApiError(res.status, `Failed to fetch file: ${res.statusText}`);
+    const res = await fetch(url, signal ? { signal } : undefined);
+    if (!res.ok) {
+        // A failed signed-URL fetch is usually a stale/expired token or an edge
+        // error; drop the cached URL so the next attempt re-issues a fresh one.
+        _urlCache.delete(materialId);
+        throw new ApiError(res.status, `Failed to fetch file: ${res.statusText}`);
+    }
     return res;
 }
 

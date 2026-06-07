@@ -5,6 +5,7 @@ import {
   collectReferencedQcmImageIds,
   pruneQcmImages,
   generateQcmImageId,
+  qcmImageUrlTransform,
 } from "./qcm-image-utils";
 import type { QCMFile } from "./qcm-types";
 
@@ -33,6 +34,30 @@ function qcmWith(images: Record<string, string>, refs: string[]): QCMFile {
     ],
   };
 }
+
+describe("qcmImageUrlTransform", () => {
+  // Mimics react-markdown's defaultUrlTransform: strips unknown protocols.
+  const stripUnknownProtocol = (url: string) =>
+    /^(https?|data):/.test(url) ? url : "";
+
+  it("preserves qcmimg: refs the default transform would strip", () => {
+    expect(stripUnknownProtocol("qcmimg:img_abc")).toBe(""); // sanity: default drops it
+    expect(qcmImageUrlTransform("qcmimg:img_abc", "src", stripUnknownProtocol)).toBe(
+      "qcmimg:img_abc",
+    );
+  });
+
+  it("preserves embedded data:image src URLs", () => {
+    expect(qcmImageUrlTransform(DATA_URL, "src", stripUnknownProtocol)).toBe(DATA_URL);
+  });
+
+  it("delegates other URLs to the default transform", () => {
+    expect(qcmImageUrlTransform("https://x/y.png", "src", stripUnknownProtocol)).toBe(
+      "https://x/y.png",
+    );
+    expect(qcmImageUrlTransform("javascript:alert(1)", "href", stripUnknownProtocol)).toBe("");
+  });
+});
 
 describe("qcmImageRef", () => {
   it("prefixes the id with qcmimg:", () => {

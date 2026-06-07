@@ -342,9 +342,14 @@ function BrowseContent() {
     inner = <BrowseSkeleton isMaterial={isLikelyMaterial} />;
   } else if (error) {
     inner = (
-      <div className="flex flex-col items-center justify-center py-20 px-4 text-muted-foreground w-full">
-        <p className="text-lg font-medium">{t("notFound")}</p>
-        <p className="text-sm">{error}</p>
+      <div className="flex flex-col items-center justify-center gap-4 py-20 px-4 text-muted-foreground w-full">
+        <div className="flex flex-col items-center gap-1 text-center">
+          <p className="text-lg font-medium">{t("notFound")}</p>
+          <p className="text-sm">{error}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => fetchData(false)}>
+          {t("retry")}
+        </Button>
       </div>
     );
   } else if (!data) {

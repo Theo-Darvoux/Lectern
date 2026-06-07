@@ -1,12 +1,12 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import "katex/dist/katex.min.css";
-import { resolveQcmImageSrc } from "@/lib/qcm-image-utils";
+import { resolveQcmImageSrc, qcmImageUrlTransform } from "@/lib/qcm-image-utils";
 import {
   Loader2,
   CheckCircle2,
@@ -85,6 +85,7 @@ function MathMarkdown({
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[[rehypeKatex, { throwOnError: false, errorColor: "#c00" }]]}
       components={components}
+      urlTransform={(url, key) => qcmImageUrlTransform(url, key, defaultUrlTransform)}
     >
       {wrapBareEnvironments(content)}
     </ReactMarkdown>

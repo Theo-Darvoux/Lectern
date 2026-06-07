@@ -1,6 +1,12 @@
 "use client";
 
-import { apiFetch } from "./api-client";
+import { apiFetchRetry } from "./api-client";
+
+// A directory listing is a small JSON payload, so it should return quickly.
+// Cap each attempt so a stalled connection can't leave the request pending
+// forever — which would otherwise pin the in-flight entry below and hang the
+// listing skeleton until a full page reload.
+const BROWSE_TIMEOUT_MS = 15_000;
 
 // Shared in-memory cache for browse API responses, keyed by browse path
 // (the part after /browse/, e.g. "category/subcategory" or "").
@@ -47,7 +53,7 @@ export function fetchBrowsePath(
     if (existing) return existing;
 
     const endpoint = browsePath ? `/browse/${browsePath}` : "/browse";
-    const request = apiFetch<unknown>(endpoint)
+    const request = apiFetchRetry<unknown>(endpoint, { timeoutMs: BROWSE_TIMEOUT_MS })
         .then((result) => {
             // Preserve the previous object identity on an unchanged revalidation
             // so the cache-first render path doesn't trigger a second full

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { apiFetch } from "./api-client";
+import { apiFetchRetry } from "./api-client";
 import {
   browseCache,
   fetchBrowsePath,
@@ -8,9 +8,11 @@ import {
 
 vi.mock("./api-client", () => ({
   apiFetch: vi.fn(),
+  apiFetchRetry: vi.fn(),
 }));
 
-const mockApiFetch = vi.mocked(apiFetch);
+// browse-prefetch fetches through apiFetchRetry (timeout + transient retry).
+const mockApiFetch = vi.mocked(apiFetchRetry);
 
 /** A promise whose resolution we control, to overlap concurrent requests. */
 function deferred<T>() {
@@ -35,8 +37,9 @@ describe("browse-prefetch", () => {
     await fetchBrowsePath("");
     await fetchBrowsePath("a/b");
 
-    expect(mockApiFetch).toHaveBeenNthCalledWith(1, "/browse");
-    expect(mockApiFetch).toHaveBeenNthCalledWith(2, "/browse/a/b");
+    const timeoutOpts = expect.objectContaining({ timeoutMs: expect.any(Number) });
+    expect(mockApiFetch).toHaveBeenNthCalledWith(1, "/browse", timeoutOpts);
+    expect(mockApiFetch).toHaveBeenNthCalledWith(2, "/browse/a/b", timeoutOpts);
   });
 
   it("caches the result and serves subsequent reads from cache", async () => {
@@ -134,5 +137,23 @@ describe("browse-prefetch", () => {
     mockApiFetch.mockRejectedValue(new Error("network"));
     await expect(fetchBrowsePath("nope")).rejects.toThrow("network");
     expect(browseCache.has("nope")).toBe(false);
+  });
+
+  // Regression: a failed request must clear the in-flight entry, otherwise a
+  // later navigation to the same path would re-join the dead promise and hang
+  // the listing skeleton until a full page reload.
+  it("clears the in-flight entry after a failure so a later fetch can recover", async () => {
+    mockApiFetch.mockRejectedValueOnce(new Error("stalled"));
+    await expect(fetchBrowsePath("flaky")).rejects.toThrow("stalled");
+
+    // A fresh attempt for the same path issues a brand-new request (not a
+    // re-join of the failed one) and succeeds.
+    const payload = { type: "directory_listing" };
+    mockApiFetch.mockResolvedValueOnce(payload);
+    const recovered = await fetchBrowsePath("flaky");
+
+    expect(recovered).toBe(payload);
+    expect(mockApiFetch).toHaveBeenCalledTimes(2);
+    expect(browseCache.get("flaky")).toBe(payload);
   });
 });

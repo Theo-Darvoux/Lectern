@@ -375,7 +375,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
     const shellScrollRef = useRef<HTMLDivElement>(null);
     const listRef = useListRef(null);
 
-    const { blobUrl, loading, error } = useMaterialFile({ materialId, fileKey, mode: "blob" });
+    const { blobUrl, loading, error, reload } = useMaterialFile({ materialId, fileKey, mode: "blob" });
 
     // The list's outer element is the actual scroll container for pinch-zoom
     const listOuterRef = useRef<HTMLDivElement>(null);
@@ -468,6 +468,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
 
     const onDocumentLoadSuccess = useCallback((pdf: { numPages: number }) => {
+        setParseError(null);
         setNumPages(pdf.numPages);
         // Pre-fill all pages with the default A4 aspect ratio immediately so the
         // list can render right away. Individual pages will update their true aspect
@@ -589,6 +590,10 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             scrollRef={shellScrollRef}
             loading={loading}
             error={error || parseError}
+            onRetry={() => {
+                setParseError(null);
+                reload();
+            }}
             toolbarLeft={
                 <button
                     onClick={() => {

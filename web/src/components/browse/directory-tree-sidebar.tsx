@@ -26,7 +26,11 @@ import {
   X,
 } from "lucide-react";
 
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, apiFetchRetry } from "@/lib/api-client";
+
+// Tree payloads are small; bound each request so a stalled connection can't
+// leave a node spinner (loadingIds) or the root spinner stuck until reload.
+const TREE_TIMEOUT_MS = 15_000;
 import { cn } from "@/lib/utils";
 import { useBrowseRefreshStore, useUIStore } from "@/lib/stores";
 import { createSSEConnection, SSEConnection } from "@/lib/sse-client";
@@ -439,10 +443,10 @@ export function DirectoryTreeSidebar() {
     setLoadingRoots(true);
     setError(null);
     try {
-      const res = await apiFetch<{
+      const res = await apiFetchRetry<{
         directories: DirNode[];
         materials: unknown[];
-      }>("/browse");
+      }>("/browse", { timeoutMs: TREE_TIMEOUT_MS });
       const dirs = res.directories || [];
       const mats = normalizeMaterials(res.materials || []);
       rootsCache.dirs = dirs;
@@ -490,10 +494,10 @@ export function DirectoryTreeSidebar() {
         return n;
       });
       try {
-        const res = await apiFetch<{
+        const res = await apiFetchRetry<{
           directories: DirNode[];
           materials: unknown[];
-        }>(`/directories/${id}/children`);
+        }>(`/directories/${id}/children`, { timeoutMs: TREE_TIMEOUT_MS });
         const data: ChildrenPayload = {
           directories: res.directories || [],
           materials: normalizeMaterials(res.materials || []),
@@ -529,10 +533,10 @@ export function DirectoryTreeSidebar() {
       const cached = childrenCache.get(id);
       if (cached) return cached;
       try {
-        const res = await apiFetch<{
+        const res = await apiFetchRetry<{
           directories: DirNode[];
           materials: unknown[];
-        }>(`/directories/${id}/children`);
+        }>(`/directories/${id}/children`, { timeoutMs: TREE_TIMEOUT_MS });
         const data: ChildrenPayload = {
           directories: res.directories || [],
           materials: normalizeMaterials(res.materials || []),
@@ -549,7 +553,7 @@ export function DirectoryTreeSidebar() {
   // Silent refetches for SSE-triggered updates — no loading spinners.
   const refetchRootSilent = useCallback(async () => {
     try {
-      const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>("/browse");
+      const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>("/browse", { timeoutMs: TREE_TIMEOUT_MS });
       const dirs = res.directories || [];
       const mats = normalizeMaterials(res.materials || []);
       rootsCache.dirs = dirs;
@@ -564,6 +568,7 @@ export function DirectoryTreeSidebar() {
     try {
       const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>(
         `/directories/${id}/children`,
+        { timeoutMs: TREE_TIMEOUT_MS },
       );
       const data: ChildrenPayload = {
         directories: res.directories || [],
@@ -633,6 +638,7 @@ export function DirectoryTreeSidebar() {
     try {
       const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>(
         `/directories/${id}/children`,
+        { timeoutMs: TREE_TIMEOUT_MS },
       );
       const data: ChildrenPayload = {
         directories: res.directories || [],
@@ -931,7 +937,15 @@ export function DirectoryTreeSidebar() {
         )}
 
         {!loadingRoots && error && (
-          <div className="px-3 py-4 text-xs text-destructive">{error}</div>
+          <div className="flex flex-col items-start gap-2 px-3 py-4 text-xs text-destructive">
+            <span>{error}</span>
+            <button
+              onClick={() => void fetchRoots()}
+              className="rounded-md border border-current px-2 py-1 font-medium text-foreground transition-colors hover:bg-foreground/5"
+            >
+              {t("retry")}
+            </button>
+          </div>
         )}
 
         {!loadingRoots && !error && roots && (

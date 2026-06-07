@@ -28,7 +28,7 @@ export function CsvViewer({ materialId, fileKey }: CsvViewerProps) {
     const [rows, setRows] = useState<string[][]>([]);
     const [page, setPage] = useState(0);
 
-    const { content, loading, error, truncated } = useMaterialFile({
+    const { content, loading, error, truncated, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "text",
@@ -84,6 +84,7 @@ export function CsvViewer({ materialId, fileKey }: CsvViewerProps) {
             scrollRef={tableContainerRef}
             loading={loading}
             error={error}
+            onRetry={reload}
             truncatedMessage={truncated ? t("csv.truncated", { rows: rows.length.toLocaleString() }) : null}
             toolbarLeft={
                 !loading && !error && (

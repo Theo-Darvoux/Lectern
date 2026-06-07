@@ -24,7 +24,7 @@ export function SvgViewer({ materialId, fileKey, fileName }: SvgViewerProps) {
 
     // Fetch via text-content endpoint which handles gzip decompression server-side,
     // then re-wrap as an image/svg+xml blob so <img> renders it correctly.
-    const { content, loading, error } = useMaterialFile({
+    const { content, loading, error, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "text",
@@ -68,6 +68,7 @@ export function SvgViewer({ materialId, fileKey, fileName }: SvgViewerProps) {
             scrollRef={scrollRef}
             loading={loading}
             error={error}
+            onRetry={reload}
             toolbarRight={
                 <ZoomControls
                     zoom={zoom}

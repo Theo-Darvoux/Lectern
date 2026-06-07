@@ -9,7 +9,7 @@ import React, {
   useMemo,
   createContext,
 } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -70,6 +70,7 @@ import {
   generateQcmImageId,
   resolveQcmImageSrc,
   pruneQcmImages,
+  qcmImageUrlTransform,
 } from "@/lib/qcm-image-utils";
 import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/lib/stores";
@@ -292,6 +293,7 @@ function MarkdownPreview({ content }: { content: string }) {
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false, errorColor: "#c00" }]]}
         components={components}
+        urlTransform={(url, key) => qcmImageUrlTransform(url, key, defaultUrlTransform)}
       >
         {wrapBareEnvironments(content) || "*empty*"}
       </ReactMarkdown>

@@ -141,7 +141,7 @@ export function MarkdownViewer({
         clientY: number;
     } | null>(null);
 
-    const { content, loading, error } = useMaterialFile({
+    const { content, loading, error, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "text",
@@ -240,6 +240,7 @@ export function MarkdownViewer({
             scrollRef={scrollRef}
             loading={loading}
             error={error ? "Failed to load markdown content." : null}
+            onRetry={reload}
             toolbarRight={
                 <ZoomControls
                     zoom={zoom}

@@ -339,7 +339,8 @@
     "showTree": "Afficher l'arborescence",
     "hideTree": "Masquer l'arborescence",
     "filterFolders": "Filtrer les dossiers…",
-    "clear": "Effacer"
+    "clear": "Effacer",
+    "retry": "Réessayer"
   },
   "Search": {
     "searchMaterials": "Rechercher des documents...",
@@ -799,7 +800,9 @@
       "initFailed": "Échec de l'initialisation : {message}",
       "configError": "Échec de la récupération de la configuration de l'éditeur : {message}",
       "loadScriptError": "Échec du chargement du script de l'API Office"
-    }
+    },
+    "retry": "Réessayer",
+    "imageLoadFailed": "Cette image n'a pas pu être affichée. Elle n'a peut-être pas été téléchargée entièrement."
   },
   "MissingImage": {
     "title": "Télécharger l'image manquante",

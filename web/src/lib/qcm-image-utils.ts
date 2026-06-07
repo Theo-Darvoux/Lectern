@@ -55,6 +55,24 @@ export function resolveQcmImageSrc(
   return null;
 }
 
+/**
+ * `urlTransform` for react-markdown that preserves QCM image refs.
+ *
+ * react-markdown's default `urlTransform` sanitizes URLs and strips any
+ * unrecognized protocol — including our custom `qcmimg:` scheme — to an empty
+ * string before the `img` renderer runs. Returning `qcmimg:` (and embedded
+ * `data:image/`) URLs unchanged lets {@link resolveQcmImageSrc} resolve them.
+ */
+export function qcmImageUrlTransform(
+  url: string,
+  key: string,
+  defaultTransform: (url: string) => string,
+): string {
+  if (url.startsWith(QCM_IMAGE_REF_PREFIX)) return url;
+  if (key === "src" && url.startsWith("data:image/")) return url;
+  return defaultTransform(url);
+}
+
 const REF_RE = /qcmimg:([A-Za-z0-9_-]+)/g;
 
 /** Every image id referenced from the QCM's text fields. */

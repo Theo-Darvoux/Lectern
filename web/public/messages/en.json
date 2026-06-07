@@ -339,7 +339,8 @@
     "showTree": "Show directory tree",
     "hideTree": "Hide directory tree",
     "filterFolders": "Filter folders…",
-    "clear": "Clear"
+    "clear": "Clear",
+    "retry": "Retry"
   },
   "Search": {
     "searchMaterials": "Search materials...",
@@ -799,7 +800,9 @@
       "initFailed": "Initialization failed: {message}",
       "configError": "Failed to fetch editor configuration: {message}",
       "loadScriptError": "Failed to load Office API script"
-    }
+    },
+    "retry": "Retry",
+    "imageLoadFailed": "This image could not be displayed. It may not have downloaded fully."
   },
   "MissingImage": {
     "title": "Upload missing image",

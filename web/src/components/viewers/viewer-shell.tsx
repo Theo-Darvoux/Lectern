@@ -2,6 +2,7 @@
 
 import React, { useRef, useCallback } from "react";
 import { Loader2, AlertCircle } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useFullscreen } from "@/hooks/use-fullscreen";
 import { useScrollHide } from "@/hooks/use-scroll-hide";
 import { ViewerToolbar } from "./viewer-toolbar";
@@ -12,6 +13,8 @@ interface ViewerShellProps {
     children: React.ReactNode;
     loading?: boolean;
     error?: string | null;
+    /** When provided, the error state shows a button that re-runs the fetch. */
+    onRetry?: () => void;
     truncatedMessage?: string | null;
     toolbarLeft?: React.ReactNode;
     toolbarCenter?: React.ReactNode;
@@ -25,6 +28,7 @@ export function ViewerShell({
     children,
     loading,
     error,
+    onRetry,
     truncatedMessage,
     toolbarLeft,
     toolbarCenter,
@@ -32,6 +36,7 @@ export function ViewerShell({
     className,
     scrollRef,
 }: ViewerShellProps) {
+    const t = useTranslations("Viewers");
     const containerRef = useRef<HTMLDivElement>(null);
     const { isFullscreen, toggleFullscreen } = useFullscreen(containerRef);
     const internalScrollRef = useRef<HTMLDivElement>(null);
@@ -88,8 +93,16 @@ export function ViewerShell({
                         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                     </div>
                 ) : error ? (
-                    <div className="flex h-full items-center justify-center p-8 text-center text-sm text-destructive">
-                        {error}
+                    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center text-sm text-destructive">
+                        <span>{error}</span>
+                        {onRetry && (
+                            <button
+                                onClick={onRetry}
+                                className="rounded-md border border-current px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-foreground/5"
+                            >
+                                {t("retry")}
+                            </button>
+                        )}
                     </div>
                 ) : (
                     children

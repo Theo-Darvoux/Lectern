@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import { usePinchZoom } from "@/hooks/use-pinch-zoom";
 import { useMaterialFile } from "@/hooks/use-material-file";
 import { ViewerShell } from "./viewer-shell";
@@ -17,15 +18,24 @@ interface ImageViewerProps {
 }
 
 export function ImageViewer({ materialId, fileKey, fileName }: ImageViewerProps) {
+    const t = useTranslations("Viewers");
     const scrollRef = useRef<HTMLDivElement>(null);
     const imgRef = useRef<HTMLImageElement>(null);
     const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
 
-    const { blobUrl, loading, error } = useMaterialFile({
+    const { blobUrl, loading, error, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "blob",
     });
+    const [decodeError, setDecodeError] = useState(false);
+
+    // A non-empty but corrupt blob (e.g. a partial download that still passed the
+    // size check) won't fail the fetch — catch it here so it surfaces as an error
+    // with a Retry button instead of an invisible, broken <img>.
+    useEffect(() => {
+        setDecodeError(false);
+    }, [blobUrl]);
 
     const { zoom, zoomIn, zoomOut, resetZoom } = usePinchZoom({
         initial: 100,
@@ -64,7 +74,8 @@ export function ImageViewer({ materialId, fileKey, fileName }: ImageViewerProps)
         <ViewerShell
             scrollRef={scrollRef}
             loading={loading}
-            error={error}
+            error={error ?? (decodeError ? t("imageLoadFailed") : null)}
+            onRetry={reload}
             toolbarRight={
                 <ZoomControls
                     zoom={zoom}
@@ -85,6 +96,7 @@ export function ImageViewer({ materialId, fileKey, fileName }: ImageViewerProps)
                         ref={imgRef}
                         src={blobUrl}
                         alt={fileName}
+                        onError={() => setDecodeError(true)}
                         style={
                             zoom !== 100 && dimensions
                                 ? {

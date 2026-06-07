@@ -13,7 +13,7 @@ export function EpubViewer({ materialId, fileKey }: EpubViewerProps) {
     const viewerRef = useRef<HTMLDivElement>(null);
     const [renderError, setRenderError] = useState<string | null>(null);
 
-    const { arrayBuffer, loading, error } = useMaterialFile({
+    const { arrayBuffer, loading, error, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "arrayBuffer",
@@ -67,7 +67,7 @@ export function EpubViewer({ materialId, fileKey }: EpubViewerProps) {
     }, [arrayBuffer]);
 
     return (
-        <ViewerShell loading={loading} error={error || renderError}>
+        <ViewerShell loading={loading} error={error || renderError} onRetry={reload}>
             <div className="relative flex flex-1 w-full flex-col h-[800px]">
                 <div ref={viewerRef} className="h-full w-full overflow-hidden" />
             </div>
