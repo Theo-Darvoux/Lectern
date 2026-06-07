@@ -1,7 +1,15 @@
 "use client";
 
-import React, { useState, useRef, useCallback, useEffect } from "react";
-import ReactMarkdown from "react-markdown";
+import React, {
+  useState,
+  useRef,
+  useCallback,
+  useEffect,
+  useContext,
+  useMemo,
+  createContext,
+} from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -18,6 +26,7 @@ import {
   MonitorPlay,
   BookmarkPlus,
   Send,
+  ImageIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,11 +61,163 @@ import {
   createEmptyQuestion,
   createEmptyAnswer,
   countQCMQuestions,
-  generateQCMId,
 } from "@/lib/qcm-utils";
+import { MAX_IMAGES_PER_QCM } from "@/lib/qcm-types";
+import {
+  processQcmImageFile,
+  QcmImageError,
+  qcmImageRef,
+  generateQcmImageId,
+  resolveQcmImageSrc,
+  pruneQcmImages,
+} from "@/lib/qcm-image-utils";
 import { apiFetch } from "@/lib/api-client";
 import { useUIStore } from "@/lib/stores";
 import { useTranslations } from "next-intl";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image support (embedded, self-contained)
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface QCMImagesContextValue {
+  images: Record<string, string>;
+  /** Embed a processed data URL; returns its id, or "" when the limit is hit. */
+  addImage: (dataUrl: string) => string;
+}
+
+const QCMImagesContext = createContext<QCMImagesContextValue>({
+  images: {},
+  addImage: () => "",
+});
+
+const useQCMImages = () => useContext(QCMImagesContext);
+
+/**
+ * Wires image insertion (button / paste / drop) onto a single markdown text
+ * field. Inserts `![](qcmimg:<id>)` at the caret after embedding the image.
+ */
+function useImageInsert(
+  value: string,
+  onChange: (next: string) => void,
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>,
+) {
+  const { addImage } = useQCMImages();
+  const t = useTranslations("QCM.editor");
+  const [busy, setBusy] = useState(false);
+
+  const insertRef = useCallback(
+    (id: string) => {
+      const snippet = `\n![](${qcmImageRef(id)})\n`;
+      const ta = textareaRef.current;
+      const start = ta?.selectionStart ?? value.length;
+      const end = ta?.selectionEnd ?? value.length;
+      const next = value.slice(0, start) + snippet + value.slice(end);
+      onChange(next);
+      requestAnimationFrame(() => {
+        if (!ta) return;
+        ta.focus();
+        const caret = start + snippet.length;
+        ta.setSelectionRange(caret, caret);
+      });
+    },
+    [value, onChange, textareaRef],
+  );
+
+  const handleFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const images = Array.from(files).filter((f) => f.type.startsWith("image/"));
+      if (images.length === 0) return;
+      setBusy(true);
+      try {
+        for (const file of images) {
+          try {
+            const dataUrl = await processQcmImageFile(file);
+            const id = addImage(dataUrl);
+            if (!id) {
+              toast.error(t("imageTooMany", { max: MAX_IMAGES_PER_QCM }));
+              break;
+            }
+            insertRef(id);
+          } catch (err) {
+            toast.error(
+              err instanceof QcmImageError && err.code === "too-large"
+                ? t("imageTooLarge")
+                : t("imageError"),
+            );
+          }
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [addImage, insertRef, t],
+  );
+
+  const onPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(e.clipboardData.files);
+      if (files.some((f) => f.type.startsWith("image/"))) {
+        e.preventDefault();
+        void handleFiles(files);
+      }
+    },
+    [handleFiles],
+  );
+
+  const onDrop = useCallback(
+    (e: React.DragEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(e.dataTransfer.files);
+      if (files.some((f) => f.type.startsWith("image/"))) {
+        e.preventDefault();
+        void handleFiles(files);
+      }
+    },
+    [handleFiles],
+  );
+
+  return { busy, handleFiles, onPaste, onDrop };
+}
+
+/** Small toolbar button that opens a file picker to embed image(s). */
+function ImageButton({
+  busy,
+  onFiles,
+  className,
+}: {
+  busy: boolean;
+  onFiles: (files: FileList) => void;
+  className?: string;
+}) {
+  const t = useTranslations("QCM.editor");
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className={cn("h-7 w-7 shrink-0 text-muted-foreground hover:text-primary", className)}
+        onClick={() => inputRef.current?.click()}
+        disabled={busy}
+        title={t("addImage")}
+        aria-label={t("addImage")}
+      >
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
+      </Button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) onFiles(e.target.files);
+          e.target.value = "";
+        }}
+      />
+    </>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -107,11 +268,30 @@ function CharCount({ value, max }: { value: string; max: number }) {
 }
 
 function MarkdownPreview({ content }: { content: string }) {
+  const { images } = useQCMImages();
+  const components = useMemo<Components>(
+    () => ({
+      img: (props) => {
+        const resolved = resolveQcmImageSrc(props.src as string | undefined, images);
+        if (!resolved) return null;
+        return (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={resolved}
+            alt={props.alt || ""}
+            className="mx-auto max-h-64 max-w-full rounded-md"
+          />
+        );
+      },
+    }),
+    [images],
+  );
   return (
     <div className="prose prose-sm dark:prose-invert max-w-none rounded-md border bg-muted/30 px-3 py-2 text-sm min-h-[2rem]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false, errorColor: "#c00" }]]}
+        components={components}
       >
         {wrapBareEnvironments(content) || "*empty*"}
       </ReactMarkdown>
@@ -133,6 +313,12 @@ interface AnswerRowProps {
 function AnswerRow({ answer, onChange, onDelete, canDelete }: AnswerRowProps) {
   const t = useTranslations("QCM.editor");
   const [preview, setPreview] = useState(false);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const setText = useCallback(
+    (text: string) => onChange({ ...answer, text }),
+    [answer, onChange],
+  );
+  const { busy, onPaste, onDrop, handleFiles } = useImageInsert(answer.text, setText, taRef);
 
   return (
     <div className="space-y-1">
@@ -151,8 +337,11 @@ function AnswerRow({ answer, onChange, onDelete, canDelete }: AnswerRowProps) {
         />
         <div className="flex-1 space-y-0.5">
           <Textarea
+            ref={taRef}
             value={answer.text}
             onChange={(e) => onChange({ ...answer, text: e.target.value.slice(0, MAX_LEN_ANSWER) })}
+            onPaste={onPaste}
+            onDrop={onDrop}
             placeholder={t("answerText")}
             className="min-h-[2.5rem] text-sm"
             rows={1}
@@ -162,6 +351,7 @@ function AnswerRow({ answer, onChange, onDelete, canDelete }: AnswerRowProps) {
             <CharCount value={answer.text} max={MAX_LEN_ANSWER} />
           </div>
         </div>
+        <ImageButton busy={busy} onFiles={handleFiles} className="mt-1" />
         <Button
           type="button"
           size="icon"
@@ -222,6 +412,24 @@ function QuestionEditor({
     !!question.explanation,
   );
   const [previewExplanation, setPreviewExplanation] = useState(false);
+
+  const questionTaRef = useRef<HTMLTextAreaElement>(null);
+  const setQuestionText = useCallback(
+    (text: string) => onChange({ ...question, text }),
+    [question, onChange],
+  );
+  const questionImg = useImageInsert(question.text, setQuestionText, questionTaRef);
+
+  const explanationTaRef = useRef<HTMLTextAreaElement>(null);
+  const setExplanationText = useCallback(
+    (text: string) => onChange({ ...question, explanation: text || undefined }),
+    [question, onChange],
+  );
+  const explanationImg = useImageInsert(
+    question.explanation ?? "",
+    setExplanationText,
+    explanationTaRef,
+  );
 
   const updateAnswer = (index: number, updated: QCMAnswer) => {
     const answers = [...question.answers];
@@ -289,6 +497,7 @@ function QuestionEditor({
       <div className="space-y-1">
         <div className="flex items-center gap-2">
           <Label className="text-xs">{t("questionText")}</Label>
+          <ImageButton busy={questionImg.busy} onFiles={questionImg.handleFiles} className="h-5 w-5" />
           <Button
             type="button"
             size="sm"
@@ -300,8 +509,11 @@ function QuestionEditor({
           </Button>
         </div>
         <Textarea
+          ref={questionTaRef}
           value={question.text}
           onChange={(e) => onChange({ ...question, text: e.target.value.slice(0, MAX_LEN_QUESTION) })}
+          onPaste={questionImg.onPaste}
+          onDrop={questionImg.onDrop}
           placeholder={t("questionText")}
           className="min-h-[4rem] text-sm"
           rows={2}
@@ -354,6 +566,11 @@ function QuestionEditor({
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <Label className="text-xs">{t("explanation")}</Label>
+              <ImageButton
+                busy={explanationImg.busy}
+                onFiles={explanationImg.handleFiles}
+                className="h-5 w-5"
+              />
               <Button
                 type="button"
                 size="sm"
@@ -369,6 +586,7 @@ function QuestionEditor({
               </Button>
             </div>
             <Textarea
+              ref={explanationTaRef}
               value={question.explanation ?? ""}
               onChange={(e) =>
                 onChange({
@@ -376,6 +594,8 @@ function QuestionEditor({
                   explanation: e.target.value.slice(0, MAX_LEN_EXPLANATION) || undefined,
                 })
               }
+              onPaste={explanationImg.onPaste}
+              onDrop={explanationImg.onDrop}
               placeholder={t("explanation")}
               className="min-h-[3rem] text-sm"
               rows={2}
@@ -544,6 +764,23 @@ export function QCMEditor({
     initialData ?? { version: 1, chapters: [createEmptyChapter("Chapitre 1")] },
   );
 
+  // Stable ref so addImage can read the current image count without re-creating.
+  const qcmRef = useRef(qcm);
+  qcmRef.current = qcm;
+
+  const addImage = useCallback((dataUrl: string): string => {
+    const current = qcmRef.current.images ?? {};
+    if (Object.keys(current).length >= MAX_IMAGES_PER_QCM) return "";
+    const id = generateQcmImageId();
+    setQcm((prev) => ({ ...prev, images: { ...(prev.images ?? {}), [id]: dataUrl } }));
+    return id;
+  }, []);
+
+  const imagesContextValue = useMemo<QCMImagesContextValue>(
+    () => ({ images: qcm.images ?? {}, addImage }),
+    [qcm.images, addImage],
+  );
+
   const [meta, setMeta] = useState<QCMMeta>({
     title: initialMeta?.title ?? "",
     type: "qcm",
@@ -646,7 +883,7 @@ export function QCMEditor({
       toast.error("Le QCM doit contenir au moins une question");
       return;
     }
-    await onSubmit(qcm, meta);
+    await onSubmit(pruneQcmImages(qcm), meta);
   };
 
   const handleSaveDraft = async () => {
@@ -654,7 +891,7 @@ export function QCMEditor({
       toast.error("Veuillez saisir un titre");
       return;
     }
-    await onSaveDraft!(qcm, meta);
+    await onSaveDraft!(pruneQcmImages(qcm), meta);
   };
 
   const totalQuestions = countQCMQuestions(qcm);
@@ -668,6 +905,7 @@ export function QCMEditor({
   }
 
   return (
+    <QCMImagesContext.Provider value={imagesContextValue}>
     <div className="flex flex-col gap-6 pb-16">
       {/* ── Metadata ── */}
       <div className="rounded-xl border bg-card p-4 space-y-4">
@@ -844,5 +1082,6 @@ export function QCMEditor({
         </DialogContent>
       </Dialog>
     </div>
+    </QCMImagesContext.Provider>
   );
 }

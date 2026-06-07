@@ -42,6 +42,9 @@ router = APIRouter(prefix="/api/qcm", tags=["qcm"])
 
 QCM_MAX_QUESTIONS: int = int(os.environ.get("QCM_MAX_QUESTIONS", "100"))
 QCM_MAX_ANSWERS_PER_QUESTION: int = int(os.environ.get("QCM_MAX_ANSWERS_PER_QUESTION", "10"))
+# Embedded image limits (kept in sync with the web client's qcm-types constants).
+QCM_MAX_IMAGES: int = int(os.environ.get("QCM_MAX_IMAGES", "30"))
+QCM_MAX_IMAGE_CHARS: int = int(os.environ.get("QCM_MAX_IMAGE_CHARS", "500000"))
 QCM_MIME_TYPE = "application/vnd.wikint.qcm+json"
 
 # ---------------------------------------------------------------------------
@@ -57,6 +60,30 @@ def _validate_qcm_structure(data: dict[str, Any]) -> None:
     chapters = data.get("chapters")
     if not isinstance(chapters, list):
         raise HTTPException(status_code=422, detail="QCM must have a 'chapters' list")
+
+    # Optional embedded image store: {id: data-url}
+    images = data.get("images")
+    if images is not None:
+        if not isinstance(images, dict):
+            raise HTTPException(status_code=422, detail="QCM 'images' must be an object")
+        if len(images) > QCM_MAX_IMAGES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"QCM exceeds maximum of {QCM_MAX_IMAGES} images",
+            )
+        for key, val in images.items():
+            if not isinstance(key, str) or not key:
+                raise HTTPException(
+                    status_code=422, detail="QCM image keys must be non-empty strings"
+                )
+            if not isinstance(val, str) or not val.startswith("data:image/"):
+                raise HTTPException(
+                    status_code=422, detail="QCM image values must be image data URLs"
+                )
+            if len(val) > QCM_MAX_IMAGE_CHARS:
+                raise HTTPException(
+                    status_code=422, detail="QCM image exceeds the maximum allowed size"
+                )
 
     total_questions = 0
 

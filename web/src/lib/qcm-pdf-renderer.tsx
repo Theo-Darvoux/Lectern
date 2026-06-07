@@ -12,6 +12,7 @@ import {
 } from "@react-pdf/renderer";
 import katex from "katex";
 import type { QCMFile } from "./qcm-types";
+import { collectReferencedQcmImageIds } from "./qcm-image-utils";
 
 // ─── KaTeX CSS with inlined fonts ────────────────────────────────────────────
 
@@ -146,11 +147,58 @@ async function renderMathToImage(
   });
 }
 
+// ─── Embedded images → sized PDF images ───────────────────────────────────────
+
+interface PdfImageInfo {
+  dataUrl: string;
+  widthPt: number;
+  heightPt: number;
+}
+
+type ImageCache = Map<string, PdfImageInfo>;
+
+// Content width on A4 with the page's horizontal padding (≈ 491pt). Block images
+// are capped well below this so figures sit comfortably within a question.
+const MAX_IMG_WIDTH_PT = 300;
+
+function loadImageDimensions(dataUrl: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => resolve({ w: img.naturalWidth || 1, h: img.naturalHeight || 1 });
+    img.onerror = () => reject(new Error("Failed to load image"));
+    img.src = dataUrl;
+  });
+}
+
+async function buildImageCache(qcm: QCMFile): Promise<ImageCache> {
+  const cache: ImageCache = new Map();
+  const images = qcm.images;
+  if (!images) return cache;
+  const ids = collectReferencedQcmImageIds(qcm);
+  await Promise.all(
+    [...ids].map(async (id) => {
+      const dataUrl = images[id];
+      if (!dataUrl) return;
+      try {
+        const { w, h } = await loadImageDimensions(dataUrl);
+        const naturalWidthPt = w * 0.75; // px → pt at 96 dpi
+        const widthPt = Math.min(naturalWidthPt, MAX_IMG_WIDTH_PT);
+        const heightPt = widthPt * (h / w);
+        cache.set(id, { dataUrl, widthPt, heightPt });
+      } catch {
+        // skip unrenderable image
+      }
+    }),
+  );
+  return cache;
+}
+
 // ─── Markdown + LaTeX parser ──────────────────────────────────────────────────
 
 type Segment =
   | { kind: "text"; content: string; bold?: boolean; italic?: boolean }
-  | { kind: "math"; latex: string; display: boolean };
+  | { kind: "math"; latex: string; display: boolean }
+  | { kind: "image"; id: string; alt?: string };
 
 // Strip markdown heading markers and trim.
 function stripHeadings(raw: string): string {
@@ -161,8 +209,26 @@ function stripHeadings(raw: string): string {
     .trim();
 }
 
+// Embedded image refs: ![alt](qcmimg:<id>)
+const IMG_RE = /!\[([^\]]*)\]\(qcmimg:([A-Za-z0-9_-]+)\)/g;
+
+// Top-level parse: pull out embedded images, then math/formatting on the rest.
 function parseSegments(raw: string): Segment[] {
   const text = stripHeadings(raw);
+  const out: Segment[] = [];
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+  IMG_RE.lastIndex = 0;
+  while ((m = IMG_RE.exec(text)) !== null) {
+    if (m.index > cursor) out.push(...parseMathSegments(text.slice(cursor, m.index)));
+    out.push({ kind: "image", id: m[2], alt: m[1] || undefined });
+    cursor = IMG_RE.lastIndex;
+  }
+  if (cursor < text.length) out.push(...parseMathSegments(text.slice(cursor)));
+  return out;
+}
+
+function parseMathSegments(text: string): Segment[] {
   // $$...$$  $...$  \[...\]  \(...\)  \begin{env}...\end{env} (same env via \5 backref)
   // The $...$ pattern allows single newlines (e.g. inside \begin{cases}) but not paragraph breaks.
   const MATH =
@@ -356,10 +422,25 @@ function mathKey(latex: string, display: boolean) {
   return `${display}::${latex}`;
 }
 
-function InlineContent({ segments, cache }: { segments: Segment[]; cache: MathCache }) {
+function InlineContent({
+  segments,
+  cache,
+  imageCache,
+}: {
+  segments: Segment[];
+  cache: MathCache;
+  imageCache: ImageCache;
+}) {
   return (
     <>
       {segments.map((seg, i) => {
+        if (seg.kind === "image") {
+          const img = imageCache.get(seg.id);
+          if (!img) return null;
+          return (
+            <PdfImage key={i} src={img.dataUrl} style={{ width: img.widthPt, height: img.heightPt }} />
+          );
+        }
         if (seg.kind === "text") {
           const style = seg.bold
             ? { fontFamily: "Helvetica-Bold" as const, fontSize: BODY_PT }
@@ -386,19 +467,33 @@ function InlineContent({ segments, cache }: { segments: Segment[]; cache: MathCa
 function RichText({
   text,
   cache,
+  imageCache,
   outerStyle,
 }: {
   text: string;
   cache: MathCache;
+  imageCache: ImageCache;
   outerStyle?: object;
 }) {
   const segments = parseSegments(text);
-  const hasDisplayMath = segments.some((s) => s.kind === "math" && s.display);
+  // Embedded images and display math are block-level → use the stacked layout.
+  const hasBlock = segments.some(
+    (s) => (s.kind === "math" && s.display) || s.kind === "image",
+  );
 
-  if (hasDisplayMath) {
+  if (hasBlock) {
     return (
       <View style={outerStyle as any}>
         {segments.map((seg, i) => {
+          if (seg.kind === "image") {
+            const img = imageCache.get(seg.id);
+            if (!img) return null;
+            return (
+              <View key={i} style={{ alignItems: "center", marginVertical: 6 }}>
+                <PdfImage src={img.dataUrl} style={{ width: img.widthPt, height: img.heightPt }} />
+              </View>
+            );
+          }
           if (seg.kind === "math" && seg.display) {
             const img = cache.get(mathKey(seg.latex, true));
             if (!img)
@@ -438,7 +533,7 @@ function RichText({
     <View
       style={[{ flexDirection: "row", flexWrap: "wrap", alignItems: "center" }, outerStyle] as never}
     >
-      <InlineContent segments={segments} cache={cache} />
+      <InlineContent segments={segments} cache={cache} imageCache={imageCache} />
     </View>
   );
 }
@@ -447,7 +542,17 @@ function RichText({
 
 const ANSWER_LETTERS = ["A", "B", "C", "D"] as const;
 
-function QCMDocument({ qcm, title, cache }: { qcm: QCMFile; title: string; cache: MathCache }) {
+function QCMDocument({
+  qcm,
+  title,
+  cache,
+  imageCache,
+}: {
+  qcm: QCMFile;
+  title: string;
+  cache: MathCache;
+  imageCache: ImageCache;
+}) {
   let globalQ = 0;
   const answerKey: Array<{ num: number; letters: string }> = [];
 
@@ -495,7 +600,12 @@ function QCMDocument({ qcm, title, cache }: { qcm: QCMFile; title: string; cache
                 <View key={q.id} style={styles.question} wrap={false}>
                   <View style={styles.questionHeader}>
                     <Text style={styles.qNum}>Q{num}.</Text>
-                    <RichText text={q.text} cache={cache} outerStyle={styles.questionText} />
+                    <RichText
+                      text={q.text}
+                      cache={cache}
+                      imageCache={imageCache}
+                      outerStyle={styles.questionText}
+                    />
                   </View>
                   {q.answers.map((a, ai) => (
                     <View key={a.id} style={styles.answerRow}>
@@ -503,12 +613,22 @@ function QCMDocument({ qcm, title, cache }: { qcm: QCMFile; title: string; cache
                       <Text style={a.correct ? styles.answerLetterCorrect : styles.answerLetter}>
                         {ANSWER_LETTERS[ai]})
                       </Text>
-                      <RichText text={a.text} cache={cache} outerStyle={styles.answerContent} />
+                      <RichText
+                        text={a.text}
+                        cache={cache}
+                        imageCache={imageCache}
+                        outerStyle={styles.answerContent}
+                      />
                     </View>
                   ))}
                   {q.explanation ? (
                     <View style={styles.explanationBlock}>
-                      <RichText text={q.explanation} cache={cache} outerStyle={{ flex: 1 }} />
+                      <RichText
+                        text={q.explanation}
+                        cache={cache}
+                        imageCache={imageCache}
+                        outerStyle={{ flex: 1 }}
+                      />
                     </View>
                   ) : null}
                 </View>
@@ -540,16 +660,21 @@ export async function generateQcmPdfBlob(qcm: QCMFile, title: string): Promise<B
   const katexCss = await getKatexCssWithInlinedFonts();
   const expressions = collectMathExpressions(qcm);
   const cache: MathCache = new Map();
-  await Promise.all(
-    expressions.map(async ({ latex, display }) => {
-      try {
-        const img = await renderMathToImage(latex, display, katexCss);
-        cache.set(mathKey(latex, display), img);
-      } catch {
-        // fallback text shown by components
-      }
-    }),
+  const [, imageCache] = await Promise.all([
+    Promise.all(
+      expressions.map(async ({ latex, display }) => {
+        try {
+          const img = await renderMathToImage(latex, display, katexCss);
+          cache.set(mathKey(latex, display), img);
+        } catch {
+          // fallback text shown by components
+        }
+      }),
+    ),
+    buildImageCache(qcm),
+  ]);
+  const instance = pdf(
+    <QCMDocument qcm={qcm} title={title} cache={cache} imageCache={imageCache} />,
   );
-  const instance = pdf(<QCMDocument qcm={qcm} title={title} cache={cache} />);
   return instance.toBlob();
 }

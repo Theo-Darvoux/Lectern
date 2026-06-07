@@ -1804,7 +1804,11 @@
       "deleteAnswer": "Delete answer",
       "maxAnswers": "Maximum 4 answers per question",
       "maxQuestions": "Maximum 100 questions",
-      "maxChapters": "Maximum 20 chapters"
+      "maxChapters": "Maximum 20 chapters",
+      "addImage": "Add image",
+      "imageTooLarge": "Image is too large, even after compression. Try a smaller image.",
+      "imageError": "Could not add the image.",
+      "imageTooMany": "Maximum {max} images per QCM."
     },
     "viewer": {
       "chapter": "Chapter",

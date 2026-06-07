@@ -1,5 +1,9 @@
 import type { QCMFile, QCMChapter, QCMQuestion, QCMAnswer } from "./qcm-types";
-import { MAX_ANSWERS_PER_QUESTION, MAX_QUESTIONS_PER_QCM } from "./qcm-types";
+import {
+  MAX_ANSWERS_PER_QUESTION,
+  MAX_QUESTIONS_PER_QCM,
+  MAX_IMAGES_PER_QCM,
+} from "./qcm-types";
 import type { QcmLimits } from "./qcm-limits";
 
 export function generateQCMId(): string {
@@ -42,6 +46,17 @@ export function validateQCMFile(qcm: unknown, limits?: QcmLimits): qcm is QCMFil
   const obj = qcm as Record<string, unknown>;
   if (obj.version !== 1) return false;
   if (!Array.isArray(obj.chapters)) return false;
+
+  // Optional embedded image store: { [id]: dataUrl }
+  if (obj.images !== undefined) {
+    if (typeof obj.images !== "object" || obj.images === null || Array.isArray(obj.images))
+      return false;
+    const entries = Object.entries(obj.images as Record<string, unknown>);
+    if (entries.length > MAX_IMAGES_PER_QCM) return false;
+    for (const [key, val] of entries) {
+      if (!key || typeof val !== "string" || !val.startsWith("data:image/")) return false;
+    }
+  }
 
   for (const ch of obj.chapters as unknown[]) {
     if (typeof ch !== "object" || ch === null) return false;

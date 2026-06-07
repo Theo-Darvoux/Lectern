@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
-import ReactMarkdown from "react-markdown";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import "katex/dist/katex.min.css";
+import { resolveQcmImageSrc } from "@/lib/qcm-image-utils";
 import {
   Loader2,
   CheckCircle2,
@@ -54,11 +55,36 @@ function wrapBareEnvironments(content: string): string {
   return out;
 }
 
-function MathMarkdown({ content }: { content: string }) {
+function MathMarkdown({
+  content,
+  images,
+}: {
+  content: string;
+  images?: Record<string, string>;
+}) {
+  const components = useMemo<Components>(
+    () => ({
+      img: (props) => {
+        const resolved = resolveQcmImageSrc(props.src as string | undefined, images);
+        if (!resolved) return null;
+        return (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={resolved}
+            alt={props.alt || ""}
+            className="mx-auto my-2 max-w-full rounded-md"
+            loading="lazy"
+          />
+        );
+      },
+    }),
+    [images],
+  );
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[[rehypeKatex, { throwOnError: false, errorColor: "#c00" }]]}
+      components={components}
     >
       {wrapBareEnvironments(content)}
     </ReactMarkdown>
@@ -215,6 +241,7 @@ interface QuestionCardProps {
   state: QuestionState;
   onToggleAnswer: (answerId: string) => void;
   onReveal: () => void;
+  images?: Record<string, string>;
   annotationThreads?: ThreadData[];
   annotationsApi?: AnnotationsAPI | null;
   currentUserId?: string | null;
@@ -227,6 +254,7 @@ function QuestionCard({
   state,
   onToggleAnswer,
   onReveal,
+  images,
   annotationThreads,
   annotationsApi,
   currentUserId,
@@ -242,7 +270,7 @@ function QuestionCard({
           Q{questionNumber}
         </span>
         <div className="prose prose-sm dark:prose-invert max-w-none flex-1 text-sm">
-          <MathMarkdown content={question.text} />
+          <MathMarkdown content={question.text} images={images} />
         </div>
       </div>
 
@@ -299,7 +327,7 @@ function QuestionCard({
                   />
                 )}
                 <div className="prose prose-sm dark:prose-invert max-w-none flex-1 select-text">
-                  <MathMarkdown content={answer.text} />
+                  <MathMarkdown content={answer.text} images={images} />
                 </div>
               </div>
             </button>
@@ -337,7 +365,7 @@ function QuestionCard({
             {t("explanation")}
           </p>
           <div className="prose prose-sm dark:prose-invert max-w-none text-sm text-blue-900 dark:text-blue-200">
-            <MathMarkdown content={question.explanation} />
+            <MathMarkdown content={question.explanation} images={images} />
           </div>
         </div>
       )}
@@ -647,6 +675,7 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
               }
               onToggleAnswer={(answerId) => handleToggleAnswer(q.id, answerId)}
               onReveal={() => handleRevealQuestion(q.id)}
+              images={qcm.images}
               annotationThreads={qThreads}
               annotationsApi={annotationsApi}
               currentUserId={user?.id ?? null}

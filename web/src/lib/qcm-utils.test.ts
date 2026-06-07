@@ -249,4 +249,23 @@ describe("validateQCMFile", () => {
     qcm.chapters[0].questions[0].explanation = "Because math.";
     expect(validateQCMFile(qcm)).toBe(true);
   });
+
+  it("accepts an optional images map of data URLs", () => {
+    const qcm = minimalQCM();
+    qcm.images = { img_a: "data:image/png;base64,AAAA" };
+    expect(validateQCMFile(qcm)).toBe(true);
+  });
+
+  it("rejects an images value that is not a data URL", () => {
+    const qcm = minimalQCM();
+    qcm.images = { img_a: "https://example.com/x.png" };
+    expect(validateQCMFile(qcm)).toBe(false);
+  });
+
+  it("rejects images that is not an object", () => {
+    const qcm = minimalQCM();
+    // @ts-expect-error intentional
+    qcm.images = ["data:image/png;base64,AAAA"];
+    expect(validateQCMFile(qcm)).toBe(false);
+  });
 });
