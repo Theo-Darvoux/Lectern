@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api-client";
 import { useConfigStore, PublicConfig } from "@/lib/stores";
 import { parseSegments, buildFontsUrlForNames } from "@/lib/fonts";
@@ -10,6 +10,14 @@ import { BackgroundWatermark } from "@/components/background-watermark";
 export function ConfigProvider({ children }: { children: ReactNode }) {
     const { config, setConfig } = useConfigStore();
     const pathname = usePathname();
+    const router = useRouter();
+
+    // Fresh instance with no admin: force the first-run setup flow.
+    useEffect(() => {
+        if (config?.needs_setup && pathname !== "/setup") {
+            router.replace("/setup");
+        }
+    }, [config?.needs_setup, pathname, router]);
 
     // Initial fetch and BroadcastChannel setup
     useEffect(() => {

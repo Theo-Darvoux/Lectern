@@ -19,7 +19,7 @@ Course-materials platform for Telecom SudParis / IMT-BS. Students and staff uplo
 - **Docker Engine ≥ 24** with the **Compose v2 plugin** (`docker compose version` should print `v2.20+`)
 - **4 GB RAM** minimum (8 GB recommended for video processing)
 - **Ports 80** (and 443 if you terminate TLS at the host) available on the machine
-- **S3-compatible object storage** — Cloudflare R2, AWS S3, or MinIO (MinIO is started automatically in dev via Docker Compose)
+- **S3-compatible object storage** — Cloudflare R2, AWS S3, or a self-hosted backend (SeaweedFS is started automatically in dev via Docker Compose)
 - A domain name and reverse proxy (nginx, Caddy…) for production; the included `infra/` configs provide a starting point
 
 ## Quick start
@@ -30,7 +30,7 @@ cp .env.example .env      # fill in required values
 docker compose up         # dev: compose.yaml + compose.override.yaml are merged automatically
 ```
 
-The app is available at `http://localhost` (Nginx on port 80). MinIO (local S3) is started automatically in dev.
+The app is available at `http://localhost` (Nginx on port 80). SeaweedFS (local S3 storage) is started automatically in dev.
 
 For production deployment, see [docs/setup.md : Option B](docs/setup.md#option-b--production-deployment):
 
@@ -44,7 +44,9 @@ For a full local dev setup (running components individually, seeding the databas
 
 | Doc | What it covers |
 |---|---|
-| [docs/setup.md](docs/setup.md) | Local development setup from scratch |
+| [docs/setup.md](docs/setup.md) | Installation & deployment — dev, production, and bare-metal |
+| [docs/configuration.md](docs/configuration.md) | How to configure the app: auth, storage, branding, limits, scaling |
+| [docs/environment-variables.md](docs/environment-variables.md) | Complete `.env` reference with defaults |
 | [docs/upload-pipeline.md](docs/upload-pipeline.md) | File upload flow: tus → CAS → scanner → ARQ |
 | [docs/pull-requests.md](docs/pull-requests.md) | Collaborative PR workflow for material changes |
 | [docs/adr/](docs/adr/) | Architecture Decision Records |
@@ -58,7 +60,7 @@ worker/               Cloudflare Worker (HMAC-signed R2 access, ZIP offload)
 stress-tests/         k6 load test suite
 infra/                Nginx configs, Docker init scripts
 compose.yaml          Base service definitions (all environments)
-compose.override.yaml Dev overlay, auto-merged (MinIO, hot reload, source mounts)
+compose.override.yaml Dev overlay, auto-merged (SeaweedFS, hot reload, source mounts)
 compose.prod.yaml     Prod overlay, explicit (prebuilt images, gunicorn, resource limits)
 ```
 

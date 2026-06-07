@@ -1,4 +1,9 @@
-# Local Development Setup
+# Installation & Deployment
+
+This page covers getting WikINT running — locally for development, and in
+production. For *what each setting does*, see the
+[Configuration guide](configuration.md) and the
+[Environment Variables Reference](environment-variables.md).
 
 ## Prerequisites
 
@@ -16,7 +21,7 @@ The project uses three compose files that layer on top of each other:
 | File | Purpose | Used when |
 |---|---|---|
 | `compose.yaml` | Base service definitions shared by all environments | Always |
-| `compose.override.yaml` | Dev additions: MinIO, source bind-mounts, hot reload, port exposure | Automatically merged on `docker compose up` |
+| `compose.override.yaml` | Dev additions: SeaweedFS, source bind-mounts, hot reload, port exposure | Automatically merged on `docker compose up` |
 | `compose.prod.yaml` | Prod additions: pre-built images, gunicorn, resource limits, replicas | Explicit: `-f compose.yaml -f compose.prod.yaml` |
 
 `compose.override.yaml` is a Docker Compose convention, it is merged automatically without needing to be named on the command line. This means `docker compose up` in development picks up both files silently. In production you always name both files explicitly.
@@ -51,27 +56,28 @@ Services available after `docker compose up`:
 | redis | 6379 | Cache, rate limiting, ARQ queues |
 | meilisearch | 7700 | Full-text search |
 | seaweedfs | 8333 / 8888 / 9333 | Local S3 storage / filer UI / master UI |
-| eurooffice | — | ONLYOFFICE document server (internal only) |
+| eurooffice | — | EuroOffice document server (internal only) |
 | worker | — | ARQ worker (non-upload tasks + fallback) |
 | worker-fast | — | ARQ worker for small uploads (text, images) |
 | worker-slow | — | ARQ worker for large uploads (video, PDF, Office) |
 
-Apply database migrations and seed initial data:
+Database migrations run automatically when the `api` container starts (see the [migrations note](#database-migrations) below), so there's nothing to apply by hand.
 
-```bash
-docker compose exec api uv run alembic upgrade head
-docker compose exec api uv run python -m app.cli seed --email admin@example.com
-```
+To create your first account, open the app in a browser — you are redirected to a **first-run setup screen** that prompts you to create the initial administrator account (email, password, and an optional display name). This only appears while no admin exists.
 
 ---
 
 ## Option B : Production deployment
 
-Production uses pre-built images from GHCR. **Do not use `compose.override.yaml`**, the prod file is specified explicitly:
+Production uses pre-built images from GHCR. **Do not use `compose.override.yaml`** — the prod file must be specified explicitly. Set `COMPOSE_FILE` once so every `docker compose` command picks up both files automatically (no repeated `-f` flags):
 
 ```bash
-docker compose -f compose.yaml -f compose.prod.yaml up -d
+export COMPOSE_FILE=compose.yaml:compose.prod.yaml
+
+docker compose up -d
 ```
+
+> Add the `export` line to your shell profile (or the `.env` file Compose reads) so it persists across sessions.
 
 What `compose.prod.yaml` changes relative to the base:
 - All services use published images (`ghcr.io/theo-darvoux/wikint/api:latest`, etc.)
@@ -81,14 +87,19 @@ What `compose.prod.yaml` changes relative to the base:
 - Resource limits and reservations are set per service
 - `worker-fast` and `worker-slow` support horizontal scaling via `WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS`
 - Nginx exposes port `9080` externally (put a reverse proxy or load balancer in front)
-- No MinIO; production uses Cloudflare R2 directly
+- No local storage container; production points `STORAGE_BACKEND` at Cloudflare R2 or a self-hosted S3 backend
 
-After first deploy:
+After first deploy, there are no commands to run. The `api` container applies database migrations automatically on startup (see [Database migrations](#database-migrations) below), and your first account is created through the **first-run setup screen**: open the site in a browser and it will prompt you to create the initial administrator account. That screen disappears once an admin exists.
+
+### Database migrations
+
+Migrations run automatically when the `api` container starts. To run them out-of-band instead (for example, to apply them during a controlled maintenance window), set `RUN_MIGRATIONS=false` on the `api` service and apply them yourself:
 
 ```bash
-docker compose -f compose.yaml -f compose.prod.yaml exec api uv run alembic upgrade head
-docker compose -f compose.yaml -f compose.prod.yaml exec api uv run python -m app.cli seed --email admin@yourorg.com
+docker compose exec api uv run alembic upgrade head
 ```
+
+If a migration fails on startup, the API prints a large banner to its logs and **refuses to start** rather than running against a broken schema — fix the migration and redeploy. With the default `restart: unless-stopped` policy the container will keep retrying (re-printing the banner) until the migration succeeds.
 
 ---
 
@@ -106,9 +117,10 @@ uv sync                           # install dependencies
 docker compose up postgres redis meilisearch seaweedfs seaweedfs-setup -d
 
 uv run alembic upgrade head       # apply migrations
-uv run python -m app.cli seed --email admin@example.com
 uv run uvicorn app.main:app --reload --port 8000
 ```
+
+Then open the frontend and complete the first-run setup screen to create your admin account. (You can still create one from the CLI with `uv run python -m app.cli seed --email admin@example.com` if you prefer.)
 
 ### Frontend
 
@@ -124,70 +136,22 @@ All configuration for the frontend comes from the root `.env` file (via `NEXT_PU
 
 ## Environment variables
 
-All variables live in a single `.env` at the project root. There are no per-component env files.
+All variables live in a single `.env` at the project root — there are no
+per-component env files. Copy the template and fill it in:
 
-### Required (API)
+```bash
+cp .env.example .env
+```
 
-| Variable | Example | Description |
-|---|---|---|
-| `DATABASE_URL` | `postgresql+asyncpg://user:pass@localhost:5432/wikint` | Async SQLAlchemy connection string |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection |
-| `SECRET_KEY` | `openssl rand -hex 32` | JWT signing + CAS HMAC derivation |
-| `MEILI_MASTER_KEY` | `<random string>` | Meilisearch admin key |
-| `MEILI_SEARCH_KEY` | `<random string>` | Meilisearch search-only key |
-| `MEILI_URL` | `http://meilisearch:7700` | Meilisearch URL |
-| `STORAGE_BACKEND` | `seaweedfs` | Storage backend: `seaweedfs` / `r2` / `garage` / `rustfs` |
-| `S3_ENDPOINT` | `seaweedfs:8333` | S3-compatible storage endpoint |
-| `S3_ACCESS_KEY` | `minioadmin` | S3 access key |
-| `S3_SECRET_KEY` | `minioadmin` | S3 secret key |
-| `S3_BUCKET` | `wikint` | Bucket name |
-| `FRONTEND_URL` | `http://localhost` | Used for CORS and email links |
+The bare minimum to boot in production: `SECRET_KEY`, `POSTGRES_PASSWORD` +
+`DATABASE_URL`, `MEILI_MASTER_KEY`, the `S3_*` storage credentials, two distinct
+EuroOffice secrets, and your `FRONTEND_URL`. The app refuses to start
+in production while critical secrets are still placeholders.
 
-### EuroOffice
-
-| Variable | Description |
-|---|---|
-| `EUROOFFICE_JWT_SECRET` | Shared with the EuroOffice server |
-| `EUROOFFICE_FILE_TOKEN_SECRET` | API-only file access tokens, must differ from `EUROOFFICE_JWT_SECRET` |
-| `EUROOFFICE_INTERNAL_API_BASE_URL` | Internal URL EuroOffice uses to fetch files (e.g., `http://api:8000`) |
-
-> In production, `EUROOFFICE_JWT_SECRET` and `EUROOFFICE_FILE_TOKEN_SECRET` **must be different**. The startup validator enforces this.
-
-### File scanning
-
-| Variable | Default | Description |
-|---|---|---|
-| `YARA_RULES_DIR` | `yara_rules` | Path to compiled YARA rule files |
-| `MALWAREBAZAAR_FAIL_CLOSED` | `false` | Reject uploads when MalwareBazaar is unreachable |
-| `MALWAREBAZAAR_TIMEOUT` | `10` | Seconds before MalwareBazaar request times out |
-| `MALWAREBAZAAR_API_KEY` | (no default) | API key for MalwareBazaar |
-
-### Upload limits
-
-| Variable | Default | Description |
-|---|---|---|
-| `MAX_FILE_SIZE_MB` | `100` | Hard cap for all files |
-| `MAX_VIDEO_SIZE_MB` | — | Per-type override |
-| `MAX_DOCUMENT_SIZE_MB` | — | Per-type override |
-| `MAX_STORAGE_GB` | — | Total storage quota |
-| `ALLOWED_EXTENSIONS` | — | Comma-separated allowlist (e.g., `.pdf,.docx`) |
-
-### Production scaling
-
-| Variable | Default | Description |
-|---|---|---|
-| `WORKER_FAST_REPLICAS` | `2` | Number of `worker-fast` container replicas |
-| `WORKER_FAST_MAX_JOBS` | `4` | Concurrent upload jobs per fast worker replica |
-| `WORKER_SLOW_REPLICAS` | `2` | Number of `worker-slow` container replicas |
-| `WORKER_SLOW_MAX_JOBS` | `2` | Concurrent upload jobs per slow worker replica |
-| `S3_PUBLIC_DOMAIN` | — | Cloudflare R2 public domain (prod Nginx S3 proxy) |
-
-### Frontend
-
-| Variable | Description |
-|---|---|
-| `NEXT_PUBLIC_API_URL` | Browser-facing API path (set to `http://localhost/api` in dev via compose.override.yaml) |
-| `NEXT_PUBLIC_EUROOFFICE_URL` | Browser-facing EuroOffice path (set to `http://localhost/eurooffice` in dev) |
+- **[Configuration guide](configuration.md)** — task-oriented: turn on Google
+  login, change the logo, raise upload limits, scale workers, …
+- **[Environment Variables Reference](environment-variables.md)** — every
+  variable, grouped, with defaults.
 
 ---
 

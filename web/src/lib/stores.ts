@@ -251,6 +251,8 @@ export interface PublicConfig {
     allow_all_domains: boolean;
     guest_access_enabled: boolean;
     max_contribution_note_length: number;
+    /** True on a fresh instance with no admin account — drives the first-run setup flow. */
+    needs_setup: boolean;
 }
 
 interface ConfigState {

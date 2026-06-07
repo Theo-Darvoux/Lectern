@@ -15,7 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.database import get_db
-from app.core.exceptions import BadRequestError, RateLimitError, UnauthorizedError
+from app.core.exceptions import (
+    BadRequestError,
+    ConflictError,
+    RateLimitError,
+    UnauthorizedError,
+)
 from app.core.redis import get_redis
 from app.core.security import decode_token
 from app.dependencies.auth import CurrentUser
@@ -25,6 +30,7 @@ from app.schemas.auth import (
     LoginIn,
     RefreshResponse,
     RequestCodeIn,
+    SetupIn,
     TokenResponse,
     UserBrief,
     VerifyCodeIn,
@@ -88,8 +94,11 @@ def _login_response(user: User, response: Response, *, is_new: bool) -> TokenRes
 
 
 @router.get("/methods")
-async def get_auth_methods() -> dict[str, Any]:
+async def get_auth_methods(
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
     return {
+        "needs_setup": not await auth_service.admin_exists(db),
         "totp_enabled": settings.totp_enabled,
         "google_enabled": settings.google_oauth_enabled,
         "google_client_id": settings.google_client_id,
@@ -335,6 +344,31 @@ async def login(
     await db.flush()
 
     return _login_response(user, response, is_new=False)
+
+
+@router.post("/setup", response_model=TokenResponse)
+@limiter.limit("5/15minutes" if not settings.is_dev else "10000/minute")
+async def setup_first_admin(
+    request: Request,
+    data: SetupIn,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
+) -> TokenResponse:
+    """First-run bootstrap: create the initial admin account.
+
+    Only works while no admin exists — once one does, this is permanently a 409.
+    This replaces the `app.cli seed` command for fresh deployments.
+    """
+    # Serialize concurrent bootstrap attempts so only one admin can ever be created.
+    await auth_service.acquire_setup_lock(db)
+    if await auth_service.admin_exists(db):
+        raise ConflictError("Setup has already been completed")
+
+    user = await auth_service.create_first_admin(db, data.email, data.password, data.display_name)
+    await db.flush()
+
+    logger.info("First admin account created via setup flow: %s", user.email)
+    return _login_response(user, response, is_new=True)
 
 
 @router.post("/refresh", response_model=RefreshResponse, dependencies=[Depends(require_client_id)])

@@ -71,3 +71,51 @@ async def test_verify_code_rate_limit(client: AsyncClient, mock_redis: AsyncMock
         assert "Too many verification attempts" in response.json()["detail"]
     finally:
         settings.environment = original_env
+
+
+async def test_setup_creates_first_admin(client: AsyncClient) -> None:
+    # Fresh instance: no admin exists yet, so setup is allowed.
+    methods = await client.get("/api/auth/methods")
+    assert methods.status_code == 200
+    assert methods.json()["needs_setup"] is True
+
+    response = await client.post(
+        "/api/auth/setup",
+        json={
+            "email": "admin@telecom-sudparis.eu",
+            "password": "supersecret123",
+            "display_name": "First Admin",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user"]["role"] == "bureau"
+    assert data["user"]["onboarded"] is True
+    assert data["access_token"]
+
+    # Once an admin exists, the instance no longer advertises setup.
+    methods = await client.get("/api/auth/methods")
+    assert methods.json()["needs_setup"] is False
+
+
+async def test_setup_blocked_when_admin_exists(client: AsyncClient) -> None:
+    first = await client.post(
+        "/api/auth/setup",
+        json={"email": "admin@telecom-sudparis.eu", "password": "supersecret123"},
+    )
+    assert first.status_code == 200
+
+    # Second attempt must be permanently rejected — this guards privilege escalation.
+    second = await client.post(
+        "/api/auth/setup",
+        json={"email": "intruder@telecom-sudparis.eu", "password": "supersecret123"},
+    )
+    assert second.status_code == 409
+
+
+async def test_setup_rejects_short_password(client: AsyncClient) -> None:
+    response = await client.post(
+        "/api/auth/setup",
+        json={"email": "admin@telecom-sudparis.eu", "password": "short"},
+    )
+    assert response.status_code == 422

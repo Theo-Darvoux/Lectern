@@ -571,5 +571,50 @@ async def _magic_link(email: str) -> None:
     typer.echo(link)
 
 
+@app.command(name="change-email")
+def change_email(
+    current_email: str = typer.Argument(..., help="Current email of the account"),
+    new_email: str = typer.Argument(..., help="New email to set"),
+) -> None:
+    """Change a user's email address (e.g. to fix a typo from first-run setup)."""
+    asyncio.run(_change_email(current_email, new_email))
+
+
+async def _change_email(current_email: str, new_email: str) -> None:
+    from sqlalchemy import func, select
+
+    from app.core.database import async_session_factory
+    from app.models.user import User
+
+    current = current_email.strip().lower()
+    new = new_email.strip().lower()
+
+    if "@" not in new:
+        typer.echo(f"'{new_email}' is not a valid email address.")
+        raise typer.Exit(code=1)
+    if new == current:
+        typer.echo("New email is the same as the current one; nothing to do.")
+        raise typer.Exit(code=1)
+
+    async with async_session_factory() as session:
+        # Look up the target account (emails are stored lowercase).
+        user = await session.scalar(select(User).where(func.lower(User.email) == current))
+        if user is None:
+            typer.echo(f"No user found with email '{current_email}'.")
+            raise typer.Exit(code=1)
+
+        # Refuse to collide with an existing account.
+        clash = await session.scalar(
+            select(User.id).where(func.lower(User.email) == new, User.id != user.id)
+        )
+        if clash is not None:
+            typer.echo(f"Another account already uses '{new_email}'.")
+            raise typer.Exit(code=1)
+
+        user.email = new
+        await session.commit()
+        typer.echo(f"Updated email: {current} -> {new}")
+
+
 if __name__ == "__main__":
     app()

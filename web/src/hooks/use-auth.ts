@@ -139,5 +139,23 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
-    return { user, isAuthenticated, isLoading, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, continueAsGuest, logout, fetchMe };
+    const setup = useCallback(async (email: string, password: string, displayName?: string) => {
+        const data = await apiFetch<{
+            access_token: string;
+            user: UserBrief;
+            is_new_user: boolean;
+        }>("/auth/setup", {
+            method: "POST",
+            body: JSON.stringify({ email, password, display_name: displayName || null }),
+            skipAuth: true,
+        });
+
+        setAccessToken(data.access_token);
+        setUser(data.user);
+        scheduleRefreshTimer(data.access_token);
+        broadcastTokenAcquired(data.access_token);
+        return data;
+    }, [setUser]);
+
+    return { user, isAuthenticated, isLoading, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, setup, continueAsGuest, logout, fetchMe };
 }

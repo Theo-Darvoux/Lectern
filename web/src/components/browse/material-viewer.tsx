@@ -259,11 +259,18 @@ export function MaterialViewer({
           hoveredOpen.current = true;
           setNavbarVisible(true);
         }
-      } else if (hoveredOpen.current && e.clientY > (headerHeightRef.current || THRESHOLD)) {
-        // Only hide once the cursor drops below the navbar itself, so the user
-        // can move down onto the breadcrumbs / download button without it closing.
-        hoveredOpen.current = false;
-        setNavbarVisible(false);
+      } else if (hoveredOpen.current) {
+        // Use the header's actual viewport bottom so the threshold correctly
+        // accounts for the global navbar height that pushes the overlay header
+        // down when navbarVisible becomes true.
+        const el = headerRef.current;
+        const headerBottom = el
+          ? el.getBoundingClientRect().bottom
+          : (headerHeightRef.current || THRESHOLD);
+        if (e.clientY > headerBottom) {
+          hoveredOpen.current = false;
+          setNavbarVisible(false);
+        }
       }
     };
     window.addEventListener("mousemove", onMouseMove);

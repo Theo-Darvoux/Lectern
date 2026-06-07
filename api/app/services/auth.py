@@ -6,7 +6,7 @@ from typing import Any
 
 from passlib.context import CryptContext
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -330,4 +330,56 @@ async def authenticate_user(db: AsyncSession, email: str, password: str) -> User
         return None
     if not verify_password(password, user.password_hash):
         return None
+    return user
+
+
+# Arbitrary fixed key for the transaction-level advisory lock that serializes
+# the first-admin bootstrap (spells "WIKI" — value is irrelevant, just stable).
+_SETUP_LOCK_KEY = 0x57494B49
+
+
+async def acquire_setup_lock(db: AsyncSession) -> None:
+    """Serialize concurrent first-admin setup attempts.
+
+    Without this, two simultaneous requests on a fresh instance could both pass
+    the ``admin_exists`` check and create two admins. A Postgres transaction-level
+    advisory lock makes the check-then-create atomic; it's released at commit.
+    No-op on non-Postgres backends (e.g. SQLite in tests), where the test suite
+    is single-threaded anyway.
+    """
+    bind = db.get_bind()
+    if bind.dialect.name == "postgresql":
+        await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _SETUP_LOCK_KEY})
+
+
+async def admin_exists(db: AsyncSession) -> bool:
+    """True if at least one (non-deleted) admin account exists.
+
+    Drives the first-run setup flow: while this is ``False`` the instance has no
+    way in, so ``POST /api/auth/setup`` is allowed to bootstrap the first admin.
+    """
+    admin_roles = [UserRole.BUREAU, UserRole.VIEUX]
+    result = await db.execute(
+        select(User.id).where(User.role.in_(admin_roles), User.deleted_at.is_(None)).limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def create_first_admin(
+    db: AsyncSession, email: str, password: str, display_name: str | None
+) -> User:
+    """Create the bootstrap admin account. Caller must ensure no admin exists yet."""
+    user = User(
+        email=email,
+        display_name=display_name,
+        role=UserRole.BUREAU,
+        password_hash=get_password_hash(password),
+        onboarded=True,
+        gdpr_consent=True,
+        gdpr_consent_at=datetime.now(UTC),
+        auto_approve=True,
+        last_login_at=datetime.now(UTC),
+    )
+    db.add(user)
+    await db.flush()
     return user
