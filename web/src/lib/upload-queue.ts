@@ -105,7 +105,7 @@ export const useUploadQueue = create<UploadQueueState>()(
             setActiveCount: (n) => set({ activeCount: n }),
         }),
         {
-            name: "wikint_upload_queue",
+            name: "lectern_upload_queue",
             storage: createJSONStorage(() => safeLocalStorage),
             partialize: (s) => ({ items: s.items }),
             // Recover stale 'uploading' items after page reload (audit review fix):
@@ -131,7 +131,7 @@ export const useUploadQueue = create<UploadQueueState>()(
 
 if (typeof window !== "undefined") {
     window.addEventListener("storage", (e) => {
-        if (e.key === "wikint_upload_queue") {
+        if (e.key === "lectern_upload_queue") {
             useUploadQueue.persist.rehydrate();
         }
     });

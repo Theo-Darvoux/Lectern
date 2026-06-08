@@ -18,7 +18,7 @@ async def _make_user(db: AsyncSession, role: UserRole, email_prefix: str = "") -
     prefix = email_prefix or role.value
     user = User(
         id=uuid.uuid4(),
-        email=f"{prefix}_{uuid.uuid4().hex[:6]}@telecom-sudparis.eu",
+        email=f"{prefix}_{uuid.uuid4().hex[:6]}@example.com",
         display_name=role.value.capitalize(),
         role=role,
         onboarded=True,
@@ -47,7 +47,7 @@ def _auth(user: User) -> dict[str, str]:
 
 
 async def test_get_auth_config_defaults(client: AsyncClient, db_session: AsyncSession) -> None:
-    """Empty DB → fallback defaults returned."""
+    """Empty DB → empty domain list with default auth flags."""
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.get("/api/admin/auth-config", headers=_auth(admin))
     assert r.status_code == 200
@@ -142,10 +142,11 @@ async def test_delete_domain_not_found(client: AsyncClient, db_session: AsyncSes
 
 
 async def test_request_code_allowed_domain(client: AsyncClient, db_session: AsyncSession) -> None:
-    """Fallback defaults allow telecom-sudparis.eu."""
+    """A configured allowed domain passes validation."""
+    await _seed_domain(db_session, "example.com")
     r = await client.post(
         "/api/auth/request-code",
-        json={"email": "student@telecom-sudparis.eu"},
+        json={"email": "student@example.com"},
     )
     # Email sending will fail in test env, but domain validation passes
     assert r.status_code == 200
@@ -191,7 +192,7 @@ async def test_request_code_newly_added_domain(
 async def test_request_code_removed_domain_rejected(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """No domains in DB and no allow_all_domains → fallback used → unknown domain rejected."""
+    """No domains in DB and no allow_all_domains → unknown domain rejected."""
     r = await client.post(
         "/api/auth/request-code",
         json={"email": "user@unknown.io"},

@@ -8,7 +8,7 @@ import { createSSEConnection, SSEConnection } from "@/lib/sse-client";
 import { isGuest } from "@/lib/guest";
 import { fetchOpenPRCount } from "@/lib/pr-client";
 
-const CHANNEL_NAME = "wikint-sse-leader";
+const CHANNEL_NAME = "lectern-sse-leader";
 
 export function useSSE() {
     const { isAuthenticated, user } = useAuthStore();

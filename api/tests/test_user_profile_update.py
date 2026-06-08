@@ -19,7 +19,7 @@ async def _create_user(
 ) -> User:
     user = User(
         id=uuid.uuid4(),
-        email=f"{uuid.uuid4().hex[:8]}@telecom-sudparis.eu",
+        email=f"{uuid.uuid4().hex[:8]}@example.com",
         display_name=display_name,
         role=role,
         onboarded=onboarded,

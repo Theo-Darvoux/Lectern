@@ -15,7 +15,7 @@ from app.models.user import User, UserRole
 async def test_user(db_session: AsyncSession) -> User:
     user = User(
         id=uuid.uuid4(),
-        email="avatar_tester@telecom-sudparis.eu",
+        email="avatar_tester@example.com",
         display_name="Avatar Tester",
         role=UserRole.STUDENT,
         onboarded=True,

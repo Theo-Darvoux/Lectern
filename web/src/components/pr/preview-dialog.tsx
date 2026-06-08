@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getFileExtension } from "@/lib/file-utils";
+import { getFileExtension, MIME_QCM } from "@/lib/file-utils";
 import { useTranslations } from "next-intl";
 
 const QCMViewerPreview = dynamic(
@@ -55,7 +55,7 @@ const PdfPreview = dynamic(
 /* ── Viewer type resolution ────────────────────────────────────────────────── */
 
 const MIME_TO_VIEWER: Record<string, string> = {
-    "application/vnd.wikint.qcm+json": "qcm",
+    [MIME_QCM]: "qcm",
     "application/pdf": "pdf",
     "text/markdown": "markdown",
     "text/x-markdown": "markdown",

@@ -6,6 +6,7 @@ import { apiFetch } from "@/lib/api-client";
 import { registerViewerPrint, unregisterViewerPrint } from "@/lib/viewer-print-registry";
 import { ViewerShell } from "./viewer-shell";
 import { useTranslations } from "next-intl";
+import { useConfigStore } from "@/lib/stores";
 
 interface OfficeViewerProps {
     fileKey: string;
@@ -13,11 +14,9 @@ interface OfficeViewerProps {
     fileName: string;
 }
 
-const BASE_EUROOFFICE_URL = process.env.NEXT_PUBLIC_EUROOFFICE_URL || "http://localhost/eurooffice/";
-const EUROOFFICE_URL = BASE_EUROOFFICE_URL.endsWith("/") ? BASE_EUROOFFICE_URL : `${BASE_EUROOFFICE_URL}/`;
-
 export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProps) {
     const t = useTranslations("Viewers.office");
+    const { config } = useConfigStore();
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const scriptRef = useRef<HTMLScriptElement | null>(null);
@@ -26,6 +25,9 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
 
     useEffect(() => {
         let isMounted = true;
+
+        const rawEuroofficeUrl = config?.eurooffice_public_url || process.env.NEXT_PUBLIC_EUROOFFICE_URL || "/eurooffice/";
+        const euroofficeUrl = rawEuroofficeUrl.endsWith("/") ? rawEuroofficeUrl : `${rawEuroofficeUrl}/`;
 
         const loadEditor = (config: any) => {
             if (!(window as any).DocsAPI) {
@@ -104,7 +106,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 if (!(window as any).DocsAPI) {
                     const script = document.createElement("script");
                     script.id = "eurooffice-api-script";
-                    script.src = `${EUROOFFICE_URL}web-apps/apps/api/documents/api.js`;
+                    script.src = `${euroofficeUrl}web-apps/apps/api/documents/api.js`;
                     script.async = true;
                     script.onload = () => {
                         if (isMounted) loadEditor(config);
@@ -143,7 +145,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
             }
             unregisterViewerPrint(materialId);
         };
-    }, [materialId, fileName, fileKey]);
+    }, [materialId, fileName, fileKey, config?.eurooffice_public_url]);
 
     return (
         <ViewerShell loading={false} error={error} className="h-full">

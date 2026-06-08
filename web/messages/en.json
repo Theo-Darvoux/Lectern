@@ -356,7 +356,7 @@
     "notFound": "Not found",
     "loadError": "Failed to load",
     "home": "Home",
-    "courseMaterials": "Course Materials",
+    "courseMaterials": "Lectern",
     "contributionPreview": "Contribution preview",
     "exitPreview": "Exit preview",
     "selectAll": "Select All",
@@ -1220,7 +1220,7 @@
           "logo": "Logo",
           "favicon": "Favicon",
           "placeholders": {
-            "siteDescription": "Wiki for SudParis Intelligence"
+            "siteDescription": "Collaborative course materials platform"
           }
         },
         "footerLinks": {
@@ -1230,7 +1230,7 @@
           "footerText": "Footer Text",
           "organizationUrl": "Organization URL",
           "placeholders": {
-            "footerText": "© 2024 WikINT",
+            "footerText": "© 2026 Lectern",
             "organizationUrl": "https://www.example.com"
           }
         },
@@ -1383,7 +1383,7 @@
           "port": "e.g. 587",
           "user": "e.g. user@gmail.com",
           "password": "••••••••",
-          "from": "e.g. noreply@wikint.com",
+          "from": "e.g. noreply@example.com",
           "senderName": "e.g. My App Team"
         },
         "senderName": "Sender Display Name",
@@ -1771,7 +1771,7 @@
     "sections": {
       "presentation": {
         "title": "Service Presentation",
-        "text": "{siteName} is a collaborative platform for sharing academic resources intended for students and community members of Telecom SudParis and IMT-BS. The service is published by {legalName}, headquartered at {legalAddress}, registered under number {legalSiret}."
+        "text": "{siteName} is a collaborative platform for sharing academic resources intended for its students and community members. The service is published by {legalName}, headquartered at {legalAddress}, registered under number {legalSiret}."
       },
       "access": {
         "title": "Access to the Service",

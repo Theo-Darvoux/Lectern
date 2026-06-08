@@ -21,7 +21,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
 
     // Initial fetch and BroadcastChannel setup
     useEffect(() => {
-        const bc = new BroadcastChannel("wikint_config_updates");
+        const bc = new BroadcastChannel("lectern_config_updates");
 
         const fetchConfig = async () => {
             try {
@@ -58,14 +58,14 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             if (segments) {
                 const usedFonts = [...new Set(segments.map((s) => s.font).filter(Boolean))];
                 const url = buildFontsUrlForNames(usedFonts);
-                if (url && !document.querySelector(`link[data-wikint-fonts]`)) {
+                if (url && !document.querySelector(`link[data-lectern-fonts]`)) {
                     const link = document.createElement("link");
                     link.rel = "stylesheet";
                     link.href = url;
-                    link.setAttribute("data-wikint-fonts", "1");
+                    link.setAttribute("data-lectern-fonts", "1");
                     document.head.appendChild(link);
                 } else if (url) {
-                    const existing = document.querySelector(`link[data-wikint-fonts]`) as HTMLLinkElement | null;
+                    const existing = document.querySelector(`link[data-lectern-fonts]`) as HTMLLinkElement | null;
                     if (existing && existing.href !== url) existing.href = url;
                 }
             }

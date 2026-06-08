@@ -19,8 +19,8 @@ Payload shape
 Signature
 ---------
 Each request includes two headers:
-  X-WikINT-Signature: sha256=<hex>
-  X-WikINT-Delivery:  <random UUID per attempt>
+  X-Lectern-Signature: sha256=<hex>
+  X-Lectern-Delivery:  <random UUID per attempt>
 
 The HMAC is computed over the UTF-8-encoded JSON body using the webhook secret
 (``settings.webhook_secret``, which falls back to ``settings.secret_key``).
@@ -123,10 +123,10 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
     delivery_id = str(uuid.uuid4())
     headers = {
         "Content-Type": "application/json",
-        "X-WikINT-Signature": signature,
-        "X-WikINT-Delivery": delivery_id,
-        "X-WikINT-Event": "upload.complete",
-        "User-Agent": "WikINT-Webhook/1.0",
+        "X-Lectern-Signature": signature,
+        "X-Lectern-Delivery": delivery_id,
+        "X-Lectern-Event": "upload.complete",
+        "User-Agent": "Lectern-Webhook/1.0",
     }
 
     # ── Single delivery attempt ───────────────────────────────────────────────

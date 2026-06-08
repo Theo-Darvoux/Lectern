@@ -90,7 +90,7 @@ async def test_tus_concurrency_limit_hit(
     response = await tus_patch(uuid.UUID(tus_id), mock_request, user, fake_redis_setup, db_session)
 
     assert response.status_code == 429
-    assert response.headers["X-WikINT-Error"] == ERR_TUS_CONCURRENCY_LIMIT
+    assert response.headers["X-Lectern-Error"] == ERR_TUS_CONCURRENCY_LIMIT
 
 
 @pytest.mark.asyncio

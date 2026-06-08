@@ -11,9 +11,9 @@ async def test_magic_link_flow_success(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any
 ) -> None:
     # 1. Request code (which generates magic token)
-    email = "test@telecom-sudparis.eu"
+    email = "test@example.com"
 
-    db_session.add(AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True))
+    db_session.add(AllowedDomain(domain="example.com", auto_approve=True))
     await db_session.flush()
 
     with patch("app.routers.auth.send_verification_email", new_callable=AsyncMock) as mock_send:
@@ -59,8 +59,8 @@ async def test_magic_link_flow_success(
 async def test_magic_link_new_user_signup(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any
 ) -> None:
-    email = "newuser@telecom-sudparis.eu"
-    db_session.add(AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True))
+    email = "newuser@example.com"
+    db_session.add(AllowedDomain(domain="example.com", auto_approve=True))
     await db_session.flush()
 
     # Step 1: Request code
@@ -117,8 +117,8 @@ async def test_magic_link_pending_approval(
 async def test_magic_link_expired(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any
 ) -> None:
-    email = "expired@telecom-sudparis.eu"
-    db_session.add(AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True))
+    email = "expired@example.com"
+    db_session.add(AllowedDomain(domain="example.com", auto_approve=True))
     await db_session.flush()
 
     # Request code

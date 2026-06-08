@@ -11,12 +11,19 @@ FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# The commit SHA identifies the running web image. It must be present as env at
-# build time so Next.js inlines it into the static export. Note: we deliberately
-# do NOT declare ARGs for the other NEXT_PUBLIC_* vars — leaving them undefined
-# lets the app fall back to its defaults (e.g. NEXT_PUBLIC_API_URL -> "/api").
+# NEXT_PUBLIC_* values are inlined into the static export at build time — the
+# static prod image has no Node runtime to read them later, so they MUST be
+# present as env during `pnpm build`. build.yml supplies these as build-args
+# (from GitHub Actions repo variables); any left unset bake as "" and the app
+# falls back to its in-code default via `|| ...` (e.g. NEXT_PUBLIC_API_URL -> "/api").
 ARG NEXT_PUBLIC_COMMIT_SHA
-ENV NEXT_PUBLIC_COMMIT_SHA=$NEXT_PUBLIC_COMMIT_SHA
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_EUROOFFICE_URL
+ARG NEXT_PUBLIC_REPO_URL
+ENV NEXT_PUBLIC_COMMIT_SHA=$NEXT_PUBLIC_COMMIT_SHA \
+    NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_EUROOFFICE_URL=$NEXT_PUBLIC_EUROOFFICE_URL \
+    NEXT_PUBLIC_REPO_URL=$NEXT_PUBLIC_REPO_URL
 RUN pnpm build
 
 FROM nginx:alpine AS runner

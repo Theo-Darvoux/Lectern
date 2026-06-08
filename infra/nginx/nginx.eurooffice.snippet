@@ -93,7 +93,7 @@ location ~* ^/(cache|web-apps|sdkjs|sdkjs-plugins|fonts|dictionaries|meta|printf
     proxy_send_timeout 300s;
 
     # If EuroOffice doesn't recognise the path (404), fall through to
-    # Next.js so future WikINT routes on these prefixes still work.
+    # Next.js so future app routes on these prefixes still work.
     proxy_intercept_errors on;
     error_page 404 = @nextjs_oo_fallback;
 }

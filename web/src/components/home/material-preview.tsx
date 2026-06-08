@@ -9,6 +9,7 @@ import type { MaterialDetail } from "./types";
 import { Loader2 } from "lucide-react";
 import { MarkdownRenderer } from "../viewers/markdown-renderer";
 import { useInView } from "@/hooks/use-in-view";
+import { MIME_QCM } from "@/lib/file-utils";
 // CSS for react-pdf: tiny side-effect import, kept static (handled at build by
 // Next's CSS pipeline — doesn't pull the pdfjs JS bundle into this chunk).
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -91,7 +92,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const isText = (mimeType.startsWith("text/") || /\.(txt|py|js|ts|json)$/i.test(fileName)) && !isMarkdown;
   const isPDF = mimeType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf");
   const isOffice = mimeType.includes("ms-") || mimeType.includes("officedocument") || /\.(docx|xlsx|pptx)$/i.test(fileName);
-  const isQCM = mimeType === "application/vnd.wikint.qcm+json" || fileName.toLowerCase().endsWith(".qcm");
+  const isQCM = mimeType === MIME_QCM || fileName.toLowerCase().endsWith(".qcm");
 
   // Track container width for react-pdf Page sizing — only needed when react-pdf will render.
   useEffect(() => {

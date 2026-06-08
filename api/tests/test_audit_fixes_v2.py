@@ -36,7 +36,7 @@ async def test_admin_get_auth_config_does_not_return_secrets(
     db_session: AsyncSession,
 ):
     """GET /api/admin/auth-config must redact secrets and return _set booleans."""
-    admin = User(email="admin@telecom-sudparis.eu", role=UserRole.VIEUX)
+    admin = User(email="admin@example.com", role=UserRole.VIEUX)
     db_session.add(admin)
     await db_session.flush()
 
@@ -63,7 +63,7 @@ async def test_prune_rejects_non_pruneable_prefix(
     client: AsyncClient,
     db_session: AsyncSession,
 ):
-    admin = User(email="admin@telecom-sudparis.eu", role=UserRole.VIEUX)
+    admin = User(email="admin@example.com", role=UserRole.VIEUX)
     db_session.add(admin)
     await db_session.commit()
 
@@ -96,7 +96,7 @@ async def test_prune_accepts_valid_prefixes(
     client: AsyncClient,
     db_session: AsyncSession,
 ):
-    admin = User(email="admin@telecom-sudparis.eu", role=UserRole.VIEUX)
+    admin = User(email="admin@example.com", role=UserRole.VIEUX)
     db_session.add(admin)
     await db_session.flush()
 
@@ -136,7 +136,7 @@ async def test_google_oauth_verify_runs_in_thread(
         # Simulate successful verification
         return {
             "iss": "accounts.google.com",
-            "email": "user@telecom-sudparis.eu",
+            "email": "user@example.com",
             "email_verified": True,
         }
 
@@ -174,7 +174,7 @@ async def test_google_oauth_rejects_unverified_email(
     ):
         mock_thread.return_value = {
             "iss": "accounts.google.com",
-            "email": "user@telecom-sudparis.eu",
+            "email": "user@example.com",
             "email_verified": False,  # unverified account
         }
         response = await client.post(
@@ -200,7 +200,7 @@ async def test_google_oauth_rejects_missing_email_verified_field(
     ):
         mock_thread.return_value = {
             "iss": "accounts.google.com",
-            "email": "user@telecom-sudparis.eu",
+            "email": "user@example.com",
             # email_verified key absent
         }
         response = await client.post(
@@ -222,7 +222,7 @@ async def test_validate_email_allow_all_domains_with_matching_domain(
     from app.config import settings
     from app.services.auth import validate_email_for_auth
 
-    domain = AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True)
+    domain = AllowedDomain(domain="example.com", auto_approve=True)
     db_session.add(domain)
     await db_session.flush()
 
@@ -231,7 +231,7 @@ async def test_validate_email_allow_all_domains_with_matching_domain(
     redis.setex = AsyncMock()
 
     with patch.object(settings, "allow_all_domains", True):
-        result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session)
+        result = await validate_email_for_auth("user@example.com", db_session)
     assert result is True
 
 
@@ -275,9 +275,7 @@ async def test_allow_all_domains_new_user_from_unknown_domain_gets_student_not_p
     """With allow_all_domains=True and a listed domain with auto_approve, new user gets STUDENT."""
     from app.services.auth import get_or_create_user
 
-    user, is_new = await get_or_create_user(
-        db_session, "user@telecom-sudparis.eu", auto_approve=True
-    )
+    user, is_new = await get_or_create_user(db_session, "user@example.com", auto_approve=True)
     assert is_new is True
     assert user.role == UserRole.STUDENT
 
@@ -372,8 +370,8 @@ async def test_admin_cannot_set_pending_role(
     client: AsyncClient,
     db_session: AsyncSession,
 ):
-    admin = User(email="admin@telecom-sudparis.eu", role=UserRole.VIEUX)
-    target = User(email="student@telecom-sudparis.eu", role=UserRole.STUDENT)
+    admin = User(email="admin@example.com", role=UserRole.VIEUX)
+    target = User(email="student@example.com", role=UserRole.STUDENT)
     db_session.add_all([admin, target])
     await db_session.flush()
 
@@ -398,7 +396,7 @@ async def test_admin_test_email_rejects_invalid_email(
     client: AsyncClient,
     db_session: AsyncSession,
 ):
-    admin = User(email="admin@telecom-sudparis.eu", role=UserRole.VIEUX)
+    admin = User(email="admin@example.com", role=UserRole.VIEUX)
     db_session.add(admin)
     await db_session.commit()
 
@@ -588,7 +586,7 @@ async def test_validate_email_listed_domain_checked_before_allow_all(
     from app.config import settings
     from app.services.auth import validate_email_for_auth
 
-    domain = AllowedDomain(domain="telecom-sudparis.eu", auto_approve=True)
+    domain = AllowedDomain(domain="example.com", auto_approve=True)
     db_session.add(domain)
     await db_session.flush()
 
@@ -597,5 +595,5 @@ async def test_validate_email_listed_domain_checked_before_allow_all(
     redis.setex = AsyncMock()
 
     with patch.object(settings, "allow_all_domains", True):
-        result = await validate_email_for_auth("user@telecom-sudparis.eu", db_session)
+        result = await validate_email_for_auth("user@example.com", db_session)
     assert result is True

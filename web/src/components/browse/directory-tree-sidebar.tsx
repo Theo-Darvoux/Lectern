@@ -43,6 +43,7 @@ import {
   getFileExtension,
   getFileIconColor,
   MATERIAL_TYPE_ICON_COLORS,
+  MIME_QCM,
 } from "@/lib/file-utils";
 
 interface DirNode {
@@ -91,7 +92,7 @@ function pickMaterialIcon(mat: MaterialNode): React.ElementType {
   if (mat.type === "document") {
     const ext = mat.file_name ? getFileExtension(mat.file_name) : "";
     if (ext && EXT_ICONS[ext]) return EXT_ICONS[ext];
-    if (mat.file_mime_type === "application/vnd.wikint.qcm+json") return ListChecks;
+    if (mat.file_mime_type === MIME_QCM) return ListChecks;
   }
   return TYPE_ICONS[mat.type] ?? File;
 }

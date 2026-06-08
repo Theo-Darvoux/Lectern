@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-Every setting WikINT understands lives in a single `.env` file at the project
+Every setting the platform understands lives in a single `.env` file at the project
 root. There are no per-component env files — the API, the workers, the frontend
 build, and the Docker Compose stack all read the same file.
 
@@ -35,9 +35,7 @@ it tells you which variables to touch and links back here for the details.
 
 > **Naming note:** the document-editing integration is wired through
 > `EUROOFFICE_*` variables everywhere the code actually reads them
-> (`api/app/config.py`, all three compose files, and `.env.example`). If you have
-> an older `.env` file using legacy `ONLYOFFICE_*` keys, rename those keys to `EUROOFFICE_*`
-> so they are recognized.
+> (`api/app/config.py`, all three compose files, and `.env.example`).
 
 ---
 
@@ -47,7 +45,9 @@ it tells you which variables to touch and links back here for the details.
 |---|---|---|
 | `ENVIRONMENT` | `development` | `development`, `production`, or `test`. Production turns on the secret validator, hides the OpenAPI docs, and changes logging. Compose forces `production` on every service in `compose.prod.yaml`. |
 | `SECRET_KEY` | *(dev placeholder)* | **Required, secret.** Signs JWTs and derives the CAS HMAC. Changing it invalidates every existing session. |
-| `FRONTEND_URL` | `http://localhost:3000` | Public base URL of the frontend. Used for CORS and for links inside emails. Set this to your real origin in production (e.g. `https://wikint.example.com`). |
+| `CAS_HKDF_SALT` | `lectern-cas-salt-v1` | HKDF salt seeding CAS key derivation (over `SECRET_KEY`). Determines the `cas/` S3 object keys and Redis dedup/ref-count keys. **Keep constant for the life of a deployment** — changing it re-derives all digests, so new uploads stop de-duplicating against existing ones and storage accounting drifts (existing files stay accessible).
+| `CAS_HKDF_INFO` | `lectern-cas-v1` | HKDF `info` paired with `CAS_HKDF_SALT`.
+| `FRONTEND_URL` | `http://localhost:3000` | Public base URL of the frontend. Used for CORS and for links inside emails. Set this to your real origin in production (e.g. `https://app.example.com`). |
 | `RUN_MIGRATIONS` | `true` | When `true`, the `api` container runs `alembic upgrade head` on startup. Set to `false` to skip migrations (e.g. to apply them out-of-band during a maintenance window). If a migration fails, the API prints a banner and refuses to start rather than running against a broken schema. |
 
 ---
@@ -59,12 +59,12 @@ the API actually connects with. Keep them consistent.
 
 | Variable | Default | Description |
 |---|---|---|
-| `POSTGRES_USER` | `wikint` | Database role created on first boot. |
+| `POSTGRES_USER` | `lectern` | Database role created on first boot. |
 | `POSTGRES_PASSWORD` | *(dev placeholder)* | **Required.** Database password. |
-| `POSTGRES_DB` | `wikint` | Database name. |
+| `POSTGRES_DB` | `lectern` | Database name. |
 | `POSTGRES_HOST` | `postgres` | Hostname — the compose service name inside Docker. |
 | `POSTGRES_PORT` | `5432` | Port. |
-| `DATABASE_URL` | `postgresql+asyncpg://wikint:wikint@localhost:5432/wikint` | **Required.** Async SQLAlchemy connection string. Must use the `postgresql+asyncpg://` scheme. In Docker the host is `postgres`, not `localhost`. |
+| `DATABASE_URL` | `postgresql+asyncpg://lectern:lectern@localhost:5432/lectern` | **Required.** Async SQLAlchemy connection string. Must use the `postgresql+asyncpg://` scheme. In Docker the host is `postgres`, not `localhost`. |
 
 ---
 
@@ -88,7 +88,7 @@ the API actually connects with. Keep them consistent.
 
 ## Object storage (S3-compatible)
 
-WikINT is storage-backend-agnostic: every backend speaks S3, and per-backend
+The platform is storage-backend-agnostic: every backend speaks S3, and per-backend
 quirks (checksum mode, presigned-PUT host rewriting) are handled automatically
 in `api/app/core/storage/backends.py`. Switching backends is env-only.
 
@@ -97,10 +97,9 @@ in `api/app/core/storage/backends.py`. Switching backends is env-only.
 | `STORAGE_BACKEND` | `r2` | One of `r2` (Cloudflare R2), `seaweedfs`, `garage`, `rustfs`. Dev compose ships `seaweedfs`. |
 | `S3_ENDPOINT` | `localhost:9000` | Internal S3 endpoint the API talks to (`seaweedfs:8333` in dev). |
 | `S3_PUBLIC_ENDPOINT` | *(unset)* | Endpoint the browser uses, when it differs from the internal one (e.g. `localhost/s3` in dev). |
-| `S3_PUBLIC_DOMAIN` | *(unset)* | Public domain for serving R2 assets through the prod Nginx S3 proxy (e.g. `files.wikint.example.com`). |
 | `S3_ACCESS_KEY` | `minioadmin` | **Required.** Access key. |
 | `S3_SECRET_KEY` | `minioadmin` | **Required, secret.** Secret key. |
-| `S3_BUCKET` | `wikint` | Bucket name. |
+| `S3_BUCKET` | `lectern` | Bucket name. |
 | `S3_REGION` | `us-east-1` | Region. For R2 this is effectively `auto`/ignored. |
 | `S3_USE_SSL` | `false` | `true` when the endpoint is HTTPS. |
 | `S3_USE_ACCELERATE_ENDPOINT` | `false` | Enable S3 Transfer Acceleration (AWS S3 only). |
@@ -128,6 +127,7 @@ contract is identical, so switching is URL-only.
 | `EUROOFFICE_FILE_TOKEN_SECRET` | *(dev placeholder)* | **Required in prod, secret.** Signs short-lived file-access tokens. **Must differ from `EUROOFFICE_JWT_SECRET`** so a compromised EuroOffice container cannot forge download tokens — the validator enforces this. |
 | `EUROOFFICE_FILE_TOKEN_TTL` | `60` | Lifetime (seconds) of a file-access token. |
 | `EUROOFFICE_INTERNAL_API_BASE_URL` | `http://api:8000` | URL the EuroOffice container uses to fetch files from the API (internal network address). |
+| `EUROOFFICE_PUBLIC_URL` | *(unset)* | Browser-facing EuroOffice URL (can also be set as `NEXT_PUBLIC_EUROOFFICE_URL`). If unset, falls back to `/eurooffice/`. |
 
 ---
 
@@ -142,7 +142,7 @@ contract is identical, so switching is URL-only.
 | `GUEST_ACCESS_ENABLED` | `false` | Allow unauthenticated read-only browsing. |
 | `ALLOW_ALL_DOMAINS` | `false` | Accept sign-ups from any email domain (otherwise only `ALLOWED_DOMAINS`). |
 | `AUTO_APPROVE_ALL_DOMAINS` | `false` | Auto-approve every new account instead of holding them for staff review. |
-| `ALLOWED_DOMAINS` | *(empty)* | Comma-separated `domain:auto` / `domain:manual` entries, e.g. `telecom-sudparis.eu:auto,imt-bs.eu:manual`. `auto` = approved on first login, `manual` = needs staff approval. When set, this overrides the editable `allowed_domains` DB table (the admin UI then shows it read-only). Empty = use the DB table. |
+| `ALLOWED_DOMAINS` | *(empty)* | Comma-separated `domain:auto` / `domain:manual` entries, e.g. `example.com:auto,example.org:manual`. `auto` = approved on first login, `manual` = needs staff approval. When set, this overrides the editable `allowed_domains` DB table (the admin UI then shows it read-only). Empty = use the DB table. **Required setup:** a fresh install has no allowed domains, so registration is blocked until you set this, add domains via the admin UI, or enable `ALLOW_ALL_DOMAINS`. The first admin is exempt. |
 | `JWT_ACCESS_TOKEN_EXPIRE_DAYS` | `7` | Access-token lifetime. |
 | `JWT_REFRESH_TOKEN_EXPIRE_DAYS` | `31` | Refresh-token lifetime. |
 
@@ -161,7 +161,7 @@ Used for verification emails, magic links, and notifications.
 | `SMTP_FROM` | *(empty)* | `From:` address on outgoing mail. |
 | `SMTP_USE_TLS` | `true` | Use STARTTLS. |
 | `SMTP_IP` | *(unset)* | Connect to this IP directly instead of resolving `SMTP_HOST` (handy when DNS is unreliable). |
-| `SMTP_SENDER_NAME` | *(unset)* | Display name in the `From:` header (e.g. `WikINT`). |
+| `SMTP_SENDER_NAME` | *(unset)* | Display name in the `From:` header (e.g. `Lectern`). |
 | `SMTP_AVATAR_URL` | *(unset)* | Avatar image shown in verification emails. |
 
 ---
@@ -173,12 +173,13 @@ edited live in the admin dashboard.
 
 | Variable | Default | Description |
 |---|---|---|
-| `SITE_NAME` | `WikINT` | Site name shown in the UI and page titles. |
-| `SITE_DESCRIPTION` | `Wiki for SudParis Intelligence` | Meta description / tagline. |
+| `SITE_NAME` | `Lectern` | Instance display name shown in the UI, page titles and emails. Set it to rebrand a deployment; defaults to `Lectern`. |
+| `SITE_DESCRIPTION` | `Collaborative course materials platform` | Meta description / tagline. |
 | `SITE_NAME_STYLE` | *(unset)* | Advanced: JSON array of styled name segments for a multi-color wordmark. |
 | `PRIMARY_COLOR` | `#3b82f6` | Accent color (hex). |
-| `FOOTER_TEXT` | `© 2024 WikINT` | Footer text. |
-| `ORGANIZATION_URL` | `https://www.telecom-sudparis.eu` | Link behind the organization name. |
+| `FOOTER_TEXT` | *(unset)* | Footer text. Hidden when empty. |
+| `ORGANIZATION_URL` | *(none)* | Link behind the organization name. |
+| `REPO_URL` | *(unset)* | Source-repository URL for the footer/About links (can also be set as `NEXT_PUBLIC_REPO_URL`). Hidden when empty. |
 | `SITE_LOGO_URL` | *(unset)* | Logo image URL. |
 | `SITE_FAVICON_URL` | *(unset)* | Favicon URL. |
 | `OG_IMAGE_URL` | *(unset)* | Open Graph preview image. |
@@ -313,21 +314,20 @@ replica. Total throughput = replicas × max-jobs.
 | Variable | Default | Description |
 |---|---|---|
 | `WEBHOOK_SECRET` | *(derived from `SECRET_KEY`)* | **Secret.** HMAC-SHA256 signing secret for outgoing webhooks. Set explicitly to rotate independently of the JWT secret. |
-| `BACKUP_DIR` | `/var/lib/wikint/backups` | Where the API writes backups (mounted as a volume in compose). |
+| `BACKUP_DIR` | `/var/lib/lectern/backups` | Where the API writes backups (mounted as a volume in compose). |
 
 ---
 
-## Frontend (build-time)
+## Frontend (build-time / runtime config)
 
-These are `NEXT_PUBLIC_*` values baked into the frontend at build/serve time, so
-they are visible to the browser. Don't put secrets here.
+These variables are either baked into the frontend static export at build time (if set as build-args) or resolved dynamically from the backend configuration at runtime.
 
 | Variable | Default | Description |
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `/api` | Browser-facing API path. Dev compose sets `http://localhost/api`. |
-| `NEXT_PUBLIC_EUROOFFICE_URL` | *(unset)* | Browser-facing EuroOffice path. Dev compose sets `http://localhost/eurooffice`. |
-| `NEXT_PUBLIC_MAX_FILE_SIZE_MB` | *(unset)* | Client-side upload-size hint; mirror `MAX_FILE_SIZE_MB`. |
-| `NEXT_PUBLIC_COMMIT_SHA` | *(unset)* | Build commit SHA, shown in the About panel. Usually injected by CI. |
+| `NEXT_PUBLIC_EUROOFFICE_URL` | *(unset)* | Browser-facing EuroOffice path. Resolved dynamically from the backend's `EUROOFFICE_PUBLIC_URL` / `NEXT_PUBLIC_EUROOFFICE_URL` at runtime. Falls back to relative `/eurooffice/`. |
+| `NEXT_PUBLIC_MAX_FILE_SIZE_MB` | `100` | Fallback client-side upload-size limit. Resolved dynamically from the backend's `MAX_FILE_SIZE_MB` at runtime. |
+| `NEXT_PUBLIC_COMMIT_SHA` | *(unset)* | Build commit SHA, shown in the About panel. Baked in at build-time. |
 
 ---
 

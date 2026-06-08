@@ -16,7 +16,7 @@ export function initAuthSync(): () => void {
     if (typeof window === "undefined") return () => {};
     if (initialized) return () => {};
 
-    channel = new BroadcastChannel("wikint_auth");
+    channel = new BroadcastChannel("lectern_auth");
     channel.onmessage = handleMessage;
 
     document.addEventListener("visibilitychange", handleVisibility);

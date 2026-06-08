@@ -118,17 +118,17 @@ class TestRequestCodeIn:
 
         return RequestCodeIn(email=email)
 
-    def test_valid_telecom(self):
-        m = self._make("alice@telecom-sudparis.eu")
-        assert m.email == "alice@telecom-sudparis.eu"
+    def test_valid_primary_domain(self):
+        m = self._make("alice@example.com")
+        assert m.email == "alice@example.com"
 
-    def test_valid_imt(self):
-        m = self._make("bob@imt-bs.eu")
-        assert m.email == "bob@imt-bs.eu"
+    def test_valid_secondary_domain(self):
+        m = self._make("bob@example.org")
+        assert m.email == "bob@example.org"
 
     def test_strips_and_lowercases(self):
-        m = self._make("  Alice@Telecom-Sudparis.EU  ")
-        assert m.email == "alice@telecom-sudparis.eu"
+        m = self._make("  Alice@Example.COM  ")
+        assert m.email == "alice@example.com"
 
     def test_gmail_passes_schema_domain_policy_enforced_at_service_layer(self):
         # Domain whitelist is enforced asynchronously in the service layer (Phase 2).
@@ -139,12 +139,12 @@ class TestRequestCodeIn:
 
     def test_rejects_plus_alias(self):
         with pytest.raises(ValidationError):
-            self._make("alice+spam@telecom-sudparis.eu")
+            self._make("alice+spam@example.com")
 
     def test_rejects_too_long(self):
         local = "a" * 250
         with pytest.raises(ValidationError):
-            self._make(f"{local}@telecom-sudparis.eu")
+            self._make(f"{local}@example.com")
 
     def test_rejects_empty(self):
         with pytest.raises(ValidationError):
@@ -158,7 +158,7 @@ class TestVerifyCodeIn:
         return VerifyCodeIn(email=email, code=code)
 
     def test_valid(self):
-        m = self._make("alice@telecom-sudparis.eu", "ABCDEF23")
+        m = self._make("alice@example.com", "ABCDEF23")
         assert m.code == "ABCDEF23"
 
     def test_gmail_passes_schema_domain_policy_enforced_at_service_layer(self):
@@ -169,28 +169,28 @@ class TestVerifyCodeIn:
 
     def test_rejects_short_code(self):
         with pytest.raises(ValidationError):
-            self._make("alice@telecom-sudparis.eu", "ABC")
+            self._make("alice@example.com", "ABC")
 
     def test_rejects_long_code(self):
         with pytest.raises(ValidationError):
-            self._make("alice@telecom-sudparis.eu", "ABCDEF2300")
+            self._make("alice@example.com", "ABCDEF2300")
 
     def test_rejects_lowercase_code(self):
         with pytest.raises(ValidationError):
-            self._make("alice@telecom-sudparis.eu", "abcdef23")
+            self._make("alice@example.com", "abcdef23")
 
     def test_rejects_digits_only_code(self):
         # '1' and '0' are not in the OTP alphabet
         with pytest.raises(ValidationError):
-            self._make("alice@telecom-sudparis.eu", "00000000")
+            self._make("alice@example.com", "00000000")
 
     def test_rejects_code_with_symbols(self):
         with pytest.raises(ValidationError):
-            self._make("alice@telecom-sudparis.eu", "ABCDE!23")
+            self._make("alice@example.com", "ABCDE!23")
 
     def test_rejects_plus_alias(self):
         with pytest.raises(ValidationError):
-            self._make("alice+x@telecom-sudparis.eu", "ABCDEF23")
+            self._make("alice+x@example.com", "ABCDEF23")
 
 
 class TestVerifyMagicLinkIn:

@@ -15,7 +15,7 @@
  *   S3_USE_SSL              "true" → https, else http
  *   S3_REGION               S3 region (default us-east-1)
  *   S3_ACCESS_KEY / S3_SECRET_KEY
- *   S3_BUCKET               bucket name (default wikint)
+ *   S3_BUCKET               bucket name (default lectern)
  */
 
 import http from "node:http";
@@ -28,7 +28,7 @@ import { s3Source } from "./s3-source.js";
 
 const PORT = Number(process.env.PORT ?? 8788);
 const SECRET = process.env.WORKER_ZIP_HMAC_SECRET ?? process.env.HMAC_SECRET ?? "";
-const BUCKET = process.env.S3_BUCKET ?? "wikint";
+const BUCKET = process.env.S3_BUCKET ?? "lectern";
 const REGION = process.env.S3_REGION ?? "us-east-1";
 const USE_SSL = (process.env.S3_USE_SSL ?? "false").toLowerCase() === "true";
 const ENDPOINT_HOST = process.env.S3_ENDPOINT ?? "localhost:8333";

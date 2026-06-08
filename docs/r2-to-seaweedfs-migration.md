@@ -1,6 +1,6 @@
 # R2 → SeaweedFS Migration Runbook
 
-This document describes the step-by-step process for migrating WikINT's
+This document describes the step-by-step process for migrating the platform's
 production storage from Cloudflare R2 to self-hosted SeaweedFS. The migration
 uses the lossless backup system (v2.0) built into the admin panel.
 
@@ -16,7 +16,7 @@ uses the lossless backup system (v2.0) built into the admin panel.
   ```
 - [ ] `selfhost-worker` image built and pushed to registry
 - [ ] nginx `worker-cache.conf` enabled in prod nginx config
-- [ ] DNS/proxy for `files.wikint.hypnos2026.fr` updated to point at selfhost-worker
+- [ ] DNS/proxy for `files.example.com` updated to point at selfhost-worker
 
 ---
 
@@ -38,14 +38,14 @@ With `STORAGE_BACKEND=r2` still active in production:
 POST /api/admin/backup/save
 
 # Or via curl (replace TOKEN):
-curl -X POST https://api.wikint.hypnos2026.fr/api/admin/backup/save \
+curl -X POST https://api.example.com/api/admin/backup/save \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 Download the resulting ZIP:
 
 ```sh
-curl -O https://api.wikint.hypnos2026.fr/api/admin/backup/{id}/download \
+curl -O https://api.example.com/api/admin/backup/{id}/download \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -83,7 +83,7 @@ S3_PUBLIC_ENDPOINT=<your-server-ip-or-domain>/s3
 S3_USE_SSL=false
 S3_ACCESS_KEY=<prod-key>
 S3_SECRET_KEY=<prod-secret>
-S3_BUCKET=wikint
+S3_BUCKET=lectern
 ```
 
 Redeploy the API and worker containers (they now point at SeaweedFS).
@@ -95,7 +95,7 @@ Redeploy the API and worker containers (they now point at SeaweedFS).
 POST /api/admin/backup/restore/upload
 
 # Or via curl:
-curl -X POST https://api.wikint.hypnos2026.fr/api/admin/backup/restore/upload \
+curl -X POST https://api.example.com/api/admin/backup/restore/upload \
   -H "Authorization: Bearer $TOKEN" \
   -F "file=@backup_YYYYMMDD_HHMMSS.zip"
 ```
@@ -114,10 +114,10 @@ This:
 curl -I "<presigned-url>"
 
 # Worker file serve — should decompress gzip correctly
-curl -I "https://files.wikint.hypnos2026.fr/file/<key>?token=..."
+curl -I "https://files.example.com/file/<key>?token=..."
 
 # Branding assets — publicly readable
-curl -I "https://files.wikint.hypnos2026.fr/branding/logo.png"
+curl -I "https://files.example.com/branding/logo.png"
 
 # Upload — creates a new object in SeaweedFS
 # (test via the UI or the API upload endpoint)

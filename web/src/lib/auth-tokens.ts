@@ -1,6 +1,6 @@
 let inMemoryToken: string | null = null;
 
-const AUTH_HINT_KEY = "wikint_auth_hint";
+const AUTH_HINT_KEY = "lectern_auth_hint";
 
 export function getAccessToken(): string | null {
     return inMemoryToken;

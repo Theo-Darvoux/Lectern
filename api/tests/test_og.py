@@ -15,9 +15,9 @@ async def test_og_falls_back_to_default_branding(client: AsyncClient) -> None:
     resp = await client.get("/api/og", headers={"X-Original-Path": "/"})
     assert resp.status_code == 200
     body = resp.text
-    assert "<title>WikINT</title>" in body
-    assert '<meta property="og:site_name" content="WikINT">' in body
-    assert 'property="og:title" content="WikINT"' in body
+    assert "<title>Lectern</title>" in body
+    assert '<meta property="og:site_name" content="Lectern">' in body
+    assert 'property="og:title" content="Lectern"' in body
 
 
 async def test_og_reflects_admin_config_branding(

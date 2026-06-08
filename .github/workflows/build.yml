@@ -12,9 +12,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  API_IMAGE: ghcr.io/theo-darvoux/wikint/api
-  WORKER_IMAGE: ghcr.io/theo-darvoux/wikint/worker
-  WEB_IMAGE: ghcr.io/theo-darvoux/wikint/web
+  API_IMAGE: ghcr.io/theo-darvoux/lectern/api
+  WORKER_IMAGE: ghcr.io/theo-darvoux/lectern/worker
+  WEB_IMAGE: ghcr.io/theo-darvoux/lectern/web
   PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
@@ -238,8 +238,6 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           push: true
           build-args: |
-            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
-            NEXT_PUBLIC_EUROOFFICE_URL=${{ vars.NEXT_PUBLIC_EUROOFFICE_URL }}
             NEXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
           tags: ${{ steps.meta-web.outputs.tags }}
           labels: ${{ steps.meta-web.outputs.labels }}

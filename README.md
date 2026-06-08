@@ -1,6 +1,6 @@
-# WikINT
+# Lectern
 
-Course-materials platform for Telecom SudParis / IMT-BS. Students and staff upload, browse, annotate, and collaboratively review documents through a pull-request workflow.
+Collaborative course-materials platform. Students and staff upload, browse, annotate, and collaboratively review documents through a pull-request workflow.
 
 ## Stack
 
@@ -57,7 +57,6 @@ For a full local dev setup (running components individually, seeding the databas
 api/                  FastAPI backend, workers, migrations
 web/                  Next.js frontend
 worker/               Cloudflare Worker (HMAC-signed R2 access, ZIP offload)
-stress-tests/         k6 load test suite
 infra/                Nginx configs, Docker init scripts
 compose.yaml          Base service definitions (all environments)
 compose.override.yaml Dev overlay, auto-merged (SeaweedFS, hot reload, source mounts)

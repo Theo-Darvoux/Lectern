@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatFileSize, getFileExtension, getViewerType, guessFileMime } from "./file-utils";
+import { formatFileSize, getFileExtension, getViewerType, guessFileMime, MIME_QCM } from "./file-utils";
 
 describe("file-utils", () => {
   describe("formatFileSize", () => {
@@ -31,7 +31,7 @@ describe("file-utils", () => {
     });
 
     it("returns qcm for QCM mime type", () => {
-      expect(getViewerType("application/vnd.wikint.qcm+json", "quiz.qcm")).toBe("qcm");
+      expect(getViewerType(MIME_QCM, "quiz.qcm")).toBe("qcm");
     });
 
     it("returns qcm for .qcm extension with octet-stream", () => {
@@ -40,7 +40,7 @@ describe("file-utils", () => {
 
     it("returns qcm mime type before other checks", () => {
       // Even with a generic filename, the mime type should win
-      expect(getViewerType("application/vnd.wikint.qcm+json", "data")).toBe("qcm");
+      expect(getViewerType(MIME_QCM, "data")).toBe("qcm");
     });
   });
 

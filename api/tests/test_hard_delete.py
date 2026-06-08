@@ -14,7 +14,7 @@ from app.models.user import User, UserRole
 async def _create_user(db: AsyncSession, email_prefix: str = "test") -> User:
     user = User(
         id=uuid.uuid4(),
-        email=f"{email_prefix}_{uuid.uuid4().hex[:6]}@telecom-sudparis.eu",
+        email=f"{email_prefix}_{uuid.uuid4().hex[:6]}@example.com",
         display_name="Tester",
         role=UserRole.STUDENT,
         onboarded=True,

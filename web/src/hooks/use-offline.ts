@@ -16,13 +16,13 @@ export function useOffline() {
         const handleUnreachable = () => setIsOffline(true);
 
         window.addEventListener("online", handleOnline);
-        window.addEventListener("wikint-api-reachable", handleReachable);
-        window.addEventListener("wikint-api-unreachable", handleUnreachable);
+        window.addEventListener("lectern-api-reachable", handleReachable);
+        window.addEventListener("lectern-api-unreachable", handleUnreachable);
 
         return () => {
             window.removeEventListener("online", handleOnline);
-            window.removeEventListener("wikint-api-reachable", handleReachable);
-            window.removeEventListener("wikint-api-unreachable", handleUnreachable);
+            window.removeEventListener("lectern-api-reachable", handleReachable);
+            window.removeEventListener("lectern-api-unreachable", handleUnreachable);
         };
     }, []);
 

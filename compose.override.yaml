@@ -43,7 +43,7 @@ services:
     environment:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_BUCKET: ${S3_BUCKET:-wikint}
+      S3_BUCKET: ${S3_BUCKET:-lectern}
       S3_REGION: ${S3_REGION:-us-east-1}
 
   api:
@@ -117,6 +117,8 @@ services:
       - API_INTERNAL_URL=http://api:8000
       # EuroOffice Document Server URL (browser-facing, routed through nginx)
       - NEXT_PUBLIC_EUROOFFICE_URL=http://localhost/eurooffice
+      # Source-repo URL for footer/About links (empty = links hidden)
+      - NEXT_PUBLIC_REPO_URL=${NEXT_PUBLIC_REPO_URL:-}
       # Ensure Node.js has enough heap space for large page compilation
       - NODE_OPTIONS=--max-old-space-size=3584
       - WATCHPACK_POLLING=true

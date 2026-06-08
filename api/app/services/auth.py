@@ -20,11 +20,10 @@ RATE_LIMIT_MAX = 3
 VERIFY_RATE_LIMIT_MAX = 5
 VERIFY_RATE_LIMIT_TTL_SECONDS = 600
 
-# Hardcoded fallback used when DB has no AllowedDomain rows and ALLOWED_DOMAINS env is unset.
-_FALLBACK_DOMAINS = [
-    {"domain": "telecom-sudparis.eu", "auto_approve": True},
-    {"domain": "imt-bs.eu", "auto_approve": True},
-]
+# Fallback used when DB has no AllowedDomain rows and ALLOWED_DOMAINS env is unset.
+# Empty by default — operators configure allowed domains via the admin UI,
+# the ALLOWED_DOMAINS env var, or enable allow_all_domains.
+_FALLBACK_DOMAINS: list[dict[str, Any]] = []
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -57,7 +56,7 @@ async def get_allowed_domains(db: AsyncSession) -> tuple[list[dict[str, Any]], b
     Domain resolution order:
     1. ALLOWED_DOMAINS env var — read-only; the UI shows an "overridden by .env" banner.
     2. allowed_domains DB table — editable via admin CRUD.
-    3. _FALLBACK_DOMAINS — hardcoded default for fresh installs.
+    3. _FALLBACK_DOMAINS — empty by default (no domains baked in).
     """
     if settings.allowed_domains:
         return _parse_allowed_domains(settings.allowed_domains), True

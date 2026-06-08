@@ -94,7 +94,7 @@ export function registerTokenRefreshCallback(cb: (token: string) => void) {
 
 export async function lockedRefresh(): Promise<string | null> {
     if (typeof navigator !== "undefined" && navigator.locks) {
-        return navigator.locks.request("wikint_refresh", async () => {
+        return navigator.locks.request("lectern_refresh", async () => {
             // Another tab may have refreshed while we waited for the lock
             const existing = getAccessToken();
             if (existing) {
@@ -121,10 +121,10 @@ function refreshTokenOnce(): Promise<string | null> {
 
 export function getClientId(): string {
     if (typeof window === "undefined") return "server-client";
-    let clientId = localStorage.getItem("wikint_client_id");
+    let clientId = localStorage.getItem("lectern_client_id");
     if (!clientId) {
         clientId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
-        localStorage.setItem("wikint_client_id", clientId);
+        localStorage.setItem("lectern_client_id", clientId);
     }
     return clientId;
 }
@@ -156,12 +156,12 @@ export async function apiRequest(
         res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
         // If we got a response (any response), the API is reachable.
         if (typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("wikint-api-reachable"));
+            window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
         }
     } catch (err) {
         // Network error (not a 4xx/5xx response)
         if (typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("wikint-api-unreachable"));
+            window.dispatchEvent(new CustomEvent("lectern-api-unreachable"));
         }
         throw err;
     }
@@ -176,7 +176,7 @@ export async function apiRequest(
             headers.set("Authorization", `Bearer ${newToken}`);
             res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
             if (typeof window !== "undefined") {
-                window.dispatchEvent(new CustomEvent("wikint-api-reachable"));
+                window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
             }
         } else {
             console.warn("[api-client] Token refresh failed (no new token). Clearing session.");

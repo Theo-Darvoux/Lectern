@@ -10,7 +10,7 @@ export function CookieBanner() {
 
     useEffect(() => {
         queueMicrotask(() => {
-            const consent = localStorage.getItem("wikint_cookie_consent");
+            const consent = localStorage.getItem("lectern_cookie_consent");
             if (!consent) {
                 setShow(true);
             }
@@ -18,7 +18,7 @@ export function CookieBanner() {
     }, []);
 
     const accept = () => {
-        localStorage.setItem("wikint_cookie_consent", "true");
+        localStorage.setItem("lectern_cookie_consent", "true");
         setShow(false);
     };
 

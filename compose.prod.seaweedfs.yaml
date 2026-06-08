@@ -122,7 +122,7 @@ services:
   selfhost-worker:
     # Self-hosted Node worker (replaces the Cloudflare Worker in prod).
     # Source: worker/src/node/server.ts
-    image: ghcr.io/your-org/wikint-worker:latest
+    image: ghcr.io/your-org/lectern-worker:latest
     restart: unless-stopped
     networks:
       - backend
@@ -135,7 +135,7 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET: ${S3_BUCKET:-wikint}
+      S3_BUCKET: ${S3_BUCKET:-lectern}
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8788/healthz || exit 1"]
       interval: 10s

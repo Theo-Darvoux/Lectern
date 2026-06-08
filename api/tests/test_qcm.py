@@ -569,7 +569,7 @@ class TestStageEndpoint:
         # Verify initial_data contains expected fields
         _, kwargs = mock_cas.call_args
         initial = kwargs.get("initial_data", {}) or mock_cas.call_args[0][2]
-        assert initial.get("mime_type") == "application/vnd.wikint.qcm+json"
+        assert initial.get("mime_type") == "application/vnd.lectern.qcm+json"
         assert initial.get("file_name") == "qcm.qcm"
 
 
@@ -680,19 +680,19 @@ class TestQCMMimeType:
         assert ".qcm" in ALLOWED_EXTENSIONS
 
     def test_qcm_mime_in_allowed_mime_types(self):
-        from app.core.mimetypes import ALLOWED_MIME_TYPES
+        from app.core.mimetypes import ALLOWED_MIME_TYPES, QCM_MIME_TYPE
 
-        assert "application/vnd.wikint.qcm+json" in ALLOWED_MIME_TYPES
+        assert QCM_MIME_TYPE in ALLOWED_MIME_TYPES
 
     def test_qcm_extension_mapping(self):
-        from app.core.mimetypes import EXTENSION_MAPPING
+        from app.core.mimetypes import EXTENSION_MAPPING, QCM_MIME_TYPE
 
-        assert "application/vnd.wikint.qcm+json" in EXTENSION_MAPPING.get(".qcm", [])
+        assert QCM_MIME_TYPE in EXTENSION_MAPPING.get(".qcm", [])
 
     def test_qcm_mime_to_extension(self):
-        from app.core.mimetypes import MIME_TO_EXTENSION
+        from app.core.mimetypes import MIME_TO_EXTENSION, QCM_MIME_TYPE
 
-        assert MIME_TO_EXTENSION["application/vnd.wikint.qcm+json"] == ".qcm"
+        assert MIME_TO_EXTENSION[QCM_MIME_TYPE] == ".qcm"
 
     def test_mime_registry_is_supported_qcm(self):
         from app.core.mimetypes import MimeRegistry
@@ -700,9 +700,9 @@ class TestQCMMimeType:
         assert MimeRegistry.is_supported_extension(".qcm") is True
 
     def test_mime_registry_allowed_mime_qcm(self):
-        from app.core.mimetypes import MimeRegistry
+        from app.core.mimetypes import QCM_MIME_TYPE, MimeRegistry
 
-        assert MimeRegistry.is_allowed_mime("application/vnd.wikint.qcm+json") is True
+        assert MimeRegistry.is_allowed_mime(QCM_MIME_TYPE) is True
 
 
 # ── Schema: qcm in ALLOWED_MATERIAL_TYPES ────────────────────────────────────

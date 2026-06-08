@@ -41,16 +41,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-// Baked in at build time from the Docker image's commit SHA (see web/Dockerfile
-// and the `NEXT_PUBLIC_COMMIT_SHA` build-arg in .github/workflows/build.yml).
 const commitSha = process.env.NEXT_PUBLIC_COMMIT_SHA;
-const repoUrl = "https://github.com/Theo-Darvoux/WikINT";
 
 export default function SettingsPage() {
   const t = useTranslations("Settings");
   const tLayout = useTranslations("Layout");
   const tLanguages = useTranslations("Languages");
   const { config } = useConfigStore();
+  const repoUrl = config?.repo_url || process.env.NEXT_PUBLIC_REPO_URL || "";
   const shortCommit = commitSha?.slice(0, 7);
   const { locale, changeLocale, isPending: localePending } = useChangeLocale();
   const [exporting, setExporting] = useState(false);
@@ -272,16 +270,18 @@ export default function SettingsPage() {
             <span>{tLayout("termsOfUse")}</span>
             <ChevronRight className="h-4 w-4 shrink-0" />
           </Link>
-          <a
-            href={config?.organization_url || repoUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-between py-3 text-sm transition-colors hover:text-foreground text-muted-foreground"
-          >
-            <span>{config?.organization_url ? tLayout("organization") : tLayout("github")}</span>
-            <ExternalLink className="h-4 w-4 shrink-0" />
-          </a>
-          {shortCommit && (
+          {(config?.organization_url || repoUrl) && (
+            <a
+              href={config?.organization_url || repoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between py-3 text-sm transition-colors hover:text-foreground text-muted-foreground"
+            >
+              <span>{config?.organization_url ? tLayout("organization") : tLayout("github")}</span>
+              <ExternalLink className="h-4 w-4 shrink-0" />
+            </a>
+          )}
+          {shortCommit && repoUrl && (
             <a
               href={`${repoUrl}/commit/${commitSha}`}
               target="_blank"

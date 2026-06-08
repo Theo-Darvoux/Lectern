@@ -58,6 +58,7 @@ import { apiFetch } from "@/lib/api-client";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
+import { MIME_QCM } from "@/lib/file-utils";
 
 const OP_ICONS: Record<string, React.ElementType> = {
     create_material: FilePlus,
@@ -112,7 +113,7 @@ function OperationCard({
         type: (op as any).target_type === "directory" ? t("labels.folder") : t("labels.material")
     });
 
-    const isQcm = (op as any).file_mime_type === "application/vnd.wikint.qcm+json";
+    const isQcm = (op as any).file_mime_type === MIME_QCM;
     const hasQcmDraft = isQcm && !!(op as any).metadata?.qcm_draft;
     const qcmEditHref = isQcm && op.op === "edit_material"
         ? `/qcm/${op.material_id}/edit?draftIndex=${index}`
@@ -235,7 +236,7 @@ export function ReviewDrawer() {
               ) as any
             : null;
         const displayName = (op as any).title || siblingTitle?.title || op.file_name || undefined;
-        const isQcm = (op as any).file_mime_type === "application/vnd.wikint.qcm+json";
+        const isQcm = (op as any).file_mime_type === MIME_QCM;
 
         if (isQcm) {
             const qcmDraft = (op as any).metadata?.qcm_draft;
@@ -244,7 +245,7 @@ export function ReviewDrawer() {
                 const url = URL.createObjectURL(blob);
                 setPreviewUrl(url);
                 setPreviewName(displayName);
-                setPreviewMime("application/vnd.wikint.qcm+json");
+                setPreviewMime(MIME_QCM);
             }
             return;
         }

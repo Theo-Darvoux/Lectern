@@ -4,6 +4,9 @@
 workspace/
 .antigravityignore
 
+# Load-test suite (instance-specific fixtures, not part of the app)
+stress-tests/
+
 # Python
 __pycache__/
 *.pyc

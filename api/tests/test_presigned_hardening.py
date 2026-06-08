@@ -29,7 +29,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 
     user = User(
         id=uuid.uuid4(),
-        email=f"{uuid.uuid4().hex[:8]}@telecom-sudparis.eu",
+        email=f"{uuid.uuid4().hex[:8]}@example.com",
         display_name="Tester",
         role=role,
         onboarded=True,

@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN groupadd -r appuser && useradd -r -g appuser -m appuser && \
     chown appuser:appuser /app && \
-    mkdir -p /var/lib/wikint && chown appuser:appuser /var/lib/wikint
+    mkdir -p /var/lib/lectern && chown appuser:appuser /var/lib/lectern
 
 COPY --from=builder --chown=appuser:appuser /venv /venv
 ENV PATH="/venv/bin:$PATH"

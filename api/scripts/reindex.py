@@ -7,7 +7,7 @@ import uuid
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-logger = logging.getLogger("wikint.reindex")
+logger = logging.getLogger("lectern.reindex")
 
 # Ensure app is importable from the script's location
 # Path assumes running from project root
@@ -183,7 +183,7 @@ async def perform_full_reindex(batch_size: int = 100):
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="WikINT Meilisearch Management Script")
+    parser = argparse.ArgumentParser(description="Meilisearch Management Script")
     parser.add_argument(
         "mode", choices=["audit", "cleanup", "prune", "full"], help="Mode of operation"
     )

@@ -14,12 +14,20 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_CAS_INFO = b"wikint-cas-v1"
-
 
 def _derive_cas_signing_key() -> bytes:
-    """Derive a dedicated CAS signing key from the server's secret key using HKDF."""
-    hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"wikint-cas-salt-v1", info=_CAS_INFO)
+    """Derive a dedicated CAS signing key from the server's secret key using HKDF.
+
+    The salt and info are domain-separation constants sourced from config
+    (``CAS_HKDF_SALT`` / ``CAS_HKDF_INFO``). They must stay constant for the life
+    of a deployment — changing them re-derives every CAS digest.
+    """
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=settings.cas_hkdf_salt.encode(),
+        info=settings.cas_hkdf_info.encode(),
+    )
     return hkdf.derive(settings.secret_key.get_secret_value().encode())
 
 

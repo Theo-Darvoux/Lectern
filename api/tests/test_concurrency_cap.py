@@ -31,6 +31,6 @@ async def test_tus_concurrency_cap_enforced():
     response = await tus_patch(uuid.UUID(tus_id), mock_request, mock_user, mock_redis, AsyncMock())
 
     assert response.status_code == 429
-    assert response.headers["X-WikINT-Error"] == ERR_TUS_CONCURRENCY_LIMIT
+    assert response.headers["X-Lectern-Error"] == ERR_TUS_CONCURRENCY_LIMIT
     # Should have decremented after seeing it's too high
     mock_redis.decr.assert_called_with(f"tus:inflight:{mock_user.id}")

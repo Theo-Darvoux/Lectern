@@ -1,11 +1,11 @@
-name = "wikint-zip-worker"
+name = "lectern-zip-worker"
 main = "src/index.ts"
 compatibility_date = "2025-05-27"
 
 [[r2_buckets]]
 binding = "BUCKET"
 # Replace with your actual R2 bucket name (must match S3_BUCKET in the API config).
-bucket_name = "wikint"
+bucket_name = "lectern"
 
 # HMAC_SECRET is set via: wrangler secret put HMAC_SECRET
 # It must match WORKER_ZIP_HMAC_SECRET in the API's .env file.

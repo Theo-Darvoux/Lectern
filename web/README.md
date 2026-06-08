@@ -1,6 +1,6 @@
-# WikINT — Frontend
+# Frontend
 
-Next.js 16 / React 19 frontend for the WikINT platform.
+Next.js 16 / React 19 frontend for the platform.
 
 For full project documentation see the [root README](../README.md) and [docs/](../docs/).
 

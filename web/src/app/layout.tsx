@@ -19,7 +19,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: process.env.SITE_NAME || "WikINT",
+  title: process.env.SITE_NAME || "Lectern",
   description: process.env.SITE_DESCRIPTION || "Collaborative course materials platform",
   icons: { icon: process.env.SITE_FAVICON_URL || "/favicon.ico" },
 };

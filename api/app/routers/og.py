@@ -76,7 +76,7 @@ async def render_og(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> HTMLResponse:
-    site_name = settings.site_name or "WikINT"
+    site_name = settings.site_name or "Lectern"
     site_description = settings.site_description or ""
     og_image = settings.og_image_url
     favicon = settings.site_favicon_url

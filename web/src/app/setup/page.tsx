@@ -59,7 +59,7 @@ export default function SetupPage() {
         }
     };
 
-    const siteName = config?.site_name ?? "WikINT";
+    const siteName = config?.site_name ?? "Lectern";
 
     return (
         <div className="flex min-h-svh items-center justify-center p-4">

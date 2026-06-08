@@ -74,11 +74,11 @@ export function BrandingConfigTab({ config }: BrandingConfigTabProps) {
     const t = useTranslations("Admin.Config.Branding");
 
     useEffect(() => {
-        if (!document.querySelector("link[data-wikint-all-fonts]")) {
+        if (!document.querySelector("link[data-lectern-all-fonts]")) {
             const link = document.createElement("link");
             link.rel = "stylesheet";
             link.href = ALL_FONTS_URL;
-            link.setAttribute("data-wikint-all-fonts", "1");
+            link.setAttribute("data-lectern-all-fonts", "1");
             document.head.appendChild(link);
         }
     }, []);

@@ -341,7 +341,7 @@ export const useStagingStore = create<StagingState>()(
                 get().operations.filter((s) => isExpiringSoon(s)).length,
         }),
         {
-            name: "wikint-staging",
+            name: "lectern-staging",
             storage: createJSONStorage(() => safeLocalStorage),
             // Persist operations and temp ID counter
             partialize: (state) => ({
@@ -356,7 +356,7 @@ export const useStagingStore = create<StagingState>()(
 
 if (typeof window !== "undefined") {
     window.addEventListener("storage", (e) => {
-        if (e.key === "wikint-staging") {
+        if (e.key === "lectern-staging") {
             useStagingStore.persist.rehydrate();
         }
     });

@@ -13,7 +13,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_SEARCH_KEY_NAME = "wikint-search-key"
+_SEARCH_KEY_NAME = "lectern-search-key"
 
 # Admin client — used by setup_meilisearch, index workers, and reindex scripts.
 meili_admin_client = AsyncClient(settings.meili_url, settings.meili_master_key)
@@ -128,7 +128,7 @@ async def _ensure_search_key() -> str:
     new_key = await meili_admin_client.create_key(
         KeyCreate(
             name=_SEARCH_KEY_NAME,
-            description="Auto-provisioned search-only key for WikINT API",
+            description="Auto-provisioned search-only key for the API",
             actions=["search"],
             indexes=["materials", "directories"],
             expires_at=None,

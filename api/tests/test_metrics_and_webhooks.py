@@ -48,7 +48,7 @@ async def test_metrics_endpoint_returns_prometheus_text(client) -> None:
     response = await client.get("/metrics")
     assert response.status_code == 200
     assert "text/plain" in response.headers["content-type"]
-    assert "wikint_upload_pipeline_total" in response.text
+    assert "lectern_upload_pipeline_total" in response.text
 
 
 @pytest.mark.asyncio
@@ -141,10 +141,10 @@ async def test_webhook_dispatched_successfully() -> None:
     call_kwargs = mock_post.call_args
     assert call_kwargs[0][0] == "https://example.com/hook"
     headers = call_kwargs[1]["headers"]
-    assert "X-WikINT-Signature" in headers
-    assert headers["X-WikINT-Signature"].startswith("sha256=")
-    assert "X-WikINT-Delivery" in headers
-    assert headers["X-WikINT-Event"] == "upload.complete"
+    assert "X-Lectern-Signature" in headers
+    assert headers["X-Lectern-Signature"].startswith("sha256=")
+    assert "X-Lectern-Delivery" in headers
+    assert headers["X-Lectern-Event"] == "upload.complete"
 
 
 @pytest.mark.asyncio
@@ -189,7 +189,7 @@ async def test_webhook_signature_is_valid() -> None:
 
     async def fake_post(url, *, content, headers, **kwargs):
         nonlocal received_sig, received_body
-        received_sig = headers["X-WikINT-Signature"]
+        received_sig = headers["X-Lectern-Signature"]
         received_body = content
         r = MagicMock()
         r.is_success = True

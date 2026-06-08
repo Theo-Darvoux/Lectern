@@ -3336,7 +3336,7 @@ wheels = [
 ]
 
 [[package]]
-name = "wikint-api"
+name = "lectern-api"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

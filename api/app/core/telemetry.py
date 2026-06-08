@@ -20,7 +20,7 @@ def setup_telemetry(app: Any) -> None:
     """Initialise OpenTelemetry. No-op when otel_endpoint is empty."""
     if not settings.otel_endpoint:
         return
-    resource = Resource.create({"service.name": "wikint-api"})
+    resource = Resource.create({"service.name": "lectern-api"})
     provider = TracerProvider(resource=resource)
     exporter = OTLPSpanExporter(endpoint=settings.otel_endpoint, insecure=True)
     provider.add_span_processor(BatchSpanProcessor(exporter))
@@ -33,12 +33,12 @@ def setup_telemetry(app: Any) -> None:
     RedisInstrumentor().instrument()
 
     global _tracer
-    _tracer = trace.get_tracer("wikint")
+    _tracer = trace.get_tracer("lectern")
     logger.info("OpenTelemetry initialised — endpoint=%s", settings.otel_endpoint)
 
 
 def get_tracer() -> trace.Tracer:
-    return _tracer or trace.get_tracer("wikint")
+    return _tracer or trace.get_tracer("lectern")
 
 
 def inject_trace_context() -> dict[str, str]:

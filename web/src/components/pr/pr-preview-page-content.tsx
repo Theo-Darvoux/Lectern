@@ -8,7 +8,7 @@ import { ArrowLeft, Loader2, AlertCircle, FileText, Image as ImageIcon, Video as
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/lib/api-client";
-import { getFileBadgeColor, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
+import { getFileBadgeColor, getFileBadgeLabel, getFileExtension, MIME_QCM } from "@/lib/file-utils";
 import { MarkdownRenderer } from "@/components/viewers/markdown-renderer";
 import { useTranslations } from "next-intl";
 
@@ -37,7 +37,7 @@ const QCMViewerPreview = dynamic(
 );
 
 const MIME_TO_VIEWER: Record<string, string> = {
-    "application/vnd.wikint.qcm+json": "qcm",
+    [MIME_QCM]: "qcm",
     "application/pdf": "pdf",
     "text/markdown": "markdown",
     "text/x-markdown": "markdown",

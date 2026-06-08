@@ -30,7 +30,7 @@ services:
           memory: 256M
 
   api:
-    image: ghcr.io/theo-darvoux/wikint/api:latest
+    image: ghcr.io/theo-darvoux/lectern/api:latest
     command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 120
     env_file: .env
     environment:
@@ -45,7 +45,7 @@ services:
           memory: 512M
 
   worker:
-    image: ghcr.io/theo-darvoux/wikint/worker:latest
+    image: ghcr.io/theo-darvoux/lectern/worker:latest
     command: arq app.workers.settings.WorkerSettings
     env_file: .env
     environment:
@@ -60,7 +60,7 @@ services:
           memory: 256M
 
   worker-fast:
-    image: ghcr.io/theo-darvoux/wikint/worker:latest
+    image: ghcr.io/theo-darvoux/lectern/worker:latest
     command: arq app.workers.settings.UploadFastWorkerSettings
     env_file: .env
     environment:
@@ -79,7 +79,7 @@ services:
           memory: 256M
 
   worker-slow:
-    image: ghcr.io/theo-darvoux/wikint/worker:latest
+    image: ghcr.io/theo-darvoux/lectern/worker:latest
     command: arq app.workers.settings.UploadSlowWorkerSettings
     env_file: .env
     environment:
@@ -98,8 +98,7 @@ services:
           memory: 256M
 
   web:
-    image: ghcr.io/theo-darvoux/wikint/web:latest
-    env_file: .env
+    image: ghcr.io/theo-darvoux/lectern/web:latest
     deploy:
       resources:
         limits:
@@ -112,12 +111,8 @@ services:
   nginx:
     ports:
       - "0.0.0.0:9080:80"
-    environment:
-      - S3_PUBLIC_DOMAIN=${S3_PUBLIC_DOMAIN:-files.example.com}
-    command: >
-      /bin/sh -c "envsubst '$$S3_PUBLIC_DOMAIN' < /etc/nginx/templates/nginx.conf.template > /tmp/nginx.conf && exec nginx -c /tmp/nginx.conf -g 'daemon off;'"
     volumes:
-      - ./infra/nginx/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
+      - ./infra/nginx/nginx.conf.template:/etc/nginx/nginx.conf:ro
       - ./infra/nginx/nginx.eurooffice.snippet:/etc/nginx/nginx.eurooffice.snippet:ro
     deploy:
       resources:

@@ -1220,7 +1220,7 @@
           "logo": "Logo",
           "favicon": "Favicon",
           "placeholders": {
-            "siteDescription": "Wiki pour SudParis Intelligence"
+            "siteDescription": "Plateforme collaborative de partage de supports de cours"
           }
         },
         "footerLinks": {
@@ -1230,7 +1230,7 @@
           "footerText": "Texte du pied de page",
           "organizationUrl": "URL de l'organisation",
           "placeholders": {
-            "footerText": "© 2024 WikINT",
+            "footerText": "© 2026 Lectern",
             "organizationUrl": "https://www.example.com"
           }
         },
@@ -1383,7 +1383,7 @@
           "port": "ex: 587",
           "user": "ex: utilisateur@gmail.com",
           "password": "••••••••",
-          "from": "ex: noreply@wikint.com",
+          "from": "ex: noreply@example.com",
           "senderName": "ex: Mon App"
         },
         "senderName": "Nom affiché de l'expéditeur",
@@ -1771,7 +1771,7 @@
     "sections": {
       "presentation": {
         "title": "Présentation du service",
-        "text": "{siteName} est une plateforme collaborative de partage de ressources académiques destinée aux étudiants et membres de la communauté de Telecom SudParis et de l'IMT-BS. Le service est édité par {legalName}, dont le siège social est situé {legalAddress}, immatriculée sous le numéro {legalSiret}."
+        "text": "{siteName} est une plateforme collaborative de partage de ressources académiques destinée à ses étudiants et membres de la communauté. Le service est édité par {legalName}, dont le siège social est situé {legalAddress}, immatriculée sous le numéro {legalSiret}."
       },
       "access": {
         "title": "Accès au service",

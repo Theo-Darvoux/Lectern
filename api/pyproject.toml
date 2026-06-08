@@ -1,7 +1,7 @@
 [project]
-name = "wikint-api"
+name = "lectern-api"
 version = "0.1.0"
-description = "WikINT API — Course materials platform backend"
+description = "API — Course materials platform backend"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

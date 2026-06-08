@@ -23,7 +23,7 @@ async def test_request_code_invalid_domain(client: AsyncClient) -> None:
 async def test_request_code_plus_alias(client: AsyncClient) -> None:
     response = await client.post(
         "/api/auth/request-code",
-        json={"email": "test+alias@telecom-sudparis.eu"},
+        json={"email": "test+alias@example.com"},
     )
     assert response.status_code == 422
 
@@ -40,7 +40,7 @@ async def test_verify_code_invalid(client: AsyncClient, mock_redis: AsyncMock) -
     try:
         response = await client.post(
             "/api/auth/verify-code",
-            json={"email": "test@telecom-sudparis.eu", "code": "WRONGCOD"},
+            json={"email": "test@example.com", "code": "WRONGCOD"},
         )
         assert response.status_code == 400
         # Check that increment was called
@@ -53,7 +53,7 @@ async def test_verify_code_rate_limit(client: AsyncClient, mock_redis: AsyncMock
     from app.config import settings
     from app.services import auth as auth_service
 
-    email = "test@telecom-sudparis.eu"
+    email = "test@example.com"
 
     # Force production environment for rate limit check
     original_env = settings.environment
@@ -82,7 +82,7 @@ async def test_setup_creates_first_admin(client: AsyncClient) -> None:
     response = await client.post(
         "/api/auth/setup",
         json={
-            "email": "admin@telecom-sudparis.eu",
+            "email": "admin@example.com",
             "password": "supersecret123",
             "display_name": "First Admin",
         },
@@ -101,14 +101,14 @@ async def test_setup_creates_first_admin(client: AsyncClient) -> None:
 async def test_setup_blocked_when_admin_exists(client: AsyncClient) -> None:
     first = await client.post(
         "/api/auth/setup",
-        json={"email": "admin@telecom-sudparis.eu", "password": "supersecret123"},
+        json={"email": "admin@example.com", "password": "supersecret123"},
     )
     assert first.status_code == 200
 
     # Second attempt must be permanently rejected — this guards privilege escalation.
     second = await client.post(
         "/api/auth/setup",
-        json={"email": "intruder@telecom-sudparis.eu", "password": "supersecret123"},
+        json={"email": "intruder@example.com", "password": "supersecret123"},
     )
     assert second.status_code == 409
 
@@ -116,6 +116,6 @@ async def test_setup_blocked_when_admin_exists(client: AsyncClient) -> None:
 async def test_setup_rejects_short_password(client: AsyncClient) -> None:
     response = await client.post(
         "/api/auth/setup",
-        json={"email": "admin@telecom-sudparis.eu", "password": "short"},
+        json={"email": "admin@example.com", "password": "short"},
     )
     assert response.status_code == 422

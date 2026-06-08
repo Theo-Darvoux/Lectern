@@ -15,7 +15,7 @@ from app.models.user import User, UserRole
 async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> User:
     user = User(
         id=uuid.uuid4(),
-        email=f"{uuid.uuid4().hex[:8]}@telecom-sudparis.eu",
+        email=f"{uuid.uuid4().hex[:8]}@example.com",
         display_name="Tester",
         role=role,
         onboarded=True,
@@ -246,7 +246,7 @@ async def test_tus_patch_success_final(
 
     assert response.status_code == 204
     assert response.headers["Upload-Offset"] == str(chunk_size)
-    assert response.headers["X-WikINT-File-Key"] == "q-key"
+    assert response.headers["X-Lectern-File-Key"] == "q-key"
 
     mock_storage["upload"].assert_called_once()
     mock_storage["complete"].assert_called_once()

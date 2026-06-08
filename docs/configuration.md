@@ -1,4 +1,4 @@
-# Configuring WikINT
+# Configuration
 
 This guide is task-oriented: pick the thing you want to change, follow the
 steps. Every setting is a variable in the root `.env` file — for the full,
@@ -32,7 +32,7 @@ Before anything else works in production, set these:
 4. **Storage** — `STORAGE_BACKEND` plus the `S3_*` credentials for it.
 5. **EuroOffice** — `EUROOFFICE_JWT_SECRET` and `EUROOFFICE_FILE_TOKEN_SECRET`,
    **two different** random strings.
-6. **`FRONTEND_URL`** — your real public origin (e.g. `https://wikint.example.com`).
+6. **`FRONTEND_URL`** — your real public origin (e.g. `https://app.example.com`).
 
 The app will refuse to start in production if any of the critical secrets are
 still at their placeholder values, or if the two EuroOffice secrets match. That
@@ -42,14 +42,14 @@ guard is deliberate.
 
 ## Choosing a storage backend
 
-WikINT talks S3 to everything; you pick the implementation with
+The platform talks S3 to everything; you pick the implementation with
 `STORAGE_BACKEND`. Per-backend quirks are handled for you in code, so switching
 is just env changes.
 
 | Goal | Set |
 |---|---|
 | **Local dev** | `STORAGE_BACKEND=seaweedfs` (this is the compose default — SeaweedFS runs automatically). |
-| **Cloudflare R2** | `STORAGE_BACKEND=r2`, point `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY` at your R2 bucket, set `S3_USE_SSL=true` and `S3_PUBLIC_DOMAIN`. |
+| **Cloudflare R2** | `STORAGE_BACKEND=r2`, point `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY` at your R2 bucket, and set `S3_USE_SSL=true`. |
 | **Self-hosted (Garage / RustFS / SeaweedFS in prod)** | the matching `STORAGE_BACKEND` value plus its `S3_*` endpoint and keys. |
 
 If the browser reaches storage on a different address than the API does
@@ -69,7 +69,7 @@ to presigned S3 / server-side streaming.
 
 ## Setting up sign-in
 
-WikINT supports several login methods; turn on the ones you want.
+The platform supports several login methods; turn on the ones you want.
 
 - **Google** — `GOOGLE_OAUTH_ENABLED=true` and `GOOGLE_CLIENT_ID=<your id>`.
 - **Email + password** — `CLASSIC_AUTH_ENABLED=true`.
@@ -79,19 +79,29 @@ WikINT supports several login methods; turn on the ones you want.
 
 ### Restricting who can register
 
-By default only configured email domains may sign up. Set `ALLOWED_DOMAINS` to a
-comma-separated list of `domain:auto` / `domain:manual` entries:
+Only configured email domains may sign up. **A fresh install ships with no
+allowed domains, so registration is blocked until you configure at least one** —
+this is a required setup step. You have three options:
 
-```dotenv
-ALLOWED_DOMAINS=telecom-sudparis.eu:auto,imt-bs.eu:manual
-```
+1. **Set `ALLOWED_DOMAINS`** to a comma-separated list of `domain:auto` /
+   `domain:manual` entries:
 
-- `auto` — approved automatically on first login.
-- `manual` — created but held until a staff member approves them.
+   ```dotenv
+   ALLOWED_DOMAINS=example.com:auto,example.org:manual
+   ```
 
-Leave `ALLOWED_DOMAINS` empty to manage the list from the admin UI instead
-(**Authentication → Domains**). To accept *any* domain, set
-`ALLOW_ALL_DOMAINS=true` (and optionally `AUTO_APPROVE_ALL_DOMAINS=true`).
+   - `auto` — approved automatically on first login.
+   - `manual` — created but held until a staff member approves them.
+
+2. **Leave `ALLOWED_DOMAINS` empty and manage the list from the admin UI**
+   (**Authentication → Domains**). The first admin (created via the first-run
+   setup screen below) is exempt from the domain check, so you can always
+   bootstrap an instance and add domains from there.
+
+3. **Accept *any* domain** by setting `ALLOW_ALL_DOMAINS=true` (and optionally
+   `AUTO_APPROVE_ALL_DOMAINS=true`).
+
+If none of these is configured, no one other than the first admin can register.
 
 ### Creating the first admin
 
@@ -130,7 +140,7 @@ SMTP_USER=postmaster@yourorg.com
 SMTP_PASSWORD=...
 SMTP_FROM=no-reply@yourorg.com
 SMTP_USE_TLS=true
-SMTP_SENDER_NAME=WikINT
+SMTP_SENDER_NAME=Lectern
 ```
 
 If outbound DNS is flaky, pin the server IP with `SMTP_IP` while keeping
@@ -164,8 +174,8 @@ populate the legal-notice and privacy pages.
 ## Tuning uploads and file safety
 
 - **Bigger files** — raise `MAX_FILE_SIZE_MB` and the relevant per-category cap
-  (`MAX_VIDEO_SIZE_MB`, `MAX_DOCUMENT_SIZE_MB`, …). Mirror the global cap into
-  `NEXT_PUBLIC_MAX_FILE_SIZE_MB` so the client shows the right limit.
+  (`MAX_VIDEO_SIZE_MB`, `MAX_DOCUMENT_SIZE_MB`, …). The client automatically
+  fetches and displays the correct limit dynamically from the backend configuration.
 - **Restrict file types** — `ALLOWED_EXTENSIONS=.pdf,.docx` and/or
   `ALLOWED_MIME_TYPES`. Empty = allow everything.
 - **Smaller stored files** — lower `PDF_QUALITY`, pick a heavier

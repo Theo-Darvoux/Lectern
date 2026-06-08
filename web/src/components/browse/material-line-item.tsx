@@ -16,7 +16,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { useUIStore, useLikeOverrides } from "@/lib/stores";
-import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
+import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension, MIME_QCM } from "@/lib/file-utils";
 import { EXT_ICONS, TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
 import { useTranslations } from "next-intl";
 
@@ -109,7 +109,7 @@ function MaterialLineItemImpl({
         const ext = getFileExtension(fileName);
         if (ext && EXT_ICONS[ext]) {
             Icon = EXT_ICONS[ext];
-        } else if (mimeType === "application/vnd.wikint.qcm+json") {
+        } else if (mimeType === MIME_QCM) {
             Icon = ListChecks;
         } else if (mimeType && mimeType.includes("pdf")) {
             Icon = FileText;

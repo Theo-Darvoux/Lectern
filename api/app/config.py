@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     secret_key: SecretStr = SecretStr(
         "change-this-to-a-secure-random-string-with-at-least-32-bytes"
     )
+
+    # CAS (content-addressed storage) key-derivation domain separation. These
+    # seed the HKDF (over SECRET_KEY) that produces every CAS digest — i.e. the
+    # `cas/` S3 object keys and the Redis dedup/ref-count keys. Changing either
+    # re-derives all digests, so a deployment that already has stored files must
+    # keep the values it was created with.
+    cas_hkdf_salt: str = "lectern-cas-salt-v1"
+    cas_hkdf_info: str = "lectern-cas-v1"
 
     # Auth toggles
     totp_enabled: bool = True
@@ -23,13 +31,14 @@ class Settings(BaseSettings):
 
     # Allowed domains — comma-separated "domain:auto|domain:manual" entries.
     # When set, this wins over DB rows. Empty means fall back to DB.
-    # Example: "telecom-sudparis.eu:auto,imt-bs.eu:auto"
+    # Example: "example.com:auto,example.org:manual"
     allowed_domains: str = ""
 
     # Branding Defaults
-    site_name: str = "WikINT"
+    # Default product name; override per-instance with SITE_NAME in .env.
+    site_name: str = "Lectern"
     site_name_style: str | None = None
-    site_description: str = "Wiki for SudParis Intelligence"
+    site_description: str = "Collaborative course materials platform"
     site_logo_url: str | None = None
     site_favicon_url: str | None = None
     og_image_url: str | None = None
@@ -38,8 +47,16 @@ class Settings(BaseSettings):
     bg_watermark_opacity_dark: float | None = None
     footer_logo_url: str | None = None
     primary_color: str = "#3b82f6"
-    footer_text: str = "© 2024 WikINT"
-    organization_url: str | None = "https://www.telecom-sudparis.eu"
+    footer_text: str = ""
+    organization_url: str | None = None
+    repo_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("repo_url", "next_public_repo_url"),
+    )
+    eurooffice_public_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("eurooffice_public_url", "next_public_eurooffice_url"),
+    )
     legal_name: str | None = None
     legal_address: str | None = None
     legal_siret: str | None = None
@@ -51,7 +68,7 @@ class Settings(BaseSettings):
     )
     legal_version: str = "1.0"
 
-    database_url: str = "postgresql+asyncpg://wikint:wikint@localhost:5432/wikint"
+    database_url: str = "postgresql+asyncpg://lectern:lectern@localhost:5432/lectern"
 
     redis_url: str = "redis://localhost:6379/0"
 
@@ -68,7 +85,7 @@ class Settings(BaseSettings):
     s3_public_endpoint: str | None = None
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
-    s3_bucket: str = "wikint"
+    s3_bucket: str = "lectern"
     s3_region: str = "us-east-1"
     s3_use_ssl: bool = False
     s3_use_accelerate_endpoint: bool = False
@@ -134,7 +151,7 @@ class Settings(BaseSettings):
     smtp_avatar_url: str | None = None
     smtp_use_tls: bool = True
 
-    backup_dir: str = "/var/lib/wikint/backups"
+    backup_dir: str = "/var/lib/lectern/backups"
 
     # Observability — Prometheus /metrics endpoint
     # When set, callers must pass ?token=<value> or Authorization: Bearer <value> to scrape.

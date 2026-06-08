@@ -1,6 +1,6 @@
 # Installation & Deployment
 
-This page covers getting WikINT running — locally for development, and in
+This page covers getting the platform running — locally for development, and in
 production. For *what each setting does*, see the
 [Configuration guide](configuration.md) and the
 [Environment Variables Reference](environment-variables.md).
@@ -10,7 +10,6 @@ production. For *what each setting does*, see the
 - Docker + Docker Compose (for the full stack)
 - Python 3.12 + [uv](https://github.com/astral-sh/uv) (API only)
 - Node.js 20+ + pnpm (frontend only)
-- k6 (optional, for stress tests)
 
 ---
 
@@ -80,7 +79,7 @@ docker compose up -d
 > Add the `export` line to your shell profile (or the `.env` file Compose reads) so it persists across sessions.
 
 What `compose.prod.yaml` changes relative to the base:
-- All services use published images (`ghcr.io/theo-darvoux/wikint/api:latest`, etc.)
+- All services use published images (`ghcr.io/theo-darvoux/lectern/api:latest`, etc.)
 - API runs under **gunicorn** with 4 uvicorn workers instead of single-process uvicorn
 - Workers run with explicit ARQ settings classes (`UploadFastWorkerSettings`, etc.)
 - `ENVIRONMENT=production` is forced on all services

@@ -114,6 +114,8 @@ async def get_auth_methods(
         "footer_text": settings.footer_text,
         "footer_logo_url": settings.footer_logo_url,
         "organization_url": settings.organization_url,
+        "repo_url": settings.repo_url,
+        "eurooffice_public_url": settings.eurooffice_public_url,
         "og_image_url": settings.og_image_url,
         "bg_watermark_url": settings.bg_watermark_url,
         "bg_watermark_opacity_light": settings.bg_watermark_opacity_light,

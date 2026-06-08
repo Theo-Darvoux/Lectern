@@ -2,7 +2,7 @@ import asyncio
 
 import typer
 
-app = typer.Typer(help="WikINT CLI")
+app = typer.Typer(help="Lectern CLI")
 
 
 @app.command()

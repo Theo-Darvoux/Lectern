@@ -347,7 +347,7 @@ async def _thumbnail_office(
     .doc, .xls, .ppt, .odt, .ods, .odp — without relying on optional embedded
     thumbnails that most files simply do not contain.
     """
-    tmp_dir = Path(tempfile.mkdtemp(prefix="wikint_office_thumb_"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="lectern_office_thumb_"))
     try:
         # 1. Convert to PDF via LibreOffice headless, explicitly defining a custom
         # unique profile directory to avoid lock collisions between concurrent jobs.
@@ -474,7 +474,7 @@ async def _thumbnail_via_soffice(
     LibreOffice requires the source file to have the right extension to identify the
     format.  ``suffix`` is appended to the temp copy (e.g. ``.md`` or ``.txt``).
     """
-    tmp_dir = Path(tempfile.mkdtemp(prefix="wikint_soffice_thumb_"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="lectern_soffice_thumb_"))
     try:
         temp_file = tmp_dir / f"document{suffix}"
         shutil.copy2(input_path, temp_file)

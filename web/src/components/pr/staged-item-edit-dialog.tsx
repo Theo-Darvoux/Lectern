@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { TagInput } from "@/components/ui/tag-input";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { sanitizeNameInput } from "@/lib/utils";
-import { formatFileSize } from "@/lib/file-utils";
+import { formatFileSize, MIME_QCM } from "@/lib/file-utils";
 import { uploadFile, logicalFileSize } from "@/lib/upload-client";
 import type { Operation } from "@/lib/staging-store";
 import { useTranslations } from "next-intl";
@@ -98,7 +98,7 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
     const hasReplaceableFile =
         op?.op === "create_material" &&
         !!op.file_key &&
-        op.file_mime_type !== "application/vnd.wikint.qcm+json";
+        op.file_mime_type !== MIME_QCM;
 
     const currentFileName = op?.op === "create_material" ? (op.file_name ?? "") : "";
     const currentFileSize = op?.op === "create_material" ? (op.file_size ?? 0) : 0;

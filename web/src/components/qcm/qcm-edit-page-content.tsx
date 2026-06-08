@@ -10,6 +10,7 @@ import type { QCMFile, QCMMeta } from "@/lib/qcm-types";
 import { validateQCMFile } from "@/lib/qcm-utils";
 import { apiFetch, getMaterialFileUrl } from "@/lib/api-client";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
+import { MIME_QCM } from "@/lib/file-utils";
 import { toast } from "sonner";
 
 function slugify(title: string): string {
@@ -124,7 +125,7 @@ function EditQCMPageInner() {
               file_key: staged.file_key,
               file_name: fileName,
               file_size: staged.file_size,
-              file_mime_type: "application/vnd.wikint.qcm+json",
+              file_mime_type: MIME_QCM,
               content_sha256: staged.sha256,
               diff_summary: "QCM modifié via l'éditeur",
               version_lock: versionLock,
@@ -163,7 +164,7 @@ function EditQCMPageInner() {
         file_key: staged.file_key,
         file_name: fileName,
         file_size: staged.file_size,
-        file_mime_type: "application/vnd.wikint.qcm+json",
+        file_mime_type: MIME_QCM,
         diff_summary: "QCM modifié via l'éditeur",
         version_lock: versionLock,
         metadata: { qcm_draft: qcm },

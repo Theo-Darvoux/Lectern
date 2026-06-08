@@ -271,7 +271,7 @@ async def upload_batch_zip(
         parts = settings.allowed_mime_types.split(",")
         allowed_mimes = {m.strip().lower() for m in parts if m.strip()}
 
-    tmp_dir = tempfile.mkdtemp(prefix="wikint_bz_")
+    tmp_dir = tempfile.mkdtemp(prefix="lectern_bz_")
     zip_path = os.path.join(tmp_dir, "upload.zip")
 
     try:

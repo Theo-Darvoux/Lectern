@@ -17,7 +17,7 @@ from app.models.user import User, UserRole
 async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> User:
     user = User(
         id=uuid.uuid4(),
-        email=f"{uuid.uuid4().hex[:8]}@telecom-sudparis.eu",
+        email=f"{uuid.uuid4().hex[:8]}@example.com",
         display_name="Tester",
         role=role,
         onboarded=True,
@@ -804,7 +804,7 @@ async def test_ensure_search_key_creates_key_when_none_exists():
     from app.core import meilisearch as ms_module
     from app.core.meilisearch import _ensure_search_key
 
-    new_key = _make_key("wikint-search-key", "brand-new-key")
+    new_key = _make_key("lectern-search-key", "brand-new-key")
 
     mock_admin = AsyncMock()
     mock_admin.get_keys = AsyncMock(return_value=_make_keys_result([]))

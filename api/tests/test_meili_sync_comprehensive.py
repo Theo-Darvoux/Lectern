@@ -18,7 +18,7 @@ from app.services.pr import apply_pr
 async def _user(db: AsyncSession) -> User:
     u = User(
         id=uuid.uuid4(),
-        email=f"{uuid.uuid4().hex[:8]}@telecom-sudparis.eu",
+        email=f"{uuid.uuid4().hex[:8]}@example.com",
         display_name="Tester",
         role=UserRole.MODERATOR,
         onboarded=True,

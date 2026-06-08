@@ -1,5 +1,5 @@
 {
-  "name": "wikint-zip-worker",
+  "name": "lectern-zip-worker",
   "version": "1.0.0",
   "private": true,
   "type": "module",

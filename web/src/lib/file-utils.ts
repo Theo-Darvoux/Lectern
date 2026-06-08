@@ -1,6 +1,9 @@
 /** Maximum upload size in bytes, configurable via NEXT_PUBLIC_MAX_FILE_SIZE_MB (default 100 MiB). */
 export const MAX_FILE_SIZE_MB = parseInt(process.env.NEXT_PUBLIC_MAX_FILE_SIZE_MB || "100", 10);
 
+/** Canonical MIME type for QCM files. Single source of truth for both upload and viewer logic. */
+export const MIME_QCM = "application/vnd.lectern.qcm+json";
+
 /** Comma-separated string of accepted file extensions for <input accept="...">. */
 export const ACCEPTED_FILE_TYPES = [
     // Documents
@@ -45,7 +48,7 @@ export const ACCEPTED_FILE_TYPES = [
     ".dart", ".sql", ".graphql", ".gql",
     // Config / Build
     ".tf", ".hcl", ".nix", ".proto", ".diff", ".patch", ".asm", ".s",
-    // WikINT QCM
+    // QCM
     ".qcm",
 ].join(",");
 
@@ -218,8 +221,8 @@ export const EXT_TO_MIME: Record<string, string> = {
     patch: "text/x-patch",
     asm: "text/plain",
     s: "text/plain",
-    // WikINT QCM
-    qcm: "application/vnd.wikint.qcm+json",
+    // QCM
+    qcm: MIME_QCM,
 };
 
 /** Resolve the best MIME type for a file: browser-reported → extension lookup → octet-stream. */
@@ -277,7 +280,7 @@ const DEFAULT_BADGE_COLOR = "bg-gray-100 text-gray-800 dark:bg-gray-800/40 dark:
 export function getFileBadgeColor(fileName: string, mimeType?: string): string {
     const ext = getFileExtension(fileName);
     if (ext && EXT_BADGE_COLORS[ext]) return EXT_BADGE_COLORS[ext];
-    
+
     if (mimeType) {
         if (mimeType === "application/pdf") return EXT_BADGE_COLORS["pdf"];
         if (mimeType.startsWith("image/")) return EXT_BADGE_COLORS["jpg"];
@@ -286,7 +289,7 @@ export function getFileBadgeColor(fileName: string, mimeType?: string): string {
         if (mimeType.includes("document") || mimeType.includes("msword")) return EXT_BADGE_COLORS["doc"];
         if (mimeType.includes("sheet") || mimeType.includes("excel")) return EXT_BADGE_COLORS["xls"];
     }
-    
+
     return DEFAULT_BADGE_COLOR;
 }
 
@@ -360,7 +363,7 @@ export function getFileIconColor(fileName: string, mimeType?: string): string {
 
     if (mimeType) {
         if (mimeType === "application/pdf") return EXT_ICON_COLORS["pdf"];
-        if (mimeType === "application/vnd.wikint.qcm+json") return EXT_ICON_COLORS["qcm"];
+        if (mimeType === MIME_QCM) return EXT_ICON_COLORS["qcm"];
         if (mimeType.startsWith("image/")) return EXT_ICON_COLORS["jpg"];
         if (mimeType.startsWith("video/")) return EXT_ICON_COLORS["mp4"];
         if (mimeType.startsWith("audio/")) return EXT_ICON_COLORS["mp3"];
@@ -622,7 +625,7 @@ export function getViewerType(mimeType: string, fileName: string): string {
     const ext = getFileExtension(fileName);
 
     // QCM check before other lookups
-    if (mimeType === "application/vnd.wikint.qcm+json" || ext === "qcm") return "qcm";
+    if (mimeType === MIME_QCM || ext === "qcm") return "qcm";
 
     // 1. Exact MIME match
     if (MIME_TO_VIEWER[mimeType]) return MIME_TO_VIEWER[mimeType];

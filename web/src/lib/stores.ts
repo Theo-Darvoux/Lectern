@@ -232,6 +232,8 @@ export interface PublicConfig {
     footer_text: string;
     footer_logo_url: string | null;
     organization_url: string | null;
+    repo_url: string | null;
+    eurooffice_public_url: string | null;
     og_image_url: string | null;
     bg_watermark_url: string | null;
     bg_watermark_opacity_light: number | null;

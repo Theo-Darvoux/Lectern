@@ -1,13 +1,13 @@
 #!/bin/sh
 set -e
 
-# Bootstrap the SeaweedFS S3 store for WikINT dev (analogue of the old MinIO
-# setup.sh). Creates the `wikint` bucket via the S3 API. Anonymous read for
+# Bootstrap the SeaweedFS S3 store for local dev (analogue of the old MinIO
+# setup.sh). Creates the `lectern` bucket via the S3 API. Anonymous read for
 # branding/ assets is granted by the `anonymous` identity in s3.json, so no
 # bucket policy step is needed here.
 
 ENDPOINT="http://seaweedfs:8333"
-BUCKET="${S3_BUCKET:-wikint}"
+BUCKET="${S3_BUCKET:-lectern}"
 export AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY:-minioadmin}"
 export AWS_SECRET_ACCESS_KEY="${S3_SECRET_KEY:-minioadmin}"
 export AWS_DEFAULT_REGION="${S3_REGION:-us-east-1}"

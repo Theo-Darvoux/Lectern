@@ -773,15 +773,8 @@ def upgrade() -> None:
     # --------------------------------------------------------------------- #
     op.execute(
         "INSERT INTO users (id, email, display_name, role, onboarded, gdpr_consent) "
-        "VALUES (gen_random_uuid(), 'guest@wikint.local', 'Guest', 'guest', true, true) "
+        "VALUES (gen_random_uuid(), 'guest@lectern.local', 'Guest', 'guest', true, true) "
         "ON CONFLICT (email) DO NOTHING"
-    )
-
-    op.execute(
-        "INSERT INTO allowed_domains (id, domain, auto_approve) VALUES "
-        "(gen_random_uuid(), 'telecom-sudparis.eu', true), "
-        "(gen_random_uuid(), 'imt-bs.eu', true) "
-        "ON CONFLICT DO NOTHING"
     )
 
 

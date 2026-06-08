@@ -19,7 +19,7 @@ def _guest_headers(guest: User) -> dict[str, str]:
 async def _create_guest_user(db: AsyncSession) -> User:
     guest = User(
         id=uuid.uuid4(),
-        email="guest@wikint.local",
+        email="guest@lectern.local",
         display_name="Guest",
         role=UserRole.GUEST,
         onboarded=True,
@@ -33,7 +33,7 @@ async def _create_guest_user(db: AsyncSession) -> User:
 async def _create_student(db: AsyncSession) -> User:
     user = User(
         id=uuid.uuid4(),
-        email=f"{uuid.uuid4().hex[:8]}@telecom-sudparis.eu",
+        email=f"{uuid.uuid4().hex[:8]}@example.com",
         display_name="Student",
         role=UserRole.STUDENT,
         onboarded=True,

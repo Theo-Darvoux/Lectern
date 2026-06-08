@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cas import hmac_cas_key, increment_cas_ref
 from app.core.database import get_db
+from app.core.mimetypes import QCM_MIME_TYPE
 from app.core.redis import redis_client
 from app.core.storage import _get_s3_settings, get_s3_client
 from app.core.storage import upload_file as storage_upload_file
@@ -45,7 +46,6 @@ QCM_MAX_ANSWERS_PER_QUESTION: int = int(os.environ.get("QCM_MAX_ANSWERS_PER_QUES
 # Embedded image limits (kept in sync with the web client's qcm-types constants).
 QCM_MAX_IMAGES: int = int(os.environ.get("QCM_MAX_IMAGES", "30"))
 QCM_MAX_IMAGE_CHARS: int = int(os.environ.get("QCM_MAX_IMAGE_CHARS", "500000"))
-QCM_MIME_TYPE = "application/vnd.wikint.qcm+json"
 
 # ---------------------------------------------------------------------------
 # Validation helpers

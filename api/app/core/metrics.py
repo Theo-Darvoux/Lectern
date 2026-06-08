@@ -1,4 +1,4 @@
-"""Prometheus metrics for the WikINT upload pipeline.
+"""Prometheus metrics for the upload pipeline.
 
 All metrics are registered in a single CollectorRegistry so tests can use
 isolated registries without polluting the default global one.
@@ -25,7 +25,7 @@ REGISTRY = CollectorRegistry(auto_describe=True)
 # ── Counters ──────────────────────────────────────────────────────────────────
 
 upload_pipeline_total = Counter(
-    "wikint_upload_pipeline_total",
+    "lectern_upload_pipeline_total",
     "Total uploads processed by the background pipeline, labelled by outcome and MIME category.",
     labelnames=["status", "mime_category"],
     registry=REGISTRY,
@@ -36,7 +36,7 @@ upload_pipeline_total = Counter(
 """
 
 upload_webhook_total = Counter(
-    "wikint_upload_webhook_total",
+    "lectern_upload_webhook_total",
     "Total webhook dispatch attempts, labelled by outcome.",
     labelnames=["outcome"],
     registry=REGISTRY,
@@ -48,7 +48,7 @@ upload_webhook_total = Counter(
 _DURATION_BUCKETS = (0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600)
 
 upload_pipeline_duration = Histogram(
-    "wikint_upload_pipeline_duration_seconds",
+    "lectern_upload_pipeline_duration_seconds",
     "End-to-end pipeline duration from job start to terminal status.",
     labelnames=["status", "mime_category"],
     buckets=_DURATION_BUCKETS,
@@ -56,7 +56,7 @@ upload_pipeline_duration = Histogram(
 )
 
 upload_scan_duration = Histogram(
-    "wikint_upload_scan_duration_seconds",
+    "lectern_upload_scan_duration_seconds",
     "Duration of the malware scan stage only.",
     labelnames=["mime_category"],
     buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60),
@@ -64,7 +64,7 @@ upload_scan_duration = Histogram(
 )
 
 upload_file_size = Histogram(
-    "wikint_upload_file_size_bytes",
+    "lectern_upload_file_size_bytes",
     "Original file size at the time of upload (before pipeline processing).",
     labelnames=["mime_category"],
     buckets=(
@@ -82,7 +82,7 @@ upload_file_size = Histogram(
 )
 
 upload_compression_ratio = Histogram(
-    "wikint_upload_compression_ratio",
+    "lectern_upload_compression_ratio",
     "Ratio of original size to final size (> 1 means size was reduced).",
     labelnames=["mime_category"],
     buckets=(0.5, 0.75, 0.9, 0.95, 1.0, 1.05, 1.1, 1.25, 1.5, 2.0, 5.0),

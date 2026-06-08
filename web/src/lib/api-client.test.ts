@@ -31,7 +31,7 @@ describe("api-client", () => {
     it("generates and persists a client id", () => {
       const id1 = getClientId();
       expect(id1).toBeDefined();
-      expect(localStorage.getItem("wikint_client_id")).toBe(id1);
+      expect(localStorage.getItem("lectern_client_id")).toBe(id1);
       
       const id2 = getClientId();
       expect(id2).toBe(id1);

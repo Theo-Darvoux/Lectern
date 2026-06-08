@@ -52,7 +52,7 @@ def _s3_csp_domain() -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    logger.info("WikINT API starting up")
+    logger.info("API starting up")
 
     from app.core.meilisearch import setup_meilisearch
     from app.core.redis import close_arq_pool, init_arq_pool
@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.scanner = scanner
 
     yield
-    logger.info("WikINT API shutting down")
+    logger.info("API shutting down")
     from app.core.sse import stop_sse_pubsub
 
     await stop_sse_pubsub()
@@ -114,8 +114,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="WikINT API",
-    description="Course materials platform for Telecom SudParis / IMT-BS",
+    title=f"{settings.site_name} API",
+    description="Collaborative course materials platform",
     version="0.1.0",
     docs_url="/api/docs" if settings.is_dev else None,
     openapi_url="/api/openapi.json" if settings.is_dev else None,

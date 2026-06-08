@@ -7,7 +7,7 @@ Upload lifecycle
 ----------------
 1. POST   /api/upload/tus          – create upload, get Location URL
 2. HEAD   /api/upload/tus/{tus_id} – query current offset
-3. PATCH  /api/upload/tus/{tus_id} – append chunk; final PATCH returns X-WikINT-File-Key
+3. PATCH  /api/upload/tus/{tus_id} – append chunk; final PATCH returns X-Lectern-File-Key
 4. DELETE /api/upload/tus/{tus_id} – terminate (abort S3 multipart, free Redis state)
 
 S3 backend
@@ -274,7 +274,7 @@ async def tus_patch(
     """Append a chunk to the upload at Upload-Offset.
 
     On the final chunk, completes the S3 multipart upload and enqueues
-    background processing.  Returns X-WikINT-File-Key for the SSE stream.
+    background processing.  Returns X-Lectern-File-Key for the SSE stream.
     """
     tus_id_str = str(tus_id)
     _inflight_key = f"tus:inflight:{user.id}"
@@ -286,7 +286,7 @@ async def tus_patch(
         await redis.decr(_inflight_key)
         return Response(
             status_code=429,
-            headers=_tus_headers(**{"X-WikINT-Error": ERR_TUS_CONCURRENCY_LIMIT}),
+            headers=_tus_headers(**{"X-Lectern-Error": ERR_TUS_CONCURRENCY_LIMIT}),
         )
 
     try:
@@ -508,7 +508,7 @@ async def tus_patch(
                         headers=_tus_headers(
                             **{
                                 "Upload-Offset": str(new_offset),
-                                "X-WikINT-File-Key": quarantine_key,
+                                "X-Lectern-File-Key": quarantine_key,
                             }
                         ),
                     )

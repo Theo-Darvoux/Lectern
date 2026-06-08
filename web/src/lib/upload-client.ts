@@ -456,7 +456,7 @@ function _tusUpload(
                 options.onBytesProgress?.(bytesUploaded, bytesTotal);
             },
             onAfterResponse: (_req, res) => {
-                const key = res.getHeader("X-WikINT-File-Key");
+                const key = res.getHeader("X-Lectern-File-Key");
                 if (key) quarantineKey = key;
 
                 // Capture tus URL once available (after first POST)
@@ -466,7 +466,7 @@ function _tusUpload(
             },
             onSuccess: () => {
                 if (!quarantineKey) {
-                    reject(new Error("Server did not return X-WikINT-File-Key after tus upload"));
+                    reject(new Error("Server did not return X-Lectern-File-Key after tus upload"));
                     return;
                 }
                 onStatusUpdate?.(options.t ? options.t("processing") : "Processing…");

@@ -5,6 +5,8 @@ x-common-env: &common-env
   MEILI_URL: ${MEILI_URL}
   MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
   SECRET_KEY: ${SECRET_KEY}
+  CAS_HKDF_SALT: ${CAS_HKDF_SALT:-lectern-cas-salt-v1}
+  CAS_HKDF_INFO: ${CAS_HKDF_INFO:-lectern-cas-v1}
   MALWAREBAZAAR_API_KEY: ${MALWAREBAZAAR_API_KEY}
   EUROOFFICE_JWT_SECRET: ${EUROOFFICE_JWT_SECRET}
   EUROOFFICE_FILE_TOKEN_SECRET: ${EUROOFFICE_FILE_TOKEN_SECRET}
@@ -13,7 +15,7 @@ x-common-env: &common-env
 
 x-worker-base: &worker-base
   restart: unless-stopped
-  entrypoint: ["./worker-start.sh"]
+  entrypoint: [ "./worker-start.sh" ]
   depends_on:
     postgres:
       condition: service_healthy
@@ -27,7 +29,7 @@ x-worker-base: &worker-base
   cap_add:
     - SYS_ADMIN
   healthcheck:
-    test: ["CMD", "python", "-c", "import os,sys; sys.exit(0 if any(b'arq' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit()) else 1)"]
+    test: [ "CMD", "python", "-c", "import os,sys; sys.exit(0 if any(b'arq' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit()) else 1)" ]
     interval: 30s
     timeout: 5s
     retries: 3
@@ -45,7 +47,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -60,7 +62,7 @@ services:
       - ./infra/docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
     command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -76,7 +78,7 @@ services:
     volumes:
       - meilisearch_data:/meili_data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:7700/health" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -95,9 +97,9 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - wikint_backups:/var/lib/wikint
+      - lectern_backups:/var/lib/lectern
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -129,7 +131,7 @@ services:
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
+      test: [ "CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/" ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -139,7 +141,7 @@ services:
 
   eurooffice:
     image: ghcr.io/euro-office/documentserver:latest
-    container_name: wikint-eurooffice-1
+    container_name: lectern-eurooffice-1
     restart: unless-stopped
     stop_grace_period: 1m
     environment:
@@ -152,7 +154,7 @@ services:
     extra_hosts:
       - "localhost:host-gateway"
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost/')"]
+      test: [ "CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost/')" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -176,7 +178,7 @@ services:
       - api
       - web
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/api/health"]
+      test: [ "CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/api/health" ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -194,4 +196,4 @@ volumes:
   meilisearch_data:
   eurooffice_data:
   eurooffice_log:
-  wikint_backups:
+  lectern_backups:
