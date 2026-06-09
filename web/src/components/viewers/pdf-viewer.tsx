@@ -434,7 +434,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         // eslint-disable-next-line react-hooks/immutability
         if (newMax > 0) el.scrollTop = anchor.ratio * newMax;
         scrollAnchorRef.current = null;
-    }, [committedZoom, twoPageView]);
+    }, [committedZoom, twoPageView, containerWidth]);
 
     // ── Container resize ─────────────────────────────────────────────────────
     // Debounce the ResizeObserver so that rapid/continuous resizing (e.g. dragging
@@ -453,6 +453,10 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             rafId = requestAnimationFrame(() => {
                 rafId = null;
                 if (pendingWidth !== null) {
+                    const scrollEl = listRef.current?.element ?? shellScrollRef.current;
+                    if (scrollEl && scrollEl.scrollHeight > scrollEl.clientHeight) {
+                        scrollAnchorRef.current = { ratio: scrollEl.scrollTop / (scrollEl.scrollHeight - scrollEl.clientHeight) };
+                    }
                     setContainerWidth(pendingWidth);
                     pendingWidth = null;
                 }
@@ -495,16 +499,74 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         setParseError(err.message ?? t("pdf.failedToParse"));
     }, [t]);
 
-    // ── Keyboard zoom ────────────────────────────────────────────────────────
+    // ── Keyboard Navigation and Zoom ────────────────────────────────────────
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if ((e.ctrlKey || e.metaKey) && (e.key === "=" || e.key === "+")) { e.preventDefault(); setZoom(z => Math.min(MAX_ZOOM, z + ZOOM_STEP)); }
-            if ((e.ctrlKey || e.metaKey) && e.key === "-") { e.preventDefault(); setZoom(z => Math.max(MIN_ZOOM, z - ZOOM_STEP)); }
-            if ((e.ctrlKey || e.metaKey) && e.key === "0") { e.preventDefault(); setZoom(100); }
+            const target = e.target as HTMLElement | null;
+            if (
+                target &&
+                (target.tagName === "INPUT" ||
+                    target.tagName === "TEXTAREA" ||
+                    target.tagName === "SELECT" ||
+                    target.isContentEditable)
+            ) {
+                return;
+            }
+
+            // Zoom shortcuts (Ctrl/Cmd + keys)
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key === "=" || e.key === "+") {
+                    e.preventDefault();
+                    setZoom(z => Math.min(MAX_ZOOM, z + ZOOM_STEP));
+                    return;
+                }
+                if (e.key === "-") {
+                    e.preventDefault();
+                    setZoom(z => Math.max(MIN_ZOOM, z - ZOOM_STEP));
+                    return;
+                }
+                if (e.key === "0") {
+                    e.preventDefault();
+                    setZoom(100);
+                    return;
+                }
+            }
+
+            // Page navigation shortcuts (no modifier keys allowed)
+            if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) {
+                return;
+            }
+
+            if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
+                e.preventDefault();
+                if (twoPageView) {
+                    const currentRow = Math.floor((currentPage - 1) / 2);
+                    const totalRows = Math.ceil(numPages / 2);
+                    if (currentRow + 1 < totalRows) {
+                        listRef.current?.scrollToRow({ align: "start", index: currentRow + 1 });
+                    }
+                } else {
+                    if (currentPage < numPages) {
+                        listRef.current?.scrollToRow({ align: "start", index: currentPage });
+                    }
+                }
+            } else if (e.key === "ArrowLeft" || e.key === "q" || e.key === "Q") {
+                e.preventDefault();
+                if (twoPageView) {
+                    const currentRow = Math.floor((currentPage - 1) / 2);
+                    if (currentRow > 0) {
+                        listRef.current?.scrollToRow({ align: "start", index: currentRow - 1 });
+                    }
+                } else {
+                    if (currentPage > 1) {
+                        listRef.current?.scrollToRow({ align: "start", index: currentPage - 2 });
+                    }
+                }
+            }
         };
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [setZoom]);
+    }, [setZoom, currentPage, numPages, twoPageView, listRef]);
 
     // ── Annotations ──────────────────────────────────────────────────────────
     const handleAnnotationClick = useCallback((threadId: string, e: React.MouseEvent) => {

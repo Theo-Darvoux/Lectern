@@ -385,11 +385,14 @@ export function MaterialViewer({
       id: materialId,
       data: { ...displayMaterial, __viewerType: viewerType },
     });
-    // Depend on materialId/viewerType only — `material` is a fresh object each
-    // render, so including it would re-fire the effect on unrelated parent
-    // re-renders and override the user's currently-selected sidebar tab.
-     
   }, [materialId, viewerType, setSidebarTarget]);
+
+  const breadcrumbItems = useMemo(() => {
+    return [
+      ...breadcrumbs,
+      { id: materialId, name: title, slug: "" },
+    ];
+  }, [breadcrumbs, materialId, title]);
 
   return (
     <AnnotationsContext.Provider value={annotationsData}>
@@ -403,52 +406,48 @@ export function MaterialViewer({
            */}
           <div
             ref={headerRef}
-            className="absolute top-0 left-0 right-0 z-20 flex flex-col gap-3 p-2 sm:p-4 md:p-6 bg-background/95 backdrop-blur-sm transition-transform duration-300 ease-in-out"
+            className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 p-2 sm:px-4 md:px-6 py-2 sm:py-3 bg-background/95 backdrop-blur-sm transition-transform duration-300 ease-in-out border-b"
             style={{ transform: navbarVisible ? "translateY(0)" : "translateY(-110%)" }}
           >
-          <div>
-            <Breadcrumbs items={breadcrumbs} linkLast={true} />
-          </div>
-
-          {/* Compact header */}
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
               <Button
                 variant="ghost"
                 size="icon"
-                className="shrink-0"
+                className="h-8 w-8 shrink-0"
                 onClick={() => router.push(parentFolderHref)}
                 title={t("backToParentFolder")}
               >
-                <ArrowLeft className="h-5 w-5" />
+                <ArrowLeft className="h-4 w-4" />
               </Button>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="text-base sm:text-lg font-semibold truncate">
-                    {title}
-                  </h1>
+              <Breadcrumbs
+                items={breadcrumbItems}
+                linkLast={false}
+                previewPrId={searchParams.get("preview_pr") || undefined}
+              >
+                <div className="flex items-center gap-1.5 ml-1.5 shrink-0">
                   <span
-                    className={`inline-block shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${getFileBadgeColor(fileName)}`}
+                    className={`inline-block shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium leading-none ${getFileBadgeColor(fileName)}`}
                   >
                     {getFileBadgeLabel(fileName, mimeType)}
                   </span>
+                  {fileSize > 0 && (
+                    <span className="text-xs text-muted-foreground font-normal shrink-0">
+                      ({formatFileSize(fileSize)})
+                    </span>
+                  )}
                 </div>
-                {fileSize > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    {formatFileSize(fileSize)}
-                  </p>
-                )}
-              </div>
+              </Breadcrumbs>
             </div>
+
             {isMobile ? (
               <Button
                 variant="ghost"
                 size="icon"
-                className="shrink-0"
+                className="shrink-0 h-8 w-8"
                 onClick={() => setMaterialActionsOpen(true)}
                 aria-label={t("documentActions")}
               >
-                <MoreVertical className="h-5 w-5" />
+                <MoreVertical className="h-4 w-4" />
               </Button>
             ) : (
               <div className="flex items-center gap-2 shrink-0">
@@ -570,7 +569,6 @@ export function MaterialViewer({
               </div>
             )}
           </div>
-          </div>{/* end header overlay */}
 
           {/*
            * Viewer wrapper — paddingTop is dynamically adjusted based on header visibility.

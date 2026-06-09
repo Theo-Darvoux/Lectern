@@ -19,13 +19,14 @@ interface BreadcrumbsProps {
     linkLast?: boolean;
     /** If true, renders with larger text for use as a primary header */
     large?: boolean;
+    children?: React.ReactNode;
 }
 
 // Max items to show before collapsing to Home > … > last N
 const COLLAPSE_THRESHOLD = 3;
 const TAIL_COUNT = 2;
 
-export function Breadcrumbs({ items, previewPrId, linkLast = false, large = false }: BreadcrumbsProps) {
+export function Breadcrumbs({ items, previewPrId, linkLast = false, large = false, children }: BreadcrumbsProps) {
     const t = useTranslations("Navigation");
     const buildPath = (index: number) => {
         const segments = items.slice(0, index + 1).map((item) => item.slug);
@@ -69,7 +70,7 @@ export function Breadcrumbs({ items, previewPrId, linkLast = false, large = fals
                 const shouldLink = !isLast || linkLast;
 
                 return (
-                    <span key={item.id} className="flex items-center gap-1 min-w-0">
+                    <span key={item.id} className="flex items-center gap-1 min-w-0 max-w-full">
                         <ChevronRight className={large ? "h-4 w-4 shrink-0 text-muted-foreground" : "h-3.5 w-3.5 shrink-0 text-muted-foreground"} />
                         {shouldLink ? (
                             <Link
@@ -81,6 +82,7 @@ export function Breadcrumbs({ items, previewPrId, linkLast = false, large = fals
                         ) : (
                             <span className="truncate font-bold tracking-tight">{item.name}</span>
                         )}
+                        {isLast && children}
                     </span>
                 );
             })}

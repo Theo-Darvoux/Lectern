@@ -178,6 +178,15 @@
         #a855f7 60%,
         #6d28d9 80%
     );
+    --zimbra-glow-1: rgba(240, 92, 40, 0.2);
+    --zimbra-glow-2: rgba(240, 92, 40, 0.15);
+    --zimbra-glow-3: rgba(27, 134, 194, 0.1);
+    --zimbra-border-glow-1: rgba(240, 92, 40, 0.4);
+    
+    --zimbra-glow-4: rgba(240, 92, 40, 0.45);
+    --zimbra-glow-5: rgba(240, 92, 40, 0.35);
+    --zimbra-glow-6: rgba(27, 134, 194, 0.25);
+    --zimbra-border-glow-2: rgba(240, 92, 40, 0.8);
 }
 
 .dark {
@@ -197,6 +206,15 @@
         #d8b4fe 60%,
         #a855f7 80%
     );
+    --zimbra-glow-1: rgba(240, 92, 40, 0.15);
+    --zimbra-glow-2: rgba(240, 92, 40, 0.1);
+    --zimbra-glow-3: rgba(27, 134, 194, 0.05);
+    --zimbra-border-glow-1: rgba(240, 92, 40, 0.3);
+    
+    --zimbra-glow-4: rgba(240, 92, 40, 0.35);
+    --zimbra-glow-5: rgba(240, 92, 40, 0.25);
+    --zimbra-glow-6: rgba(27, 134, 194, 0.15);
+    --zimbra-border-glow-2: rgba(240, 92, 40, 0.6);
 }
 
 @keyframes pf-fade-up {
@@ -318,6 +336,8 @@
         opacity: 0.85;
     }
 }
+
+
 
 /* ─── highlight.js dark mode overrides ─── */
 
@@ -492,4 +512,65 @@
 .dark .annotation-highlight {
     background-color: rgba(255, 213, 0, 0.3);
 }
+
+/* Zimbra Button Glow & Shimmer Effects */
+@keyframes zimbra-glow {
+    0%, 100% {
+        box-shadow: 
+            0 0 8px var(--zimbra-glow-1),
+            0 0 14px var(--zimbra-glow-2),
+            0 0 20px var(--zimbra-glow-3);
+    }
+    50% {
+        box-shadow: 
+            0 0 18px var(--zimbra-glow-4),
+            0 0 28px var(--zimbra-glow-5),
+            0 0 38px var(--zimbra-glow-6);
+    }
+}
+
+@keyframes zimbra-shimmer {
+    0% {
+        transform: translateX(-150%) rotate(30deg);
+    }
+    100% {
+        transform: translateX(250%) rotate(30deg);
+    }
+}
+
+.zimbra-btn-glow {
+    animation: zimbra-glow 4s infinite ease-in-out;
+}
+
+.zimbra-btn-shimmer-container {
+    position: relative;
+    overflow: hidden;
+}
+
+.zimbra-btn-shimmer {
+    position: absolute;
+    top: -50%;
+    left: -60%;
+    width: 35%;
+    height: 200%;
+    background: linear-gradient(
+        to right,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.4) 30%,
+        rgba(255, 255, 255, 0) 100%
+    );
+    transform: rotate(30deg);
+    animation: zimbra-shimmer 4.5s infinite ease-in-out;
+    pointer-events: none;
+}
+
+.dark .zimbra-btn-shimmer {
+    background: linear-gradient(
+        to right,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.2) 30%,
+        rgba(255, 255, 255, 0) 100%
+    );
+}
+
 

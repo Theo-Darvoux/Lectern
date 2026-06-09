@@ -286,6 +286,88 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                     pdf_image = PdfImage(raw_image)
                     pil_image = pdf_image.as_pil_image()
 
+                    # Reconstruct transparency from /SMask or /Mask. Since pikepdf extracts
+                    # the base image stream directly, the transparency is not automatically
+                    # composited. We load the mask and apply it to pil_image.
+                    smask_ref = raw_image.get("/SMask")
+                    mask_ref = raw_image.get("/Mask")
+
+                    if isinstance(smask_ref, pikepdf.Stream):
+                        try:
+                            smask_pdf_image = PdfImage(smask_ref)
+                            smask_pil = smask_pdf_image.as_pil_image()
+                            smask_pil = smask_pil.convert("L")
+                            if smask_pil.size != pil_image.size:
+                                smask_pil = smask_pil.resize(
+                                    pil_image.size, Image.Resampling.LANCZOS
+                                )
+                            pil_image = pil_image.convert("RGBA")
+                            pil_image.putalpha(smask_pil)
+                        except Exception as e:
+                            logger.debug("Failed to apply SMask: %s", e)
+                    elif isinstance(mask_ref, pikepdf.Stream):
+                        try:
+                            mask_pdf_image = PdfImage(mask_ref)
+                            mask_pil = mask_pdf_image.as_pil_image()
+                            mask_pil = mask_pil.convert("L")
+                            if mask_pil.size != pil_image.size:
+                                mask_pil = mask_pil.resize(pil_image.size, Image.Resampling.LANCZOS)
+                            decode = mask_ref.get("/Decode")
+                            if (
+                                decode is not None
+                                and len(decode) >= 2
+                                and float(decode[0]) > float(decode[1])
+                            ):
+                                from PIL import ImageOps
+
+                                mask_pil = ImageOps.invert(mask_pil)
+                            pil_image = pil_image.convert("RGBA")
+                            pil_image.putalpha(mask_pil)
+                        except Exception as e:
+                            logger.debug("Failed to apply stencil Mask: %s", e)
+                    elif isinstance(mask_ref, pikepdf.Array):
+                        try:
+                            mask_array = [int(x) for x in mask_ref]
+                            if len(mask_array) == 6:
+                                r_min, r_max, g_min, g_max, b_min, b_max = mask_array
+                                pil_image = pil_image.convert("RGB")
+                                r, g, b = pil_image.split()
+                                r_mask = r.point(
+                                    lambda p, r_min=r_min, r_max=r_max: (
+                                        255 if r_min <= p <= r_max else 0
+                                    )
+                                )
+                                g_mask = g.point(
+                                    lambda p, g_min=g_min, g_max=g_max: (
+                                        255 if g_min <= p <= g_max else 0
+                                    )
+                                )
+                                b_mask = b.point(
+                                    lambda p, b_min=b_min, b_max=b_max: (
+                                        255 if b_min <= p <= b_max else 0
+                                    )
+                                )
+                                from PIL import ImageChops
+
+                                transparent_mask = ImageChops.darker(r_mask, g_mask)
+                                transparent_mask = ImageChops.darker(transparent_mask, b_mask)
+                                alpha_mask = transparent_mask.point(lambda p: 255 - p)
+                                pil_image = pil_image.convert("RGBA")
+                                pil_image.putalpha(alpha_mask)
+                            elif len(mask_array) == 2:
+                                v_min, v_max = mask_array
+                                l_chan = pil_image.convert("L")
+                                transparent_mask = l_chan.point(
+                                    lambda p, v_min=v_min, v_max=v_max: (
+                                        255 if v_min <= p <= v_max else 0
+                                    )
+                                )
+                                alpha_mask = transparent_mask.point(lambda p: 255 - p)
+                                pil_image = pil_image.convert("RGBA")
+                                pil_image.putalpha(alpha_mask)
+                        except Exception as e:
+                            logger.debug("Failed to apply chroma key Mask: %s", e)
+
                     if pil_image.width < 100 or pil_image.height < 100:
                         continue
 
@@ -362,6 +444,10 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                         raw_image.SMask = smask
                     elif "/SMask" in raw_image:
                         del raw_image["/SMask"]
+
+                    # Remove old /Mask key to avoid conflicts with new SMask/image data
+                    if "/Mask" in raw_image:
+                        del raw_image["/Mask"]
 
                 except Exception as e:
                     logger.debug("Could not downsample PDF image %s: %s", name, e)
