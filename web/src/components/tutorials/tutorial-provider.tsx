@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useIsMobile } from "@/hooks/use-media-query";
-import { useAuthStore } from "@/lib/stores";
+import { useAuthStore, useConfigStore } from "@/lib/stores";
 import { TUTORIALS } from "@/lib/tutorials/registry";
 import { tierQualifies } from "@/lib/tutorials/types";
 import { useTutorialRun } from "@/lib/tutorials/tutorial-store";
@@ -47,6 +47,9 @@ export function TutorialProvider() {
     const active = useTutorialRun((s) => s.active);
     const start = useTutorialRun((s) => s.start);
     const attempted = useRef<Set<string>>(new Set());
+    // Subscribe to the runtime toggle so the overlay mounts/unmounts when the
+    // public config (TUTORIALS_ENABLED) loads or changes.
+    const configTutorialsOff = useConfigStore((s) => s.config?.tutorials_enabled === false);
 
     useEffect(() => {
         if (!tutorialsEnabled() || isLoading || !user || active) return;
@@ -64,8 +67,8 @@ export function TutorialProvider() {
         // Let the page settle before spotlighting.
         const timer = window.setTimeout(() => start(candidate.id, { user, isMobile }), 900);
         return () => window.clearTimeout(timer);
-    }, [pathname, user, isLoading, active, start, isMobile]);
+    }, [pathname, user, isLoading, active, start, isMobile, configTutorialsOff]);
 
-    if (!tutorialsEnabled()) return null;
+    if (configTutorialsOff || !tutorialsEnabled()) return null;
     return <TutorialOverlay />;
 }

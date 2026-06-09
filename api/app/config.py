@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     auto_approve_all_domains: bool = False
     guest_access_enabled: bool = False
 
+    # Feature toggles
+    # Set TUTORIALS_ENABLED=false to disable the in-app guided tours platform-wide.
+    tutorials_enabled: bool = True
+
     # Allowed domains — comma-separated "domain:auto|domain:manual" entries.
     # When set, this wins over DB rows. Empty means fall back to DB.
     # Example: "example.com:auto,example.org:manual"

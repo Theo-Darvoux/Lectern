@@ -5,16 +5,22 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { apiFetch } from "@/lib/api-client";
 import { safeLocalStorage } from "@/lib/safe-storage";
 import { isGuest, type UserBrief } from "@/lib/guest";
-import { useAuthStore } from "@/lib/stores";
+import { useAuthStore, useConfigStore } from "@/lib/stores";
 import { TUTORIALS } from "./registry";
 import { useTutorialRun } from "./tutorial-store";
 import { tierQualifies, type Tutorial } from "./types";
 
-/** Build-time kill-switch. `off`/`false`/`0` disable the whole feature. */
+/**
+ * Whether the tutorial feature is on. The runtime `.env` toggle
+ * `TUTORIALS_ENABLED` (served via the public config) is the source of truth;
+ * the build-time `NEXT_PUBLIC_TUTORIALS=off` kill-switch still wins if set.
+ */
 export function tutorialsEnabled(): boolean {
     const v = process.env.NEXT_PUBLIC_TUTORIALS;
-    if (v == null || v === "") return true;
-    return !["off", "false", "0", "no"].includes(v.toLowerCase());
+    if (v != null && v !== "" && ["off", "false", "0", "no"].includes(v.toLowerCase())) {
+        return false;
+    }
+    return useConfigStore.getState().config?.tutorials_enabled !== false;
 }
 
 const GUEST_STORAGE_KEY = "lectern.tutorials.completed";
@@ -43,6 +49,7 @@ export function useTutorial() {
     const { user, setUser } = useAuthStore();
     const start = useTutorialRun((s) => s.start);
     const isMobile = useIsMobile();
+    const tutorialsOff = useConfigStore((s) => s.config?.tutorials_enabled === false);
 
     const completed = useMemo<string[]>(() => {
         if (!user) return [];
@@ -54,8 +61,11 @@ export function useTutorial() {
 
     /** Tutorials the current user is allowed to see, in registry order. */
     const available = useMemo<Tutorial[]>(
-        () => TUTORIALS.filter((t) => tierQualifies(user, t.minTier)),
-        [user],
+        () =>
+            tutorialsOff || !tutorialsEnabled()
+                ? []
+                : TUTORIALS.filter((t) => tierQualifies(user, t.minTier)),
+        [user, tutorialsOff],
     );
 
     const launch = useCallback((id: string) => {

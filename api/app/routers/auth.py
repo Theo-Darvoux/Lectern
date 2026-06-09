@@ -105,6 +105,7 @@ async def get_auth_methods(
         "classic_enabled": settings.classic_auth_enabled,
         "allow_all_domains": settings.allow_all_domains,
         "guest_access_enabled": settings.guest_access_enabled,
+        "tutorials_enabled": settings.tutorials_enabled,
         "site_name": settings.site_name,
         "site_name_style": settings.site_name_style,
         "site_description": settings.site_description,

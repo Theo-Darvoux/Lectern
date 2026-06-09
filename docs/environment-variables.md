@@ -140,6 +140,7 @@ contract is identical, so switching is URL-only.
 | `GOOGLE_CLIENT_ID` | *(unset)* | Google OAuth client ID. Required when Google login is on. |
 | `CLASSIC_AUTH_ENABLED` | `false` | Enable classic email + password login. |
 | `GUEST_ACCESS_ENABLED` | `false` | Allow unauthenticated read-only browsing. |
+| `TUTORIALS_ENABLED` | `true` | In-app interactive tutorials (guided tours). Set to `false` to disable platform-wide — no first-visit auto-launch and the Help center hides them. Runtime toggle, served via the public config. The build-time `NEXT_PUBLIC_TUTORIALS=off` still wins if set. |
 | `ALLOW_ALL_DOMAINS` | `false` | Accept sign-ups from any email domain (otherwise only `ALLOWED_DOMAINS`). |
 | `AUTO_APPROVE_ALL_DOMAINS` | `false` | Auto-approve every new account instead of holding them for staff review. |
 | `ALLOWED_DOMAINS` | *(empty)* | Comma-separated `domain:auto` / `domain:manual` entries, e.g. `example.com:auto,example.org:manual`. `auto` = approved on first login, `manual` = needs staff approval. When set, this overrides the editable `allowed_domains` DB table (the admin UI then shows it read-only). Empty = use the DB table. **Required setup:** a fresh install has no allowed domains, so registration is blocked until you set this, add domains via the admin UI, or enable `ALLOW_ALL_DOMAINS`. The first admin is exempt. |
@@ -328,7 +329,7 @@ These variables are either baked into the frontend static export at build time (
 | `NEXT_PUBLIC_EUROOFFICE_URL` | *(unset)* | Browser-facing EuroOffice path. Resolved dynamically from the backend's `EUROOFFICE_PUBLIC_URL` / `NEXT_PUBLIC_EUROOFFICE_URL` at runtime. Falls back to relative `/eurooffice/`. |
 | `NEXT_PUBLIC_MAX_FILE_SIZE_MB` | `100` | Fallback client-side upload-size limit. Resolved dynamically from the backend's `MAX_FILE_SIZE_MB` at runtime. |
 | `NEXT_PUBLIC_COMMIT_SHA` | *(unset)* | Build commit SHA, shown in the About panel. Baked in at build-time. |
-| `NEXT_PUBLIC_TUTORIALS` | `on` | In-app interactive tutorials (guided tours). Set to `off`/`false`/`0` to disable the feature entirely — no first-visit auto-launch and the Help center is hidden. Baked in at build-time. |
+| `NEXT_PUBLIC_TUTORIALS` | `on` | Build-time kill-switch for the interactive tutorials. Set to `off`/`false`/`0` to hard-disable at build. For a runtime toggle prefer the backend `TUTORIALS_ENABLED`; this build-time switch still wins if set. Baked in at build-time. |
 
 ---
 
