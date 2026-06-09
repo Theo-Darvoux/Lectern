@@ -166,15 +166,15 @@ async def get_directory_paths(
     ).join(base_alias, dir_alias.id == base_alias.c.parent_id)
 
     cte = base_case.union_all(recursive_case)
-    
+
     # Order by depth descending so that when we iterate, we see the root-most slug first.
     stmt = select(cte.c.start_id, cte.c.slug).order_by(cte.c.start_id, cte.c.depth.desc())
     result = await db.execute(stmt)
-    
+
     paths: dict[uuid.UUID, list[str]] = {}
     for start_id, slug in result.all():
         paths.setdefault(start_id, []).append(slug)
-        
+
     return {k: "/".join(v) for k, v in paths.items()}
 
 
@@ -217,7 +217,9 @@ async def get_ancestor_map(
     ).join(base_alias, dir_alias.id == base_alias.c.parent_id)
 
     cte = base_case.union_all(recursive_case)
-    stmt = select(cte.c.start_id, cte.c.name, cte.c.slug).order_by(cte.c.start_id, cte.c.depth.desc())
+    stmt = select(cte.c.start_id, cte.c.name, cte.c.slug).order_by(
+        cte.c.start_id, cte.c.depth.desc()
+    )
     result = await db.execute(stmt)
 
     paths: dict[uuid.UUID, tuple[list[str], list[str]]] = {}
@@ -560,14 +562,9 @@ async def resolve_browse_path(
     mat_result = await db.execute(
         select(Material)
         .options(selectinload(Material.tags))
-        .where(
-            Material.slug == last_segment,
-            Material.parent_material_id.is_(None)
-        )
+        .where(Material.slug == last_segment, Material.parent_material_id.is_(None))
     )
     mat_map = {m.directory_id: m for m in mat_result.scalars().all()}
-
-    current_dir: Directory | None = None
 
     for i, segment in enumerate(segments):
         parent_key = current_dir.id if current_dir else None

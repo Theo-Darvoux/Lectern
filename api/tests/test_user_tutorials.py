@@ -29,7 +29,9 @@ def _auth_headers(user: User) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_me_returns_completed_tutorials(client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_me_returns_completed_tutorials(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
     user = await _create_user(db_session)
     await db_session.commit()
 
@@ -39,7 +41,9 @@ async def test_me_returns_completed_tutorials(client: AsyncClient, db_session: A
 
 
 @pytest.mark.asyncio
-async def test_complete_tutorial_is_idempotent(client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_complete_tutorial_is_idempotent(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
     user = await _create_user(db_session)
     await db_session.commit()
     headers = _auth_headers(user)

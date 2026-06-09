@@ -42,14 +42,15 @@ from app.schemas.common import HealthResponse
 logger = logging.getLogger(__name__)
 
 
-def _compute_s3_csp_domain() -> str:
+def _s3_csp_domain() -> str:
     """Extract the bare host[:port] from the S3 public endpoint for CSP header use."""
     from urllib.parse import urlparse
 
     ep = settings.s3_public_endpoint or ""
     return urlparse(ep).netloc or ep
 
-_S3_CSP_DOMAIN = _compute_s3_csp_domain()
+
+_S3_CSP_DOMAIN = _s3_csp_domain()
 
 
 @asynccontextmanager

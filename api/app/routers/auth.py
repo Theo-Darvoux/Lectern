@@ -6,7 +6,7 @@ from typing import Annotated, Any
 logger = logging.getLogger(__name__)
 
 import google.auth.transport.requests
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from google.oauth2 import id_token
 from redis.asyncio import Redis
 from slowapi import Limiter
@@ -95,6 +95,7 @@ def _login_response(user: User, response: Response, *, is_new: bool) -> TokenRes
 
 _NEEDS_SETUP_CACHE: bool | None = None
 
+
 @router.get("/methods")
 async def get_auth_methods(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -179,6 +180,7 @@ async def guest_session(
 async def request_code(
     request: Request,
     data: RequestCodeIn,
+    background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> dict[str, str]:
@@ -206,10 +208,13 @@ async def request_code(
     base_url = settings.frontend_url.rstrip("/")
     magic_link = f"{base_url}/login/verify?token={magic_token}"
 
-    try:
-        await send_verification_email(email, code, magic_link)
-    except Exception as e:
-        logger.error("Failed to send verification email: %s", e, exc_info=True)
+    async def _send_safe(email: str, code: str, magic_link: str) -> None:
+        try:
+            await send_verification_email(email, code, magic_link)
+        except Exception as e:
+            logger.error("Failed to send verification email: %s", e, exc_info=True)
+
+    background_tasks.add_task(_send_safe, email, code, magic_link)
 
     return {"message": "Verification code sent"}
 

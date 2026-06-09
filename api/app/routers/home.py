@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
+from app.core.redis import get_redis, redis_lock
 from app.dependencies.auth import CurrentUser
 from app.models.directory import Directory
 from app.models.featured import FeaturedItem
@@ -143,6 +146,7 @@ async def _build_featured_out(
 async def get_home(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> HomeResponse:
     """Aggregate home-page payload in a single request.
 
@@ -254,106 +258,218 @@ async def get_home(
 
     # ── stats ─────────────────────────────────────────────────────────────────
     stats_query = select(
-        select(func.count()).select_from(Material).where(Material.parent_material_id.is_(None), Material.deleted_at.is_(None)).scalar_subquery().label("m_count"),
-        select(func.count()).select_from(Directory).where(Directory.deleted_at.is_(None)).scalar_subquery().label("d_count"),
-        select(func.count()).select_from(PullRequest).where(PullRequest.status == PRStatus.OPEN).scalar_subquery().label("pr_count"),
-        select(func.count()).select_from(PullRequest).where(PullRequest.author_id == user.id).scalar_subquery().label("my_pr_count"),
+        select(func.count())
+        .select_from(Material)
+        .where(Material.parent_material_id.is_(None), Material.deleted_at.is_(None))
+        .scalar_subquery()
+        .label("m_count"),
+        select(func.count())
+        .select_from(Directory)
+        .where(Directory.deleted_at.is_(None))
+        .scalar_subquery()
+        .label("d_count"),
+        select(func.count())
+        .select_from(PullRequest)
+        .where(PullRequest.status == PRStatus.OPEN)
+        .scalar_subquery()
+        .label("pr_count"),
+        select(func.count())
+        .select_from(PullRequest)
+        .where(PullRequest.author_id == user.id)
+        .scalar_subquery()
+        .label("my_pr_count"),
     )
 
-    # Execute queries sequentially but efficiently
-    today_rows = (await db.execute(today_stmt)).all()
-    week2_rows = (await db.execute(week2_stmt)).all()
-    featured_rows = (await db.execute(featured_stmt)).all()
-    pr_rows = (await db.execute(pr_stmt)).scalars().all()
+    # Check cache for global queries
+    global_cache = await redis.get("cache:home_global")
+    if not global_cache:
+        import asyncio
+
+        try:
+            async with redis_lock(redis, "home_cache_build", timeout=0.1):
+                # Cache miss: execute global queries
+                today_rows = (await db.execute(today_stmt)).all()
+                week2_rows = (await db.execute(week2_stmt)).all()
+                featured_rows = (await db.execute(featured_stmt)).all()
+                pr_rows = (await db.execute(pr_stmt)).scalars().all()
+                added_rows = (await db.execute(added_stmt)).all()
+                stats_row = (await db.execute(stats_query)).one()
+
+                recent_prs = [PullRequestOut.model_validate(pr) for pr in pr_rows]
+
+                # Consolidate all directory paths fetching
+                dir_ids = set()
+                for rows in (today_rows, week2_rows, added_rows):
+                    for material, _ in rows:
+                        if material.directory_id:
+                            dir_ids.add(material.directory_id)
+
+                boost_dir_ids = set()
+                for featured_item, material, version, directory in featured_rows:
+                    if material and material.directory_id:
+                        dir_ids.add(material.directory_id)
+                    elif directory:
+                        boost_dir_ids.add(directory.id)
+                        dir_ids.add(directory.id)
+
+                paths = await get_directory_paths(db, dir_ids)
+                preview_ids = (
+                    await get_preview_material_ids(db, list(boost_dir_ids)) if boost_dir_ids else {}
+                )
+
+                def build_mat_list(rows: Any) -> list[MaterialDetail]:
+                    res = []
+                    for material, version in rows:
+                        mat_dict = material_orm_to_dict(
+                            material, current_user_id=None, current_version=version
+                        )
+                        mat_dict["directory_path"] = paths.get(mat_dict["directory_id"])
+                        res.append(MaterialDetail.model_validate(mat_dict))
+                    return res
+
+                popular_today = build_mat_list(today_rows)
+                popular_14d = build_mat_list(week2_rows)
+                recently_added = build_mat_list(added_rows)
+
+                # Build featured
+                featured_out = []
+                for featured_item, material, version, directory in featured_rows:
+                    if material:
+                        mat_dict = material_orm_to_dict(
+                            material, current_user_id=None, current_version=version
+                        )
+                        mat_dict["directory_path"] = paths.get(mat_dict["directory_id"])
+                        featured_out.append(
+                            FeaturedItemOut(
+                                id=featured_item.id,
+                                material=MaterialDetail.model_validate(mat_dict),
+                                directory=None,
+                                title=featured_item.title,
+                                description=featured_item.description,
+                                start_at=featured_item.start_at,
+                                end_at=featured_item.end_at,
+                                priority=featured_item.priority,
+                            )
+                        )
+                    elif directory:
+                        dir_dict = {
+                            "id": directory.id,
+                            "parent_id": directory.parent_id,
+                            "name": directory.name,
+                            "slug": directory.slug,
+                            "type": directory.type,
+                            "description": directory.description,
+                            "metadata_": directory.metadata_,
+                            "sort_order": directory.sort_order,
+                            "tags": directory.tags,
+                            "full_path": paths.get(directory.id),
+                            "preview_material_ids": preview_ids.get(directory.id, []),
+                            "created_at": directory.created_at,
+                        }
+                        featured_out.append(
+                            FeaturedItemOut(
+                                id=featured_item.id,
+                                material=None,
+                                directory=DirectoryOut.model_validate(dir_dict),
+                                title=featured_item.title,
+                                description=featured_item.description,
+                                start_at=featured_item.start_at,
+                                end_at=featured_item.end_at,
+                                priority=featured_item.priority,
+                            )
+                        )
+
+                row_id_order = {row[0].id: i for i, row in enumerate(featured_rows)}
+                featured_out.sort(key=lambda x: row_id_order.get(x.id, 9999))
+
+                # Save to cache
+                cache_payload = {
+                    "popular_today": [m.model_dump() for m in popular_today],
+                    "popular_14d": [m.model_dump() for m in popular_14d],
+                    "recent_prs": [m.model_dump() for m in recent_prs],
+                    "recently_added": [m.model_dump() for m in recently_added],
+                    "featured": [m.model_dump() for m in featured_out],
+                    "stats": {
+                        "m_count": stats_row.m_count,
+                        "d_count": stats_row.d_count,
+                        "pr_count": stats_row.pr_count,
+                    },
+                }
+
+                # JSON serialize with custom UUID/datetime encoder
+                class Encoder(json.JSONEncoder):
+                    def default(self, obj):
+                        from datetime import datetime
+                        from uuid import UUID
+
+                        if isinstance(obj, UUID):
+                            return str(obj)
+                        if isinstance(obj, datetime):
+                            return obj.isoformat()
+                        return super().default(obj)
+
+                global_cache_str = json.dumps(cache_payload, cls=Encoder)
+                await redis.setex("cache:home_global", 60, global_cache_str)
+                global_cache = global_cache_str
+        except TimeoutError:
+            # Someone else is building the cache. Wait for them.
+            for _ in range(30):
+                await asyncio.sleep(0.5)
+                global_cache = await redis.get("cache:home_global")
+                if global_cache:
+                    break
+            else:
+                # Fallback if cache build takes > 15s or fails
+                raise RuntimeError("Timeout waiting for home page cache")
+
+    # Execute user-specific queries always
     fav_rows = (await db.execute(fav_stmt)).all()
     viewed_rows = (await db.execute(viewed_stmt)).all()
-    added_rows = (await db.execute(added_stmt)).all()
-    stats_row = (await db.execute(stats_query)).one()
 
-    recent_prs = [PullRequestOut.model_validate(pr) for pr in pr_rows]
+    if global_cache:
+        cached_data = json.loads(global_cache)
+        popular_today = [MaterialDetail.model_validate(m) for m in cached_data["popular_today"]]
+        popular_14d = [MaterialDetail.model_validate(m) for m in cached_data["popular_14d"]]
+        recent_prs = [PullRequestOut.model_validate(m) for m in cached_data["recent_prs"]]
+        recently_added = [MaterialDetail.model_validate(m) for m in cached_data["recently_added"]]
+        featured_out = [FeaturedItemOut.model_validate(m) for m in cached_data["featured"]]
+        global_stats = cached_data["stats"]
 
-    # Consolidate all directory paths fetching
-    dir_ids = set()
-    for rows in (today_rows, week2_rows, fav_rows, viewed_rows, added_rows):
-        for material, _ in rows:
-            if material.directory_id:
-                dir_ids.add(material.directory_id)
+        # User-specific stats must be fetched even if cache hits
+        my_pr_count = await db.scalar(
+            select(func.count()).select_from(PullRequest).where(PullRequest.author_id == user.id)
+        )
+        stats_row = type(
+            "StatsRow",
+            (),
+            {
+                "m_count": global_stats["m_count"],
+                "d_count": global_stats["d_count"],
+                "pr_count": global_stats["pr_count"],
+                "my_pr_count": my_pr_count,
+            },
+        )()
 
-    boost_dir_ids = set()
-    for featured_item, material, version, directory in featured_rows:
-        if material and material.directory_id:
-            dir_ids.add(material.directory_id)
-        elif directory:
-            boost_dir_ids.add(directory.id)
-            dir_ids.add(directory.id)
+        user_dir_ids = set()
+        for rows in (fav_rows, viewed_rows):
+            for material, _ in rows:
+                if material.directory_id:
+                    user_dir_ids.add(material.directory_id)
+        paths = await get_directory_paths(db, user_dir_ids)
 
-    paths = await get_directory_paths(db, dir_ids)
-    preview_ids = await get_preview_material_ids(db, list(boost_dir_ids)) if boost_dir_ids else {}
-
-    def build_mat_list(rows: Any) -> list[MaterialDetail]:
+    # User specific lists are built using the fetched paths
+    def build_user_mat_list(rows: Any) -> list[MaterialDetail]:
         res = []
         for material, version in rows:
-            mat_dict = material_orm_to_dict(material, current_user_id=user.id, current_version=version)
+            mat_dict = material_orm_to_dict(
+                material, current_user_id=user.id, current_version=version
+            )
             mat_dict["directory_path"] = paths.get(mat_dict["directory_id"])
             res.append(MaterialDetail.model_validate(mat_dict))
         return res
 
-    popular_today = build_mat_list(today_rows)
-    popular_14d = build_mat_list(week2_rows)
-    recent_favourites = build_mat_list(fav_rows)
-    recently_viewed = build_mat_list(viewed_rows)
-    recently_added = build_mat_list(added_rows)
-
-    # Build featured
-    featured_out = []
-    staged_materials = []
-    staged_directories = []
-    for featured_item, material, version, directory in featured_rows:
-        if material:
-            mat_dict = material_orm_to_dict(material, current_user_id=user.id, current_version=version)
-            mat_dict["directory_path"] = paths.get(mat_dict["directory_id"])
-            featured_out.append(
-                FeaturedItemOut(
-                    id=featured_item.id,
-                    material=MaterialDetail.model_validate(mat_dict),
-                    directory=None,
-                    title=featured_item.title,
-                    description=featured_item.description,
-                    start_at=featured_item.start_at,
-                    end_at=featured_item.end_at,
-                    priority=featured_item.priority,
-                )
-            )
-        elif directory:
-            dir_dict = {
-                "id": directory.id,
-                "parent_id": directory.parent_id,
-                "name": directory.name,
-                "slug": directory.slug,
-                "type": directory.type,
-                "description": directory.description,
-                "metadata_": directory.metadata_,
-                "sort_order": directory.sort_order,
-                "tags": directory.tags,
-                "full_path": paths.get(directory.id),
-                "preview_material_ids": preview_ids.get(directory.id, []),
-                "created_at": directory.created_at,
-            }
-            featured_out.append(
-                FeaturedItemOut(
-                    id=featured_item.id,
-                    material=None,
-                    directory=DirectoryOut.model_validate(dir_dict),
-                    title=featured_item.title,
-                    description=featured_item.description,
-                    start_at=featured_item.start_at,
-                    end_at=featured_item.end_at,
-                    priority=featured_item.priority,
-                )
-            )
-
-    row_id_order = {row[0].id: i for i, row in enumerate(featured_rows)}
-    featured_out.sort(key=lambda x: row_id_order.get(x.id, 9999))
+    recent_favourites = build_user_mat_list(fav_rows)
+    recently_viewed = build_user_mat_list(viewed_rows)
 
     stats = HomeStats(
         total_materials=stats_row.m_count or 0,
