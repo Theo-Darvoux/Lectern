@@ -17,7 +17,8 @@ import { toast } from "sonner";
 import { useStagingStore, type Operation } from "@/lib/staging-store";
 import { TagInput } from "@/components/ui/tag-input";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore } from "@/lib/stores";
+import { useBrowseRefreshStore, useAuthStore } from "@/lib/stores";
+import { isStaff } from "@/lib/guest";
 import { sanitizeNameInput } from "@/lib/utils";
 import { useTranslations } from "next-intl";
 
@@ -45,9 +46,13 @@ export function NewFolderDialog({
     const [submitting, setSubmitting] = useState(false);
     const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
+    const staff = isStaff(useAuthStore((s) => s.user));
     const NAME_MAX = 128;
     const canSubmit = name.trim().length >= 1 && name.length <= NAME_MAX && !submitting;
     const isDraftParent = parentId?.startsWith("$") ?? false;
+    // Only staff may bypass drafting and create a folder directly. Regular users
+    // always draft, so a batch of changes can be reviewed and submitted together.
+    const canCreateDirectly = staff && !isDraftParent;
 
     const buildOp = (): Operation => {
         const tempId = nextTempId("dir");
@@ -88,10 +93,10 @@ export function NewFolderDialog({
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === "Enter" && !e.shiftKey && canSubmit) {
             e.preventDefault();
-            if (isDraftParent) {
-                handleDraft();
-            } else {
+            if (canCreateDirectly) {
                 handleDirectSubmit();
+            } else {
+                handleDraft();
             }
         }
     };
@@ -184,7 +189,7 @@ export function NewFolderDialog({
                         <Plus className="h-4 w-4" />
                         {t("draft")}
                     </Button>
-                    {!isDraftParent && (
+                    {canCreateDirectly && (
                         <Button
                             onClick={handleDirectSubmit}
                             disabled={!canSubmit}
