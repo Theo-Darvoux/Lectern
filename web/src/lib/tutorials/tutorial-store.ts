@@ -52,3 +52,12 @@ export const useTutorialRun = create<TutorialRunState>((set, get) => ({
     },
     cancel: () => set({ active: null, stepIndex: 0 }),
 }));
+
+/**
+ * True when the active tutorial step asks for the menu with this id to be open.
+ * Dropdown components tie their `open` state to this so the tour can reveal the
+ * items inside (e.g. the "New content" or profile menu).
+ */
+export function useTutorialMenuOpen(menuId: string): boolean {
+    return useTutorialRun((s) => s.active?.steps[s.stepIndex]?.openMenu === menuId);
+}

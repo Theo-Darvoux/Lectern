@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 import { useTutorialRun } from "@/lib/tutorials/tutorial-store";
@@ -46,20 +46,12 @@ export function TutorialOverlay() {
     // step changes so the card/dim glide to the next spot instead of vanishing
     // while the next target is resolved.
     const [shownOnce, setShownOnce] = useState(false);
-    const directionRef = useRef<1 | -1>(1);
 
     const step = active?.steps[stepIndex] ?? null;
     const total = active?.steps.length ?? 0;
 
-    const handleNext = useCallback(() => {
-        directionRef.current = 1;
-        next();
-    }, [next]);
-
-    const handlePrev = useCallback(() => {
-        directionRef.current = -1;
-        prev();
-    }, [prev]);
+    const handleNext = useCallback(() => next(), [next]);
+    const handlePrev = useCallback(() => prev(), [prev]);
 
     const finish = useCallback(() => {
         if (active) void markComplete(active.id);
@@ -123,15 +115,12 @@ export function TutorialOverlay() {
                 return;
             }
             if (Date.now() > deadline) {
-                // Target absent (e.g. role can't see it) — skip in travel direction.
-                if (directionRef.current === 1) {
-                    if (stepIndex < total - 1) next();
-                    else finish();
-                } else if (stepIndex > 0) {
-                    prev();
-                } else {
-                    next();
-                }
+                // Target never appeared — its UI isn't present in this context
+                // (e.g. the staging FAB with nothing staged, or the annotations
+                // panel outside a document). Show the step's card centered so it
+                // still reads as a step instead of blanking or being skipped.
+                setRect(null);
+                setReady(true);
                 return;
             }
             raf = requestAnimationFrame(poll);
@@ -142,7 +131,7 @@ export function TutorialOverlay() {
             cancelled = true;
             if (raf) cancelAnimationFrame(raf);
         };
-    }, [active, step, stepIndex, total, pathname, router, next, prev, finish]);
+    }, [active, step, pathname, router]);
 
     // Keep the spotlight aligned while the step is shown.
     useEffect(() => {

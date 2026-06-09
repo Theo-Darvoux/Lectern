@@ -26,8 +26,8 @@ export const TUTORIALS: Tutorial[] = [
                 waitForTarget: true,
                 minTier: "student",
             },
-            { id: "profile", target: '[data-tutorial="nav-profile"]', placement: "left", minTier: "student" },
-            { id: "help", target: '[data-tutorial="nav-profile"]', placement: "left", minTier: "student" },
+            { id: "profile", target: '[data-tutorial="nav-profile"]', placement: "left", minTier: "student", openMenu: "profile-menu" },
+            { id: "help", target: '[data-tutorial="nav-profile"]', placement: "left", minTier: "student", openMenu: "profile-menu" },
             { id: "outro", placement: "center" },
         ],
     },
@@ -52,7 +52,7 @@ export const TUTORIALS: Tutorial[] = [
         icon: "Upload",
         steps: [
             { id: "intro", placement: "center", route: "/browse" },
-            { id: "create", target: '[data-tutorial="create-menu"]', placement: "bottom", waitForTarget: true },
+            { id: "create", target: '[data-tutorial="create-menu"]', placement: "left", waitForTarget: true, openMenu: "create-menu" },
             { id: "dropzone", placement: "center" },
             { id: "staging", target: '[data-tutorial="staging-fab"]', placement: "left", waitForTarget: true },
             { id: "outro", placement: "center" },
@@ -64,7 +64,7 @@ export const TUTORIALS: Tutorial[] = [
         icon: "GitPullRequest",
         steps: [
             { id: "intro", placement: "center", route: "/browse" },
-            { id: "create", target: '[data-tutorial="create-menu"]', placement: "bottom", waitForTarget: true },
+            { id: "create", target: '[data-tutorial="create-menu"]', placement: "left", waitForTarget: true, openMenu: "create-menu" },
             { id: "edit", placement: "center" },
             { id: "staging", target: '[data-tutorial="staging-fab"]', placement: "left", waitForTarget: true },
             { id: "track", target: '[data-tutorial="nav-contributions"]', placement: "bottom", waitForTarget: true },

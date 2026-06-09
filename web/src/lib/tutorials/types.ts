@@ -65,6 +65,12 @@ export interface TutorialStep {
      */
     only?: "desktop" | "mobile";
     /**
+     * Force a registered dropdown/menu open while this step is shown (its id is
+     * matched by `useTutorialMenuOpen`). Use for steps that describe items
+     * inside a menu — the menu opens above the dim so the user can see them.
+     */
+    openMenu?: string;
+    /**
      * CSS selector for the element to spotlight. Prefer
      * `[data-tutorial="..."]`. Omit for a centered intro/outro card.
      */

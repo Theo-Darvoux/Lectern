@@ -1886,12 +1886,12 @@
     "helpCenter": {
       "open": "Aide et tutoriels",
       "title": "Centre d'aide",
-      "description": "Des tutoriels pas à pas pour vous repérer. Lancez-en un à tout moment — reprenez où vous en étiez ou recommencez du début.",
+      "description": "Des tutoriels pas à pas pour vous repérer. Lancez-en un à tout moment - reprenez où vous en étiez ou recommencez du début.",
       "start": "Commencer",
       "replay": "Revoir",
       "completed": "Terminé",
       "resetAll": "Réinitialiser les tutoriels",
-      "resetDone": "Tutoriels réinitialisés — les visites guidées réapparaîtront.",
+      "resetDone": "Tutoriels réinitialisés - les visites guidées réapparaîtront.",
       "empty": "Aucun tutoriel n'est disponible pour votre compte pour le moment."
     },
     "welcome": {
@@ -1908,7 +1908,7 @@
         },
         "search": {
           "title": "Recherche",
-          "body": "Trouvez cours, fichiers et personnes instantanément — le moyen le plus rapide de naviguer."
+          "body": "Trouvez cours, fichiers et personnes instantanément - le moyen le plus rapide de naviguer."
         },
         "notifications": {
           "title": "Notifications",
@@ -1920,11 +1920,11 @@
         },
         "help": {
           "title": "Besoin d'aide plus tard ?",
-          "body": "Tous les tutoriels se trouvent dans le centre d'aide — ouvrez-le depuis ce menu quand vous voulez une piqûre de rappel."
+          "body": "Tous les tutoriels se trouvent dans le centre d'aide - ouvrez-le depuis ce menu quand vous voulez une piqûre de rappel."
         },
         "outro": {
           "title": "Tout est prêt",
-          "body": "Voilà pour les bases. Explorez à votre rythme — nous vous guiderons au fil de l'eau."
+          "body": "Voilà pour les bases. Explorez à votre rythme - nous vous guiderons au fil de l'eau."
         }
       }
     },
@@ -1958,7 +1958,7 @@
         },
         "outro": {
           "title": "Bonne navigation",
-          "body": "C'est tout — plongez et explorez les supports."
+          "body": "C'est tout - plongez et explorez les supports."
         }
       }
     },
@@ -1976,7 +1976,7 @@
         },
         "dropzone": {
           "title": "Glisser-déposer",
-          "body": "Vous pouvez aussi glisser des fichiers depuis votre ordinateur n'importe où sur la page — ils seront pris en compte automatiquement."
+          "body": "Vous pouvez aussi glisser des fichiers depuis votre ordinateur n'importe où sur la page - ils seront pris en compte automatiquement."
         },
         "staging": {
           "title": "Vérifier et soumettre",
@@ -1990,11 +1990,11 @@
     },
     "contribute": {
       "title": "Proposer des modifications",
-      "description": "Proposez de nouveaux fichiers ou des modifications — l'équipe les relit avant publication.",
+      "description": "Proposez de nouveaux fichiers ou des modifications - l'équipe les relit avant publication.",
       "steps": {
         "intro": {
           "title": "Comment ça marche",
-          "body": "Les changements sont proposés sous forme de pull request et relus par l'équipe avant publication — rien n'est écrasé directement."
+          "body": "Les changements sont proposés sous forme de pull request et relus par l'équipe avant publication - rien n'est écrasé directement."
         },
         "create": {
           "title": "Proposer du contenu",
@@ -2028,7 +2028,7 @@
         },
         "name": {
           "title": "Nommez votre quiz",
-          "body": "Donnez-lui un titre clair — c'est ce que verront les apprenants et les relecteurs."
+          "body": "Donnez-lui un titre clair - c'est ce que verront les apprenants et les relecteurs."
         },
         "import": {
           "title": "Importer depuis Moodle",
@@ -2036,7 +2036,7 @@
         },
         "addChapter": {
           "title": "Questions et chapitres",
-          "body": "Organisez les questions en chapitres. Chaque question peut avoir plusieurs réponses — cochez les bonnes. Markdown, formules LaTeX et images sont pris en charge."
+          "body": "Organisez les questions en chapitres. Chaque question peut avoir plusieurs réponses - cochez les bonnes. Markdown, formules LaTeX et images sont pris en charge."
         },
         "preview": {
           "title": "Aperçu",
@@ -2066,7 +2066,7 @@
         },
         "panel": {
           "title": "Le panneau d'annotations",
-          "body": "Toutes les annotations d'un document se trouvent ici — répondez, résolvez les fils et suivez la conversation."
+          "body": "Toutes les annotations d'un document se trouvent ici - répondez, résolvez les fils et suivez la conversation."
         },
         "outro": {
           "title": "Lancez la discussion",
@@ -2122,7 +2122,7 @@
         },
         "outro": {
           "title": "Vous êtes équipé",
-          "body": "Explorez chaque onglet — chaque action ici est journalisée."
+          "body": "Explorez chaque onglet - chaque action ici est journalisée."
         }
       }
     }

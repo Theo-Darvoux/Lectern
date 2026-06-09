@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, startTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { useTutorialMenuOpen } from "@/lib/tutorials/tutorial-store";
 import { DirectoryLineItem } from "@/components/browse/directory-line-item";
 import { MaterialLineItem } from "@/components/browse/material-line-item";
 import { Breadcrumbs } from "@/components/browse/breadcrumbs";
@@ -96,6 +97,8 @@ export function DirectoryListing({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadParentMat, setUploadParentMat] = useState<{ id: string; name: string } | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const tutorialCreateOpen = useTutorialMenuOpen("create-menu");
   const [editFolderOpen, setEditFolderOpen] = useState(false);
   const requestUpload = useDropZoneStore((s) => s.requestUpload);
   const setBrowseContext = useDropZoneStore((s) => s.setBrowseContext);
@@ -676,7 +679,12 @@ export function DirectoryListing({
                 )}
 
                 {!guest && (
-                <DropdownMenu>
+                <DropdownMenu
+                  open={tutorialCreateOpen || createMenuOpen}
+                  onOpenChange={(o) => {
+                    if (!tutorialCreateOpen) setCreateMenuOpen(o);
+                  }}
+                >
                   <DropdownMenuTrigger asChild>
                     <Button
                       key="create-btn"
@@ -690,7 +698,13 @@ export function DirectoryListing({
                       <ChevronDown className="w-3 h-3 sm:ml-0.5 opacity-60" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuContent
+                    align="end"
+                    className={`w-48 ${tutorialCreateOpen ? "z-[1001] pointer-events-none" : ""}`}
+                    onInteractOutside={(e) => {
+                      if (tutorialCreateOpen) e.preventDefault();
+                    }}
+                  >
                     <DropdownMenuItem onClick={() => setNewFolderOpen(true)}>
                       <FolderPlus className="w-4 h-4 mr-2" />
                       {t("newFolder")}

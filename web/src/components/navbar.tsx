@@ -22,6 +22,7 @@ import { useState, useEffect, useCallback } from "react";
 import { SearchModal } from "@/components/search/search-modal";
 import { SearchInline } from "@/components/search/search-inline";
 import { useNotificationStore, useConfigStore, usePRStore } from "@/lib/stores";
+import { useTutorialMenuOpen } from "@/lib/tutorials/tutorial-store";
 import { isGuest } from "@/lib/guest";
 import { useSSE } from "@/hooks/use-sse";
 import { usePathname } from "next/navigation";
@@ -64,6 +65,8 @@ export function Navbar() {
   const pathname = usePathname();
 
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const tutorialProfileOpen = useTutorialMenuOpen("profile-menu");
   const [recentNotifications, setRecentNotifications] = useState<
     NotificationItem[]
   >([]);
@@ -386,7 +389,13 @@ export function Navbar() {
                 </Popover>
               </div>
 
-              <DropdownMenu modal={false}>
+              <DropdownMenu
+                modal={false}
+                open={tutorialProfileOpen || profileMenuOpen}
+                onOpenChange={(o) => {
+                  if (!tutorialProfileOpen) setProfileMenuOpen(o);
+                }}
+              >
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -412,7 +421,13 @@ export function Navbar() {
                     </span>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuContent
+                  align="end"
+                  className={`w-56 ${tutorialProfileOpen ? "z-[1001] pointer-events-none" : ""}`}
+                  onInteractOutside={(e) => {
+                    if (tutorialProfileOpen) e.preventDefault();
+                  }}
+                >
                   <div className="flex items-center justify-start gap-2 p-2">
                     <div className="flex flex-col space-y-1 leading-none">
                       {user.display_name && (

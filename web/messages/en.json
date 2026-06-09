@@ -1886,12 +1886,12 @@
     "helpCenter": {
       "open": "Help & tutorials",
       "title": "Help center",
-      "description": "Step-by-step tutorials for getting around. Start one anytime — pick up where you left off or replay from the beginning.",
+      "description": "Step-by-step tutorials for getting around. Start one anytime - pick up where you left off or replay from the beginning.",
       "start": "Start",
       "replay": "Replay",
       "completed": "Completed",
       "resetAll": "Reset all tutorials",
-      "resetDone": "Tutorials reset — auto tours will show again.",
+      "resetDone": "Tutorials reset - auto tours will show again.",
       "empty": "No tutorials are available for your account yet."
     },
     "welcome": {
@@ -1908,7 +1908,7 @@
         },
         "search": {
           "title": "Search",
-          "body": "Find courses, files and people instantly — it's the fastest way to get around."
+          "body": "Find courses, files and people instantly - it's the fastest way to get around."
         },
         "notifications": {
           "title": "Notifications",
@@ -1920,11 +1920,11 @@
         },
         "help": {
           "title": "Need help later?",
-          "body": "Every tutorial lives in the Help center — open it from this menu whenever you want a refresher."
+          "body": "Every tutorial lives in the Help center - open it from this menu whenever you want a refresher."
         },
         "outro": {
           "title": "You're all set",
-          "body": "That's the basics. Explore at your own pace — we'll point things out as you go."
+          "body": "That's the basics. Explore at your own pace - we'll point things out as you go."
         }
       }
     },
@@ -1958,7 +1958,7 @@
         },
         "outro": {
           "title": "Happy browsing",
-          "body": "That's it — dive in and explore the materials."
+          "body": "That's it - dive in and explore the materials."
         }
       }
     },
@@ -1976,7 +1976,7 @@
         },
         "dropzone": {
           "title": "Drag & drop",
-          "body": "You can also drag files from your computer anywhere onto the page — they'll be picked up automatically."
+          "body": "You can also drag files from your computer anywhere onto the page - they'll be picked up automatically."
         },
         "staging": {
           "title": "Review & submit",
@@ -1990,11 +1990,11 @@
     },
     "contribute": {
       "title": "Contributing changes",
-      "description": "Propose new files or edits — staff review them before they go live.",
+      "description": "Propose new files or edits - staff review them before they go live.",
       "steps": {
         "intro": {
           "title": "How contributing works",
-          "body": "Changes are proposed as a pull request and reviewed by staff before publishing — nothing is overwritten directly."
+          "body": "Changes are proposed as a pull request and reviewed by staff before publishing - nothing is overwritten directly."
         },
         "create": {
           "title": "Propose new content",
@@ -2028,7 +2028,7 @@
         },
         "name": {
           "title": "Name your quiz",
-          "body": "Give it a clear title — this is what learners and reviewers will see."
+          "body": "Give it a clear title - this is what learners and reviewers will see."
         },
         "import": {
           "title": "Import from Moodle",
@@ -2036,7 +2036,7 @@
         },
         "addChapter": {
           "title": "Questions & chapters",
-          "body": "Organise questions into chapters. Each question can have several answers — mark the correct ones. Markdown, LaTeX maths and images are all supported."
+          "body": "Organise questions into chapters. Each question can have several answers - mark the correct ones. Markdown, LaTeX maths and images are all supported."
         },
         "preview": {
           "title": "Preview",
@@ -2066,7 +2066,7 @@
         },
         "panel": {
           "title": "The annotations panel",
-          "body": "Every annotation on a document lives here — reply, resolve threads and follow the conversation."
+          "body": "Every annotation on a document lives here - reply, resolve threads and follow the conversation."
         },
         "outro": {
           "title": "Start the conversation",
@@ -2122,7 +2122,7 @@
         },
         "outro": {
           "title": "You're equipped",
-          "body": "Explore each tab — every action here is logged."
+          "body": "Explore each tab - every action here is logged."
         }
       }
     }
