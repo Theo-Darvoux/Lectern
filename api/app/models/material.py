@@ -47,6 +47,11 @@ class Material(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
             postgresql_where=text("directory_id IS NULL AND deleted_at IS NULL"),
             sqlite_where=text("directory_id IS NULL AND deleted_at IS NULL"),
         ),
+        Index("ix_materials_directory_parent", "directory_id", "parent_material_id"),
+        Index("ix_materials_parent_material_id", "parent_material_id"),
+        Index("ix_materials_views_today", text("views_today DESC")),
+        Index("ix_materials_views_14d", text("views_14d DESC")),
+        Index("ix_materials_author_id", "author_id"),
     )
 
     directory_id: Mapped[uuid.UUID | None] = mapped_column(

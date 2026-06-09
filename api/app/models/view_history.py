@@ -12,6 +12,7 @@ class ViewHistory(UUIDMixin, Base):
     __table_args__ = (
         UniqueConstraint("user_id", "material_id", name="uq_view_history_user_material"),
         Index("idx_view_history_user", "user_id", "viewed_at"),
+        Index("ix_view_history_material_id", "material_id"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(

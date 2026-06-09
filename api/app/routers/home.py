@@ -159,7 +159,7 @@ async def get_home(
     now = datetime.now(UTC)
 
     # ── popular_today ─────────────────────────────────────────────────────────
-    today_result = await db.execute(
+    today_stmt = (
         select(Material, MaterialVersion)
         .outerjoin(
             MaterialVersion,
@@ -170,10 +170,9 @@ async def get_home(
         .order_by(Material.views_today.desc())
         .limit(8)
     )
-    popular_today = await _build_material_details(db, today_result.all(), user.id)
 
     # ── popular_14d ───────────────────────────────────────────────────────────
-    week2_result = await db.execute(
+    week2_stmt = (
         select(Material, MaterialVersion)
         .outerjoin(
             MaterialVersion,
@@ -184,10 +183,9 @@ async def get_home(
         .order_by(Material.views_14d.desc())
         .limit(8)
     )
-    popular_14d = await _build_material_details(db, week2_result.all(), user.id)
 
     # ── featured ──────────────────────────────────────────────────────────────
-    featured_result = await db.execute(
+    featured_stmt = (
         select(FeaturedItem, Material, MaterialVersion, Directory)
         .outerjoin(Material, FeaturedItem.material_id == Material.id)
         .outerjoin(
@@ -203,20 +201,18 @@ async def get_home(
         )
         .order_by(FeaturedItem.priority.desc())
     )
-    featured = await _build_featured_out(db, featured_result.all(), user.id)
 
     # ── recent open PRs ───────────────────────────────────────────────────────
-    pr_result = await db.execute(
+    pr_stmt = (
         select(PullRequest)
         .options(selectinload(PullRequest.author))
         .where(PullRequest.status == PRStatus.OPEN)
         .order_by(PullRequest.created_at.desc())
         .limit(5)
     )
-    recent_prs = [PullRequestOut.model_validate(pr) for pr in pr_result.scalars().all()]
 
     # ── recent favourites ─────────────────────────────────────────────────────
-    fav_result = await db.execute(
+    fav_stmt = (
         select(Material, MaterialVersion)
         .join(MaterialFavourite, MaterialFavourite.material_id == Material.id)
         .outerjoin(
@@ -228,10 +224,9 @@ async def get_home(
         .order_by(MaterialFavourite.created_at.desc())
         .limit(6)
     )
-    recent_favourites = await _build_material_details(db, fav_result.all(), user.id)
 
     # ── recently viewed ───────────────────────────────────────────────────────
-    viewed_result = await db.execute(
+    viewed_stmt = (
         select(Material, MaterialVersion)
         .join(ViewHistory, ViewHistory.material_id == Material.id)
         .outerjoin(
@@ -243,10 +238,9 @@ async def get_home(
         .order_by(ViewHistory.viewed_at.desc())
         .limit(8)
     )
-    recently_viewed = await _build_material_details(db, viewed_result.all(), user.id)
 
     # ── recently added ────────────────────────────────────────────────────────
-    added_result = await db.execute(
+    added_stmt = (
         select(Material, MaterialVersion)
         .outerjoin(
             MaterialVersion,
@@ -257,33 +251,119 @@ async def get_home(
         .order_by(Material.created_at.desc())
         .limit(8)
     )
-    recently_added = await _build_material_details(db, added_result.all(), user.id)
 
     # ── stats ─────────────────────────────────────────────────────────────────
-    total_materials = await db.scalar(
-        select(func.count())
-        .select_from(Material)
-        .where(Material.parent_material_id.is_(None), Material.deleted_at.is_(None))
-    )
-    total_directories = await db.scalar(
-        select(func.count()).select_from(Directory).where(Directory.deleted_at.is_(None))
-    )
-    open_prs_count = await db.scalar(
-        select(func.count()).select_from(PullRequest).where(PullRequest.status == PRStatus.OPEN)
-    )
-    my_contributions = await db.scalar(
-        select(func.count()).select_from(PullRequest).where(PullRequest.author_id == user.id)
+    stats_query = select(
+        select(func.count()).select_from(Material).where(Material.parent_material_id.is_(None), Material.deleted_at.is_(None)).scalar_subquery().label("m_count"),
+        select(func.count()).select_from(Directory).where(Directory.deleted_at.is_(None)).scalar_subquery().label("d_count"),
+        select(func.count()).select_from(PullRequest).where(PullRequest.status == PRStatus.OPEN).scalar_subquery().label("pr_count"),
+        select(func.count()).select_from(PullRequest).where(PullRequest.author_id == user.id).scalar_subquery().label("my_pr_count"),
     )
 
+    # Execute queries sequentially but efficiently
+    today_rows = (await db.execute(today_stmt)).all()
+    week2_rows = (await db.execute(week2_stmt)).all()
+    featured_rows = (await db.execute(featured_stmt)).all()
+    pr_rows = (await db.execute(pr_stmt)).scalars().all()
+    fav_rows = (await db.execute(fav_stmt)).all()
+    viewed_rows = (await db.execute(viewed_stmt)).all()
+    added_rows = (await db.execute(added_stmt)).all()
+    stats_row = (await db.execute(stats_query)).one()
+
+    recent_prs = [PullRequestOut.model_validate(pr) for pr in pr_rows]
+
+    # Consolidate all directory paths fetching
+    dir_ids = set()
+    for rows in (today_rows, week2_rows, fav_rows, viewed_rows, added_rows):
+        for material, _ in rows:
+            if material.directory_id:
+                dir_ids.add(material.directory_id)
+
+    boost_dir_ids = set()
+    for featured_item, material, version, directory in featured_rows:
+        if material and material.directory_id:
+            dir_ids.add(material.directory_id)
+        elif directory:
+            boost_dir_ids.add(directory.id)
+            dir_ids.add(directory.id)
+
+    paths = await get_directory_paths(db, dir_ids)
+    preview_ids = await get_preview_material_ids(db, list(boost_dir_ids)) if boost_dir_ids else {}
+
+    def build_mat_list(rows: Any) -> list[MaterialDetail]:
+        res = []
+        for material, version in rows:
+            mat_dict = material_orm_to_dict(material, current_user_id=user.id, current_version=version)
+            mat_dict["directory_path"] = paths.get(mat_dict["directory_id"])
+            res.append(MaterialDetail.model_validate(mat_dict))
+        return res
+
+    popular_today = build_mat_list(today_rows)
+    popular_14d = build_mat_list(week2_rows)
+    recent_favourites = build_mat_list(fav_rows)
+    recently_viewed = build_mat_list(viewed_rows)
+    recently_added = build_mat_list(added_rows)
+
+    # Build featured
+    featured_out = []
+    staged_materials = []
+    staged_directories = []
+    for featured_item, material, version, directory in featured_rows:
+        if material:
+            mat_dict = material_orm_to_dict(material, current_user_id=user.id, current_version=version)
+            mat_dict["directory_path"] = paths.get(mat_dict["directory_id"])
+            featured_out.append(
+                FeaturedItemOut(
+                    id=featured_item.id,
+                    material=MaterialDetail.model_validate(mat_dict),
+                    directory=None,
+                    title=featured_item.title,
+                    description=featured_item.description,
+                    start_at=featured_item.start_at,
+                    end_at=featured_item.end_at,
+                    priority=featured_item.priority,
+                )
+            )
+        elif directory:
+            dir_dict = {
+                "id": directory.id,
+                "parent_id": directory.parent_id,
+                "name": directory.name,
+                "slug": directory.slug,
+                "type": directory.type,
+                "description": directory.description,
+                "metadata_": directory.metadata_,
+                "sort_order": directory.sort_order,
+                "tags": directory.tags,
+                "full_path": paths.get(directory.id),
+                "preview_material_ids": preview_ids.get(directory.id, []),
+                "created_at": directory.created_at,
+            }
+            featured_out.append(
+                FeaturedItemOut(
+                    id=featured_item.id,
+                    material=None,
+                    directory=DirectoryOut.model_validate(dir_dict),
+                    title=featured_item.title,
+                    description=featured_item.description,
+                    start_at=featured_item.start_at,
+                    end_at=featured_item.end_at,
+                    priority=featured_item.priority,
+                )
+            )
+
+    row_id_order = {row[0].id: i for i, row in enumerate(featured_rows)}
+    featured_out.sort(key=lambda x: row_id_order.get(x.id, 9999))
+
     stats = HomeStats(
-        total_materials=total_materials or 0,
-        total_directories=total_directories or 0,
-        open_prs=open_prs_count or 0,
-        my_contributions=my_contributions or 0,
+        total_materials=stats_row.m_count or 0,
+        total_directories=stats_row.d_count or 0,
+        open_prs=stats_row.pr_count or 0,
+        my_contributions=stats_row.my_pr_count or 0,
     )
 
     return HomeResponse(
-        featured=featured,
+        featured=featured_out,
         popular_today=popular_today,
         popular_14d=popular_14d,
         recent_prs=recent_prs,

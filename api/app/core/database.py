@@ -10,8 +10,15 @@ from app.config import settings
 _is_sqlite = settings.database_url.startswith("sqlite")
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.is_dev,
-    **({} if _is_sqlite else {"pool_size": 20, "max_overflow": 10}),
+    echo=False,  # DO NOT USE settings.is_dev as it causes massive I/O load under load
+    query_cache_size=1200,
+    **({} if _is_sqlite else {
+        "pool_size": 15, 
+        "max_overflow": 30,
+        "pool_timeout": 10,
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,
+    }),
 )
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)

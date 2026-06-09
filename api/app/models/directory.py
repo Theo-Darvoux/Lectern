@@ -43,6 +43,7 @@ class Directory(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),
         ),
+        Index("ix_directories_parent_id", "parent_id"),
     )
 
     parent_id: Mapped[uuid.UUID | None] = mapped_column(

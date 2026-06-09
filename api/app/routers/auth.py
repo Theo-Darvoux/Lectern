@@ -93,12 +93,18 @@ def _login_response(user: User, response: Response, *, is_new: bool) -> TokenRes
     )
 
 
+_NEEDS_SETUP_CACHE: bool | None = None
+
 @router.get("/methods")
 async def get_auth_methods(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
+    global _NEEDS_SETUP_CACHE
+    if _NEEDS_SETUP_CACHE is None or _NEEDS_SETUP_CACHE is True:
+        _NEEDS_SETUP_CACHE = not await auth_service.admin_exists(db)
+
     return {
-        "needs_setup": not await auth_service.admin_exists(db),
+        "needs_setup": _NEEDS_SETUP_CACHE,
         "totp_enabled": settings.totp_enabled,
         "google_enabled": settings.google_oauth_enabled,
         "google_client_id": settings.google_client_id,
