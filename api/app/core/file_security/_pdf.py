@@ -168,6 +168,10 @@ async def _compress_pdf_ghostscript(file_path: Path, quality: int) -> Path:
     sources of PDF bloat that pikepdf cannot touch. Returns a new temp path if
     the result is smaller than the input; returns the original path on failure
     or if no saving was achieved (fail-open).
+
+    At quality >= 100 the image stages are disabled entirely: GS still subsets
+    fonts and packs objects (both lossless) but passes image streams through
+    untouched, so no resampling or JPEG re-encoding occurs.
     """
     # Pick the tier for the requested quality level
     profile, colour_dpi, gray_dpi, mono_dpi = "/ebook", 96, 96, 300
@@ -178,6 +182,35 @@ async def _compress_pdf_ghostscript(file_path: Path, quality: int) -> Path:
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as _f:
         out_name = _f.name
+
+    if quality >= 100:
+        # Lossless image mode: subset fonts and pack objects, but pass image
+        # streams through untouched — no downsampling and no re-encoding. Without
+        # these flags the /prepress profile would still resample to 300 dpi and
+        # re-JPEG colour images (AutoFilter), losing quality even at quality=100.
+        image_args = [
+            "-dDownsampleColorImages=false",
+            "-dDownsampleGrayImages=false",
+            "-dDownsampleMonoImages=false",
+            "-dAutoFilterColorImages=false",
+            "-dAutoFilterGrayImages=false",
+            "-dEncodeColorImages=false",
+            "-dEncodeGrayImages=false",
+            "-dEncodeMonoImages=false",
+        ]
+    else:
+        # Explicit DPI overrides — these win over the profile defaults.
+        image_args = [
+            "-dDownsampleColorImages=true",
+            "-dColorImageDownsampleType=/Bicubic",
+            f"-dColorImageResolution={colour_dpi}",
+            "-dDownsampleGrayImages=true",
+            "-dGrayImageDownsampleType=/Bicubic",
+            f"-dGrayImageResolution={gray_dpi}",
+            "-dDownsampleMonoImages=true",
+            "-dMonoImageDownsampleType=/Subsample",
+            f"-dMonoImageResolution={mono_dpi}",
+        ]
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -190,16 +223,7 @@ async def _compress_pdf_ghostscript(file_path: Path, quality: int) -> Path:
             "-dCompatibilityLevel=1.4",
             f"-dPDFSETTINGS={profile}",
             "-dDetectDuplicateImages=true",
-            # Explicit DPI overrides — these win over the profile defaults.
-            "-dDownsampleColorImages=true",
-            "-dColorImageDownsampleType=/Bicubic",
-            f"-dColorImageResolution={colour_dpi}",
-            "-dDownsampleGrayImages=true",
-            "-dGrayImageDownsampleType=/Bicubic",
-            f"-dGrayImageResolution={gray_dpi}",
-            "-dDownsampleMonoImages=true",
-            "-dMonoImageDownsampleType=/Subsample",
-            f"-dMonoImageResolution={mono_dpi}",
+            *image_args,
             f"-sOutputFile={out_name}",
             str(file_path),
             stdout=asyncio.subprocess.DEVNULL,

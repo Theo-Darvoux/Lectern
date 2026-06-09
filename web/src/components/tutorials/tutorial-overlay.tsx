@@ -42,6 +42,10 @@ export function TutorialOverlay() {
 
     const [rect, setRect] = useState<TargetRect | null>(null);
     const [ready, setReady] = useState(false);
+    // Once the first step has been revealed, keep the overlay mounted across
+    // step changes so the card/dim glide to the next spot instead of vanishing
+    // while the next target is resolved.
+    const [shownOnce, setShownOnce] = useState(false);
     const directionRef = useRef<1 | -1>(1);
 
     const step = active?.steps[stepIndex] ?? null;
@@ -61,6 +65,14 @@ export function TutorialOverlay() {
         if (active) void markComplete(active.id);
         cancel();
     }, [active, markComplete, cancel]);
+
+    // Track first reveal / teardown so the overlay stays mounted between steps.
+    useEffect(() => {
+        if (ready) setShownOnce(true);
+    }, [ready]);
+    useEffect(() => {
+        if (!active) setShownOnce(false);
+    }, [active]);
 
     // Resolve the current step's target: navigate if needed, then poll for it.
     useEffect(() => {
@@ -148,7 +160,7 @@ export function TutorialOverlay() {
         return () => window.removeEventListener("keydown", onKey);
     }, [active, finish, handleNext, handlePrev]);
 
-    if (!active || !step || !ready || typeof document === "undefined") return null;
+    if (!active || !step || !(ready || shownOnce) || typeof document === "undefined") return null;
 
     return createPortal(
         <>

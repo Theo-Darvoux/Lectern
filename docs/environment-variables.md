@@ -224,7 +224,7 @@ in MiB unless noted.
 | `MAX_TEXT_SIZE_MB` | `20` | Per-category cap for text/code. |
 | `ALLOWED_EXTENSIONS` | *(empty = all)* | Comma-separated allowlist, e.g. `.pdf,.docx`. |
 | `ALLOWED_MIME_TYPES` | *(empty = all)* | Comma-separated MIME-type allowlist. |
-| `PDF_QUALITY` | `75` | PDF compression quality (0–100). |
+| `PDF_QUALITY` | `75` | PDF compression quality (0–100). Set to `100` to keep images lossless — fonts are still subsetted and objects packed, but images are never downsampled or re-encoded. |
 | `PDF_COMPRESSION_LEVEL` | *(unset)* | Ghostscript-style alias (`screen`/`ebook`/`printer`/`prepress`); when set it overrides `PDF_QUALITY`. |
 | `VIDEO_COMPRESSION_PROFILE` | `medium` | ffmpeg profile: `none`, `light`, `medium`, `aggressive`, `heavy`, `extreme`. |
 | `THUMBNAIL_QUALITY` | `85` | Thumbnail JPEG quality (0–100). |

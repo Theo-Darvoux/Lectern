@@ -114,7 +114,7 @@ A follow-up `process_upload_post_scan` job runs:
 
 **Compression** (soft failure : original served if this fails):
 - Images: PNG/JPEG re-encoded at reduced quality
-- PDF: quality reduction (controlled by `PDF_QUALITY`, default 75)
+- PDF: quality reduction (controlled by `PDF_QUALITY`, default 75; `100` keeps images lossless — font subsetting and object packing only)
 - Video: FFmpeg transcode using `VIDEO_COMPRESSION_PROFILE` (none | light | medium | aggressive | heavy | extreme)
 
 **Thumbnail generation** (soft failure):

@@ -1,6 +1,7 @@
 import { create } from "zustand";
+import type { UserBrief } from "@/lib/guest";
 import { getTutorial } from "./registry";
-import type { Tutorial } from "./types";
+import { tierQualifies, type Tutorial } from "./types";
 
 interface TutorialRunState {
     /** The tutorial currently playing, or null when idle. */
@@ -8,7 +9,7 @@ interface TutorialRunState {
     /** Index into `active.steps`. */
     stepIndex: number;
     /** True once the user reached the final step and confirmed (for completion). */
-    start: (id: string) => void;
+    start: (id: string, user: UserBrief | null | undefined) => void;
     next: () => void;
     prev: () => void;
     goTo: (index: number) => void;
@@ -19,9 +20,15 @@ interface TutorialRunState {
 export const useTutorialRun = create<TutorialRunState>((set, get) => ({
     active: null,
     stepIndex: 0,
-    start: (id) => {
+    start: (id, user) => {
         const tutorial = getTutorial(id);
-        if (tutorial) set({ active: tutorial, stepIndex: 0 });
+        if (!tutorial) return;
+        // Drop steps the viewer can't see (their target never renders), so the
+        // engine doesn't blank out polling for an absent element.
+        const steps = tutorial.steps.filter(
+            (s) => !s.minTier || tierQualifies(user, s.minTier),
+        );
+        set({ active: { ...tutorial, steps }, stepIndex: 0 });
     },
     next: () => {
         const { active, stepIndex } = get();

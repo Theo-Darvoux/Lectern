@@ -60,7 +60,7 @@ export function TutorialProvider() {
         if (!candidate) return;
         attempted.current.add(candidate.id);
         // Let the page settle before spotlighting.
-        const timer = window.setTimeout(() => start(candidate.id), 900);
+        const timer = window.setTimeout(() => start(candidate.id, user), 900);
         return () => window.clearTimeout(timer);
     }, [pathname, user, isLoading, active, start]);
 

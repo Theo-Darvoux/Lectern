@@ -57,8 +57,8 @@ export function useTutorial() {
     );
 
     const launch = useCallback((id: string) => {
-        if (tutorialsEnabled()) start(id);
-    }, [start]);
+        if (tutorialsEnabled()) start(id, user);
+    }, [start, user]);
 
     const markComplete = useCallback(
         async (id: string) => {

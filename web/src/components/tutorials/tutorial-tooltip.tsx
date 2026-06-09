@@ -1,6 +1,6 @@
 "use client";
 
-import { createElement } from "react";
+import { createElement, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowLeft, ArrowRight, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,10 +27,15 @@ const MARGIN = 16;
 
 /** Position the card around the target using a single anchor + transform. */
 function cardStyle(rect: TargetRect | null, placement: string): React.CSSProperties {
-    if (typeof window === "undefined" || !rect || placement === "center") {
+    if (typeof window === "undefined") {
+        return { top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
+    }
+    if (!rect || placement === "center") {
+        // Pixel-based center so transitions to/from anchored steps interpolate
+        // smoothly (CSS won't animate between px and %).
         return {
-            top: "50%",
-            left: "50%",
+            top: window.innerHeight / 2,
+            left: window.innerWidth / 2,
             transform: "translate(-50%, -50%)",
         };
     }
@@ -68,6 +73,11 @@ export function TutorialTooltip({
     const t = useTranslations("Tutorials");
     const tc = useTranslations("Tutorials.controls");
     const isMobile = useIsMobile();
+    const cardRef = useRef<HTMLDivElement>(null);
+    // Corrective translate that pulls the card fully back into the viewport
+    // after layout — anchor + placement transform alone can overflow any edge
+    // when the target sits near it.
+    const [correction, setCorrection] = useState({ dx: 0, dy: 0 });
 
     const isFirst = stepIndex === 0;
     const isLast = stepIndex === total - 1;
@@ -76,18 +86,53 @@ export function TutorialTooltip({
     const body = t(`${tutorial.id}.steps.${step.id}.body`);
 
     const mobile = isMobile;
+    const placement = step.placement ?? "bottom";
+
+    // Reset the correction whenever the anchor or step changes, so the next
+    // measurement starts from the raw placement.
+    useLayoutEffect(() => {
+        setCorrection((c) => (c.dx === 0 && c.dy === 0 ? c : { dx: 0, dy: 0 }));
+    }, [rect, step, mobile]);
+
+    // Measure the rendered card and nudge it on-screen. Runs again after each
+    // correction (converges to a no-op once it fits).
+    useLayoutEffect(() => {
+        const el = cardRef.current;
+        if (!el || mobile) return;
+        const r = el.getBoundingClientRect();
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        let dx = 0;
+        let dy = 0;
+        if (r.left < MARGIN) dx = MARGIN - r.left;
+        else if (r.right > vw - MARGIN) dx = vw - MARGIN - r.right;
+        if (r.top < MARGIN) dy = MARGIN - r.top;
+        else if (r.bottom > vh - MARGIN) dy = vh - MARGIN - r.bottom;
+        if (dx !== 0 || dy !== 0) {
+            setCorrection((c) => ({ dx: c.dx + dx, dy: c.dy + dy }));
+        }
+    }, [rect, step, mobile, correction]);
+
+    const base = cardStyle(rect, placement);
     const style: React.CSSProperties = mobile
         ? {}
-        : { ...cardStyle(rect, step.placement ?? "bottom"), width: CARD_WIDTH, maxWidth: `calc(100vw - ${2 * MARGIN}px)` };
+        : {
+              ...base,
+              transform: `${base.transform ?? ""} translate(${correction.dx}px, ${correction.dy}px)`,
+              width: CARD_WIDTH,
+              maxWidth: `calc(100vw - ${2 * MARGIN}px)`,
+          };
 
     return (
         <div
+            ref={cardRef}
             role="dialog"
             aria-modal="true"
             aria-label={title}
             className={cn(
                 "fixed z-[1002] flex flex-col gap-3 rounded-2xl border bg-popover p-5 text-popover-foreground shadow-2xl",
                 "animate-in fade-in zoom-in-95 duration-200",
+                "motion-safe:transition-[top,left,transform] motion-safe:duration-300 motion-safe:ease-out",
                 mobile && "inset-x-0 bottom-0 rounded-b-none border-x-0 border-b-0 pb-[calc(env(safe-area-inset-bottom)+1.25rem)]",
             )}
             style={style}

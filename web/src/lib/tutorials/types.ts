@@ -53,6 +53,12 @@ export interface TutorialStep {
     /** Stable id within the tutorial (used for i18n keys). */
     id: string;
     /**
+     * Minimum tier required for this individual step. Steps above the viewer's
+     * tier are dropped at launch — use for steps whose target only renders for
+     * more-privileged users (e.g. a guest has no notifications/profile nav).
+     */
+    minTier?: TutorialTier;
+    /**
      * CSS selector for the element to spotlight. Prefer
      * `[data-tutorial="..."]`. Omit for a centered intro/outro card.
      */
