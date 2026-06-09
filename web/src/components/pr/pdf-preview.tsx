@@ -4,7 +4,7 @@
 // pdfjs-dist calls Promise.withResolvers() at module-evaluation time, which does not
 // exist in the Node.js versions used by Next.js SSR — dynamic import keeps it browser-only.
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
     FileText,
@@ -97,21 +97,83 @@ export function PdfPreview({ url }: { url: string }) {
         return () => io.disconnect();
     }, [numPages, zoom]);
 
-    // Keyboard zoom
+    const targetPageRef = useRef(1);
+    const lastNavRef = useRef(0);
+
+    // Sync targetPageRef with currentPage only if we are not actively navigating
+    useEffect(() => {
+        const now = Date.now();
+        if (now - lastNavRef.current > 500) {
+            targetPageRef.current = currentPage;
+        }
+    }, [currentPage]);
+
+    const navigatePage = useCallback((direction: "next" | "prev") => {
+        if (numPages === 0) return;
+        lastNavRef.current = Date.now();
+        let nextTarget = targetPageRef.current;
+        if (direction === "next") {
+            nextTarget = Math.min(numPages, targetPageRef.current + 1);
+        } else {
+            nextTarget = Math.max(1, targetPageRef.current - 1);
+        }
+        targetPageRef.current = nextTarget;
+        scrollRef.current?.querySelector(`[data-page="${nextTarget}"]`)?.scrollIntoView({ behavior: "smooth" });
+    }, [numPages]);
+
+    // Keyboard Navigation and Zoom
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            if (!(e.ctrlKey || e.metaKey)) return;
-            if (e.key === "=" || e.key === "+") { e.preventDefault(); setZoom((z) => Math.min(MAX_ZOOM, z + ZOOM_STEP)); }
-            if (e.key === "-") { e.preventDefault(); setZoom((z) => Math.max(MIN_ZOOM, z - ZOOM_STEP)); }
-            if (e.key === "0") { e.preventDefault(); setZoom(100); }
+            const target = e.target as HTMLElement | null;
+            if (
+                target &&
+                (target.tagName === "INPUT" ||
+                    target.tagName === "TEXTAREA" ||
+                    target.tagName === "SELECT" ||
+                    target.isContentEditable)
+            ) {
+                return;
+            }
+
+            // Zoom shortcuts (Ctrl/Cmd + keys)
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key === "=" || e.key === "+") {
+                    e.preventDefault();
+                    setZoom((z) => Math.min(MAX_ZOOM, z + ZOOM_STEP));
+                    return;
+                }
+                if (e.key === "-") {
+                    e.preventDefault();
+                    setZoom((z) => Math.max(MIN_ZOOM, z - ZOOM_STEP));
+                    return;
+                }
+                if (e.key === "0") {
+                    e.preventDefault();
+                    setZoom(100);
+                    return;
+                }
+            }
+
+            // Page navigation shortcuts (no modifier keys allowed)
+            if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) {
+                return;
+            }
+
+            if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
+                e.preventDefault();
+                navigatePage("next");
+            } else if (
+                e.key === "ArrowLeft" ||
+                e.key === "q" || e.key === "Q" ||
+                e.key === "a" || e.key === "A"
+            ) {
+                e.preventDefault();
+                navigatePage("prev");
+            }
         };
         window.addEventListener("keydown", handler);
         return () => window.removeEventListener("keydown", handler);
-    }, []);
-
-    const scrollToPage = (page: number) => {
-        scrollRef.current?.querySelector(`[data-page="${page}"]`)?.scrollIntoView({ behavior: "smooth" });
-    };
+    }, [navigatePage, setZoom]);
 
     if (loading) return (
         <div className="flex h-full items-center justify-center">
@@ -158,7 +220,7 @@ export function PdfPreview({ url }: { url: string }) {
                             size="icon"
                             className="h-7 w-7"
                             disabled={currentPage <= 1}
-                            onClick={() => scrollToPage(currentPage - 1)}
+                            onClick={() => navigatePage("prev")}
                         >
                             <ChevronLeft className="h-3.5 w-3.5" />
                         </Button>
@@ -168,7 +230,7 @@ export function PdfPreview({ url }: { url: string }) {
                             size="icon"
                             className="h-7 w-7"
                             disabled={currentPage >= numPages}
-                            onClick={() => scrollToPage(currentPage + 1)}
+                            onClick={() => navigatePage("next")}
                         >
                             <ChevronRight className="h-3.5 w-3.5" />
                         </Button>

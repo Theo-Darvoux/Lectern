@@ -499,6 +499,17 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         setParseError(err.message ?? t("pdf.failedToParse"));
     }, [t]);
 
+    const targetPageRef = useRef(1);
+    const lastKeyboardNavRef = useRef(0);
+
+    // Sync targetPageRef with currentPage only if we are not actively navigating via keyboard
+    useEffect(() => {
+        const now = Date.now();
+        if (now - lastKeyboardNavRef.current > 500) {
+            targetPageRef.current = currentPage;
+        }
+    }, [currentPage]);
+
     // ── Keyboard Navigation and Zoom ────────────────────────────────────────
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -539,34 +550,48 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
             if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
                 e.preventDefault();
+                lastKeyboardNavRef.current = Date.now();
                 if (twoPageView) {
-                    const currentRow = Math.floor((currentPage - 1) / 2);
+                    const currentRow = Math.floor((targetPageRef.current - 1) / 2);
                     const totalRows = Math.ceil(numPages / 2);
                     if (currentRow + 1 < totalRows) {
+                        const newTarget = Math.min(numPages, (currentRow + 1) * 2 + 1);
+                        targetPageRef.current = newTarget;
                         listRef.current?.scrollToRow({ align: "start", index: currentRow + 1 });
                     }
                 } else {
-                    if (currentPage < numPages) {
-                        listRef.current?.scrollToRow({ align: "start", index: currentPage });
+                    if (targetPageRef.current < numPages) {
+                        const newTarget = targetPageRef.current + 1;
+                        targetPageRef.current = newTarget;
+                        listRef.current?.scrollToRow({ align: "start", index: newTarget - 1 });
                     }
                 }
-            } else if (e.key === "ArrowLeft" || e.key === "q" || e.key === "Q") {
+            } else if (
+                e.key === "ArrowLeft" ||
+                e.key === "q" || e.key === "Q" ||
+                e.key === "a" || e.key === "A"
+            ) {
                 e.preventDefault();
+                lastKeyboardNavRef.current = Date.now();
                 if (twoPageView) {
-                    const currentRow = Math.floor((currentPage - 1) / 2);
+                    const currentRow = Math.floor((targetPageRef.current - 1) / 2);
                     if (currentRow > 0) {
+                        const newTarget = (currentRow - 1) * 2 + 1;
+                        targetPageRef.current = newTarget;
                         listRef.current?.scrollToRow({ align: "start", index: currentRow - 1 });
                     }
                 } else {
-                    if (currentPage > 1) {
-                        listRef.current?.scrollToRow({ align: "start", index: currentPage - 2 });
+                    if (targetPageRef.current > 1) {
+                        const newTarget = targetPageRef.current - 1;
+                        targetPageRef.current = newTarget;
+                        listRef.current?.scrollToRow({ align: "start", index: newTarget - 1 });
                     }
                 }
             }
         };
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [setZoom, currentPage, numPages, twoPageView, listRef]);
+    }, [setZoom, numPages, twoPageView, listRef]);
 
     // ── Annotations ──────────────────────────────────────────────────────────
     const handleAnnotationClick = useCallback((threadId: string, e: React.MouseEvent) => {
