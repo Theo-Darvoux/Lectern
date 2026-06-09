@@ -59,6 +59,12 @@ export interface TutorialStep {
      */
     minTier?: TutorialTier;
     /**
+     * Restrict the step to one form factor. Steps whose target only renders on
+     * one layout (e.g. the desktop tree sidebar) are dropped at launch on the
+     * other, so they skip instantly instead of polling for an absent element.
+     */
+    only?: "desktop" | "mobile";
+    /**
      * CSS selector for the element to spotlight. Prefer
      * `[data-tutorial="..."]`. Omit for a centered intro/outro card.
      */

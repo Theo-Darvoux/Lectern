@@ -26,6 +26,8 @@ interface NavItem {
   Icon: LucideIcon;
   match: (pathname: string) => boolean;
   badgeCount?: (unreadCount: number, openPRCount: number) => number;
+  /** Tutorial anchor — mirrors the desktop navbar so tours resolve on mobile. */
+  tut?: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -47,6 +49,7 @@ const NAV_ITEMS: NavItem[] = [
     Icon: Send,
     match: (p) => p.startsWith("/pull-requests"),
     badgeCount: (_, openPRCount) => openPRCount,
+    tut: "nav-contributions",
   },
   {
     href: "/notifications",
@@ -54,12 +57,14 @@ const NAV_ITEMS: NavItem[] = [
     Icon: Bell,
     match: (p) => p.startsWith("/notifications"),
     badgeCount: (unreadCount) => unreadCount,
+    tut: "nav-notifications",
   },
   {
     href: "/profile",
     labelKey: "profile",
     Icon: User,
     match: (p) => p.startsWith("/profile"),
+    tut: "nav-profile",
   },
 ];
 
@@ -122,7 +127,7 @@ export function MobileBottomBar() {
           "ring-1 ring-inset ring-white/20 dark:ring-white/4",
         )}
       >
-        {navItems.map(({ href, labelKey, Icon, match, badgeCount }) => {
+        {navItems.map(({ href, labelKey, Icon, match, badgeCount, tut }) => {
           const isActive = match(pathname);
           const count = badgeCount ? badgeCount(unreadCount, openPRCount) : 0;
           const showBadge = count > 0;
@@ -132,6 +137,7 @@ export function MobileBottomBar() {
             <Link
               key={href}
               href={href}
+              data-tutorial={tut}
               aria-label={label}
               aria-current={isActive ? "page" : undefined}
               className={cn(

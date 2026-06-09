@@ -100,6 +100,19 @@ export function TutorialOverlay() {
             if (cancelled) return;
             const el = findVisibleTarget(target);
             if (el) {
+                const r = el.getBoundingClientRect();
+                const fullyInView =
+                    r.top >= 0 &&
+                    r.left >= 0 &&
+                    r.bottom <= window.innerHeight &&
+                    r.right <= window.innerWidth;
+                if (fullyInView) {
+                    // Already visible (e.g. fixed nav) — measure now so the card
+                    // glides straight to it with no dead wait.
+                    setRect(measure(el));
+                    setReady(true);
+                    return;
+                }
                 el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
                 // Let the smooth scroll settle before measuring.
                 window.setTimeout(() => {

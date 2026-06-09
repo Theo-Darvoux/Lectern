@@ -1,6 +1,6 @@
 "use client";
 
-import { createElement, useLayoutEffect, useRef, useState } from "react";
+import { createElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowLeft, ArrowRight, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,38 +25,59 @@ const CARD_WIDTH = 360;
 const GAP = 14;
 const MARGIN = 16;
 
-/** Position the card around the target using a single anchor + transform. */
-function cardStyle(rect: TargetRect | null, placement: string): React.CSSProperties {
-    if (typeof window === "undefined") {
-        return { top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
-    }
-    if (!rect || placement === "center") {
-        // Pixel-based center so transitions to/from anchored steps interpolate
-        // smoothly (CSS won't animate between px and %).
-        return {
-            top: window.innerHeight / 2,
-            left: window.innerWidth / 2,
-            transform: "translate(-50%, -50%)",
-        };
-    }
-    const vw = window.innerWidth;
-    const cardW = Math.min(CARD_WIDTH, vw - 2 * MARGIN);
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    // Clamp the horizontal centre so a centered card stays on-screen.
-    const clampedCx = Math.max(MARGIN + cardW / 2, Math.min(cx, vw - MARGIN - cardW / 2));
+interface Size {
+    width: number;
+    height: number;
+}
 
-    switch (placement) {
-        case "top":
-            return { top: rect.top - GAP, left: clampedCx, transform: "translate(-50%, -100%)" };
-        case "left":
-            return { top: cy, left: rect.left - GAP, transform: "translate(-100%, -50%)" };
-        case "right":
-            return { top: cy, left: rect.left + rect.width + GAP, transform: "translate(0, -50%)" };
-        case "bottom":
-        default:
-            return { top: rect.top + rect.height + GAP, left: clampedCx, transform: "translate(-50%, 0)" };
+/**
+ * Compute the card's top-left corner from the target rect, the card's measured
+ * size and the viewport. Position is pure math (no read-back of the rendered
+ * card), so it can't feed back into a render loop, and clamping keeps the whole
+ * card on-screen for every placement.
+ */
+function cornerFor(
+    rect: TargetRect | null,
+    placement: string,
+    size: Size,
+    vw: number,
+    vh: number,
+): { top: number; left: number } {
+    const { width: w, height: h } = size;
+    let top: number;
+    let left: number;
+
+    if (!rect || placement === "center") {
+        left = (vw - w) / 2;
+        top = (vh - h) / 2;
+    } else {
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        switch (placement) {
+            case "top":
+                left = cx - w / 2;
+                top = rect.top - GAP - h;
+                break;
+            case "left":
+                left = rect.left - GAP - w;
+                top = cy - h / 2;
+                break;
+            case "right":
+                left = rect.left + rect.width + GAP;
+                top = cy - h / 2;
+                break;
+            case "bottom":
+            default:
+                left = cx - w / 2;
+                top = rect.top + rect.height + GAP;
+                break;
+        }
     }
+
+    // Clamp so the whole card stays within the viewport margins.
+    left = Math.max(MARGIN, Math.min(left, vw - MARGIN - w));
+    top = Math.max(MARGIN, Math.min(top, vh - MARGIN - h));
+    return { top, left };
 }
 
 export function TutorialTooltip({
@@ -74,10 +95,13 @@ export function TutorialTooltip({
     const tc = useTranslations("Tutorials.controls");
     const isMobile = useIsMobile();
     const cardRef = useRef<HTMLDivElement>(null);
-    // Corrective translate that pulls the card fully back into the viewport
-    // after layout — anchor + placement transform alone can overflow any edge
-    // when the target sits near it.
-    const [correction, setCorrection] = useState({ dx: 0, dy: 0 });
+    // Measured card size (only the size — never the rendered position — so this
+    // can't feed back into a layout loop) and the live viewport dimensions.
+    const [size, setSize] = useState<Size>({ width: CARD_WIDTH, height: 160 });
+    const [viewport, setViewport] = useState(() => ({
+        w: typeof window === "undefined" ? 1024 : window.innerWidth,
+        h: typeof window === "undefined" ? 768 : window.innerHeight,
+    }));
 
     const isFirst = stepIndex === 0;
     const isLast = stepIndex === total - 1;
@@ -88,37 +112,37 @@ export function TutorialTooltip({
     const mobile = isMobile;
     const placement = step.placement ?? "bottom";
 
-    // Reset the correction whenever the anchor or step changes, so the next
-    // measurement starts from the raw placement.
-    useLayoutEffect(() => {
-        setCorrection((c) => (c.dx === 0 && c.dy === 0 ? c : { dx: 0, dy: 0 }));
-    }, [rect, step, mobile]);
-
-    // Measure the rendered card and nudge it on-screen. Runs again after each
-    // correction (converges to a no-op once it fits).
+    // Track the card's intrinsic size (changes only with content, not position).
     useLayoutEffect(() => {
         const el = cardRef.current;
-        if (!el || mobile) return;
-        const r = el.getBoundingClientRect();
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        let dx = 0;
-        let dy = 0;
-        if (r.left < MARGIN) dx = MARGIN - r.left;
-        else if (r.right > vw - MARGIN) dx = vw - MARGIN - r.right;
-        if (r.top < MARGIN) dy = MARGIN - r.top;
-        else if (r.bottom > vh - MARGIN) dy = vh - MARGIN - r.bottom;
-        if (dx !== 0 || dy !== 0) {
-            setCorrection((c) => ({ dx: c.dx + dx, dy: c.dy + dy }));
-        }
-    }, [rect, step, mobile, correction]);
+        if (!el) return;
+        const apply = () => {
+            const r = el.getBoundingClientRect();
+            setSize((prev) =>
+                prev.width === r.width && prev.height === r.height
+                    ? prev
+                    : { width: r.width, height: r.height },
+            );
+        };
+        apply();
+        const ro = new ResizeObserver(apply);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [step, mobile]);
 
-    const base = cardStyle(rect, placement);
+    // Keep positioning in sync with the viewport.
+    useEffect(() => {
+        const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+        window.addEventListener("resize", onResize);
+        return () => window.removeEventListener("resize", onResize);
+    }, []);
+
+    const corner = cornerFor(rect, placement, size, viewport.w, viewport.h);
     const style: React.CSSProperties = mobile
         ? {}
         : {
-              ...base,
-              transform: `${base.transform ?? ""} translate(${correction.dx}px, ${correction.dy}px)`,
+              top: corner.top,
+              left: corner.left,
               width: CARD_WIDTH,
               maxWidth: `calc(100vw - ${2 * MARGIN}px)`,
           };
@@ -132,7 +156,7 @@ export function TutorialTooltip({
             className={cn(
                 "fixed z-[1002] flex flex-col gap-3 rounded-2xl border bg-popover p-5 text-popover-foreground shadow-2xl",
                 "animate-in fade-in zoom-in-95 duration-200",
-                "motion-safe:transition-[top,left,transform] motion-safe:duration-300 motion-safe:ease-out",
+                "motion-safe:transition-[top,left] motion-safe:duration-300 motion-safe:ease-out",
                 mobile && "inset-x-0 bottom-0 rounded-b-none border-x-0 border-b-0 pb-[calc(env(safe-area-inset-bottom)+1.25rem)]",
             )}
             style={style}

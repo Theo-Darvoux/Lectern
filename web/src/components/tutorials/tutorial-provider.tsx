@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
+import { useIsMobile } from "@/hooks/use-media-query";
 import { useAuthStore } from "@/lib/stores";
 import { TUTORIALS } from "@/lib/tutorials/registry";
 import { tierQualifies } from "@/lib/tutorials/types";
@@ -42,6 +43,7 @@ export function TutorialProvider() {
     const pathname = usePathname();
     const user = useAuthStore((s) => s.user);
     const isLoading = useAuthStore((s) => s.isLoading);
+    const isMobile = useIsMobile();
     const active = useTutorialRun((s) => s.active);
     const start = useTutorialRun((s) => s.start);
     const attempted = useRef<Set<string>>(new Set());
@@ -60,9 +62,9 @@ export function TutorialProvider() {
         if (!candidate) return;
         attempted.current.add(candidate.id);
         // Let the page settle before spotlighting.
-        const timer = window.setTimeout(() => start(candidate.id, user), 900);
+        const timer = window.setTimeout(() => start(candidate.id, { user, isMobile }), 900);
         return () => window.clearTimeout(timer);
-    }, [pathname, user, isLoading, active, start]);
+    }, [pathname, user, isLoading, active, start, isMobile]);
 
     if (!tutorialsEnabled()) return null;
     return <TutorialOverlay />;

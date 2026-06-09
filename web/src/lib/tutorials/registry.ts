@@ -38,7 +38,7 @@ export const TUTORIALS: Tutorial[] = [
         autoStartOn: "/browse",
         steps: [
             { id: "intro", placement: "center", route: "/browse" },
-            { id: "tree", target: '[data-tutorial="sidebar-tree"]', placement: "right", waitForTarget: true },
+            { id: "tree", target: '[data-tutorial="sidebar-tree"]', placement: "right", waitForTarget: true, only: "desktop" },
             { id: "breadcrumb", target: '[data-tutorial="breadcrumb"]', placement: "bottom", waitForTarget: true },
             { id: "viewMode", target: '[data-tutorial="view-mode"]', placement: "bottom", waitForTarget: true },
             { id: "card", target: '[data-tutorial="browse-item"]', placement: "top", waitForTarget: true },

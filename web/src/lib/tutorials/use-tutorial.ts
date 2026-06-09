@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
+import { useIsMobile } from "@/hooks/use-media-query";
 import { apiFetch } from "@/lib/api-client";
 import { safeLocalStorage } from "@/lib/safe-storage";
 import { isGuest, type UserBrief } from "@/lib/guest";
@@ -41,6 +42,7 @@ function writeGuestCompleted(ids: string[]): void {
 export function useTutorial() {
     const { user, setUser } = useAuthStore();
     const start = useTutorialRun((s) => s.start);
+    const isMobile = useIsMobile();
 
     const completed = useMemo<string[]>(() => {
         if (!user) return [];
@@ -57,8 +59,8 @@ export function useTutorial() {
     );
 
     const launch = useCallback((id: string) => {
-        if (tutorialsEnabled()) start(id, user);
-    }, [start, user]);
+        if (tutorialsEnabled()) start(id, { user, isMobile });
+    }, [start, user, isMobile]);
 
     const markComplete = useCallback(
         async (id: string) => {

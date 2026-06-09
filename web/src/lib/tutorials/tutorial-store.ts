@@ -9,7 +9,7 @@ interface TutorialRunState {
     /** Index into `active.steps`. */
     stepIndex: number;
     /** True once the user reached the final step and confirmed (for completion). */
-    start: (id: string, user: UserBrief | null | undefined) => void;
+    start: (id: string, ctx: { user: UserBrief | null | undefined; isMobile: boolean }) => void;
     next: () => void;
     prev: () => void;
     goTo: (index: number) => void;
@@ -20,14 +20,17 @@ interface TutorialRunState {
 export const useTutorialRun = create<TutorialRunState>((set, get) => ({
     active: null,
     stepIndex: 0,
-    start: (id, user) => {
+    start: (id, { user, isMobile }) => {
         const tutorial = getTutorial(id);
         if (!tutorial) return;
         // Drop steps the viewer can't see (their target never renders), so the
         // engine doesn't blank out polling for an absent element.
-        const steps = tutorial.steps.filter(
-            (s) => !s.minTier || tierQualifies(user, s.minTier),
-        );
+        const steps = tutorial.steps.filter((s) => {
+            if (s.minTier && !tierQualifies(user, s.minTier)) return false;
+            if (s.only === "desktop" && isMobile) return false;
+            if (s.only === "mobile" && !isMobile) return false;
+            return true;
+        });
         set({ active: { ...tutorial, steps }, stepIndex: 0 });
     },
     next: () => {
