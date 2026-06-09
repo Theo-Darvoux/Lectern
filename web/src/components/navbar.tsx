@@ -23,6 +23,7 @@ import { SearchModal } from "@/components/search/search-modal";
 import { SearchInline } from "@/components/search/search-inline";
 import { useNotificationStore, useConfigStore, usePRStore } from "@/lib/stores";
 import { useTutorialMenuOpen } from "@/lib/tutorials/tutorial-store";
+import { tutorialsEnabled } from "@/lib/tutorials/use-tutorial";
 import { isGuest } from "@/lib/guest";
 import { useSSE } from "@/hooks/use-sse";
 import { usePathname } from "next/navigation";
@@ -67,6 +68,9 @@ export function Navbar() {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const tutorialProfileOpen = useTutorialMenuOpen("profile-menu");
+  // Re-render when the runtime toggle loads so the Help center link hides.
+  const tutorialsDisabled = useConfigStore((s) => s.config?.tutorials_enabled === false);
+  const showHelp = !tutorialsDisabled && tutorialsEnabled();
   const [recentNotifications, setRecentNotifications] = useState<
     NotificationItem[]
   >([]);
@@ -451,12 +455,14 @@ export function Navbar() {
                       <span>{t("settings")}</span>
                     </Link>
                   </DropdownMenuItem>
-                  <DropdownMenuItem asChild className="cursor-pointer">
-                    <Link href="/help">
-                      <HelpCircle className="mr-2 h-4 w-4" />
-                      <span>{tHelp("open")}</span>
-                    </Link>
-                  </DropdownMenuItem>
+                  {showHelp && (
+                    <DropdownMenuItem asChild className="cursor-pointer">
+                      <Link href="/help">
+                        <HelpCircle className="mr-2 h-4 w-4" />
+                        <span>{tHelp("open")}</span>
+                      </Link>
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={logout}
