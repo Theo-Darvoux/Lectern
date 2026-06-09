@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetchRetry } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { getFileTypeStyle } from "./file-type-display";
 import type { MaterialDetail } from "./types";
@@ -32,6 +32,14 @@ const Page = dynamic(() => import("react-pdf").then((mod) => mod.Page), { ssr: f
 // visible card hits /thumbnail simultaneously — 20-30 parallel requests + image
 // decode storms cause severe FPS drops. Queue to a small parallelism cap.
 const MAX_CONCURRENT_THUMBNAILS = 4;
+
+// A signed worker/presigned URL can transiently fail to load (cold edge cache,
+// brief 5xx, flaky connection) and an <img> that errors never re-attempts on its
+// own. Retry a bounded number of times with backoff, cache-busting the request
+// so the browser doesn't replay its cached failure. The extra query param is
+// safe: the worker only verifies `token` and strips the query string from its
+// cache key, so it neither breaks signature validation nor pollutes the cache.
+const MAX_IMG_RETRIES = 3;
 let inflightThumbnails = 0;
 const thumbnailQueue: Array<() => void> = [];
 
@@ -69,6 +77,9 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [textPreview, setTextPreview] = useState<string | null>(null);
   const [pdfReady, setPdfReady] = useState(false);
+  const [imgBust, setImgBust] = useState(0);
+  const imgAttemptRef = useRef(0);
+  const imgRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(300);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -121,7 +132,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         //    It returns { url, thumbnail_type: "webp" | "fallback" }.
         try {
           const thumbData = await withThumbnailSlot(() =>
-            apiFetch<{ url: string; thumbnail_type: ThumbnailType }>(
+            apiFetchRetry<{ url: string; thumbnail_type: ThumbnailType }>(
               `/materials/${material.id}/thumbnail`
             )
           );
@@ -146,7 +157,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         }
 
         const data = await withThumbnailSlot(() =>
-          apiFetch<{ url: string }>(`/materials/${material.id}/inline`)
+          apiFetchRetry<{ url: string }>(`/materials/${material.id}/inline`)
         );
         if (!mounted) return;
 
@@ -200,6 +211,32 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
       clearTimeout(timer);
     };
   }, [material.id, isText, isImage, isVideo, isMarkdown, isPDF, shouldLoad]);
+
+  // Reset the image-retry counter whenever the source URL changes, and clear any
+  // pending retry timer on unmount.
+  useEffect(() => {
+    imgAttemptRef.current = 0;
+    setImgBust(0);
+    return () => {
+      if (imgRetryTimer.current) {
+        clearTimeout(imgRetryTimer.current);
+        imgRetryTimer.current = null;
+      }
+    };
+  }, [url]);
+
+  const handleImgError = () => {
+    if (imgRetryTimer.current || imgAttemptRef.current >= MAX_IMG_RETRIES) return;
+    const delay = 500 * 2 ** imgAttemptRef.current;
+    imgRetryTimer.current = setTimeout(() => {
+      imgRetryTimer.current = null;
+      imgAttemptRef.current += 1;
+      setImgBust(imgAttemptRef.current); // bump cache-buster → forces <img> reload
+    }, delay);
+  };
+
+  const imgSrc =
+    url && imgBust > 0 ? `${url}${url.includes("?") ? "&" : "?"}_r=${imgBust}` : url;
 
   const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName, mimeType);
 
@@ -277,7 +314,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
       {(showAsImg || showPdfWebp) && (
         /* eslint-disable-next-line @next/next/no-img-element */
         <img
-          src={url!}
+          src={imgSrc!}
           alt={material.title}
           className={cn(
             "absolute inset-0 h-full w-full object-cover",
@@ -285,6 +322,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
           )}
           loading="lazy"
           decoding="async"
+          onError={handleImgError}
         />
       )}
 

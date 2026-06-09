@@ -16,6 +16,7 @@ import {
   Folder,
   Check,
   CheckCheck,
+  HelpCircle,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { SearchModal } from "@/components/search/search-modal";
@@ -53,6 +54,7 @@ import { useTranslations } from "next-intl";
 export function Navbar() {
   const t = useTranslations("Navigation");
   const tCommon = useTranslations("Common");
+  const tHelp = useTranslations("Tutorials.helpCenter");
   const { user, isAuthenticated, logout } = useAuth();
   const guest = isGuest(user);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -176,6 +178,7 @@ export function Navbar() {
         <div className="flex w-1/3 justify-start items-center gap-4">
           <Link
             href="/"
+            data-tutorial="nav-home"
             className="flex items-center gap-2 text-xl font-extrabold tracking-tight hover:opacity-80 transition-opacity"
           >
             {config?.site_logo_url && (
@@ -210,7 +213,10 @@ export function Navbar() {
 
         {/* Center: Search */}
         {pathname !== "/login" && (
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md px-4 pointer-events-none lg:pointer-events-auto hidden lg:block">
+          <div
+            data-tutorial="nav-search"
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md px-4 pointer-events-none lg:pointer-events-auto hidden lg:block"
+          >
             <SearchInline />
           </div>
         )}
@@ -222,6 +228,7 @@ export function Navbar() {
             <Button
               variant="ghost"
               size="icon"
+              data-tutorial="nav-search"
               className="lg:hidden h-9 w-9 text-muted-foreground"
               onClick={() => setSearchOpen(true)}
             >
@@ -250,6 +257,7 @@ export function Navbar() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-tutorial="nav-contributions"
                   title={t("contributions")}
                   className={`relative rounded-full ${pathname.startsWith("/pull-requests") ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
@@ -268,6 +276,7 @@ export function Navbar() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      data-tutorial="nav-notifications"
                       className={`relative rounded-full ${pathname.startsWith("/notifications") || popoverOpen ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
                       title={t("notifications")}
                     >
@@ -382,6 +391,7 @@ export function Navbar() {
                   <Button
                     variant="ghost"
                     size="sm"
+                    data-tutorial="nav-profile"
                     className="gap-2 rounded-full pl-2 pr-3"
                     title={t("profile")}
                   >
@@ -424,6 +434,12 @@ export function Navbar() {
                     <Link href="/settings">
                       <Settings className="mr-2 h-4 w-4" />
                       <span>{t("settings")}</span>
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild className="cursor-pointer">
+                    <Link href="/help">
+                      <HelpCircle className="mr-2 h-4 w-4" />
+                      <span>{tHelp("open")}</span>
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />

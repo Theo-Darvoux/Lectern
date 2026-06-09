@@ -17,7 +17,13 @@ from app.schemas.annotation import AnnotationOut
 from app.schemas.common import PaginatedResponse
 from app.schemas.material import MaterialDetail
 from app.schemas.pull_request import PullRequestOut
-from app.schemas.user import OnboardIn, UserOut, UserProfileOut, UserUpdateIn
+from app.schemas.user import (
+    OnboardIn,
+    TutorialCompleteIn,
+    UserOut,
+    UserProfileOut,
+    UserUpdateIn,
+)
 from app.services.directory import get_directory_paths
 from app.services.material import material_orm_to_dict
 from app.services.user import (
@@ -27,7 +33,9 @@ from app.services.user import (
     get_user_contributions,
     get_user_stats,
     hard_delete_user,
+    mark_tutorial_complete,
     onboard_user,
+    reset_tutorials,
     update_user_profile,
 )
 
@@ -65,6 +73,27 @@ async def patch_me(
         user,
         **data.model_dump(exclude_unset=True),
     )
+    return UserOut.model_validate(updated)
+
+
+@router.post("/me/tutorials/complete", response_model=UserOut)
+async def complete_tutorial(
+    data: TutorialCompleteIn,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> UserOut:
+    updated = await mark_tutorial_complete(db, user, data.tutorial_id)
+    await db.commit()
+    return UserOut.model_validate(updated)
+
+
+@router.delete("/me/tutorials", response_model=UserOut)
+async def reset_my_tutorials(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> UserOut:
+    updated = await reset_tutorials(db, user)
+    await db.commit()
     return UserOut.model_validate(updated)
 
 

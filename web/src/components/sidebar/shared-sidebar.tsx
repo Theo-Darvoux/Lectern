@@ -103,6 +103,7 @@ function SidebarContent() {
               <TabsTrigger
                 key={tab.value}
                 value={tab.value}
+                data-tutorial={`sidebar-tab-${tab.value}`}
                 className={cn("px-2.5 py-2 text-xs transition-opacity", isTabRestricted && "opacity-40 cursor-not-allowed")}
                 disabled={isTabRestricted}
               >

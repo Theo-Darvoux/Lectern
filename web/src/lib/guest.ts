@@ -6,6 +6,8 @@ export interface UserBrief {
     role: string;
     onboarded: boolean;
     auto_approve: boolean;
+    /** Tutorial IDs the user has finished (server-persisted). Absent for guests. */
+    completed_tutorials?: string[];
 }
 
 export const GUEST_ROLE = "guest";

@@ -917,6 +917,7 @@ export function QCMEditor({
           </Label>
           <Input
             id="qcm-title"
+            data-tutorial="qcm-title"
             value={meta.title}
             onChange={(e) => setMeta((m) => ({ ...m, title: e.target.value.slice(0, MAX_LEN_TITLE) }))}
             placeholder={t("title")}
@@ -958,6 +959,7 @@ export function QCMEditor({
             type="button"
             size="sm"
             variant="outline"
+            data-tutorial="qcm-import"
             className="gap-2 text-xs"
             disabled={isImporting}
             onClick={() => moodleInputRef.current?.click()}
@@ -998,6 +1000,7 @@ export function QCMEditor({
         <Button
           type="button"
           variant="outline"
+          data-tutorial="qcm-add-chapter"
           className="gap-2 w-full border-dashed"
           onClick={addChapter}
         >
@@ -1022,6 +1025,7 @@ export function QCMEditor({
           <Button
             type="button"
             variant="outline"
+            data-tutorial="qcm-preview"
             className="gap-2"
             disabled={totalQuestions === 0}
             onClick={() => setPreviewOpen(true)}
@@ -1044,6 +1048,7 @@ export function QCMEditor({
           <Button
             type="button"
             onClick={handleSubmit}
+            data-tutorial="qcm-submit"
             disabled={isSubmitting || isSavingDraft || !meta.title.trim()}
             className="gap-2"
           >

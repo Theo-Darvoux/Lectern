@@ -630,7 +630,7 @@ export function DirectoryListing({
                     <FolderPen className="w-4 h-4 opacity-50 group-hover:opacity-100" />
                   </Button>
                 )}
-                <div className="flex items-center border rounded-md overflow-hidden h-8">
+                <div data-tutorial="view-mode" className="flex items-center border rounded-md overflow-hidden h-8">
                   <button
                     onClick={() => setViewMode("list")}
                     className={`px-2 h-full flex items-center transition-colors ${viewMode === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted/50"}`}
@@ -682,6 +682,7 @@ export function DirectoryListing({
                       key="create-btn"
                       size="sm"
                       variant="outline"
+                      data-tutorial="create-menu"
                       className="gap-1.5 shadow-xs"
                     >
                       <Plus className="w-4 h-4" />
@@ -816,7 +817,7 @@ export function DirectoryListing({
       ) : (
         !isEmpty && (
           viewMode === "list" ? (
-            <div className={`divide-y rounded-lg border ${selectMode ? "select-none" : ""}`}>
+            <div data-tutorial="browse-item" className={`divide-y rounded-lg border ${selectMode ? "select-none" : ""}`}>
               {sortedDirs.slice(0, showDirs).map((dir, i) => {
                 const id = String(dir.id);
                 const op = dirOpById.get(id);
@@ -993,7 +994,7 @@ export function DirectoryListing({
             </div>
           ) : (
             /* ── Grid view ──────────────────────────────────────────────────── */
-            <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 ${selectMode ? "select-none" : ""}`}>
+            <div data-tutorial="browse-item" className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 ${selectMode ? "select-none" : ""}`}>
               {sortedDirs.slice(0, showDirs).map((dir, i) => {
                 const id = String(dir.id);
                 const op = dirOpById.get(id);

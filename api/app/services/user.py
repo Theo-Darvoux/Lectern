@@ -41,6 +41,25 @@ async def onboard_user(
     return user
 
 
+async def mark_tutorial_complete(db: AsyncSession, user: User, tutorial_id: str) -> User:
+    """Idempotently record that the user finished a tutorial."""
+    completed = list(user.completed_tutorials or [])
+    if tutorial_id not in completed:
+        completed.append(tutorial_id)
+        # Reassign so SQLAlchemy detects the change on the JSON column.
+        user.completed_tutorials = completed
+        await db.flush()
+    return user
+
+
+async def reset_tutorials(db: AsyncSession, user: User) -> User:
+    """Clear all completed-tutorial flags so auto-launch tours show again."""
+    if user.completed_tutorials:
+        user.completed_tutorials = []
+        await db.flush()
+    return user
+
+
 async def get_user_by_id(db: AsyncSession, user_id: str) -> User | None:
     uid = uuid.UUID(str(user_id))
     result = await db.execute(select(User).where(User.id == uid))

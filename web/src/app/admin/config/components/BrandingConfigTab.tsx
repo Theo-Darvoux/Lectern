@@ -12,6 +12,7 @@ import {
     parseSegments,
 } from "@/lib/fonts";
 import { SiteName } from "@/components/site-name";
+import { WordmarkBuilder } from "./WordmarkBuilder";
 
 interface AuthConfig {
     site_name: string;
@@ -152,6 +153,11 @@ export function BrandingConfigTab({ config }: BrandingConfigTabProps) {
                     </div>
                 </CardContent>
             </Card>
+
+            <WordmarkBuilder
+                siteName={config.site_name}
+                siteNameStyle={config.site_name_style}
+            />
 
             <Card>
                 <CardHeader>

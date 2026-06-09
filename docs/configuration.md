@@ -166,6 +166,37 @@ ORGANIZATION_URL=https://www.myschool.edu
 There's also a background watermark (`BG_WATERMARK_URL` + the two opacity
 values) and an advanced multi-color wordmark (`SITE_NAME_STYLE`).
 
+### Designing the wordmark (`SITE_NAME_STYLE`)
+
+`SITE_NAME_STYLE` makes the site name in the navbar render as styled segments —
+each with its own text, font, color, and bold/italic — instead of plain text.
+The value is a JSON array, which is awkward to write by hand, so the admin
+dashboard ships a visual builder for it.
+
+**In the dashboard:** sign in as an admin and open **Config → Branding →
+Wordmark Builder**. Add a segment per styled piece of the name (e.g. `Lect` +
+`ern`), pick a font and color, toggle bold/italic, and watch the live preview.
+The builder generates the exact line to set:
+
+```dotenv
+SITE_NAME_STYLE=[{"text":"Lect","font":"Inter","color":"#7c3aed","bold":true,"italic":false},{"text":"ern","font":"Inter","color":null,"bold":true,"italic":false}]
+```
+
+Copy it with the **Copy to Clipboard** button, paste it into your `.env`
+(replacing any existing `SITE_NAME_STYLE` line), and restart the stack
+(`docker compose up -d`) to apply it. Notes:
+
+- The whole admin Config screen is **read-only** — it reflects what's in the
+  environment and can't write it back, so applying a wordmark always means
+  editing `.env` and restarting. The builder only produces the value for you.
+- Each segment's `font` must be one of the fonts the builder offers (Inter,
+  Poppins, Playfair Display, …); the public site auto-loads the
+  Google Fonts for whichever ones the wordmark uses. A `color` of `null` (or an
+  omitted color) inherits the default gradient.
+- Don't wrap the value in quotes — both Docker Compose and the API read the raw
+  JSON as-is. If the JSON is malformed, the site silently falls back to plain
+  `SITE_NAME`.
+
 Fill in the legal/GDPR block (`LEGAL_NAME`, `CONTACT_EMAIL`, `DPO_EMAIL`, …) to
 populate the legal-notice and privacy pages.
 

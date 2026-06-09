@@ -1221,6 +1221,27 @@
           "favicon": "Favicon",
           "placeholders": {
             "siteDescription": "Plateforme collaborative de partage de supports de cours"
+          },
+          "wordmarkBuilder": {
+            "title": "Générateur de logo textuel",
+            "description": "Créez un logo textuel personnalisé avec plusieurs couleurs ou polices. Copiez la ligne générée dans votre fichier .env pour l'appliquer.",
+            "preview": "Aperçu en direct",
+            "addSegment": "Ajouter un segment",
+            "text": "Texte",
+            "font": "Police",
+            "color": "Couleur",
+            "bold": "Gras",
+            "italic": "Italique",
+            "delete": "Supprimer",
+            "placeholderText": "ex. Wiki",
+            "placeholderColor": "Par défaut",
+            "copyBtn": "Copier dans le presse-papiers",
+            "copiedBtn": "Copié !",
+            "generatedConfig": "Configuration générée",
+            "instructionsTitle": "Comment appliquer :",
+            "instructionsStep1": "Copiez la variable d'environnement ci-dessus.",
+            "instructionsStep2": "Ouvrez votre fichier .env à la racine du projet et collez/remplacez la ligne SITE_NAME_STYLE.",
+            "instructionsStep3": "Redémarrez les conteneurs avec votre commande compose (ex. docker compose up -d) pour appliquer la modification."
           }
         },
         "footerLinks": {
@@ -1852,6 +1873,258 @@
       "notes": "Notes",
       "noNotes": "Pas encore de notes",
       "addNote": "Ajouter une note..."
+    }
+  },
+  "Tutorials": {
+    "controls": {
+      "next": "Suivant",
+      "back": "Précédent",
+      "skip": "Passer",
+      "done": "Compris",
+      "progress": "Étape {current} sur {total}"
+    },
+    "helpCenter": {
+      "open": "Aide et tutoriels",
+      "title": "Centre d'aide",
+      "description": "Des tutoriels pas à pas pour vous repérer. Lancez-en un à tout moment — reprenez où vous en étiez ou recommencez du début.",
+      "start": "Commencer",
+      "replay": "Revoir",
+      "completed": "Terminé",
+      "resetAll": "Réinitialiser les tutoriels",
+      "resetDone": "Tutoriels réinitialisés — les visites guidées réapparaîtront.",
+      "empty": "Aucun tutoriel n'est disponible pour votre compte pour le moment."
+    },
+    "welcome": {
+      "title": "Visite de bienvenue",
+      "description": "Un tour de 30 secondes de l'interface et de l'emplacement de chaque chose.",
+      "steps": {
+        "intro": {
+          "title": "Bienvenue",
+          "body": "Faites un tour rapide pour vous repérer. Vous pourrez revoir n'importe quel tutoriel depuis votre menu profil."
+        },
+        "home": {
+          "title": "Accueil",
+          "body": "Cliquez sur le logo à tout moment pour revenir à l'accueil."
+        },
+        "search": {
+          "title": "Recherche",
+          "body": "Trouvez cours, fichiers et personnes instantanément — le moyen le plus rapide de naviguer."
+        },
+        "notifications": {
+          "title": "Notifications",
+          "body": "Réponses, relectures et validations apparaissent ici."
+        },
+        "profile": {
+          "title": "Votre menu",
+          "body": "Ouvrez votre menu profil pour accéder aux paramètres, à votre compte et au centre d'aide."
+        },
+        "help": {
+          "title": "Besoin d'aide plus tard ?",
+          "body": "Tous les tutoriels se trouvent dans le centre d'aide — ouvrez-le depuis ce menu quand vous voulez une piqûre de rappel."
+        },
+        "outro": {
+          "title": "Tout est prêt",
+          "body": "Voilà pour les bases. Explorez à votre rythme — nous vous guiderons au fil de l'eau."
+        }
+      }
+    },
+    "browse": {
+      "title": "Parcourir les fichiers",
+      "description": "Trouvez, prévisualisez et téléchargez les supports de cours.",
+      "steps": {
+        "intro": {
+          "title": "Parcourir les supports",
+          "body": "C'est ici que vivent tous les supports de cours, organisés en dossiers."
+        },
+        "tree": {
+          "title": "Arborescence",
+          "body": "Naviguez dans les cours et chapitres depuis cette barre latérale."
+        },
+        "breadcrumb": {
+          "title": "Fil d'Ariane",
+          "body": "Voyez où vous êtes et remontez d'un niveau."
+        },
+        "viewMode": {
+          "title": "Options d'affichage",
+          "body": "Basculez entre grille et liste, et changez le tri des éléments."
+        },
+        "card": {
+          "title": "Ouvrir un fichier",
+          "body": "Cliquez sur un élément pour le prévisualiser. Vous pouvez aussi aimer, mettre en favori et télécharger d'ici."
+        },
+        "search": {
+          "title": "Recherche rapide",
+          "body": "Vous cherchez quelque chose de précis ? La recherche est toujours à un clic."
+        },
+        "outro": {
+          "title": "Bonne navigation",
+          "body": "C'est tout — plongez et explorez les supports."
+        }
+      }
+    },
+    "upload": {
+      "title": "Ajouter des fichiers",
+      "description": "Ajoutez documents, images et autres supports à un cours.",
+      "steps": {
+        "intro": {
+          "title": "Ajouter des supports",
+          "body": "Deux façons d'ajouter des fichiers : le menu Nouveau contenu, ou le glisser-déposer."
+        },
+        "create": {
+          "title": "Nouveau contenu",
+          "body": "Utilisez ce menu pour téléverser un fichier, créer un dossier ou construire un QCM à cet emplacement."
+        },
+        "dropzone": {
+          "title": "Glisser-déposer",
+          "body": "Vous pouvez aussi glisser des fichiers depuis votre ordinateur n'importe où sur la page — ils seront pris en compte automatiquement."
+        },
+        "staging": {
+          "title": "Vérifier et soumettre",
+          "body": "Les fichiers ajoutés se rassemblent d'abord ici. Ouvrez ce panneau pour les vérifier, puis soumettez-les pour publication."
+        },
+        "outro": {
+          "title": "Voilà pour l'ajout",
+          "body": "Les gros fichiers et vidéos se téléversent en arrière-plan et reprennent si la connexion est coupée."
+        }
+      }
+    },
+    "contribute": {
+      "title": "Proposer des modifications",
+      "description": "Proposez de nouveaux fichiers ou des modifications — l'équipe les relit avant publication.",
+      "steps": {
+        "intro": {
+          "title": "Comment ça marche",
+          "body": "Les changements sont proposés sous forme de pull request et relus par l'équipe avant publication — rien n'est écrasé directement."
+        },
+        "create": {
+          "title": "Proposer du contenu",
+          "body": "Ajoutez de nouveaux fichiers ou dossiers depuis le menu Nouveau contenu."
+        },
+        "edit": {
+          "title": "Modifier un fichier existant",
+          "body": "Ouvrez un document et choisissez Proposer une modification. Votre édition devient une proposition relisible."
+        },
+        "staging": {
+          "title": "Regrouper vos changements",
+          "body": "Vos modifications proposées se rassemblent ici. Soumettez-les ensemble en une seule pull request."
+        },
+        "track": {
+          "title": "Suivre vos contributions",
+          "body": "Suivez l'état de vos pull requests et les retours des relecteurs depuis ici."
+        },
+        "outro": {
+          "title": "Vous êtes contributeur",
+          "body": "Une fois approuvés, vos changements sont publiés pour tout le monde. Merci de votre aide !"
+        }
+      }
+    },
+    "qcm": {
+      "title": "Créer un QCM",
+      "description": "Créez un quiz interactif à choix multiples, exportable en PDF.",
+      "steps": {
+        "intro": {
+          "title": "Créer un quiz",
+          "body": "Un QCM est un quiz à choix multiples. Découvrons l'éditeur."
+        },
+        "name": {
+          "title": "Nommez votre quiz",
+          "body": "Donnez-lui un titre clair — c'est ce que verront les apprenants et les relecteurs."
+        },
+        "import": {
+          "title": "Importer depuis Moodle",
+          "body": "Vous avez déjà un quiz Moodle ? Importez son XML pour gagner du temps."
+        },
+        "addChapter": {
+          "title": "Questions et chapitres",
+          "body": "Organisez les questions en chapitres. Chaque question peut avoir plusieurs réponses — cochez les bonnes. Markdown, formules LaTeX et images sont pris en charge."
+        },
+        "preview": {
+          "title": "Aperçu",
+          "body": "Vérifiez l'apparence et le comportement du quiz avant de le soumettre."
+        },
+        "submit": {
+          "title": "Soumettre",
+          "body": "La soumission envoie votre QCM en relecture, comme une contribution, avant publication."
+        },
+        "outro": {
+          "title": "Quiz prêt",
+          "body": "Vous pouvez enregistrer un brouillon à tout moment et revenir plus tard."
+        }
+      }
+    },
+    "annotations": {
+      "title": "Annoter des documents",
+      "description": "Discutez de parties précises d'un document avec les autres.",
+      "steps": {
+        "intro": {
+          "title": "Qu'est-ce qu'une annotation ?",
+          "body": "Les annotations permettent de lancer une discussion ancrée à un endroit précis d'un document."
+        },
+        "select": {
+          "title": "En créer une",
+          "body": "Ouvrez un document, puis sélectionnez le texte ou la zone à commenter pour démarrer une annotation."
+        },
+        "panel": {
+          "title": "Le panneau d'annotations",
+          "body": "Toutes les annotations d'un document se trouvent ici — répondez, résolvez les fils et suivez la conversation."
+        },
+        "outro": {
+          "title": "Lancez la discussion",
+          "body": "Les annotations sont idéales pour poser des questions et signaler des erreurs à l'équipe."
+        }
+      }
+    },
+    "review-pr": {
+      "title": "Relire les contributions",
+      "description": "Relisez, commentez, puis approuvez ou fusionnez les pull requests.",
+      "steps": {
+        "intro": {
+          "title": "Relire les pull requests",
+          "body": "En tant que membre de l'équipe, vous relisez les changements proposés par les étudiants avant publication."
+        },
+        "queue": {
+          "title": "La file de relecture",
+          "body": "Les contributions en attente de relecture se trouvent ici."
+        },
+        "open": {
+          "title": "Inspecter les changements",
+          "body": "Ouvrez une contribution pour voir précisément ce qui a changé, fichier par fichier, avec un aperçu avant/après."
+        },
+        "decide": {
+          "title": "Prendre une décision",
+          "body": "Laissez des commentaires en ligne, puis approuvez, demandez des modifications ou fusionnez. La fusion publie les changements pour tout le monde."
+        },
+        "outro": {
+          "title": "Merci pour la relecture",
+          "body": "Des relectures rapides motivent les contributeurs et gardent la bibliothèque fiable."
+        }
+      }
+    },
+    "moderation": {
+      "title": "Outils de modération",
+      "description": "Gérez les signalements, l'arborescence des dossiers et le contenu mis en avant.",
+      "steps": {
+        "intro": {
+          "title": "Vos outils de modération",
+          "body": "L'espace modérateur regroupe tout le nécessaire pour garder l'ordre et la sécurité."
+        },
+        "flags": {
+          "title": "Signalements",
+          "body": "Examinez les contenus et utilisateurs signalés par les membres, et agissez."
+        },
+        "directories": {
+          "title": "Dossiers",
+          "body": "Créez et réorganisez l'arborescence cours/chapitres."
+        },
+        "featured": {
+          "title": "Contenu mis en avant",
+          "body": "Mettez en valeur les meilleurs supports sur la page d'accueil."
+        },
+        "outro": {
+          "title": "Vous êtes équipé",
+          "body": "Explorez chaque onglet — chaque action ici est journalisée."
+        }
+      }
     }
   }
 }

@@ -62,9 +62,14 @@ class UserOut(BaseModel):
     academic_year: str | None
     onboarded: bool
     auto_approve: bool
+    completed_tutorials: list[str] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class TutorialCompleteIn(BaseModel):
+    tutorial_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$")
 
 
 class UserProfileOut(UserOut):

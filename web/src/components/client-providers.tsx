@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { LayoutShell } from "@/components/layout-shell";
 import { ConfigProvider } from "@/components/config-provider";
 import { LocaleProvider } from "@/components/locale-provider";
+import { TutorialProvider } from "@/components/tutorials/tutorial-provider";
 import type { AbstractIntlMessages } from "next-intl";
 
 import enMessages from "../../messages/en.json";
@@ -42,6 +43,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
       >
         <ConfigProvider>
           <LayoutShell>{children}</LayoutShell>
+          <TutorialProvider />
         </ConfigProvider>
         <Toaster position="bottom-left" expand richColors />
       </ThemeProvider>

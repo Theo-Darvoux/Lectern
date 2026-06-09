@@ -1221,6 +1221,27 @@
           "favicon": "Favicon",
           "placeholders": {
             "siteDescription": "Collaborative course materials platform"
+          },
+          "wordmarkBuilder": {
+            "title": "Wordmark Builder",
+            "description": "Design a custom multi-color or multi-font brand wordmark. Copy the generated line into your .env file to apply it.",
+            "preview": "Live Preview",
+            "addSegment": "Add Segment",
+            "text": "Text",
+            "font": "Font",
+            "color": "Color",
+            "bold": "Bold",
+            "italic": "Italic",
+            "delete": "Delete",
+            "placeholderText": "e.g. Wiki",
+            "placeholderColor": "Default",
+            "copyBtn": "Copy to Clipboard",
+            "copiedBtn": "Copied!",
+            "generatedConfig": "Generated Config",
+            "instructionsTitle": "How to apply:",
+            "instructionsStep1": "Copy the environment variable string above.",
+            "instructionsStep2": "Open your .env file at the project root and paste/replace the SITE_NAME_STYLE line.",
+            "instructionsStep3": "Restart the containers with your compose command (e.g. docker compose up -d) to apply the change."
           }
         },
         "footerLinks": {
@@ -1852,6 +1873,258 @@
       "notes": "Notes",
       "noNotes": "No notes yet",
       "addNote": "Add a note..."
+    }
+  },
+  "Tutorials": {
+    "controls": {
+      "next": "Next",
+      "back": "Back",
+      "skip": "Skip",
+      "done": "Got it",
+      "progress": "Step {current} of {total}"
+    },
+    "helpCenter": {
+      "open": "Help & tutorials",
+      "title": "Help center",
+      "description": "Step-by-step tutorials for getting around. Start one anytime — pick up where you left off or replay from the beginning.",
+      "start": "Start",
+      "replay": "Replay",
+      "completed": "Completed",
+      "resetAll": "Reset all tutorials",
+      "resetDone": "Tutorials reset — auto tours will show again.",
+      "empty": "No tutorials are available for your account yet."
+    },
+    "welcome": {
+      "title": "Welcome tour",
+      "description": "A 30-second tour of the interface and where everything lives.",
+      "steps": {
+        "intro": {
+          "title": "Welcome aboard",
+          "body": "Take a quick tour to find your way around. You can replay any tutorial later from your profile menu."
+        },
+        "home": {
+          "title": "Home",
+          "body": "Click the logo anytime to return to the home page."
+        },
+        "search": {
+          "title": "Search",
+          "body": "Find courses, files and people instantly — it's the fastest way to get around."
+        },
+        "notifications": {
+          "title": "Notifications",
+          "body": "Replies, reviews and approvals show up here."
+        },
+        "profile": {
+          "title": "Your menu",
+          "body": "Open your profile menu to reach your settings, account and the Help center."
+        },
+        "help": {
+          "title": "Need help later?",
+          "body": "Every tutorial lives in the Help center — open it from this menu whenever you want a refresher."
+        },
+        "outro": {
+          "title": "You're all set",
+          "body": "That's the basics. Explore at your own pace — we'll point things out as you go."
+        }
+      }
+    },
+    "browse": {
+      "title": "Browsing files",
+      "description": "Find, preview and download course materials.",
+      "steps": {
+        "intro": {
+          "title": "Browsing materials",
+          "body": "This is where all course materials live, organised into folders."
+        },
+        "tree": {
+          "title": "Folder tree",
+          "body": "Navigate courses and chapters from this sidebar."
+        },
+        "breadcrumb": {
+          "title": "Breadcrumb",
+          "body": "See where you are and jump back up a level."
+        },
+        "viewMode": {
+          "title": "View options",
+          "body": "Switch between grid and list, and change how items are sorted."
+        },
+        "card": {
+          "title": "Open a file",
+          "body": "Click any item to preview it. You can like, favourite and download from here too."
+        },
+        "search": {
+          "title": "Quick search",
+          "body": "Looking for something specific? Search is always one click away."
+        },
+        "outro": {
+          "title": "Happy browsing",
+          "body": "That's it — dive in and explore the materials."
+        }
+      }
+    },
+    "upload": {
+      "title": "Uploading files",
+      "description": "Add documents, images and other materials to a course.",
+      "steps": {
+        "intro": {
+          "title": "Adding materials",
+          "body": "There are two ways to add files: the New content menu, or drag-and-drop."
+        },
+        "create": {
+          "title": "New content",
+          "body": "Use this menu to upload a file, create a folder or build a QCM in the current location."
+        },
+        "dropzone": {
+          "title": "Drag & drop",
+          "body": "You can also drag files from your computer anywhere onto the page — they'll be picked up automatically."
+        },
+        "staging": {
+          "title": "Review & submit",
+          "body": "Files you add gather here first. Open it to review them, then submit them for publishing."
+        },
+        "outro": {
+          "title": "That's uploading",
+          "body": "Large files and videos upload in the background and resume if your connection drops."
+        }
+      }
+    },
+    "contribute": {
+      "title": "Contributing changes",
+      "description": "Propose new files or edits — staff review them before they go live.",
+      "steps": {
+        "intro": {
+          "title": "How contributing works",
+          "body": "Changes are proposed as a pull request and reviewed by staff before publishing — nothing is overwritten directly."
+        },
+        "create": {
+          "title": "Propose new content",
+          "body": "Add new files or folders from the New content menu."
+        },
+        "edit": {
+          "title": "Edit an existing file",
+          "body": "Open any document and choose Propose change. Your edit becomes a reviewable proposal."
+        },
+        "staging": {
+          "title": "Bundle your changes",
+          "body": "Your proposed changes collect here. Submit them together as one pull request."
+        },
+        "track": {
+          "title": "Track your contributions",
+          "body": "Follow the status of your pull requests and reviewer feedback from here."
+        },
+        "outro": {
+          "title": "You're a contributor",
+          "body": "Once approved, your changes are published for everyone. Thanks for helping!"
+        }
+      }
+    },
+    "qcm": {
+      "title": "Building a QCM",
+      "description": "Create an interactive multiple-choice quiz with export to PDF.",
+      "steps": {
+        "intro": {
+          "title": "Create a quiz",
+          "body": "A QCM is a multiple-choice quiz. Let's walk through the editor."
+        },
+        "name": {
+          "title": "Name your quiz",
+          "body": "Give it a clear title — this is what learners and reviewers will see."
+        },
+        "import": {
+          "title": "Import from Moodle",
+          "body": "Already have a Moodle quiz? Import its XML to get a head start."
+        },
+        "addChapter": {
+          "title": "Questions & chapters",
+          "body": "Organise questions into chapters. Each question can have several answers — mark the correct ones. Markdown, LaTeX maths and images are all supported."
+        },
+        "preview": {
+          "title": "Preview",
+          "body": "Check how the quiz looks and behaves before you submit it."
+        },
+        "submit": {
+          "title": "Submit",
+          "body": "Submitting sends your QCM through review as a contribution before it's published."
+        },
+        "outro": {
+          "title": "Quiz ready",
+          "body": "You can save a draft at any time and come back later."
+        }
+      }
+    },
+    "annotations": {
+      "title": "Annotating documents",
+      "description": "Discuss specific parts of a document with others.",
+      "steps": {
+        "intro": {
+          "title": "What are annotations?",
+          "body": "Annotations let you start a discussion anchored to a specific part of a document."
+        },
+        "select": {
+          "title": "Create one",
+          "body": "Open any document, then select the text or area you want to comment on to start an annotation."
+        },
+        "panel": {
+          "title": "The annotations panel",
+          "body": "Every annotation on a document lives here — reply, resolve threads and follow the conversation."
+        },
+        "outro": {
+          "title": "Start the conversation",
+          "body": "Annotations are a great way to ask questions and flag mistakes for staff."
+        }
+      }
+    },
+    "review-pr": {
+      "title": "Reviewing contributions",
+      "description": "Review, comment on, and approve or merge pull requests.",
+      "steps": {
+        "intro": {
+          "title": "Reviewing pull requests",
+          "body": "As staff, you review the changes students propose before they're published."
+        },
+        "queue": {
+          "title": "The review queue",
+          "body": "Pending contributions waiting for review live here."
+        },
+        "open": {
+          "title": "Inspect the changes",
+          "body": "Open a contribution to see exactly what changed, file by file, with a before/after preview."
+        },
+        "decide": {
+          "title": "Make a decision",
+          "body": "Leave comments inline, then approve, request changes, or merge. Merging publishes the changes for everyone."
+        },
+        "outro": {
+          "title": "Thanks for reviewing",
+          "body": "Timely reviews keep contributors motivated and the library accurate."
+        }
+      }
+    },
+    "moderation": {
+      "title": "Moderation tools",
+      "description": "Handle flags, manage the folder structure, and feature content.",
+      "steps": {
+        "intro": {
+          "title": "Your moderation tools",
+          "body": "The moderator area gathers everything you need to keep things tidy and safe."
+        },
+        "flags": {
+          "title": "Flags",
+          "body": "Review content and users that members have reported, and take action."
+        },
+        "directories": {
+          "title": "Directories",
+          "body": "Create and reorganise the course/chapter folder structure."
+        },
+        "featured": {
+          "title": "Featured content",
+          "body": "Highlight standout materials on the home page."
+        },
+        "outro": {
+          "title": "You're equipped",
+          "body": "Explore each tab — every action here is logged."
+        }
+      }
     }
   }
 }

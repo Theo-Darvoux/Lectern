@@ -855,6 +855,7 @@ export function DirectoryTreeSidebar() {
 
   return (
     <aside
+      data-tutorial="sidebar-tree"
       className={cn(
         "relative h-full hidden md:flex flex-col shrink-0 overflow-hidden",
         "border-r border-border bg-background",

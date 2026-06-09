@@ -35,15 +35,16 @@ export default function ModeratorLayout({
   }
 
   const navItems = [
-    { href: "/moderator", label: t("nav.dashboard"), icon: LayoutDashboard },
-    { href: "/moderator/flags", label: t("nav.flags"), icon: Flag },
-    { href: "/moderator/directories", label: t("nav.directories"), icon: FolderTree },
+    { href: "/moderator", label: t("nav.dashboard"), icon: LayoutDashboard, tut: "mod-nav-dashboard" },
+    { href: "/moderator/flags", label: t("nav.flags"), icon: Flag, tut: "mod-nav-flags" },
+    { href: "/moderator/directories", label: t("nav.directories"), icon: FolderTree, tut: "mod-nav-directories" },
     {
       href: "/moderator/pull-requests",
       label: t("nav.contributions"),
       icon: GitPullRequest,
+      tut: "mod-nav-prs",
     },
-    { href: "/moderator/featured", label: t("nav.featured"), icon: Star },
+    { href: "/moderator/featured", label: t("nav.featured"), icon: Star, tut: "mod-nav-featured" },
   ];
 
   return (
@@ -60,6 +61,7 @@ export default function ModeratorLayout({
             <Link
               key={item.href}
               href={item.href}
+              data-tutorial={item.tut}
               className={`flex min-w-fit items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors hover:text-foreground ${
                 isActive
                   ? "border-primary text-foreground"

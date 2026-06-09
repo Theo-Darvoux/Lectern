@@ -42,7 +42,7 @@ export function Breadcrumbs({ items, previewPrId, linkLast = false, large = fals
     const visibleOffset = collapsed ? items.length - TAIL_COUNT : 0;
 
     return (
-        <nav className={`flex items-center gap-1 min-w-0 ${large ? "text-lg sm:text-xl" : "text-sm"}`}>
+        <nav data-tutorial="breadcrumb" className={`flex items-center gap-1 min-w-0 ${large ? "text-lg sm:text-xl" : "text-sm"}`}>
             <Link href={rootHref} className="flex items-center shrink-0 text-muted-foreground hover:text-foreground gap-1.5">
                 <Home className={large ? "h-5 w-5" : "h-4 w-4"} />
                 {large && items.length === 0 && <span className="font-bold tracking-tight text-foreground">{t("home")}</span>}

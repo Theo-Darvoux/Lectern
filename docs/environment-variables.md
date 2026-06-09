@@ -175,7 +175,7 @@ edited live in the admin dashboard.
 |---|---|---|
 | `SITE_NAME` | `Lectern` | Instance display name shown in the UI, page titles and emails. Set it to rebrand a deployment; defaults to `Lectern`. |
 | `SITE_DESCRIPTION` | `Collaborative course materials platform` | Meta description / tagline. |
-| `SITE_NAME_STYLE` | *(unset)* | Advanced: JSON array of styled name segments for a multi-color wordmark. |
+| `SITE_NAME_STYLE` | *(unset)* | Advanced: JSON array of styled name segments for a multi-color wordmark. Generate it with the visual **Wordmark Builder** in the admin dashboard (Config → Branding) — see [configuration.md](configuration.md#designing-the-wordmark-site_name_style). |
 | `PRIMARY_COLOR` | `#3b82f6` | Accent color (hex). |
 | `FOOTER_TEXT` | *(unset)* | Footer text. Hidden when empty. |
 | `ORGANIZATION_URL` | *(none)* | Link behind the organization name. |
@@ -328,6 +328,7 @@ These variables are either baked into the frontend static export at build time (
 | `NEXT_PUBLIC_EUROOFFICE_URL` | *(unset)* | Browser-facing EuroOffice path. Resolved dynamically from the backend's `EUROOFFICE_PUBLIC_URL` / `NEXT_PUBLIC_EUROOFFICE_URL` at runtime. Falls back to relative `/eurooffice/`. |
 | `NEXT_PUBLIC_MAX_FILE_SIZE_MB` | `100` | Fallback client-side upload-size limit. Resolved dynamically from the backend's `MAX_FILE_SIZE_MB` at runtime. |
 | `NEXT_PUBLIC_COMMIT_SHA` | *(unset)* | Build commit SHA, shown in the About panel. Baked in at build-time. |
+| `NEXT_PUBLIC_TUTORIALS` | `on` | In-app interactive tutorials (guided tours). Set to `off`/`false`/`0` to disable the feature entirely — no first-visit auto-launch and the Help center is hidden. Baked in at build-time. |
 
 ---
 

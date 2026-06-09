@@ -29,6 +29,7 @@ export function StagingFab() {
     <Button
       onClick={() => setReviewOpen(true)}
       size="lg"
+      data-tutorial="staging-fab"
       className={cn(
         "fixed bottom-[4.5rem] right-4 md:bottom-6 md:right-6 z-50 gap-2 rounded-full shadow-lg",
         "h-14 px-5 text-base",
