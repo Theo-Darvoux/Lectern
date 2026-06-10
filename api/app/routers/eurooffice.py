@@ -146,7 +146,11 @@ async def get_eurooffice_config(
     return config
 
 
-@router.api_route("/file/{material_id}", methods=["GET", "HEAD"])
+# GET and HEAD are registered separately with distinct operation_ids: a single
+# multi-method route makes FastAPI emit the same operationId for both methods,
+# which produces duplicate identifiers in the generated TS client (openapi-typescript).
+@router.get("/file/{material_id}", operation_id="serve_file_to_eurooffice")
+@router.head("/file/{material_id}", operation_id="serve_file_to_eurooffice_head")
 async def serve_file_to_eurooffice(
     request: Request,
     material_id: uuid.UUID,
