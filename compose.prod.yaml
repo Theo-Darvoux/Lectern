@@ -1,0 +1,25 @@
+services:
+  api:
+    command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
+
+  web:
+    # Use the production nginx static runner target
+    build:
+      target: runner
+    # The runner image sets CMD ["nginx", "-g", "daemon off;"] by default, so we just reset the command
+    # property here to null so it stops running the dev Next.js server override from compose.yaml
+    command: []
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
+
+  nginx:
+    ports:
+      # Expose on 9080 for production reverse proxy by default
+      - "9080:80"
+    volumes:
+      # Use the production nginx conf template
+      - ./infra/nginx/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
