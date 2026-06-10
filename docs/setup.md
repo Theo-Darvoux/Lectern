@@ -15,8 +15,7 @@ production. For *what each setting does*, see the
 
 ## Compose file structure
 
-The project uses a **single `compose.yaml`** for all environments. Behavior is
-controlled entirely through `.env` — no `-f` flags are needed.
+The project uses a base **`compose.yaml`** (optimized for development) and overlays production configurations with **`compose.prod.yaml`** using the Docker Compose `-f` flags.
 
 Two mechanisms handle environment differences:
 
@@ -25,10 +24,9 @@ Two mechanisms handle environment differences:
   local SeaweedFS single-node storage. The `seaweedfs-prod` profile starts the
   production cluster. The `selfhost-worker` profile adds the self-hosted
   HMAC-signed delivery worker.
-- **Behavioral env vars** — `API_CMD`, `WEB_CMD`, `NGINX_CONF_TEMPLATE`, etc.
-  switch the server commands, build targets, and config paths between dev and
-  prod. Dev defaults are baked into the compose file; production values are set
-  in `.env`.
+- **Production Overrides** — production specific server commands (Gunicorn), 
+  build targets (runner stage), resource limits, and production Nginx config templates 
+  are configured in `compose.prod.yaml`. Production deployments merge both files.
 
 ---
 
@@ -77,20 +75,12 @@ To create your first account, open the app in a browser — you are redirected t
 
 ## Option B : Production deployment
 
-Production uses pre-built images from GHCR. The same `compose.yaml` is used —
-switch to production mode by setting the relevant env vars in `.env`:
+Production uses pre-built images from GHCR. Production deployments merge the base `compose.yaml` with the production overrides in `compose.prod.yaml`:
 
 ```bash
 # Minimal production .env additions (on top of the defaults in .env.example):
 ENVIRONMENT=production
 COMPOSE_PROFILES=          # empty = no local storage containers; uses R2 or external S3
-API_CMD=gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
-WEB_CMD=exec nginx -g 'daemon off;'
-WEB_BUILD_TARGET=runner
-WEB_MEMORY_LIMIT=64M
-WEB_MEMORY_RESERVATION=32M
-NGINX_HOST_PORT=9080
-NGINX_CONF_TEMPLATE=./infra/nginx/nginx.conf.template
 WORKER_FAST_REPLICAS=2
 WORKER_SLOW_REPLICAS=2
 ```
@@ -98,18 +88,21 @@ WORKER_SLOW_REPLICAS=2
 Then deploy:
 
 ```bash
-docker compose pull          # pull latest images from GHCR
-docker compose up -d
+# Pull the latest production images from GHCR
+docker compose -f compose.yaml -f compose.prod.yaml pull
+
+# Start services in production mode
+docker compose -f compose.yaml -f compose.prod.yaml up -d
 ```
 
 What production mode changes relative to the dev defaults:
 - All services use published images (`ghcr.io/theo-darvoux/lectern/api:latest`, etc.)
-- API runs under **gunicorn** with 4 uvicorn workers
-- Web is served by **nginx** from the pre-built static export (64 MB container)
+- API runs under **gunicorn** with 4 uvicorn workers (defined in `compose.prod.yaml`)
+- Web is served by **nginx** from the pre-built static export (64 MB container, defined in `compose.prod.yaml`)
 - `ENVIRONMENT=production` activates secret validation, hides OpenAPI docs, changes logging
-- Resource limits are set per service
+- Resource limits are set per service (defined in `compose.prod.yaml`)
 - `worker-fast` and `worker-slow` scale horizontally via `WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS`
-- Nginx exposes port `9080` (put a reverse proxy or load balancer in front)
+- Nginx exposes port `9080` (defined in `compose.prod.yaml`; put a reverse proxy or load balancer in front)
 - No local storage container; `STORAGE_BACKEND` points at Cloudflare R2 or a self-hosted S3 backend
 
 After first deploy, there are no commands to run. The `api` container applies database migrations automatically on startup (see [Database migrations](#database-migrations) below), and your first account is created through the **first-run setup screen**: open the site in a browser and it will prompt you to create the initial administrator account. That screen disappears once an admin exists.

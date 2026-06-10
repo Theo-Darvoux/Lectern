@@ -33,9 +33,9 @@ it tells you which variables to touch and links back here for the details.
   EuroOffice secrets are identical. This is intentional — it stops you from
   accidentally deploying with `change-me` secrets.
 
-> **Naming note:** the document-editing integration is wired through
+> Naming note: the document-editing integration is wired through
 > `EUROOFFICE_*` variables everywhere the code actually reads them
-> (`api/app/config.py`, all three compose files, and `.env.example`).
+> (`api/app/config.py`, both compose files, and `.env.example`).
 
 ---
 
