@@ -37,7 +37,7 @@ import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 
 // --- Dynamic Viewer Imports ---
-// This prevents large libraries (like react-pdf, mermaid, monaco) from being compiled
+// This prevents large libraries (like pdf.js, mermaid, monaco) from being compiled
 // simultaneously when only one is needed, drastically reducing dev memory pressure.
 
 const PdfViewer = dynamic(

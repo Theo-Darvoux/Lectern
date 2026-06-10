@@ -4,7 +4,7 @@ import typing
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.avatar_processor import process_avatar
@@ -70,19 +70,23 @@ async def get_user_stats(db: AsyncSession, user_id: str) -> dict[str, int]:
     uid = uuid.UUID(str(user_id))
     from app.models.pull_request import PRStatus
 
-    pr_approved = await db.scalar(
-        select(func.count()).where(
-            PullRequest.author_id == uid, PullRequest.status == PRStatus.APPROVED
+    # All PR counts in a single pass with conditional aggregation. (AsyncSession
+    # can't run queries concurrently, so folding queries beats asyncio.gather.)
+    prs_total, pr_approved, open_pr_count = (
+        await db.execute(
+            select(
+                func.count(PullRequest.id),
+                func.coalesce(
+                    func.sum(case((PullRequest.status == PRStatus.APPROVED, 1), else_=0)), 0
+                ),
+                func.coalesce(
+                    func.sum(case((PullRequest.status == PRStatus.OPEN, 1), else_=0)), 0
+                ),
+            ).where(PullRequest.author_id == uid)
         )
-    )
-    prs_total = await db.scalar(select(func.count()).where(PullRequest.author_id == uid))
+    ).one()
     annotations_count = await db.scalar(select(func.count()).where(Annotation.author_id == uid))
     comments_count = await db.scalar(select(func.count()).where(Comment.author_id == uid))
-    open_pr_count = await db.scalar(
-        select(func.count()).where(
-            PullRequest.author_id == uid, PullRequest.status == PRStatus.OPEN
-        )
-    )
 
     pr_approved = pr_approved or 0
     annotations_count = annotations_count or 0

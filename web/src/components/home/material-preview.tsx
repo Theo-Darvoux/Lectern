@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import dynamic from "next/dynamic";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { apiFetchRetry } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { getFileTypeStyle } from "./file-type-display";
@@ -10,23 +9,59 @@ import { Loader2 } from "lucide-react";
 import { MarkdownRenderer } from "../viewers/markdown-renderer";
 import { useInView } from "@/hooks/use-in-view";
 import { MIME_QCM } from "@/lib/file-utils";
-// CSS for react-pdf: tiny side-effect import, kept static (handled at build by
-// Next's CSS pipeline — doesn't pull the pdfjs JS bundle into this chunk).
-import "react-pdf/dist/Page/AnnotationLayer.css";
-import "react-pdf/dist/Page/TextLayer.css";
 
-// react-pdf pulls in pdfjs (~1MB of JS to parse). Static-importing it here used
-// to cost every page that mounts a MaterialPreview, even though grid/lazy mode
-// never renders a <Document>. Defer the JS to first PDF-fallback render.
-const Document = dynamic(
-  () =>
-    import("react-pdf").then((mod) => {
-      mod.pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${mod.pdfjs.version}/build/pdf.worker.min.mjs`;
-      return mod.Document;
-    }),
-  { ssr: false },
-);
-const Page = dynamic(() => import("react-pdf").then((mod) => mod.Page), { ssr: false });
+// Renders the first page of a PDF to a canvas via pdf.js. The engine (~1MB of
+// JS) is imported lazily inside the effect, so it only loads when a card
+// actually needs a raw-PDF fallback preview (grid/lazy mode never mounts this).
+function PdfThumbnailCanvas({
+  url,
+  width,
+  onReady,
+  onError,
+}: {
+  url: string;
+  width: number;
+  onReady: () => void;
+  onError: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let cleanup: (() => void) | undefined;
+    (async () => {
+      try {
+        const pdfjs = await import("pdfjs-dist");
+        if (cancelled) return;
+        pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+        const task = pdfjs.getDocument({ url });
+        const doc = await task.promise;
+        if (cancelled) { doc.destroy(); return; }
+        const page = await doc.getPage(1);
+        const canvas = canvasRef.current;
+        if (cancelled || !canvas) { doc.destroy(); return; }
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const scale = (width || 300) / baseViewport.width;
+        const viewport = page.getViewport({ scale: scale * dpr });
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { doc.destroy(); return; }
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.style.width = "100%";
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        if (cancelled) { doc.destroy(); return; }
+        onReady();
+        cleanup = () => doc.destroy();
+      } catch (err) {
+        if (!cancelled && (err as Error)?.name !== "AbortException") onError();
+      }
+    })();
+    return () => { cancelled = true; cleanup?.(); };
+  }, [url, width, onReady, onError]);
+
+  return <canvas ref={canvasRef} className="block w-full" />;
+}
 
 // Concurrency-limited thumbnail fetcher. On first paint of a grid view, every
 // visible card hits /thumbnail simultaneously — 20-30 parallel requests + image
@@ -77,6 +112,8 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [textPreview, setTextPreview] = useState<string | null>(null);
   const [pdfReady, setPdfReady] = useState(false);
+  const handlePdfReady = useCallback(() => setPdfReady(true), []);
+  const handlePdfError = useCallback(() => setPdfReady(false), []);
   const [imgBust, setImgBust] = useState(0);
   const imgAttemptRef = useRef(0);
   const imgRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -88,9 +125,9 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   // In lazy mode, gate loading on viewport intersection. In non-lazy mode we
   // always load — collapsing to a constant `true` so the fetch effect below does
   // NOT re-run when `inView` later flips false→true. A re-run would reset
-  // `pdfReady` to false while react-pdf's <Document file> prop stays unchanged
-  // (same URL), so onLoadSuccess never re-fires and a rendered PDF preview fades
-  // back to opacity-0 ("renders then disappears").
+  // `pdfReady` to false while the PDF URL stays unchanged (same URL), so the
+  // canvas onReady never re-fires and a rendered PDF preview fades back to
+  // opacity-0 ("renders then disappears").
   const shouldLoad = lazy ? inView : true;
 
   const versionInfo = material.current_version_info;
@@ -105,7 +142,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const isOffice = mimeType.includes("ms-") || mimeType.includes("officedocument") || /\.(docx|xlsx|pptx)$/i.test(fileName);
   const isQCM = mimeType === MIME_QCM || fileName.toLowerCase().endsWith(".qcm");
 
-  // Track container width for react-pdf Page sizing — only needed when react-pdf will render.
+  // Track container width for PDF canvas sizing — only needed when the PDF thumbnail will render.
   useEffect(() => {
     if (!isPDF || lazy) return;
     const el = containerRef.current;
@@ -258,8 +295,8 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     (thumbnailType === "webp" ||
       (!isVideo && !isPDF && (thumbnailType === "fallback" || (thumbnailType === null && isImage))));
 
-  // PDF fallback: raw PDF file returned by server → render first page with react-pdf.
-  // Disabled in lazy/grid mode — instantiating react-pdf per card is too expensive.
+  // PDF fallback: raw PDF file returned by server → render first page with pdf.js.
+  // Disabled in lazy/grid mode — instantiating pdf.js per card is too expensive.
   const showAsPdf = url && isPDF && thumbnailType === "fallback" && !lazy;
 
   // PDF with a real generated WebP thumbnail → just use <img>
@@ -326,7 +363,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         />
       )}
 
-      {/* ── PDF first-page preview via react-pdf (fallback URL = raw PDF) ── */}
+      {/* ── PDF first-page preview via pdf.js canvas (fallback URL = raw PDF) ── */}
       {showAsPdf && (
         <div
           className={cn(
@@ -335,21 +372,12 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
             pdfReady ? "opacity-100" : "opacity-0"
           )}
         >
-          <Document
-            file={url!}
-            loading={null}
-            onLoadSuccess={() => setPdfReady(true)}
-            onLoadError={() => setPdfReady(false)}
-            // Suppress known pdfjs noise
-            externalLinkTarget="_blank"
-          >
-            <Page
-              pageNumber={1}
-              width={containerWidth}
-              renderTextLayer={false}
-              renderAnnotationLayer={false}
-            />
-          </Document>
+          <PdfThumbnailCanvas
+            url={url!}
+            width={containerWidth}
+            onReady={handlePdfReady}
+            onError={handlePdfError}
+          />
           {/* Gradient overlay so it blends into the card gradient */}
           <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/30 to-transparent pointer-events-none" />
         </div>

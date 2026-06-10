@@ -10,16 +10,16 @@ interface AuthGuardProps {
 }
 
 export function AuthGuard({ children, requireOnboarded = false }: AuthGuardProps) {
-    const { user, isAuthenticated, isLoading, fetchMe } = useAuth();
+    const { user, isAuthenticated, isLoading, bootstrapAuth } = useAuth();
     const router = useRouter();
     const fetchedRef = useRef(false);
 
     useEffect(() => {
         if (!fetchedRef.current && !isAuthenticated && isLoading) {
             fetchedRef.current = true;
-            fetchMe();
+            bootstrapAuth();
         }
-    }, [isAuthenticated, isLoading, fetchMe]);
+    }, [isAuthenticated, isLoading, bootstrapAuth]);
 
     useEffect(() => {
         if (isLoading) return;

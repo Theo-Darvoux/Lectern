@@ -426,7 +426,18 @@ async def refresh_token(
     new_access_token, new_refresh_token, _ = auth_service.issue_tokens(user)
     _set_refresh_cookie(response, new_refresh_token)
 
-    return RefreshResponse(access_token=new_access_token)
+    return RefreshResponse(
+        access_token=new_access_token,
+        user=UserBrief(
+            id=str(user.id),
+            email=user.email,
+            display_name=user.display_name,
+            avatar_url=user.avatar_url,
+            role=user.role.value,
+            onboarded=user.onboarded,
+            auto_approve=user.auto_approve,
+        ),
+    )
 
 
 @router.post("/logout", dependencies=[Depends(require_client_id)])

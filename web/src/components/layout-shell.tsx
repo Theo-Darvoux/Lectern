@@ -20,7 +20,6 @@ const GlobalDropZone = dynamic(
 );
 import { useAuth } from "@/hooks/use-auth";
 import { useOffline } from "@/hooks/use-offline";
-import { getAccessToken, hasAuthHint } from "@/lib/auth-tokens";
 import { initAuthSync } from "@/lib/auth-sync";
 import { WifiOff } from "lucide-react";
 import { cn, sanitizeNext } from "@/lib/utils";
@@ -31,7 +30,7 @@ import { useTranslations } from "next-intl";
 
 export function LayoutShell({ children }: { children: ReactNode }) {
   const t = useTranslations("Layout");
-  const { user, isAuthenticated, isLoading, fetchMe } = useAuth();
+  const { user, isAuthenticated, isLoading, bootstrapAuth } = useAuth();
   const guest = isGuest(user);
   const { hideFooter, navbarVisible } = useUIStore();
   const rawPathname = usePathname();
@@ -52,15 +51,11 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const token = getAccessToken();
-    const hint = hasAuthHint();
-    if ((token || hint) && !isAuthenticated && isLoading) {
-      fetchMe();
-    } else if (!token && !hint && isLoading) {
-      // No token and no hint — clear loading state so navbar renders correctly
-      fetchMe();
-    }
-  }, []);  
+    // Resolve auth on load. bootstrapAuth handles every case internally:
+    // reload (hint, no token) → refresh-first; cross-tab token → /users/me;
+    // no token and no hint → logged out without a network round-trip.
+    bootstrapAuth();
+  }, []);
 
   useEffect(() => {
     if (isLoading) return;

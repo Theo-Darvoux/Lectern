@@ -81,6 +81,7 @@ class TokenResponse(BaseModel):
 
 class RefreshResponse(BaseModel):
     access_token: str
+    user: "UserBrief | None" = None
 
 
 class UserBrief(BaseModel):

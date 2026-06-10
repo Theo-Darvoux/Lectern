@@ -13,7 +13,7 @@ import { useTranslations } from "next-intl";
  * user selected. The scope matches exactly what buildHighlights walks so that
  * the same index finds the right match at render time.
  *
- * For PDF: scope = the page's .react-pdf__Page__textContent element.
+ * For PDF: scope = the page's pdf.js .textLayer element.
  * For other viewers: scope = the nearest [data-annotation-scope] ancestor,
  * which must be the same element passed to buildHighlights as `container`.
  */
@@ -26,7 +26,7 @@ function computeOccurrenceIndex(
     // Resolve the text scope
     let scopeEl: Element;
     if (pageEl) {
-        scopeEl = pageEl.querySelector(".react-pdf__Page__textContent") ?? pageEl;
+        scopeEl = pageEl.querySelector(".textLayer") ?? pageEl;
     } else {
         let node: Node | null = range.startContainer;
         let found: Element | null = null;

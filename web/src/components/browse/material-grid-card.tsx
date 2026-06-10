@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import type { MaterialDetail } from "@/components/home/types";
 import { useInView } from "@/hooks/use-in-view";
 
-// Lazy import to avoid loading react-pdf in the grid preview
+// Lazy import to avoid loading pdf.js in the grid preview
 import { MaterialPreview } from "@/components/home/material-preview";
 
 // Frosted-glass circular action button — reads on any preview (light, dark or

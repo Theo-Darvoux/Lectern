@@ -80,11 +80,11 @@ async function handleVisibility() {
             const now = Math.floor(Date.now() / 1000);
             if (decoded.exp - now < 120) {
                 try {
-                    const newToken = await lockedRefresh();
-                    if (newToken) {
-                        setAccessToken(newToken);
-                        scheduleRefreshTimer(newToken);
-                        broadcastTokenRefreshed(newToken);
+                    const refreshed = await lockedRefresh();
+                    if (refreshed) {
+                        setAccessToken(refreshed.accessToken);
+                        scheduleRefreshTimer(refreshed.accessToken);
+                        broadcastTokenRefreshed(refreshed.accessToken);
                     } else {
                         performLogout();
                     }
@@ -97,11 +97,12 @@ async function handleVisibility() {
         // We don't have a token in memory, but we have a hint that we should be logged in
         // (Another tab might still be active, or this is a fresh reload and the interceptor hasn't fired yet)
         try {
-            const newToken = await lockedRefresh();
-            if (newToken) {
-                setAccessToken(newToken);
-                scheduleRefreshTimer(newToken);
-                broadcastTokenRefreshed(newToken);
+            const refreshed = await lockedRefresh();
+            if (refreshed) {
+                setAccessToken(refreshed.accessToken);
+                scheduleRefreshTimer(refreshed.accessToken);
+                broadcastTokenRefreshed(refreshed.accessToken);
+                if (refreshed.user) useAuthStore.getState().setUser(refreshed.user);
             }
             // If it fails, we let the interceptor handle it or stay logged out.
         } catch {
@@ -123,11 +124,11 @@ export function scheduleRefreshTimer(token: string) {
 
     refreshTimer = setTimeout(async () => {
         try {
-            const newToken = await lockedRefresh();
-            if (newToken) {
-                setAccessToken(newToken);
-                scheduleRefreshTimer(newToken);
-                broadcastTokenRefreshed(newToken);
+            const refreshed = await lockedRefresh();
+            if (refreshed) {
+                setAccessToken(refreshed.accessToken);
+                scheduleRefreshTimer(refreshed.accessToken);
+                broadcastTokenRefreshed(refreshed.accessToken);
             } else {
                 performLogout();
             }

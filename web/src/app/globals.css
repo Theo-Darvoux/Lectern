@@ -503,8 +503,8 @@
 }
 
 /* Annotation text highlights — div overlays used by the markdown and PDF viewers.
-   For PDF: injected inside .react-pdf__Page before .textLayer so canvas text
-   renders on top; no blend mode needed. For markdown: multiply/screen blend
+   For PDF: injected into the pdf.js .page element (over the .textLayer) so canvas
+   text renders on top; no blend mode needed. For markdown: multiply/screen blend
    tints the underlying DOM text without a separate stacking layer. */
 .annotation-highlight {
     background-color: rgba(255, 213, 0, 0.3);

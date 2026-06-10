@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback } from "react";
-import { apiFetch, ApiError } from "@/lib/api-client";
-import { setAccessToken, getAccessToken } from "@/lib/auth-tokens";
+import { apiFetch, ApiError, lockedRefresh } from "@/lib/api-client";
+import { setAccessToken, getAccessToken, hasAuthHint } from "@/lib/auth-tokens";
 import { useAuthStore } from "@/lib/stores";
 import type { UserBrief } from "@/lib/guest";
 import { broadcastTokenAcquired, performLogout, scheduleRefreshTimer } from "@/lib/auth-sync";
@@ -80,6 +80,19 @@ export function useAuth() {
         performLogout();
     }, []);
 
+    const handleAuthError = useCallback((err: unknown) => {
+        if (err instanceof ApiError && err.status === 401) {
+            performLogout();
+        } else if (err instanceof ApiError && err.status === 403 && err.error_code === "USER_PENDING") {
+            // User exists but is pending approval — set a minimal pending state so
+            // isAuthenticated stays true and LayoutShell doesn't redirect to /login.
+            setUser({ id: "", email: "", display_name: null, avatar_url: null, role: "pending", onboarded: false, auto_approve: false });
+            if (typeof window !== "undefined" && !window.location.pathname.startsWith("/pending-approval")) {
+                window.location.replace("/pending-approval");
+            }
+        }
+    }, [setUser]);
+
     const fetchMe = useCallback(async () => {
         setLoading(true);
         try {
@@ -88,20 +101,48 @@ export function useAuth() {
             const token = getAccessToken();
             if (token) scheduleRefreshTimer(token);
         } catch (err) {
-            if (err instanceof ApiError && err.status === 401) {
-                performLogout();
-            } else if (err instanceof ApiError && err.status === 403 && err.error_code === "USER_PENDING") {
-                // User exists but is pending approval — set a minimal pending state so
-                // isAuthenticated stays true and LayoutShell doesn't redirect to /login.
-                setUser({ id: "", email: "", display_name: null, avatar_url: null, role: "pending", onboarded: false, auto_approve: false });
-                if (typeof window !== "undefined" && !window.location.pathname.startsWith("/pending-approval")) {
-                    window.location.replace("/pending-approval");
-                }
-            }
+            handleAuthError(err);
         } finally {
             setLoading(false);
         }
-    }, [setUser, setLoading]);
+    }, [setUser, setLoading, handleAuthError]);
+
+    // Initial auth resolution on app load. The access token lives in memory only,
+    // so after a page reload all we have is the persisted hint. Rather than fire a
+    // guaranteed-401 `/users/me` and only then refresh, refresh first — a single
+    // request that also returns the user — and skip `/users/me` entirely.
+    const bootstrapAuth = useCallback(async () => {
+        setLoading(true);
+        try {
+            if (!getAccessToken()) {
+                if (!hasAuthHint()) {
+                    // No token and no hint: definitely logged out. Don't touch the network.
+                    setUser(null);
+                    return;
+                }
+                const refreshed = await lockedRefresh();
+                if (!refreshed) {
+                    performLogout();
+                    return;
+                }
+                setAccessToken(refreshed.accessToken);
+                scheduleRefreshTimer(refreshed.accessToken);
+                if (refreshed.user) {
+                    setUser(refreshed.user);
+                    return;
+                }
+                // Token but no user (e.g. older API): fall through to /users/me.
+            }
+            const me = await apiFetch<UserBrief>("/users/me");
+            setUser(me);
+            const token = getAccessToken();
+            if (token) scheduleRefreshTimer(token);
+        } catch (err) {
+            handleAuthError(err);
+        } finally {
+            setLoading(false);
+        }
+    }, [setUser, setLoading, handleAuthError]);
 
     const verifyGoogleOAuth = useCallback(async (credential: string) => {
         const data = await apiFetch<{
@@ -157,5 +198,5 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
-    return { user, isAuthenticated, isLoading, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, setup, continueAsGuest, logout, fetchMe };
+    return { user, isAuthenticated, isLoading, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, setup, continueAsGuest, logout, fetchMe, bootstrapAuth };
 }

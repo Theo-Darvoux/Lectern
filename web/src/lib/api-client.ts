@@ -1,4 +1,10 @@
 import { clearAccessToken, getAccessToken, setAccessToken, decodeToken } from "./auth-tokens";
+import type { UserBrief } from "./guest";
+
+/** Result of a token refresh. `user` is present when the server folds the
+ *  caller's profile into the refresh response (reload bootstrap fast-path),
+ *  letting the client skip a follow-up `/users/me`. */
+export type RefreshResult = { accessToken: string; user: UserBrief | null };
 
 export const API_BASE = (() => {
     // On the server, we use the internal URL to reach the API container directly
@@ -74,7 +80,7 @@ export async function apiFetchRetry<T>(
     throw lastErr;
 }
 
-async function refreshToken(): Promise<string | null> {
+async function refreshToken(): Promise<RefreshResult | null> {
     const res = await fetch(`${API_BASE}/auth/refresh`, {
         method: "POST",
         credentials: "include",
@@ -84,7 +90,7 @@ async function refreshToken(): Promise<string | null> {
     });
     if (!res.ok) return null;
     const data = await res.json();
-    return data.access_token as string;
+    return { accessToken: data.access_token as string, user: (data.user ?? null) as UserBrief | null };
 }
 
 let _onTokenRefreshed: ((token: string) => void) | null = null;
@@ -92,7 +98,7 @@ export function registerTokenRefreshCallback(cb: (token: string) => void) {
     _onTokenRefreshed = cb;
 }
 
-export async function lockedRefresh(): Promise<string | null> {
+export async function lockedRefresh(): Promise<RefreshResult | null> {
     if (typeof navigator !== "undefined" && navigator.locks) {
         return navigator.locks.request("lectern_refresh", async () => {
             // Another tab may have refreshed while we waited for the lock
@@ -100,7 +106,7 @@ export async function lockedRefresh(): Promise<string | null> {
             if (existing) {
                 const decoded = decodeToken(existing);
                 if (decoded && decoded.exp > Date.now() / 1000 + 30) {
-                    return existing;
+                    return { accessToken: existing, user: null };
                 }
             }
             return refreshToken();
@@ -110,9 +116,9 @@ export async function lockedRefresh(): Promise<string | null> {
     return refreshToken();
 }
 
-let refreshPromise: Promise<string | null> | null = null;
+let refreshPromise: Promise<RefreshResult | null> | null = null;
 
-function refreshTokenOnce(): Promise<string | null> {
+function refreshTokenOnce(): Promise<RefreshResult | null> {
     if (!refreshPromise) {
         refreshPromise = lockedRefresh().finally(() => { refreshPromise = null; });
     }
@@ -168,9 +174,10 @@ export async function apiRequest(
 
     if (res.status === 401 && !skipAuth) {
         console.debug("[api-client] 401 Unauthorized, attempting token refresh...");
-        const newToken = await refreshTokenOnce();
-        if (newToken) {
+        const refreshed = await refreshTokenOnce();
+        if (refreshed) {
             console.debug("[api-client] Token refreshed successfully, retrying request.");
+            const newToken = refreshed.accessToken;
             setAccessToken(newToken);
             _onTokenRefreshed?.(newToken);
             headers.set("Authorization", `Bearer ${newToken}`);
