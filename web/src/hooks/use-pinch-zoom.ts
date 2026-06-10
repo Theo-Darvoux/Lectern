@@ -26,6 +26,7 @@ interface UsePinchZoomReturn {
     zoomIn: () => void;
     zoomOut: () => void;
     resetZoom: () => void;
+    origin: { x: number; y: number } | null;
 }
 
 /**
@@ -45,15 +46,16 @@ export function usePinchZoom({
     handleKeyboard = false,
 }: UsePinchZoomOptions = {}): UsePinchZoomReturn {
     const [zoom, setZoom] = useState(initial);
+    const [origin, setOrigin] = useState<{ x: number; y: number } | null>(null);
 
     const clamp = useCallback(
         (v: number) => Math.max(min, Math.min(max, v)),
         [min, max],
     );
 
-    const zoomIn = useCallback(() => setZoom((z) => clamp(z + step)), [clamp, step]);
-    const zoomOut = useCallback(() => setZoom((z) => clamp(z - step)), [clamp, step]);
-    const resetZoom = useCallback(() => setZoom(initial), [initial]);
+    const zoomIn = useCallback(() => { setOrigin(null); setZoom((z) => clamp(z + step)); }, [clamp, step]);
+    const zoomOut = useCallback(() => { setOrigin(null); setZoom((z) => clamp(z - step)); }, [clamp, step]);
+    const resetZoom = useCallback(() => { setOrigin(null); setZoom(initial); }, [initial]);
 
     // ── Pinch & wheel ────────────────────────────────────────────────────────
     // We keep the initial distance in a ref so we can compute the ratio.
@@ -75,6 +77,10 @@ export function usePinchZoom({
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             pinchStartDistRef.current = Math.hypot(dx, dy);
             pinchStartZoomRef.current = zoomRef.current;
+            setOrigin({
+                x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                y: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+            });
         };
 
         const onTouchMove = (e: TouchEvent) => {
@@ -95,7 +101,9 @@ export function usePinchZoom({
         const onWheel = (e: WheelEvent) => {
             if (!e.ctrlKey && !e.metaKey) return;
             e.preventDefault();
-            const delta = e.deltaY > 0 ? -step : step;
+            setOrigin({ x: e.clientX, y: e.clientY });
+            // For trackpads, deltaY is small, for mice it's ~100. Smooth proportion is better.
+            const delta = -e.deltaY * (step / 100);
             setZoom((z) => clamp(z + delta));
         };
 
@@ -134,5 +142,5 @@ export function usePinchZoom({
         return () => window.removeEventListener("keydown", onKeyDown);
     }, [handleKeyboard, zoomIn, zoomOut, resetZoom]);
 
-    return { zoom, setZoom, zoomIn, zoomOut, resetZoom };
+    return { zoom, setZoom, zoomIn, zoomOut, resetZoom, origin };
 }

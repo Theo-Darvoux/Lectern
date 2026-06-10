@@ -31,9 +31,9 @@ if (typeof window !== "undefined") {
     console.warn = (...args) => { if (!filterArgs(args)) originalWarn(...args); };
 }
 
-const ZOOM_STEP = 25;
-const MIN_ZOOM = 50;
-const MAX_ZOOM = 300;
+const ZOOM_STEP = 18.75;
+const MIN_ZOOM = 37.5;
+const MAX_ZOOM = 225;
 const PAGE_GAP = 16;
 const DEFAULT_ASPECT = 1.414; // A4
 const EMPTY_ROW_PROPS = {};
@@ -278,27 +278,38 @@ interface RowContext {
     onPageLoadSuccess: (pageNum: number, page: any) => void;
     innerWidth: number;
     scrollContainerRef: React.RefObject<HTMLDivElement | null>;
+    zoomOrigin: { x: number; y: number } | null;
 }
 
 const RowCtx = React.createContext<RowContext>(null!);
 
 const CustomScrollContainer = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(({ children, style, ...rest }, ref) => {
-    const { cssScale, isScaling, innerWidth, scrollContainerRef } = React.useContext(RowCtx);
+    const { cssScale, isScaling, innerWidth, scrollContainerRef, zoomOrigin } = React.useContext(RowCtx);
     const [origin, setOrigin] = useState("50% 50%");
     
     useLayoutEffect(() => {
         if (isScaling && scrollContainerRef.current) {
             setOrigin(prev => {
-                if (prev.includes("px")) return prev;
+                if (prev.includes("px") && prev !== "50% 50%") return prev;
                 const el = scrollContainerRef.current!;
-                const y = el.scrollTop + el.clientHeight / 2;
-                const x = el.scrollLeft + el.clientWidth / 2;
+                const rect = el.getBoundingClientRect();
+                
+                let clientX = rect.left + el.clientWidth / 2;
+                let clientY = rect.top + el.clientHeight / 2;
+                
+                if (zoomOrigin) {
+                    clientX = zoomOrigin.x;
+                    clientY = zoomOrigin.y;
+                }
+                
+                const y = el.scrollTop + (clientY - rect.top);
+                const x = el.scrollLeft + (clientX - rect.left);
                 return `${x}px ${y}px`;
             });
         } else {
             setOrigin("50% 50%");
         }
-    }, [isScaling, scrollContainerRef]);
+    }, [isScaling, scrollContainerRef, zoomOrigin]);
 
     return (
         <div
@@ -391,8 +402,8 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         }
     });
 
-    const { zoom, setZoom } = usePinchZoom({
-        initial: 100, min: MIN_ZOOM, max: MAX_ZOOM, step: ZOOM_STEP,
+    const { zoom, setZoom, origin: zoomOrigin } = usePinchZoom({
+        initial: 75, min: MIN_ZOOM, max: MAX_ZOOM, step: ZOOM_STEP,
         targetRef: shellScrollRef, // pinch zoom targets the shell scroll container
         handleKeyboard: false,
     });
@@ -412,27 +423,39 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
     const [aspectsVersion, setAspectsVersion] = useState(0);
 
     // ── Committed zoom (debounced) ───────────────────────────────────────────
-    const [committedZoom, setCommittedZoom] = useState(100);
-    const scrollAnchorRef = useRef<{ ratio: number } | null>(null);
+    const [committedZoom, setCommittedZoom] = useState(75);
+    const scrollAnchorRef = useRef<{ ratioY: number; ratioX: number; offsetY: number; offsetX: number } | null>(null);
+
+    const captureScrollAnchor = useCallback(() => {
+        const el = listRef.current?.element ?? shellScrollRef.current;
+        if (!el || el.scrollHeight <= 0) return;
+        const rect = el.getBoundingClientRect();
+        const clientX = zoomOrigin ? zoomOrigin.x : (rect.left + el.clientWidth / 2);
+        const clientY = zoomOrigin ? zoomOrigin.y : (rect.top + el.clientHeight / 2);
+        const targetY = el.scrollTop + Math.max(0, clientY - rect.top);
+        const targetX = el.scrollLeft + Math.max(0, clientX - rect.left);
+        scrollAnchorRef.current = {
+            ratioY: targetY / el.scrollHeight,
+            ratioX: targetX / el.scrollWidth,
+            offsetY: Math.max(0, clientY - rect.top),
+            offsetX: Math.max(0, clientX - rect.left),
+        };
+    }, [zoomOrigin, listRef, shellScrollRef]);
 
     useEffect(() => {
         const timer = setTimeout(() => {
-            const el = listRef.current?.element ?? shellScrollRef.current;
-            if (el && el.scrollHeight > el.clientHeight) {
-                scrollAnchorRef.current = { ratio: el.scrollTop / (el.scrollHeight - el.clientHeight) };
-            }
+            captureScrollAnchor();
             setCommittedZoom(zoom);
         }, 350);
         return () => clearTimeout(timer);
-    }, [zoom]);
+    }, [zoom, captureScrollAnchor]);
 
     useLayoutEffect(() => {
         const el = listRef.current?.element ?? shellScrollRef.current;
         const anchor = scrollAnchorRef.current;
         if (!el || !anchor) return;
-        const newMax = el.scrollHeight - el.clientHeight;
-        // eslint-disable-next-line react-hooks/immutability
-        if (newMax > 0) el.scrollTop = anchor.ratio * newMax;
+        el.scrollTop = anchor.ratioY * el.scrollHeight - anchor.offsetY;
+        el.scrollLeft = anchor.ratioX * el.scrollWidth - anchor.offsetX;
         scrollAnchorRef.current = null;
     }, [committedZoom, twoPageView, containerWidth]);
 
@@ -453,10 +476,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             rafId = requestAnimationFrame(() => {
                 rafId = null;
                 if (pendingWidth !== null) {
-                    const scrollEl = listRef.current?.element ?? shellScrollRef.current;
-                    if (scrollEl && scrollEl.scrollHeight > scrollEl.clientHeight) {
-                        scrollAnchorRef.current = { ratio: scrollEl.scrollTop / (scrollEl.scrollHeight - scrollEl.clientHeight) };
-                    }
+                    captureScrollAnchor();
                     setContainerWidth(pendingWidth);
                     pendingWidth = null;
                 }
@@ -538,7 +558,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                 }
                 if (e.key === "0") {
                     e.preventDefault();
-                    setZoom(100);
+                    setZoom(75);
                     return;
                 }
             }
@@ -652,8 +672,8 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
     // ── Row context ──────────────────────────────────────────────────────────
     const rowCtxValue = useMemo<RowContext>(() => ({
-        twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess, innerWidth, scrollContainerRef: listOuterRef,
-    }), [twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess, innerWidth, listOuterRef]);
+        twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess, innerWidth, scrollContainerRef: listOuterRef, zoomOrigin,
+    }), [twoPageView, numPages, pageWidthCommitted, containerWidth, cssScale, isScaling, allAnnotations, handleAnnotationClick, onPageLoadSuccess, innerWidth, listOuterRef, zoomOrigin]);
 
     // ── Loading skeleton ─────────────────────────────────────────────────────
     const loadingSkeleton = (
@@ -684,10 +704,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             toolbarLeft={
                 <button
                     onClick={() => {
-                        const el = listRef.current?.element ?? shellScrollRef.current;
-                        if (el && el.scrollHeight > el.clientHeight) {
-                            scrollAnchorRef.current = { ratio: el.scrollTop / (el.scrollHeight - el.clientHeight) };
-                        }
+                        captureScrollAnchor();
                         setTwoPageView(!twoPageView);
                     }}
                     disabled={loading}
@@ -715,12 +732,12 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                         <ZoomOut className="h-4 w-4" />
                     </button>
                     <button
-                        onClick={() => setZoom(100)}
+                        onClick={() => setZoom(75)}
                         disabled={loading}
                         className="min-w-12 rounded-md px-2 py-1 text-center text-xs font-medium tabular-nums transition-colors hover:bg-zinc-200 dark:hover:bg-zinc-800 disabled:opacity-40"
                         title={t("pdf.resetZoom")}
                     >
-                        {zoom}%
+                        {Math.round(zoom / 0.75)}%
                     </button>
                     <button
                         onClick={() => setZoom(z => Math.min(MAX_ZOOM, z + ZOOM_STEP))}
