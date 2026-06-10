@@ -91,6 +91,46 @@ describe("api-client", () => {
       expect(lastCallHeaders.get("Authorization")).toBe("Bearer new-token");
     });
 
+    it("handles 401 and fails on transient refresh errors without clearing session", async () => {
+      vi.mocked(getAccessToken).mockReturnValue("old-token");
+
+      // 1. Initial 401
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      } as Response);
+
+      // 2. Refresh call returns 502 Bad Gateway
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        statusText: "Bad Gateway",
+      } as Response);
+
+      await expect(apiRequest("/test")).rejects.toThrow(ApiError);
+      expect(clearAccessToken).not.toHaveBeenCalled();
+    });
+
+    it("handles 401 and clears session on permanent refresh errors", async () => {
+      vi.mocked(getAccessToken).mockReturnValue("old-token");
+
+      // 1. Initial 401
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      } as Response);
+
+      // 2. Refresh call returns 400 Bad Request
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+      } as Response);
+
+      await expect(apiRequest("/test")).rejects.toThrow(ApiError);
+      expect(clearAccessToken).toHaveBeenCalled();
+    });
+
     it("throws ApiError on failure", async () => {
       vi.mocked(fetch).mockResolvedValue({
         ok: false,

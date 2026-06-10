@@ -1,4 +1,4 @@
-import { lockedRefresh, registerTokenRefreshCallback, apiFetch } from "./api-client";
+import { lockedRefresh, registerTokenRefreshCallback, apiFetch, isRetriableError } from "./api-client";
 import { clearAccessToken, decodeToken, getAccessToken, hasAuthHint, setAccessToken } from "./auth-tokens";
 import { useAuthStore } from "./stores";
 import type { UserBrief } from "./guest";
@@ -88,8 +88,10 @@ async function handleVisibility() {
                     } else {
                         performLogout();
                     }
-                } catch {
-                    performLogout();
+                } catch (err) {
+                    if (!isRetriableError(err)) {
+                        performLogout();
+                    }
                 }
             }
         }
@@ -134,7 +136,15 @@ export function scheduleRefreshTimer(token: string) {
             }
         } catch (err) {
             console.error("Proactive refresh failed", err);
-            performLogout();
+            if (isRetriableError(err)) {
+                // Transient error: retry in 30 seconds instead of logging out
+                clearRefreshTimer();
+                refreshTimer = setTimeout(() => {
+                    scheduleRefreshTimer(token);
+                }, 30000);
+            } else {
+                performLogout();
+            }
         }
     }, delay);
 }

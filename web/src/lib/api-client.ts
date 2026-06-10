@@ -81,14 +81,27 @@ export async function apiFetchRetry<T>(
 }
 
 async function refreshToken(): Promise<RefreshResult | null> {
-    const res = await fetch(`${API_BASE}/auth/refresh`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-            "X-Client-ID": getClientId(),
-        },
-    });
-    if (!res.ok) return null;
+    let res: Response;
+    try {
+        res = await fetch(`${API_BASE}/auth/refresh`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "X-Client-ID": getClientId(),
+            },
+        });
+    } catch (err) {
+        // Network connection error
+        throw err;
+    }
+
+    if (!res.ok) {
+        // Treat 5xx and 429 as transient/retriable errors. Do not clear the session.
+        if (res.status >= 500 || res.status === 429) {
+            throw new ApiError(res.status, res.statusText);
+        }
+        return null;
+    }
     const data = await res.json();
     return { accessToken: data.access_token as string, user: (data.user ?? null) as UserBrief | null };
 }
@@ -174,19 +187,30 @@ export async function apiRequest(
 
     if (res.status === 401 && !skipAuth) {
         console.debug("[api-client] 401 Unauthorized, attempting token refresh...");
-        const refreshed = await refreshTokenOnce();
-        if (refreshed) {
-            console.debug("[api-client] Token refreshed successfully, retrying request.");
-            const newToken = refreshed.accessToken;
-            setAccessToken(newToken);
-            _onTokenRefreshed?.(newToken);
-            headers.set("Authorization", `Bearer ${newToken}`);
-            res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
-            if (typeof window !== "undefined") {
-                window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
+        try {
+            const refreshed = await refreshTokenOnce();
+            if (refreshed) {
+                console.debug("[api-client] Token refreshed successfully, retrying request.");
+                const newToken = refreshed.accessToken;
+                setAccessToken(newToken);
+                _onTokenRefreshed?.(newToken);
+                headers.set("Authorization", `Bearer ${newToken}`);
+                res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
+                if (typeof window !== "undefined") {
+                    window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
+                }
+            } else {
+                console.warn("[api-client] Token refresh failed (no new token). Clearing session.");
+                clearAccessToken();
+                throw new ApiError(401, "Session expired");
             }
-        } else {
-            console.warn("[api-client] Token refresh failed (no new token). Clearing session.");
+        } catch (err) {
+            console.error("[api-client] Token refresh encountered an error:", err);
+            if (isRetriableError(err)) {
+                // Transient error: propagate it without clearing the session
+                throw err;
+            }
+            console.warn("[api-client] Token refresh failed (non-retriable error). Clearing session.");
             clearAccessToken();
             throw new ApiError(401, "Session expired");
         }
