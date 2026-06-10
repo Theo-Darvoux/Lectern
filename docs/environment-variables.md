@@ -43,7 +43,7 @@ it tells you which variables to touch and links back here for the details.
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENVIRONMENT` | `development` | `development`, `production`, or `test`. Production turns on the secret validator, hides the OpenAPI docs, and changes logging. Compose forces `production` on every service in `compose.prod.yaml`. |
+| `ENVIRONMENT` | `development` | `development`, `production`, or `test`. Production turns on the secret validator, hides the OpenAPI docs, and changes logging. Set `ENVIRONMENT=production` in `.env` for production deployments. |
 | `SECRET_KEY` | *(dev placeholder)* | **Required, secret.** Signs JWTs and derives the CAS HMAC. Changing it invalidates every existing session. |
 | `CAS_HKDF_SALT` | `lectern-cas-salt-v1` | HKDF salt seeding CAS key derivation (over `SECRET_KEY`). Determines the `cas/` S3 object keys and Redis dedup/ref-count keys. **Keep constant for the life of a deployment** — changing it re-derives all digests, so new uploads stop de-duplicating against existing ones and storage accounting drifts (existing files stay accessible).
 | `CAS_HKDF_INFO` | `lectern-cas-v1` | HKDF `info` paired with `CAS_HKDF_SALT`.
@@ -278,15 +278,16 @@ Rarely need touching; defaults match S3 multipart constraints.
 
 ## Scaling & worker concurrency
 
-`WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS` are read by `compose.prod.yaml`
-to scale containers; the `*_MAX_JOBS` values control concurrency *inside* each
-replica. Total throughput = replicas × max-jobs.
+`WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS` control how many containers
+`docker compose` starts for each worker type; the `*_MAX_JOBS` values control
+concurrency *inside* each replica. Total throughput = replicas × max-jobs.
+The default in `compose.yaml` is 1 replica for dev; set these to 2+ in production.
 
 | Variable | Default | Description |
 |---|---|---|
-| `WORKER_FAST_REPLICAS` | `2` | Number of `worker-fast` containers (small files). |
+| `WORKER_FAST_REPLICAS` | `1` | Number of `worker-fast` containers (small files). Set to 2+ in production. |
 | `WORKER_FAST_MAX_JOBS` | `4` | Concurrent jobs per fast worker (I/O-bound, safe to over-subscribe). |
-| `WORKER_SLOW_REPLICAS` | `2` | Number of `worker-slow` containers (large/video files). |
+| `WORKER_SLOW_REPLICAS` | `1` | Number of `worker-slow` containers (large/video files). Set to 2+ in production. |
 | `WORKER_SLOW_MAX_JOBS` | `2` | Concurrent jobs per slow worker (CPU-heavy, keep low). |
 | `GLOBAL_MAX_SUBPROCESSES` | `0` (auto) | Cap on heavy subprocesses; `0` = `os.cpu_count()`. |
 | `MAX_CONCURRENT_IMAGE_OPS` | `0` (auto) | Cap on concurrent image operations; `0` = `cpu_count // 2`. |

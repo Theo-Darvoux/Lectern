@@ -1,5 +1,32 @@
+# compose.yaml — unified compose file for all environments.
+#
+# Environment is controlled entirely via .env — no -f flags needed:
+#
+#   Development (SeaweedFS local storage, default):
+#     COMPOSE_PROFILES=seaweedfs-dev   →   docker compose up [--watch]
+#
+#   Production (Cloudflare R2 or external S3):
+#     COMPOSE_PROFILES=                →   docker compose up -d
+#
+#   Production (self-hosted SeaweedFS cluster):
+#     COMPOSE_PROFILES=seaweedfs-prod  →   docker compose up -d
+#
+#   Add self-hosted delivery worker to either prod variant:
+#     COMPOSE_PROFILES=seaweedfs-prod,selfhost-worker
+#
+# Key behavioral env vars (see .env.example for full docs and prod values):
+#   API_CMD             — API server command (default: uvicorn --reload)
+#   WEB_CMD             — web server command (default: next dev --turbopack)
+#   WEB_MEMORY_LIMIT    — memory limit for web container (default: 4G for dev)
+#   NGINX_HOST_PORT     — host port nginx binds to (default: 80)
+#   NGINX_CONF_TEMPLATE — nginx config template path (default: dev template)
+#
+# Hot-reload in dev (Docker Compose v2.22+):
+#   docker compose up --watch
+# File changes in ./api/app and ./web/src are synced live into the containers.
+
 x-common-env: &common-env
-  ENVIRONMENT: ${ENVIRONMENT}
+  ENVIRONMENT: ${ENVIRONMENT:-development}
   DATABASE_URL: ${DATABASE_URL}
   REDIS_URL: ${REDIS_URL}
   MEILI_URL: ${MEILI_URL}
@@ -15,10 +42,11 @@ x-common-env: &common-env
 
 x-worker-base: &worker-base
   restart: unless-stopped
-  entrypoint: [ "./worker-start.sh" ]
+  entrypoint: ["./worker-start.sh"]
   depends_on:
     postgres:
       condition: service_healthy
+      required: false
     redis:
       condition: service_healthy
   networks:
@@ -29,14 +57,29 @@ x-worker-base: &worker-base
   cap_add:
     - SYS_ADMIN
   healthcheck:
-    test: [ "CMD", "python", "-c", "import os,sys; sys.exit(0 if any(b'arq' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit()) else 1)" ]
+    test: ["CMD", "python", "-c", "import os,sys; sys.exit(0 if any(b'arq' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit()) else 1)"]
     interval: 30s
     timeout: 5s
     retries: 3
     start_period: 20s
 
+x-worker-watch: &worker-watch
+  develop:
+    watch:
+      - action: sync+restart
+        path: ./api/app
+        target: /app/app
+        ignore:
+          - __pycache__/
+          - "*.pyc"
+      - action: rebuild
+        path: api/pyproject.toml
+
 services:
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
   postgres:
+    profiles: [postgres]
     restart: unless-stopped
     image: postgres:16-alpine
     command: postgres -c max_connections=500
@@ -50,12 +93,20 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
 
   redis:
     restart: unless-stopped
@@ -65,12 +116,20 @@ services:
       - ./infra/docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
     command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
 
   meilisearch:
     restart: unless-stopped
@@ -81,15 +140,33 @@ services:
     volumes:
       - meilisearch_data:/meili_data
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:7700/health" ]
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
       interval: 30s
       timeout: 5s
       retries: 5
     networks:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ── Application ─────────────────────────────────────────────────────────────
 
   api:
     restart: unless-stopped
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: api
+    image: ghcr.io/theo-darvoux/lectern/api:latest
+    # Dev default: uvicorn with hot-reload. Prod: set API_CMD=gunicorn ... in .env
+    command: >-
+      ${API_CMD:-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload}
     env_file: .env
     environment:
       <<: *common-env
@@ -97,50 +174,162 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
     volumes:
       - lectern_backups:/var/lib/lectern
+    ports:
+      - "8000:8000"
     healthcheck:
-      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" ]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - frontend
       - backend
+    develop:
+      watch:
+        - action: sync
+          path: ./api/app
+          target: /app/app
+          ignore:
+            - __pycache__/
+            - "*.pyc"
+        - action: rebuild
+          path: api/pyproject.toml
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
 
   worker:
-    <<: *worker-base
+    <<: [*worker-base, *worker-watch]
     stop_grace_period: 30s
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: worker
+    image: ghcr.io/theo-darvoux/lectern/worker:latest
+    command: arq app.workers.settings.WorkerSettings
     env_file: .env
     environment: *common-env
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
 
   worker-fast:
-    <<: *worker-base
+    <<: [*worker-base, *worker-watch]
     stop_grace_period: 30s
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: worker
+    image: ghcr.io/theo-darvoux/lectern/worker:latest
+    command: arq app.workers.settings.UploadFastWorkerSettings
     env_file: .env
-    environment: *common-env
+    environment:
+      <<: *common-env
+      WORKER_FAST_MAX_JOBS: ${WORKER_FAST_MAX_JOBS:-4}
+    deploy:
+      replicas: ${WORKER_FAST_REPLICAS:-1}
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
 
   worker-slow:
-    <<: *worker-base
+    <<: [*worker-base, *worker-watch]
     stop_grace_period: 1m
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: worker
+    image: ghcr.io/theo-darvoux/lectern/worker:latest
+    command: arq app.workers.settings.UploadSlowWorkerSettings
     env_file: .env
-    environment: *common-env
+    environment:
+      <<: *common-env
+      WORKER_SLOW_MAX_JOBS: ${WORKER_SLOW_MAX_JOBS:-2}
+    deploy:
+      replicas: ${WORKER_SLOW_REPLICAS:-1}
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
 
   web:
     restart: unless-stopped
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      # Dev: deps (node+pnpm, no source — source comes from the ./web bind mount).
+      # Prod: runner (nginx static). Override via WEB_BUILD_TARGET in .env.
+      target: ${WEB_BUILD_TARGET:-deps}
+    image: ghcr.io/theo-darvoux/lectern/web:latest
+    # Dev default: pnpm dev. Prod: set WEB_CMD=exec nginx -g 'daemon off;' in .env
+    command: >-
+      ${WEB_CMD:-sh -c "CI=true pnpm install && node_modules/.bin/next dev --turbopack"}
+    environment:
+      # Route browser API calls through nginx so SSE works correctly in dev.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
+      NEXT_PUBLIC_EUROOFFICE_URL: ${NEXT_PUBLIC_EUROOFFICE_URL:-http://localhost/eurooffice}
+      NEXT_PUBLIC_REPO_URL: ${NEXT_PUBLIC_REPO_URL:-}
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=3584}
+      WATCHPACK_POLLING: ${WATCHPACK_POLLING:-true}
     env_file: .env
     depends_on:
       - api
+    # ./web:/app gives the dev server access to source code.
+    # In prod (nginx runner), /app is unused — nginx serves from /usr/share/nginx/html.
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
     healthcheck:
-      test: [ "CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/" ]
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
     networks:
       - frontend
+    develop:
+      watch:
+        - action: sync
+          path: ./web/src
+          target: /app/src
+        - action: sync
+          path: ./web/public
+          target: /app/public
+        - action: rebuild
+          path: web/package.json
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: ${WEB_MEMORY_LIMIT:-4G}
+        reservations:
+          cpus: "0.1"
+          memory: ${WEB_MEMORY_RESERVATION:-1G}
 
   eurooffice:
     image: ghcr.io/euro-office/documentserver:latest
@@ -157,7 +346,7 @@ services:
     extra_hosts:
       - "localhost:host-gateway"
     healthcheck:
-      test: [ "CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost/')" ]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost/')"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -175,19 +364,234 @@ services:
   nginx:
     restart: unless-stopped
     image: nginx:alpine
+    # Bypass nginx's default entrypoint so envsubst can write to /tmp (always
+    # writable) even on read-only overlay filesystems in some container runtimes.
+    entrypoint: []
+    command: >
+      /bin/sh -c "envsubst '$$CORS_ALLOWED_HEADERS'
+      < /etc/nginx/templates/nginx.conf.template
+      > /tmp/nginx.conf
+      && exec nginx -c /tmp/nginx.conf -g 'daemon off;'"
+    environment:
+      CORS_ALLOWED_HEADERS: ${CORS_ALLOWED_HEADERS:-Content-Type,Authorization,X-Client-ID,X-Upload-ID,Accept,X-Requested-With,Upload-Checksum,Tus-Checksum-Algorithm}
+    ports:
+      - "${NGINX_HOST_PORT:-80}:80"
     volumes:
+      # Dev default: nginx.dev.conf.template. Prod: set NGINX_CONF_TEMPLATE in .env.
+      - ${NGINX_CONF_TEMPLATE:-./infra/nginx/nginx.dev.conf.template}:/etc/nginx/templates/nginx.conf.template:ro
+      # Always present so the prod template's `include` directive resolves in both envs.
+      - ./infra/nginx/nginx.eurooffice.snippet:/etc/nginx/nginx.eurooffice.snippet:ro
       - ./infra/nginx/error-expired.html:/etc/nginx/html/error-expired.html:ro
     depends_on:
       - api
       - web
     healthcheck:
-      test: [ "CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/api/health" ]
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
     networks:
       - frontend
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+
+  # ── SeaweedFS — dev (single-node all-in-one) ────────────────────────────────
+  # Activate with COMPOSE_PROFILES=seaweedfs-dev in .env (the default in .env.example).
+
+  seaweedfs:
+    profiles: [seaweedfs-dev]
+    restart: unless-stopped
+    image: chrislusf/seaweedfs:latest
+    networks:
+      - backend
+    command: >
+      server -dir=/data -ip.bind=0.0.0.0
+      -master.volumeSizeLimitMB=1024
+      -s3 -s3.config=/etc/seaweedfs/s3.json
+    volumes:
+      - seaweedfs_data:/data
+      - ./infra/docker/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    ports:
+      - "8333:8333"
+      - "8888:8888"
+      - "9333:9333"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9333/cluster/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  seaweedfs-setup:
+    profiles: [seaweedfs-dev]
+    image: amazon/aws-cli:latest
+    networks:
+      - backend
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    volumes:
+      - ./infra/docker/seaweedfs/setup.sh:/setup.sh:ro
+    command: /setup.sh
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-lectern}
+      S3_REGION: ${S3_REGION:-us-east-1}
+
+  # ── SeaweedFS — production cluster ─────────────────────────────────────────
+  # Activate with COMPOSE_PROFILES=seaweedfs-prod in .env.
+  # Before first run: envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
+
+  seaweedfs-master:
+    profiles: [seaweedfs-prod]
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    networks:
+      - backend
+    command: >
+      master
+      -ip=seaweedfs-master
+      -ip.bind=0.0.0.0
+      -port=9333
+      -defaultReplication=001
+      -volumeSizeLimitMB=1024
+    volumes:
+      - /opt/seaweedfs/master:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9333/cluster/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  seaweedfs-volume1:
+    profiles: [seaweedfs-prod]
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+    command: >
+      volume
+      -dir=/data
+      -ip.bind=0.0.0.0
+      -mserver=seaweedfs-master:9333
+      -port=8081
+      -dataCenter=dc1
+      -rack=rack1
+    volumes:
+      - /opt/seaweedfs/volume1:/data
+
+  seaweedfs-volume2:
+    profiles: [seaweedfs-prod]
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+    command: >
+      volume
+      -dir=/data
+      -ip.bind=0.0.0.0
+      -mserver=seaweedfs-master:9333
+      -port=8082
+      -dataCenter=dc1
+      -rack=rack2
+    volumes:
+      - /opt/seaweedfs/volume2:/data
+
+  seaweedfs-filer:
+    profiles: [seaweedfs-prod]
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+    command: >
+      filer
+      -ip.bind=0.0.0.0
+      -master=seaweedfs-master:9333
+    volumes:
+      - /opt/seaweedfs/filer:/data
+
+  seaweedfs-s3:
+    profiles: [seaweedfs-prod]
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      seaweedfs-filer:
+        condition: service_started
+    command: >
+      s3
+      -ip.bind=0.0.0.0
+      -port=8333
+      -filer=seaweedfs-filer:8888
+      -config=/etc/seaweedfs/s3.json
+    volumes:
+      - /opt/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8333/ 2>&1 | grep -q '' && exit 0 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Self-hosted delivery worker ─────────────────────────────────────────────
+  # Optional HMAC-signed /file, /branding, /zip delivery (replaces Cloudflare Worker).
+  # Activate with COMPOSE_PROFILES=...,selfhost-worker. Also set in .env:
+  #   WORKER_ZIP_URL=http://localhost:8788
+  #   WORKER_ZIP_HMAC_SECRET=<shared-secret>
+  # In production front with nginx proxy_cache (infra/nginx/worker-cache.conf).
+
+  selfhost-worker:
+    profiles: [selfhost-worker]
+    restart: unless-stopped
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    image: ghcr.io/theo-darvoux/lectern/selfhost-worker:latest
+    networks:
+      - backend
+      - frontend
+    environment:
+      PORT: "8788"
+      WORKER_ZIP_HMAC_SECRET: ${WORKER_ZIP_HMAC_SECRET:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-seaweedfs:8333}
+      S3_USE_SSL: ${S3_USE_SSL:-false}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-lectern}
+    ports:
+      - "8788:8788"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8788/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 networks:
   frontend:
@@ -200,3 +604,4 @@ volumes:
   eurooffice_data:
   eurooffice_log:
   lectern_backups:
+  seaweedfs_data:

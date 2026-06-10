@@ -9,7 +9,7 @@ uses the lossless backup system (v2.0) built into the admin panel.
 ## Prerequisites
 
 - [ ] SeaweedFS prod server provisioned (two disks/volumes minimum)
-- [ ] `compose.prod.seaweedfs.yaml` deployed and `seaweedfs-s3` healthy
+- [ ] SeaweedFS prod cluster deployed (`COMPOSE_PROFILES=seaweedfs-prod`) and `seaweedfs-s3` healthy
 - [ ] `s3.json` rendered from template with prod credentials:
   ```sh
   envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
@@ -58,18 +58,20 @@ curl -O https://api.example.com/api/admin/backup/{id}/download \
 # Render credentials
 envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
 
-# Bring up the storage stack
-docker compose -f compose.yaml -f compose.prod.seaweedfs.yaml up -d \
+# Set the profile and bring up the storage stack
+# (COMPOSE_PROFILES can be set in .env or passed on the command line)
+COMPOSE_PROFILES=seaweedfs-prod docker compose up -d \
   seaweedfs-master seaweedfs-volume1 seaweedfs-volume2 seaweedfs-filer seaweedfs-s3
 
 # Wait for S3 gateway to be healthy
 docker compose ps seaweedfs-s3
 ```
 
-Create the bucket (runs once):
+The `seaweedfs-dev` profile's `seaweedfs-setup` one-shot container is not available
+in `seaweedfs-prod`. Create the bucket manually if needed:
 
 ```sh
-docker compose -f compose.yaml -f compose.prod.seaweedfs.yaml run --rm seaweedfs-setup
+aws s3 mb s3://lectern --endpoint-url http://localhost:8333
 ```
 
 ### Step 4 — Switch the API to SeaweedFS

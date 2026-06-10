@@ -15,15 +15,20 @@ production. For *what each setting does*, see the
 
 ## Compose file structure
 
-The project uses three compose files that layer on top of each other:
+The project uses a **single `compose.yaml`** for all environments. Behavior is
+controlled entirely through `.env` — no `-f` flags are needed.
 
-| File | Purpose | Used when |
-|---|---|---|
-| `compose.yaml` | Base service definitions shared by all environments | Always |
-| `compose.override.yaml` | Dev additions: SeaweedFS, source bind-mounts, hot reload, port exposure | Automatically merged on `docker compose up` |
-| `compose.prod.yaml` | Prod additions: pre-built images, gunicorn, resource limits, replicas | Explicit: `-f compose.yaml -f compose.prod.yaml` |
+Two mechanisms handle environment differences:
 
-`compose.override.yaml` is a Docker Compose convention, it is merged automatically without needing to be named on the command line. This means `docker compose up` in development picks up both files silently. In production you always name both files explicitly.
+- **Profiles** — optional service groups started by setting `COMPOSE_PROFILES`
+  in `.env`. The `seaweedfs-dev` profile (default in `.env.example`) starts the
+  local SeaweedFS single-node storage. The `seaweedfs-prod` profile starts the
+  production cluster. The `selfhost-worker` profile adds the self-hosted
+  HMAC-signed delivery worker.
+- **Behavioral env vars** — `API_CMD`, `WEB_CMD`, `NGINX_CONF_TEMPLATE`, etc.
+  switch the server commands, build targets, and config paths between dev and
+  prod. Dev defaults are baked into the compose file; production values are set
+  in `.env`.
 
 ---
 
@@ -33,16 +38,20 @@ The project uses three compose files that layer on top of each other:
 # 1. Copy and fill the env file (single file at project root)
 cp .env.example .env
 
-# 2. Start all services (compose.yaml + compose.override.yaml are merged automatically)
+# 2. Start all services — COMPOSE_PROFILES=seaweedfs-dev is the default
 docker compose up
 ```
 
-What `compose.override.yaml` adds in development:
-- **SeaweedFS** : local S3-compatible storage (auto-configured bucket via `seaweedfs-setup`). Production can use the same (`STORAGE_BACKEND=seaweedfs`) or Cloudflare R2 (`STORAGE_BACKEND=r2`).
-- Source bind-mounts on `api/` and `web/` for hot reload
-- `uvicorn --reload` for the API, `next dev --turbopack` for the frontend
-- Port exposure: API on `8000`, web on `3000`, SeaweedFS S3 on `8333` (filer UI `8888`, master UI `9333`)
-- Dev Nginx config (`infra/nginx/nginx.dev.conf.template`) with CORS handling
+What the default dev configuration provides:
+- **SeaweedFS** (`seaweedfs-dev` profile): local S3-compatible storage, bucket
+  auto-created by the one-shot `seaweedfs-setup` container.
+- **uvicorn `--reload`** for the API, **`next dev --turbopack`** for the frontend.
+- Source bind-mount on `./web` so the Next.js dev server reads live source.
+- **Hot-reload via file-sync** (Docker Compose v2.22+): `docker compose up --watch`
+  syncs changes in `./api/app` and `./web/src` directly into the running
+  containers without restarting them.
+- Dev Nginx config (`infra/nginx/nginx.dev.conf.template`) with inline CORS
+  and EuroOffice routing.
 
 Services available after `docker compose up`:
 
@@ -68,25 +77,40 @@ To create your first account, open the app in a browser — you are redirected t
 
 ## Option B : Production deployment
 
-Production uses pre-built images from GHCR. **Do not use `compose.override.yaml`** — the prod file must be specified explicitly. Set `COMPOSE_FILE` once so every `docker compose` command picks up both files automatically (no repeated `-f` flags):
+Production uses pre-built images from GHCR. The same `compose.yaml` is used —
+switch to production mode by setting the relevant env vars in `.env`:
 
 ```bash
-export COMPOSE_FILE=compose.yaml:compose.prod.yaml
+# Minimal production .env additions (on top of the defaults in .env.example):
+ENVIRONMENT=production
+COMPOSE_PROFILES=          # empty = no local storage containers; uses R2 or external S3
+API_CMD=gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
+WEB_CMD=exec nginx -g 'daemon off;'
+WEB_BUILD_TARGET=runner
+WEB_MEMORY_LIMIT=64M
+WEB_MEMORY_RESERVATION=32M
+NGINX_HOST_PORT=9080
+NGINX_CONF_TEMPLATE=./infra/nginx/nginx.conf.template
+WORKER_FAST_REPLICAS=2
+WORKER_SLOW_REPLICAS=2
+```
 
+Then deploy:
+
+```bash
+docker compose pull          # pull latest images from GHCR
 docker compose up -d
 ```
 
-> Add the `export` line to your shell profile (or the `.env` file Compose reads) so it persists across sessions.
-
-What `compose.prod.yaml` changes relative to the base:
+What production mode changes relative to the dev defaults:
 - All services use published images (`ghcr.io/theo-darvoux/lectern/api:latest`, etc.)
-- API runs under **gunicorn** with 4 uvicorn workers instead of single-process uvicorn
-- Workers run with explicit ARQ settings classes (`UploadFastWorkerSettings`, etc.)
-- `ENVIRONMENT=production` is forced on all services
-- Resource limits and reservations are set per service
-- `worker-fast` and `worker-slow` support horizontal scaling via `WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS`
-- Nginx exposes port `9080` externally (put a reverse proxy or load balancer in front)
-- No local storage container; production points `STORAGE_BACKEND` at Cloudflare R2 or a self-hosted S3 backend
+- API runs under **gunicorn** with 4 uvicorn workers
+- Web is served by **nginx** from the pre-built static export (64 MB container)
+- `ENVIRONMENT=production` activates secret validation, hides OpenAPI docs, changes logging
+- Resource limits are set per service
+- `worker-fast` and `worker-slow` scale horizontally via `WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS`
+- Nginx exposes port `9080` (put a reverse proxy or load balancer in front)
+- No local storage container; `STORAGE_BACKEND` points at Cloudflare R2 or a self-hosted S3 backend
 
 After first deploy, there are no commands to run. The `api` container applies database migrations automatically on startup (see [Database migrations](#database-migrations) below), and your first account is created through the **first-run setup screen**: open the site in a browser and it will prompt you to create the initial administrator account. That screen disappears once an admin exists.
 
@@ -112,8 +136,8 @@ Useful when you want fast iteration on a single component without rebuilding con
 cd api
 uv sync                           # install dependencies
 
-# Start backing services from the root
-docker compose up postgres redis meilisearch seaweedfs seaweedfs-setup -d
+# Start backing services from the root (seaweedfs-dev profile for local storage)
+docker compose --profile seaweedfs-dev up postgres redis meilisearch seaweedfs seaweedfs-setup -d
 
 uv run alembic upgrade head       # apply migrations
 uv run uvicorn app.main:app --reload --port 8000
@@ -198,4 +222,4 @@ pnpm knip                              # dead-code detection
 
 **MeiliSearch index out of sync** : re-index with `uv run python -m app.cli reindex`.
 
-**SeaweedFS bucket missing in dev** : the `seaweedfs-setup` one-shot container creates the bucket on first start. If it failed, run `docker compose up seaweedfs-setup` again.
+**SeaweedFS bucket missing in dev** : the `seaweedfs-setup` one-shot container creates the bucket on first start. If it failed, run `docker compose up seaweedfs-setup` again (the `seaweedfs-dev` profile must be active, i.e. `COMPOSE_PROFILES=seaweedfs-dev` in `.env`).

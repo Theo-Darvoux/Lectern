@@ -8,11 +8,7 @@ alphabetised list with defaults, see the
 After editing `.env`, apply changes by restarting the affected services:
 
 ```bash
-# dev
 docker compose up -d
-
-# prod
-docker compose -f compose.yaml -f compose.prod.yaml up -d
 ```
 
 A handful of branding/auth settings can also be edited live in the **Admin
@@ -230,9 +226,9 @@ WORKER_SLOW_REPLICAS=2
 WORKER_SLOW_MAX_JOBS=2
 ```
 
-Replica counts are applied by `compose.prod.yaml`. Keep slow-queue concurrency
-modest — video compression is CPU- and memory-hungry, and the per-service
-resource limits in the prod compose file assume that.
+Replica counts are read from `WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS` in
+`.env`. Keep slow-queue concurrency modest — video compression is CPU- and
+memory-hungry, and the per-service resource limits in the compose file assume that.
 
 ---
 
