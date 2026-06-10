@@ -621,7 +621,7 @@ export function ProfileView({
 
             {/* Bio */}
             {profile.bio ? (
-              <p className="mt-2 text-sm text-foreground/80 leading-relaxed max-w-lg">
+              <p className="mt-2 text-sm text-foreground/80 leading-relaxed max-w-lg whitespace-pre-wrap">
                 {profile.bio}
               </p>
             ) : (
