@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ZoomIn, ZoomOut, BookOpen } from "lucide-react";
+import { ZoomIn, ZoomOut, BookOpen, Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import type { ThreadData } from "@/hooks/use-annotations";
 import { useMaterialFile } from "@/hooks/use-material-file";
@@ -66,8 +66,19 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
     const {
         containerRef, viewerElRef, status, error: pdfError,
         numPages, currentPage, scalePercent,
-        zoomIn, zoomOut, resetZoom, goToPage, setSpread,
+        zoomIn, zoomOut, resetZoom, goToPage, setSpread, reload: reloadDoc,
     } = usePdfjsDocument({ url: blobUrl, onTextLayerRendered });
+
+    // The pdf.js container must stay mounted across loading/error so its init
+    // effect can attach exactly once (ViewerShell otherwise swaps children out
+    // while the blob is fetched, leaving pdf.js with no element to bind to).
+    // We therefore drive loading/error as overlays here, not via ViewerShell.
+    const combinedError = error || (status === "error" ? pdfError : null);
+    const showSpinner = !combinedError && (loading || status === "loading");
+    const handleRetry = useCallback(() => {
+        if (error) reload();
+        else reloadDoc();
+    }, [error, reload, reloadDoc]);
 
     // Two-page (spread) view toggle.
     useEffect(() => {
@@ -121,9 +132,6 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         <>
             <ViewerShell
                 scrollRef={shellScrollRef}
-                loading={loading}
-                error={error || (status === "error" ? pdfError : null)}
-                onRetry={reload}
                 toolbarLeft={
                     <button
                         onClick={() => setTwoPageView((v) => !v)}
@@ -171,10 +179,27 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
                 }
             >
                 {/* pdf.js requires its scroll container to be absolutely positioned;
-                    the shell's `relative` scroll area is the offset parent. */}
+                    the shell's `relative` scroll area is the offset parent. The
+                    container is always mounted so pdf.js binds to it exactly once. */}
                 <div ref={containerRef} className="absolute inset-0 overflow-auto">
                     <div ref={viewerElRef} className="pdfViewer" />
                 </div>
+                {showSpinner && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                )}
+                {combinedError && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-8 text-center text-sm text-destructive">
+                        <span>{combinedError}</span>
+                        <button
+                            onClick={handleRetry}
+                            className="rounded-md border border-current px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-foreground/5"
+                        >
+                            {t("retry")}
+                        </button>
+                    </div>
+                )}
             </ViewerShell>
             {activeAnnotation && (
                 <AnnotationInlinePopover
