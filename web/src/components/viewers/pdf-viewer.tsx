@@ -454,6 +454,7 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
         const el = listRef.current?.element ?? shellScrollRef.current;
         const anchor = scrollAnchorRef.current;
         if (!el || !anchor) return;
+        // eslint-disable-next-line react-hooks/immutability
         el.scrollTop = anchor.ratioY * el.scrollHeight - anchor.offsetY;
         el.scrollLeft = anchor.ratioX * el.scrollWidth - anchor.offsetX;
         scrollAnchorRef.current = null;
