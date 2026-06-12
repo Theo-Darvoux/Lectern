@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatFileSize, getFileExtension, getViewerType, guessFileMime, MIME_QCM } from "./file-utils";
+import { formatFileSize, getFileExtension, getViewerType, guessFileMime, sniffFileType, MIME_TO_EXT, MIME_QCM } from "./file-utils";
 
 describe("file-utils", () => {
   describe("formatFileSize", () => {
@@ -61,6 +61,51 @@ describe("file-utils", () => {
     it("falls back to octet-stream for unknown extensions", () => {
       const file = { name: "test.unknown", type: "" } as File;
       expect(guessFileMime(file)).toBe("application/octet-stream");
+    });
+  });
+
+  describe("MIME_TO_EXT", () => {
+    it("maps common mime types to their canonical extension", () => {
+      expect(MIME_TO_EXT["application/pdf"]).toBe("pdf");
+      expect(MIME_TO_EXT["image/jpeg"]).toBe("jpg");
+      expect(MIME_TO_EXT["text/plain"]).toBe("txt");
+      expect(MIME_TO_EXT["text/markdown"]).toBe("md");
+    });
+  });
+
+  describe("sniffFileType", () => {
+    const fileOf = (bytes: number[], name = "noext") =>
+      new File([new Uint8Array(bytes)], name, { type: "application/octet-stream" });
+
+    it("detects a PDF from magic bytes", async () => {
+      const pdf = fileOf([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]); // %PDF-1.7
+      expect(await sniffFileType(pdf)).toEqual({ mime: "application/pdf", ext: "pdf" });
+    });
+
+    it("detects PNG and JPEG", async () => {
+      expect(await sniffFileType(fileOf([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
+        .toEqual({ mime: "image/png", ext: "png" });
+      expect(await sniffFileType(fileOf([0xff, 0xd8, 0xff, 0xe0])))
+        .toEqual({ mime: "image/jpeg", ext: "jpg" });
+    });
+
+    it("detects mp4 via the ftyp box at offset 4", async () => {
+      const mp4 = fileOf([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+      expect(await sniffFileType(mp4)).toEqual({ mime: "video/mp4", ext: "mp4" });
+    });
+
+    it("disambiguates RIFF containers", async () => {
+      const riff = (tag: string) =>
+        fileOf([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, ...[...tag].map((c) => c.charCodeAt(0))]);
+      expect(await sniffFileType(riff("WEBP"))).toEqual({ mime: "image/webp", ext: "webp" });
+      expect(await sniffFileType(riff("WAVE"))).toEqual({ mime: "audio/wav", ext: "wav" });
+      expect(await sniffFileType(riff("AVI "))).toBeNull();
+    });
+
+    it("returns null for unknown or ZIP-based signatures", async () => {
+      expect(await sniffFileType(fileOf([0x50, 0x4b, 0x03, 0x04]))).toBeNull(); // ZIP (docx/epub…)
+      expect(await sniffFileType(fileOf([0x68, 0x65, 0x6c, 0x6c, 0x6f]))).toBeNull();
+      expect(await sniffFileType(fileOf([]))).toBeNull();
     });
   });
 });

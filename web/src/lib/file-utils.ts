@@ -233,6 +233,54 @@ export function guessFileMime(file: File): string {
     return EXT_TO_MIME[ext] ?? "application/octet-stream";
 }
 
+/** MIME type → canonical extension (without dot), inverted from EXT_TO_MIME (first entry wins). */
+export const MIME_TO_EXT: Record<string, string> = Object.entries(EXT_TO_MIME).reduce(
+    (acc, [ext, mime]) => {
+        if (!acc[mime]) acc[mime] = ext;
+        return acc;
+    },
+    // "rst" maps to text/plain before "txt" does; force the sensible canonical.
+    { "text/plain": "txt" } as Record<string, string>,
+);
+
+/** Magic-byte signatures for binary types that mobile pickers and messaging apps
+ *  commonly deliver with a stripped filename and a generic MIME type. ZIP-based
+ *  formats (docx, epub…) share a signature and are deliberately absent. */
+const MAGIC_SIGNATURES: Array<{ bytes: number[]; offset?: number; mime: string; ext: string }> = [
+    { bytes: [0x25, 0x50, 0x44, 0x46], mime: "application/pdf", ext: "pdf" }, // %PDF
+    { bytes: [0x89, 0x50, 0x4e, 0x47], mime: "image/png", ext: "png" },
+    { bytes: [0xff, 0xd8, 0xff], mime: "image/jpeg", ext: "jpg" },
+    { bytes: [0x47, 0x49, 0x46, 0x38], mime: "image/gif", ext: "gif" }, // GIF8
+    { bytes: [0x41, 0x54, 0x26, 0x54, 0x46, 0x4f, 0x52, 0x4d], mime: "image/vnd.djvu", ext: "djvu" }, // AT&TFORM
+    { bytes: [0x66, 0x74, 0x79, 0x70], offset: 4, mime: "video/mp4", ext: "mp4" }, // ....ftyp
+    { bytes: [0x1a, 0x45, 0xdf, 0xa3], mime: "video/webm", ext: "webm" }, // EBML
+    { bytes: [0x49, 0x44, 0x33], mime: "audio/mpeg", ext: "mp3" }, // ID3
+    { bytes: [0x4f, 0x67, 0x67, 0x53], mime: "audio/ogg", ext: "ogg" }, // OggS
+    { bytes: [0x66, 0x4c, 0x61, 0x43], mime: "audio/flac", ext: "flac" }, // fLaC
+];
+
+/** Identify a file from its magic bytes. Returns null when the signature is
+ *  unknown or ambiguous — callers should then fall back to name/MIME checks. */
+export async function sniffFileType(file: File): Promise<{ mime: string; ext: string } | null> {
+    let head: Uint8Array;
+    try {
+        head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    } catch {
+        return null;
+    }
+    const matches = (sig: number[], offset = 0) => sig.every((b, i) => head[offset + i] === b);
+    if (matches([0x52, 0x49, 0x46, 0x46])) {
+        // RIFF container: disambiguate via the format tag at offset 8
+        if (matches([0x57, 0x45, 0x42, 0x50], 8)) return { mime: "image/webp", ext: "webp" };
+        if (matches([0x57, 0x41, 0x56, 0x45], 8)) return { mime: "audio/wav", ext: "wav" };
+        return null;
+    }
+    for (const { bytes, offset, mime, ext } of MAGIC_SIGNATURES) {
+        if (matches(bytes, offset ?? 0)) return { mime, ext };
+    }
+    return null;
+}
+
 /** Extension → color classes used by browse listing, viewer header, and sidebar. */
 export const EXT_BADGE_COLORS: Record<string, string> = {
     pdf: "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300",

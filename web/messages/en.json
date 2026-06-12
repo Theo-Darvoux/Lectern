@@ -592,7 +592,7 @@
     "failedToReadDropped": "Failed to read dropped items",
     "foldersNotAccessible": "{count, plural, =1 {# folder} other {# folders}} could not be read. Try dragging folders one at a time, or use the file picker instead.",
     "fileExceedsLimit": "{name} exceeds the {limit} MiB size limit",
-    "fileTypeNotSupported": "File type '{type}' is not supported.",
+    "fileTypeNotSupported": "{name}: file type “{type}” is not supported.",
     "errorProcessing": "Processing failed",
     "folderUploadFailed": "Folder upload failed",
     "errorReferenceLost": "File reference lost after page refresh. Please remove and re-add this file.",
@@ -887,7 +887,7 @@
     "uploading": "Uploading…",
     "cancel": "Cancel",
     "staged": "Staged! Opening review…",
-    "resolving": "Resolving image '{src}'...",
+    "resolving": "Resolving image “{src}”...",
     "failedToLoad": "Failed to load image: {fileName}",
     "uploadMissingLabel": "Upload missing image \"{fileName}\"",
     "upload": "Upload"

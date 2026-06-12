@@ -592,7 +592,7 @@
     "failedToReadDropped": "Échec de la lecture des éléments déposés",
     "foldersNotAccessible": "{count, plural, =1 {# dossier} other {# dossiers}} n'ont pas pu être lus. Essayez de glisser les dossiers un par un, ou utilisez le sélecteur de fichiers.",
     "fileExceedsLimit": "{name} dépasse la limite de taille de {limit} MiB",
-    "fileTypeNotSupported": "Le type de fichier '{type}' n'est pas supporté.",
+    "fileTypeNotSupported": "{name} : le type de fichier « {type} » n'est pas supporté.",
     "errorProcessing": "Échec du traitement",
     "folderUploadFailed": "Le téléversement du dossier a échoué",
     "errorReferenceLost": "Référence du fichier perdue après rafraîchissement de la page. Veuillez retirer et ré-ajouter ce fichier.",
@@ -887,7 +887,7 @@
     "uploading": "Téléchargement…",
     "cancel": "Annuler",
     "staged": "Mis en attente ! Ouverture de la révision…",
-    "resolving": "Résolution de l'image '{src}'...",
+    "resolving": "Résolution de l'image « {src} »...",
     "failedToLoad": "Échec du chargement de l'image : {fileName}",
     "uploadMissingLabel": "Télécharger l'image manquante \"{fileName}\"",
     "upload": "Télécharger"

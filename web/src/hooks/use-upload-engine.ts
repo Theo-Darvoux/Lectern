@@ -2,7 +2,7 @@ import { useCallback, useRef, useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { useStagingStore } from "@/lib/staging-store";
 import type { CreateMaterialOp } from "@/lib/staging-store";
-import { MAX_FILE_SIZE_MB, ACCEPTED_FILE_TYPES, guessFileMime } from "@/lib/file-utils";
+import { MAX_FILE_SIZE_MB, ACCEPTED_FILE_TYPES, guessFileMime, sniffFileType, MIME_TO_EXT } from "@/lib/file-utils";
 import { uploadFile, getUploadConfig, logicalFileSize, trackExistingUpload, uploadBatchZip, type UploadConfig, type TusUploadHandle } from "@/lib/upload-client";
 import { ApiError } from "@/lib/api-client";
 import { collectDroppedItems, extractDirPaths, traverseFolder, zipScannedFiles, type ScannedFile } from "@/lib/drop-utils";
@@ -362,7 +362,7 @@ export function useUploadEngine({
     );
 
     const processScannedFiles = useCallback(
-        (scanned: ScannedFile[]) => {
+        async (scanned: ScannedFile[]) => {
             if (scanned.length === 0) return;
 
             const currentMaxSize = (config?.max_file_size_mb || MAX_FILE_SIZE_MB) * 1024 * 1024;
@@ -383,6 +383,29 @@ export function useUploadEngine({
                 return s;
             });
 
+            // Mobile pickers and messaging apps often deliver files with a stripped or
+            // decorated name and a generic MIME type. Sniff magic bytes to recover the
+            // real type, and restore the canonical extension so valid files are not
+            // rejected here or by server-side filename validation.
+            valid = await Promise.all(valid.map(async (s) => {
+                let f = s.file;
+                const ext = `.${f.name.split(".").pop()?.toLowerCase()}`;
+                const extKnown = config
+                    ? config.allowed_extensions.includes(ext)
+                    : ACCEPTED_FILE_TYPES.split(",").includes(ext);
+                if (extKnown) return s;
+                let mime = f.type;
+                if (!mime || mime === "application/octet-stream") {
+                    const sniffed = await sniffFileType(f);
+                    if (sniffed) mime = sniffed.mime;
+                }
+                const canonicalExt = MIME_TO_EXT[mime];
+                const name = canonicalExt ? `${f.name}.${canonicalExt}` : f.name;
+                if (mime === f.type && name === f.name) return s;
+                f = new File([f], name, { type: mime, lastModified: f.lastModified });
+                return { ...s, file: f };
+            }));
+
             if (config) {
                 const toProcess: ScannedFile[] = [];
                 const needsMime: ScannedFile[] = [];
@@ -399,7 +422,7 @@ export function useUploadEngine({
                         // Extension is allowed but MIME still unknown — ask user
                         needsMime.push(s);
                     } else if (!isAllowedExt && !isAllowedMime && !isTextMime) {
-                        toast.error(t("fileTypeNotSupported", { type: f.type || ext }));
+                        toast.error(t("fileTypeNotSupported", { name: f.name, type: f.type || ext }));
                     } else {
                         toProcess.push(s);
                     }
