@@ -273,6 +273,13 @@ export async function getMaterialFileUrl(materialId: string): Promise<string> {
     return url;
 }
 
+/** Drop the cached presigned URL for a material so the next read re-issues a
+ *  fresh one. Call after a material's content changes (e.g. a new version) —
+ *  otherwise the stale URL keeps pointing at the previous version's file_key. */
+export function invalidateMaterialFileUrl(materialId: string): void {
+    _urlCache.delete(materialId);
+}
+
 export async function fetchMaterialFile(materialId: string, signal?: AbortSignal): Promise<Response> {
     const url = await getMaterialFileUrl(materialId);
     const res = await fetch(url, signal ? { signal } : undefined);

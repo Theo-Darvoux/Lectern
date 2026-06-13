@@ -662,9 +662,13 @@ async def _exec_edit_material(
         )
 
     parent_topic = str(mat.directory_id) if mat.directory_id else "root"
-    db.info.setdefault("post_commit_sse_broadcasts", []).append(
+    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts.append(
         (parent_topic, {"type": "child_updated", "kind": "material", "id": str(mat.id)})
     )
+    # Also notify clients viewing the material directly so they drop any cached
+    # file URL and re-fetch the new version's content.
+    broadcasts.append((str(mat.id), {"type": "material_updated", "id": str(mat.id)}))
 
     seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
     key = ("index_material", str(mat.id))

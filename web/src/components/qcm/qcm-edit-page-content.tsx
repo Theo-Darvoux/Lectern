@@ -8,7 +8,7 @@ import { AuthGuard } from "@/components/auth-guard";
 import { QCMEditor } from "@/components/qcm/qcm-editor";
 import type { QCMFile, QCMMeta } from "@/lib/qcm-types";
 import { validateQCMFile } from "@/lib/qcm-utils";
-import { apiFetch, getMaterialFileUrl } from "@/lib/api-client";
+import { apiFetch, getMaterialFileUrl, invalidateMaterialFileUrl } from "@/lib/api-client";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { MIME_QCM } from "@/lib/file-utils";
 import { toast } from "sonner";
@@ -122,6 +122,9 @@ function EditQCMPageInner() {
             {
               op: "edit_material",
               material_id: materialId,
+              title: meta.title,
+              description: meta.description || null,
+              tags: meta.tags ?? [],
               file_key: staged.file_key,
               file_name: fileName,
               file_size: staged.file_size,
@@ -133,6 +136,11 @@ function EditQCMPageInner() {
           ],
         }),
       });
+
+      // The edit may have applied immediately (auto-approved moderators), creating
+      // a new version with a new file_key. Drop the cached presigned URL so the
+      // viewer/editor re-fetches the updated content instead of the stale version.
+      invalidateMaterialFileUrl(materialId);
 
       toast.success("QCM mis à jour avec succès");
       router.push(`/pull-requests/${pr.id}`);

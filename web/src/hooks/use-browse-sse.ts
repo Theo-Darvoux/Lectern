@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createSSEConnection } from "@/lib/sse-client";
+import { invalidateMaterialFileUrl } from "@/lib/api-client";
 
 interface BrowseData {
     type: "directory_listing" | "material";
@@ -97,6 +98,7 @@ export function useBrowseSSE(
             listeners["pr_closed"] = refreshDir;
         } else {
             // mat: key — material view
+            const matId = sseEntityKey.slice(4);
             listeners["material_deleted"] = () => {
                 const slugs = breadcrumbSlugsRef.current;
                 const parentPath =
@@ -106,6 +108,14 @@ export function useBrowseSSE(
                 browseCacheRef.current.delete(pathRef.current);
                 triggerRefreshRef.current();
                 routerRef.current.replace(parentPath);
+            };
+            // A new version was applied (e.g. a reviewed/merged edit). Drop the
+            // cached file URL so the viewer re-fetches the updated content.
+            listeners["material_updated"] = () => {
+                invalidateMaterialFileUrl(matId);
+                browseCacheRef.current.delete(pathRef.current);
+                fetchDataRef.current(true);
+                triggerRefreshRef.current();
             };
         }
 
