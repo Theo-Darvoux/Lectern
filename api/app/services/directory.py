@@ -10,7 +10,7 @@ from sqlalchemy.orm import aliased, selectinload
 from app.core.exceptions import NotFoundError
 from app.core.sorting import natural_sort_key
 from app.models.directory import Directory, DirectoryFavourite, DirectoryLike
-from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
+from app.models.material import Material, MaterialVersion
 
 
 def slugify(text: str) -> str:
@@ -320,7 +320,7 @@ async def _attach_version_and_counts(
     directory_path: str | None,
 ) -> list[dict[str, typing.Any]]:
     """Batch-fetch attachment counts and current versions for a list of materials."""
-    from app.services.material import material_orm_to_dict
+    from app.services.material import get_liked_favourited_sets, material_orm_to_dict
 
     if not materials:
         return []
@@ -351,24 +351,7 @@ async def _attach_version_and_counts(
 
     # Batch: liked / favourited sets for the current user. Avoids loading the
     # full likes/favourites collections per material (like_count is a column).
-    liked_ids: set[uuid.UUID] = set()
-    favourited_ids: set[uuid.UUID] = set()
-    if current_user_id:
-        like_rows = await db.execute(
-            select(MaterialLike.material_id).where(
-                MaterialLike.user_id == current_user_id,
-                MaterialLike.material_id.in_(mat_ids),
-            )
-        )
-        liked_ids = {r.material_id for r in like_rows.all()}
-
-        fav_rows = await db.execute(
-            select(MaterialFavourite.material_id).where(
-                MaterialFavourite.user_id == current_user_id,
-                MaterialFavourite.material_id.in_(mat_ids),
-            )
-        )
-        favourited_ids = {r.material_id for r in fav_rows.all()}
+    liked_ids, favourited_ids = await get_liked_favourited_sets(db, current_user_id, mat_ids)
 
     return [
         material_orm_to_dict(

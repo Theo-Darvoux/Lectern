@@ -24,7 +24,7 @@ from app.schemas.home import FeaturedItemOut, HomeResponse, HomeStats
 from app.schemas.material import MaterialDetail
 from app.schemas.pull_request import PullRequestOut
 from app.services.directory import get_directory_paths, get_preview_material_ids
-from app.services.material import material_orm_to_dict
+from app.services.material import get_liked_favourited_sets, material_orm_to_dict
 
 router = APIRouter(prefix="/api/home", tags=["home"])
 
@@ -43,10 +43,18 @@ async def _build_material_details(
     if not rows:
         return []
 
+    liked_ids, favourited_ids = await get_liked_favourited_sets(
+        db, current_user_id, [material.id for material, _ in rows]
+    )
+
     mat_dicts: list[dict[str, Any]] = []
     for material, version in rows:
         mat_dict: dict[str, Any] = material_orm_to_dict(
-            material, current_user_id=current_user_id, current_version=version
+            material,
+            current_user_id=current_user_id,
+            current_version=version,
+            is_liked=material.id in liked_ids,
+            is_favourited=material.id in favourited_ids,
         )
         mat_dicts.append(mat_dict)
 
@@ -77,10 +85,18 @@ async def _build_featured_out(
     mat_dir_ids: set[uuid.UUID] = set()
     boost_dir_ids: set[uuid.UUID] = set()
 
+    liked_ids, favourited_ids = await get_liked_favourited_sets(
+        db, current_user_id, [m.id for _, m, _, _ in featured_rows if m]
+    )
+
     for featured, material, version, directory in featured_rows:
         if material:
             mat_dict: dict[str, Any] = material_orm_to_dict(
-                material, current_user_id=current_user_id, current_version=version
+                material,
+                current_user_id=current_user_id,
+                current_version=version,
+                is_liked=material.id in liked_ids,
+                is_favourited=material.id in favourited_ids,
             )
             if material.directory_id:
                 mat_dir_ids.add(material.directory_id)
@@ -470,6 +486,27 @@ async def get_home(
 
     recent_favourites = build_user_mat_list(fav_rows)
     recently_viewed = build_user_mat_list(viewed_rows)
+
+    # Resolve per-user like / favourite state across every material on the page.
+    # The global lists (featured, popular, recently_added) come from a shared
+    # cross-user cache built with current_user_id=None, so their is_liked /
+    # is_favourited flags are always False as cached. Patch them per request
+    # here with a single batched lookup instead of baking user state into the
+    # shared cache.
+    all_materials: list[MaterialDetail] = [
+        *popular_today,
+        *popular_14d,
+        *recently_added,
+        *recent_favourites,
+        *recently_viewed,
+        *(item.material for item in featured_out if item.material is not None),
+    ]
+    liked_ids, favourited_ids = await get_liked_favourited_sets(
+        db, user.id, [m.id for m in all_materials]
+    )
+    for m in all_materials:
+        m.is_liked = m.id in liked_ids
+        m.is_favourited = m.id in favourited_ids
 
     stats = HomeStats(
         total_materials=stats_row.m_count or 0,

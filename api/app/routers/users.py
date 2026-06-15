@@ -25,7 +25,7 @@ from app.schemas.user import (
     UserUpdateIn,
 )
 from app.services.directory import get_directory_paths
-from app.services.material import material_orm_to_dict
+from app.services.material import get_liked_favourited_sets, material_orm_to_dict
 from app.services.user import (
     export_user_data,
     get_recently_viewed,
@@ -129,11 +129,20 @@ async def get_my_favourites(
         .where(MaterialFavourite.user_id == user.id)
         .order_by(MaterialFavourite.created_at.desc())
     )
-    result = await db.execute(stmt)
+    rows = (await db.execute(stmt)).all()
+    liked_ids, favourited_ids = await get_liked_favourited_sets(
+        db, user.id, [material.id for material, _ in rows]
+    )
 
     materials_out = []
-    for material, version in result.all():
-        mat_dict = material_orm_to_dict(material, current_user_id=user.id, current_version=version)
+    for material, version in rows:
+        mat_dict = material_orm_to_dict(
+            material,
+            current_user_id=user.id,
+            current_version=version,
+            is_liked=material.id in liked_ids,
+            is_favourited=material.id in favourited_ids,
+        )
         materials_out.append(mat_dict)
 
     dir_ids = {m["directory_id"] for m in materials_out if m.get("directory_id") is not None}

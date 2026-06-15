@@ -105,6 +105,41 @@ def version_orm_to_dict(v: MaterialVersion) -> dict[str, typing.Any]:
     }
 
 
+async def get_liked_favourited_sets(
+    db: AsyncSession,
+    user_id: uuid.UUID | None,
+    material_ids: typing.Collection[uuid.UUID],
+) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+    """Return ``(liked_ids, favourited_ids)`` for ``user_id`` among ``material_ids``.
+
+    Batches the membership lookup into two queries instead of loading the full
+    ``likes`` / ``favourites`` collections per material. Callers pass the result
+    into ``material_orm_to_dict(is_liked=..., is_favourited=...)``. Returns empty
+    sets for anonymous callers or an empty id list.
+    """
+    if not user_id or not material_ids:
+        return set(), set()
+
+    ids = list(material_ids)
+    like_rows = await db.execute(
+        select(MaterialLike.material_id).where(
+            MaterialLike.user_id == user_id,
+            MaterialLike.material_id.in_(ids),
+        )
+    )
+    liked_ids = {r.material_id for r in like_rows.all()}
+
+    fav_rows = await db.execute(
+        select(MaterialFavourite.material_id).where(
+            MaterialFavourite.user_id == user_id,
+            MaterialFavourite.material_id.in_(ids),
+        )
+    )
+    favourited_ids = {r.material_id for r in fav_rows.all()}
+
+    return liked_ids, favourited_ids
+
+
 async def get_material_thumbnail_info(
     db: AsyncSession,
     material_id: uuid.UUID,
@@ -234,6 +269,8 @@ async def get_material_with_version(
         or 0
     )
 
+    liked_ids, favourited_ids = await get_liked_favourited_sets(db, current_user_id, [material.id])
+
     return material_orm_to_dict(
         material,
         attachment_count=att_count,
@@ -241,6 +278,8 @@ async def get_material_with_version(
         annotation_count=ann_count,
         current_user_id=current_user_id,
         current_version=current_version,
+        is_liked=material.id in liked_ids,
+        is_favourited=material.id in favourited_ids,
     )
 
 
@@ -290,8 +329,17 @@ async def get_material_attachments(
     )
 
     rows = sorted(result.all(), key=lambda row: natural_sort_key(row[0].title))
+    liked_ids, favourited_ids = await get_liked_favourited_sets(
+        db, current_user_id, [material.id for material, _ in rows]
+    )
     return [
-        material_orm_to_dict(material, current_user_id=current_user_id, current_version=version)
+        material_orm_to_dict(
+            material,
+            current_user_id=current_user_id,
+            current_version=version,
+            is_liked=material.id in liked_ids,
+            is_favourited=material.id in favourited_ids,
+        )
         for material, version in rows
     ]
 

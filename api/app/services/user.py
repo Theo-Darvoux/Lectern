@@ -19,7 +19,7 @@ from app.models.pull_request import PRComment, PullRequest
 from app.models.upload import Upload
 from app.models.user import User
 from app.models.view_history import ViewHistory
-from app.services.material import material_orm_to_dict
+from app.services.material import get_liked_favourited_sets, material_orm_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,7 @@ async def get_user_stats(db: AsyncSession, user_id: str) -> dict[str, int]:
                 func.coalesce(
                     func.sum(case((PullRequest.status == PRStatus.APPROVED, 1), else_=0)), 0
                 ),
-                func.coalesce(
-                    func.sum(case((PullRequest.status == PRStatus.OPEN, 1), else_=0)), 0
-                ),
+                func.coalesce(func.sum(case((PullRequest.status == PRStatus.OPEN, 1), else_=0)), 0),
             ).where(PullRequest.author_id == uid)
         )
     ).one()
@@ -122,11 +120,20 @@ async def get_recently_viewed(
         .order_by(ViewHistory.viewed_at.desc())
         .limit(limit)
     )
-    result = await db.execute(stmt)
+    rows = (await db.execute(stmt)).all()
+    liked_ids, favourited_ids = await get_liked_favourited_sets(
+        db, uid, [material.id for material, _ in rows]
+    )
 
     return [
-        material_orm_to_dict(material, current_user_id=uid, current_version=version)
-        for material, version in result.all()
+        material_orm_to_dict(
+            material,
+            current_user_id=uid,
+            current_version=version,
+            is_liked=material.id in liked_ids,
+            is_favourited=material.id in favourited_ids,
+        )
+        for material, version in rows
     ]
 
 
@@ -171,9 +178,19 @@ async def get_user_contributions(
             .offset(offset)
             .limit(limit)
         )
+        rows = result.all()
+        liked_ids, favourited_ids = await get_liked_favourited_sets(
+            db, current_user_id, [material.id for material, _ in rows]
+        )
         materials_out = [
-            material_orm_to_dict(material, current_user_id=current_user_id, current_version=version)
-            for material, version in result.all()
+            material_orm_to_dict(
+                material,
+                current_user_id=current_user_id,
+                current_version=version,
+                is_liked=material.id in liked_ids,
+                is_favourited=material.id in favourited_ids,
+            )
+            for material, version in rows
         ]
         return materials_out, total
     elif contribution_type == "annotations":
