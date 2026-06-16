@@ -1033,7 +1033,9 @@
       "resolved": "Flag resolved",
       "dismissed": "Flag dismissed",
       "reportedBy": "Reported by: {name}",
-      "targetId": "Target ID: {id}",
+      "reportedContent": "Reported content",
+      "viewContent": "View content",
+      "contentDeleted": "The reported content no longer exists.",
       "placeholderStatus": "Status",
       "placeholderType": "Type",
       "status": {

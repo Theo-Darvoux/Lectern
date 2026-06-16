@@ -13,6 +13,7 @@ import type {
 // `Promise.withResolvers()` at evaluation time, which throws under Next SSR — so
 // it is imported dynamically inside the effect below.
 import "pdfjs-dist/web/pdf_viewer.css";
+import { pdfWorkerSrc } from "@/lib/pdf-worker";
 
 // Suppress known pdf.js console noise (cancelled renders / aborted loads). These
 // are handled in the hook's error path; pdf.js still logs them unprompted.
@@ -126,7 +127,7 @@ export function usePdfjsDocument({
             ]);
             if (destroyed) return;
 
-            pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+            pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
             const eventBus = new viewerMod.EventBus();
             const linkService = new viewerMod.PDFLinkService({ eventBus });

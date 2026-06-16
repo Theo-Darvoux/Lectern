@@ -25,12 +25,22 @@ class FlagReporter(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class FlagTarget(BaseModel):
+    """Resolved context for a flagged item: whether it still exists, a short
+    content preview, and a navigable frontend link to its parent container."""
+
+    exists: bool
+    preview: str | None = None
+    link: str | None = None
+
+
 class FlagOut(BaseModel):
     id: uuid.UUID
     reporter_id: uuid.UUID | None
     reporter: FlagReporter | None = None
     target_type: str
     target_id: uuid.UUID
+    target: FlagTarget | None = None
     reason: str
     description: str | None
     status: str

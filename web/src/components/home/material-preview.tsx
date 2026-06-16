@@ -9,6 +9,7 @@ import { Loader2 } from "lucide-react";
 import { MarkdownRenderer } from "../viewers/markdown-renderer";
 import { useInView } from "@/hooks/use-in-view";
 import { MIME_QCM } from "@/lib/file-utils";
+import { pdfWorkerSrc } from "@/lib/pdf-worker";
 
 // Renders the first page of a PDF to a canvas via pdf.js. The engine (~1MB of
 // JS) is imported lazily inside the effect, so it only loads when a card
@@ -33,7 +34,7 @@ function PdfThumbnailCanvas({
       try {
         const pdfjs = await import("pdfjs-dist");
         if (cancelled) return;
-        pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
         const task = pdfjs.getDocument({ url });
         const doc = await task.promise;
         if (cancelled) { doc.destroy(); return; }

@@ -19,7 +19,7 @@ from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.flag import Flag, FlagStatus
 from app.models.material import Material
 from app.models.user import User, UserRole
-from app.services.flag import create_flag, list_flags, update_flag
+from app.services.flag import create_flag, list_flags, resolve_flag_targets, update_flag
 
 
 async def _make_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> User:
@@ -171,6 +171,38 @@ async def test_list_flags_target_type_filter(db_session: AsyncSession) -> None:
     items, total = await list_flags(db_session, limit=10, offset=0, target_type="material")
     assert total == 1
     assert items[0].target_type == "material"
+
+
+# ── resolve_flag_targets ──────────────────────────────────────────────────────
+
+
+async def test_resolve_targets_material_preview_and_link(db_session: AsyncSession) -> None:
+    """A material flag resolves to the title preview and a root browse link."""
+    reporter = await _make_user(db_session)
+    material = await _make_material(db_session)
+    flag = await _make_flag(db_session, reporter, material)
+
+    targets = await resolve_flag_targets(db_session, [flag])
+    info = targets[flag.id]
+    assert info.exists is True
+    assert info.preview == material.title
+    assert info.link == f"/browse/{material.slug}"
+
+
+async def test_resolve_targets_deleted_content(db_session: AsyncSession) -> None:
+    """A flag whose target row is gone resolves to exists=False with no link."""
+    reporter = await _make_user(db_session)
+    material = await _make_material(db_session)
+    flag = await _make_flag(db_session, reporter, material)
+
+    await db_session.delete(material)
+    await db_session.flush()
+
+    targets = await resolve_flag_targets(db_session, [flag])
+    info = targets[flag.id]
+    assert info.exists is False
+    assert info.preview is None
+    assert info.link is None
 
 
 async def test_list_flags_status_filter(db_session: AsyncSession) -> None:

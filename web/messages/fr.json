@@ -1033,7 +1033,9 @@
       "resolved": "Signalement résolu",
       "dismissed": "Signalement rejeté",
       "reportedBy": "Signalé par : {name}",
-      "targetId": "ID cible : {id}",
+      "reportedContent": "Contenu signalé",
+      "viewContent": "Voir le contenu",
+      "contentDeleted": "Le contenu signalé n'existe plus.",
       "placeholderStatus": "Statut",
       "placeholderType": "Type",
       "status": {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Check, X, Shield, ChevronLeft, ChevronRight } from "lucide-react";
+import { Check, X, Shield, ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -26,6 +26,11 @@ interface FlagData {
     } | null;
     target_type: string;
     target_id: string;
+    target: {
+        exists: boolean;
+        preview: string | null;
+        link: string | null;
+    } | null;
     reason: string;
     description: string | null;
     status: string;
@@ -169,9 +174,33 @@ export default function ModeratorFlagsPage() {
                                 <p className="text-xs text-muted-foreground">
                                     {t("reportedBy", { name: flag.reporter?.display_name ?? flag.reporter?.email ?? "Unknown" })}
                                 </p>
-                                <p className="text-xs text-muted-foreground">
-                                    {t("targetId", { id: flag.target_id })}
-                                </p>
+                                {flag.target?.exists ? (
+                                    <div className="rounded-md border bg-muted/30 p-2">
+                                        <p className="text-xs font-medium text-muted-foreground">
+                                            {t("reportedContent")}
+                                        </p>
+                                        {flag.target.preview && (
+                                            <p className="mt-1 line-clamp-3 text-sm">
+                                                {flag.target.preview}
+                                            </p>
+                                        )}
+                                        {flag.target.link && (
+                                            <a
+                                                href={flag.target.link}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                                            >
+                                                <ExternalLink className="h-3.5 w-3.5" />
+                                                {t("viewContent")}
+                                            </a>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <p className="text-xs text-muted-foreground italic">
+                                        {t("contentDeleted")}
+                                    </p>
+                                )}
                                 {flag.description && (
                                     <p className="rounded-md bg-muted/50 p-2 text-sm">
                                         {flag.description}
