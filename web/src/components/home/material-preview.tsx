@@ -53,6 +53,8 @@ function PdfThumbnailCanvas({
       try {
         const pdfjs = await import("pdfjs-dist");
         if (cancelled) return;
+        (globalThis as any).pdfjsLib = pdfjs;
+
         rawWorker = createPdfWorker();
         pdfWorker = pdfjs.PDFWorker.fromPort({ port: rawWorker });
         const task = pdfjs.getDocument({ url, worker: pdfWorker });

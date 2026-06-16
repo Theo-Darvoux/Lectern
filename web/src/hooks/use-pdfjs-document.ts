@@ -127,10 +127,16 @@ export function usePdfjsDocument({
         if (!container || !viewerEl) return;
 
         (async () => {
-            const [pdfjs, viewerMod] = await Promise.all([
-                import("pdfjs-dist"),
-                import("pdfjs-dist/web/pdf_viewer.mjs"),
-            ]);
+            const pdfjs = await import("pdfjs-dist");
+            if (destroyed) return;
+
+            // pdf.js v4 components (like PDFViewer) and its "fake worker" fallback
+            // expect `pdfjsLib` to be available on the global scope in many
+            // environments. If a worker fails to start, the fallback engine
+            // crashes immediately without this.
+            (globalThis as any).pdfjsLib = pdfjs;
+
+            const viewerMod = await import("pdfjs-dist/web/pdf_viewer.mjs");
             if (destroyed) return;
 
             const worker = createPdfWorker();
