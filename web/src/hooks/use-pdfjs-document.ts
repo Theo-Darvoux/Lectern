@@ -13,7 +13,8 @@ import type {
 // `Promise.withResolvers()` at evaluation time, which throws under Next SSR — so
 // it is imported dynamically inside the effect below.
 import "pdfjs-dist/web/pdf_viewer.css";
-import { pdfWorkerSrc } from "@/lib/pdf-worker";
+import { createPdfWorker } from "@/lib/pdf-worker";
+import type { PDFWorker as PdfJsWorker } from "pdfjs-dist";
 
 // Suppress known pdf.js console noise (cancelled renders / aborted loads). These
 // are handled in the hook's error path; pdf.js still logs them unprompted.
@@ -100,6 +101,11 @@ export function usePdfjsDocument({
     const eventBusRef = useRef<PdfJsEventBus | null>(null);
     const docRef = useRef<PDFDocumentProxy | null>(null);
     const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
+    // Dedicated module worker for this viewer, created once alongside the engine
+    // and reused across reloads. We own its lifecycle (see cleanup below); since
+    // it's passed explicitly to getDocument, pdf.js never destroys it for us.
+    const workerRef = useRef<Worker | null>(null);
+    const pdfWorkerRef = useRef<PdfJsWorker | null>(null);
 
     // Keep the latest callback without re-running the init effect.
     const onTextLayerRef = useRef(onTextLayerRendered);
@@ -127,7 +133,9 @@ export function usePdfjsDocument({
             ]);
             if (destroyed) return;
 
-            pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+            const worker = createPdfWorker();
+            workerRef.current = worker;
+            pdfWorkerRef.current = pdfjs.PDFWorker.fromPort({ port: worker });
 
             const eventBus = new viewerMod.EventBus();
             const linkService = new viewerMod.PDFLinkService({ eventBus });
@@ -174,6 +182,12 @@ export function usePdfjsDocument({
             linkServiceRef.current = null;
             eventBusRef.current = null;
             pdfjsRef.current = null;
+            // We own the worker (getDocument got it explicitly, so pdf.js won't
+            // destroy it): tear down the PDFWorker wrapper then the worker.
+            pdfWorkerRef.current?.destroy();
+            pdfWorkerRef.current = null;
+            workerRef.current?.terminate();
+            workerRef.current = null;
             setModulesReady(false);
         };
     }, []);
@@ -189,7 +203,7 @@ export function usePdfjsDocument({
         setStatus("loading");
         setError(null);
 
-        const task = pdfjs.getDocument({ url });
+        const task = pdfjs.getDocument({ url, worker: pdfWorkerRef.current ?? undefined });
         loadingTaskRef.current = task;
 
         task.promise.then(

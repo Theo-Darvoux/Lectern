@@ -9,7 +9,7 @@ import { Loader2 } from "lucide-react";
 import { MarkdownRenderer } from "../viewers/markdown-renderer";
 import { useInView } from "@/hooks/use-in-view";
 import { MIME_QCM } from "@/lib/file-utils";
-import { pdfWorkerSrc } from "@/lib/pdf-worker";
+import { createPdfWorker } from "@/lib/pdf-worker";
 
 // Renders the first page of a PDF to a canvas via pdf.js. The engine (~1MB of
 // JS) is imported lazily inside the effect, so it only loads when a card
@@ -29,36 +29,60 @@ function PdfThumbnailCanvas({
 
   useEffect(() => {
     let cancelled = false;
-    let cleanup: (() => void) | undefined;
+    // Each thumbnail gets its own module worker, handed to getDocument explicitly
+    // (rather than the global GlobalWorkerOptions.workerSrc string). pdf.js's
+    // workerSrc path keeps a module-global "worker disabled" flag that a single
+    // failed worker flips for the whole page, poisoning every later PDF with the
+    // ESM-incompatible fake worker (`globalThis.pdfjsLib is undefined`). An
+    // explicit per-document worker bypasses that flag. We own its teardown.
+    let doc: Awaited<ReturnType<typeof import("pdfjs-dist").getDocument>["promise"]> | undefined;
+    let rawWorker: Worker | undefined;
+    let pdfWorker: import("pdfjs-dist").PDFWorker | undefined;
+    const dispose = () => {
+      const d = doc, pw = pdfWorker, rw = rawWorker;
+      doc = pdfWorker = rawWorker = undefined;
+      // Let the document tear down (it tells the worker to wind up) before we
+      // destroy the wrapper and terminate the worker, so an in-flight teardown
+      // message doesn't race the terminate() and surface as console noise.
+      Promise.resolve(d?.destroy()).finally(() => {
+        pw?.destroy();
+        rw?.terminate();
+      });
+    };
     (async () => {
       try {
         const pdfjs = await import("pdfjs-dist");
         if (cancelled) return;
-        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
-        const task = pdfjs.getDocument({ url });
-        const doc = await task.promise;
-        if (cancelled) { doc.destroy(); return; }
+        rawWorker = createPdfWorker();
+        pdfWorker = pdfjs.PDFWorker.fromPort({ port: rawWorker });
+        const task = pdfjs.getDocument({ url, worker: pdfWorker });
+        doc = await task.promise;
+        if (cancelled) return;
         const page = await doc.getPage(1);
         const canvas = canvasRef.current;
-        if (cancelled || !canvas) { doc.destroy(); return; }
+        if (cancelled || !canvas) return;
         const dpr = Math.min(2, window.devicePixelRatio || 1);
         const baseViewport = page.getViewport({ scale: 1 });
         const scale = (width || 300) / baseViewport.width;
         const viewport = page.getViewport({ scale: scale * dpr });
         const ctx = canvas.getContext("2d");
-        if (!ctx) { doc.destroy(); return; }
+        if (!ctx) return;
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         canvas.style.width = "100%";
         await page.render({ canvasContext: ctx, viewport }).promise;
-        if (cancelled) { doc.destroy(); return; }
+        if (cancelled) return;
         onReady();
-        cleanup = () => doc.destroy();
       } catch (err) {
         if (!cancelled && (err as Error)?.name !== "AbortException") onError();
+      } finally {
+        // The first page is rasterised onto the canvas; the doc + worker are no
+        // longer needed, so release them immediately rather than holding a worker
+        // per visible thumbnail until unmount.
+        dispose();
       }
     })();
-    return () => { cancelled = true; cleanup?.(); };
+    return () => { cancelled = true; dispose(); };
   }, [url, width, onReady, onError]);
 
   return <canvas ref={canvasRef} className="block w-full" />;
