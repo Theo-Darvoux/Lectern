@@ -22,9 +22,20 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
     const scriptRef = useRef<HTMLScriptElement | null>(null);
     const editorRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const readyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         let isMounted = true;
+        let isReady = false;
+
+        const markReady = () => {
+            isReady = true;
+            if (readyTimeoutRef.current) {
+                clearTimeout(readyTimeoutRef.current);
+                readyTimeoutRef.current = null;
+            }
+            if (isMounted) setLoading(false);
+        };
 
         const rawEuroofficeUrl = config?.eurooffice_public_url || process.env.NEXT_PUBLIC_EUROOFFICE_URL || "/eurooffice/";
         const euroofficeUrl = rawEuroofficeUrl.endsWith("/") ? rawEuroofficeUrl : `${rawEuroofficeUrl}/`;
@@ -49,6 +60,16 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                     containerRef.current.innerHTML = '<div id="office-editor-container" style="width:100%;height:100%;"></div>';
                 }
 
+                // EuroOffice renders some failures (download error, malformed
+                // security token) as its own in-iframe error page WITHOUT firing
+                // the onError JS callback. Without this safeguard our loading
+                // overlay would sit on top of that error page indefinitely. Drop
+                // the overlay after a grace period so the real error is visible.
+                if (readyTimeoutRef.current) clearTimeout(readyTimeoutRef.current);
+                readyTimeoutRef.current = setTimeout(() => {
+                    if (isMounted && !isReady) setLoading(false);
+                }, 20000);
+
                 // Initialize the editor with the backend-provided config
                 editorRef.current = new (window as any).DocsAPI.DocEditor("office-editor-container", {
                     ...config,
@@ -56,7 +77,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                     width: "100%",
                     events: {
                         onAppReady: () => {
-                            if (isMounted) setLoading(false);
+                            markReady();
                             registerViewerPrint(materialId, {
                                 print: () => {
                                     const iframe = containerRef.current?.querySelector("iframe");
@@ -72,6 +93,11 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                             const code = e?.data?.errorCode ?? e?.data ?? e?.errorCode;
                             const desc = e?.data?.errorDescription ?? e?.description ?? "";
                             console.error("OnlyOffice Editor Error:", { code, desc, raw: e });
+                            isReady = true;
+                            if (readyTimeoutRef.current) {
+                                clearTimeout(readyTimeoutRef.current);
+                                readyTimeoutRef.current = null;
+                            }
                             if (isMounted) {
                                 const detail = code != null ? ` (Code: ${code}${desc ? ` — ${desc}` : ""})` : "";
                                 setError(`${t("engineError")}${detail}`);
@@ -79,7 +105,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                             }
                         },
                         onDocumentReady: () => {
-                            if (isMounted) setLoading(false);
+                            markReady();
                         }
                     }
                 });
@@ -136,6 +162,10 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
 
         return () => {
             isMounted = false;
+            if (readyTimeoutRef.current) {
+                clearTimeout(readyTimeoutRef.current);
+                readyTimeoutRef.current = null;
+            }
             if (editorRef.current) {
                 try { editorRef.current.destroyEditor(); } catch (e) {}
                 editorRef.current = null;
