@@ -675,3 +675,158 @@ class TestScannerPathBased:
 
         with pytest.raises(RuntimeError, match="not initialized"):
             await scanner._scan_yara_path(test_file, "file.bin")
+
+
+# ── Temporary File Robustness and Leak Protection Tests ───────────────────────
+
+
+class TestTempFileLeakProtection:
+    """Tests to verify that temporary files are properly cleaned up on exceptions."""
+
+    def test_strip_pdf_unlinks_temp_on_exception(self, tmp_path):
+        """_strip_pdf_from_path unlinks the temp file if saving fails."""
+        from app.core.file_security._pdf import _strip_pdf_from_path
+
+        pdf_path = _make_minimal_pdf(tmp_path)
+
+        # We patch pikepdf.Pdf.save to raise an exception, but let tempfile work
+        with patch("pikepdf.Pdf.save", side_effect=RuntimeError("Save failed")):
+            with patch("tempfile.NamedTemporaryFile") as mock_temp:
+                mock_file = MagicMock()
+                mock_file.name = str(tmp_path / "leaked_temp_pdf.pdf")
+                mock_temp.return_value.__enter__.return_value = mock_file
+
+                # Make sure the file exists initially to check if it's unlinked
+                Path(mock_file.name).write_bytes(b"dummy pdf data")
+                assert Path(mock_file.name).exists()
+
+                result = _strip_pdf_from_path(pdf_path)
+                assert result == pdf_path
+                assert not Path(mock_file.name).exists()
+
+    def test_strip_image_unlinks_temp_on_exception(self, tmp_path):
+        """_strip_image_from_path unlinks the temp file if saving fails."""
+        from app.core.file_security._image import _strip_image_from_path
+        from PIL import Image
+
+        img_path = tmp_path / "test.png"
+        img = Image.new("RGB", (10, 10))
+        img.save(img_path, format="PNG")
+
+        with patch("app.core.file_security._image._save_stripped_image", side_effect=RuntimeError("Save failed")):
+            with patch("tempfile.NamedTemporaryFile") as mock_temp:
+                mock_file = MagicMock()
+                mock_file.name = str(tmp_path / "leaked_temp_img.png")
+                mock_temp.return_value = mock_file
+
+                Path(mock_file.name).write_bytes(b"dummy image data")
+                assert Path(mock_file.name).exists()
+
+                result = _strip_image_from_path(img_path)
+                assert result == img_path
+                assert not Path(mock_file.name).exists()
+
+    def test_strip_audio_unlinks_temp_on_exception(self, tmp_path):
+        """_strip_audio_from_path unlinks the temp file if mutagen save fails."""
+        from app.core.file_security._audio_video import _strip_audio_from_path
+
+        audio_path = tmp_path / "test.mp3"
+        audio_path.write_bytes(b"ID3...")
+
+        with patch("mutagen.File", side_effect=RuntimeError("Mutagen crashed")):
+            with patch("tempfile.NamedTemporaryFile") as mock_temp:
+                mock_file = MagicMock()
+                mock_file.name = str(tmp_path / "leaked_temp_audio.mp3")
+                mock_temp.return_value = mock_file
+
+                Path(mock_file.name).write_bytes(b"dummy audio data")
+                assert Path(mock_file.name).exists()
+
+                result = _strip_audio_from_path(audio_path, "audio/mpeg")
+                assert result == audio_path
+                assert not Path(mock_file.name).exists()
+
+    def test_optimize_svg_unlinks_temp_on_exception(self, tmp_path):
+        """_optimize_svg_to_path unlinks the temp file if safety check raises SvgSecurityError."""
+        from app.core.file_security.compress import _optimize_svg_to_path
+
+        svg_path = tmp_path / "test.svg"
+        svg_path.write_bytes(b"<svg></svg>")
+
+        with patch("app.core.file_security.compress.check_svg_safety") as mock_check:
+            # First safety check succeeds, second fails on optimized version
+            mock_check.side_effect = [None, SvgSecurityError("Malicious SVG")]
+
+            with patch("app.core.file_security.compress._optimize_svg", return_value=b"<svg/>"):
+                with patch("tempfile.NamedTemporaryFile") as mock_temp:
+                    mock_file = MagicMock()
+                    mock_file.name = str(tmp_path / "leaked_temp_svg.svg")
+                    mock_temp.return_value = mock_file
+
+                    Path(mock_file.name).write_bytes(b"dummy svg data")
+                    assert Path(mock_file.name).exists()
+
+                    with pytest.raises(SvgSecurityError):
+                        _optimize_svg_to_path(svg_path, "test.svg")
+
+                    assert not Path(mock_file.name).exists()
+
+    @pytest.mark.asyncio
+    async def test_run_scan_and_strip_unlinks_temp_on_scan_failure(self, tmp_path):
+        """run_scan_and_strip unlinks the stripped path if scan returns an exception."""
+        from app.workers.upload.stages.scan_strip import run_scan_and_strip
+        from app.core.processing import ProcessingFile
+
+        pf_path = tmp_path / "pf.bin"
+        pf_path.write_bytes(b"original data")
+        pf = ProcessingFile(pf_path, len(pf_path.read_bytes()))
+
+        # We simulate a scan failure
+        scan_res_exc = RuntimeError("Scan crashed")
+        strip_res_path = tmp_path / "stripped_temp.bin"
+        strip_res_path.write_bytes(b"stripped data")
+
+        ctx = MagicMock()
+        ctx.scanner = MagicMock()
+
+        # Parallel tasks return (scan_res_exc, strip_res_path)
+        with patch("app.workers.upload.stages.scan_strip.parallel_tasks", new_callable=AsyncMock) as mock_tasks:
+            mock_tasks.return_value = [scan_res_exc, strip_res_path]
+
+            # Make sure strip_res_path exists
+            assert strip_res_path.exists()
+
+            with pytest.raises(RuntimeError, match="Scan crashed"):
+                await run_scan_and_strip(
+                    ctx, pf, pf_path, "pf.bin", "hash", "bin", "bin", "upload_id", MagicMock()
+                )
+
+            # verify that the temp stripped file was deleted and not registered to pf
+            assert not strip_res_path.exists()
+            assert pf.path == pf_path
+
+    @pytest.mark.asyncio
+    async def test_run_strip_only_unlinks_temp_on_exception(self, tmp_path):
+        """run_strip_only unlinks the clean file if an exception occurs during replace_with."""
+        from app.workers.upload.stages.scan_strip import run_strip_only
+        from app.core.processing import ProcessingFile
+
+        pf_path = tmp_path / "pf.bin"
+        pf_path.write_bytes(b"original data")
+        pf = ProcessingFile(pf_path, len(pf_path.read_bytes()))
+
+        strip_res_path = tmp_path / "stripped_temp.bin"
+        strip_res_path.write_bytes(b"stripped data")
+
+        # mock replace_with to fail
+        with patch.object(pf, "replace_with", side_effect=RuntimeError("Replace failed")):
+            with patch("app.workers.upload.stages.scan_strip.strip_metadata_file", new_callable=AsyncMock) as mock_strip:
+                mock_strip.return_value = strip_res_path
+
+                assert strip_res_path.exists()
+
+                with pytest.raises(RuntimeError, match="Replace failed"):
+                    await run_strip_only(pf, pf_path, "bin", "upload_id", MagicMock())
+
+                # verify that the temp stripped file was deleted
+                assert not strip_res_path.exists()

@@ -276,18 +276,23 @@ def _strip_audio_from_path(file_path: Path, mime_type: str) -> Path:
     import shutil
 
     new_path = Path(tempfile.NamedTemporaryFile(delete=False).name)
-    shutil.copyfile(file_path, new_path)
+    try:
+        shutil.copyfile(file_path, new_path)
 
-    hint = _AUDIO_FILENAME_HINTS.get(mime_type, "audio.mp3")
-    # mutagen.File is used dynamically here to avoid export issues with mypy
-    audio = mutagen.File(str(new_path), filename=hint)  # type: ignore[attr-defined]
-    if audio is None or audio.tags is None:
+        hint = _AUDIO_FILENAME_HINTS.get(mime_type, "audio.mp3")
+        # mutagen.File is used dynamically here to avoid export issues with mypy
+        audio = mutagen.File(str(new_path), filename=hint)  # type: ignore[attr-defined]
+        if audio is None or audio.tags is None:
+            new_path.unlink(missing_ok=True)
+            return file_path
+
+        audio.delete()
+        audio.save()
+        return new_path
+    except Exception as exc:
+        logger.warning("Audio metadata strip failed: %s", exc)
         new_path.unlink(missing_ok=True)
         return file_path
-
-    audio.delete()
-    audio.save()
-    return new_path
 
 
 async def _compress_video_path(file_path: Path, suffix: str, config: dict | None = None) -> Path:  # type: ignore[type-arg]

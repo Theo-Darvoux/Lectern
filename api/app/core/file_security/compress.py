@@ -49,6 +49,7 @@ def _optimize_svg_to_path(file_path: Path, filename: str) -> Path:
     """
     svg_bytes = file_path.read_bytes()
     check_svg_safety(svg_bytes, filename)
+    new_path = None
     try:
         optimised = _optimize_svg(svg_bytes)
         if optimised and len(optimised) < len(svg_bytes):
@@ -60,9 +61,13 @@ def _optimize_svg_to_path(file_path: Path, filename: str) -> Path:
             check_svg_safety(new_path.read_bytes(), filename)
             return new_path
     except SvgSecurityError:
+        if new_path is not None:
+            new_path.unlink(missing_ok=True)
         raise
     except Exception as svg_err:
         logger.debug("scour SVG optimization failed or skipped: %s", svg_err)
+        if new_path is not None:
+            new_path.unlink(missing_ok=True)
     return file_path
 
 

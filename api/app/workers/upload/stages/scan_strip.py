@@ -70,23 +70,31 @@ async def run_scan_and_strip(
 
     upload_scan_duration.labels(mime_category=mime_category).observe(time.monotonic() - scan_start)
 
-    # Error handling
-    if isinstance(scan_res, TimeoutError):
-        raise UploadError(UploadStatus.FAILED, "Malware scan timed out")
-    if isinstance(scan_res, BadRequestError):
-        detail = str(scan_res.detail) if hasattr(scan_res, "detail") else str(scan_res)
-        raise MalwareError(detail)
-    if isinstance(scan_res, BaseException):
-        raise scan_res
+    try:
+        # Error handling
+        if isinstance(scan_res, TimeoutError):
+            raise UploadError(UploadStatus.FAILED, "Malware scan timed out")
+        if isinstance(scan_res, BadRequestError):
+            detail = str(scan_res.detail) if hasattr(scan_res, "detail") else str(scan_res)
+            raise MalwareError(detail)
+        if isinstance(scan_res, BaseException):
+            raise scan_res
 
-    if isinstance(strip_res, TimeoutError):
-        raise UploadError(UploadStatus.FAILED, "Metadata stripping timed out")
-    if isinstance(strip_res, ValueError):
-        raise MalwareError(str(strip_res))
-    if isinstance(strip_res, BaseException):
-        logger.warning("Strip failed for %s (ignored): %s", upload_id, strip_res)
-    elif isinstance(strip_res, Path) and strip_res != tmp_path:
-        pf.replace_with(strip_res)
+        if isinstance(strip_res, TimeoutError):
+            raise UploadError(UploadStatus.FAILED, "Metadata stripping timed out")
+        if isinstance(strip_res, ValueError):
+            raise MalwareError(str(strip_res))
+        if isinstance(strip_res, BaseException):
+            logger.warning("Strip failed for %s (ignored): %s", upload_id, strip_res)
+        elif isinstance(strip_res, Path) and strip_res != tmp_path:
+            pf.replace_with(strip_res)
+    except Exception:
+        if isinstance(strip_res, Path) and strip_res != tmp_path and pf.path != strip_res:
+            try:
+                strip_res.unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning("Failed to clean up leaked strip_res path %s: %s", strip_res, e)
+        raise
 
 
 async def run_strip_only(
@@ -96,6 +104,7 @@ async def run_strip_only(
     upload_id: str,
     tracer: Any,
 ) -> None:
+    clean_path = None
     with tracer.start_as_current_span("upload.strip_metadata"):
         try:
             clean_path = await asyncio.wait_for(
@@ -105,9 +114,15 @@ async def run_strip_only(
             if clean_path != tmp_path:
                 pf.replace_with(clean_path)
         except TimeoutError:
+            if clean_path is not None and clean_path != tmp_path and pf.path != clean_path:
+                clean_path.unlink(missing_ok=True)
             raise UploadError(UploadStatus.FAILED, "Metadata stripping timed out")
-        except ValueError as exc:
-            raise MalwareError(str(exc))
+        except Exception as exc:
+            if clean_path is not None and clean_path != tmp_path and pf.path != clean_path:
+                clean_path.unlink(missing_ok=True)
+            if isinstance(exc, ValueError):
+                raise MalwareError(str(exc))
+            raise
 
 
 async def run_post_strip_pdf_check(

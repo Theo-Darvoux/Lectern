@@ -149,6 +149,7 @@ def _apply_pdf_security_strip(pdf: pikepdf.Pdf) -> None:
 
 def _strip_pdf_from_path(file_path: Path) -> Path:
     """Remove Document Info, XMP metadata, and active content from PDFs on disk."""
+    new_path = None
     try:
         with pikepdf.open(str(file_path)) as pdf:
             _apply_pdf_security_strip(pdf)
@@ -158,6 +159,8 @@ def _strip_pdf_from_path(file_path: Path) -> Path:
             return Path(new_path)
     except Exception as exc:
         logger.warning("PDF metadata strip path failed: %s", exc)
+        if new_path is not None:
+            Path(new_path).unlink(missing_ok=True)
         return file_path
 
 
@@ -681,16 +684,21 @@ async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Pat
 
     # Stage 3: rasterization for vector-heavy PDFs that resisted stages 1+2.
     # Only triggered when the best result so far is still ≥80% of original size.
-    best_size = best_path.stat().st_size
-    orig_size = file_path.stat().st_size
-    if best_size >= orig_size * 0.8 and await asyncio.to_thread(_is_vector_heavy_pdf, file_path):
-        raster_result = await _rasterize_pdf_path(file_path)
-        if raster_result != file_path:
-            raster_size = raster_result.stat().st_size
-            if raster_size < best_size:
-                if best_path != file_path:
-                    best_path.unlink(missing_ok=True)
-                return raster_result
-            raster_result.unlink(missing_ok=True)
+    try:
+        best_size = best_path.stat().st_size
+        orig_size = file_path.stat().st_size
+        if best_size >= orig_size * 0.8 and await asyncio.to_thread(_is_vector_heavy_pdf, file_path):
+            raster_result = await _rasterize_pdf_path(file_path)
+            if raster_result != file_path:
+                raster_size = raster_result.stat().st_size
+                if raster_size < best_size:
+                    if best_path != file_path:
+                        best_path.unlink(missing_ok=True)
+                    return raster_result
+                raster_result.unlink(missing_ok=True)
+    except Exception:
+        if best_path != file_path:
+            best_path.unlink(missing_ok=True)
+        raise
 
     return best_path

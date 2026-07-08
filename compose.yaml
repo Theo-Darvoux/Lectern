@@ -56,6 +56,8 @@ x-worker-base: &worker-base
     - apparmor:unconfined
   cap_add:
     - SYS_ADMIN
+  ulimits:
+    core: 0
   healthcheck:
     test: [ "CMD", "python", "-c", "import os,sys; sys.exit(0 if any(b'arq' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit()) else 1)" ]
     interval: 30s
@@ -180,6 +182,8 @@ services:
       - lectern_backups:/var/lib/lectern
     ports:
       - "8000:8000"
+    ulimits:
+      core: 0
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" ]
       interval: 10s

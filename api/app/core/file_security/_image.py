@@ -98,15 +98,20 @@ def _strip_image_metadata(file_bytes: bytes) -> bytes:
 
 def _strip_image_from_path(file_path: Path) -> Path:
     """Remove EXIF data from images by re-saving them from a file path."""
+    new_path = None
     try:
         with Image.open(file_path) as img:
             new_path = Path(tempfile.NamedTemporaryFile(delete=False).name)
             _save_stripped_image(img, img.format or "JPEG", str(new_path))
             return new_path
     except ValueError:
+        if new_path is not None:
+            new_path.unlink(missing_ok=True)
         raise
     except Exception as exc:
         logger.warning("Image metadata strip path failed: %s", exc)
+        if new_path is not None:
+            new_path.unlink(missing_ok=True)
         return file_path
 
 
@@ -130,6 +135,7 @@ def _compress_image_path(file_path: Path) -> Path:
     """Resize image to max 2048px (2K) and compress deeply (Quality 75).
     Forces WEBP conversion for all non-animated images.
     """
+    out_name = None
     try:
         with Image.open(file_path) as img:
             max_size = 2048
@@ -147,4 +153,6 @@ def _compress_image_path(file_path: Path) -> Path:
             out_name.unlink(missing_ok=True)
     except Exception as exc:
         logger.warning("Image compression failed for %s: %s", file_path, exc)
+        if out_name is not None:
+            out_name.unlink(missing_ok=True)
     return file_path
