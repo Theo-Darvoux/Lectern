@@ -706,14 +706,18 @@ class TestTempFileLeakProtection:
 
     def test_strip_image_unlinks_temp_on_exception(self, tmp_path):
         """_strip_image_from_path unlinks the temp file if saving fails."""
-        from app.core.file_security._image import _strip_image_from_path
         from PIL import Image
+
+        from app.core.file_security._image import _strip_image_from_path
 
         img_path = tmp_path / "test.png"
         img = Image.new("RGB", (10, 10))
         img.save(img_path, format="PNG")
 
-        with patch("app.core.file_security._image._save_stripped_image", side_effect=RuntimeError("Save failed")):
+        with patch(
+            "app.core.file_security._image._save_stripped_image",
+            side_effect=RuntimeError("Save failed"),
+        ):
             with patch("tempfile.NamedTemporaryFile") as mock_temp:
                 mock_file = MagicMock()
                 mock_file.name = str(tmp_path / "leaked_temp_img.png")
@@ -774,8 +778,8 @@ class TestTempFileLeakProtection:
     @pytest.mark.asyncio
     async def test_run_scan_and_strip_unlinks_temp_on_scan_failure(self, tmp_path):
         """run_scan_and_strip unlinks the stripped path if scan returns an exception."""
-        from app.workers.upload.stages.scan_strip import run_scan_and_strip
         from app.core.processing import ProcessingFile
+        from app.workers.upload.stages.scan_strip import run_scan_and_strip
 
         pf_path = tmp_path / "pf.bin"
         pf_path.write_bytes(b"original data")
@@ -790,7 +794,9 @@ class TestTempFileLeakProtection:
         ctx.scanner = MagicMock()
 
         # Parallel tasks return (scan_res_exc, strip_res_path)
-        with patch("app.workers.upload.stages.scan_strip.parallel_tasks", new_callable=AsyncMock) as mock_tasks:
+        with patch(
+            "app.workers.upload.stages.scan_strip.parallel_tasks", new_callable=AsyncMock
+        ) as mock_tasks:
             mock_tasks.return_value = [scan_res_exc, strip_res_path]
 
             # Make sure strip_res_path exists
@@ -808,8 +814,8 @@ class TestTempFileLeakProtection:
     @pytest.mark.asyncio
     async def test_run_strip_only_unlinks_temp_on_exception(self, tmp_path):
         """run_strip_only unlinks the clean file if an exception occurs during replace_with."""
-        from app.workers.upload.stages.scan_strip import run_strip_only
         from app.core.processing import ProcessingFile
+        from app.workers.upload.stages.scan_strip import run_strip_only
 
         pf_path = tmp_path / "pf.bin"
         pf_path.write_bytes(b"original data")
@@ -820,7 +826,9 @@ class TestTempFileLeakProtection:
 
         # mock replace_with to fail
         with patch.object(pf, "replace_with", side_effect=RuntimeError("Replace failed")):
-            with patch("app.workers.upload.stages.scan_strip.strip_metadata_file", new_callable=AsyncMock) as mock_strip:
+            with patch(
+                "app.workers.upload.stages.scan_strip.strip_metadata_file", new_callable=AsyncMock
+            ) as mock_strip:
                 mock_strip.return_value = strip_res_path
 
                 assert strip_res_path.exists()

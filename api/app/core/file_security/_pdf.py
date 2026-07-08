@@ -330,7 +330,7 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                             logger.debug("Failed to apply stencil Mask: %s", e)
                     elif isinstance(mask_ref, pikepdf.Array):
                         try:
-                            mask_array = [int(x) for x in mask_ref]
+                            mask_array = [int(x) for x in mask_ref]  # type: ignore[attr-defined]
                             if len(mask_array) == 6:
                                 r_min, r_max, g_min, g_max, b_min, b_max = mask_array
                                 pil_image = pil_image.convert("RGB")
@@ -687,7 +687,9 @@ async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Pat
     try:
         best_size = best_path.stat().st_size
         orig_size = file_path.stat().st_size
-        if best_size >= orig_size * 0.8 and await asyncio.to_thread(_is_vector_heavy_pdf, file_path):
+        if best_size >= orig_size * 0.8 and await asyncio.to_thread(
+            _is_vector_heavy_pdf, file_path
+        ):
             raster_result = await _rasterize_pdf_path(file_path)
             if raster_result != file_path:
                 raster_size = raster_result.stat().st_size
