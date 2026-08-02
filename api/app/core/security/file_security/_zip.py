@@ -29,7 +29,8 @@ from app.core.security.processing_paths import make_processing_temp_path as _mak
 logger = logging.getLogger(__name__)
 
 # ZIP bomb protection thresholds
-_ZIP_MAX_ENTRY_BYTES = 200 * 1024 * 1024  # 200 MB per entry
+_ZIP_MAX_ENTRY_BYTES = 200 * 1024 * 1024  # 200 MB per streamed entry
+_ZIP_MAX_TRANSFORM_BYTES = 64 * 1024 * 1024  # 64 MB for in-memory transforms
 _ZIP_MAX_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB total uncompressed
 _ZIP_MAX_ENTRIES = 10_000
 _ZIP_MAX_COMPRESSION_RATIO = 1_000
@@ -107,11 +108,25 @@ def _canonical_zip_name(name: str) -> str:
     return unicodedata.normalize("NFC", name.rstrip("/")).casefold()
 
 
-def _register_zip_name(registry: dict[str, bool], safe_name: str, *, is_dir: bool) -> None:
-    """Reject duplicates and file/directory hierarchy conflicts after canonicalization."""
+def _register_zip_name(
+    registry: dict[str, bool | None],
+    safe_name: str,
+    *,
+    is_dir: bool,
+) -> None:
+    """Reject canonical name conflicts in O(path depth), independent of entry order.
+
+    ``None`` marks an implicit parent directory created by a previously-seen
+    descendant. An explicit directory entry may promote that marker to ``True``.
+    """
 
     canonical = _canonical_zip_name(safe_name)
-    if canonical in registry:
+    missing = object()
+    existing = registry.get(canonical, missing)
+    if existing is not missing:
+        if existing is None and is_dir:
+            registry[canonical] = True
+            return
         raise ValueError(f"ZIP contains duplicate sanitized entry '{safe_name}'")
 
     parts = canonical.split("/")
@@ -119,11 +134,7 @@ def _register_zip_name(registry: dict[str, bool], safe_name: str, *, is_dir: boo
         parent = "/".join(parts[:index])
         if registry.get(parent) is False:
             raise ValueError(f"ZIP entry '{safe_name}' is nested beneath file '{parent}'")
-
-    if not is_dir:
-        prefix = f"{canonical}/"
-        if any(existing.startswith(prefix) for existing in registry):
-            raise ValueError(f"ZIP file '{safe_name}' conflicts with an existing directory")
+        registry.setdefault(parent, None)
 
     registry[canonical] = is_dir
 
@@ -410,7 +421,7 @@ def _recompress_zip_path(file_path: Path) -> Path:
                 raise ValueError("ZIP archive uncompressed content is too large")
 
             total_actual = 0
-            registered_names: dict[str, bool] = {}
+            registered_names: dict[str, bool | None] = {}
             for item in entries:
                 _validate_zip_info(item)
                 safe_name = _sanitize_zip_entry_name(item.filename)
@@ -443,7 +454,12 @@ def _recompress_zip_path(file_path: Path) -> Path:
                 )
 
                 if entry_ext in _ZIP_IMAGE_EXTENSIONS:
-                    entry_data = _read_zip_entry_bounded(zin, item, total_actual)
+                    entry_data = _read_zip_entry_bounded(
+                        zin,
+                        item,
+                        total_actual,
+                        max_entry_bytes=_ZIP_MAX_TRANSFORM_BYTES,
+                    )
                     total_actual += len(entry_data)
                     sanitized_data = _sanitize_embedded_image(entry_data, safe_name)
                     must_use_output |= sanitized_data != entry_data
@@ -483,15 +499,29 @@ def _read_zip_entry_bounded(
     archive: zipfile.ZipFile,
     item: zipfile.ZipInfo,
     total_before: int,
+    *,
+    max_entry_bytes: int | None = None,
 ) -> bytes:
-    """Read one ZIP entry while enforcing per-entry and archive size limits."""
+    """Read one ZIP entry with total, per-entry, and transform-memory limits."""
+    entry_limit = min(
+        _ZIP_MAX_ENTRY_BYTES,
+        max_entry_bytes if max_entry_bytes is not None else _ZIP_MAX_ENTRY_BYTES,
+    )
+    if item.file_size > entry_limit:
+        raise ValueError(
+            f"ZIP entry '{item.filename}' exceeds in-memory transform limit "
+            f"({item.file_size} > {entry_limit})"
+        )
+
     chunks: list[bytes] = []
     written = 0
     with archive.open(item) as src:
         while chunk := src.read(_CHUNK_SIZE):
             written += len(chunk)
-            if written > _ZIP_MAX_ENTRY_BYTES:
-                raise ValueError(f"ZIP entry '{item.filename}' expanded beyond limit")
+            if written > entry_limit:
+                raise ValueError(
+                    f"ZIP entry '{item.filename}' expanded beyond transform limit"
+                )
             if total_before + written > _ZIP_MAX_TOTAL_BYTES:
                 raise ValueError("ZIP archive actual uncompressed content exceeds total limit")
             chunks.append(chunk)

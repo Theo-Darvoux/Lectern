@@ -266,13 +266,19 @@ async def sse_event_stream(
                 if event.get("type") == "close":
                     break
 
-                if event.get("type") == "resync_required":
-                    _desynced_queue_ids.discard(id(queue))
-
+                event_type = str(event.get("type") or "message")
+                outgoing_event = (
+                    event_type
+                    if event_type == "resync_required"
+                    else event_name or event_type
+                )
                 yield {
-                    "event": event_name or event.get("type", "message"),
+                    "event": outgoing_event,
                     "data": json.dumps(event, default=str),
                 }
+
+                if event_type == "resync_required":
+                    break
             except TimeoutError:
                 yield {"event": "ping", "data": ""}
     finally:

@@ -31,6 +31,7 @@ _SSE_KEEPALIVE = 15.0  # seconds between keepalive pings (issue 4.10)
 _SSE_MAX_PER_USER = 10  # max concurrent SSE streams per user (issue 1.14)
 _SSE_COUNTER_PREFIX = "upload:sse:active:"
 _SSE_COUNTER_TTL = 700  # slightly longer than _SSE_TIMEOUT as a safety net
+_SSE_HANDOFF_QUEUE_SIZE = 256
 
 
 @asynccontextmanager
@@ -48,6 +49,38 @@ async def sse_concurrency_guard(redis: Redis, user_id: str):  # type: ignore[no-
     finally:
         with suppress(Exception):
             await redis.decr(sse_counter_key)
+
+
+async def _load_event_log(
+    redis: Redis,  # type: ignore[type-arg]
+    event_log_key: str,
+    *,
+    start: int = 0,
+) -> list[str]:
+    """Load the bounded upload log from a best-effort SSE replay offset."""
+    raw_entries = await redis.lrange(event_log_key, max(0, start), -1)
+    return [
+        raw.decode() if isinstance(raw, bytes) else str(raw)
+        for raw in raw_entries
+    ]
+
+
+def _enqueue_pubsub_payload(
+    queue: asyncio.Queue[str | None],
+    payload: str,
+) -> bool:
+    """Offer a pub/sub event without allowing a slow client to grow memory."""
+    try:
+        queue.put_nowait(payload)
+        return True
+    except asyncio.QueueFull:
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        queue.put_nowait(None)
+        return False
 
 
 async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -> None:
@@ -139,7 +172,7 @@ async def upload_events(
     """SSE stream for upload processing status.
 
     Auth via Authorization: Bearer header (fetch-based SSE, not native EventSource).
-    Reconnect-safe: serves the cached terminal event immediately on reconnect.
+    Reconnect-safe: replays the bounded durable log at least once on reconnect.
 
     Events:
       - type=upload, data=UploadStatusOut JSON  (status updates from worker)
@@ -192,10 +225,9 @@ async def upload_events(
             data = json.loads(cached_status)
             if data.get("status") in ("clean", "malicious", "failed"):
                 event_log_key = f"upload:eventlog:{file_key}"
-                log_entries: list[bytes] = await redis.lrange(event_log_key, 0, -1)  # type: ignore[misc]
+                log_entries = await _load_event_log(redis, event_log_key)
                 events: list[dict[str, str]] = []
-                for i, raw in enumerate(log_entries):
-                    entry = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[redundant-expr]
+                for i, entry in enumerate(log_entries):
                     events.append({"event": "upload", "data": entry, "id": str(i + 1)})
                 # Ensure the terminal event is present (it should be the last log entry,
                 # but append cached_status as a safety net if the log is empty).
@@ -209,7 +241,7 @@ async def upload_events(
             pass
 
     try:
-        last_event_id = int(request.headers.get("Last-Event-ID", "0"))
+        last_event_id = max(0, int(request.headers.get("Last-Event-ID", "0")))
     except (ValueError, TypeError):
         last_event_id = 0
 
@@ -230,15 +262,27 @@ async def upload_events(
             pubsub = redis.pubsub()
             await pubsub.subscribe(f"upload:events:{file_key}")
 
-            queue: asyncio.Queue[str | None] = asyncio.Queue()
+            queue: asyncio.Queue[str | None] = asyncio.Queue(
+                maxsize=_SSE_HANDOFF_QUEUE_SIZE
+            )
 
             async def _pubsub_reader() -> None:
                 try:
                     async for message in pubsub.listen():
                         if message["type"] != "message":
                             continue
-                        payload: str = message["data"]
-                        await queue.put(payload)
+                        raw_payload = message["data"]
+                        payload = (
+                            raw_payload.decode()
+                            if isinstance(raw_payload, bytes)
+                            else str(raw_payload)
+                        )
+                        if not _enqueue_pubsub_payload(queue, payload):
+                            logger.warning(
+                                "Upload SSE handoff queue overflow for %s; closing for replay",
+                                file_key,
+                            )
+                            return
                         try:
                             if json.loads(payload).get("status") in (
                                 "clean",
@@ -255,18 +299,21 @@ async def upload_events(
 
             reader_task = asyncio.create_task(_pubsub_reader())
 
-            # Replay missed events from event log.
-            # Because subscribe() was called BEFORE lrange(), any event
-            # published between subscribe and the end of lrange will appear
-            # in BOTH the replay list and the pub/sub queue.  We track how
-            # many events we replayed so we can skip that many from pub/sub.
+            # Preserve the existing Last-Event-ID contract as a best-effort
+            # offset into the bounded Redis list. The list may be trimmed, so this
+            # is not an absolute sequence, but it remains useful for ordinary
+            # reconnects. Do not skip pub/sub messages based on the current log
+            # length: those messages can be genuinely new events.
             event_log_key = f"upload:eventlog:{file_key}"
-            replayed: list[str] = await redis.lrange(event_log_key, last_event_id, -1)  # type: ignore[misc]
+            replayed = await _load_event_log(
+                redis,
+                event_log_key,
+                start=last_event_id,
+            )
 
             yielded_count = last_event_id
 
-            for i, raw in enumerate(replayed):
-                payload_str = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[ignore-without-code]
+            for i, payload_str in enumerate(replayed):
                 yielded_count = last_event_id + i + 1
                 yield {"event": "upload", "data": payload_str, "id": str(yielded_count)}
                 try:
@@ -279,12 +326,6 @@ async def upload_events(
                         return
                 except (json.JSONDecodeError, KeyError):
                     pass
-
-            # Snapshot the log length right after replay.  Pub/sub events
-            # whose log index falls within [0, replay_log_len) were already
-            # replayed above and must be skipped to avoid duplicates.
-            replay_log_len: int = await redis.llen(event_log_key)  # type: ignore[misc]
-            pubsub_seq = 0  # counts pub/sub messages received
 
             # Stream from Pub/Sub queue
             try:
@@ -305,26 +346,6 @@ async def upload_events(
 
                     if payload is None:
                         break
-
-                    pubsub_seq += 1
-
-                    # Skip events that were already sent during the replay
-                    # phase.  Because rpush happens before publish (in the
-                    # worker), each pub/sub message maps 1-to-1 to a log
-                    # entry.  The first `replay_log_len` pub/sub messages
-                    # are duplicates of what lrange already returned.
-                    if pubsub_seq <= replay_log_len:
-                        # Still check for terminal status so we don't hang
-                        try:
-                            if json.loads(payload).get("status") in (
-                                "clean",
-                                "malicious",
-                                "failed",
-                            ):
-                                break
-                        except (json.JSONDecodeError, KeyError):
-                            pass
-                        continue
 
                     yielded_count += 1
                     yield {

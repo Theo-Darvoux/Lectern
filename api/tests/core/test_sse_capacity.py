@@ -49,7 +49,7 @@ def test_desynced_queue_drops_later_incremental_events(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_consuming_resync_reenables_incremental_events(monkeypatch) -> None:
+async def test_consuming_resync_closes_desynchronized_stream(monkeypatch) -> None:
     monkeypatch.setattr(sse, "_SSE_QUEUE_MAXSIZE", 1)
     queue = sse.register_topic_queue("material-id")
     cleanup = Mock()
@@ -63,10 +63,8 @@ async def test_consuming_resync_reenables_incremental_events(monkeypatch) -> Non
     assert delivered["event"] == "resync_required"
     assert json.loads(delivered["data"])["reason"] == "event_buffer_overflow"
 
-    sse._deliver_to_topic("material-id", {"type": "fresh"})
-    assert queue.get_nowait() == {"type": "fresh"}
-
-    await stream.aclose()
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
     cleanup.assert_called_once()
 
 
@@ -98,3 +96,25 @@ def test_process_connection_limit(monkeypatch) -> None:
     second = sse.register_topic_queue("two")
 
     assert second is not first
+
+@pytest.mark.asyncio
+async def test_named_stream_preserves_resync_control_event(monkeypatch) -> None:
+    monkeypatch.setattr(sse, "_SSE_QUEUE_MAXSIZE", 1)
+    queue = sse.register_topic_queue("notifications")
+    cleanup = Mock()
+
+    queue.put_nowait({"type": "notification"})
+    sse._deliver_to_topic("notifications", {"type": "overflow"})
+
+    stream = sse.sse_event_stream(
+        queue,
+        cleanup,
+        event_name="notification",
+        keepalive_seconds=1,
+    )
+    delivered = await anext(stream)
+
+    assert delivered["event"] == "resync_required"
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+    cleanup.assert_called_once()

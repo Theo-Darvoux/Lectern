@@ -53,21 +53,20 @@ def directory_orm_to_dict(
     return out
 
 
+_PREVIEW_MAX_DEPTH = 32
+
+
 async def get_preview_material_ids(
     db: AsyncSession, dir_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, list[str]]:
-    """Return up to 4 preview material IDs per directory (latest version).
+    """Return up to four preview material IDs from each bounded subtree.
 
-    Walks each requested directory's whole subtree, so a folder that only
-    contains sub-folders still surfaces thumbnails "back-propagated" from
-    materials nested deeper. Direct children win: results are ordered by depth
-    first, so a directory's own materials fill the slots before descendants'.
+    Direct materials win over descendants. The recursive depth cap prevents a
+    corrupted directory cycle from running forever.
     """
     if not dir_ids:
         return {}
 
-    # Recursive CTE: map each requested root directory to every directory in its
-    # subtree (itself at depth 0).
     base = select(
         Directory.id.label("root_id"),
         Directory.id.label("dir_id"),
@@ -83,28 +82,42 @@ async def get_preview_material_ids(
         ).where(
             child.parent_id == subtree.c.dir_id,
             child.deleted_at.is_(None),
-            subtree.c.depth < 1,
+            subtree.c.depth < _PREVIEW_MAX_DEPTH,
         )
     )
 
-    rows = await db.execute(
-        select(subtree.c.root_id, subtree.c.depth, Material.id, Material.title)
+    ranked = (
+        select(
+            subtree.c.root_id,
+            Material.id.label("material_id"),
+            func.row_number()
+            .over(
+                partition_by=subtree.c.root_id,
+                order_by=(
+                    subtree.c.depth,
+                    func.lower(Material.title),
+                    Material.id,
+                ),
+            )
+            .label("preview_rank"),
+        )
         .join(Material, Material.directory_id == subtree.c.dir_id)
         .where(
             Material.parent_material_id.is_(None),
             Material.deleted_at.is_(None),
         )
+        .subquery()
     )
 
-    # Direct children win (depth first), then natural order by title. sorted() is
-    # stable, so per-root ordering is preserved when bucketing below.
-    ordered = sorted(rows.all(), key=lambda r: (r.depth, natural_sort_key(r.title)))
+    rows = await db.execute(
+        select(ranked.c.root_id, ranked.c.material_id)
+        .where(ranked.c.preview_rank <= 4)
+        .order_by(ranked.c.root_id, ranked.c.preview_rank)
+    )
 
     result: dict[uuid.UUID, list[str]] = {}
-    for row in ordered:
-        lst = result.setdefault(row.root_id, [])
-        if len(lst) < 4:
-            lst.append(str(row.id))
+    for root_id, material_id in rows:
+        result.setdefault(root_id, []).append(str(material_id))
     return result
 
 

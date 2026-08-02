@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from typing import Annotated, Any
 
 from pydantic import BeforeValidator
@@ -30,8 +31,9 @@ _INVALID_NAME_CHAR_RE = re.compile(r"[^\x20-\x7e\u00c0-\u00d6\u00d8-\u00f6\u00f8
 
 
 def clean_text(v: str) -> str:
-    """Strip invisible/dangerous Unicode from a string."""
-    return _DANGEROUS_CHARS_RE.sub("", v)
+    """Strip dangerous Unicode, then normalize the remaining text."""
+    cleaned = _DANGEROUS_CHARS_RE.sub("", v)
+    return unicodedata.normalize("NFC", cleaned)
 
 
 def _sanitize_value(v: Any) -> Any:
@@ -64,15 +66,61 @@ def _validate_name_value(v: Any) -> Any:
 NameStr = Annotated[str, BeforeValidator(_validate_name_value)]
 
 
-def strip_null_chars(v: Any) -> Any:
-    """Recursively strip null bytes from strings/lists/dicts."""
+_MAX_JSON_DEPTH = 20
+_MAX_JSON_NODES = 2_000
+_MAX_JSON_CONTAINER_ITEMS = 200
+
+
+def _consume_json_budget(budget: list[int]) -> None:
+    budget[0] += 1
+    if budget[0] > _MAX_JSON_NODES:
+        raise ValueError(f"JSON payload exceeds node limit ({_MAX_JSON_NODES})")
+
+
+def _sanitize_json_value(v: Any, *, depth: int, budget: list[int]) -> Any:
+    if depth > _MAX_JSON_DEPTH:
+        raise ValueError(f"JSON payload exceeds depth limit ({_MAX_JSON_DEPTH})")
+
+    _consume_json_budget(budget)
+
     if isinstance(v, str):
         return clean_text(v)
+
     if isinstance(v, list):
-        return [strip_null_chars(i) for i in v]
+        if len(v) > _MAX_JSON_CONTAINER_ITEMS:
+            raise ValueError(
+                f"JSON list exceeds item limit ({_MAX_JSON_CONTAINER_ITEMS})"
+            )
+        return [
+            _sanitize_json_value(item, depth=depth + 1, budget=budget)
+            for item in v
+        ]
+
     if isinstance(v, dict):
-        return {k: strip_null_chars(val) for k, val in v.items()}
+        if len(v) > _MAX_JSON_CONTAINER_ITEMS:
+            raise ValueError(
+                f"JSON object exceeds key limit ({_MAX_JSON_CONTAINER_ITEMS})"
+            )
+
+        cleaned: dict[Any, Any] = {}
+        for key, value in v.items():
+            _consume_json_budget(budget)
+            cleaned_key = clean_text(key) if isinstance(key, str) else key
+            if cleaned_key in cleaned:
+                raise ValueError("JSON object contains colliding keys after sanitization")
+            cleaned[cleaned_key] = _sanitize_json_value(
+                value,
+                depth=depth + 1,
+                budget=budget,
+            )
+        return cleaned
+
     return v
+
+
+def strip_null_chars(v: Any) -> Any:
+    """Bound and recursively sanitize JSON-compatible values and mapping keys."""
+    return _sanitize_json_value(v, depth=0, budget=[0])
 
 
 def sanitize_json_payload(v: Any) -> Any:

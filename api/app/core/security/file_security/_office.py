@@ -23,6 +23,7 @@ from app.core.security.file_security._zip import (
     _ZIP_MAX_ENTRIES,
     _ZIP_MAX_ENTRY_BYTES,
     _ZIP_MAX_TOTAL_BYTES,
+    _ZIP_MAX_TRANSFORM_BYTES,
     _read_zip_entry_bounded,
     _register_zip_name,
     _sanitize_embedded_image,
@@ -120,6 +121,8 @@ _EPUB_PRIVATE_META_NAMES = frozenset(
     {"author", "creator", "contributor", "publisher", "rights", "description", "subject"}
 )
 _MAX_PACKAGE_XML_BYTES = 1 * 1024 * 1024
+_MAX_EPUB_TEXT_BYTES = 8 * 1024 * 1024
+_MAX_EMBEDDED_SVG_BYTES = 8 * 1024 * 1024
 _OOXML_ACTIVE_DIRECTORIES = frozenset({"activex", "embeddings"})
 _OOXML_ACTIVE_FILES = frozenset({"vbaproject.bin", "vbadata.xml"})
 _ALLOWED_HYPERLINK_SCHEMES = frozenset({"http", "https", "mailto"})
@@ -454,7 +457,7 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                 items.sort(key=lambda item: _sanitize_zip_entry_name(item.filename) != "mimetype")
 
             validated_items: list[tuple[zipfile.ZipInfo, str, str, bool]] = []
-            registered_names: dict[str, bool] = {}
+            registered_names: dict[str, bool | None] = {}
             for item in items:
                 try:
                     _validate_zip_info(item)
@@ -539,16 +542,24 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                 )
 
                 if is_epub and extension == ".opf":
-                    package_data = _read_zip_entry_bounded(source_archive, item, total_actual)
+                    package_data = _read_zip_entry_bounded(
+                        source_archive,
+                        item,
+                        total_actual,
+                        max_entry_bytes=_MAX_PACKAGE_XML_BYTES,
+                    )
                     total_actual += len(package_data)
                     output_archive.writestr(new_info, epub_opf_outputs[normalized_name])
                     continue
 
-                if is_ooxml and extension == ".rels":
+                if is_ooxml and (
+                    extension == ".rels" or Path(safe_name).name.casefold() == ".rels"
+                ):
                     relationship_data = _read_zip_entry_bounded(
                         source_archive,
                         item,
                         total_actual,
+                        max_entry_bytes=_MAX_PACKAGE_XML_BYTES,
                     )
                     total_actual += len(relationship_data)
                     if len(relationship_data) > _MAX_PACKAGE_XML_BYTES:
@@ -561,14 +572,24 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
 
                 declared_media = epub_manifest.get(normalized_name) if is_epub else None
                 if declared_media in _EPUB_MARKUP_MEDIA_TYPES:
-                    markup_data = _read_zip_entry_bounded(source_archive, item, total_actual)
+                    markup_data = _read_zip_entry_bounded(
+                        source_archive,
+                        item,
+                        total_actual,
+                        max_entry_bytes=_MAX_EPUB_TEXT_BYTES,
+                    )
                     total_actual += len(markup_data)
                     _validate_epub_markup(markup_data, safe_name)
                     output_archive.writestr(new_info, markup_data)
                     continue
 
                 if declared_media in _EPUB_CSS_MEDIA_TYPES:
-                    css_data = _read_zip_entry_bounded(source_archive, item, total_actual)
+                    css_data = _read_zip_entry_bounded(
+                        source_archive,
+                        item,
+                        total_actual,
+                        max_entry_bytes=_MAX_EPUB_TEXT_BYTES,
+                    )
                     total_actual += len(css_data)
                     _validate_epub_css(css_data, safe_name)
                     output_archive.writestr(new_info, css_data)
@@ -582,7 +603,12 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                     or extension in _PACKAGE_MEDIA_EXTENSIONS
                     or extension in _UNSUPPORTED_EMBEDDED_MEDIA_EXTENSIONS
                 ):
-                    media_data = _read_zip_entry_bounded(source_archive, item, total_actual)
+                    media_data = _read_zip_entry_bounded(
+                        source_archive,
+                        item,
+                        total_actual,
+                        max_entry_bytes=_ZIP_MAX_TRANSFORM_BYTES,
+                    )
                     total_actual += len(media_data)
                     sanitized_media = _sanitize_embedded_media(
                         media_data,
@@ -597,7 +623,12 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                     _EPUB_IMAGE_MEDIA_TYPES.get(declared_media or "") if is_epub else None
                 )
                 if expected_image_format is not None or extension in _PACKAGE_IMAGE_EXTENSIONS:
-                    image_data = _read_zip_entry_bounded(source_archive, item, total_actual)
+                    image_data = _read_zip_entry_bounded(
+                        source_archive,
+                        item,
+                        total_actual,
+                        max_entry_bytes=_ZIP_MAX_TRANSFORM_BYTES,
+                    )
                     total_actual += len(image_data)
                     try:
                         sanitized_image = _sanitize_embedded_image(
@@ -612,7 +643,12 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                     continue
 
                 if declared_media == "image/svg+xml" or extension == ".svg":
-                    svg_data = _read_zip_entry_bounded(source_archive, item, total_actual)
+                    svg_data = _read_zip_entry_bounded(
+                        source_archive,
+                        item,
+                        total_actual,
+                        max_entry_bytes=_MAX_EMBEDDED_SVG_BYTES,
+                    )
                     total_actual += len(svg_data)
                     check_svg_safety(svg_data, safe_name)
                     output_archive.writestr(new_info, svg_data)

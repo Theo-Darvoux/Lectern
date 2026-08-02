@@ -100,3 +100,44 @@ async def test_worker_explicit_clean_result_writes_clean_tombstone() -> None:
         "1",
         ex=_CLEAN_TOMBSTONE_TTL,
     )
+
+@pytest.mark.asyncio
+async def test_scanner_strict_override_rejects_non_object_json() -> None:
+    scanner = MalwareScanner()
+    response = MagicMock(status_code=200)
+    response.json.return_value = []
+    scanner.client = MagicMock()
+    scanner.client.post = AsyncMock(return_value=response)
+
+    with (
+        patch("app.core.security.scanner.settings") as mock_settings,
+        pytest.raises(ServiceUnavailableError, match="non-object JSON"),
+    ):
+        mock_settings.malwarebazaar_api_key = ""
+        mock_settings.malwarebazaar_url = "https://example.invalid"
+        await scanner.check_malwarebazaar(
+            "d" * 64,
+            "upload-id",
+            fail_closed=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_scanner_strict_override_rejects_malformed_threat_data() -> None:
+    scanner = MalwareScanner()
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"query_status": "ok", "data": ["invalid"]}
+    scanner.client = MagicMock()
+    scanner.client.post = AsyncMock(return_value=response)
+
+    with (
+        patch("app.core.security.scanner.settings") as mock_settings,
+        pytest.raises(ServiceUnavailableError, match="malformed threat data"),
+    ):
+        mock_settings.malwarebazaar_api_key = ""
+        mock_settings.malwarebazaar_url = "https://example.invalid"
+        await scanner.check_malwarebazaar(
+            "e" * 64,
+            "upload-id",
+            fail_closed=True,
+        )

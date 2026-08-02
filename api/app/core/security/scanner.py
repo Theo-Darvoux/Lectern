@@ -162,11 +162,10 @@ class MalwareScanner:
     ) -> str | None:
         """Query MalwareBazaar for known malware by SHA-256 hash.
 
-        Returns the threat signature name if flagged, or ``None`` only when the
-        service explicitly reports the hash as absent. By default, availability
-        errors follow ``settings.malwarebazaar_fail_closed``. Callers that need
-        to distinguish an unavailable service from an explicit clean result can
-        pass ``fail_closed=True`` and apply their own policy after catching the
+        Returns the threat signature name if flagged, or ``None`` when no
+        threat is reported. In fail-open mode ``None`` can also mean that the
+        service was unavailable. Callers that must distinguish those cases pass
+        ``fail_closed=True`` and apply their own policy after catching the
         resulting exception.
         """
         effective_fail_closed = (
@@ -216,19 +215,35 @@ class MalwareScanner:
             logger.warning("%s. Skipping.", message)
             return None
 
+        if not isinstance(body, dict):
+            message = f"MalwareBazaar returned a non-object JSON response for {filename}"
+            if effective_fail_closed:
+                raise ServiceUnavailableError(message)
+            logger.warning("%s. Skipping.", message)
+            return None
+
         status = body.get("query_status")
 
         if status in ("hash_not_found", "no_results"):
             return None
 
         if status == "ok":
-            data = body.get("data", [{}])
-            if isinstance(data, list) and data:
-                threat = data[0].get("signature") or data[0].get("file_name", "unknown")
-            else:
-                threat = "known malware"
+            data = body.get("data")
+            if (
+                not isinstance(data, list)
+                or not data
+                or not isinstance(data[0], dict)
+            ):
+                message = f"MalwareBazaar returned malformed threat data for {filename}"
+                if effective_fail_closed:
+                    raise ServiceUnavailableError(message)
+                logger.warning("%s. Skipping.", message)
+                return None
+
+            first = data[0]
+            threat = first.get("signature") or first.get("file_name") or "known malware"
             logger.warning("MalwareBazaar hit for %s (sha256=%s): %s", filename, sha256, threat)
-            return cast(str, threat)
+            return str(threat)
 
         message = f"MalwareBazaar returned unexpected status {status!r}"
         if effective_fail_closed:
