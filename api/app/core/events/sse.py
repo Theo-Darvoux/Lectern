@@ -6,10 +6,22 @@ import uuid
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
+from app.core.common.exceptions import ServiceUnavailableError
+
 logger = logging.getLogger(__name__)
+
+_SSE_QUEUE_MAXSIZE = 500
+_MAX_LOCAL_SSE_CONNECTIONS = 2_000
+_MAX_USER_SSE_CONNECTIONS = 5
+_RESYNC_EVENT: dict[str, Any] = {
+    "type": "resync_required",
+    "reason": "event_buffer_overflow",
+}
 
 _user_queues: dict[uuid.UUID, list[asyncio.Queue[dict[str, Any]]]] = {}
 _topic_queues: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
+_active_queue_ids: set[int] = set()
+_desynced_queue_ids: set[int] = set()
 
 _INSTANCE_ID = uuid.uuid4().hex
 _FANOUT_CHANNEL = "sse:fanout"
@@ -18,31 +30,87 @@ _publish_queue: asyncio.Queue[str] | None = None
 _pubsub_tasks: list[asyncio.Task[None]] = []
 
 
+class SSECapacityError(ServiceUnavailableError):
+    """The process cannot safely accept another SSE connection."""
+
+    def __init__(self, detail: str = "Live updates are temporarily at capacity") -> None:
+        super().__init__(detail)
+
+
+def _new_queue() -> asyncio.Queue[dict[str, Any]]:
+    if len(_active_queue_ids) >= _MAX_LOCAL_SSE_CONNECTIONS:
+        raise SSECapacityError()
+
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=_SSE_QUEUE_MAXSIZE)
+    _active_queue_ids.add(id(queue))
+    return queue
+
+
+def _release_queue(queue: asyncio.Queue[dict[str, Any]]) -> None:
+    queue_id = id(queue)
+    _active_queue_ids.discard(queue_id)
+    _desynced_queue_ids.discard(queue_id)
+
+
+def _enqueue_or_request_resync(
+    queue: asyncio.Queue[dict[str, Any]],
+    event: dict[str, Any],
+) -> bool:
+    """Enqueue an event, replacing an overflowed stream with one resync marker.
+
+    Returns ``True`` when the queue overflowed. While a resync marker is pending,
+    later incremental events are dropped because their ordering is no longer
+    trustworthy.
+    """
+    queue_id = id(queue)
+    if queue_id in _desynced_queue_ids:
+        return False
+
+    try:
+        queue.put_nowait(event)
+        return False
+    except asyncio.QueueFull:
+        pass
+
+    while True:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+
+    queue.put_nowait(dict(_RESYNC_EVENT))
+    _desynced_queue_ids.add(queue_id)
+    return True
+
+
 # --- User-keyed queues (1:N mapping, used for notifications) ---
 
 
 def register_user_queue(user_id: uuid.UUID) -> asyncio.Queue[dict[str, Any]]:
-    """Register an SSE queue for a user. Supports multiple concurrent connections."""
-    q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=500)
-    _user_queues.setdefault(user_id, []).append(q)
-    return q
+    """Register a bounded SSE queue for a user."""
+    queues = _user_queues.get(user_id, [])
+    if len(queues) >= _MAX_USER_SSE_CONNECTIONS:
+        raise SSECapacityError("Too many concurrent live-update connections for this user")
+
+    queue = _new_queue()
+    _user_queues.setdefault(user_id, []).append(queue)
+    return queue
 
 
-def unregister_user_queue(user_id: uuid.UUID, q: asyncio.Queue[dict[str, Any]]) -> None:
+def unregister_user_queue(user_id: uuid.UUID, queue: asyncio.Queue[dict[str, Any]]) -> None:
     """Unregister a specific SSE queue for a user."""
     queues = _user_queues.get(user_id, [])
     with contextlib.suppress(ValueError):
-        queues.remove(q)
+        queues.remove(queue)
+    _release_queue(queue)
     if not queues:
         _user_queues.pop(user_id, None)
 
 
 def _deliver_to_user(user_id: uuid.UUID, event: dict[str, Any]) -> None:
-    for q in list(_user_queues.get(user_id, [])):
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            logger.warning("SSE user queue full for user %s; dropping event", user_id)
+    for queue in list(_user_queues.get(user_id, [])):
+        if _enqueue_or_request_resync(queue, event):
+            logger.warning("SSE user queue overflow for user %s; requesting resync", user_id)
 
 
 def broadcast_to_user(user_id: uuid.UUID, event: dict[str, Any]) -> None:
@@ -55,26 +123,25 @@ def broadcast_to_user(user_id: uuid.UUID, event: dict[str, Any]) -> None:
 
 
 def register_topic_queue(topic: str) -> asyncio.Queue[dict[str, Any]]:
-    """Register a watcher queue for a topic (e.g. a material_id)."""
-    q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=500)
-    _topic_queues.setdefault(topic, []).append(q)
-    return q
+    """Register a bounded watcher queue for a topic."""
+    queue = _new_queue()
+    _topic_queues.setdefault(topic, []).append(queue)
+    return queue
 
 
-def unregister_topic_queue(topic: str, q: asyncio.Queue[dict[str, Any]]) -> None:
+def unregister_topic_queue(topic: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
     queues = _topic_queues.get(topic, [])
     with contextlib.suppress(ValueError):
-        queues.remove(q)
+        queues.remove(queue)
+    _release_queue(queue)
     if not queues:
         _topic_queues.pop(topic, None)
 
 
 def _deliver_to_topic(topic: str, event: dict[str, Any]) -> None:
-    for q in list(_topic_queues.get(topic, [])):
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            logger.warning("SSE topic queue full for topic %s; dropping event", topic)
+    for queue in list(_topic_queues.get(topic, [])):
+        if _enqueue_or_request_resync(queue, event):
+            logger.warning("SSE topic queue overflow for topic %s; requesting resync", topic)
 
 
 def broadcast_to_topic(topic: str, event: dict[str, Any]) -> None:
@@ -112,6 +179,8 @@ async def _publisher_loop() -> None:
             await redis_client.publish(_FANOUT_CHANNEL, payload)
         except Exception:
             logger.exception("Failed to publish SSE fan-out message")
+        finally:
+            _publish_queue.task_done()
 
 
 async def _subscriber_loop() -> None:
@@ -196,6 +265,9 @@ async def sse_event_stream(
                 event = await asyncio.wait_for(queue.get(), timeout=keepalive_seconds)
                 if event.get("type") == "close":
                     break
+
+                if event.get("type") == "resync_required":
+                    _desynced_queue_ids.discard(id(queue))
 
                 yield {
                     "event": event_name or event.get("type", "message"),

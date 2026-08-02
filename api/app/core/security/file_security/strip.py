@@ -6,6 +6,7 @@ than the upload security boundary.
 """
 
 import logging
+from collections.abc import Awaitable
 from pathlib import Path
 
 from app.core.media.mimetypes import OLE2_MIME_TYPES, ZIP_MIME_TYPES
@@ -32,6 +33,21 @@ def _must_fail_closed(mime_type: str) -> bool:
     )
 
 
+async def _require_sanitized_output(
+    source: Path,
+    operation: Awaitable[Path],
+    *,
+    mime_type: str,
+) -> Path:
+    """Require a high-risk sanitizer to produce a distinct, existing file."""
+    result = await operation
+    if result == source:
+        raise SanitizationError(f"{mime_type} sanitizer returned the original unsanitized file")
+    if not result.is_file():
+        raise SanitizationError(f"{mime_type} sanitizer did not produce an output file")
+    return result
+
+
 async def strip_metadata_file(file_path: Path, mime_type: str) -> Path:
     """Remove metadata and reject files that cannot be safely sanitized."""
     try:
@@ -40,18 +56,34 @@ async def strip_metadata_file(file_path: Path, mime_type: str) -> Path:
             return file_path
         if mime_type.startswith("image/"):
             async with image_guard():
-                return await _shielded_to_thread(_strip_image_from_path, file_path)
+                return await _require_sanitized_output(
+                    file_path,
+                    _shielded_to_thread(_strip_image_from_path, file_path),
+                    mime_type=mime_type,
+                )
         if mime_type == "application/pdf":
             async with image_guard():
-                return await _shielded_to_thread(_strip_pdf_from_path, file_path)
+                return await _require_sanitized_output(
+                    file_path,
+                    _shielded_to_thread(_strip_pdf_from_path, file_path),
+                    mime_type=mime_type,
+                )
         if mime_type.startswith("video/"):
             return await _strip_video_from_path(file_path, mime_type)
         if mime_type.startswith("audio/"):
             return await _shielded_to_thread(_strip_audio_from_path, file_path, mime_type)
         if mime_type in OLE2_MIME_TYPES:
-            return await _strip_ole2_from_path(file_path, mime_type)
+            return await _require_sanitized_output(
+                file_path,
+                _strip_ole2_from_path(file_path, mime_type),
+                mime_type=mime_type,
+            )
         if mime_type in ZIP_MIME_TYPES:
-            return await _strip_ooxml_from_path(file_path, mime_type)
+            return await _require_sanitized_output(
+                file_path,
+                _strip_ooxml_from_path(file_path, mime_type),
+                mime_type=mime_type,
+            )
     except SanitizationError:
         raise
     except ValueError as exc:

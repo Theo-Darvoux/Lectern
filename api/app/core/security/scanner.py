@@ -153,14 +153,29 @@ class MalwareScanner:
             filename,
         )
 
-    async def check_malwarebazaar(self, sha256: str, filename: str) -> str | None:
+    async def check_malwarebazaar(
+        self,
+        sha256: str,
+        filename: str,
+        *,
+        fail_closed: bool | None = None,
+    ) -> str | None:
         """Query MalwareBazaar for known malware by SHA-256 hash.
 
-        Returns the threat signature name if flagged, or None if clean.
+        Returns the threat signature name if flagged, or ``None`` only when the
+        service explicitly reports the hash as absent. By default, availability
+        errors follow ``settings.malwarebazaar_fail_closed``. Callers that need
+        to distinguish an unavailable service from an explicit clean result can
+        pass ``fail_closed=True`` and apply their own policy after catching the
+        resulting exception.
         """
+        effective_fail_closed = (
+            settings.malwarebazaar_fail_closed if fail_closed is None else fail_closed
+        )
+
         if self.client is None:
             message = "Scanner HTTP client not initialized"
-            if settings.malwarebazaar_fail_closed:
+            if effective_fail_closed:
                 raise ServiceUnavailableError(message)
             logger.error(message)
             return None
@@ -176,7 +191,7 @@ class MalwareScanner:
                 headers=headers,
             )
         except (httpx.TimeoutException, httpx.HTTPError) as e:
-            if settings.malwarebazaar_fail_closed:
+            if effective_fail_closed:
                 raise
             logger.warning(
                 "MalwareBazaar is temporarily unavailable: %s. "
@@ -187,7 +202,7 @@ class MalwareScanner:
 
         if resp.status_code != 200:
             message = f"MalwareBazaar returned HTTP {resp.status_code} for {filename}"
-            if settings.malwarebazaar_fail_closed:
+            if effective_fail_closed:
                 raise ServiceUnavailableError(message)
             logger.warning("%s. Skipping external check.", message)
             return None
@@ -196,7 +211,7 @@ class MalwareScanner:
             body = resp.json()
         except (ValueError, TypeError):
             message = f"MalwareBazaar returned invalid JSON for {filename}"
-            if settings.malwarebazaar_fail_closed:
+            if effective_fail_closed:
                 raise ServiceUnavailableError(message)
             logger.warning("%s. Skipping.", message)
             return None
@@ -216,7 +231,7 @@ class MalwareScanner:
             return cast(str, threat)
 
         message = f"MalwareBazaar returned unexpected status {status!r}"
-        if settings.malwarebazaar_fail_closed:
+        if effective_fail_closed:
             raise ServiceUnavailableError(message)
         logger.warning("%s. Skipping check.", message)
         return None
