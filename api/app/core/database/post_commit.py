@@ -140,9 +140,7 @@ async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> in
                     kwargs = dict(encoded_kwargs)
                     args.pop()
             enqueue_job = cast(Any, redis_db.arq_pool.enqueue_job)
-            await enqueue_job(
-                row.job_name, *args, **kwargs, _job_id=f"outbox:{row.id}"
-            )
+            await enqueue_job(row.job_name, *args, **kwargs, _job_id=f"outbox:{row.id}")
         except Exception as exc:
             row.attempts = (row.attempts or 0) + 1
             row.last_error = str(exc)[:2000]

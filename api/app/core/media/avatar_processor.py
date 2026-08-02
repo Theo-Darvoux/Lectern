@@ -26,15 +26,11 @@ def process_avatar(
         bytes: The WebP encoded image bytes.
     """
     try:
-        source = (
-            io.BytesIO(input_source) if isinstance(input_source, bytes) else input_source
-        )
+        source = io.BytesIO(input_source) if isinstance(input_source, bytes) else input_source
         with Image.open(source) as base_img:
             pixels = base_img.width * base_img.height
             if pixels > MAX_AVATAR_PIXELS:
-                raise ValueError(
-                    f"Avatar exceeds pixel limit ({pixels:,} > {MAX_AVATAR_PIXELS:,})"
-                )
+                raise ValueError(f"Avatar exceeds pixel limit ({pixels:,} > {MAX_AVATAR_PIXELS:,})")
             # Handle EXIF orientation
             img = ImageOps.exif_transpose(base_img)
 

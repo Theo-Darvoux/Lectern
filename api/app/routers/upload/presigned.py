@@ -80,9 +80,7 @@ def _validated_multipart_manifest(
     try:
         declared_size = int(intent["size"])
         part_size = int(intent.get("part_size", _PRESIGNED_MULTIPART_PART_SIZE))
-        expected_parts = int(
-            intent.get("num_parts", (declared_size + part_size - 1) // part_size)
-        )
+        expected_parts = int(intent.get("num_parts", (declared_size + part_size - 1) // part_size))
     except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
         raise BadRequestError(
             "Multipart upload intent is invalid. Please restart the upload.",
@@ -167,9 +165,7 @@ async def init_upload(
                 "sha256": getattr(data, "sha256", None),
             }
         )
-        await redis.set(
-            f"{_UPLOAD_INTENT_PREFIX}{upload_id}", intent, ex=_UPLOAD_INTENT_TTL
-        )
+        await redis.set(f"{_UPLOAD_INTENT_PREFIX}{upload_id}", intent, ex=_UPLOAD_INTENT_TTL)
 
         await _create_upload_row(
             upload_id=upload_id,
@@ -421,9 +417,7 @@ async def presigned_multipart_complete(
             )
         _check_per_type_size(intent["mime_type"], actual_size)
         await _reserve_storage_limit(actual_size, data.upload_id, redis, db)
-        await redis.zadd(
-            f"{_QUOTA_KEY_PREFIX}{user_id}", {intent["quarantine_key"]: time.time()}
-        )
+        await redis.zadd(f"{_QUOTA_KEY_PREFIX}{user_id}", {intent["quarantine_key"]: time.time()})
         await _enqueue_processing(
             user_id=user_id,
             upload_id=intent["upload_id"],

@@ -130,9 +130,7 @@ async def test_hashed_download_rejects_body_larger_than_limit(tmp_path: Path) ->
         patch("app.core.storage.s3.S3Backend.get_s3_client", return_value=client_context),
         pytest.raises(ValueError, match="download size limit"),
     ):
-        await S3Backend().download_file_with_hash(
-            "quarantine/object", destination, max_bytes=3
-        )
+        await S3Backend().download_file_with_hash("quarantine/object", destination, max_bytes=3)
 
     assert destination.read_bytes() == b""
     body.close.assert_called_once()
@@ -155,9 +153,7 @@ async def test_hashed_download_rejects_head_size_mismatch(tmp_path: Path) -> Non
         patch("app.core.storage.s3.S3Backend.get_s3_client", return_value=client_context),
         pytest.raises(ValueError, match="size changed during download"),
     ):
-        await S3Backend().download_file_with_hash(
-            "quarantine/object", destination, expected_size=5
-        )
+        await S3Backend().download_file_with_hash("quarantine/object", destination, expected_size=5)
 
     assert destination.read_bytes() == b"1234"
     body.close.assert_called_once()

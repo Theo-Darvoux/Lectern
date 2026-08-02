@@ -18,7 +18,6 @@ MAX_GIF_FRAMES = 300
 MAX_GIF_TOTAL_PIXELS = 100_000_000
 
 
-
 def _validate_image_size(img: Image.Image, limit: int = MAX_IMAGE_PIXELS) -> None:
     pixels = img.width * img.height
     if pixels > limit:
@@ -48,10 +47,7 @@ def _normalize_clean_image(img: Image.Image) -> Image.Image:
     img.load()
     oriented = ImageOps.exif_transpose(img)
 
-    has_alpha = (
-        oriented.mode in {"RGBA", "LA", "PA"}
-        or "transparency" in oriented.info
-    )
+    has_alpha = oriented.mode in {"RGBA", "LA", "PA"} or "transparency" in oriented.info
 
     target_mode = "RGBA" if has_alpha else "RGB"
     try:
@@ -67,7 +63,9 @@ def _normalize_clean_image(img: Image.Image) -> Image.Image:
             oriented.close()
 
 
-def _save_stripped_image(clean: Image.Image, img_format: str, dest: "io.BytesIO | str | Path") -> None:
+def _save_stripped_image(
+    clean: Image.Image, img_format: str, dest: "io.BytesIO | str | Path"
+) -> None:
     """Save clean image to dest with metadata stripped using explicit quality parameters."""
     if img_format == "JPEG":
         save_img = clean.convert("RGB") if clean.mode != "RGB" else clean
@@ -194,6 +192,3 @@ def _compress_image_path(file_path: Path) -> tuple[Path, str]:
         except Exception:
             pass
     return file_path, "application/octet-stream"
-
-
-

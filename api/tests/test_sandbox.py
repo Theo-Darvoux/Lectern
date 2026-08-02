@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from app.core.security.sandbox import SubprocessOutputLimitError, sandboxed_run
+from app.core.security.sandbox import sandboxed_run
 
 
 def _reset_bwrap_cache() -> None:
@@ -153,4 +153,3 @@ def test_sandboxed_run_timeout_propagates(
     with pytest.raises(subprocess.TimeoutExpired):
         sandboxed_run(["sleep", "999"], timeout=1)
     _reset_bwrap_cache()
-

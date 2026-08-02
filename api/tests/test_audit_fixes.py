@@ -402,9 +402,7 @@ class TestOOXMLStrip:
             },
         )
 
-        result = await _strip_ooxml_from_path(
-            p, "application/vnd.oasis.opendocument.text"
-        )
+        result = await _strip_ooxml_from_path(p, "application/vnd.oasis.opendocument.text")
 
         with zipfile.ZipFile(result) as archive:
             assert "meta.xml" not in archive.namelist()
@@ -495,7 +493,6 @@ class TestGIFPixelBudget:
         gif_bytes = _make_gif(100, 100, 1)
         result = _strip_image_metadata(gif_bytes)
         assert len(result) > 0
-
 
 
 # =============================================================================
@@ -702,8 +699,7 @@ class TestSVGSafetyBypass:
     @pytest.mark.parametrize("reference", ["../secret.png", "/internal.png", "asset.png"])
     def test_svg_with_nonlocal_reference(self, reference):
         svg = (
-            '<svg xmlns="http://www.w3.org/2000/svg">'
-            f'<image href="{reference}"/></svg>'
+            f'<svg xmlns="http://www.w3.org/2000/svg"><image href="{reference}"/></svg>'
         ).encode()
         with pytest.raises(SvgSecurityError, match="external URLs"):
             check_svg_safety(svg, "reference.svg")
@@ -858,7 +854,6 @@ class TestStripMetadataEdgeCases:
         p.write_bytes(gif_bytes)
         with pytest.raises(ValueError, match="Animated and multi-frame images are not supported"):
             await strip_metadata_file(p, "image/gif")
-
 
     async def test_pdf_strip_corrupt_fails_closed(self, tmp_path):
         p = tmp_path / "bad.pdf"

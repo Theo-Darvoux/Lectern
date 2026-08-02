@@ -483,7 +483,9 @@ async def test_multipart_complete_rejects_object_size_different_from_intent(
             new_callable=AsyncMock,
             return_value={"size": declared_size - 1},
         ),
-        patch("app.routers.upload.presigned._enqueue_processing", new_callable=AsyncMock) as enqueue,
+        patch(
+            "app.routers.upload.presigned._enqueue_processing", new_callable=AsyncMock
+        ) as enqueue,
     ):
         response = await client.post(
             "/api/upload/presigned-multipart/complete",

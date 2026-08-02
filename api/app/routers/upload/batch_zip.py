@@ -412,9 +412,7 @@ async def upload_batch_zip(
                     # AsyncSession cannot be shared between gather() tasks.
                     async with async_session_factory() as entry_db:
                         try:
-                            await _reserve_storage_limit(
-                                pf.size, upload_id, redis, entry_db
-                            )
+                            await _reserve_storage_limit(pf.size, upload_id, redis, entry_db)
                             storage_reserved = True
                         except BadRequestError as exc:
                             per_file_errors.append(f"{entry.filename}: {exc.detail}")

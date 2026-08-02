@@ -305,6 +305,7 @@ class S3Backend:
         pending: set[asyncio.Task[dict[str, int | str]]] = set()
         results: list[dict[str, int | str]] = []
         try:
+
             async def _upload_one(pnum: int, data: bytes) -> dict[str, int | str]:
                 etag = await self.upload_part(file_key, s3_upload_id, pnum, data)
                 return {"PartNumber": pnum, "ETag": etag}
@@ -493,8 +494,7 @@ class S3Backend:
                 await _close_response_body(body)
         if expected_size is not None and written != expected_size:
             raise ValueError(
-                f"Object {file_key!r} size changed during download "
-                f"({written} != {expected_size})"
+                f"Object {file_key!r} size changed during download ({written} != {expected_size})"
             )
         return hasher.hexdigest()
 

@@ -125,11 +125,7 @@ async def cancel_upload(
     object_keys = {
         key
         for key in (row.quarantine_key, row.final_key)
-        if key
-        and (
-            key.startswith(quarantine_prefix)
-            or key.startswith(uploads_prefix)
-        )
+        if key and (key.startswith(quarantine_prefix) or key.startswith(uploads_prefix))
     }
     for object_key in object_keys:
         with contextlib.suppress(Exception):
@@ -152,9 +148,7 @@ async def cancel_upload(
     cleanup_members = {
         key
         for key in quota_members
-        if key == staging_key
-        or key.startswith(quarantine_prefix)
-        or key.startswith(uploads_prefix)
+        if key == staging_key or key.startswith(quarantine_prefix) or key.startswith(uploads_prefix)
     }
     if cleanup_members:
         await redis.zrem(quota_key, *cleanup_members)

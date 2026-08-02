@@ -591,9 +591,7 @@ async def test_post_scan_thumbnail_retried_once_then_succeeds() -> None:
 
     assert call_count == 2, "run_thumbnail_stage must be called twice (fail + retry)"
     upload = ctx["db_sessionmaker"].return_value.scalar.return_value
-    assert upload.thumbnail_status == "ok", (
-        "thumbnail_status must be 'ok' when retry succeeds"
-    )
+    assert upload.thumbnail_status == "ok", "thumbnail_status must be 'ok' when retry succeeds"
 
 
 @pytest.mark.asyncio

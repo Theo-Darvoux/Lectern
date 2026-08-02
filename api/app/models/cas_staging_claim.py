@@ -19,5 +19,7 @@ class CasStagingClaim(UUIDMixin, Base):
     )
     file_key: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

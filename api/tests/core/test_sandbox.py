@@ -24,7 +24,9 @@ def test_resolve_bwrap_missing():
                 _resolve_bwrap()
 
 
-def test_sandboxed_run_basic_command():
+def test_sandboxed_run_basic_command(tmp_path: Path):
+    test_dir = tmp_path / "test"
+    test_dir.mkdir(parents=True, exist_ok=True)
     # Mock resolve_bwrap to return dummy path
     with patch("app.core.security.sandbox._resolve_bwrap", return_value="/usr/bin/bwrap"):
         # Mock subprocess.Popen to avoid actual execution
@@ -37,7 +39,7 @@ def test_sandboxed_run_basic_command():
             mock_popen.return_value = proc
 
             cmd = ["ffmpeg", "-version"]
-            sandboxed_run(cmd, rw_paths=["/tmp/test"], timeout=10)
+            sandboxed_run(cmd, rw_paths=[test_dir], timeout=10)
 
             # Verify the bwrap command construction
             args, kwargs = mock_popen.call_args
@@ -51,14 +53,13 @@ def test_sandboxed_run_basic_command():
                 assert bwrap_cmd[bwrap_cmd.index("--tmpfs") + 1] in ("/proc", "/tmp")
 
             assert "--bind" in bwrap_cmd
-            assert "/tmp/test" in bwrap_cmd
+            assert str(test_dir) in bwrap_cmd
 
             assert "/proc" in bwrap_cmd or "--proc" in bwrap_cmd
 
             assert "--" in bwrap_cmd
             assert bwrap_cmd[-2] == "ffmpeg"
             assert bwrap_cmd[-1] == "-version"
-
 
 
 # ── Real Environment Smoke Tests (Functional) ───────────────────────────────

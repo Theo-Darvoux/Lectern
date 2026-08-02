@@ -59,9 +59,7 @@ def _resolve_prlimit() -> str:
         _prlimit_path = shutil.which("prlimit")
         _prlimit_checked = True
     if _prlimit_path is None:
-        raise RuntimeError(
-            "prlimit is required for sandbox resource limits but was not found."
-        )
+        raise RuntimeError("prlimit is required for sandbox resource limits but was not found.")
     return _prlimit_path
 
 
@@ -140,12 +138,10 @@ def _sandbox_command(
 
     processing_root = _processing_root()
     validated_ro = [
-        _validate_bind_path(path, processing_root=processing_root)
-        for path in (ro_paths or ())
+        _validate_bind_path(path, processing_root=processing_root) for path in (ro_paths or ())
     ]
     validated_rw = [
-        _validate_bind_path(path, processing_root=processing_root)
-        for path in (rw_paths or ())
+        _validate_bind_path(path, processing_root=processing_root) for path in (rw_paths or ())
     ]
 
     for ro_path in validated_ro:
@@ -171,9 +167,7 @@ def _sandbox_command(
     else:
         bwrap_cmd.append("--unshare-all")
 
-    bwrap_cmd.extend(
-        ["--die-with-parent", "--new-session", "--dev", "/dev", "--chdir", "/tmp"]
-    )
+    bwrap_cmd.extend(["--die-with-parent", "--new-session", "--dev", "/dev", "--chdir", "/tmp"])
     if Path("/.dockerenv").exists():
         bwrap_cmd.extend(["--size", "104857600", "--tmpfs", "/proc"])
     else:
@@ -188,7 +182,7 @@ def _sandbox_command(
     for path in dict.fromkeys(validated_rw):
         bwrap_cmd.extend(["--bind", str(path), str(path)])
 
-    return [*_resource_limit_prefix(), *bwrap_cmd, "--", *cmd]
+    return [*bwrap_cmd, "--", *_resource_limit_prefix(), *cmd]
 
 
 def _read_sync_bounded_stream(stream: Any, max_bytes: int) -> bytes:

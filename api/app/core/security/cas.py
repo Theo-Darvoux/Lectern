@@ -63,7 +63,7 @@ def _operation_marker_key(operation_id: str) -> str:
 
 
 async def increment_cas_ref(
-    redis: Redis[Any],
+    redis: Redis[Any] | Any,
     sha256: str,
     initial_data: dict[str, Any] | None = None,
     ttl_seconds: int | None = None,
@@ -96,9 +96,7 @@ async def increment_cas_ref(
         raise CasReferenceError(f"CAS ref increment failed for {sha256}") from exc
 
 
-async def decrement_cas_ref(
-    redis: Redis[Any], sha256: str, *, operation_id: str
-) -> int:
+async def decrement_cas_ref(redis: Redis[Any] | Any, sha256: str, *, operation_id: str) -> int:
     """Idempotently decrement the CAS ref count for one durable operation."""
     cas_key = hmac_cas_key(sha256)
     try:

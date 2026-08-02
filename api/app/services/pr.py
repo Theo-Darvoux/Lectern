@@ -212,11 +212,7 @@ async def _cleanup_pr_resources(
 
     if cas_payload_refs:
         upload_rows = list(
-            (
-                await db.scalars(
-                    select(Upload).where(Upload.final_key.in_(cas_payload_refs))
-                )
-            ).all()
+            (await db.scalars(select(Upload).where(Upload.final_key.in_(cas_payload_refs)))).all()
         )
         uploads_by_key = {row.final_key: row for row in upload_rows if row.final_key}
         refs_to_release: list[str] = []
@@ -523,9 +519,9 @@ async def _make_version_for_file(
         upload_row = (
             await db.execute(
                 select(Upload.size_bytes, Upload.content_sha256)
-            .where(Upload.final_key == file_key)
-            .order_by(Upload.updated_at.desc())
-            .limit(1)
+                .where(Upload.final_key == file_key)
+                .order_by(Upload.updated_at.desc())
+                .limit(1)
             )
         ).one_or_none()
         upload_size = upload_row[0] if upload_row is not None else None
@@ -1305,7 +1301,11 @@ async def create_pull_request_service(
                 raise BadRequestError(
                     "One or more files do not have a valid security claim for your account."
                 )
-            if expected_sha and key.startswith(cas_prefix) and declared_hashes.get(key) != expected_sha:
+            if (
+                expected_sha
+                and key.startswith(cas_prefix)
+                and declared_hashes.get(key) != expected_sha
+            ):
                 raise BadRequestError("A CAS file hash does not match its verified upload claim")
 
         for key, claim in claims_by_key.items():

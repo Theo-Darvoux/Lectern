@@ -42,7 +42,7 @@ x-common-env: &common-env
 
 x-worker-base: &worker-base
   restart: unless-stopped
-  entrypoint: [ "./worker-start.sh" ]
+  entrypoint: [ "./scripts/worker-start.sh" ]
   depends_on:
     postgres:
       condition: service_healthy

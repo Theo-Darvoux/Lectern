@@ -53,11 +53,11 @@ def resolve_safe_url(url: str) -> ResolvedHttpsUrl | None:
             addresses = (str(literal),)
         except ValueError:
             try:
-                infos = socket.getaddrinfo(
-                    hostname, parsed.port or 443, type=socket.SOCK_STREAM
-                )
+                infos = socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM)
             except OSError as exc:
-                logger.warning("Outbound URL blocked: DNS resolution failed for %s: %s", hostname, exc)
+                logger.warning(
+                    "Outbound URL blocked: DNS resolution failed for %s: %s", hostname, exc
+                )
                 return None
             addresses = tuple(dict.fromkeys(str(info[4][0]) for info in infos))
 

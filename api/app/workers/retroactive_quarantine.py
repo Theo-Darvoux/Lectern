@@ -221,11 +221,9 @@ async def _quarantine_material_versions(
                 .values(deleted_at=now)
             )
             logger.warning(
-                "retroactive_quarantine: soft-deleted Material %s "
-                "(all versions were malicious).",
+                "retroactive_quarantine: soft-deleted Material %s (all versions were malicious).",
                 mid_str,
             )
-
 
 
 async def _emit_malicious_sse(

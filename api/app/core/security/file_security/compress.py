@@ -5,7 +5,6 @@ SVG safety is always checked regardless of file size.
 Fail-open: returns original path + size on any non-security error.
 """
 
-import asyncio
 import logging
 import tempfile
 import zipfile
@@ -23,7 +22,6 @@ from app.core.security.file_security._concurrency import (
     image_guard,
 )
 from app.core.security.file_security._image import _compress_image_path
-
 from app.core.security.file_security._pdf import _compress_pdf_path
 from app.core.security.file_security._svg import SvgSecurityError, _optimize_svg, check_svg_safety
 from app.core.security.file_security._zip import _gzip_compress_path, _recompress_zip_path
@@ -162,7 +160,6 @@ async def compress_file_path(
             async with image_guard():
                 compressed, res_mime = await _shielded_to_thread(_compress_image_path, file_path)
             return CompressResultPath(compressed, compressed.stat().st_size, None, res_mime)
-
 
     except SvgSecurityError:
         raise

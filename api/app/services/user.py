@@ -278,9 +278,7 @@ async def update_user_profile(
                         )
 
                         async with _get_concurrency_guard("image"):
-                            processed_bytes = await asyncio.to_thread(
-                                process_avatar, local_input
-                            )
+                            processed_bytes = await asyncio.to_thread(process_avatar, local_input)
                         # 3. Upload to permanent avatars/ prefix
                         avatar_uuid = uuid_pkg.uuid4()
                         new_key = f"avatars/{user.id}/{avatar_uuid}.webp"

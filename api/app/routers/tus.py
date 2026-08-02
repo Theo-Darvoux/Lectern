@@ -323,9 +323,7 @@ async def tus_patch(
         if inflight > settings.tus_max_concurrent_per_user:
             return Response(
                 status_code=429,
-                headers=_tus_headers(
-                    **{"X-Lectern-Error": UploadErrorCode.TUS_CONCURRENCY_LIMIT}
-                ),
+                headers=_tus_headers(**{"X-Lectern-Error": UploadErrorCode.TUS_CONCURRENCY_LIMIT}),
             )
 
         if request.headers.get("Content-Type", "") != "application/offset+octet-stream":
@@ -449,12 +447,9 @@ async def tus_patch(
                     )
 
                 if chunk_size == 0:
-                    if (
-                        current_offset == total_length
-                        and (
-                            state.get("multipart_completed") == "1"
-                            or await object_exists(state["quarantine_key"])
-                        )
+                    if current_offset == total_length and (
+                        state.get("multipart_completed") == "1"
+                        or await object_exists(state["quarantine_key"])
                     ):
                         quarantine_key = state["quarantine_key"]
                         await redis.zadd(

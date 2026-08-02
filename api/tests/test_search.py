@@ -791,9 +791,7 @@ async def test_ensure_search_key_reuses_existing_provisioned_key():
     probe.index = MagicMock(
         return_value=MagicMock(
             search=AsyncMock(
-                side_effect=MeilisearchApiError(
-                    "invalid_api_key", MagicMock(status_code=403)
-                )
+                side_effect=MeilisearchApiError("invalid_api_key", MagicMock(status_code=403))
             )
         )
     )

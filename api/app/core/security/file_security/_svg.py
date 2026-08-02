@@ -143,9 +143,7 @@ def check_svg_safety_stream(file_obj: IO[bytes], filename: str = "") -> None:
                         # Relative and absolute paths are external resources too;
                         # checking URL schemes alone would allow `../asset` and
                         # `/asset` to escape this policy.
-                        if normalized_value and not _SVG_LOCAL_HREF_RE.fullmatch(
-                            normalized_value
-                        ):
+                        if normalized_value and not _SVG_LOCAL_HREF_RE.fullmatch(normalized_value):
                             logger.warning("SVG external URL in attr %s of %s", bare_attr, filename)
                             raise SvgSecurityError(
                                 "SVG files containing external URLs are not allowed."

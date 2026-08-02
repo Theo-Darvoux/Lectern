@@ -64,9 +64,7 @@ def _walk_page_tree_for_actions(page_node: pikepdf.Dictionary, depth: int = 0) -
             _walk_page_tree_for_actions(cast(pikepdf.Dictionary, kids[i]), depth + 1)
 
 
-def _validate_goto_action(
-    action: pikepdf.Dictionary, *, context: str, depth: int = 0
-) -> None:
+def _validate_goto_action(action: pikepdf.Dictionary, *, context: str, depth: int = 0) -> None:
     """Allow only local GoTo actions, including every chained /Next action."""
     if depth > MAX_PDF_TREE_DEPTH:
         raise ValueError(f"PDF {context} action chain exceeds the maximum safe depth")
@@ -450,9 +448,21 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
 
                                     pil_image = pil_image.convert("RGB")
                                     r, g, b = pil_image.split()
-                                    r_m = r.point(lambda p: 255 if r_min_8 <= p <= r_max_8 else 0)
-                                    g_m = g.point(lambda p: 255 if g_min_8 <= p <= g_max_8 else 0)
-                                    b_m = b.point(lambda p: 255 if b_min_8 <= p <= b_max_8 else 0)
+                                    r_m = r.point(
+                                        lambda p, r0=r_min_8, r1=r_max_8: (
+                                            255 if r0 <= p <= r1 else 0
+                                        )
+                                    )
+                                    g_m = g.point(
+                                        lambda p, g0=g_min_8, g1=g_max_8: (
+                                            255 if g0 <= p <= g1 else 0
+                                        )
+                                    )
+                                    b_m = b.point(
+                                        lambda p, b0=b_min_8, b1=b_max_8: (
+                                            255 if b0 <= p <= b1 else 0
+                                        )
+                                    )
                                     from PIL import ImageChops
 
                                     trans = ImageChops.darker(ImageChops.darker(r_m, g_m), b_m)
@@ -465,7 +475,9 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                     v_max_8 = int((v_max / max_val) * 255)
                                     l_chan = pil_image.convert("L")
                                     trans = l_chan.point(
-                                        lambda p: 255 if v_min_8 <= p <= v_max_8 else 0
+                                        lambda p, v0=v_min_8, v1=v_max_8: (
+                                            255 if v0 <= p <= v1 else 0
+                                        )
                                     )
                                     alpha = trans.point(lambda p: 255 - p)
                                     pil_image = pil_image.convert("RGBA")
@@ -555,6 +567,7 @@ def _validate_pdf_image_dimensions(image: pikepdf.Stream) -> None:
         raise ValueError(
             f"PDF embedded image exceeds pixel limit ({pixels:,} > {MAX_IMAGE_PIXELS:,})"
         )
+
 
 _VECTOR_HEAVY_BYTES_PER_PAGE = 400 * 1024
 _VECTOR_HEAVY_MAX_IMAGE_PIXELS = 500_000

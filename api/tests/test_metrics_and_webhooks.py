@@ -141,7 +141,9 @@ async def test_webhook_dispatched_successfully() -> None:
     upload = _make_upload()
     ctx = _make_ctx(upload)
 
-    with patch("app.workers.webhook_dispatch.post_pinned_https", new_callable=AsyncMock) as mock_post:
+    with patch(
+        "app.workers.webhook_dispatch.post_pinned_https", new_callable=AsyncMock
+    ) as mock_post:
         mock_response = MagicMock()
         mock_response.is_success = True
         mock_response.status_code = 200
@@ -223,7 +225,9 @@ async def test_webhook_skipped_when_no_url() -> None:
     upload = _make_upload(webhook_url=None)
     ctx = _make_ctx(upload)
 
-    with patch("app.workers.webhook_dispatch.post_pinned_https", new_callable=AsyncMock) as mock_post:
+    with patch(
+        "app.workers.webhook_dispatch.post_pinned_https", new_callable=AsyncMock
+    ) as mock_post:
         await dispatch_webhook(ctx, upload_id=upload.upload_id)
 
     mock_post.assert_not_called()
@@ -233,7 +237,9 @@ async def test_webhook_skipped_when_no_url() -> None:
 async def test_webhook_skipped_when_no_session_factory() -> None:
     from app.workers.webhook_dispatch import dispatch_webhook
 
-    with patch("app.workers.webhook_dispatch.post_pinned_https", new_callable=AsyncMock) as mock_post:
+    with patch(
+        "app.workers.webhook_dispatch.post_pinned_https", new_callable=AsyncMock
+    ) as mock_post:
         await dispatch_webhook({}, upload_id="some-id")
 
     mock_post.assert_not_called()

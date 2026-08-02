@@ -24,6 +24,7 @@ def _make_temp_path(suffix: str = "") -> Path:
     tmp.close()
     return Path(tmp.name)
 
+
 from app.core.database.redis import (
     RedisSemaphoreUnavailableError,
     redis_client,
@@ -160,5 +161,3 @@ async def run_managed_subprocess(
             stderr=result.stderr,
         )
     return result
-
-

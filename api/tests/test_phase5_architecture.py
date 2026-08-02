@@ -81,9 +81,7 @@ async def test_quota_check_falls_back_to_db_on_redis_failure(mock_redis: AsyncMo
     mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
     mock_session_ctx.__aexit__ = AsyncMock(return_value=None)
 
-    with patch(
-        "app.core.database.database.async_session_factory", return_value=mock_session_ctx
-    ):
+    with patch("app.core.database.database.async_session_factory", return_value=mock_session_ctx):
         # Should not raise
         await _check_pending_cap(user_id, mock_redis, mock_db)
 
@@ -104,9 +102,7 @@ async def test_quota_check_db_fallback_enforces_cap(mock_redis: AsyncMock):
     mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
     mock_session_ctx.__aexit__ = AsyncMock(return_value=None)
 
-    with patch(
-        "app.core.database.database.async_session_factory", return_value=mock_session_ctx
-    ):
+    with patch("app.core.database.database.async_session_factory", return_value=mock_session_ctx):
         with pytest.raises(BadRequestError):
             await _check_pending_cap(user_id, mock_redis, mock_db)
 

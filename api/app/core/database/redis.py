@@ -169,7 +169,6 @@ async def redis_lock(
         raise RedisConcurrencyError(f"Lost lock ownership for {lock_name}") from release_error
 
 
-
 @asynccontextmanager
 async def redis_semaphore(
     redis: RedisClient,
@@ -247,7 +246,6 @@ async def redis_semaphore(
                 body_error = exc
                 raise
     finally:
-
         renewal_task.cancel()
         with contextlib.suppress(Exception, asyncio.CancelledError):
             await renewal_task
@@ -278,5 +276,3 @@ async def redis_semaphore(
         raise RedisConcurrencyError(f"Lost semaphore lease for {sem_name}") from renewal_error
     if cleanup_error is not None:
         raise cleanup_error
-
-

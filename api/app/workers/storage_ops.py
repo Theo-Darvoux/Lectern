@@ -43,9 +43,7 @@ async def release_cas_references(ctx: dict, references: list[dict]) -> None:  # 
     for reference in references:
         sha256 = str(reference["sha256"])
         try:
-            await decrement_cas_ref(
-                redis, sha256, operation_id=str(reference["operation_id"])
-            )
+            await decrement_cas_ref(redis, sha256, operation_id=str(reference["operation_id"]))
         except Exception as exc:
             logger.error("Failed to release CAS reference %.16s…: %s", sha256, exc)
             errors.append(exc)
@@ -74,9 +72,7 @@ async def delete_storage_objects(ctx: dict, keys: list[str]) -> None:  # type: i
         raise ExceptionGroup("One or more storage objects could not be deleted", errors)
 
 
-async def release_upload_quota(
-    ctx: dict, user_id: str, members: list[str]
-) -> None:  # type: ignore[type-arg]
+async def release_upload_quota(ctx: dict, user_id: str, members: list[str]) -> None:  # type: ignore[type-arg]
     """Remove synthetic upload reservations after their DB owners are deleted."""
     redis = ctx.get("redis")
     if redis is None:

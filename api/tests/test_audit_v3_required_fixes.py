@@ -2,15 +2,12 @@
 
 import asyncio
 import io
-import os
-import signal
 import subprocess
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PIL import Image, ImageOps
+from PIL import Image
 
 from app.config import settings
 from app.core.database.redis import RedisSemaphoreUnavailableError
@@ -20,7 +17,6 @@ from app.core.security.file_security._concurrency import (
     run_managed_subprocess,
 )
 from app.core.security.file_security._image import (
-    _strip_image_from_path,
     _strip_image_metadata,
 )
 from app.core.security.sandbox import (
@@ -113,7 +109,6 @@ def test_sync_sandboxed_run_output_limit():
             sandboxed_run(["python3", "-c", script], timeout=2)
 
 
-
 # =============================================================================
 # 4. Animated-format policy test
 # =============================================================================
@@ -153,8 +148,6 @@ def test_palette_transparency_and_orientation():
     gif_transparent.info["transparency"] = 1
     buf_gif = io.BytesIO()
     gif_transparent.save(buf_gif, format="GIF", transparency=1)
-
-
 
     stripped_gif_bytes = _strip_image_metadata(buf_gif.getvalue())
     with Image.open(io.BytesIO(stripped_gif_bytes)) as out_gif:
@@ -254,6 +247,7 @@ async def test_complete_deadline_passes_remaining_time():
 async def test_redis_expired_lease_renewal_fails():
     """Verify that attempting to renew an expired or missing lease returns 0 and raises RedisConcurrencyError."""
     from unittest.mock import AsyncMock
+
     from app.core.database.redis import RedisConcurrencyError, redis_semaphore
 
     mock_client = AsyncMock()
@@ -277,6 +271,7 @@ async def test_redis_expired_lease_renewal_fails():
 async def test_redis_body_exception_preserved_over_cleanup_error():
     """Verify that a body exception is never overwritten by a cleanup or renewal error."""
     from unittest.mock import AsyncMock
+
     from app.core.database.redis import redis_semaphore
 
     mock_client = AsyncMock()
@@ -290,7 +285,6 @@ async def test_redis_body_exception_preserved_over_cleanup_error():
         with pytest.raises(ZeroDivisionError):
             async with redis_semaphore(mock_client, "test_sem", limit=1, timeout=1.0, expire=10):
                 raise ZeroDivisionError("Original body error")
-
 
 
 # =============================================================================
@@ -316,7 +310,7 @@ def test_compress_image_applies_exif_orientation():
             assert out_img.width < 2048
     finally:
         tmp_input.unlink(missing_ok=True)
-        if 'compressed_path' in locals() and compressed_path != tmp_input:
+        if "compressed_path" in locals() and compressed_path != tmp_input:
             compressed_path.unlink(missing_ok=True)
 
 
@@ -340,7 +334,8 @@ def test_compress_image_mime_accuracy_for_uncompressed_or_failed():
 @pytest.mark.asyncio
 async def test_redis_lock_body_exception_preserved():
     """Verify that redis_lock preserves body exceptions even if release fails."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import AsyncMock
+
     from app.core.database.redis import redis_lock
 
     mock_client = MagicMock()
@@ -358,6 +353,7 @@ async def test_redis_lock_body_exception_preserved():
 async def test_ooxml_malformed_rels_before_vba_fails_closed():
     """Verify that an OOXML file with malformed .rels before vbaProject.bin raises SanitizationError and never fails open."""
     import zipfile
+
     from app.core.security.file_security import strip_metadata_file
     from app.core.security.file_security._concurrency import _make_temp_path
     from app.core.security.file_security.errors import SanitizationError
@@ -369,10 +365,8 @@ async def test_ooxml_malformed_rels_before_vba_fails_closed():
 
     try:
         with pytest.raises(SanitizationError):
-            await strip_metadata_file(tmp_docx, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            await strip_metadata_file(
+                tmp_docx, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
     finally:
         tmp_docx.unlink(missing_ok=True)
-
-
-
-

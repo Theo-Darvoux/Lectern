@@ -1,6 +1,5 @@
 """Office document security and metadata stripping."""
 
-import asyncio
 import logging
 import shutil
 import subprocess
@@ -48,9 +47,7 @@ def _check_ole2_macros(source: bytes | Path) -> None:
         else:
             parser = VBA_Parser(str(source))
         if parser.detect_vba_macros():
-            raise UnsafeFileError(
-                "Macro-enabled legacy Office files are not supported."
-            )
+            raise UnsafeFileError("Macro-enabled legacy Office files are not supported.")
     except (UnsafeFileError, SanitizationError):
         raise
     except Exception as exc:
@@ -77,9 +74,7 @@ async def _strip_ole2_from_path(file_path: Path) -> Path:
                 result.returncode,
                 result.stderr[:500],
             )
-            raise SanitizationError(
-                "Failed to sanitize legacy Office document metadata."
-            )
+            raise SanitizationError("Failed to sanitize legacy Office document metadata.")
         return new_path
     except BaseException:
         new_path.unlink(missing_ok=True)
@@ -187,9 +182,7 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
             is_epub = mime_type == "application/epub+zip"
             is_ooxml = not is_odf and not is_epub
             if is_epub:
-                items.sort(
-                    key=lambda item: _sanitize_zip_entry_name(item.filename) != "mimetype"
-                )
+                items.sort(key=lambda item: _sanitize_zip_entry_name(item.filename) != "mimetype")
 
             if sum(item.file_size for item in items) > _ZIP_MAX_TOTAL_BYTES:
                 raise SanitizationError("ZIP archive uncompressed content is too large")
@@ -203,9 +196,7 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                 safe_name = _sanitize_zip_entry_name(item.filename)
                 normalized_name = safe_name.casefold()
                 if normalized_name in normalized_names:
-                    raise SanitizationError(
-                        f"ZIP contains duplicate sanitized entry '{safe_name}'"
-                    )
+                    raise SanitizationError(f"ZIP contains duplicate sanitized entry '{safe_name}'")
                 normalized_names.add(normalized_name)
                 if is_ooxml and _is_ooxml_active_content(safe_name):
                     raise UnsafeFileError(
@@ -255,7 +246,10 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                     output_archive.writestr(new_info, relationship_data)
                     continue
 
-                with source_archive.open(item) as source, output_archive.open(new_info, "w") as dest:
+                with (
+                    source_archive.open(item) as source,
+                    output_archive.open(new_info, "w") as dest,
+                ):
                     written = 0
                     while chunk := source.read(65536):
                         written += len(chunk)
@@ -272,9 +266,7 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
     except (UnsafeFileError, SanitizationError):
         raise
     except Exception as exc:
-        raise SanitizationError(
-            "Failed to validate and sanitize document package"
-        ) from exc
+        raise SanitizationError("Failed to validate and sanitize document package") from exc
 
 
 async def _strip_ooxml_from_path(file_path: Path, mime_type: str | None = None) -> Path:

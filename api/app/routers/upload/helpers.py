@@ -47,9 +47,7 @@ async def _get_storage_usage(db: AsyncSession, redis: "Redis") -> int:  # type: 
     )
     all_refs = union_all(material_refs, upload_refs).subquery()
     unique_sizes = (
-        select(func.max(all_refs.c.size).label("size"))
-        .group_by(all_refs.c.sha256)
-        .subquery()
+        select(func.max(all_refs.c.size).label("size")).group_by(all_refs.c.sha256).subquery()
     )
 
     async def _from_db() -> int:
@@ -156,9 +154,7 @@ async def _reserve_storage_limit(
         )
 
 
-async def _release_storage_reservation(
-    reservation_id: str, redis: Any
-) -> None:
+async def _release_storage_reservation(reservation_id: str, redis: Any) -> None:
     """Release a capacity reservation; repeated calls are harmless."""
     if not settings.max_storage_gb:
         return

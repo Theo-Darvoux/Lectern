@@ -467,9 +467,7 @@ async def client(
                                 if isinstance(encoded, dict):
                                     job_kwargs = encoded
                                     job_args.pop()
-                            await redis_core.arq_pool.enqueue_job(
-                                job[0], *job_args, **job_kwargs
-                            )
+                            await redis_core.arq_pool.enqueue_job(job[0], *job_args, **job_kwargs)
             except Exception:
                 await session.rollback()
                 raise

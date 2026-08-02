@@ -421,9 +421,7 @@ class UploadPipeline:
         if scanner is None:
             scanner = _get_fallback_scanner()
         try:
-            threat = await scanner.check_malwarebazaar(
-                self.original_sha256, self.original_filename
-            )
+            threat = await scanner.check_malwarebazaar(self.original_sha256, self.original_filename)
         finally:
             if owns_scanner:
                 await scanner.close()

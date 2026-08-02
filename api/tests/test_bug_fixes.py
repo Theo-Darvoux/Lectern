@@ -53,8 +53,9 @@ async def test_delete_storage_objects_reports_cas_rejection() -> None:
     ctx = {"redis": mock_redis}
 
     mock_delete = AsyncMock()
-    with patch("app.workers.storage_ops.delete_object", mock_delete), pytest.raises(
-        ExceptionGroup, match="could not be deleted"
+    with (
+        patch("app.workers.storage_ops.delete_object", mock_delete),
+        pytest.raises(ExceptionGroup, match="could not be deleted"),
     ):
         await delete_storage_objects(ctx, ["cas/deadbeef"])
 

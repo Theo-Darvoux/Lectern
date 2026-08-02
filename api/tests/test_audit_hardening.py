@@ -381,8 +381,7 @@ async def test_cleanup_expired_cas_staging_claim_releases_once(
         ]
     ]
     assert any(
-        call.args[:2] == ("storage:total_usage_bytes", 0)
-        for call in mock_redis.set.await_args_list
+        call.args[:2] == ("storage:total_usage_bytes", 0) for call in mock_redis.set.await_args_list
     )
 
 
