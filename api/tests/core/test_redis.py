@@ -192,3 +192,79 @@ async def test_close_redis_client():
     with patch("app.core.database.redis.redis_client.aclose", new_callable=AsyncMock) as mock_close:
         await close_redis_client()
         mock_close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_redis_semaphore_repeated_cancellation_waits_for_release():
+    """Repeated caller cancellation cannot abandon holder removal."""
+    import asyncio
+
+    mock_redis = AsyncMock()
+    release_started = asyncio.Event()
+    allow_release = asyncio.Event()
+
+    async def delayed_zrem(*_args):
+        release_started.set()
+        await allow_release.wait()
+        return 1
+
+    mock_redis.zrem.side_effect = delayed_zrem
+
+    async def mock_script(*_args, **_kwargs):
+        return 1
+
+    entered = asyncio.Event()
+
+    async def guarded_body() -> None:
+        with patch("app.core.database.redis._semaphore_script", side_effect=mock_script):
+            async with redis_semaphore(mock_redis, "cancel_cleanup", limit=1, expire=10):
+                entered.set()
+                await asyncio.Event().wait()
+
+    task = asyncio.create_task(guarded_body())
+    await entered.wait()
+    task.cancel()
+    await release_started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    allow_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    mock_redis.zrem.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_external_cancellation_wins_lease_loss_race():
+    """A caller cancellation racing renewal failure must not become a Redis error."""
+    import asyncio
+
+    mock_redis = AsyncMock()
+    mock_redis.zrem.return_value = 1
+    renewal_started = asyncio.Event()
+
+    async def mock_script(*_args, **kwargs):
+        operation = kwargs["args"][2]
+        if operation == "renew":
+            renewal_started.set()
+            await asyncio.sleep(0)
+            return 0
+        return 1
+
+    entered = asyncio.Event()
+
+    async def guarded_body() -> None:
+        with patch("app.core.database.redis._semaphore_script", side_effect=mock_script):
+            async with redis_semaphore(mock_redis, "cancel_race", limit=1, expire=0.03):
+                entered.set()
+                await asyncio.Event().wait()
+
+    task = asyncio.create_task(guarded_body())
+    await entered.wait()
+    await renewal_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    mock_redis.zrem.assert_awaited_once()

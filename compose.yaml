@@ -39,6 +39,13 @@ x-common-env: &common-env
   EUROOFFICE_FILE_TOKEN_SECRET: ${EUROOFFICE_FILE_TOKEN_SECRET}
   WORKER_ZIP_URL: ${WORKER_ZIP_URL:-}
   WORKER_ZIP_HMAC_SECRET: ${WORKER_ZIP_HMAC_SECRET:-}
+  PROCESSING_ROOT: ${PROCESSING_ROOT:-/var/lib/lectern/processing}
+  SANDBOX_MEMORY_LIMIT_MB: ${SANDBOX_MEMORY_LIMIT_MB:-1024}
+  SANDBOX_CPU_LIMIT_SECONDS: ${SANDBOX_CPU_LIMIT_SECONDS:-60}
+  SANDBOX_FILE_SIZE_LIMIT_MB: ${SANDBOX_FILE_SIZE_LIMIT_MB:-100}
+  SANDBOX_PROCESS_LIMIT: ${SANDBOX_PROCESS_LIMIT:-64}
+  GLOBAL_MAX_SUBPROCESSES: ${GLOBAL_MAX_SUBPROCESSES:-4}
+  MAX_CONCURRENT_IMAGE_OPS: ${MAX_CONCURRENT_IMAGE_OPS:-1}
 
 x-worker-base: &worker-base
   restart: unless-stopped
@@ -58,6 +65,7 @@ x-worker-base: &worker-base
     - SYS_ADMIN
   ulimits:
     core: 0
+  pids_limit: ${WORKER_PIDS_LIMIT:-256}
   healthcheck:
     test: [ "CMD", "python", "-c", "import os,sys; sys.exit(0 if any(b'arq' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit()) else 1)" ]
     interval: 30s

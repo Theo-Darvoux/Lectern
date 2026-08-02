@@ -8,6 +8,7 @@ import gzip
 import hashlib
 import inspect
 import logging
+import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,6 +20,7 @@ from aiobotocore.config import AioConfig
 
 from app.config import settings
 from app.core.common.constants import MAGIC_HEADER_SIZE
+from app.core.security.async_utils import shielded_await, shielded_to_thread
 
 if TYPE_CHECKING:
     from types_aiobotocore_s3.client import S3Client
@@ -74,6 +76,32 @@ async def _close_response_body(body: Any) -> None:
     close_result = body.close()
     if inspect.isawaitable(close_result):
         await close_result
+
+
+async def _finish_response_body(
+    body: Any,
+    *,
+    primary_error: BaseException | None,
+) -> None:
+    """Close an S3 body without abandoning cleanup or masking a primary error."""
+    try:
+        await shielded_await(
+            _close_response_body(body),
+            description="S3 response body close",
+        )
+    except asyncio.CancelledError:
+        # shielded_await reports cancellation only after close has completed.
+        # Preserve an existing primary error; otherwise propagate cancellation.
+        if primary_error is None:
+            raise
+    except Exception as cleanup_error:
+        if primary_error is None:
+            raise
+        logger.warning(
+            "S3 response body cleanup failed after %s: %s",
+            type(primary_error).__name__,
+            cleanup_error,
+        )
 
 
 class S3Backend:
@@ -313,7 +341,11 @@ class S3Backend:
             part_number = 1
             with open(path, "rb") as fh:
                 while True:
-                    chunk = await asyncio.to_thread(fh.read, effective_chunk_size)
+                    chunk = await shielded_to_thread(
+                        fh.read,
+                        effective_chunk_size,
+                        description="multipart file read",
+                    )
                     if not chunk:
                         break
                     pending.add(asyncio.create_task(_upload_one(part_number, chunk)))
@@ -334,14 +366,39 @@ class S3Backend:
             parts: list[dict[str, int | str]] = sorted(results, key=lambda p: int(p["PartNumber"]))
             await self.complete_multipart_upload(file_key, s3_upload_id, parts)
         except BaseException:
+            primary_error = sys.exception()
             for task in pending:
                 task.cancel()
             if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+                try:
+                    await shielded_await(
+                        asyncio.gather(*pending, return_exceptions=True),
+                        description="multipart task cleanup",
+                    )
+                except asyncio.CancelledError:
+                    # Pending tasks have completed; preserve the primary result.
+                    pass
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Multipart task cleanup failed after %s: %s",
+                        type(primary_error).__name__ if primary_error else "unknown error",
+                        cleanup_error,
+                    )
             try:
-                await asyncio.shield(self.abort_multipart_upload(file_key, s3_upload_id))
-            except Exception:
-                logger.exception("Failed to abort multipart upload %s", s3_upload_id)
+                await shielded_await(
+                    self.abort_multipart_upload(file_key, s3_upload_id),
+                    description="multipart upload abort",
+                )
+            except asyncio.CancelledError:
+                # Abort completed before cancellation was re-delivered.
+                pass
+            except Exception as cleanup_error:
+                logger.warning(
+                    "Failed to abort multipart upload %s after %s: %s",
+                    s3_upload_id,
+                    type(primary_error).__name__ if primary_error else "unknown error",
+                    cleanup_error,
+                )
             raise
 
     async def generate_presigned_upload_part(
@@ -419,12 +476,18 @@ class S3Backend:
                         written += len(chunk)
                         if max_bytes is not None and written > max_bytes:
                             raise ValueError(f"Object {file_key!r} exceeds download size limit")
-                        await asyncio.to_thread(f.write, chunk)
+                        await shielded_to_thread(
+                            f.write, chunk, description="S3 download file write"
+                        )
             finally:
-                await _close_response_body(body)
+                await _finish_response_body(body, primary_error=sys.exception())
 
             if decompress and response.get("ContentEncoding") == "gzip":
-                await asyncio.to_thread(_decompress_gzip_file, dest_path)
+                await shielded_to_thread(
+                    _decompress_gzip_file,
+                    dest_path,
+                    description="gzip download decompression",
+                )
 
     async def download_file_raw(
         self, file_key: str, dest_path: str | Path, *, max_bytes: int | None = None
@@ -444,9 +507,11 @@ class S3Backend:
                         written += len(chunk)
                         if max_bytes is not None and written > max_bytes:
                             raise ValueError(f"Object {file_key!r} exceeds download size limit")
-                        await asyncio.to_thread(f.write, chunk)
+                        await shielded_to_thread(
+                            f.write, chunk, description="S3 download file write"
+                        )
             finally:
-                await _close_response_body(body)
+                await _finish_response_body(body, primary_error=sys.exception())
 
     async def get_object_headers(self, file_key: str) -> dict[str, str | None]:
         """Return the HTTP metadata headers stored on an S3 object."""
@@ -489,9 +554,11 @@ class S3Backend:
                             f.write(c)
                             hasher.update(c)
 
-                        await asyncio.to_thread(_write_and_hash)
+                        await shielded_to_thread(
+                            _write_and_hash, description="S3 download write and hash"
+                        )
             finally:
-                await _close_response_body(body)
+                await _finish_response_body(body, primary_error=sys.exception())
         if expected_size is not None and written != expected_size:
             raise ValueError(
                 f"Object {file_key!r} size changed during download ({written} != {expected_size})"
@@ -520,7 +587,7 @@ class S3Backend:
                     raise ValueError(f"Object {file_key!r} exceeds the read_full_object limit")
                 return data
             finally:
-                await _close_response_body(body)
+                await _finish_response_body(body, primary_error=sys.exception())
 
     async def read_object_bytes(self, file_key: str, byte_count: int = MAGIC_HEADER_SIZE) -> bytes:
         cfg = self._cfg()
@@ -533,7 +600,7 @@ class S3Backend:
                 try:
                     return cast(bytes, await body.read(byte_count))[:byte_count]
                 finally:
-                    await _close_response_body(body)
+                    await _finish_response_body(body, primary_error=sys.exception())
             except client.exceptions.ClientError as e:
                 if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
                     return b""
@@ -549,7 +616,7 @@ class S3Backend:
             try:
                 yield s3_body
             finally:
-                await _close_response_body(s3_body)
+                await _finish_response_body(s3_body, primary_error=sys.exception())
             return
 
         async with self._client(cfg) as client:
@@ -558,7 +625,7 @@ class S3Backend:
             try:
                 yield s3_body
             finally:
-                await _close_response_body(s3_body)
+                await _finish_response_body(s3_body, primary_error=sys.exception())
 
     # presigned URLs
 

@@ -319,21 +319,33 @@ async def _terminate_and_reap(
     stdout_task: asyncio.Task[bytes],
     stderr_task: asyncio.Task[bytes],
 ) -> None:
-    """Kill the process group, drain reader tasks, and reap the child."""
-    with contextlib.suppress(ProcessLookupError, OSError):
-        os.killpg(pgid, signal.SIGKILL)
-    with contextlib.suppress(ProcessLookupError, OSError):
-        process.kill()
+    """Kill, drain readers, and reap under one bounded cleanup deadline."""
 
-    for task in (stdout_task, stderr_task):
-        task.cancel()
-    await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+    async def _cleanup() -> None:
+        with contextlib.suppress(ProcessLookupError, OSError):
+            os.killpg(pgid, signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError, OSError):
+            process.kill()
+
+        for task in (stdout_task, stderr_task):
+            task.cancel()
+        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        await process.wait()
 
     try:
         async with asyncio.timeout(_CLEANUP_TIMEOUT_SECONDS):
-            await process.wait()
+            await _cleanup()
     except TimeoutError:
-        logger.error("Failed to reap sandboxed process %s after SIGKILL", process.pid)
+        logger.error(
+            "Timed out cleaning sandboxed process %s and its stream readers",
+            process.pid,
+        )
+        for task in (stdout_task, stderr_task):
+            task.cancel()
+        with contextlib.suppress(ProcessLookupError, OSError):
+            os.killpg(pgid, signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError, OSError):
+            process.kill()
 
 
 async def async_sandboxed_run(
@@ -343,16 +355,45 @@ async def async_sandboxed_run(
     ro_paths: Sequence[Path | str] | None = None,
     timeout: int = 60,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run and reliably reap a sandboxed process on success or cancellation."""
+    """Run and reliably reap a sandboxed process under one deadline."""
     wrapped = _sandbox_command(cmd, rw_paths=rw_paths, ro_paths=ro_paths)
-    process = await asyncio.create_subprocess_exec(
-        *wrapped,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=_sandbox_environment(),
-        start_new_session=True,
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    spawn_task = asyncio.create_task(
+        asyncio.create_subprocess_exec(
+            *wrapped,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_sandbox_environment(),
+            start_new_session=True,
+        )
     )
+    spawn_cancellation: asyncio.CancelledError | None = None
+    spawn_timed_out = False
+
+    while not spawn_task.done():
+        try:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                spawn_timed_out = True
+                await asyncio.shield(spawn_task)
+            else:
+                await asyncio.wait_for(asyncio.shield(spawn_task), timeout=remaining)
+        except TimeoutError:
+            # Do not abandon process creation: wait for the handle, then kill it.
+            spawn_timed_out = True
+        except asyncio.CancelledError as exc:
+            spawn_cancellation = spawn_cancellation or exc
+
+    try:
+        process = spawn_task.result()
+    except BaseException:
+        if spawn_cancellation is not None:
+            logger.exception("Sandbox process creation failed after caller cancellation")
+            raise spawn_cancellation
+        raise
+
     pgid = process.pid
     stdout_task = asyncio.create_task(
         _read_bounded_stream(process.stdout, _MAX_SUBPROCESS_OUTPUT_BYTES)
@@ -361,11 +402,7 @@ async def async_sandboxed_run(
         _read_bounded_stream(process.stderr, _MAX_SUBPROCESS_OUTPUT_BYTES)
     )
 
-    try:
-        async with asyncio.timeout(timeout):
-            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
-            await process.wait()
-    except BaseException:
+    async def _cleanup_process() -> None:
         cleanup_task = asyncio.create_task(
             _terminate_and_reap(process, pgid, stdout_task, stderr_task)
         )
@@ -375,12 +412,29 @@ async def async_sandboxed_run(
             except asyncio.CancelledError:
                 continue
             except Exception:
-                # The cleanup task is complete when its exception is observed.
                 break
         try:
             cleanup_task.result()
         except Exception:
             logger.exception("Subprocess cleanup failed")
+
+    if spawn_cancellation is not None or spawn_timed_out:
+        await _cleanup_process()
+        if spawn_cancellation is not None:
+            raise spawn_cancellation
+        raise TimeoutError(f"Sandbox process exceeded timeout of {timeout}s during creation")
+
+    remaining = deadline - loop.time()
+    if remaining <= 0:
+        await _cleanup_process()
+        raise TimeoutError(f"Sandbox process exceeded timeout of {timeout}s")
+
+    try:
+        async with asyncio.timeout(remaining):
+            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+            await process.wait()
+    except BaseException:
+        await _cleanup_process()
         raise
 
     return subprocess.CompletedProcess(wrapped, process.returncode or 0, stdout, stderr)

@@ -64,3 +64,48 @@ async def test_cancelled_extraction_holds_global_slot_until_thread_stops() -> No
         await second
 
     assert calls == 2
+
+
+def test_extract_zip_rejects_unicode_normalized_traversal(tmp_path) -> None:
+    archive_path = tmp_path / "upload.zip"
+    extraction_path = tmp_path / "extracted"
+    extraction_path.mkdir()
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("．．／escape.txt", b"payload")
+
+    with pytest.raises(BadRequestError, match="unsafe path"):
+        batch_zip._extract_zip_sync(str(archive_path), str(extraction_path), max_members=10)
+
+
+def test_extract_zip_rejects_casefold_and_hierarchy_collisions(tmp_path) -> None:
+    extraction_path = tmp_path / "extracted"
+    extraction_path.mkdir()
+
+    casefold_archive = tmp_path / "casefold.zip"
+    with zipfile.ZipFile(casefold_archive, "w") as archive:
+        archive.writestr("File.txt", b"one")
+        archive.writestr("file.txt", b"two")
+    with pytest.raises(BadRequestError, match="colliding file paths"):
+        batch_zip._extract_zip_sync(str(casefold_archive), str(extraction_path), max_members=10)
+
+    hierarchy_archive = tmp_path / "hierarchy.zip"
+    with zipfile.ZipFile(hierarchy_archive, "w") as archive:
+        archive.writestr("folder", b"file")
+        archive.writestr("folder/child.txt", b"child")
+    with pytest.raises(BadRequestError, match="colliding file paths"):
+        batch_zip._extract_zip_sync(str(hierarchy_archive), str(extraction_path), max_members=10)
+
+
+def test_extract_zip_persists_canonical_relative_path(tmp_path) -> None:
+    archive_path = tmp_path / "canonical.zip"
+    extraction_path = tmp_path / "extracted"
+    extraction_path.mkdir()
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("Ｆｏｌｄｅｒ／file.txt", b"payload")
+
+    entries, skipped = batch_zip._extract_zip_sync(
+        str(archive_path), str(extraction_path), max_members=10
+    )
+    assert skipped == []
+    assert entries[0].relative_path == "Folder/file.txt"
+    assert entries[0].filename == "file.txt"

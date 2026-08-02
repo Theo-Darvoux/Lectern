@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.config import settings
 from app.core.security.sandbox import _resolve_bwrap, sandboxed_run
 
 # ── Command Construction Unit Tests (Mocked) ────────────────────────────────
@@ -27,8 +28,12 @@ def test_resolve_bwrap_missing():
 def test_sandboxed_run_basic_command(tmp_path: Path):
     test_dir = tmp_path / "test"
     test_dir.mkdir(parents=True, exist_ok=True)
-    # Mock resolve_bwrap to return dummy path
-    with patch("app.core.security.sandbox._resolve_bwrap", return_value="/usr/bin/bwrap"):
+    # Mock external launchers and keep binds under an explicit processing root.
+    with (
+        patch.object(settings, "processing_root", str(tmp_path)),
+        patch("app.core.security.sandbox._resolve_bwrap", return_value="/usr/bin/bwrap"),
+        patch("app.core.security.sandbox._resolve_prlimit", return_value="/usr/bin/prlimit"),
+    ):
         # Mock subprocess.Popen to avoid actual execution
         with patch("app.core.security.sandbox.subprocess.Popen") as mock_popen:
             proc = MagicMock()

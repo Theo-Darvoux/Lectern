@@ -45,17 +45,41 @@ _SVG_DANGEROUS_VALUE_RE = re.compile(
 # (can embed scripts inside nested SVGs loaded via <use>).
 _SVG_DATA_SVG_RE = re.compile(r"data:\s*image/svg\+xml", re.IGNORECASE)
 
-# CSS injection vectors in <style> elements or style attributes.
-# Blocks url(), @import, and legacy IE expression().
-# Includes check for CSS comments (/*...*/) inside url() to prevent evasion.
-_SVG_CSS_INJECTION_RE = re.compile(
-    r"url\s*\(|@import|expression\s*\(|\\|/\*.*\*/",
-    re.IGNORECASE,
-)
-
+# CSS values are decoded before validation so escaped schemes and function names
+# cannot bypass the policy. Local paint-server references remain supported.
+_CSS_ESCAPE_RE = re.compile(r"\\([0-9a-fA-F]{1,6})(?:\s)?|\\(.)", re.DOTALL)
+_SVG_CSS_INJECTION_RE = re.compile(r"@import|expression\s*\(", re.IGNORECASE)
+_SVG_URL_VALUE_RE = re.compile(r"url\s*\((.*?)\)", re.IGNORECASE | re.DOTALL)
 _SVG_URL_FUNCTION_RE = re.compile(r"url\s*\(", re.IGNORECASE)
 _SVG_LOCAL_URL_RE = re.compile(r"^url\s*\(\s*#[A-Za-z_][\w:.-]*\s*\)$", re.IGNORECASE)
 _SVG_LOCAL_HREF_RE = re.compile(r"^#[A-Za-z_][\w:.-]*$")
+
+
+def _decode_css_escapes(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        if match.group(1):
+            try:
+                return chr(int(match.group(1), 16))
+            except (ValueError, OverflowError):
+                return ""
+        return match.group(2) or ""
+
+    return _CSS_ESCAPE_RE.sub(replace, value)
+
+
+def _validate_svg_style(value: str) -> str:
+    """Return normalized CSS after rejecting active or external resources."""
+    without_comments = re.sub(r"/\*.*?\*/", "", value, flags=re.DOTALL)
+    normalized = _decode_css_escapes(without_comments).strip()
+    if _SVG_CSS_INJECTION_RE.search(normalized):
+        raise SvgSecurityError("SVG files containing suspicious CSS are not allowed.")
+    if _SVG_DANGEROUS_VALUE_RE.search(normalized) or _SVG_DATA_SVG_RE.search(normalized):
+        raise SvgSecurityError("SVG files containing dangerous CSS URIs are not allowed.")
+    for match in _SVG_URL_VALUE_RE.finditer(normalized):
+        target = match.group(1).strip().strip("\"'")
+        if not _SVG_LOCAL_HREF_RE.fullmatch(target):
+            raise SvgSecurityError("SVG files containing external CSS resources are not allowed.")
+    return normalized
 
 
 class SvgSecurityError(ValueError):
@@ -94,6 +118,7 @@ def check_svg_safety_stream(file_obj: IO[bytes], filename: str = "") -> None:
                         bare_attr = bare_attr.split("}", 1)[1]
                     bare_attr_lower = bare_attr.lower()
                     normalized_value = attr_value.strip()
+                    security_value = _decode_css_escapes(normalized_value)
 
                     if bare_attr_lower == "base":
                         raise SvgSecurityError(
@@ -106,23 +131,24 @@ def check_svg_safety_stream(file_obj: IO[bytes], filename: str = "") -> None:
                             "SVG files containing event handler attributes are not allowed."
                         )
 
-                    if bare_attr_lower == "style" and _SVG_CSS_INJECTION_RE.search(
-                        normalized_value
-                    ):
-                        logger.warning(
-                            "SVG CSS injection in style attribute of <%s> in %s", local, filename
-                        )
-                        raise SvgSecurityError(
-                            "SVG files containing suspicious CSS injection are not allowed."
-                        )
+                    if bare_attr_lower == "style":
+                        try:
+                            security_value = _validate_svg_style(normalized_value)
+                        except SvgSecurityError:
+                            logger.warning(
+                                "SVG CSS injection in style attribute of <%s> in %s",
+                                local,
+                                filename,
+                            )
+                            raise
 
-                    if _SVG_DANGEROUS_VALUE_RE.search(normalized_value):
+                    if _SVG_DANGEROUS_VALUE_RE.search(security_value):
                         logger.warning("SVG dangerous URI in attr %s of %s", bare_attr, filename)
                         raise SvgSecurityError(
                             "SVG files containing active content or dangerous URI handlers are not allowed."
                         )
 
-                    if _SVG_DATA_SVG_RE.search(normalized_value):
+                    if _SVG_DATA_SVG_RE.search(security_value):
                         logger.warning(
                             "SVG data:image/svg+xml in attr %s of %s", bare_attr, filename
                         )
@@ -130,9 +156,11 @@ def check_svg_safety_stream(file_obj: IO[bytes], filename: str = "") -> None:
                             "SVG files referencing nested SVG content via data URIs are not allowed."
                         )
 
-                    if _SVG_URL_FUNCTION_RE.search(
-                        normalized_value
-                    ) and not _SVG_LOCAL_URL_RE.fullmatch(normalized_value):
+                    if (
+                        bare_attr_lower != "style"
+                        and _SVG_URL_FUNCTION_RE.search(security_value)
+                        and not _SVG_LOCAL_URL_RE.fullmatch(security_value)
+                    ):
                         logger.warning("SVG external url() in attr %s of %s", bare_attr, filename)
                         raise SvgSecurityError(
                             "SVG files containing external CSS resource URLs are not allowed."
@@ -143,7 +171,7 @@ def check_svg_safety_stream(file_obj: IO[bytes], filename: str = "") -> None:
                         # Relative and absolute paths are external resources too;
                         # checking URL schemes alone would allow `../asset` and
                         # `/asset` to escape this policy.
-                        if normalized_value and not _SVG_LOCAL_HREF_RE.fullmatch(normalized_value):
+                        if security_value and not _SVG_LOCAL_HREF_RE.fullmatch(security_value):
                             logger.warning("SVG external URL in attr %s of %s", bare_attr, filename)
                             raise SvgSecurityError(
                                 "SVG files containing external URLs are not allowed."

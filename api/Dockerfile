@@ -38,7 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN groupadd -r appuser && useradd -r -g appuser -m appuser && \
     chown appuser:appuser /app && \
-    mkdir -p /var/lib/lectern && chown appuser:appuser /var/lib/lectern
+    mkdir -p /var/lib/lectern/processing && \
+    chown -R appuser:appuser /var/lib/lectern
 
 COPY --from=builder --chown=appuser:appuser /venv /venv
 ENV PATH="/venv/bin:$PATH"
@@ -75,6 +76,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ghostscript \
     ffmpeg \
     bubblewrap \
+    util-linux \
     libimage-exiftool-perl \
     libreoffice-nogui \
     librsvg2-bin \

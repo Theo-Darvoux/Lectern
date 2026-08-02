@@ -15,6 +15,8 @@ from app.config import settings
 from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
 from app.core.security.file_security._concurrency import _get_concurrency_guard
 from app.core.security.file_security._image import MAX_IMAGE_PIXELS
+from app.core.security.file_security._jpeg import strip_jpeg_metadata
+from app.core.security.file_security.errors import SanitizationError
 from app.core.security.processing_paths import (
     make_processing_temp_path as _make_temp_path,
     processing_temp_dir,
@@ -233,6 +235,43 @@ def check_pdf_safety(file_path: Path) -> None:
         ) from exc
 
 
+def _uses_dct_filter(stream_filter: object) -> bool:
+    if stream_filter == pikepdf.Name("/DCTDecode"):
+        return True
+    return (
+        isinstance(stream_filter, pikepdf.Array)
+        and len(stream_filter) == 1
+        and stream_filter[0] == pikepdf.Name("/DCTDecode")
+    )
+
+
+def _strip_pdf_object_metadata(pdf: pikepdf.Pdf) -> None:
+    """Remove metadata references and scrub every indirect JPEG stream."""
+    for raw_object in pdf.objects:
+        if not isinstance(raw_object, pikepdf.Dictionary):
+            continue
+        if "/Metadata" in raw_object:
+            del raw_object["/Metadata"]
+        if not isinstance(raw_object, pikepdf.Stream):
+            continue
+
+        object_type = str(raw_object.get("/Type"))
+        if object_type in {"/Metadata", "/EmbeddedFile"}:
+            # References are removed elsewhere, but zero orphaned payloads too so
+            # incremental/object-table preservation cannot retain private bytes.
+            raw_object.write(b"")
+            continue
+
+        if (
+            str(raw_object.get("/Subtype")) == "/Image"
+            and _uses_dct_filter(raw_object.get("/Filter"))
+        ):
+            raw_jpeg = raw_object.read_raw_bytes()
+            cleaned_jpeg = strip_jpeg_metadata(raw_jpeg)
+            if cleaned_jpeg != raw_jpeg:
+                raw_object.write(cleaned_jpeg, filter=pikepdf.Name("/DCTDecode"))
+
+
 def _apply_pdf_security_strip(pdf: pikepdf.Pdf) -> None:
     """Strip metadata and active-content constructs from an open pikepdf document"""
     with pdf.open_metadata():
@@ -240,6 +279,8 @@ def _apply_pdf_security_strip(pdf: pikepdf.Pdf) -> None:
     if "/Info" in pdf.trailer:
         del pdf.trailer["/Info"]
     catalog = pdf.Root
+    if "/Metadata" in catalog:
+        del catalog["/Metadata"]
     if "/OpenAction" in catalog:
         del catalog["/OpenAction"]
     if "/AA" in catalog:
@@ -250,7 +291,10 @@ def _apply_pdf_security_strip(pdf: pikepdf.Pdf) -> None:
             del names["/EmbeddedFiles"]
         if "/JavaScript" in names:
             del names["/JavaScript"]
+    _strip_pdf_object_metadata(pdf)
     for page in pdf.pages:
+        if "/Metadata" in page:
+            del page["/Metadata"]  # type: ignore[operator]  # pikepdf stubs
         if "/AA" in page:
             del page["/AA"]  # type: ignore[operator]  # pikepdf stubs
         annotations = page.get("/Annots")
@@ -436,6 +480,10 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                 continue
                         elif isinstance(mask_ref, pikepdf.Array):
                             try:
+                                if len(mask_ref) > 8:
+                                    raise SanitizationError(
+                                        "PDF image mask contains too many values"
+                                    )
                                 mask_array = [int(x) for x in mask_ref]  # type: ignore[attr-defined]
                                 bpc = int(str(raw_image.get("/BitsPerComponent", 8)))
                                 max_val = (1 << bpc) - 1 if bpc in (1, 2, 4, 8, 16) else 255
@@ -484,6 +532,8 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                     alpha = trans.point(lambda p: 255 - p)
                                     pil_image = pil_image.convert("RGBA")
                                     pil_image.putalpha(alpha)
+                            except SanitizationError:
+                                raise
                             except Exception as e:
                                 logger.debug("Failed to apply chroma key Mask: %s", e)
                                 continue
@@ -563,10 +613,10 @@ def _validate_pdf_image_dimensions(image: pikepdf.Stream) -> None:
         width = int(str(image.get("/Width")))
         height = int(str(image.get("/Height")))
     except (TypeError, ValueError) as exc:
-        raise ValueError("PDF contains an image with invalid dimensions") from exc
+        raise SanitizationError("PDF contains an image with invalid dimensions") from exc
     pixels = width * height
     if width <= 0 or height <= 0 or pixels > MAX_IMAGE_PIXELS:
-        raise ValueError(
+        raise SanitizationError(
             f"PDF embedded image exceeds pixel limit ({pixels:,} > {MAX_IMAGE_PIXELS:,})"
         )
 
@@ -755,6 +805,11 @@ async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Pat
             Path(out_name).unlink(missing_ok=True)
             best_path = gs_result  # GS result alone (may equal file_path if GS also failed)
 
+    except SanitizationError:
+        Path(out_name).unlink(missing_ok=True)
+        if gs_improved:
+            gs_result.unlink(missing_ok=True)
+        raise
     except Exception:
         Path(out_name).unlink(missing_ok=True)
         if gs_improved:

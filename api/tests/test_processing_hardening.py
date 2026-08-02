@@ -167,3 +167,113 @@ async def test_compression_dispatcher_preserves_sanitization_error(
 
     with pytest.raises(SanitizationError, match="unsafe image"):
         await dispatcher.compress_file_path(source, "image/png", "large.png")
+
+
+@pytest.mark.asyncio
+async def test_async_sandbox_cancellation_during_spawn_reaps_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.security import sandbox
+
+    class BlockingReader:
+        async def read(self, _size: int) -> bytes:
+            await asyncio.Event().wait()
+            return b""
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.pid = 424242
+            self.stdout = BlockingReader()
+            self.stderr = BlockingReader()
+            self.returncode = -9
+            self.killed = False
+            self.waited = False
+            self._exited = asyncio.Event()
+
+        def kill(self) -> None:
+            self.killed = True
+            self._exited.set()
+
+        async def wait(self) -> int:
+            await self._exited.wait()
+            self.waited = True
+            return self.returncode
+
+    process = FakeProcess()
+    spawn_allowed = asyncio.Event()
+
+    async def fake_spawn(*_args: object, **_kwargs: object) -> FakeProcess:
+        await spawn_allowed.wait()
+        return process
+
+    monkeypatch.setattr(sandbox, "_sandbox_command", lambda command, **_kwargs: command)
+    monkeypatch.setattr(sandbox.asyncio, "create_subprocess_exec", fake_spawn)
+    monkeypatch.setattr(sandbox.os, "killpg", lambda *_args: None)
+
+    task = asyncio.create_task(sandbox.async_sandboxed_run(["fake"]))
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    assert not task.done()
+
+    spawn_allowed.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert process.killed
+    assert process.waited
+
+
+@pytest.mark.asyncio
+async def test_async_sandbox_spawn_timeout_reaps_late_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.security import sandbox
+
+    class BlockingReader:
+        async def read(self, _size: int) -> bytes:
+            await asyncio.Event().wait()
+            return b""
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.pid = 424243
+            self.stdout = BlockingReader()
+            self.stderr = BlockingReader()
+            self.returncode = -9
+            self.killed = False
+            self.waited = False
+            self._exited = asyncio.Event()
+
+        def kill(self) -> None:
+            self.killed = True
+            self._exited.set()
+
+        async def wait(self) -> int:
+            await self._exited.wait()
+            self.waited = True
+            return self.returncode
+
+    process = FakeProcess()
+    spawn_allowed = asyncio.Event()
+
+    async def fake_spawn(*_args: object, **_kwargs: object) -> FakeProcess:
+        await spawn_allowed.wait()
+        return process
+
+    async def allow_late_spawn() -> None:
+        await asyncio.sleep(0.05)
+        spawn_allowed.set()
+
+    monkeypatch.setattr(sandbox, "_sandbox_command", lambda command, **_kwargs: command)
+    monkeypatch.setattr(sandbox.asyncio, "create_subprocess_exec", fake_spawn)
+    monkeypatch.setattr(sandbox.os, "killpg", lambda *_args: None)
+
+    releaser = asyncio.create_task(allow_late_spawn())
+    with pytest.raises(TimeoutError, match="during creation"):
+        await sandbox.async_sandboxed_run(["fake"], timeout=0.01)
+    await releaser
+
+    assert process.killed
+    assert process.waited

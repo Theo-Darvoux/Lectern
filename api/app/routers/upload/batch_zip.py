@@ -16,7 +16,7 @@ import logging
 import mimetypes
 import os
 import shutil
-import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +35,9 @@ from app.core.database.post_commit import dispatch_post_commit_actions, persist_
 from app.core.database.redis import get_redis
 from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import guess_mime_from_bytes
+from app.core.security.async_utils import shielded_to_thread
 from app.core.security.file_security import SvgSecurityError, check_svg_safety_stream
+from app.core.security.processing_paths import make_processing_temp_dir
 from app.core.storage.facade import delete_object, get_s3_client
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
@@ -83,14 +85,40 @@ _EXTRACTION_SEMAPHORE = asyncio.Semaphore(1)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
+def _canonical_zip_path(path: str) -> str | None:
+    """Return one stable relative ZIP path or ``None`` when it is unsafe."""
+    normalized = unicodedata.normalize(
+        "NFC", unicodedata.normalize("NFKC", path)
+    ).replace("\\", "/")
+    if not normalized or normalized.startswith(("/", "//")):
+        return None
+    if "\x00" in normalized or any(
+        unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in normalized
+    ):
+        return None
+    if len(normalized) >= 2 and normalized[0].isalpha() and normalized[1] == ":":
+        return None
+
+    is_directory = normalized.endswith("/")
+    parts = normalized.rstrip("/").split("/")
+    if (
+        not parts
+        or len(normalized) > 1024
+        or any(
+            part in {"", ".", ".."}
+            or len(part) > 255
+            or part.endswith((" ", "."))
+            for part in parts
+        )
+    ):
+        return None
+    canonical = "/".join(parts)
+    return canonical + "/" if is_directory else canonical
+
+
 def _is_safe_zip_path(path: str) -> bool:
-    """Return True if the zip entry path is free of traversal sequences."""
-    norm = path.replace("\\", "/")
-    if norm.startswith("/"):
-        return False
-    if "\x00" in norm:
-        return False
-    return all(part != ".." for part in norm.split("/"))
+    """Return whether a ZIP path has one unambiguous canonical form."""
+    return _canonical_zip_path(path) is not None
 
 
 def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:
@@ -98,9 +126,11 @@ def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:
     return (info.external_attr >> 16) & 0o170000 == 0o120000
 
 
-def _should_skip_metadata(info: zipfile.ZipInfo) -> bool:
+def _should_skip_metadata(
+    info: zipfile.ZipInfo, canonical_path: str | None = None
+) -> bool:
     """Return True for directories, symlinks, and OS-generated junk files."""
-    fname = info.filename
+    fname = canonical_path or info.filename
     if fname.endswith("/") or info.file_size == 0 and fname.endswith("/"):
         return True
     if _is_symlink_entry(info):
@@ -141,15 +171,40 @@ def _extract_zip_sync(
     with zf_obj as zf:
         all_members = zf.infolist()
 
-        # Phase 1 — path safety scan (fail the entire zip on first violation)
+        # Phase 1 — canonical path and hierarchy scan. Validation happens after
+        # Unicode compatibility normalization so full-width traversal characters
+        # cannot become dangerous only when a downstream consumer normalizes them.
+        file_members: list[tuple[zipfile.ZipInfo, str]] = []
+        canonical_files: set[str] = set()
+        canonical_parents: set[str] = set()
         for info in all_members:
-            if not _should_skip_metadata(info) and not _is_safe_zip_path(info.filename):
+            canonical = _canonical_zip_path(info.filename)
+            if canonical is None:
                 raise BadRequestError(
                     f"Zip contains an unsafe path and was rejected: {info.filename!r}",
                     code=UploadErrorCode.INVALID_ZIP,
                 )
+            if _should_skip_metadata(info, canonical):
+                continue
+            if info.flag_bits & 0x1:
+                raise BadRequestError(
+                    f"Encrypted zip entries are not supported: {info.filename!r}",
+                    code=UploadErrorCode.INVALID_ZIP,
+                )
 
-        file_members = [m for m in all_members if not _should_skip_metadata(m)]
+            key = canonical.casefold()
+            parents = {
+                "/".join(canonical.split("/")[:index]).casefold()
+                for index in range(1, len(canonical.split("/")))
+            }
+            if key in canonical_files or key in canonical_parents or parents & canonical_files:
+                raise BadRequestError(
+                    f"Zip contains colliding file paths: {info.filename!r}",
+                    code=UploadErrorCode.INVALID_ZIP,
+                )
+            canonical_files.add(key)
+            canonical_parents.update(parents)
+            file_members.append((info, canonical))
 
         # Member count limit
         if len(file_members) > max_members:
@@ -159,7 +214,7 @@ def _extract_zip_sync(
             )
 
         # Total uncompressed size declared in headers
-        total_declared = sum(m.file_size for m in file_members)
+        total_declared = sum(info.file_size for info, _ in file_members)
         if total_declared > _MAX_TOTAL_EXTRACTED_BYTES:
             raise BadRequestError(
                 f"Zip would extract to {total_declared // (1024**3):.1f} GiB; "
@@ -175,7 +230,7 @@ def _extract_zip_sync(
             )
 
         # Compression ratio check (zip bomb via header vs payload divergence)
-        total_compressed = sum(m.compress_size for m in file_members)
+        total_compressed = sum(info.compress_size for info, _ in file_members)
         if total_compressed > 0:
             ratio = total_declared / total_compressed
             if ratio > _MAX_COMPRESSION_RATIO:
@@ -183,13 +238,24 @@ def _extract_zip_sync(
                     f"Zip compression ratio ({ratio:.0f}x) exceeds safety limit.",
                     code=UploadErrorCode.ZIP_BOMB,
                 )
+        for info, _ in file_members:
+            if info.compress_size == 0 and info.file_size > 0:
+                raise BadRequestError(
+                    f"Zip entry has an invalid compressed size: {info.filename!r}",
+                    code=UploadErrorCode.ZIP_BOMB,
+                )
+            if info.compress_size and info.file_size / info.compress_size > _MAX_COMPRESSION_RATIO:
+                raise BadRequestError(
+                    f"Zip entry compression ratio exceeds safety limit: {info.filename!r}",
+                    code=UploadErrorCode.ZIP_BOMB,
+                )
 
         # Path depth check
-        for m in file_members:
-            depth = len(m.filename.rstrip("/").split("/"))
+        for info, canonical in file_members:
+            depth = len(canonical.rstrip("/").split("/"))
             if depth > _MAX_PATH_DEPTH:
                 raise BadRequestError(
-                    f"Zip entry is nested too deeply ({depth} levels): {m.filename!r}",
+                    f"Zip entry is nested too deeply ({depth} levels): {info.filename!r}",
                     code=UploadErrorCode.INVALID_ZIP,
                 )
 
@@ -199,7 +265,7 @@ def _extract_zip_sync(
         total_bytes_read = 0
         chunk = 64 * 1024
 
-        for idx, info in enumerate(file_members):
+        for idx, (info, canonical) in enumerate(file_members):
             tmp_path = Path(tmp_dir) / f"entry_{idx}"
             bytes_written = 0
 
@@ -228,12 +294,12 @@ def _extract_zip_sync(
                 continue
 
             total_bytes_read += bytes_written
-            sanitized = os.path.basename(info.filename)
+            sanitized = canonical.rsplit("/", 1)[-1]
             entries.append(
                 _ExtractedEntry(
                     tmp_path=tmp_path,
                     filename=sanitized,
-                    relative_path=info.filename.rstrip("/"),
+                    relative_path=canonical.rstrip("/"),
                     size=bytes_written,
                 )
             )
@@ -248,17 +314,13 @@ async def _extract_zip_bounded(
 ) -> tuple[list[_ExtractedEntry], list[str]]:
     """Run extraction under a process-wide slot, including after cancellation."""
     async with _EXTRACTION_SEMAPHORE:
-        extraction = asyncio.create_task(
-            asyncio.to_thread(_extract_zip_sync, zip_path, tmp_dir, max_members)
+        return await shielded_to_thread(
+            _extract_zip_sync,
+            zip_path,
+            tmp_dir,
+            max_members,
+            description="batch ZIP extraction",
         )
-        try:
-            return await asyncio.shield(extraction)
-        except asyncio.CancelledError:
-            # ``to_thread`` cannot stop a running function. Do not release the slot
-            # until it has really stopped consuming extraction resources.
-            with contextlib.suppress(Exception):
-                await extraction
-            raise
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -299,8 +361,9 @@ async def upload_batch_zip(
         parts = settings.allowed_mime_types.split(",")
         allowed_mimes = {m.strip().lower() for m in parts if m.strip()}
 
-    tmp_dir = tempfile.mkdtemp(prefix="lectern_bz_")
-    zip_path = os.path.join(tmp_dir, "upload.zip")
+    tmp_dir_path = make_processing_temp_dir(prefix="batch-zip-")
+    tmp_dir = str(tmp_dir_path)
+    zip_path = str(tmp_dir_path / "upload.zip")
 
     try:
         # ── Stream zip to disk ──────────────────────────────────────────────
@@ -317,7 +380,9 @@ async def upload_batch_zip(
                         f"Zip file exceeds {_MAX_ZIP_BYTES // (1024**2)} MiB limit.",
                         code=UploadErrorCode.BATCH_TOO_LARGE,
                     )
-                fh.write(chunk)
+                await shielded_to_thread(
+                    fh.write, chunk, description="batch ZIP upload write"
+                )
 
         if bytes_written == 0:
             raise BadRequestError("Empty zip file.", code=UploadErrorCode.INVALID_ZIP)
@@ -506,4 +571,9 @@ async def upload_batch_zip(
         )
 
     finally:
-        await asyncio.to_thread(shutil.rmtree, tmp_dir, True)
+        await shielded_to_thread(
+            shutil.rmtree,
+            tmp_dir,
+            True,
+            description="batch ZIP temporary directory cleanup",
+        )
