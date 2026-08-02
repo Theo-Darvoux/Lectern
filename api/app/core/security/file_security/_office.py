@@ -7,19 +7,18 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as StdET
 import zipfile
-
-import mutagen
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+import mutagen
 from defusedxml import ElementTree as SafeET
 
+from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
 from app.core.security.file_security._concurrency import (
-    _make_temp_path,
-    _shielded_to_thread,
     image_guard,
     subprocess_guard,
 )
+from app.core.security.file_security._svg import check_svg_safety
 from app.core.security.file_security._zip import (
     _ZIP_MAX_ENTRIES,
     _ZIP_MAX_ENTRY_BYTES,
@@ -31,9 +30,13 @@ from app.core.security.file_security._zip import (
     _sanitized_zip_info,
     _validate_zip_info,
 )
-from app.core.security.file_security._svg import check_svg_safety
 from app.core.security.file_security.errors import SanitizationError, UnsafeFileError
-from app.core.security.processing_paths import processing_temp_dir
+from app.core.security.processing_paths import (
+    make_processing_temp_path as _make_temp_path,
+)
+from app.core.security.processing_paths import (
+    processing_temp_dir,
+)
 from app.core.security.sandbox import async_sandboxed_run
 
 logger = logging.getLogger(__name__)
@@ -158,9 +161,7 @@ _PACKAGE_MEDIA_EXTENSIONS = frozenset(
 )
 _UNSUPPORTED_EMBEDDED_MEDIA_EXTENSIONS = frozenset({".webm", ".avi"})
 _EPUB_BLOCKED_PROPERTIES = frozenset({"scripted", "remote-resources"})
-_EPUB_BLOCKED_ELEMENTS = frozenset(
-    {"script", "iframe", "object", "embed", "foreignobject", "form"}
-)
+_EPUB_BLOCKED_ELEMENTS = frozenset({"script", "iframe", "object", "embed", "foreignobject", "form"})
 _DANGEROUS_URI_RE = re.compile(
     r"^(?:javascript|vbscript|data\s*:\s*(?:text/html|application/))",
     re.IGNORECASE,
@@ -310,7 +311,9 @@ def _validate_odf_xml_stream(source, description: str) -> None:
             if event == "start":
                 local = element.tag.rsplit("}", 1)[-1].casefold()
                 if local in blocked_elements:
-                    raise UnsafeFileError(f"ODF {description} contains prohibited <{local}> content")
+                    raise UnsafeFileError(
+                        f"ODF {description} contains prohibited <{local}> content"
+                    )
                 for raw_name, raw_value in element.attrib.items():
                     name = raw_name.rsplit("}", 1)[-1].casefold()
                     value = raw_value.strip().casefold()
@@ -346,7 +349,9 @@ def _sanitize_embedded_media(
         media_loaders = {
             ".mp3": lambda path: __import__("mutagen.mp3", fromlist=["MP3"]).MP3(path),
             ".flac": lambda path: __import__("mutagen.flac", fromlist=["FLAC"]).FLAC(path),
-            ".ogg": lambda path: __import__("mutagen.oggvorbis", fromlist=["OggVorbis"]).OggVorbis(path),
+            ".ogg": lambda path: __import__("mutagen.oggvorbis", fromlist=["OggVorbis"]).OggVorbis(
+                path
+            ),
             ".opus": lambda path: __import__("mutagen.oggopus", fromlist=["OggOpus"]).OggOpus(path),
             ".wav": lambda path: __import__("mutagen.wave", fromlist=["WAVE"]).WAVE(path),
             ".mp4": lambda path: __import__("mutagen.mp4", fromlist=["MP4"]).MP4(path),
@@ -481,7 +486,9 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                 with source_archive.open(mimetype_items[0]) as source:
                     declared_mimetype = source.read(256)
                 if declared_mimetype != (mime_type or "").encode("ascii"):
-                    raise SanitizationError("Package mimetype entry does not match detected MIME type")
+                    raise SanitizationError(
+                        "Package mimetype entry does not match detected MIME type"
+                    )
 
             epub_manifest: dict[str, str] = {}
             epub_opf_outputs: dict[str, bytes] = {}

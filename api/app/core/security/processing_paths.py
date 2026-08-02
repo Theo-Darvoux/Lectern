@@ -6,9 +6,9 @@ import os
 import shutil
 import stat
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from app.config import settings
 
@@ -17,7 +17,7 @@ def _absolute_configured_root() -> Path:
     raw = Path(settings.processing_root).expanduser()
     if not raw.is_absolute():
         raise RuntimeError("PROCESSING_ROOT must be an absolute path")
-    return Path(os.path.abspath(raw))
+    return raw.absolute()
 
 
 def _reject_symlink_components(path: Path) -> None:
@@ -55,7 +55,7 @@ def validate_processing_path(
     """Validate a path as a non-symlink descendant of the processing root."""
 
     root = get_processing_root()
-    candidate = Path(os.path.abspath(Path(path).expanduser()))
+    candidate = Path(path).expanduser().absolute()
     if candidate == root:
         if not allow_root:
             raise ValueError("Using the processing root itself is prohibited")

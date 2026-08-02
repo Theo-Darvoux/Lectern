@@ -19,12 +19,12 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from app.core.security.processing_paths import make_processing_temp_path as _make_temp_path
 from app.core.security.file_security._image import (
     MAX_GIF_FRAMES,
     MAX_GIF_TOTAL_PIXELS,
     _validate_image_size,
 )
+from app.core.security.processing_paths import make_processing_temp_path as _make_temp_path
 
 logger = logging.getLogger(__name__)
 
@@ -129,10 +129,12 @@ def _register_zip_name(registry: dict[str, bool], safe_name: str, *, is_dir: boo
 
 
 def _validate_zip_info(item: zipfile.ZipInfo) -> None:
-    if item.flag_bits & 0x1:
-        raise ValueError(f"Encrypted ZIP entry '{item.filename}' is not supported")
     if item.file_size > _ZIP_MAX_ENTRY_BYTES:
         raise ValueError(f"ZIP entry '{item.filename}' is too large")
+
+    if item.flag_bits & 0x1:
+        raise ValueError(f"Encrypted ZIP entry '{item.filename}' is not supported")
+
     if (
         item.file_size >= _ZIP_RATIO_MIN_UNCOMPRESSED_BYTES
         and item.compress_size > 0
@@ -341,9 +343,7 @@ def _compress_zip_image_entry(data: bytes, entry_name: str) -> tuple[bytes, int]
                     try:
                         quantized = flat.quantize(colors=256, method=2)
                         try:
-                            quantized.save(
-                                buf, format="PNG", optimize=True, compress_level=6
-                            )
+                            quantized.save(buf, format="PNG", optimize=True, compress_level=6)
                         finally:
                             quantized.close()
                     finally:
@@ -357,9 +357,7 @@ def _compress_zip_image_entry(data: bytes, entry_name: str) -> tuple[bytes, int]
                     try:
                         quantized = rgb.quantize(colors=256, method=2)
                         try:
-                            quantized.save(
-                                buf, format="PNG", optimize=True, compress_level=6
-                            )
+                            quantized.save(buf, format="PNG", optimize=True, compress_level=6)
                         finally:
                             quantized.close()
                     finally:

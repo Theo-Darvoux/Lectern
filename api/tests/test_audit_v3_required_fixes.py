@@ -11,9 +11,9 @@ from PIL import Image
 
 from app.config import settings
 from app.core.database.redis import RedisSemaphoreUnavailableError
+from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
 from app.core.security.file_security._concurrency import (
     _get_concurrency_guard,
-    _shielded_to_thread,
     run_managed_subprocess,
 )
 from app.core.security.file_security._image import (
@@ -355,8 +355,10 @@ async def test_ooxml_malformed_rels_before_vba_fails_closed():
     import zipfile
 
     from app.core.security.file_security import strip_metadata_file
-    from app.core.security.file_security._concurrency import _make_temp_path
     from app.core.security.file_security.errors import SanitizationError
+    from app.core.security.processing_paths import (
+        make_processing_temp_path as _make_temp_path,
+    )
 
     tmp_docx = _make_temp_path(suffix=".docx")
     with zipfile.ZipFile(tmp_docx, "w") as z:

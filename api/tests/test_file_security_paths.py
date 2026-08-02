@@ -359,12 +359,22 @@ class TestGzipCompressPath:
         assert result.exists()
 
     def test_cleanup_on_exception(self, tmp_path):
-        """Temp file is cleaned up when an exception occurs mid-compression."""
         src = tmp_path / "src.txt"
         src.write_bytes(b"data " * 100)
 
-        with patch("gzip.open", side_effect=OSError("disk full")), pytest.raises(OSError):
+        output = tmp_path / "partial.gz"
+
+        with (
+            patch(
+                "app.core.security.file_security._zip._make_temp_path",
+                return_value=output,
+            ),
+            patch("gzip.GzipFile", side_effect=OSError("disk full")),
+            pytest.raises(OSError),
+        ):
             _gzip_compress_path(src)
+
+        assert not output.exists()
 
 
 # ── _recompress_zip_path ─────────────────────────────────────────────────────
@@ -403,6 +413,8 @@ class TestRecompressZipPath:
         large_info = MagicMock()
         large_info.filename = "big.bin"
         large_info.file_size = 201 * 1024 * 1024
+        large_info.compress_size = 1
+        large_info.flag_bits = 0
         large_info.date_time = (2024, 1, 1, 0, 0, 0)
 
         with patch("zipfile.ZipFile.infolist", return_value=[large_info]):
@@ -728,25 +740,23 @@ class TestTempFileLeakProtection:
     """Tests to verify that temporary files are properly cleaned up on exceptions."""
 
     def test_strip_pdf_unlinks_temp_on_exception(self, tmp_path):
-        """_strip_pdf_from_path unlinks the temp file if saving fails."""
         from app.core.security.file_security._pdf import _strip_pdf_from_path
 
         pdf_path = _make_minimal_pdf(tmp_path)
+        output = tmp_path / "leaked_temp_pdf.pdf"
+        output.write_bytes(b"dummy pdf data")
 
-        # We patch pikepdf.Pdf.save to raise an exception, but let tempfile work
-        with patch("pikepdf.Pdf.save", side_effect=RuntimeError("Save failed")):
-            with patch("tempfile.NamedTemporaryFile") as mock_temp:
-                mock_file = MagicMock()
-                mock_file.name = str(tmp_path / "leaked_temp_pdf.pdf")
-                mock_temp.return_value.__enter__.return_value = mock_file
+        with (
+            patch("pikepdf.Pdf.save", side_effect=RuntimeError("Save failed")),
+            patch(
+                "app.core.security.file_security._pdf._make_temp_path",
+                return_value=output,
+            ),
+        ):
+            with pytest.raises(ValueError, match="sanitize"):
+                _strip_pdf_from_path(pdf_path)
 
-                # Make sure the file exists initially to check if it's unlinked
-                Path(mock_file.name).write_bytes(b"dummy pdf data")
-                assert Path(mock_file.name).exists()
-
-                with pytest.raises(ValueError, match="sanitize"):
-                    _strip_pdf_from_path(pdf_path)
-                assert not Path(mock_file.name).exists()
+        assert not output.exists()
 
     def test_strip_image_unlinks_temp_on_exception(self, tmp_path):
         """_strip_image_from_path unlinks the temp file if saving fails."""

@@ -1,15 +1,15 @@
-import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from PIL import Image, ImageDraw
 
+from app.core.security.processing_paths import make_processing_temp_path
 from app.workers.upload.stages.thumbnail import _is_blank_thumbnail
 
 
 def _save(img: Image.Image, suffix: str = ".png") -> Path:
-    path = Path(tempfile.mkdtemp()) / f"thumb{suffix}"
+    path = make_processing_temp_path(suffix=suffix)
     img.save(path)
     return path
 
@@ -52,9 +52,8 @@ async def test_run_thumbnail_stage_svg() -> None:
         '<text x="10" y="60" font-size="24" fill="white">Sample</text>'
         "</svg>"
     )
-    with tempfile.NamedTemporaryFile(suffix=".svg", delete=False, mode="w") as f:
-        f.write(svg_content)
-        temp_path = Path(f.name)
+    temp_path = make_processing_temp_path(suffix=".svg")
+    temp_path.write_text(svg_content)
 
     pf = ProcessingFile(temp_path, temp_path.stat().st_size)
     thumb_path_str = None
@@ -80,11 +79,10 @@ async def test_run_thumbnail_stage_markdown() -> None:
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
     # Create a temp markdown file
-    with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w") as f:
-        f.write(
-            "# Hello World\n\nThis is a sample markdown document to test thumbnail generation.\n\n- Bullet point 1\n- Bullet point 2\n"
-        )
-        temp_path = Path(f.name)
+    temp_path = make_processing_temp_path(suffix=".md")
+    temp_path.write_text(
+        "# Hello World\n\nThis is a sample markdown document to test thumbnail generation.\n\n- Bullet point 1\n- Bullet point 2\n"
+    )
 
     pf = ProcessingFile(temp_path, temp_path.stat().st_size)
     thumb_path_str = None
@@ -114,11 +112,10 @@ async def test_run_thumbnail_stage_text() -> None:
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
     # Create a temp latex file
-    with tempfile.NamedTemporaryFile(suffix=".tex", delete=False, mode="w") as f:
-        f.write(
-            "\\documentclass{article}\n\\begin{document}\nHello World from LaTeX!\n\\end{document}\n"
-        )
-        temp_path = Path(f.name)
+    temp_path = make_processing_temp_path(suffix=".tex")
+    temp_path.write_text(
+        "\\documentclass{article}\n\\begin{document}\nHello World from LaTeX!\n\\end{document}\n"
+    )
 
     pf = ProcessingFile(temp_path, temp_path.stat().st_size)
     thumb_path_str = None
@@ -149,9 +146,8 @@ async def test_run_thumbnail_stage_unsupported_mime_returns_none() -> None:
     from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        f.write(b"\x00" * 64)
-        temp_path = Path(f.name)
+    temp_path = make_processing_temp_path(suffix=".bin")
+    temp_path.write_bytes(b"\x00" * 64)
 
     pf = ProcessingFile(temp_path, 64)
     try:
@@ -167,9 +163,8 @@ async def test_run_thumbnail_stage_raises_on_generator_failure() -> None:
     from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-        f.write(b"\xff\xd8\xff" + b"\x00" * 64)
-        temp_path = Path(f.name)
+    temp_path = make_processing_temp_path(suffix=".jpg")
+    temp_path.write_bytes(b"\xff\xd8\xff" + b"\x00" * 64)
 
     pf = ProcessingFile(temp_path, temp_path.stat().st_size)
     try:
@@ -190,9 +185,8 @@ async def test_run_thumbnail_stage_cleans_up_partial_file_on_failure() -> None:
     from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-        f.write(b"\xff\xd8\xff" + b"\x00" * 64)
-        temp_path = Path(f.name)
+    temp_path = make_processing_temp_path(suffix=".jpg")
+    temp_path.write_bytes(b"\xff\xd8\xff" + b"\x00" * 64)
 
     pf = ProcessingFile(temp_path, temp_path.stat().st_size)
     expected_thumb = pf.path.parent / f"thumb_{pf.path.name}.webp"

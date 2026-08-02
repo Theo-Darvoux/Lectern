@@ -14,18 +14,14 @@ def process_avatar(
     input_source: Path | bytes | BinaryIO, size: int = 256, quality: int = 60
 ) -> bytes:
     """Process a bounded, single-frame image into a metadata-free WebP avatar."""
-    source = io.BytesIO(input_source) if isinstance(input_source, bytes) else input_source
-    owns_source = isinstance(input_source, bytes)
+    byte_stream = io.BytesIO(input_source) if isinstance(input_source, bytes) else None
+    source = byte_stream if byte_stream is not None else input_source
     try:
         with Image.open(source) as base_img:
             pixels = base_img.width * base_img.height
             if pixels > MAX_AVATAR_PIXELS:
-                raise ValueError(
-                    f"Avatar exceeds pixel limit ({pixels:,} > {MAX_AVATAR_PIXELS:,})"
-                )
-            if getattr(base_img, "n_frames", 1) != 1 or getattr(
-                base_img, "is_animated", False
-            ):
+                raise ValueError(f"Avatar exceeds pixel limit ({pixels:,} > {MAX_AVATAR_PIXELS:,})")
+            if getattr(base_img, "n_frames", 1) != 1 or getattr(base_img, "is_animated", False):
                 raise ValueError("Animated and multi-frame avatars are not supported")
 
             base_img.load()
@@ -33,9 +29,7 @@ def process_avatar(
             try:
                 normalized = oriented.convert("RGBA")
                 try:
-                    fitted = ImageOps.fit(
-                        normalized, (size, size), Image.Resampling.LANCZOS
-                    )
+                    fitted = ImageOps.fit(normalized, (size, size), Image.Resampling.LANCZOS)
                     try:
                         with io.BytesIO() as output:
                             fitted.save(output, format="WEBP", quality=quality, method=4)
@@ -58,5 +52,5 @@ def process_avatar(
         logger.error("Failed to process avatar: %s", exc)
         raise ValueError(f"Failed to process avatar: {exc}") from exc
     finally:
-        if owns_source:
-            source.close()
+        if byte_stream is not None:
+            byte_stream.close()

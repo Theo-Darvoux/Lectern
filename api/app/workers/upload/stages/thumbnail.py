@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import shutil
 from pathlib import Path
@@ -184,9 +183,7 @@ async def _thumbnail_image(
     def _sync() -> None:
         with Image.open(input_path) as base_img:
             _validate_image_size(base_img)
-            if getattr(base_img, "n_frames", 1) != 1 or getattr(
-                base_img, "is_animated", False
-            ):
+            if getattr(base_img, "n_frames", 1) != 1 or getattr(base_img, "is_animated", False):
                 raise ValueError("Animated thumbnail sources are not supported")
             base_img.load()
 
@@ -491,9 +488,7 @@ async def _fallback_extract_largest_image(
         try:
             with io.BytesIO(img_data) as source, Image.open(source) as img:
                 _validate_image_size(img)
-                if getattr(img, "n_frames", 1) != 1 or getattr(
-                    img, "is_animated", False
-                ):
+                if getattr(img, "n_frames", 1) != 1 or getattr(img, "is_animated", False):
                     raise ValueError("Animated embedded thumbnails are not supported")
                 img.load()
                 img.thumbnail(size, Image.Resampling.LANCZOS)

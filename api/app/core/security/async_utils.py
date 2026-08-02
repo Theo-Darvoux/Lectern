@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
 
-
-async def shielded_await(awaitable: Awaitable[T], *, description: str = "cleanup") -> T:
+async def shielded_await[T](
+    awaitable: Awaitable[T],
+    *,
+    description: str = "cleanup",
+) -> T:
     """Await an operation to completion before re-delivering caller cancellation.
 
     This is intended for cleanup and ownership-transfer operations that must not be
@@ -41,7 +43,7 @@ async def shielded_await(awaitable: Awaitable[T], *, description: str = "cleanup
     return task.result()
 
 
-async def shielded_to_thread(
+async def shielded_to_thread[T](
     func: Callable[..., T],
     *args: Any,
     description: str | None = None,

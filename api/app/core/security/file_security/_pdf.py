@@ -1,6 +1,5 @@
 """PDF security checks and metadata stripping."""
 
-import asyncio
 import contextlib
 import io
 import logging
@@ -20,6 +19,8 @@ from app.core.security.file_security._jpeg import strip_jpeg_metadata
 from app.core.security.file_security.errors import SanitizationError
 from app.core.security.processing_paths import (
     make_processing_temp_path as _make_temp_path,
+)
+from app.core.security.processing_paths import (
     processing_temp_dir,
 )
 from app.core.security.sandbox import async_sandboxed_run
@@ -249,28 +250,29 @@ def _uses_dct_filter(stream_filter: object) -> bool:
 def _strip_pdf_object_metadata(pdf: pikepdf.Pdf) -> None:
     """Remove metadata references and scrub every indirect JPEG stream."""
     for raw_object in pdf.objects:
-        if not isinstance(raw_object, pikepdf.Dictionary):
+        if isinstance(raw_object, pikepdf.Stream):
+            if "/Metadata" in raw_object:
+                del raw_object["/Metadata"]
+
+            object_type = str(raw_object.get("/Type"))
+            if object_type in {"/Metadata", "/EmbeddedFile"}:
+                raw_object.write(b"")
+                continue
+
+            if str(raw_object.get("/Subtype")) == "/Image" and _uses_dct_filter(
+                raw_object.get("/Filter")
+            ):
+                raw_jpeg = raw_object.read_raw_bytes()
+                cleaned_jpeg = strip_jpeg_metadata(raw_jpeg)
+                if cleaned_jpeg != raw_jpeg:
+                    raw_object.write(
+                        cleaned_jpeg,
+                        filter=pikepdf.Name("/DCTDecode"),
+                    )
             continue
-        if "/Metadata" in raw_object:
+
+        if isinstance(raw_object, pikepdf.Dictionary) and "/Metadata" in raw_object:
             del raw_object["/Metadata"]
-        if not isinstance(raw_object, pikepdf.Stream):
-            continue
-
-        object_type = str(raw_object.get("/Type"))
-        if object_type in {"/Metadata", "/EmbeddedFile"}:
-            # References are removed elsewhere, but zero orphaned payloads too so
-            # incremental/object-table preservation cannot retain private bytes.
-            raw_object.write(b"")
-            continue
-
-        if (
-            str(raw_object.get("/Subtype")) == "/Image"
-            and _uses_dct_filter(raw_object.get("/Filter"))
-        ):
-            raw_jpeg = raw_object.read_raw_bytes()
-            cleaned_jpeg = strip_jpeg_metadata(raw_jpeg)
-            if cleaned_jpeg != raw_jpeg:
-                raw_object.write(cleaned_jpeg, filter=pikepdf.Name("/DCTDecode"))
 
 
 def _apply_pdf_security_strip(pdf: pikepdf.Pdf) -> None:
@@ -430,8 +432,11 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                 for name, raw_image in page.images.items():
                     owned_images: list[Image.Image] = []
 
-                    def _own(image: Image.Image) -> Image.Image:
-                        owned_images.append(image)
+                    def _own(
+                        image: Image.Image,
+                        owned: list[Image.Image] = owned_images,
+                    ) -> Image.Image:
+                        owned.append(image)
                         return image
 
                     try:
@@ -452,9 +457,7 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                 smask_pil = _own(smask_source.convert("L"))
                                 if smask_pil.size != pil_image.size:
                                     smask_pil = _own(
-                                        smask_pil.resize(
-                                            pil_image.size, Image.Resampling.LANCZOS
-                                        )
+                                        smask_pil.resize(pil_image.size, Image.Resampling.LANCZOS)
                                     )
                                 pil_image = _own(pil_image.convert("RGBA"))
                                 pil_image.putalpha(smask_pil)
@@ -469,9 +472,7 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                 mask_pil = _own(mask_source.convert("L"))
                                 if mask_pil.size != pil_image.size:
                                     mask_pil = _own(
-                                        mask_pil.resize(
-                                            pil_image.size, Image.Resampling.LANCZOS
-                                        )
+                                        mask_pil.resize(pil_image.size, Image.Resampling.LANCZOS)
                                     )
                                 decode = mask_ref.get("/Decode")
                                 if (
@@ -536,9 +537,7 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                     from PIL import ImageChops
 
                                     red_green_mask = _own(ImageChops.darker(red_mask, green_mask))
-                                    transparent = _own(
-                                        ImageChops.darker(red_green_mask, blue_mask)
-                                    )
+                                    transparent = _own(ImageChops.darker(red_green_mask, blue_mask))
                                     alpha = _own(transparent.point(lambda pixel: 255 - pixel))
                                     pil_image = _own(pil_image.convert("RGBA"))
                                     pil_image.putalpha(alpha)
@@ -578,9 +577,7 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                             width = max(1, int(width * ratio))
                             height = max(1, int(height * ratio))
                             pil_image = _own(
-                                pil_image.resize(
-                                    (width, height), Image.Resampling.LANCZOS
-                                )
+                                pil_image.resize((width, height), Image.Resampling.LANCZOS)
                             )
 
                         has_alpha = pil_image.mode in ("RGBA", "LA")
@@ -611,9 +608,7 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                 quality=quality,
                                 optimize=True,
                             )
-                            raw_image.write(
-                                buffer.getvalue(), filter=pikepdf.Name("/DCTDecode")
-                            )
+                            raw_image.write(buffer.getvalue(), filter=pikepdf.Name("/DCTDecode"))
                         raw_image.BitsPerComponent = 8
                         raw_image.Width = width
                         raw_image.Height = height
@@ -867,9 +862,8 @@ async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Pat
     try:
         best_size = best_path.stat().st_size
         orig_size = file_path.stat().st_size
-        if (
-            best_size >= orig_size * 0.8
-            and await _shielded_to_thread(_is_vector_heavy_pdf, file_path)
+        if best_size >= orig_size * 0.8 and await _shielded_to_thread(
+            _is_vector_heavy_pdf, file_path
         ):
             raster_result = await _rasterize_pdf_path(file_path, quality=quality)
             if raster_result != file_path:

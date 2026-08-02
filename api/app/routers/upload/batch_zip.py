@@ -87,9 +87,9 @@ _EXTRACTION_SEMAPHORE = asyncio.Semaphore(1)
 
 def _canonical_zip_path(path: str) -> str | None:
     """Return one stable relative ZIP path or ``None`` when it is unsafe."""
-    normalized = unicodedata.normalize(
-        "NFC", unicodedata.normalize("NFKC", path)
-    ).replace("\\", "/")
+    normalized = unicodedata.normalize("NFC", unicodedata.normalize("NFKC", path)).replace(
+        "\\", "/"
+    )
     if not normalized or normalized.startswith(("/", "//")):
         return None
     if "\x00" in normalized or any(
@@ -105,9 +105,7 @@ def _canonical_zip_path(path: str) -> str | None:
         not parts
         or len(normalized) > 1024
         or any(
-            part in {"", ".", ".."}
-            or len(part) > 255
-            or part.endswith((" ", "."))
+            part in {"", ".", ".."} or len(part) > 255 or part.endswith((" ", "."))
             for part in parts
         )
     ):
@@ -126,9 +124,7 @@ def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:
     return (info.external_attr >> 16) & 0o170000 == 0o120000
 
 
-def _should_skip_metadata(
-    info: zipfile.ZipInfo, canonical_path: str | None = None
-) -> bool:
+def _should_skip_metadata(info: zipfile.ZipInfo, canonical_path: str | None = None) -> bool:
     """Return True for directories, symlinks, and OS-generated junk files."""
     fname = canonical_path or info.filename
     if fname.endswith("/") or info.file_size == 0 and fname.endswith("/"):
@@ -380,9 +376,7 @@ async def upload_batch_zip(
                         f"Zip file exceeds {_MAX_ZIP_BYTES // (1024**2)} MiB limit.",
                         code=UploadErrorCode.BATCH_TOO_LARGE,
                     )
-                await shielded_to_thread(
-                    fh.write, chunk, description="batch ZIP upload write"
-                )
+                await shielded_to_thread(fh.write, chunk, description="batch ZIP upload write")
 
         if bytes_written == 0:
             raise BadRequestError("Empty zip file.", code=UploadErrorCode.INVALID_ZIP)

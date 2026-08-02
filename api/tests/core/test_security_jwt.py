@@ -132,7 +132,11 @@ def test_decode_token_garbage_raises_decode_error() -> None:
 
 
 def test_decode_token_wrong_key_raises() -> None:
-    token = jwt.encode({"sub": "uid", "exp": int(time.time()) + 3600}, "other-secret", ALGORITHM)
+    token = jwt.encode(
+        {"sub": "uid", "exp": int(time.time()) + 3600},
+        "other-secret-key-that-is-at-least-32-bytes-long",
+        ALGORITHM,
+    )
     with pytest.raises(jwt.InvalidSignatureError):
         decode_token(token)
 

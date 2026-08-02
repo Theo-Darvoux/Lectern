@@ -313,6 +313,16 @@ async def _read_bounded_stream(
     return bytes(buffer)
 
 
+def _close_async_process_transport(
+    process: asyncio.subprocess.Process,
+) -> None:
+    """Close asyncio's subprocess transport after pipes have been drained."""
+    transport = getattr(process, "_transport", None)
+    if transport is not None:
+        with contextlib.suppress(Exception):
+            transport.close()
+
+
 async def _terminate_and_reap(
     process: asyncio.subprocess.Process,
     pgid: int,
@@ -327,9 +337,11 @@ async def _terminate_and_reap(
         with contextlib.suppress(ProcessLookupError, OSError):
             process.kill()
 
-        for task in (stdout_task, stderr_task):
-            task.cancel()
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        await asyncio.gather(
+            stdout_task,
+            stderr_task,
+            return_exceptions=True,
+        )
         await process.wait()
 
     try:
@@ -340,12 +352,26 @@ async def _terminate_and_reap(
             "Timed out cleaning sandboxed process %s and its stream readers",
             process.pid,
         )
-        for task in (stdout_task, stderr_task):
-            task.cancel()
+
         with contextlib.suppress(ProcessLookupError, OSError):
             os.killpg(pgid, signal.SIGKILL)
         with contextlib.suppress(ProcessLookupError, OSError):
             process.kill()
+
+        for task in (stdout_task, stderr_task):
+            task.cancel()
+
+        await asyncio.gather(
+            stdout_task,
+            stderr_task,
+            return_exceptions=True,
+        )
+
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(0.5):
+                await process.wait()
+    finally:
+        _close_async_process_transport(process)
 
 
 async def async_sandboxed_run(
@@ -436,5 +462,8 @@ async def async_sandboxed_run(
     except BaseException:
         await _cleanup_process()
         raise
+    finally:
+        if process.returncode is not None:
+            _close_async_process_transport(process)
 
     return subprocess.CompletedProcess(wrapped, process.returncode or 0, stdout, stderr)

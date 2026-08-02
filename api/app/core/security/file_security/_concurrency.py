@@ -9,11 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
-from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
-from app.core.security.processing_paths import (
-    make_processing_temp_path as _make_temp_path,
-)
-
 from app.core.database.redis import (
     RedisSemaphoreUnavailableError,
     redis_client,

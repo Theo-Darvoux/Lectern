@@ -9,14 +9,12 @@ import logging
 from pathlib import Path
 
 from app.core.media.mimetypes import OLE2_MIME_TYPES, ZIP_MIME_TYPES
+from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
 from app.core.security.file_security._audio_video import (
     _strip_audio_from_path,
     _strip_video_from_path,
 )
-from app.core.security.file_security._concurrency import (
-    _shielded_to_thread,
-    image_guard,
-)
+from app.core.security.file_security._concurrency import image_guard
 from app.core.security.file_security._image import _strip_image_from_path
 from app.core.security.file_security._office import _strip_ole2_from_path, _strip_ooxml_from_path
 from app.core.security.file_security._pdf import _strip_pdf_from_path

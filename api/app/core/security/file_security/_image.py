@@ -6,8 +6,8 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from app.core.security.processing_paths import make_processing_temp_path as _make_temp_path
 from app.core.security.file_security.errors import SanitizationError
+from app.core.security.processing_paths import make_processing_temp_path as _make_temp_path
 
 logger = logging.getLogger(__name__)
 

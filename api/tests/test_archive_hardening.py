@@ -17,10 +17,9 @@ from PIL import Image
 
 from app.config import settings
 from app.core.security.file_security._zip import (
-    MAX_GIF_TOTAL_PIXELS,
     _gzip_compress_path,
-    _register_zip_name,
     _recompress_zip_path,
+    _register_zip_name,
     _sanitize_embedded_image,
     _sanitize_zip_entry_name,
     _validate_zip_info,

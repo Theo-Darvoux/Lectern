@@ -99,7 +99,7 @@ def test_verify_file_token_garbage_returns_false() -> None:
 def test_verify_file_token_signed_with_wrong_secret() -> None:
     token = jwt.encode(
         {"sub": "mat-123", "type": "eurooffice_file", "exp": int(time.time()) + 600},
-        "wrong-secret",
+        "wrong-secret-key-that-is-at-least-32-bytes-long",
         algorithm=_ALGORITHM,
     )
     assert _verify_file_token(token, "mat-123") is False

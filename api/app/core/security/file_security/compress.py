@@ -11,19 +11,19 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from app.core.media.mimetypes import GZIP_MIME_TYPES, ZIP_MIME_TYPES
+from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
 from app.core.security.file_security._audio_video import (
     VIDEO_COMPRESS_THRESHOLD,
     _compress_video_path,
     _convert_to_opus_path,
 )
-from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
 from app.core.security.file_security._concurrency import image_guard
-from app.core.security.processing_paths import make_processing_temp_path as _make_temp_path
 from app.core.security.file_security._image import _compress_image_path
 from app.core.security.file_security._pdf import _compress_pdf_path
 from app.core.security.file_security._svg import SvgSecurityError, _optimize_svg, check_svg_safety
 from app.core.security.file_security._zip import _gzip_compress_path, _recompress_zip_path
 from app.core.security.file_security.errors import SanitizationError
+from app.core.security.processing_paths import make_processing_temp_path as _make_temp_path
 
 logger = logging.getLogger(__name__)
 

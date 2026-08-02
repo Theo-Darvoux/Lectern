@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from app.config import settings
 from app.core.security.sandbox import sandboxed_run
 
 
@@ -87,9 +88,11 @@ def test_sandboxed_run_rw_paths(
     _mock_which: MagicMock,
     mock_popen: MagicMock,
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     """rw_paths should produce --bind arguments in the bwrap command."""
     _reset_bwrap_cache()
+    monkeypatch.setattr(settings, "processing_root", str(tmp_path))
     proc = _make_mock_popen()
     mock_popen.return_value = proc
 
@@ -115,9 +118,11 @@ def test_sandboxed_run_ro_paths(
     _mock_which: MagicMock,
     mock_popen: MagicMock,
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     """ro_paths should produce --ro-bind arguments in the bwrap command."""
     _reset_bwrap_cache()
+    monkeypatch.setattr(settings, "processing_root", str(tmp_path))
     proc = _make_mock_popen()
     mock_popen.return_value = proc
 

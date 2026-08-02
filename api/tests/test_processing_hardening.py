@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -42,7 +41,9 @@ def test_processing_temp_paths_are_private_descendants(processing_root: Path) ->
         temp_dir.rmdir()
 
 
-def test_processing_root_rejects_symlink(processing_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_processing_root_rejects_symlink(
+    processing_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     target = processing_root.parent / "real"
     target.mkdir()
     link = processing_root.parent / "linked"
@@ -140,9 +141,7 @@ async def test_compression_stage_cleans_unadopted_output_on_cancellation(
 
     tracer = type("Tracer", (), {"start_as_current_span": span})()
     with pytest.raises(asyncio.CancelledError):
-        await stage.run_compress_stage(
-            pf, "application/octet-stream", "file.bin", tracer
-        )
+        await stage.run_compress_stage(pf, "application/octet-stream", "file.bin", tracer)
     assert not generated.exists()
 
 

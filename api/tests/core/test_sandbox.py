@@ -87,7 +87,8 @@ def test_sandboxed_run_smoke_test(tmp_path: Path):
     (test_dir / "canary.txt").write_text("hello-sandbox")
 
     try:
-        result = sandboxed_run(cmd, rw_paths=[test_dir], timeout=5)
+        with patch.object(settings, "processing_root", str(tmp_path)):
+            result = sandboxed_run(cmd, rw_paths=[test_dir], timeout=5)
 
         # If we got here, bwrap didn't crash or return error due to mount failures
         assert result.returncode == 0

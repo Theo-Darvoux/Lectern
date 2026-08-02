@@ -57,19 +57,19 @@ def test_jpeg_scrubber_rejects_malformed_segments() -> None:
 
 def test_svg_allows_local_gradient_in_style() -> None:
     check_svg_safety(
-        b'''<svg xmlns="http://www.w3.org/2000/svg">
+        b"""<svg xmlns="http://www.w3.org/2000/svg">
         <defs><linearGradient id="gradient"/></defs>
         <rect style="fill:url(#gradient); stroke:#fff"/>
-        </svg>'''
+        </svg>"""
     )
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        b'''<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:j\\61vascript:alert(1)"/></svg>''',
-        b'''<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:u\\72l(https://example.com/a)"/></svg>''',
-        b'''<svg xmlns="http://www.w3.org/2000/svg"><a href="java\\73cript:alert(1)"/></svg>''',
+        b"""<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:j\\61vascript:alert(1)"/></svg>""",
+        b"""<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:u\\72l(https://example.com/a)"/></svg>""",
+        b"""<svg xmlns="http://www.w3.org/2000/svg"><a href="java\\73cript:alert(1)"/></svg>""",
     ],
 )
 def test_svg_rejects_css_escaped_active_content(payload: bytes) -> None:
