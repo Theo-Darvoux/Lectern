@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.config import settings
+from app.core.common.upload_limits import upload_size_limit
 from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import ZIP_MIME_TYPES, MimeRegistry, guess_mime_from_file_path
 from app.core.observability.metrics import mime_category as _mime_cat
@@ -38,7 +38,7 @@ async def run_download_and_validate(
 ) -> DownloadResult:
     info = await get_object_info(quarantine_key)
     initial_size = info["size"]
-    download_limit = settings.max_file_size_mb * 1024 * 1024
+    download_limit, _ = upload_size_limit(mime_type)
     if initial_size > download_limit:
         raise UploadError(UploadStatus.FAILED, "File exceeds configured upload size limit")
 
@@ -92,6 +92,13 @@ async def run_download_and_validate(
         )
     else:
         actual_mime = declared_mime
+
+    actual_limit, _ = upload_size_limit(actual_mime)
+    if initial_size > actual_limit:
+        raise UploadError(
+            UploadStatus.FAILED,
+            f"File exceeds configured size limit for detected type {actual_mime}",
+        )
 
     mime_category = _mime_cat(actual_mime)
 

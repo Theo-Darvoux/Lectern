@@ -4,72 +4,26 @@ import os
 import re
 from typing import Any
 
-from app.config import settings
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_limits import upload_size_limit
 from app.core.media.mimetypes import MimeRegistry
 
 _MAX_FILENAME_LENGTH = 255
 
 
-def _mb(key: str, fallback: int, config: dict[str, Any] | None) -> int:
-    """Return the byte limit for *key*, preferring config over the settings default."""
-    v = config.get(key) if config else None
-    return (v if v is not None else fallback) * 1024 * 1024
-
-
-def _build_limits(config: dict[str, Any] | None) -> dict[str, int]:
-    doc = _mb("max_document_size_mb", settings.max_document_size_mb, config)
-    office = _mb("max_office_size_mb", settings.max_office_size_mb, config)
-    return {
-        "image/svg+xml": _mb("max_svg_size_mb", settings.max_svg_size_mb, config),
-        "image/": _mb("max_image_size_mb", settings.max_image_size_mb, config),
-        "audio/": _mb("max_audio_size_mb", settings.max_audio_size_mb, config),
-        "video/": _mb("max_video_size_mb", settings.max_video_size_mb, config),
-        "application/pdf": doc,
-        "application/epub+zip": doc,
-        "image/vnd.djvu": doc,
-        "text/": _mb("max_text_size_mb", settings.max_text_size_mb, config),
-        "application/vnd.openxmlformats": office,
-        "application/msword": office,
-        "application/vnd.ms-": office,
-    }
-
-
 def _check_per_type_size(mime_type: str, size: int, config: dict[str, Any] | None = None) -> None:
-    """Raise BadRequestError if ``size`` exceeds the applicable limit for ``mime_type``.
+    """Raise BadRequestError if ``size`` exceeds the configured MIME-specific limit."""
+    limit, is_global = upload_size_limit(mime_type, config)
+    if size <= limit:
+        return
 
-    Category-specific limits (e.g. 500MB for video) take precedence over the
-    global default.
-    """
-    limits = _build_limits(config)
-    global_limit = _mb("max_file_size_mb", settings.max_file_size_mb, config)
-
-    # 1. Exact MIME match first, then prefix match
-    limit = limits.get(mime_type)
-    if limit is None:
-        for prefix, cap in limits.items():
-            if prefix.endswith("/") and mime_type.startswith(prefix):
-                limit = cap
-                break
-            if not prefix.endswith("/") and mime_type.startswith(prefix):
-                limit = cap
-                break
-
-    # 2. Fallback to global limit
-    is_global = False
-    if limit is None:
-        limit = global_limit
-        is_global = True
-
-    # 3. Validate
-    if size > limit:
-        mb = limit // (1024 * 1024)
-        if is_global:
-            msg = f"File size {size // (1024 * 1024)} MiB exceeds the global limit of {mb} MiB."
-        else:
-            msg = f"File size exceeds the {mb} MiB limit for this file type."
-        raise BadRequestError(msg, code=UploadErrorCode.FILE_TOO_LARGE)
+    mb = limit // (1024 * 1024)
+    if is_global:
+        msg = f"File size {size // (1024 * 1024)} MiB exceeds the global limit of {mb} MiB."
+    else:
+        msg = f"File size exceeds the {mb} MiB limit for this file type."
+    raise BadRequestError(msg, code=UploadErrorCode.FILE_TOO_LARGE)
 
 
 def _sanitize_filename(raw: str) -> str:
