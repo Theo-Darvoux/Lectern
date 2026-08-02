@@ -12,13 +12,13 @@ from pikepdf.models.image import PdfImage
 from PIL import Image
 
 from app.config import settings
-from app.core.security.file_security._concurrency import (
-    _get_concurrency_guard,
-    _make_temp_path,
-    _shielded_to_thread,
-)
+from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
+from app.core.security.file_security._concurrency import _get_concurrency_guard
 from app.core.security.file_security._image import MAX_IMAGE_PIXELS
-from app.core.security.processing_paths import processing_temp_dir
+from app.core.security.processing_paths import (
+    make_processing_temp_path as _make_temp_path,
+    processing_temp_dir,
+)
 from app.core.security.sandbox import async_sandboxed_run
 
 logger = logging.getLogger(__name__)

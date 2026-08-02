@@ -8,11 +8,8 @@ from PIL import Image
 
 from app.core.events.processing import ProcessingFile
 from app.core.observability.telemetry import get_tracer
-from app.core.security.file_security._concurrency import (
-    _get_concurrency_guard,
-    _shielded_to_thread,
-    image_guard,
-)
+from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
+from app.core.security.file_security._concurrency import _get_concurrency_guard, image_guard
 from app.core.security.file_security._image import _validate_image_size
 from app.core.security.processing_paths import processing_temp_dir
 from app.core.security.sandbox import async_sandboxed_run

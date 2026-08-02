@@ -13,7 +13,8 @@ from typing import Any
 
 import mutagen
 
-from app.core.security.file_security._concurrency import _get_concurrency_guard, _make_temp_path
+from app.core.security.file_security._concurrency import _get_concurrency_guard
+from app.core.security.processing_paths import make_processing_temp_path as _make_temp_path
 from app.core.security.sandbox import async_sandboxed_run
 
 logger = logging.getLogger(__name__)

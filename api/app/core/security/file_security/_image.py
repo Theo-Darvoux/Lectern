@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from app.core.security.file_security._concurrency import _make_temp_path
+from app.core.security.processing_paths import make_processing_temp_path as _make_temp_path
 from app.core.security.file_security.errors import SanitizationError
 
 logger = logging.getLogger(__name__)

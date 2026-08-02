@@ -50,7 +50,7 @@ async def strip_metadata_file(file_path: Path, mime_type: str) -> Path:
         if mime_type.startswith("audio/"):
             return await _shielded_to_thread(_strip_audio_from_path, file_path, mime_type)
         if mime_type in OLE2_MIME_TYPES:
-            return await _strip_ole2_from_path(file_path)
+            return await _strip_ole2_from_path(file_path, mime_type)
         if mime_type in ZIP_MIME_TYPES:
             return await _strip_ooxml_from_path(file_path, mime_type)
     except SanitizationError:

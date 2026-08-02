@@ -1,48 +1,13 @@
-"""file_security — file safety, metadata stripping, and compression.
+"""Public, lazily loaded file-security API.
 
-This package is the drop-in replacement for the former monolithic
-``app/core/file_security.py``. Its supported public API is re-exported here;
-format-specific implementation helpers remain in their defining modules.
-
-Public API (path-based, production):
-    strip_metadata_file   — remove metadata from a file on disk
-    compress_file_path    — compress a file on disk
-    CompressResultPath    — NamedTuple returned by compress_file_path
-    check_pdf_safety      — structural PDF safety validation
-    check_svg_safety      — SVG allowlist-based safety check
-    check_svg_safety_stream — stream variant for SVG safety check
-    SvgSecurityError      — exception raised on SVG violation
-    get_uncompressed_size — safe ZIP central-directory size query
-    run_managed_subprocess— subprocess with global concurrency guard
+Keeping imports lazy prevents optional/native processors and Redis/database
+initialization from running merely because a format-specific helper is imported.
 """
 
-# ── Audio / Video ─────────────────────────────────────────────────────────────
-from app.core.security.file_security._audio_video import VIDEO_COMPRESS_THRESHOLD
+from __future__ import annotations
 
-# ── Concurrency ───────────────────────────────────────────────────────────────
-from app.core.security.file_security._concurrency import run_managed_subprocess
-
-# ── Image ─────────────────────────────────────────────────────────────────────
-from app.core.security.file_security._image import MAX_GIF_FRAMES, MAX_GIF_TOTAL_PIXELS
-
-# ── PDF ───────────────────────────────────────────────────────────────────────
-from app.core.security.file_security._pdf import check_pdf_safety
-
-# ── SVG ───────────────────────────────────────────────────────────────────────
-from app.core.security.file_security._svg import (
-    SvgSecurityError,
-    check_svg_safety,
-    check_svg_safety_stream,
-)
-
-# ── ZIP / Gzip ────────────────────────────────────────────────────────────────
-from app.core.security.file_security._zip import get_uncompressed_size
-
-# ── Compress dispatcher ───────────────────────────────────────────────────────
-from app.core.security.file_security.compress import CompressResultPath, compress_file_path
-
-# ── Strip dispatcher ──────────────────────────────────────────────────────────
-from app.core.security.file_security.strip import strip_metadata_file
+from importlib import import_module
+from typing import Any
 
 __all__ = [
     "strip_metadata_file",
@@ -58,3 +23,47 @@ __all__ = [
     "MAX_GIF_FRAMES",
     "MAX_GIF_TOTAL_PIXELS",
 ]
+
+_EXPORTS: dict[str, tuple[str, str]] = {
+    "strip_metadata_file": ("app.core.security.file_security.strip", "strip_metadata_file"),
+    "compress_file_path": ("app.core.security.file_security.compress", "compress_file_path"),
+    "CompressResultPath": ("app.core.security.file_security.compress", "CompressResultPath"),
+    "check_pdf_safety": ("app.core.security.file_security._pdf", "check_pdf_safety"),
+    "check_svg_safety": ("app.core.security.file_security._svg", "check_svg_safety"),
+    "check_svg_safety_stream": (
+        "app.core.security.file_security._svg",
+        "check_svg_safety_stream",
+    ),
+    "SvgSecurityError": ("app.core.security.file_security._svg", "SvgSecurityError"),
+    "get_uncompressed_size": (
+        "app.core.security.file_security._zip",
+        "get_uncompressed_size",
+    ),
+    "run_managed_subprocess": (
+        "app.core.security.file_security._concurrency",
+        "run_managed_subprocess",
+    ),
+    "VIDEO_COMPRESS_THRESHOLD": (
+        "app.core.security.file_security._audio_video",
+        "VIDEO_COMPRESS_THRESHOLD",
+    ),
+    "MAX_GIF_FRAMES": ("app.core.security.file_security._image", "MAX_GIF_FRAMES"),
+    "MAX_GIF_TOTAL_PIXELS": (
+        "app.core.security.file_security._image",
+        "MAX_GIF_TOTAL_PIXELS",
+    ),
+}
+
+
+def __getattr__(name: str) -> Any:
+    try:
+        module_name, attribute_name = _EXPORTS[name]
+    except KeyError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

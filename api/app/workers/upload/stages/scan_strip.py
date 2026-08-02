@@ -8,9 +8,8 @@ from typing import Any
 from app.core.common.exceptions import BadRequestError
 from app.core.events.processing import ProcessingFile
 from app.core.observability.metrics import upload_scan_duration
-from app.core.security.async_utils import shielded_await
+from app.core.security.async_utils import shielded_await, shielded_to_thread
 from app.core.security.file_security import check_pdf_safety, strip_metadata_file
-from app.core.security.file_security._concurrency import _shielded_to_thread
 from app.core.security.scanner import MalwareScanner
 from app.schemas.material import UploadStatus
 from app.workers.upload.context import WorkerContext
@@ -39,7 +38,7 @@ async def run_scan_and_strip(
 
     scan_copy = tmp_path.with_suffix(".scan")
     try:
-        await _shielded_to_thread(shutil.copyfile, tmp_path, scan_copy)
+        await shielded_to_thread(shutil.copyfile, tmp_path, scan_copy)
     except BaseException:
         scan_copy.unlink(missing_ok=True)
         if owns_scanner:
@@ -140,6 +139,6 @@ async def run_post_strip_pdf_check(
         return
 
     try:
-        await _shielded_to_thread(check_pdf_safety, pf.path)
+        await shielded_to_thread(check_pdf_safety, pf.path)
     except ValueError as exc:
         raise MalwareError(str(exc))
