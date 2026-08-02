@@ -1,12 +1,13 @@
 import asyncio
 import hashlib
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import IO, Self
 
 from fastapi import UploadFile
 
 from app.core.common.exceptions import BadRequestError
+from app.core.security.async_utils import shielded_to_thread
+from app.core.security.processing_paths import make_processing_temp_path
 
 CHUNK_SIZE = 1024 * 1024  # 1 MiB chunks for fast buffered writes without thread overhead
 
@@ -22,8 +23,8 @@ class ProcessingFile:
     @classmethod
     async def from_upload(cls, upload: UploadFile, max_bytes: int) -> Self:
         """Spool UploadFile to a named temp file with size enforcement and hashing."""
-        temp = NamedTemporaryFile(delete=False)
-        temp_path = Path(temp.name)
+        temp_path = make_processing_temp_path()
+        temp = temp_path.open("wb")
         hasher = hashlib.sha256()
 
         try:
@@ -41,7 +42,7 @@ class ProcessingFile:
                         f"File size exceeds maximum of {max_bytes // (1024 * 1024)} MiB"
                     )
                 hasher.update(chunk)
-                await asyncio.to_thread(temp.write, chunk)
+                await shielded_to_thread(temp.write, chunk)
 
             temp.close()
             return cls(temp_path, total_size, hash=hasher.hexdigest())
@@ -82,7 +83,7 @@ class ProcessingFile:
                     hasher.update(buffer[:n])
             return hasher.hexdigest()
 
-        digest = await asyncio.to_thread(_hash_file)
+        digest = await shielded_to_thread(_hash_file)
         self.hash = digest
         return digest
 

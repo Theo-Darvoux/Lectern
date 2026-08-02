@@ -8,13 +8,12 @@ Provides:
 """
 
 import logging
-import tempfile
 from pathlib import Path
 from typing import Any
 
 import mutagen
 
-from app.core.security.file_security._concurrency import _get_concurrency_guard
+from app.core.security.file_security._concurrency import _get_concurrency_guard, _make_temp_path
 from app.core.security.sandbox import async_sandboxed_run
 
 logger = logging.getLogger(__name__)
@@ -131,7 +130,7 @@ async def _strip_video_from_path(file_path: Path, mime_type: str) -> Path:
     """Remove metadata from video files using ffmpeg on disk (stream copy, no re-encoding)."""
     ext = _VIDEO_EXTENSION_HINTS.get(mime_type, ".mp4")
 
-    dst_name = tempfile.NamedTemporaryFile(suffix=ext, delete=False).name
+    dst_name = str(_make_temp_path(suffix=ext))
     success = False
     try:
         async with _get_concurrency_guard("subprocess"):
@@ -170,7 +169,7 @@ def _strip_audio_from_path(file_path: Path, mime_type: str) -> Path:
     """Remove ID3/Vorbis/MP4 tags from audio files on disk."""
     import shutil
 
-    new_path = Path(tempfile.NamedTemporaryFile(delete=False).name)
+    new_path = _make_temp_path()
     success = False
     try:
         shutil.copyfile(file_path, new_path)
@@ -205,7 +204,7 @@ async def _compress_video_path(
     if file_path.stat().st_size > VIDEO_COMPRESS_THRESHOLD:
         return file_path
 
-    out_name = tempfile.NamedTemporaryFile(suffix=suffix, delete=False).name
+    out_name = str(_make_temp_path(suffix=suffix))
     success = False
     try:
         async with _get_concurrency_guard("subprocess"):
@@ -236,7 +235,7 @@ async def _compress_video_path(
 
 async def _convert_to_opus_path(file_path: Path) -> Path:
     """Convert audio to Opus (lossy, high compression) using FFmpeg."""
-    out_name = tempfile.NamedTemporaryFile(suffix=".opus", delete=False).name
+    out_name = str(_make_temp_path(suffix=".opus"))
     success = False
     try:
         async with _get_concurrency_guard("subprocess"):

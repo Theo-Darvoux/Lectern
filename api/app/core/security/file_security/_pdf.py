@@ -3,7 +3,6 @@
 import asyncio
 import io
 import logging
-import tempfile
 import zlib
 from pathlib import Path
 from typing import Final, cast
@@ -13,8 +12,13 @@ from pikepdf.models.image import PdfImage
 from PIL import Image
 
 from app.config import settings
-from app.core.security.file_security._concurrency import _get_concurrency_guard
+from app.core.security.file_security._concurrency import (
+    _get_concurrency_guard,
+    _make_temp_path,
+    _shielded_to_thread,
+)
 from app.core.security.file_security._image import MAX_IMAGE_PIXELS
+from app.core.security.processing_paths import processing_temp_dir
 from app.core.security.sandbox import async_sandboxed_run
 
 logger = logging.getLogger(__name__)
@@ -274,10 +278,9 @@ def _strip_pdf_from_path(file_path: Path) -> Path:
     try:
         with pikepdf.open(str(file_path)) as pdf:
             _apply_pdf_security_strip(pdf)
-            with tempfile.NamedTemporaryFile(delete=False) as _f:
-                new_path = _f.name
-            pdf.save(new_path)
-            return Path(new_path)
+            new_path = _make_temp_path(suffix=".pdf")
+            pdf.save(str(new_path))
+            return new_path
     except Exception as exc:
         logger.warning("PDF metadata strip path failed: %s", exc)
         if new_path is not None:
@@ -294,8 +297,7 @@ async def _compress_pdf_ghostscript(file_path: Path, quality: int) -> Path:
             profile, colour_dpi, gray_dpi, mono_dpi = prof, cdpi, gdpi, mdpi
             break
 
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as _f:
-        out_name = _f.name
+    out_name = str(_make_temp_path(suffix=".pdf"))
 
     if quality >= 100:
         image_args = [
@@ -650,8 +652,8 @@ async def _rasterize_pdf_path(file_path: Path, quality: int = 85) -> Path:
     else:
         dpi, jpeg_q = 150, 70
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        page_prefix = str(Path(tmpdir) / "page")
+    with processing_temp_dir(prefix="pdf-raster-") as tmpdir:
+        page_prefix = str(tmpdir / "page")
 
         command = [
             "gs",
@@ -685,17 +687,16 @@ async def _rasterize_pdf_path(file_path: Path, quality: int = 85) -> Path:
 
         # Sort using numeric key to handle 1000+ page documents correctly without page scrambling
         jpeg_paths = sorted(
-            (str(p) for p in Path(tmpdir).glob("page-*.jpg")),
+            (str(p) for p in tmpdir.glob("page-*.jpg")),
             key=lambda p: int(Path(p).stem.rsplit("-", 1)[1]),
         )
         if not jpeg_paths:
             return file_path
 
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as _f:
-            out_name = _f.name
+        out_name = str(_make_temp_path(suffix=".pdf"))
 
         try:
-            ok = await asyncio.to_thread(_build_rasterized_pdf, jpeg_paths, out_name, dpi)
+            ok = await _shielded_to_thread(_build_rasterized_pdf, jpeg_paths, out_name, dpi)
             if not ok:
                 Path(out_name).unlink(missing_ok=True)
                 return file_path
@@ -731,14 +732,13 @@ async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Pat
 
     # Stage 2: pikepdf stream repacking on the GS output (or original).
     # When GS ran, skip image processing (GS already handled it); just repack streams.
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as _f:
-        out_name = _f.name
+    out_name = str(_make_temp_path(suffix=".pdf"))
 
     best_path = file_path
     try:
         work_path = gs_result  # GS output, or original if GS produced no gain
 
-        smaller = await asyncio.to_thread(
+        smaller = await _shielded_to_thread(
             _pikepdf_repack_streams,
             work_path,
             out_name,
@@ -767,8 +767,9 @@ async def _compress_pdf_path(file_path: Path, config: dict | None = None) -> Pat
     try:
         best_size = best_path.stat().st_size
         orig_size = file_path.stat().st_size
-        if best_size >= orig_size * 0.8 and await asyncio.to_thread(
-            _is_vector_heavy_pdf, file_path
+        if (
+            best_size >= orig_size * 0.8
+            and await _shielded_to_thread(_is_vector_heavy_pdf, file_path)
         ):
             raster_result = await _rasterize_pdf_path(file_path, quality=quality)
             if raster_result != file_path:

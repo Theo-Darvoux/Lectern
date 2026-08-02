@@ -13,12 +13,12 @@ import io
 import logging
 import math
 import re
-import tempfile
 import zipfile
 from pathlib import Path
 
 from PIL import Image
 
+from app.core.security.file_security._concurrency import _make_temp_path
 from app.core.security.file_security._image import (
     MAX_GIF_FRAMES,
     MAX_GIF_TOTAL_PIXELS,
@@ -279,7 +279,7 @@ def _recompress_zip_path(file_path: Path) -> Path:
         ValueError: if entry or total size exceeds configured limits.
         zipfile.BadZipFile: if the input is not a valid ZIP.
     """
-    out_name = tempfile.NamedTemporaryFile(suffix=".zip", delete=False).name
+    out_name = str(_make_temp_path(suffix=".zip"))
     try:
         must_use_output = False
         with (
@@ -375,7 +375,7 @@ def _gzip_compress_path(file_path: Path) -> Path:
 
     Returns the original path if the compressed output is not smaller.
     """
-    out_name = tempfile.NamedTemporaryFile(suffix=".gz", delete=False).name
+    out_name = str(_make_temp_path(suffix=".gz"))
     try:
         with open(file_path, "rb") as f_in, gzip.open(out_name, "wb", compresslevel=9) as f_out:
             import shutil

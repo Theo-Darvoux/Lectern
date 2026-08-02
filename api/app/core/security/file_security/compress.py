@@ -6,7 +6,6 @@ Fail-open: returns original path + size on any non-security error.
 """
 
 import logging
-import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -18,6 +17,7 @@ from app.core.security.file_security._audio_video import (
     _convert_to_opus_path,
 )
 from app.core.security.file_security._concurrency import (
+    _make_temp_path,
     _shielded_to_thread,
     image_guard,
 )
@@ -25,6 +25,7 @@ from app.core.security.file_security._image import _compress_image_path
 from app.core.security.file_security._pdf import _compress_pdf_path
 from app.core.security.file_security._svg import SvgSecurityError, _optimize_svg, check_svg_safety
 from app.core.security.file_security._zip import _gzip_compress_path, _recompress_zip_path
+from app.core.security.file_security.errors import SanitizationError
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +56,8 @@ def _optimize_svg_to_path(file_path: Path, filename: str) -> Path:
     try:
         optimised = _optimize_svg(svg_bytes)
         if optimised and len(optimised) < len(svg_bytes):
-            new_svg = tempfile.NamedTemporaryFile(suffix=".svg", delete=False)
-            new_svg.write(optimised)
-            new_svg.close()
-            new_path = Path(new_svg.name)
+            new_path = _make_temp_path(suffix=".svg")
+            new_path.write_bytes(optimised)
             # Re-verify the optimized markup
             check_svg_safety(new_path.read_bytes(), filename)
             return new_path
@@ -161,7 +160,7 @@ async def compress_file_path(
                 compressed, res_mime = await _shielded_to_thread(_compress_image_path, file_path)
             return CompressResultPath(compressed, compressed.stat().st_size, None, res_mime)
 
-    except SvgSecurityError:
+    except (SvgSecurityError, SanitizationError):
         raise
     except Exception as e:
         logger.warning("Compression failed for path %s (%s): %s", filename, mime_type, e)

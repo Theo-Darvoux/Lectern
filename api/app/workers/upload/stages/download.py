@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,6 +6,7 @@ from app.config import settings
 from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import ZIP_MIME_TYPES, MimeRegistry, guess_mime_from_file_path
 from app.core.observability.metrics import mime_category as _mime_cat
+from app.core.security.async_utils import shielded_to_thread
 from app.core.security.cas import hmac_cas_key
 from app.core.security.file_security import check_svg_safety, get_uncompressed_size
 from app.core.security.polyglot import check_polyglot
@@ -59,7 +59,7 @@ async def run_download_and_validate(
         (".docx", ".xlsx", ".pptx", ".zip", ".epub")
     )
     if is_zip_family:
-        uncompressed_size = await asyncio.to_thread(get_uncompressed_size, tmp_path)
+        uncompressed_size = await shielded_to_thread(get_uncompressed_size, tmp_path)
         if uncompressed_size > expansion_hard_limit:
             msg = (
                 "Decompression bomb detected: total uncompressed size "
@@ -100,7 +100,7 @@ async def run_download_and_validate(
         raise UploadError(UploadStatus.FAILED, msg)
 
     try:
-        await asyncio.to_thread(check_polyglot, tmp_path, actual_mime)
+        await shielded_to_thread(check_polyglot, tmp_path, actual_mime)
     except ValueError as exc:
         raise MalwareError(str(exc))
 

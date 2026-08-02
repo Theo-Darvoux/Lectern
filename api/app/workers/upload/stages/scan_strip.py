@@ -8,6 +8,7 @@ from typing import Any
 from app.core.common.exceptions import BadRequestError
 from app.core.events.processing import ProcessingFile
 from app.core.observability.metrics import upload_scan_duration
+from app.core.security.async_utils import shielded_await
 from app.core.security.file_security import check_pdf_safety, strip_metadata_file
 from app.core.security.file_security._concurrency import _shielded_to_thread
 from app.core.security.scanner import MalwareScanner
@@ -42,7 +43,7 @@ async def run_scan_and_strip(
     except BaseException:
         scan_copy.unlink(missing_ok=True)
         if owns_scanner:
-            await scanner.close()
+            await shielded_await(scanner.close(), description="scanner close")
         raise
 
     async def _run_scan() -> None:
@@ -72,7 +73,7 @@ async def run_scan_and_strip(
         scan_res, strip_res = results[0], results[1]
     finally:
         if owns_scanner:
-            await scanner.close()
+            await shielded_await(scanner.close(), description="scanner close")
 
     upload_scan_duration.labels(mime_category=mime_category).observe(time.monotonic() - scan_start)
 
@@ -94,7 +95,7 @@ async def run_scan_and_strip(
             raise strip_res
         if isinstance(strip_res, Path) and strip_res != tmp_path:
             await pf.replace_with(strip_res)
-    except Exception:
+    except BaseException:
         if isinstance(strip_res, Path) and strip_res != tmp_path and pf.path != strip_res:
             try:
                 strip_res.unlink(missing_ok=True)
@@ -123,7 +124,7 @@ async def run_strip_only(
             if clean_path is not None and clean_path != tmp_path and pf.path != clean_path:
                 clean_path.unlink(missing_ok=True)
             raise UploadError(UploadStatus.FAILED, "Metadata stripping timed out")
-        except Exception as exc:
+        except BaseException as exc:
             if clean_path is not None and clean_path != tmp_path and pf.path != clean_path:
                 clean_path.unlink(missing_ok=True)
             if isinstance(exc, ValueError):

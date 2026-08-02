@@ -91,19 +91,16 @@ def _overlaps(a: Path, b: Path) -> bool:
 
 
 def _processing_root() -> Path:
-    from app.config import settings
+    from app.core.security.processing_paths import get_processing_root
 
-    root = Path(settings.processing_root).resolve(strict=True)
-    if not root.is_dir():
-        raise RuntimeError(f"Configured processing root is not a directory: {root}")
-    return root
+    return get_processing_root()
 
 
 def _validate_bind_path(path: Path | str, *, processing_root: Path) -> Path:
-    """Resolve a bind path and require it to be a child of the processing root."""
-    resolved = Path(path).resolve(strict=True)
-    if resolved == processing_root:
-        raise ValueError("Binding the processing root itself is prohibited")
+    """Resolve a bind path and require a non-symlink child of the processing root."""
+    from app.core.security.processing_paths import validate_processing_path
+
+    resolved = validate_processing_path(path)
     if not resolved.is_relative_to(processing_root):
         raise ValueError(f"Sandbox path is outside processing root: {resolved}")
     return resolved

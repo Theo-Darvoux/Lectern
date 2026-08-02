@@ -3,27 +3,16 @@
 import asyncio
 import logging
 import subprocess
-import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from app.config import settings
-
-
-def _make_temp_path(suffix: str = "") -> Path:
-    """Create a closed temporary file beneath the configured processing root."""
-    processing_root = Path(settings.processing_root).resolve()
-    processing_root.mkdir(parents=True, exist_ok=True)
-    tmp = tempfile.NamedTemporaryFile(
-        suffix=suffix,
-        dir=processing_root,
-        delete=False,
-    )
-    tmp.close()
-    return Path(tmp.name)
-
+from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
+from app.core.security.processing_paths import (
+    make_processing_temp_path as _make_temp_path,
+)
 
 from app.core.database.redis import (
     RedisSemaphoreUnavailableError,
@@ -110,27 +99,6 @@ async def image_guard() -> AsyncIterator[None]:
     """Concurrency guard for heavy in-process image operations."""
     async with _get_concurrency_guard("image"):
         yield
-
-
-async def _shielded_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
-    """Execute a synchronous function in a worker thread while shielding cancellation until thread finishes."""
-    worker = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
-    cancellation: asyncio.CancelledError | None = None
-
-    while not worker.done():
-        try:
-            await asyncio.shield(worker)
-        except asyncio.CancelledError as exc:
-            cancellation = cancellation or exc
-
-    if cancellation is not None:
-        try:
-            worker.result()
-        except BaseException:
-            logger.exception("Thread worker failed after caller cancellation")
-        raise cancellation
-
-    return worker.result()
 
 
 async def run_managed_subprocess(

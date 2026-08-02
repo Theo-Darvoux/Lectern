@@ -180,7 +180,7 @@ class Settings(BaseSettings):
 
     # Sandboxed file-processing limits. All temporary inputs and outputs used by
     # sandboxed processors must be descendants of processing_root.
-    processing_root: str = "/tmp"
+    processing_root: str = "/tmp/lectern-processing"
     sandbox_memory_limit_mb: int = Field(default=1024, ge=128)
     sandbox_cpu_limit_seconds: int = Field(default=60, ge=1)
     sandbox_file_size_limit_mb: int = Field(default=100, ge=1)

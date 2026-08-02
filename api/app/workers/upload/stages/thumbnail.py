@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import shutil
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -9,8 +8,13 @@ from PIL import Image
 
 from app.core.events.processing import ProcessingFile
 from app.core.observability.telemetry import get_tracer
-from app.core.security.file_security._concurrency import _get_concurrency_guard
+from app.core.security.file_security._concurrency import (
+    _get_concurrency_guard,
+    _shielded_to_thread,
+    image_guard,
+)
 from app.core.security.file_security._image import _validate_image_size
+from app.core.security.processing_paths import processing_temp_dir
 from app.core.security.sandbox import async_sandboxed_run
 
 logger = logging.getLogger(__name__)
@@ -188,7 +192,8 @@ async def _thumbnail_image(
             img.thumbnail(size, Image.Resampling.LANCZOS)
             img.save(output_path, "WEBP", quality=quality)
 
-    await asyncio.to_thread(_sync)
+    async with image_guard():
+        await _shielded_to_thread(_sync)
 
 
 async def _thumbnail_svg(
@@ -204,8 +209,8 @@ async def _thumbnail_svg(
     # writes by atomically replacing its output; a file bind would leave the
     # replacement inside the sandbox mount namespace and the host would still
     # see the original empty inode.
-    with tempfile.TemporaryDirectory(prefix="svg-thumb-") as temp_dir:
-        temp_png = Path(temp_dir) / "render.png"
+    with processing_temp_dir(prefix="svg-thumb-") as temp_dir:
+        temp_png = temp_dir / "render.png"
         cmd = [
             "rsvg-convert",
             "--width",
@@ -221,7 +226,7 @@ async def _thumbnail_svg(
             process = await async_sandboxed_run(
                 cmd,
                 ro_paths=[input_path],
-                rw_paths=[Path(temp_dir)],
+                rw_paths=[temp_dir],
                 timeout=60,
             )
         if process.returncode != 0 or not temp_png.exists():
@@ -241,7 +246,8 @@ async def _thumbnail_svg(
                 else:
                     img.convert("RGB").save(output_path, "WEBP", quality=quality)
 
-        await asyncio.to_thread(_flatten_and_save)
+        async with image_guard():
+            await _shielded_to_thread(_flatten_and_save)
 
 
 async def _thumbnail_video(
@@ -250,7 +256,7 @@ async def _thumbnail_video(
     """Extract a frame from video using FFmpeg."""
     # Heuristic: seek to 2 seconds or 10%
     # We use a simple 2s seek first as it's fastest
-    with tempfile.TemporaryDirectory(prefix="video-thumb-") as temp_dir:
+    with processing_temp_dir(prefix="video-thumb-") as temp_dir:
         temp_jpg = Path(temp_dir) / "frame.jpg"
         for seek in ("00:00:02", "00:00:00"):
             cmd = [
@@ -272,7 +278,7 @@ async def _thumbnail_video(
                 process = await async_sandboxed_run(
                     cmd,
                     ro_paths=[input_path],
-                    rw_paths=[Path(temp_dir)],
+                    rw_paths=[temp_dir],
                     timeout=60,
                 )
             if process.returncode == 0 and temp_jpg.exists():
@@ -294,7 +300,7 @@ async def _thumbnail_pdf(
     Tries page 1 first. If the resulting thumbnail is nearly blank (common for
     attestation covers or title pages with minimal content), falls back to page 2.
     """
-    with tempfile.TemporaryDirectory(prefix="pdf-thumb-") as temp_dir:
+    with processing_temp_dir(prefix="pdf-thumb-") as temp_dir:
         for page_num in (1, 2):
             temp_png = Path(temp_dir) / f"page-{page_num}.png"
             cmd = [
@@ -314,7 +320,7 @@ async def _thumbnail_pdf(
                 process = await async_sandboxed_run(
                     cmd,
                     ro_paths=[input_path],
-                    rw_paths=[Path(temp_dir)],
+                    rw_paths=[temp_dir],
                     timeout=60,
                 )
 
@@ -357,8 +363,7 @@ async def _thumbnail_office(
     .doc, .xls, .ppt, .odt, .ods, .odp — without relying on optional embedded
     thumbnails that most files simply do not contain.
     """
-    tmp_dir = Path(tempfile.mkdtemp(prefix="lectern_office_thumb_"))
-    try:
+    with processing_temp_dir(prefix="lectern-office-thumb-") as tmp_dir:
         # 1. Convert to PDF via LibreOffice headless, explicitly defining a custom
         # unique profile directory to avoid lock collisions between concurrent jobs.
         cmd = [
@@ -412,9 +417,6 @@ async def _thumbnail_office(
         # 3. Reuse the existing Ghostscript → Pillow → WebP pipeline
         await _thumbnail_pdf(pdf_path, output_path, size, quality)
 
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
 
 async def _fallback_extract_largest_image(
     input_path: Path, output_path: Path, size: tuple[int, int], quality: int
@@ -454,7 +456,7 @@ async def _fallback_extract_largest_image(
             logger.error("Fallback image extraction failed for %s: %s", input_path.name, e)
             return None
 
-    data = await asyncio.to_thread(_extract)
+    data = await _shielded_to_thread(_extract)
     if not data:
         return
 
@@ -470,7 +472,8 @@ async def _fallback_extract_largest_image(
         except Exception as e:
             logger.error("Fallback image processing failed: %s", e)
 
-    await asyncio.to_thread(_sync_process, data)
+    async with image_guard():
+        await _shielded_to_thread(_sync_process, data)
 
 
 async def _thumbnail_via_soffice(
@@ -486,8 +489,7 @@ async def _thumbnail_via_soffice(
     LibreOffice requires the source file to have the right extension to identify the
     format.  ``suffix`` is appended to the temp copy (e.g. ``.md`` or ``.txt``).
     """
-    tmp_dir = Path(tempfile.mkdtemp(prefix="lectern_soffice_thumb_"))
-    try:
+    with processing_temp_dir(prefix="lectern-soffice-thumb-") as tmp_dir:
         temp_file = tmp_dir / f"document{suffix}"
         shutil.copy2(input_path, temp_file)
 
@@ -524,5 +526,3 @@ async def _thumbnail_via_soffice(
             return
 
         await _thumbnail_pdf(pdf_files[0], output_path, size, quality)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
