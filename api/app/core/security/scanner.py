@@ -1,7 +1,8 @@
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -23,6 +24,7 @@ class MalwareScanner:
         self.client: httpx.AsyncClient | None = None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yara-scan")
         self._scan_slot: asyncio.Semaphore | None = None
+        self._active_yara_future: Future[list[Any]] | None = None
 
     @property
     def scan_slot(self) -> asyncio.Semaphore:
@@ -34,13 +36,6 @@ class MalwareScanner:
     @property
     def initialized(self) -> bool:
         return self.rules is not None
-
-    def _reset_executor(self) -> None:
-        """Recreate the single-worker thread pool if a native thread hangs or times out."""
-        logger.warning("Resetting YARA scanner ThreadPoolExecutor after thread timeout/error")
-        old_executor = self._executor
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yara-scan")
-        old_executor.shutdown(wait=False, cancel_futures=True)
 
     def initialize(self) -> None:
         """Compile YARA rules from disk. Fails hard if no rules found."""
@@ -65,10 +60,15 @@ class MalwareScanner:
         logger.info("Scanner: compiled %d YARA rule file(s) from %s", len(rule_files), rules_dir)
 
     async def close(self) -> None:
-        """Shut down the shared HTTP client."""
+        """Shut down the shared HTTP client and scanner executor."""
         if self.client:
             await self.client.aclose()
             self.client = None
+        future = self._active_yara_future
+        if future is not None and future.done():
+            with contextlib.suppress(BaseException):
+                future.result()
+            self._active_yara_future = None
         self._executor.shutdown(wait=False, cancel_futures=True)
 
     async def _run_scan_gate(
@@ -107,26 +107,47 @@ class MalwareScanner:
         """Run the local YARA gate; the pipeline applies the configured Bazaar policy."""
         await self._run_scan_gate(self._scan_yara_path(file_path, filename), filename)
 
+    def _clear_completed_yara_future(self) -> None:
+        """Consume a completed native scan before another one is submitted."""
+        future = self._active_yara_future
+        if future is None or not future.done():
+            return
+        with contextlib.suppress(BaseException):
+            future.result()
+        self._active_yara_future = None
+
     async def _run_yara_match(
         self,
         match_callable: Callable[[], list[Any]],
         filename: str,
     ) -> str | None:
-        """Execute a YARA match callable in a thread executor with timeout."""
-        loop = asyncio.get_running_loop()
+        """Execute one YARA match without accumulating unkillable native workers."""
         async with self.scan_slot:
+            self._clear_completed_yara_future()
+            if self._active_yara_future is not None:
+                # ThreadPoolExecutor cannot terminate a native call. Replacing
+                # the executor after a timeout would leak one worker per request.
+                raise RuntimeError("A previous YARA scan is still running after its timeout")
+
+            future = self._executor.submit(match_callable)
+            self._active_yara_future = future
+            wrapped = asyncio.wrap_future(future)
             try:
                 matches: list[Any] = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, match_callable),
+                    asyncio.shield(wrapped),
                     timeout=settings.yara_scan_timeout + 5,
                 )
             except TimeoutError:
-                logger.error("YARA scan timed out for %s; resetting thread executor.", filename)
-                self._reset_executor()
+                logger.error(
+                    "YARA scan timed out for %s; rejecting further scans until the "
+                    "native call exits.",
+                    filename,
+                )
                 raise
-            except Exception:
-                self._reset_executor()
-                raise
+            finally:
+                if future.done() and self._active_yara_future is future:
+                    self._clear_completed_yara_future()
+
         if matches:
             rule_names = [m.rule for m in matches]
             logger.warning("YARA match in %s: %s", filename, ", ".join(rule_names))
@@ -248,9 +269,7 @@ class MalwareScanner:
         return None
 
 
-# ────────────────────────────────────────────────────────────────────────────────
 # FastAPI dependency
-# ────────────────────────────────────────────────────────────────────────────────
 
 
 def get_scanner(request: Request) -> MalwareScanner:

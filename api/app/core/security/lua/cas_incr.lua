@@ -3,7 +3,10 @@ local usage_key = KEYS[2]
 local data
 local previous_ttl = -2
 if redis.call('EXISTS', KEYS[3]) == 1 then
-  if not raw then return 0 end
+  -- An idempotency marker without its CAS record is not a successful duplicate.
+  -- The record is explicitly evictable, and silently returning zero here would
+  -- leave ref-count and physical-usage state unreconstructed.
+  if not raw then return -1 end
   local duplicate_ok, duplicate_data = pcall(cjson.decode, raw)
   if not duplicate_ok then return -2 end
   return duplicate_data['ref_count'] or 0
