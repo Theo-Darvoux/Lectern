@@ -1,0 +1,44 @@
+name: SeaweedFS Integration
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/seaweedfs-integration.yml"
+      - "api/app/core/events/processing.py"
+      - "api/app/core/media/**"
+      - "api/app/core/security/**"
+      - "api/app/core/storage/**"
+      - "api/app/workers/upload/**"
+      - "api/pyproject.toml"
+      - "api/uv.lock"
+      - "api/scripts/run-seaweedfs-integration-tests.sh"
+      - "api/tests/integration/storage/**"
+      - "infra/docker/seaweedfs/s3.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seaweedfs-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  seaweedfs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+
+      - name: Install API dependencies
+        working-directory: api
+        run: uv sync --frozen --extra dev
+
+      - name: Run live SeaweedFS integration suite
+        run: ./api/scripts/run-seaweedfs-integration-tests.sh

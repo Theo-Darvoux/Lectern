@@ -582,14 +582,32 @@ class S3Backend:
                         f"{_READ_FULL_OBJECT_MAX_BYTES // 1024 // 1024} MiB limit for "
                         "read_full_object. Use download_file_with_hash for large files."
                     )
-                data = cast(bytes, await body.read(_READ_FULL_OBJECT_MAX_BYTES + 1))
-                if len(data) > _READ_FULL_OBJECT_MAX_BYTES:
-                    raise ValueError(f"Object {file_key!r} exceeds the read_full_object limit")
-                return data
+                chunks: list[bytes] = []
+                total = 0
+                while True:
+                    if content_length and total >= content_length:
+                        break
+                    remaining_budget = _READ_FULL_OBJECT_MAX_BYTES - total
+                    read_size = min(64 * 1024, remaining_budget + 1)
+                    if content_length:
+                        read_size = min(read_size, content_length - total)
+                    chunk = cast(bytes, await body.read(read_size))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _READ_FULL_OBJECT_MAX_BYTES:
+                        raise ValueError(
+                            f"Object {file_key!r} exceeds the read_full_object limit"
+                        )
+                    chunks.append(chunk)
+                return b"".join(chunks)
             finally:
                 await _finish_response_body(body, primary_error=sys.exception())
 
     async def read_object_bytes(self, file_key: str, byte_count: int = MAGIC_HEADER_SIZE) -> bytes:
+        if byte_count <= 0:
+            return b""
+
         cfg = self._cfg()
         async with self._client(cfg) as client:
             try:
@@ -602,8 +620,22 @@ class S3Backend:
                 finally:
                     await _finish_response_body(body, primary_error=sys.exception())
             except client.exceptions.ClientError as e:
-                if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+                code = e.response["Error"]["Code"]
+                if code in ("404", "NoSuchKey", "NotFound"):
                     return b""
+                if code in ("416", "InvalidRange", "RequestedRangeNotSatisfiable"):
+                    try:
+                        metadata = await client.head_object(
+                            Bucket=cfg["bucket"],
+                            Key=file_key,
+                        )
+                    except client.exceptions.ClientError as head_error:
+                        head_code = head_error.response["Error"]["Code"]
+                        if head_code in ("404", "NoSuchKey", "NotFound"):
+                            return b""
+                        raise
+                    if int(metadata.get("ContentLength") or 0) == 0:
+                        return b""
                 raise
 
     @asynccontextmanager
