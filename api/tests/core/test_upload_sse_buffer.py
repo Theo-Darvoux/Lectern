@@ -6,6 +6,7 @@ import pytest
 from app.routers.upload.sse import (
     _enqueue_pubsub_payload,
     _load_event_log,
+    _upload_sse_event,
 )
 
 
@@ -43,3 +44,17 @@ def test_handoff_overflow_closes_stream_instead_of_growing_memory() -> None:
     assert accepted is False
     assert queue.qsize() == 1
     assert queue.get_nowait() is None
+
+
+def test_only_durable_replay_events_advance_last_event_id() -> None:
+    replay = _upload_sse_event('{"status":"processing"}', event_id=10)
+    live_duplicate = _upload_sse_event('{"status":"processing"}')
+
+    assert replay["id"] == "10"
+    assert "id" not in live_duplicate
+
+
+def test_cached_terminal_without_log_does_not_create_synthetic_cursor() -> None:
+    event = _upload_sse_event('{"status":"clean"}')
+
+    assert event == {"event": "upload", "data": '{"status":"clean"}'}

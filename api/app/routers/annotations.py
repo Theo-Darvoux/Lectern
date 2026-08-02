@@ -13,6 +13,7 @@ from app.core.events.sse import (
     broadcast_to_topic,
     register_topic_queue,
     sse_event_stream,
+    topic_owner_key,
     unregister_topic_queue,
 )
 from app.dependencies.auth import CurrentUser, OnboardedUser
@@ -152,7 +153,10 @@ async def material_event_stream(
     if not result.scalar_one_or_none():
         raise NotFoundError("Material not found")
 
-    queue = register_topic_queue(material_id)
+    owner_key = topic_owner_key(
+        client_host=request.client.host if request.client is not None else None
+    )
+    queue = register_topic_queue(material_id, owner_key=owner_key)
     return EventSourceResponse(
         sse_event_stream(
             queue,

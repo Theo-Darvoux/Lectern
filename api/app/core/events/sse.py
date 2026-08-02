@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import ipaddress
 import json
 import logging
 import uuid
@@ -12,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 _SSE_QUEUE_MAXSIZE = 500
 _MAX_LOCAL_SSE_CONNECTIONS = 2_000
+_MAX_LOCAL_TOPIC_CONNECTIONS = 1_500
 _MAX_USER_SSE_CONNECTIONS = 5
+_MAX_TOPIC_CONNECTIONS_PER_OWNER = 20
 _RESYNC_EVENT: dict[str, Any] = {
     "type": "resync_required",
     "reason": "event_buffer_overflow",
@@ -20,6 +23,9 @@ _RESYNC_EVENT: dict[str, Any] = {
 
 _user_queues: dict[uuid.UUID, list[asyncio.Queue[dict[str, Any]]]] = {}
 _topic_queues: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
+_topic_queue_owners: dict[int, str] = {}
+_topic_owner_queue_ids: dict[str, set[int]] = {}
+_active_topic_queue_ids: set[int] = set()
 _active_queue_ids: set[int] = set()
 _desynced_queue_ids: set[int] = set()
 
@@ -122,10 +128,47 @@ def broadcast_to_user(user_id: uuid.UUID, event: dict[str, Any]) -> None:
 # --- Topic-keyed queues (1:N mapping, used for material annotations) ---
 
 
-def register_topic_queue(topic: str) -> asyncio.Queue[dict[str, Any]]:
-    """Register a bounded watcher queue for a topic."""
+def topic_owner_key(
+    *,
+    user_id: uuid.UUID | str | None = None,
+    client_host: str | None = None,
+) -> str:
+    """Build a stable, bounded owner key for topic-stream capacity accounting."""
+    if user_id is not None:
+        return f"user:{user_id}"
+
+    host = (client_host or "unknown").strip().casefold()
+    try:
+        host = str(ipaddress.ip_address(host))
+    except ValueError:
+        host = host[:255] or "unknown"
+    return f"ip:{host}"
+
+
+def register_topic_queue(
+    topic: str,
+    *,
+    owner_key: str,
+) -> asyncio.Queue[dict[str, Any]]:
+    """Register a bounded topic queue with per-owner and reserved-pool limits."""
+    normalized_owner = owner_key.strip()
+    if not normalized_owner:
+        raise ValueError("Topic SSE owner key must not be empty")
+
+    owner_queue_ids = _topic_owner_queue_ids.get(normalized_owner, set())
+    if len(owner_queue_ids) >= _MAX_TOPIC_CONNECTIONS_PER_OWNER:
+        raise SSECapacityError(
+            "Too many concurrent topic live-update connections for this client"
+        )
+    if len(_active_topic_queue_ids) >= _MAX_LOCAL_TOPIC_CONNECTIONS:
+        raise SSECapacityError("Topic live updates are temporarily at capacity")
+
     queue = _new_queue()
+    queue_id = id(queue)
     _topic_queues.setdefault(topic, []).append(queue)
+    _topic_queue_owners[queue_id] = normalized_owner
+    _topic_owner_queue_ids.setdefault(normalized_owner, set()).add(queue_id)
+    _active_topic_queue_ids.add(queue_id)
     return queue
 
 
@@ -133,6 +176,16 @@ def unregister_topic_queue(topic: str, queue: asyncio.Queue[dict[str, Any]]) -> 
     queues = _topic_queues.get(topic, [])
     with contextlib.suppress(ValueError):
         queues.remove(queue)
+
+    queue_id = id(queue)
+    owner_key = _topic_queue_owners.pop(queue_id, None)
+    if owner_key is not None:
+        owner_queue_ids = _topic_owner_queue_ids.get(owner_key)
+        if owner_queue_ids is not None:
+            owner_queue_ids.discard(queue_id)
+            if not owner_queue_ids:
+                _topic_owner_queue_ids.pop(owner_key, None)
+    _active_topic_queue_ids.discard(queue_id)
     _release_queue(queue)
     if not queues:
         _topic_queues.pop(topic, None)

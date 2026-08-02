@@ -19,10 +19,12 @@ from sse_starlette.sse import EventSourceResponse
 from app.core.common.exceptions import BadRequestError, ForbiddenError, UnauthorizedError
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_client
+from app.core.events.limiter import limiter
 from app.core.events.sse import (
     broadcast_to_topic,
     register_topic_queue,
     sse_event_stream,
+    topic_owner_key,
     unregister_topic_queue,
 )
 from app.core.storage.facade import stream_object
@@ -137,10 +139,15 @@ async def get_directory_path(
 
 
 @router.get("/{id}/sse")
-async def directory_event_stream(id: str) -> EventSourceResponse:
-    queue = register_topic_queue(id)
+@limiter.limit("20/minute")
+async def directory_event_stream(request: Request, id: uuid.UUID) -> EventSourceResponse:
+    topic = str(id)
+    owner_key = topic_owner_key(
+        client_host=request.client.host if request.client is not None else None
+    )
+    queue = register_topic_queue(topic, owner_key=owner_key)
     return EventSourceResponse(
-        sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(id, queue)),
+        sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(topic, queue)),
         headers={"X-Accel-Buffering": "no"},
     )
 

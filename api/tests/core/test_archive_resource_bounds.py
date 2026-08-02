@@ -7,6 +7,7 @@ from app.core.security.file_security._office import _zip_strip_file
 from app.core.security.file_security._zip import (
     _read_zip_entry_bounded,
     _register_zip_name,
+    _sanitize_zip_entry_name,
 )
 from app.core.security.file_security.errors import SanitizationError, UnsafeFileError
 
@@ -107,3 +108,18 @@ def test_root_ooxml_relationship_file_is_security_checked(tmp_path) -> None:
             output,
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
+
+
+def test_zip_path_component_limit_rejects_extreme_depth() -> None:
+    path = "/".join(["a"] * 65) + "/file.txt"
+
+    with pytest.raises(ValueError, match="too many components"):
+        _sanitize_zip_entry_name(path)
+
+
+def test_zip_path_total_length_limit_rejects_large_prefix_registry() -> None:
+    component = "a" * 255
+    path = "/".join([component] * 17)
+
+    with pytest.raises(ValueError, match="path is too long"):
+        _sanitize_zip_entry_name(path)

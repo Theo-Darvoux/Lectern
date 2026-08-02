@@ -83,6 +83,18 @@ def _enqueue_pubsub_payload(
         return False
 
 
+def _upload_sse_event(
+    payload: str,
+    *,
+    event_id: int | str | None = None,
+) -> dict[str, str]:
+    """Format an upload event; only durable replay entries receive an SSE cursor."""
+    event = {"event": "upload", "data": payload}
+    if event_id is not None:
+        event["id"] = str(event_id)
+    return event
+
+
 async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -> None:
     """Raise ForbiddenError if the file_key doesn't belong to the user."""
     # V1 keys: quarantine/{user_id}/... or uploads/{user_id}/...
@@ -228,11 +240,11 @@ async def upload_events(
                 log_entries = await _load_event_log(redis, event_log_key)
                 events: list[dict[str, str]] = []
                 for i, entry in enumerate(log_entries):
-                    events.append({"event": "upload", "data": entry, "id": str(i + 1)})
+                    events.append(_upload_sse_event(entry, event_id=i + 1))
                 # Ensure the terminal event is present (it should be the last log entry,
                 # but append cached_status as a safety net if the log is empty).
                 if not events:
-                    events.append({"event": "upload", "data": cached_status, "id": "final"})
+                    events.append(_upload_sse_event(cached_status))
                 return EventSourceResponse(
                     AsyncIteratorAdapter(events),  # type: ignore[no-untyped-call]
                     headers={"X-Accel-Buffering": "no"},
@@ -315,7 +327,7 @@ async def upload_events(
 
             for i, payload_str in enumerate(replayed):
                 yielded_count = last_event_id + i + 1
-                yield {"event": "upload", "data": payload_str, "id": str(yielded_count)}
+                yield _upload_sse_event(payload_str, event_id=yielded_count)
                 try:
                     if json.loads(payload_str).get("status") in (
                         "clean",
@@ -347,12 +359,11 @@ async def upload_events(
                     if payload is None:
                         break
 
-                    yielded_count += 1
-                    yield {
-                        "event": "upload",
-                        "data": payload,
-                        "id": str(yielded_count),
-                    }
+                    # Pub/sub can duplicate an event already observed during the
+                    # subscribe-before-replay window. Never advance Last-Event-ID
+                    # for live messages: reconnects replay from the last durable
+                    # Redis-list cursor, yielding harmless duplicates instead of gaps.
+                    yield _upload_sse_event(payload)
 
                     try:
                         if json.loads(payload).get("status") in (

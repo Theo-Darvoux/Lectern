@@ -34,6 +34,8 @@ _ZIP_MAX_TRANSFORM_BYTES = 64 * 1024 * 1024  # 64 MB for in-memory transforms
 _ZIP_MAX_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB total uncompressed
 _ZIP_MAX_ENTRIES = 10_000
 _ZIP_MAX_COMPRESSION_RATIO = 1_000
+_ZIP_MAX_PATH_COMPONENTS = 64
+_ZIP_MAX_PATH_CHARS = 4_096
 _ZIP_RATIO_MIN_UNCOMPRESSED_BYTES = 1 * 1024 * 1024
 _SANITIZED_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
@@ -100,7 +102,16 @@ def _sanitize_zip_entry_name(name: str) -> str:
     normalized = re.sub(r"^([a-zA-Z]:[\\/]|[/\\]+)", "", normalized)
     parts = re.split(r"[\\/]", normalized)
     safe_parts = ["_" if part in {".", ".."} else part[:255] for part in parts if part]
+    if len(safe_parts) > _ZIP_MAX_PATH_COMPONENTS:
+        raise ValueError(
+            f"ZIP entry path has too many components (max {_ZIP_MAX_PATH_COMPONENTS})"
+        )
+
     safe_name = "/".join(safe_parts) or "_unknown_"
+    if len(safe_name) > _ZIP_MAX_PATH_CHARS:
+        raise ValueError(
+            f"ZIP entry path is too long (max {_ZIP_MAX_PATH_CHARS} characters)"
+        )
     return f"{safe_name}/" if is_dir else safe_name
 
 
@@ -130,8 +141,9 @@ def _register_zip_name(
         raise ValueError(f"ZIP contains duplicate sanitized entry '{safe_name}'")
 
     parts = canonical.split("/")
-    for index in range(1, len(parts)):
-        parent = "/".join(parts[:index])
+    parent = ""
+    for part in parts[:-1]:
+        parent = part if not parent else f"{parent}/{part}"
         if registry.get(parent) is False:
             raise ValueError(f"ZIP entry '{safe_name}' is nested beneath file '{parent}'")
         registry.setdefault(parent, None)
