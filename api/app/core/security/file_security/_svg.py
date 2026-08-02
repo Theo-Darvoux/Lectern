@@ -92,7 +92,8 @@ def check_svg_safety(file_bytes: bytes, filename: str = "") -> None:
     Parses the SVG as XML with defusedxml (protects against entity/bomb attacks),
     then walks every element and attribute looking for dangerous content.
     """
-    check_svg_safety_stream(io.BytesIO(file_bytes), filename)
+    with io.BytesIO(file_bytes) as source:
+        check_svg_safety_stream(source, filename)
 
 
 def check_svg_safety_stream(file_obj: IO[bytes], filename: str = "") -> None:

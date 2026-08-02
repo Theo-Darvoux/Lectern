@@ -1,6 +1,7 @@
 """PDF security checks and metadata stripping."""
 
 import asyncio
+import contextlib
 import io
 import logging
 import zlib
@@ -427,6 +428,12 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
             max_dim = 4096 if quality >= 85 else (2048 if quality >= 70 else 1600)
             for page in pdf.pages:
                 for name, raw_image in page.images.items():
+                    owned_images: list[Image.Image] = []
+
+                    def _own(image: Image.Image) -> Image.Image:
+                        owned_images.append(image)
+                        return image
+
                     try:
                         _validate_pdf_image_dimensions(raw_image)
                         smask_ref = raw_image.get("/SMask")
@@ -437,30 +444,34 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                             _validate_pdf_image_dimensions(mask_ref)
 
                         pdf_image = PdfImage(raw_image)
-                        pil_image = pdf_image.as_pil_image()
+                        pil_image = _own(pdf_image.as_pil_image())
 
                         if isinstance(smask_ref, pikepdf.Stream):
                             try:
-                                smask_pdf_image = PdfImage(smask_ref)
-                                smask_pil = smask_pdf_image.as_pil_image().convert("L")
+                                smask_source = _own(PdfImage(smask_ref).as_pil_image())
+                                smask_pil = _own(smask_source.convert("L"))
                                 if smask_pil.size != pil_image.size:
-                                    smask_pil = smask_pil.resize(
-                                        pil_image.size, Image.Resampling.LANCZOS
+                                    smask_pil = _own(
+                                        smask_pil.resize(
+                                            pil_image.size, Image.Resampling.LANCZOS
+                                        )
                                     )
-                                pil_image = pil_image.convert("RGBA")
+                                pil_image = _own(pil_image.convert("RGBA"))
                                 pil_image.putalpha(smask_pil)
                             except ValueError:
                                 raise
-                            except Exception as e:
-                                logger.debug("Failed to apply SMask: %s", e)
+                            except Exception as exc:
+                                logger.debug("Failed to apply SMask: %s", exc)
                                 continue
                         elif isinstance(mask_ref, pikepdf.Stream):
                             try:
-                                mask_pdf_image = PdfImage(mask_ref)
-                                mask_pil = mask_pdf_image.as_pil_image().convert("L")
+                                mask_source = _own(PdfImage(mask_ref).as_pil_image())
+                                mask_pil = _own(mask_source.convert("L"))
                                 if mask_pil.size != pil_image.size:
-                                    mask_pil = mask_pil.resize(
-                                        pil_image.size, Image.Resampling.LANCZOS
+                                    mask_pil = _own(
+                                        mask_pil.resize(
+                                            pil_image.size, Image.Resampling.LANCZOS
+                                        )
                                     )
                                 decode = mask_ref.get("/Decode")
                                 if (
@@ -470,13 +481,13 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                 ):
                                     from PIL import ImageOps
 
-                                    mask_pil = ImageOps.invert(mask_pil)
-                                pil_image = pil_image.convert("RGBA")
+                                    mask_pil = _own(ImageOps.invert(mask_pil))
+                                pil_image = _own(pil_image.convert("RGBA"))
                                 pil_image.putalpha(mask_pil)
                             except ValueError:
                                 raise
-                            except Exception as e:
-                                logger.debug("Failed to apply stencil Mask: %s", e)
+                            except Exception as exc:
+                                logger.debug("Failed to apply stencil Mask: %s", exc)
                                 continue
                         elif isinstance(mask_ref, pikepdf.Array):
                             try:
@@ -484,7 +495,7 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                     raise SanitizationError(
                                         "PDF image mask contains too many values"
                                     )
-                                mask_array = [int(x) for x in mask_ref]  # type: ignore[attr-defined]
+                                mask_array = [int(value) for value in mask_ref]
                                 bpc = int(str(raw_image.get("/BitsPerComponent", 8)))
                                 max_val = (1 << bpc) - 1 if bpc in (1, 2, 4, 8, 16) else 255
                                 if len(mask_array) == 6:
@@ -496,95 +507,120 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
                                     b_min_8 = int((b_min / max_val) * 255)
                                     b_max_8 = int((b_max / max_val) * 255)
 
-                                    pil_image = pil_image.convert("RGB")
-                                    r, g, b = pil_image.split()
-                                    r_m = r.point(
-                                        lambda p, r0=r_min_8, r1=r_max_8: (
-                                            255 if r0 <= p <= r1 else 0
+                                    pil_image = _own(pil_image.convert("RGB"))
+                                    red, green, blue = pil_image.split()
+                                    red = _own(red)
+                                    green = _own(green)
+                                    blue = _own(blue)
+                                    red_mask = _own(
+                                        red.point(
+                                            lambda pixel, minimum=r_min_8, maximum=r_max_8: (
+                                                255 if minimum <= pixel <= maximum else 0
+                                            )
                                         )
                                     )
-                                    g_m = g.point(
-                                        lambda p, g0=g_min_8, g1=g_max_8: (
-                                            255 if g0 <= p <= g1 else 0
+                                    green_mask = _own(
+                                        green.point(
+                                            lambda pixel, minimum=g_min_8, maximum=g_max_8: (
+                                                255 if minimum <= pixel <= maximum else 0
+                                            )
                                         )
                                     )
-                                    b_m = b.point(
-                                        lambda p, b0=b_min_8, b1=b_max_8: (
-                                            255 if b0 <= p <= b1 else 0
+                                    blue_mask = _own(
+                                        blue.point(
+                                            lambda pixel, minimum=b_min_8, maximum=b_max_8: (
+                                                255 if minimum <= pixel <= maximum else 0
+                                            )
                                         )
                                     )
                                     from PIL import ImageChops
 
-                                    trans = ImageChops.darker(ImageChops.darker(r_m, g_m), b_m)
-                                    alpha = trans.point(lambda p: 255 - p)
-                                    pil_image = pil_image.convert("RGBA")
+                                    red_green_mask = _own(ImageChops.darker(red_mask, green_mask))
+                                    transparent = _own(
+                                        ImageChops.darker(red_green_mask, blue_mask)
+                                    )
+                                    alpha = _own(transparent.point(lambda pixel: 255 - pixel))
+                                    pil_image = _own(pil_image.convert("RGBA"))
                                     pil_image.putalpha(alpha)
                                 elif len(mask_array) == 2:
-                                    v_min, v_max = mask_array
-                                    v_min_8 = int((v_min / max_val) * 255)
-                                    v_max_8 = int((v_max / max_val) * 255)
-                                    l_chan = pil_image.convert("L")
-                                    trans = l_chan.point(
-                                        lambda p, v0=v_min_8, v1=v_max_8: (
-                                            255 if v0 <= p <= v1 else 0
+                                    value_min, value_max = mask_array
+                                    value_min_8 = int((value_min / max_val) * 255)
+                                    value_max_8 = int((value_max / max_val) * 255)
+                                    luminance = _own(pil_image.convert("L"))
+                                    transparent = _own(
+                                        luminance.point(
+                                            lambda pixel, minimum=value_min_8, maximum=value_max_8: (
+                                                255 if minimum <= pixel <= maximum else 0
+                                            )
                                         )
                                     )
-                                    alpha = trans.point(lambda p: 255 - p)
-                                    pil_image = pil_image.convert("RGBA")
+                                    alpha = _own(transparent.point(lambda pixel: 255 - pixel))
+                                    pil_image = _own(pil_image.convert("RGBA"))
                                     pil_image.putalpha(alpha)
                             except SanitizationError:
                                 raise
-                            except Exception as e:
-                                logger.debug("Failed to apply chroma key Mask: %s", e)
+                            except Exception as exc:
+                                logger.debug("Failed to apply chroma key Mask: %s", exc)
                                 continue
 
                         if pil_image.width < 100 or pil_image.height < 100:
                             continue
 
-                        w, h = pil_image.size
-                        needs_resize = w > max_dim or h > max_dim
+                        width, height = pil_image.size
+                        needs_resize = width > max_dim or height > max_dim
 
                         existing_filter = raw_image.get("/Filter")
                         already_jpeg = existing_filter == pikepdf.Name("/DCTDecode")
                         if already_jpeg and not needs_resize:
                             continue
                         if needs_resize:
-                            ratio = min(max_dim / w, max_dim / h)
-                            w = int(w * ratio)
-                            h = int(h * ratio)
-                            pil_image = pil_image.resize((w, h), Image.Resampling.LANCZOS)
+                            ratio = min(max_dim / width, max_dim / height)
+                            width = max(1, int(width * ratio))
+                            height = max(1, int(height * ratio))
+                            pil_image = _own(
+                                pil_image.resize(
+                                    (width, height), Image.Resampling.LANCZOS
+                                )
+                            )
 
                         has_alpha = pil_image.mode in ("RGBA", "LA")
                         smask = None
                         if has_alpha:
-                            alpha_channel = pil_image.getchannel("A")
+                            alpha_channel = _own(pil_image.getchannel("A"))
                             alpha_data = zlib.compress(alpha_channel.tobytes())
                             smask = pdf.make_stream(alpha_data)
                             smask.Type = pikepdf.Name("/XObject")
                             smask.Subtype = pikepdf.Name("/Image")
-                            smask.Width = w
-                            smask.Height = h
+                            smask.Width = width
+                            smask.Height = height
                             smask.ColorSpace = pikepdf.Name("/DeviceGray")
                             smask.BitsPerComponent = 8
                             smask.Filter = pikepdf.Name("/FlateDecode")
 
                         if pil_image.mode in ("RGBA", "RGB"):
-                            img_to_save = pil_image.convert("RGB")
+                            image_to_save = _own(pil_image.convert("RGB"))
                             raw_image.ColorSpace = pikepdf.Name("/DeviceRGB")
                         else:
-                            img_to_save = pil_image.convert("L")
+                            image_to_save = _own(pil_image.convert("L"))
                             raw_image.ColorSpace = pikepdf.Name("/DeviceGray")
 
-                        buf = io.BytesIO()
-                        img_to_save.save(buf, format="JPEG", quality=quality, optimize=True)
-                        raw_image.write(buf.getvalue(), filter=pikepdf.Name("/DCTDecode"))
+                        with io.BytesIO() as buffer:
+                            image_to_save.save(
+                                buffer,
+                                format="JPEG",
+                                quality=quality,
+                                optimize=True,
+                            )
+                            raw_image.write(
+                                buffer.getvalue(), filter=pikepdf.Name("/DCTDecode")
+                            )
                         raw_image.BitsPerComponent = 8
-                        raw_image.Width = w
-                        raw_image.Height = h
+                        raw_image.Width = width
+                        raw_image.Height = height
                         if "/DecodeParms" in raw_image:
                             del raw_image["/DecodeParms"]
 
-                        if smask:
+                        if smask is not None:
                             raw_image.SMask = smask
                         elif "/SMask" in raw_image:
                             del raw_image["/SMask"]
@@ -594,8 +630,17 @@ def _pikepdf_repack_streams(file_path: Path, out_name: str, quality: int) -> boo
 
                     except ValueError:
                         raise
-                    except Exception as e:
-                        logger.debug("Could not downsample PDF image %s: %s", name, e)
+                    except Exception as exc:
+                        logger.debug("Could not downsample PDF image %s: %s", name, exc)
+                    finally:
+                        closed_ids: set[int] = set()
+                        for image in reversed(owned_images):
+                            image_id = id(image)
+                            if image_id in closed_ids:
+                                continue
+                            closed_ids.add(image_id)
+                            with contextlib.suppress(Exception):
+                                image.close()
 
         pdf.save(
             out_name,

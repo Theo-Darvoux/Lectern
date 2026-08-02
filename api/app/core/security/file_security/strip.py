@@ -44,7 +44,8 @@ async def strip_metadata_file(file_path: Path, mime_type: str) -> Path:
             async with image_guard():
                 return await _shielded_to_thread(_strip_image_from_path, file_path)
         if mime_type == "application/pdf":
-            return await _shielded_to_thread(_strip_pdf_from_path, file_path)
+            async with image_guard():
+                return await _shielded_to_thread(_strip_pdf_from_path, file_path)
         if mime_type.startswith("video/"):
             return await _strip_video_from_path(file_path, mime_type)
         if mime_type.startswith("audio/"):

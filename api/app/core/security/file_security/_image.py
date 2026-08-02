@@ -69,7 +69,11 @@ def _save_stripped_image(
     """Save clean image to dest with metadata stripped using explicit quality parameters."""
     if img_format == "JPEG":
         save_img = clean.convert("RGB") if clean.mode != "RGB" else clean
-        save_img.save(dest, format="JPEG", optimize=True, quality=90, progressive=True)
+        try:
+            save_img.save(dest, format="JPEG", optimize=True, quality=90, progressive=True)
+        finally:
+            if save_img is not clean:
+                save_img.close()
     elif img_format == "PNG":
         clean.save(dest, format="PNG", optimize=True, compress_level=6)
     elif img_format == "WEBP":
@@ -83,14 +87,14 @@ def _save_stripped_image(
 def _strip_image_metadata(file_bytes: bytes) -> bytes:
     """Remove EXIF data, comments, and auxiliary chunks from images by re-saving clean pixel data."""
     try:
-        with Image.open(io.BytesIO(file_bytes)) as img:
+        with io.BytesIO(file_bytes) as source, Image.open(source) as img:
             _validate_image_size(img)
             img_format = _validate_image_format_and_frames(img)
             clean = _normalize_clean_image(img)
             try:
-                output = io.BytesIO()
-                _save_stripped_image(clean, img_format, output)
-                return output.getvalue()
+                with io.BytesIO() as output:
+                    _save_stripped_image(clean, img_format, output)
+                    return output.getvalue()
             finally:
                 clean.close()
     except SanitizationError:
@@ -129,7 +133,11 @@ def _save_compressed_image(img: Image.Image, img_format: str, dest: "io.BytesIO 
     """Save img to dest with high compression settings."""
     if img_format == "JPEG":
         save_img = img.convert("RGB") if img.mode != "RGB" else img
-        save_img.save(dest, format="JPEG", optimize=True, quality=75, progressive=True)
+        try:
+            save_img.save(dest, format="JPEG", optimize=True, quality=75, progressive=True)
+        finally:
+            if save_img is not img:
+                save_img.close()
     elif img_format == "PNG":
         img.save(dest, format="PNG", optimize=True, compress_level=9)
     elif img_format == "WEBP":

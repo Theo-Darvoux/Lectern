@@ -155,18 +155,26 @@ def _has_trivial_alpha(img: Image.Image, threshold: float = 0.95) -> bool:
     Uses Pillow's C-level histogram (fast) instead of per-pixel Python iteration.
     Returns True if >= *threshold* fraction of pixels have alpha > 250.
     """
-    alpha = img.split()[-1]
-    hist = alpha.histogram()  # 256 buckets
-    opaque_pixels = sum(hist[251:])
-    total_pixels = img.width * img.height
-    return opaque_pixels >= total_pixels * threshold
+    alpha = img.getchannel("A")
+    try:
+        hist = alpha.histogram()  # 256 buckets
+        opaque_pixels = sum(hist[251:])
+        total_pixels = img.width * img.height
+        return opaque_pixels >= total_pixels * threshold
+    finally:
+        alpha.close()
 
 
 def _flatten_rgba(img: Image.Image) -> Image.Image:
     """Composite an RGBA image onto a white background, returning an RGB image."""
-    bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-    bg.paste(img, mask=img.split()[3])
-    return bg.convert("RGB")
+    background = Image.new("RGBA", img.size, (255, 255, 255, 255))
+    alpha = img.getchannel("A")
+    try:
+        background.paste(img, mask=alpha)
+        return background.convert("RGB")
+    finally:
+        alpha.close()
+        background.close()
 
 
 def _compress_animated_gif(img: Image.Image, data: bytes) -> tuple[bytes, bool]:
@@ -199,18 +207,18 @@ def _compress_animated_gif(img: Image.Image, data: bytes) -> tuple[bytes, bool]:
         if not frames:
             raise ValueError("Animated GIF contains no decodable frames")
 
-        output = io.BytesIO()
-        frames[0].save(
-            output,
-            format="GIF",
-            save_all=True,
-            append_images=frames[1:],
-            duration=durations,
-            loop=int(img.info.get("loop", 0)),
-            optimize=True,
-            comment=b"",
-        )
-        result = output.getvalue()
+        with io.BytesIO() as output:
+            frames[0].save(
+                output,
+                format="GIF",
+                save_all=True,
+                append_images=frames[1:],
+                duration=durations,
+                loop=int(img.info.get("loop", 0)),
+                optimize=True,
+                comment=b"",
+            )
+            result = output.getvalue()
         return result, result != data
     finally:
         for frame in frames:
@@ -242,7 +250,7 @@ def _sanitize_embedded_image(
     expected = expected.upper()
 
     try:
-        with Image.open(io.BytesIO(data)) as img:
+        with io.BytesIO(data) as source, Image.open(source) as img:
             _validate_image_size(img)
             actual = (img.format or "").upper()
             if actual != expected:
@@ -257,26 +265,26 @@ def _sanitize_embedded_image(
             img.load()
             oriented = ImageOps.exif_transpose(img)
             try:
-                output = io.BytesIO()
-                if actual == "JPEG":
-                    converted = oriented.convert("RGB")
-                    try:
-                        converted.save(output, format="JPEG", quality=95, optimize=True)
-                    finally:
-                        converted.close()
-                elif actual == "PNG":
-                    oriented.save(output, format="PNG", optimize=True, compress_level=6)
-                elif actual == "GIF":
-                    oriented.save(output, format="GIF", optimize=True, comment=b"")
-                elif actual == "WEBP":
-                    oriented.save(output, format="WEBP", lossless=True, method=6)
-                elif actual == "TIFF":
-                    oriented.save(output, format="TIFF", compression="tiff_deflate")
-                elif actual == "BMP":
-                    oriented.save(output, format="BMP")
-                else:
-                    raise ValueError(f"Unsupported embedded image format: {actual}")
-                return output.getvalue()
+                with io.BytesIO() as output:
+                    if actual == "JPEG":
+                        converted = oriented.convert("RGB")
+                        try:
+                            converted.save(output, format="JPEG", quality=95, optimize=True)
+                        finally:
+                            converted.close()
+                    elif actual == "PNG":
+                        oriented.save(output, format="PNG", optimize=True, compress_level=6)
+                    elif actual == "GIF":
+                        oriented.save(output, format="GIF", optimize=True, comment=b"")
+                    elif actual == "WEBP":
+                        oriented.save(output, format="WEBP", lossless=True, method=6)
+                    elif actual == "TIFF":
+                        oriented.save(output, format="TIFF", compression="tiff_deflate")
+                    elif actual == "BMP":
+                        oriented.save(output, format="BMP")
+                    else:
+                        raise ValueError(f"Unsupported embedded image format: {actual}")
+                    return output.getvalue()
             finally:
                 if oriented is not img:
                     oriented.close()
@@ -307,10 +315,9 @@ def _compress_zip_image_entry(data: bytes, entry_name: str) -> tuple[bytes, int]
     Any Pillow failure is swallowed (fail-open): returns original data + ZIP_STORED.
     """
     try:
-        with Image.open(io.BytesIO(data)) as img:
+        with io.BytesIO(data) as source, Image.open(source) as img, io.BytesIO() as buf:
             _validate_image_size(img)
             img_format = img.format or "JPEG"
-            buf = io.BytesIO()
 
             if img_format == "JPEG":
                 max_dim = 1600
@@ -331,16 +338,33 @@ def _compress_zip_image_entry(data: bytes, entry_name: str) -> tuple[bytes, int]
                 if has_alpha and _has_trivial_alpha(img):
                     # Mostly-opaque RGBA: flatten and quantize for massive savings
                     flat = _flatten_rgba(img)
-                    quantized = flat.quantize(colors=256, method=2)
-                    quantized.save(buf, format="PNG", optimize=True, compress_level=6)
+                    try:
+                        quantized = flat.quantize(colors=256, method=2)
+                        try:
+                            quantized.save(
+                                buf, format="PNG", optimize=True, compress_level=6
+                            )
+                        finally:
+                            quantized.close()
+                    finally:
+                        flat.close()
                 elif has_alpha:
                     # Real transparency: just resize + optimize (quantize loses alpha)
                     img.save(buf, format="PNG", optimize=True, compress_level=6)
                 else:
                     # Opaque PNG: quantize for big savings
                     rgb = img.convert("RGB") if img.mode != "RGB" else img
-                    quantized = rgb.quantize(colors=256, method=2)
-                    quantized.save(buf, format="PNG", optimize=True, compress_level=6)
+                    try:
+                        quantized = rgb.quantize(colors=256, method=2)
+                        try:
+                            quantized.save(
+                                buf, format="PNG", optimize=True, compress_level=6
+                            )
+                        finally:
+                            quantized.close()
+                    finally:
+                        if rgb is not img:
+                            rgb.close()
 
                 compressed = buf.getvalue()
                 if len(compressed) < len(data):

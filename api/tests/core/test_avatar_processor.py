@@ -33,3 +33,13 @@ def test_process_avatar_pixel_limit(tmp_path):
     with patch("PIL.Image.open", return_value=mock_img):
         with pytest.raises(ValueError, match="Avatar exceeds pixel limit"):
             process_avatar(source)
+
+
+def test_process_avatar_rejects_animation(tmp_path):
+    source = tmp_path / "animated.gif"
+    first = Image.new("RGB", (16, 16), color="red")
+    second = Image.new("RGB", (16, 16), color="blue")
+    first.save(source, format="GIF", save_all=True, append_images=[second])
+
+    with pytest.raises(ValueError, match="Animated and multi-frame avatars are not supported"):
+        process_avatar(source)

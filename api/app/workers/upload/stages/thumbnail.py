@@ -143,10 +143,13 @@ def _is_blank_thumbnail(
 
         with Image.open(path) as img:
             gray = img.convert("L")
-            stat = ImageStat.Stat(gray)
-            mean = stat.mean[0]
-            stddev = stat.stddev[0]
-            return mean >= brightness_threshold and stddev <= stddev_threshold
+            try:
+                stat = ImageStat.Stat(gray)
+                mean = stat.mean[0]
+                stddev = stat.stddev[0]
+                return mean >= brightness_threshold and stddev <= stddev_threshold
+            finally:
+                gray.close()
     except Exception:
         return False
 
@@ -179,15 +182,23 @@ async def _thumbnail_image(
     """Resize image to thumbnail using Pillow."""
 
     def _sync() -> None:
-        with Image.open(input_path) as img:
-            # Handle orientation if present
-            if hasattr(img, "_getexif"):
-                from PIL import ImageOps
+        with Image.open(input_path) as base_img:
+            _validate_image_size(base_img)
+            if getattr(base_img, "n_frames", 1) != 1 or getattr(
+                base_img, "is_animated", False
+            ):
+                raise ValueError("Animated thumbnail sources are not supported")
+            base_img.load()
 
-                img = ImageOps.exif_transpose(img)  # type: ignore[assignment]
+            from PIL import ImageOps
 
-            img.thumbnail(size, Image.Resampling.LANCZOS)
-            img.save(output_path, "WEBP", quality=quality)
+            oriented = ImageOps.exif_transpose(base_img)
+            try:
+                oriented.thumbnail(size, Image.Resampling.LANCZOS)
+                oriented.save(output_path, "WEBP", quality=quality)
+            finally:
+                if oriented is not base_img:
+                    oriented.close()
 
     async with image_guard():
         await _shielded_to_thread(_sync)
@@ -234,14 +245,30 @@ async def _thumbnail_svg(
 
         def _flatten_and_save() -> None:
             with Image.open(temp_png) as img:
+                _validate_image_size(img)
                 img.thumbnail(size, Image.Resampling.LANCZOS)
                 if img.mode in ("RGBA", "LA", "PA"):
-                    rgba_img = img.convert("RGBA") if img.mode == "PA" else img
-                    bg = Image.new("RGB", rgba_img.size, "white")
-                    bg.paste(rgba_img, mask=rgba_img.split()[-1])
-                    bg.save(output_path, "WEBP", quality=quality)
+                    rgba_img = img.convert("RGBA") if img.mode != "RGBA" else img
+                    try:
+                        alpha = rgba_img.getchannel("A")
+                        try:
+                            background = Image.new("RGB", rgba_img.size, "white")
+                            try:
+                                background.paste(rgba_img, mask=alpha)
+                                background.save(output_path, "WEBP", quality=quality)
+                            finally:
+                                background.close()
+                        finally:
+                            alpha.close()
+                    finally:
+                        if rgba_img is not img:
+                            rgba_img.close()
                 else:
-                    img.convert("RGB").save(output_path, "WEBP", quality=quality)
+                    rgb = img.convert("RGB")
+                    try:
+                        rgb.save(output_path, "WEBP", quality=quality)
+                    finally:
+                        rgb.close()
 
         async with image_guard():
             await _shielded_to_thread(_flatten_and_save)
@@ -462,8 +489,13 @@ async def _fallback_extract_largest_image(
         import io
 
         try:
-            with Image.open(io.BytesIO(img_data)) as img:
+            with io.BytesIO(img_data) as source, Image.open(source) as img:
                 _validate_image_size(img)
+                if getattr(img, "n_frames", 1) != 1 or getattr(
+                    img, "is_animated", False
+                ):
+                    raise ValueError("Animated embedded thumbnails are not supported")
+                img.load()
                 img.thumbnail(size, Image.Resampling.LANCZOS)
                 img.save(output_path, "WEBP", quality=quality)
         except Exception as e:
@@ -488,7 +520,7 @@ async def _thumbnail_via_soffice(
     """
     with processing_temp_dir(prefix="lectern-soffice-thumb-") as tmp_dir:
         temp_file = tmp_dir / f"document{suffix}"
-        shutil.copy2(input_path, temp_file)
+        await _shielded_to_thread(shutil.copy2, input_path, temp_file)
 
         cmd = [
             "soffice",
