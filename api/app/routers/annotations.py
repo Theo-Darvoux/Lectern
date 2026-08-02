@@ -13,7 +13,7 @@ from app.core.events.sse import (
     broadcast_to_topic,
     register_topic_queue,
     sse_event_stream,
-    topic_owner_key,
+    topic_owner_keys,
     unregister_topic_queue,
 )
 from app.dependencies.auth import CurrentUser, OnboardedUser
@@ -153,10 +153,12 @@ async def material_event_stream(
     if not result.scalar_one_or_none():
         raise NotFoundError("Material not found")
 
-    owner_key = topic_owner_key(
-        client_host=request.client.host if request.client is not None else None
+    owner_keys = topic_owner_keys(
+        client_host=request.client.host if request.client is not None else None,
+        forwarded_for=request.headers.get("x-forwarded-for"),
+        real_ip=request.headers.get("x-real-ip"),
     )
-    queue = register_topic_queue(material_id, owner_key=owner_key)
+    queue = register_topic_queue(material_id, owner_keys=owner_keys)
     return EventSourceResponse(
         sse_event_stream(
             queue,

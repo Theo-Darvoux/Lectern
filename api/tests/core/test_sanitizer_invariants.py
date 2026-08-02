@@ -42,9 +42,7 @@ async def test_required_sanitizer_rejects_missing_output(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_ooxml_dispatcher_cannot_accept_original_path(tmp_path) -> None:
-    mime_type = (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     source = tmp_path / "document.docx"
     source.write_bytes(b"PK\x03\x04")
 

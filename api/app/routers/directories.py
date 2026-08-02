@@ -16,7 +16,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.common.exceptions import BadRequestError, ForbiddenError, UnauthorizedError
+from app.core.common.exceptions import (
+    BadRequestError,
+    ForbiddenError,
+    NotFoundError,
+    UnauthorizedError,
+)
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_client
 from app.core.events.limiter import limiter
@@ -24,7 +29,7 @@ from app.core.events.sse import (
     broadcast_to_topic,
     register_topic_queue,
     sse_event_stream,
-    topic_owner_key,
+    topic_owner_keys,
     unregister_topic_queue,
 )
 from app.core.storage.facade import stream_object
@@ -138,14 +143,25 @@ async def get_directory_path(
     return [DirectoryBreadcrumb.model_validate(p) for p in path]
 
 
+def _normalize_directory_topic(raw_id: str) -> str:
+    if raw_id == "root":
+        return "root"
+    try:
+        return str(uuid.UUID(raw_id))
+    except ValueError:
+        raise NotFoundError("Directory not found")
+
+
 @router.get("/{id}/sse")
 @limiter.limit("20/minute")
-async def directory_event_stream(request: Request, id: uuid.UUID) -> EventSourceResponse:
-    topic = str(id)
-    owner_key = topic_owner_key(
-        client_host=request.client.host if request.client is not None else None
+async def directory_event_stream(request: Request, id: str) -> EventSourceResponse:
+    topic = _normalize_directory_topic(id)
+    owner_keys = topic_owner_keys(
+        client_host=request.client.host if request.client is not None else None,
+        forwarded_for=request.headers.get("x-forwarded-for"),
+        real_ip=request.headers.get("x-real-ip"),
     )
-    queue = register_topic_queue(topic, owner_key=owner_key)
+    queue = register_topic_queue(topic, owner_keys=owner_keys)
     return EventSourceResponse(
         sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(topic, queue)),
         headers={"X-Accel-Buffering": "no"},

@@ -16,7 +16,7 @@ from app.core.events.limiter import limiter
 from app.core.events.sse import (
     register_topic_queue,
     sse_event_stream,
-    topic_owner_key,
+    topic_owner_keys,
     unregister_topic_queue,
 )
 from app.dependencies.auth import (
@@ -58,7 +58,7 @@ router = APIRouter(prefix="/api/pull-requests", tags=["pull-requests"])
 async def pull_request_sse(user: SSEUser) -> EventSourceResponse:
     """Per-user SSE stream for PR list updates (pr_opened / pr_closed events)."""
     topic = f"pr_updates:{user.id}"
-    queue = register_topic_queue(topic, owner_key=topic_owner_key(user_id=user.id))
+    queue = register_topic_queue(topic, owner_keys=topic_owner_keys(user_id=user.id))
     return EventSourceResponse(
         sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(topic, queue)),
         headers={"X-Accel-Buffering": "no"},

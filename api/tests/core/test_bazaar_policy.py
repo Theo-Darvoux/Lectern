@@ -101,6 +101,7 @@ async def test_worker_explicit_clean_result_writes_clean_tombstone() -> None:
         ex=_CLEAN_TOMBSTONE_TTL,
     )
 
+
 @pytest.mark.asyncio
 async def test_scanner_strict_override_rejects_non_object_json() -> None:
     scanner = MalwareScanner()

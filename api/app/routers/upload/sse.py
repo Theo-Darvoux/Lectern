@@ -59,10 +59,7 @@ async def _load_event_log(
 ) -> list[str]:
     """Load the bounded upload log from a best-effort SSE replay offset."""
     raw_entries = await redis.lrange(event_log_key, max(0, start), -1)
-    return [
-        raw.decode() if isinstance(raw, bytes) else str(raw)
-        for raw in raw_entries
-    ]
+    return [raw.decode() if isinstance(raw, bytes) else str(raw) for raw in raw_entries]
 
 
 def _enqueue_pubsub_payload(
@@ -274,9 +271,7 @@ async def upload_events(
             pubsub = redis.pubsub()
             await pubsub.subscribe(f"upload:events:{file_key}")
 
-            queue: asyncio.Queue[str | None] = asyncio.Queue(
-                maxsize=_SSE_HANDOFF_QUEUE_SIZE
-            )
+            queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=_SSE_HANDOFF_QUEUE_SIZE)
 
             async def _pubsub_reader() -> None:
                 try:

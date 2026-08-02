@@ -229,11 +229,7 @@ class MalwareScanner:
 
         if status == "ok":
             data = body.get("data")
-            if (
-                not isinstance(data, list)
-                or not data
-                or not isinstance(data[0], dict)
-            ):
+            if not isinstance(data, list) or not data or not isinstance(data[0], dict):
                 message = f"MalwareBazaar returned malformed threat data for {filename}"
                 if effective_fail_closed:
                     raise ServiceUnavailableError(message)

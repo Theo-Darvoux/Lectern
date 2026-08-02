@@ -15,6 +15,8 @@ import math
 import re
 import unicodedata
 import zipfile
+from bisect import bisect_left
+from collections.abc import Iterable
 from pathlib import Path
 
 from PIL import Image, ImageOps
@@ -36,6 +38,7 @@ _ZIP_MAX_ENTRIES = 10_000
 _ZIP_MAX_COMPRESSION_RATIO = 1_000
 _ZIP_MAX_PATH_COMPONENTS = 64
 _ZIP_MAX_PATH_CHARS = 4_096
+_ZIP_MAX_TOTAL_NAME_CHARS = 8 * 1024 * 1024
 _ZIP_RATIO_MIN_UNCOMPRESSED_BYTES = 1 * 1024 * 1024
 _SANITIZED_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
@@ -103,15 +106,11 @@ def _sanitize_zip_entry_name(name: str) -> str:
     parts = re.split(r"[\\/]", normalized)
     safe_parts = ["_" if part in {".", ".."} else part[:255] for part in parts if part]
     if len(safe_parts) > _ZIP_MAX_PATH_COMPONENTS:
-        raise ValueError(
-            f"ZIP entry path has too many components (max {_ZIP_MAX_PATH_COMPONENTS})"
-        )
+        raise ValueError(f"ZIP entry path has too many components (max {_ZIP_MAX_PATH_COMPONENTS})")
 
     safe_name = "/".join(safe_parts) or "_unknown_"
     if len(safe_name) > _ZIP_MAX_PATH_CHARS:
-        raise ValueError(
-            f"ZIP entry path is too long (max {_ZIP_MAX_PATH_CHARS} characters)"
-        )
+        raise ValueError(f"ZIP entry path is too long (max {_ZIP_MAX_PATH_CHARS} characters)")
     return f"{safe_name}/" if is_dir else safe_name
 
 
@@ -125,10 +124,13 @@ def _register_zip_name(
     *,
     is_dir: bool,
 ) -> None:
-    """Reject canonical name conflicts in O(path depth), independent of entry order.
+    """Register one real member for legacy callers without retaining prefixes.
 
-    ``None`` marks an implicit parent directory created by a previously-seen
-    descendant. An explicit directory entry may promote that marker to ``True``.
+    Production archive rewriting validates all names together with
+    :func:`_validate_zip_name_conflicts`, which is the scalable path.  This
+    compatibility helper remains for older tests and marginal callers.  It
+    stores only canonical names for real members; implicit parent prefixes are
+    never materialized.
     """
 
     canonical = _canonical_zip_name(safe_name)
@@ -140,15 +142,68 @@ def _register_zip_name(
             return
         raise ValueError(f"ZIP contains duplicate sanitized entry '{safe_name}'")
 
-    parts = canonical.split("/")
     parent = ""
-    for part in parts[:-1]:
+    for part in canonical.split("/")[:-1]:
         parent = part if not parent else f"{parent}/{part}"
         if registry.get(parent) is False:
             raise ValueError(f"ZIP entry '{safe_name}' is nested beneath file '{parent}'")
-        registry.setdefault(parent, None)
+
+    if not is_dir:
+        descendant_prefix = f"{canonical}/"
+        for registered_name in registry:
+            if registered_name.startswith(descendant_prefix):
+                raise ValueError(
+                    f"ZIP file '{safe_name}' conflicts with descendant entry '{registered_name}'"
+                )
 
     registry[canonical] = is_dir
+
+
+def _validate_zip_name_conflicts(
+    entries: Iterable[tuple[str, bool]],
+) -> int:
+    """Validate canonical ZIP names using O(entries) retained strings.
+
+    Only one canonical string is retained per real archive member.  A sorted
+    pass detects duplicates and file/descendant conflicts without materializing
+    every implicit parent prefix.  The aggregate character budget bounds the
+    memory used even when every individually valid path is near the per-name
+    limit.
+    """
+
+    canonical_entries: list[tuple[str, bool, str]] = []
+    total_name_chars = 0
+    for safe_name, is_dir in entries:
+        canonical = _canonical_zip_name(safe_name)
+        total_name_chars += len(canonical)
+        if total_name_chars > _ZIP_MAX_TOTAL_NAME_CHARS:
+            raise ValueError(
+                "ZIP archive entry names exceed aggregate character limit "
+                f"({_ZIP_MAX_TOTAL_NAME_CHARS})"
+            )
+        canonical_entries.append((canonical, is_dir, safe_name))
+
+    canonical_entries.sort(key=lambda entry: entry[0])
+    canonical_names = [entry[0] for entry in canonical_entries]
+
+    for index, (canonical, is_dir, safe_name) in enumerate(canonical_entries):
+        if index > 0 and canonical_names[index - 1] == canonical:
+            raise ValueError(f"ZIP contains duplicate sanitized entry '{safe_name}'")
+
+        if is_dir:
+            continue
+
+        descendant_prefix = f"{canonical}/"
+        descendant_index = bisect_left(canonical_names, descendant_prefix)
+        if descendant_index < len(canonical_names) and canonical_names[descendant_index].startswith(
+            descendant_prefix
+        ):
+            raise ValueError(
+                f"ZIP file '{safe_name}' conflicts with descendant entry "
+                f"'{canonical_entries[descendant_index][2]}'"
+            )
+
+    return len(canonical_entries)
 
 
 def _validate_zip_info(item: zipfile.ZipInfo) -> None:
@@ -432,17 +487,29 @@ def _recompress_zip_path(file_path: Path) -> Path:
             if sum(item.file_size for item in entries) > _ZIP_MAX_TOTAL_BYTES:
                 raise ValueError("ZIP archive uncompressed content is too large")
 
-            total_actual = 0
-            registered_names: dict[str, bool | None] = {}
+            validated_entries: list[tuple[zipfile.ZipInfo, str, bool]] = []
+            total_name_chars = 0
             for item in entries:
                 _validate_zip_info(item)
                 safe_name = _sanitize_zip_entry_name(item.filename)
                 is_dir = item.is_dir() or safe_name.endswith("/")
                 if is_dir and not safe_name.endswith("/"):
                     safe_name = f"{safe_name}/"
-                _register_zip_name(registered_names, safe_name, is_dir=is_dir)
+                total_name_chars += len(_canonical_zip_name(safe_name))
+                if total_name_chars > _ZIP_MAX_TOTAL_NAME_CHARS:
+                    raise ValueError(
+                        "ZIP archive entry names exceed aggregate character limit "
+                        f"({_ZIP_MAX_TOTAL_NAME_CHARS})"
+                    )
+                validated_entries.append((item, safe_name, is_dir))
                 must_use_output |= safe_name != item.filename
 
+            _validate_zip_name_conflicts(
+                (safe_name, is_dir) for _item, safe_name, is_dir in validated_entries
+            )
+
+            total_actual = 0
+            for item, safe_name, is_dir in validated_entries:
                 if is_dir:
                     zout.writestr(
                         _sanitized_zip_info(
@@ -531,9 +598,7 @@ def _read_zip_entry_bounded(
         while chunk := src.read(_CHUNK_SIZE):
             written += len(chunk)
             if written > entry_limit:
-                raise ValueError(
-                    f"ZIP entry '{item.filename}' expanded beyond transform limit"
-                )
+                raise ValueError(f"ZIP entry '{item.filename}' expanded beyond transform limit")
             if total_before + written > _ZIP_MAX_TOTAL_BYTES:
                 raise ValueError("ZIP archive actual uncompressed content exceeds total limit")
             chunks.append(chunk)

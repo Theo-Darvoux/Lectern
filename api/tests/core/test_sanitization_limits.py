@@ -12,9 +12,7 @@ def test_clean_text_preserves_precomposed_accent() -> None:
 
 
 def test_json_sanitizer_cleans_mapping_keys() -> None:
-    assert sanitization.sanitize_json_payload({"nul\x00key": "value"}) == {
-        "nulkey": "value"
-    }
+    assert sanitization.sanitize_json_payload({"nul\x00key": "value"}) == {"nulkey": "value"}
 
 
 def test_json_sanitizer_rejects_key_collisions() -> None:

@@ -88,19 +88,12 @@ def _sanitize_json_value(v: Any, *, depth: int, budget: list[int]) -> Any:
 
     if isinstance(v, list):
         if len(v) > _MAX_JSON_CONTAINER_ITEMS:
-            raise ValueError(
-                f"JSON list exceeds item limit ({_MAX_JSON_CONTAINER_ITEMS})"
-            )
-        return [
-            _sanitize_json_value(item, depth=depth + 1, budget=budget)
-            for item in v
-        ]
+            raise ValueError(f"JSON list exceeds item limit ({_MAX_JSON_CONTAINER_ITEMS})")
+        return [_sanitize_json_value(item, depth=depth + 1, budget=budget) for item in v]
 
     if isinstance(v, dict):
         if len(v) > _MAX_JSON_CONTAINER_ITEMS:
-            raise ValueError(
-                f"JSON object exceeds key limit ({_MAX_JSON_CONTAINER_ITEMS})"
-            )
+            raise ValueError(f"JSON object exceeds key limit ({_MAX_JSON_CONTAINER_ITEMS})")
 
         cleaned: dict[Any, Any] = {}
         for key, value in v.items():

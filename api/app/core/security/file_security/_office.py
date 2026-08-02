@@ -23,13 +23,15 @@ from app.core.security.file_security._zip import (
     _ZIP_MAX_ENTRIES,
     _ZIP_MAX_ENTRY_BYTES,
     _ZIP_MAX_TOTAL_BYTES,
+    _ZIP_MAX_TOTAL_NAME_CHARS,
     _ZIP_MAX_TRANSFORM_BYTES,
+    _canonical_zip_name,
     _read_zip_entry_bounded,
-    _register_zip_name,
     _sanitize_embedded_image,
     _sanitize_zip_entry_name,
     _sanitized_zip_info,
     _validate_zip_info,
+    _validate_zip_name_conflicts,
 )
 from app.core.security.file_security.errors import SanitizationError, UnsafeFileError
 from app.core.security.processing_paths import (
@@ -457,7 +459,7 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                 items.sort(key=lambda item: _sanitize_zip_entry_name(item.filename) != "mimetype")
 
             validated_items: list[tuple[zipfile.ZipInfo, str, str, bool]] = []
-            registered_names: dict[str, bool | None] = {}
+            total_name_chars = 0
             for item in items:
                 try:
                     _validate_zip_info(item)
@@ -467,16 +469,26 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                 is_dir = item.is_dir() or safe_name.endswith("/")
                 if is_dir and not safe_name.endswith("/"):
                     safe_name = f"{safe_name}/"
-                try:
-                    _register_zip_name(registered_names, safe_name, is_dir=is_dir)
-                except ValueError as exc:
-                    raise SanitizationError(str(exc)) from exc
+                total_name_chars += len(_canonical_zip_name(safe_name))
+                if total_name_chars > _ZIP_MAX_TOTAL_NAME_CHARS:
+                    raise SanitizationError(
+                        "ZIP archive entry names exceed aggregate character limit "
+                        f"({_ZIP_MAX_TOTAL_NAME_CHARS})"
+                    )
                 normalized_name = safe_name.casefold()
                 if is_ooxml and _is_ooxml_active_content(safe_name):
                     raise UnsafeFileError(
                         f"OOXML package contains prohibited active content: '{safe_name}'"
                     )
                 validated_items.append((item, safe_name, normalized_name, is_dir))
+
+            try:
+                _validate_zip_name_conflicts(
+                    (safe_name, is_dir)
+                    for _item, safe_name, _normalized_name, is_dir in validated_items
+                )
+            except ValueError as exc:
+                raise SanitizationError(str(exc)) from exc
 
             if is_epub or is_odf:
                 mimetype_items = [

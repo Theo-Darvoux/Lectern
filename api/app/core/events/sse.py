@@ -16,6 +16,18 @@ _MAX_LOCAL_SSE_CONNECTIONS = 2_000
 _MAX_LOCAL_TOPIC_CONNECTIONS = 1_500
 _MAX_USER_SSE_CONNECTIONS = 5
 _MAX_TOPIC_CONNECTIONS_PER_OWNER = 20
+_MAX_TOPIC_CONNECTIONS_PER_FORWARDED_HOP = 200
+_MAX_TOPIC_CONNECTIONS_PER_PROXY_PEER = 1_200
+_MAX_FORWARDED_FOR_HOSTS = 16
+_MAX_FORWARDED_FOR_CHARS = 2_048
+_INTERNAL_PROXY_NETWORKS_V4: tuple[ipaddress.IPv4Network, ...] = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+)
+_INTERNAL_PROXY_NETWORKS_V6: tuple[ipaddress.IPv6Network, ...] = (
+    ipaddress.IPv6Network("fc00::/7"),
+)
 _RESYNC_EVENT: dict[str, Any] = {
     "type": "resync_required",
     "reason": "event_buffer_overflow",
@@ -23,7 +35,7 @@ _RESYNC_EVENT: dict[str, Any] = {
 
 _user_queues: dict[uuid.UUID, list[asyncio.Queue[dict[str, Any]]]] = {}
 _topic_queues: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
-_topic_queue_owners: dict[int, str] = {}
+_topic_queue_owners: dict[int, tuple[str, ...]] = {}
 _topic_owner_queue_ids: dict[str, set[int]] = {}
 _active_topic_queue_ids: set[int] = set()
 _active_queue_ids: set[int] = set()
@@ -128,46 +140,145 @@ def broadcast_to_user(user_id: uuid.UUID, event: dict[str, Any]) -> None:
 # --- Topic-keyed queues (1:N mapping, used for material annotations) ---
 
 
+def _normalize_owner_host(
+    host: str | None,
+) -> tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address | None]:
+    normalized = (host or "unknown").strip().casefold()
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return normalized[:255] or "unknown", None
+    return str(address), address
+
+
+def _is_internal_proxy_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    if address.is_loopback or address.is_link_local:
+        return True
+    if isinstance(address, ipaddress.IPv4Address):
+        return any(address in network for network in _INTERNAL_PROXY_NETWORKS_V4)
+    return any(address in network for network in _INTERNAL_PROXY_NETWORKS_V6)
+
+
+def _forwarded_ip_chain(value: str | None) -> tuple[str, ...]:
+    if not value or len(value) > _MAX_FORWARDED_FOR_CHARS:
+        return ()
+
+    raw_hosts = value.split(",")
+    if len(raw_hosts) > _MAX_FORWARDED_FOR_HOSTS:
+        half = _MAX_FORWARDED_FOR_HOSTS // 2
+        raw_hosts = raw_hosts[:half] + raw_hosts[-half:]
+
+    hosts: list[str] = []
+    for raw_host in raw_hosts:
+        normalized, address = _normalize_owner_host(raw_host)
+        if address is not None:
+            hosts.append(normalized)
+    return tuple(hosts)
+
+
+def topic_owner_keys(
+    *,
+    user_id: uuid.UUID | str | None = None,
+    client_host: str | None = None,
+    forwarded_for: str | None = None,
+    real_ip: str | None = None,
+) -> tuple[str, ...]:
+    """Build hierarchical capacity keys for one topic-stream client.
+
+    Authenticated users are keyed by user ID. Anonymous streams use the ASGI
+    client directly unless it is a private/loopback/link-local proxy peer. For
+    the checked-in Nginx topology, the leftmost valid ``X-Forwarded-For`` value
+    identifies the external client and the rightmost value identifies the hop
+    that connected to Nginx. ``X-Real-IP`` is a fallback for single-proxy
+    deployments.
+
+    Every derived layer is retained as a quota key. A directly connected private
+    client can forge forwarded headers, but rotating the apparent client cannot
+    evade the bounded forwarded-hop and immediate-proxy pools.
+    """
+    if user_id is not None:
+        return (f"user:{user_id}",)
+
+    proxy_host, proxy_address = _normalize_owner_host(client_host)
+    client_identity = proxy_host
+    forwarded_hop: str | None = None
+
+    if proxy_address is not None and _is_internal_proxy_address(proxy_address):
+        chain = _forwarded_ip_chain(forwarded_for)
+        if chain:
+            client_identity = chain[0]
+            forwarded_hop = chain[-1]
+        else:
+            real_identity, real_address = _normalize_owner_host(real_ip)
+            if real_address is not None:
+                client_identity = real_identity
+                forwarded_hop = real_identity
+
+    keys = [f"client:{client_identity}"]
+    if forwarded_hop is not None and forwarded_hop != client_identity:
+        keys.append(f"hop:{forwarded_hop}")
+    if proxy_host not in {client_identity, forwarded_hop}:
+        keys.append(f"proxy:{proxy_host}")
+    return tuple(keys)
+
+
 def topic_owner_key(
     *,
     user_id: uuid.UUID | str | None = None,
     client_host: str | None = None,
 ) -> str:
-    """Build a stable, bounded owner key for topic-stream capacity accounting."""
-    if user_id is not None:
-        return f"user:{user_id}"
+    """Backward-compatible primary owner key helper."""
+    return topic_owner_keys(user_id=user_id, client_host=client_host)[0]
 
-    host = (client_host or "unknown").strip().casefold()
-    try:
-        host = str(ipaddress.ip_address(host))
-    except ValueError:
-        host = host[:255] or "unknown"
-    return f"ip:{host}"
+
+def _topic_owner_limit(owner_key: str) -> int:
+    if owner_key.startswith("hop:"):
+        return _MAX_TOPIC_CONNECTIONS_PER_FORWARDED_HOP
+    if owner_key.startswith("proxy:"):
+        return _MAX_TOPIC_CONNECTIONS_PER_PROXY_PEER
+    return _MAX_TOPIC_CONNECTIONS_PER_OWNER
 
 
 def register_topic_queue(
     topic: str,
     *,
-    owner_key: str,
+    owner_keys: tuple[str, ...] | None = None,
+    owner_key: str | None = None,
 ) -> asyncio.Queue[dict[str, Any]]:
-    """Register a bounded topic queue with per-owner and reserved-pool limits."""
-    normalized_owner = owner_key.strip()
-    if not normalized_owner:
-        raise ValueError("Topic SSE owner key must not be empty")
+    """Register a bounded topic queue with hierarchical owner limits.
 
-    owner_queue_ids = _topic_owner_queue_ids.get(normalized_owner, set())
-    if len(owner_queue_ids) >= _MAX_TOPIC_CONNECTIONS_PER_OWNER:
-        raise SSECapacityError(
-            "Too many concurrent topic live-update connections for this client"
-        )
+    ``owner_key`` remains accepted for compatibility with older internal callers;
+    new request paths should supply every derived layer through ``owner_keys``.
+    """
+    if owner_keys is not None and owner_key is not None:
+        raise ValueError("Supply either topic SSE owner_keys or owner_key, not both")
+    raw_owner_keys = owner_keys if owner_keys is not None else ((owner_key,) if owner_key else ())
+    normalized_owners = tuple(
+        dict.fromkeys(owner.strip() for owner in raw_owner_keys if owner.strip())
+    )
+    if not normalized_owners:
+        raise ValueError("Topic SSE owner keys must not be empty")
+
+    for owner_key in normalized_owners:
+        owner_queue_ids = _topic_owner_queue_ids.get(owner_key, set())
+        if len(owner_queue_ids) >= _topic_owner_limit(owner_key):
+            if owner_key.startswith(("hop:", "proxy:")):
+                detail = "Too many concurrent topic connections through this proxy path"
+            else:
+                detail = "Too many concurrent topic live-update connections for this client"
+            raise SSECapacityError(detail)
+
     if len(_active_topic_queue_ids) >= _MAX_LOCAL_TOPIC_CONNECTIONS:
         raise SSECapacityError("Topic live updates are temporarily at capacity")
 
     queue = _new_queue()
     queue_id = id(queue)
     _topic_queues.setdefault(topic, []).append(queue)
-    _topic_queue_owners[queue_id] = normalized_owner
-    _topic_owner_queue_ids.setdefault(normalized_owner, set()).add(queue_id)
+    _topic_queue_owners[queue_id] = normalized_owners
+    for owner_key in normalized_owners:
+        _topic_owner_queue_ids.setdefault(owner_key, set()).add(queue_id)
     _active_topic_queue_ids.add(queue_id)
     return queue
 
@@ -178,8 +289,8 @@ def unregister_topic_queue(topic: str, queue: asyncio.Queue[dict[str, Any]]) -> 
         queues.remove(queue)
 
     queue_id = id(queue)
-    owner_key = _topic_queue_owners.pop(queue_id, None)
-    if owner_key is not None:
+    owner_keys = _topic_queue_owners.pop(queue_id, ())
+    for owner_key in owner_keys:
         owner_queue_ids = _topic_owner_queue_ids.get(owner_key)
         if owner_queue_ids is not None:
             owner_queue_ids.discard(queue_id)
@@ -321,9 +432,7 @@ async def sse_event_stream(
 
                 event_type = str(event.get("type") or "message")
                 outgoing_event = (
-                    event_type
-                    if event_type == "resync_required"
-                    else event_name or event_type
+                    event_type if event_type == "resync_required" else event_name or event_type
                 )
                 yield {
                     "event": outgoing_event,
