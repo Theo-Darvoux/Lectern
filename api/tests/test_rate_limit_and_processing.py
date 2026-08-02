@@ -1,7 +1,6 @@
 """Tests for rate_limit_uploads dependency and ProcessingFile fast-path."""
 
 import io
-import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,8 +8,8 @@ import pytest
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import RateLimitError
-from app.core.processing import ProcessingFile
+from app.core.common.exceptions import BadRequestError, RateLimitError
+from app.core.events.processing import ProcessingFile
 from app.models.user import User, UserRole
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -31,7 +30,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -242,66 +241,16 @@ class TestRateLimitViews:
 # ── ProcessingFile fast-path (disk copy) ─────────────────────────────────────
 
 
-class TestProcessingFileFastPath:
-    """Tests for the shutil.copyfile fast-path in ProcessingFile.from_upload."""
+class TestProcessingFile:
+    """Tests for the unified chunked read pipeline in ProcessingFile."""
 
     @pytest.mark.asyncio
-    async def test_fast_path_used_when_file_on_disk(self, tmp_path):
-        """When the inner file object has a real path on disk, copyfile is used."""
-        content = os.urandom(200 * 1024)  # 200 KiB
-        disk_file = tmp_path / "spooled.bin"
-        disk_file.write_bytes(content)
-
-        # Build an UploadFile-like mock whose .file.name points to the disk path
-        file_obj = MagicMock()
-        file_obj.name = str(disk_file)
-
-        upload = AsyncMock()
-        upload.file = file_obj
-
-        copied = False
-        original_copyfile = __import__("shutil").copyfile
-
-        def _track_copyfile(src, dst):
-            nonlocal copied
-            copied = True
-            return original_copyfile(src, dst)
-
-        with patch("app.core.processing.shutil.copyfile", side_effect=_track_copyfile):
-            pf = await ProcessingFile.from_upload(upload, max_bytes=1024 * 1024)
-
-        assert copied, "shutil.copyfile fast-path should have been taken"
-        assert pf.size == len(content)
-        assert pf.path.read_bytes() == content
-        pf.cleanup()
-
-    @pytest.mark.asyncio
-    async def test_fast_path_enforces_size(self, tmp_path):
-        """Fast path enforces the size limit even when reading from disk."""
-        from app.core.exceptions import BadRequestError
-
-        content = b"x" * (512 * 1024)  # 512 KiB
-        disk_file = tmp_path / "large.bin"
-        disk_file.write_bytes(content)
-
-        file_obj = MagicMock()
-        file_obj.name = str(disk_file)
-
-        upload = AsyncMock()
-        upload.file = file_obj
-
-        with pytest.raises(BadRequestError, match="exceeds maximum"):
-            await ProcessingFile.from_upload(upload, max_bytes=256 * 1024)  # 256 KiB limit
-
-    @pytest.mark.asyncio
-    async def test_slow_path_used_when_no_disk_file(self):
-        """When the upload has no disk path, the chunked read path is taken."""
-        content = b"test content " * 100
-
+    async def test_spooling_reads_in_chunks_and_hashes(self):
+        """Uploads are read in chunks and correctly hashed."""
+        content = b"chunk data " * 100
         stream = io.BytesIO(content)
 
         upload = AsyncMock()
-        upload.file = None  # No inner file object → slow path
 
         async def _read(size: int = -1) -> bytes:
             return stream.read(size)
@@ -312,40 +261,35 @@ class TestProcessingFileFastPath:
 
         assert pf.size == len(content)
         assert pf.path.read_bytes() == content
+
+        import hashlib
+
+        expected_hash = hashlib.sha256(content).hexdigest()
+        assert await pf.sha256() == expected_hash
+
         pf.cleanup()
 
     @pytest.mark.asyncio
-    async def test_cleanup_on_exception_during_fast_path(self, tmp_path):
-        """Temp file is removed if copyfile raises during the fast path."""
-        disk_file = tmp_path / "src.bin"
-        disk_file.write_bytes(b"data")
-
-        file_obj = MagicMock()
-        file_obj.name = str(disk_file)
+    async def test_enforces_max_bytes_limit(self):
+        """The read loop strictly enforces the max_bytes limit."""
+        content = b"x" * (512 * 1024)  # 512 KiB
+        stream = io.BytesIO(content)
 
         upload = AsyncMock()
-        upload.file = file_obj
 
-        with patch("app.core.processing.shutil.copyfile", side_effect=OSError("disk full")):
-            with pytest.raises(OSError):
-                await ProcessingFile.from_upload(upload, max_bytes=1024 * 1024)
+        async def _read(size: int = -1) -> bytes:
+            return stream.read(size)
 
-        # No temp file should remain
-        # We can't easily get the exact path, but the test validates no exception leakage
+        upload.read = _read
+
+        with pytest.raises(BadRequestError, match="exceeds maximum"):
+            await ProcessingFile.from_upload(upload, max_bytes=256 * 1024)  # 256 KiB limit
 
     @pytest.mark.asyncio
-    async def test_fast_path_with_path_like_name(self, tmp_path):
-        """Fast path works when file.name is a Path object (not just str)."""
-        content = b"path object test " * 50
-        disk_file = tmp_path / "path_obj.bin"
-        disk_file.write_bytes(content)
-
-        file_obj = MagicMock()
-        file_obj.name = disk_file  # Pass as Path, not str
-
+    async def test_cleanup_on_exception_during_read(self, tmp_path):
+        """If the read loop raises an exception, the temp file is cleaned up."""
         upload = AsyncMock()
-        upload.file = file_obj
+        upload.read.side_effect = OSError("network dropped")
 
-        pf = await ProcessingFile.from_upload(upload, max_bytes=len(content) + 1024)
-        assert pf.size == len(content)
-        pf.cleanup()
+        with pytest.raises(OSError):
+            await ProcessingFile.from_upload(upload, max_bytes=1024 * 1024)

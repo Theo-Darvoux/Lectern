@@ -97,8 +97,8 @@ class Settings(BaseSettings):
 
     meili_url: str = "http://localhost:7700"
     meili_master_key: str = "change-me"
-    # Search-only key for public search route.  Provision via Meilisearch admin API and set here.
-    # If unset, falls back to master key with a startup warning (acceptable in dev).
+    # Search-only key for public search. If absent/invalid, startup provisions a
+    # restricted key through the admin client; the master key is never exposed.
     meili_search_key: str | None = None
 
     max_file_size_mb: int = 100
@@ -137,9 +137,9 @@ class Settings(BaseSettings):
     # When True, a MalwareBazaar timeout/error fails the scan (fail-closed).
     # When False (default), YARA remains the authoritative gatekeeper on API failure.
     malwarebazaar_fail_closed: bool = True
-    # When True, MalwareBazaar runs as a background ARQ job after YARA-only promotion.
-    # YARA remains the synchronous gate; Bazaar flags trigger retroactive quarantine.
-    # Set to False to restore the legacy synchronous behaviour (blocks ~6 s per upload).
+    # When True in fail-open mode, MalwareBazaar runs as a background ARQ job after
+    # YARA-only promotion. Fail-closed mode always checks synchronously before publish.
+    # Set to False to use synchronous behaviour in either policy mode.
     bazaar_async_enabled: bool = True
     # When True, retroactive quarantine also soft-deletes any approved MaterialVersion
     # rows that reference the flagged cas/ S3 key.
@@ -154,6 +154,9 @@ class Settings(BaseSettings):
     smtp_sender_name: str | None = None
     smtp_avatar_url: str | None = None
     smtp_use_tls: bool = True
+    # Explicit transport mode. When omitted, legacy SMTP_USE_TLS maps port 465
+    # to implicit TLS and all other ports to STARTTLS.
+    smtp_tls_mode: Literal["none", "starttls", "implicit"] | None = None
 
     backup_dir: str = "/var/lib/lectern/backups"
 
@@ -164,6 +167,7 @@ class Settings(BaseSettings):
 
     # OpenTelemetry Collector endpoint (e.g. "localhost:4317")
     otel_endpoint: str = ""
+    otel_insecure: bool = False
 
     enable_presigned_multipart: bool = True
     direct_upload_threshold_mb: int = 10  # files smaller than this use direct upload
@@ -174,9 +178,18 @@ class Settings(BaseSettings):
     # compilation timestamp will be re-processed through the full pipeline.
     cas_max_age_seconds: int = 7 * 24 * 3600
 
-    # Concurrency guards for heavy worker operations
-    global_max_subprocesses: int = 0  # 0 = auto (os.cpu_count())
-    max_concurrent_image_ops: int = 0  # 0 = auto (cpu_count // 2)
+    # Sandboxed file-processing limits. All temporary inputs and outputs used by
+    # sandboxed processors must be descendants of processing_root.
+    processing_root: str = "/tmp"
+    sandbox_memory_limit_mb: int = Field(default=1024, ge=128)
+    sandbox_cpu_limit_seconds: int = Field(default=60, ge=1)
+    sandbox_file_size_limit_mb: int = Field(default=100, ge=1)
+    sandbox_process_limit: int = Field(default=64, ge=1)
+
+    # Concurrency guards for heavy worker operations. These are explicit rather
+    # than CPU-derived so every production worker uses the same Redis limit.
+    global_max_subprocesses: int = Field(default=4, ge=1)
+    max_concurrent_image_ops: int = Field(default=1, ge=1)
 
     # Upload worker concurrency — how many jobs each worker process runs in parallel.
     # Tune alongside WORKER_FAST_REPLICAS / WORKER_SLOW_REPLICAS in compose.prod.yaml.
@@ -240,6 +253,9 @@ class Settings(BaseSettings):
     # Stored as a comma-separated string so pydantic-settings never attempts JSON
     # parsing on it. Use the `cors_headers_list` property in application code.
     cors_allowed_headers: str = "Content-Type,Authorization,X-Client-ID,X-Upload-ID,Accept,X-Requested-With,Upload-Checksum,Tus-Checksum-Algorithm"
+    # Only these reverse proxies may supply X-Forwarded-For/Proto. The API's
+    # direct listener must never accept a client-spoofed source address.
+    trusted_proxy_hosts: str = "127.0.0.1,::1"
 
     @property
     def cors_headers_list(self) -> list[str]:
@@ -251,6 +267,10 @@ class Settings(BaseSettings):
             "Accept",
             "X-Requested-With",
         ]
+
+    @property
+    def trusted_proxy_hosts_list(self) -> list[str]:
+        return [host.strip() for host in self.trusted_proxy_hosts.split(",") if host.strip()]
 
     # EuroOffice Document Server
     eurooffice_internal_api_base_url: str = "http://api:8000"

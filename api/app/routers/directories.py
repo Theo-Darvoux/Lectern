@@ -16,16 +16,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError, ForbiddenError, UnauthorizedError
-from app.core.redis import get_redis, redis_client
-from app.core.sse import (
+from app.core.common.exceptions import BadRequestError, ForbiddenError, UnauthorizedError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis, redis_client
+from app.core.events.sse import (
     broadcast_to_topic,
     register_topic_queue,
     sse_event_stream,
     unregister_topic_queue,
 )
-from app.core.storage import stream_object
+from app.core.storage.facade import stream_object
 from app.dependencies.auth import get_current_user, get_user_from_token, security
 from app.dependencies.rate_limit import rate_limit_downloads
 from app.models.material import Material

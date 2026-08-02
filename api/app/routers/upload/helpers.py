@@ -2,23 +2,80 @@
 
 import logging
 import time
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 from uuid import UUID
 
 from redis.asyncio import Redis
-from sqlalchemy import func, select
+from sqlalchemy import func, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_core
+import app.core.database.redis as redis_core
 from app.config import settings
-from app.core.cas import _STORAGE_USAGE_KEY
-from app.core.exceptions import BadRequestError
-from app.core.telemetry import inject_trace_context
-from app.core.upload_errors import ERR_QUOTA_EXCEEDED, ERR_STORAGE_FULL
+from app.core.common.exceptions import BadRequestError
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.database.post_commit import PostCommitKey, outbox_kwargs
+from app.core.observability.telemetry import inject_trace_context
+from app.core.security.cas import _STORAGE_USAGE_KEY
 from app.models.material import MaterialVersion
 from app.models.upload import Upload
 
 logger = logging.getLogger(__name__)
+
+_LUA_DIR = Path(__file__).parents[2] / "core" / "database" / "lua"
+_STORAGE_RESERVE_SCRIPT = (_LUA_DIR / "storage_reserve.lua").read_text(encoding="utf-8")
+_STORAGE_RELEASE_SCRIPT = (_LUA_DIR / "storage_release.lua").read_text(encoding="utf-8")
+_STORAGE_RESERVATION_EXPIRIES = "storage:upload_reservations:expiries"
+_STORAGE_RESERVATION_SIZES = "storage:upload_reservations:sizes"
+_STORAGE_RESERVATION_TOTAL = "storage:upload_reservations:total"
+_STORAGE_RESERVATION_TTL = 3 * 3600
+
+
+async def _get_storage_usage(db: AsyncSession, redis: "Redis") -> int:  # type: ignore[type-arg]
+    """Return physical CAS usage, rebuilding the cache from the database if needed."""
+    material_refs = select(
+        MaterialVersion.cas_sha256.label("sha256"),
+        MaterialVersion.file_size.label("size"),
+    ).where(MaterialVersion.cas_sha256.is_not(None))
+    upload_refs = select(
+        Upload.content_sha256.label("sha256"),
+        Upload.size_bytes.label("size"),
+    ).where(
+        Upload.content_sha256.is_not(None),
+        Upload.final_key.like("cas/%"),
+        Upload.cas_ref_count > 0,
+    )
+    all_refs = union_all(material_refs, upload_refs).subquery()
+    unique_sizes = (
+        select(func.max(all_refs.c.size).label("size"))
+        .group_by(all_refs.c.sha256)
+        .subquery()
+    )
+
+    async def _from_db() -> int:
+        return int(await db.scalar(select(func.sum(unique_sizes.c.size))) or 0)
+
+    try:
+        usage_raw = await redis.get(_STORAGE_USAGE_KEY)
+    except Exception as exc:
+        logger.warning("Storage usage cache unavailable; using the database: %s", exc)
+        return await _from_db()
+    if usage_raw is not None:
+        return max(0, int(usage_raw))
+
+    usage = await _from_db()
+    try:
+        # Do not overwrite a CAS increment that raced the database rebuild.
+        # SET NX makes initialization atomic with the Lua CAS writers; read the
+        # winning value back when another writer initialized it first.
+        initialized = await redis.set(_STORAGE_USAGE_KEY, usage, nx=True)
+        if not initialized:
+            current = await redis.get(_STORAGE_USAGE_KEY)
+            if current is not None:
+                return max(0, int(current))
+    except Exception as exc:
+        logger.warning("Could not refresh the storage usage cache: %s", exc)
+    return usage
 
 
 async def _check_storage_limit(
@@ -36,26 +93,7 @@ async def _check_storage_limit(
     max_bytes = max_gb * 1024 * 1024 * 1024
     redis = redis_core.redis_client
 
-    # 1. Try to get cached usage from Redis
-    try:
-        usage_raw = await redis.get(_STORAGE_USAGE_KEY)
-        if usage_raw is not None:
-            usage = max(0, int(usage_raw))
-        else:
-            # 2. Fallback to DB: sum unique CAS blobs only (physical storage)
-            inner_q = (
-                select(func.max(MaterialVersion.file_size).label("size"))
-                .group_by(MaterialVersion.cas_sha256)
-                .subquery()
-            )
-            usage = await db.scalar(select(func.sum(inner_q.c.size))) or 0
-            await redis.set(_STORAGE_USAGE_KEY, usage, ex=3600)
-    except Exception as exc:
-        logger.warning(
-            "Failed to get/set storage usage from Redis: %s. Falling back to logical sum.", exc
-        )
-        # Deep fallback to logical sum if everything else fails
-        usage = await db.scalar(select(func.sum(MaterialVersion.file_size))) or 0
+    usage = await _get_storage_usage(db, redis)
 
     if usage + size_bytes > max_bytes:
         logger.warning(
@@ -66,8 +104,74 @@ async def _check_storage_limit(
         )
         raise BadRequestError(
             f"Global storage limit reached ({max_gb} GB). Please contact an administrator.",
-            code=ERR_STORAGE_FULL,
+            code=UploadErrorCode.STORAGE_FULL,
         )
+
+
+async def _reserve_storage_limit(
+    size_bytes: int,
+    reservation_id: str,
+    redis: "Redis",  # type: ignore[type-arg]
+    db: AsyncSession,
+) -> None:
+    """Atomically reserve global capacity for an in-flight upload."""
+    if not settings.max_storage_gb:
+        return
+
+    # Ensure the physical-usage key exists. The reservation Lua script reads it
+    # atomically with reservation totals, so this value must not be passed as a
+    # stale argument from Python.
+    await _get_storage_usage(db, redis)
+    max_bytes = int(settings.max_storage_gb * 1024 * 1024 * 1024)
+    now = int(time.time())
+    try:
+        reserve = redis.register_script(_STORAGE_RESERVE_SCRIPT)
+        accepted = await reserve(
+            keys=[
+                _STORAGE_RESERVATION_EXPIRIES,
+                _STORAGE_RESERVATION_SIZES,
+                _STORAGE_RESERVATION_TOTAL,
+                _STORAGE_USAGE_KEY,
+            ],
+            args=[
+                reservation_id,
+                size_bytes,
+                now + _STORAGE_RESERVATION_TTL,
+                now,
+                max_bytes,
+            ],
+            client=redis,
+        )
+    except Exception as exc:
+        logger.error("Cannot enforce the global storage reservation: %s", exc)
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable. Please try again later."
+        ) from exc
+
+    if int(accepted) != 1:
+        raise BadRequestError(
+            f"Global storage limit reached ({settings.max_storage_gb} GB). "
+            "Please contact an administrator.",
+            code=UploadErrorCode.STORAGE_FULL,
+        )
+
+
+async def _release_storage_reservation(
+    reservation_id: str, redis: Any
+) -> None:
+    """Release a capacity reservation; repeated calls are harmless."""
+    if not settings.max_storage_gb:
+        return
+    release = redis.register_script(_STORAGE_RELEASE_SCRIPT)
+    await release(
+        keys=[
+            _STORAGE_RESERVATION_EXPIRIES,
+            _STORAGE_RESERVATION_SIZES,
+            _STORAGE_RESERVATION_TOTAL,
+        ],
+        args=[reservation_id],
+        client=redis,
+    )
 
 
 MAX_PENDING_UPLOADS = 50
@@ -146,7 +250,7 @@ async def _check_pending_cap(
                 raise BadRequestError(
                     f"Too many pending uploads ({cap} max). "
                     "Submit a pull request or wait for existing uploads to expire.",
-                    code=ERR_QUOTA_EXCEEDED,
+                    code=UploadErrorCode.QUOTA_EXCEEDED,
                 )
         else:
             count = await redis.zcard(quota_key)
@@ -154,7 +258,7 @@ async def _check_pending_cap(
                 raise BadRequestError(
                     f"Too many pending uploads ({cap} max). "
                     "Submit a pull request or wait for existing uploads to expire.",
-                    code=ERR_QUOTA_EXCEEDED,
+                    code=UploadErrorCode.QUOTA_EXCEEDED,
                 )
     except BadRequestError:
         raise
@@ -170,7 +274,7 @@ async def _check_pending_cap(
         # Use a fresh session to avoid PendingRollbackError if the request session
         # is in an error state from a previous operation.
         try:
-            from app.core.database import async_session_factory
+            from app.core.database.database import async_session_factory
 
             async with async_session_factory() as fallback_db:
                 db_count = (
@@ -185,7 +289,7 @@ async def _check_pending_cap(
                 raise BadRequestError(
                     f"Too many pending uploads ({MAX_PENDING_UPLOADS} max). "
                     "Submit a pull request or wait for existing uploads to expire.",
-                    code=ERR_QUOTA_EXCEEDED,
+                    code=UploadErrorCode.QUOTA_EXCEEDED,
                 )
         except BadRequestError:
             raise
@@ -210,6 +314,7 @@ async def _enqueue_processing(
     file_size: int = 0,
     trace_context: dict[str, str] | None = None,
     expected_sha256: str | None = None,
+    job_id: str | None = None,
 ) -> None:
     """Enqueue the background processing ARQ job.
 
@@ -219,7 +324,28 @@ async def _enqueue_processing(
     if redis_core.arq_pool is None:
         raise BadRequestError("Background processing is temporarily unavailable. Please try again.")
 
-    # Priority-based queue routing
+    queue_name = _processing_queue_name(mime_type, file_size)
+
+    tc = trace_context if trace_context is not None else inject_trace_context()
+    job_options: dict[str, object] = {"_queue_name": queue_name}
+    if job_id is not None:
+        job_options["_job_id"] = job_id
+    enqueue_job = cast(Any, redis_core.arq_pool.enqueue_job)
+    await enqueue_job(
+        "process_upload",
+        **job_options,
+        user_id=user_id,
+        upload_id=upload_id,
+        quarantine_key=quarantine_key,
+        original_filename=filename,
+        mime_type=mime_type,
+        expected_sha256=expected_sha256,
+        trace_context=tc,
+    )
+
+
+def _processing_queue_name(mime_type: str, file_size: int) -> str:
+    """Choose the ARQ queue used for an upload's processing job."""
     is_fast_mime = any(mime_type.startswith(m) for m in ("text/", "image/"))
     is_heavy_mime = any(
         mime_type.startswith(m)
@@ -241,15 +367,36 @@ async def _enqueue_processing(
         # Fallback to size-based routing for unknown/mixed types
         queue_name = _FAST_QUEUE_NAME if file_size < _FAST_QUEUE_THRESHOLD else _SLOW_QUEUE_NAME
 
+    return queue_name
+
+
+def _queue_processing_after_commit(
+    db: AsyncSession,
+    user_id: str,
+    upload_id: str,
+    quarantine_key: str,
+    filename: str,
+    mime_type: str,
+    *,
+    file_size: int = 0,
+    trace_context: dict[str, str] | None = None,
+    expected_sha256: str | None = None,
+) -> None:
+    """Persist an upload-processing job in the request transaction's outbox."""
     tc = trace_context if trace_context is not None else inject_trace_context()
-    await redis_core.arq_pool.enqueue_job(
-        "process_upload",
-        _queue_name=queue_name,
-        user_id=user_id,
-        upload_id=upload_id,
-        quarantine_key=quarantine_key,
-        original_filename=filename,
-        mime_type=mime_type,
-        expected_sha256=expected_sha256,
-        trace_context=tc,
+    queue_name = _processing_queue_name(mime_type, file_size)
+    db.info.setdefault(PostCommitKey.JOBS, []).append(
+        (
+            "process_upload",
+            outbox_kwargs(
+                _queue_name=queue_name,
+                user_id=user_id,
+                upload_id=upload_id,
+                quarantine_key=quarantine_key,
+                original_filename=filename,
+                mime_type=mime_type,
+                expected_sha256=expected_sha256,
+                trace_context=tc,
+            ),
+        )
     )

@@ -1,4 +1,4 @@
-"""Background ARQ worker: MalwareBazaar post-promotion check.
+"""Background ARQ worker: fail-open MalwareBazaar post-promotion check.
 
 This worker is enqueued fire-and-forget by the upload pipeline immediately after
 a file is promoted to ``cas/`` storage with status=CLEAN.  It performs the
@@ -10,9 +10,8 @@ Design invariants
 * Idempotent: a Redis tombstone (``bazaar:clean:{sha256}``) prevents duplicate
   Bazaar calls for the same hash.  Re-uploads of the same file skip this worker
   entirely.
-* Fail-closed/open: controlled by ``settings.malwarebazaar_fail_closed``.
-  True  → timeout/error re-raises, ARQ retries up to 3×.
-  False → timeout/error is logged and treated as "skip" (YARA remains the gate).
+* This worker is used by fail-open mode. It still re-raises if configuration is
+  changed to fail-closed while an already-queued job is running.
 * No hard dependency on the scanner pool: falls back to a one-shot scanner when
   the context scanner is unavailable (e.g. in integration tests).
 """
@@ -25,6 +24,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.core.common.exceptions import ServiceUnavailableError
 from app.workers.retroactive_quarantine import retroactive_quarantine
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.pipeline import _get_fallback_scanner
@@ -80,7 +80,7 @@ async def check_bazaar(
 
     try:
         threat = await scanner.check_malwarebazaar(sha256, upload_id)
-    except (httpx.TimeoutException, httpx.HTTPError) as exc:
+    except (httpx.TimeoutException, httpx.HTTPError, ServiceUnavailableError) as exc:
         if owns_scanner:
             await scanner.close()
         if settings.malwarebazaar_fail_closed:

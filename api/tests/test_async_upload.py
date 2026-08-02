@@ -26,7 +26,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -122,7 +122,9 @@ async def test_worker_process_upload_logic():
         ) as mock_comp,
         patch("app.workers.upload.stages.finalize.upload_file_multipart", new_callable=AsyncMock),
         patch("app.workers.upload.pipeline.delete_object", new_callable=AsyncMock),
-        patch("app.core.processing.ProcessingFile.sha256", new_callable=AsyncMock) as mock_sha,
+        patch(
+            "app.core.events.processing.ProcessingFile.sha256", new_callable=AsyncMock
+        ) as mock_sha,
     ):
         mock_dl.return_value = "mocksha256"
         mock_info.return_value = {"size": 100, "content_type": "application/pdf"}
@@ -132,6 +134,7 @@ async def test_worker_process_upload_logic():
         # Mock scanner instance
         mock_scanner = MagicMock()
         mock_scanner.scan_file_path = AsyncMock()
+        mock_scanner.check_malwarebazaar = AsyncMock(return_value=None)
         mock_scanner.close = AsyncMock()
         mock_scanner_cls.return_value = mock_scanner
 
@@ -151,7 +154,7 @@ async def test_worker_process_upload_logic():
 
         mock_strip.return_value = clean_path
 
-        from app.core.file_security import CompressResultPath
+        from app.core.security.file_security import CompressResultPath
 
         mock_comp.return_value = CompressResultPath(comp_path, 500, None, "application/pdf")
 

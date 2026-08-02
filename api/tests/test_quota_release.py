@@ -6,7 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
 from app.models.upload import Upload
 from app.models.user import User, UserRole
 from app.routers.upload.helpers import _QUOTA_KEY_PREFIX
@@ -30,7 +30,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 def mock_storage(mock_redis):
     with (
         patch("app.services.pr.object_exists", new_callable=AsyncMock) as m,
-        patch("app.core.redis.redis_client", mock_redis),
+        patch("app.core.database.redis.redis_client", mock_redis),
     ):
         m.return_value = True
         yield m
@@ -66,6 +66,8 @@ async def test_quota_released_on_pr_approval(
         filename="test.pdf",
         mime_type="application/pdf",
         status="clean",
+        content_sha256="a" * 64,
+        cas_ref_count=1,
     )
     db_session.add(up)
     await db_session.commit()
@@ -83,6 +85,7 @@ async def test_quota_released_on_pr_approval(
                     "type": "document",
                     "file_key": "cas/somehash",
                     "file_name": "test.pdf",
+                    "content_sha256": "a" * 64,
                 }
             ],
         },
@@ -104,6 +107,7 @@ async def test_quota_released_on_pr_approval(
     # 6. Verify Upload status updated to 'applied'
     await db_session.refresh(up)
     assert up.status == "applied"
+    assert up.cas_ref_count == 0
 
 
 @pytest.mark.asyncio

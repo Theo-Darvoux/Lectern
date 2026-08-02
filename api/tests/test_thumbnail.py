@@ -43,7 +43,7 @@ def test_pale_page_with_title_bar_is_not_blank() -> None:
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_svg() -> None:
     """SVG files should be rendered to a WebP thumbnail via rsvg-convert."""
-    from app.core.processing import ProcessingFile
+    from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
     svg_content = (
@@ -76,7 +76,7 @@ async def test_run_thumbnail_stage_svg() -> None:
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_markdown() -> None:
     """Markdown files should be successfully converted to a WebP thumbnail."""
-    from app.core.processing import ProcessingFile
+    from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
     # Create a temp markdown file
@@ -110,7 +110,7 @@ async def test_run_thumbnail_stage_markdown() -> None:
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_text() -> None:
     """Text/code files should be successfully converted to a WebP thumbnail."""
-    from app.core.processing import ProcessingFile
+    from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
     # Create a temp latex file
@@ -146,7 +146,7 @@ async def test_run_thumbnail_stage_text() -> None:
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_unsupported_mime_returns_none() -> None:
     """Unsupported MIME types return None without raising — no retry needed."""
-    from app.core.processing import ProcessingFile
+    from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
@@ -164,7 +164,7 @@ async def test_run_thumbnail_stage_unsupported_mime_returns_none() -> None:
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_raises_on_generator_failure() -> None:
     """A failing generator now raises instead of silently returning None."""
-    from app.core.processing import ProcessingFile
+    from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
@@ -187,7 +187,7 @@ async def test_run_thumbnail_stage_raises_on_generator_failure() -> None:
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_cleans_up_partial_file_on_failure() -> None:
     """The partial thumb file is deleted even when the generator raises mid-write."""
-    from app.core.processing import ProcessingFile
+    from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:

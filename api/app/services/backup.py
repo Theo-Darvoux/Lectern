@@ -31,7 +31,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.storage import (
+from app.core.storage.facade import (
     delete_object,
     download_file_raw,
     get_object_headers,

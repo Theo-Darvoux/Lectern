@@ -33,11 +33,14 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-import httpx
-
 from app.config import settings
-from app.core.metrics import upload_webhook_total
-from app.core.url_validation import is_safe_url
+from app.core.observability.metrics import upload_webhook_total
+from app.core.security.url_validation import (
+    PinnedRequestError,
+    post_pinned_https,
+    resolve_safe_url,
+    resolve_safe_url_async,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +63,7 @@ def _sign(body: bytes) -> str:
 
 def validate_webhook_url(url: str) -> bool:
     """Validate a webhook URL to prevent SSRF. Delegates to core/url_validation.py."""
-    return is_safe_url(url)
+    return resolve_safe_url(url) is not None
 
 
 async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> None:  # type: ignore[type-arg]
@@ -101,7 +104,8 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
         return
 
     # ── SSRF Validation ───────────────────────────────────────────────────────
-    if not validate_webhook_url(row.webhook_url):
+    resolved_target = await resolve_safe_url_async(row.webhook_url)
+    if resolved_target is None:
         logger.warning("dispatch_webhook: invalid webhook URL %s — skipping", row.webhook_url)
         upload_webhook_total.labels(outcome="skipped").inc()
         return
@@ -132,8 +136,12 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
     # ── Single delivery attempt ───────────────────────────────────────────────
     transient_failure: str | None = None
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
-            response = await client.post(row.webhook_url, content=body, headers=headers)
+        response = await post_pinned_https(
+            resolved_target,
+            content=body,
+            headers=headers,
+            timeout=_TIMEOUT_SECONDS,
+        )
         if response.is_success:
             logger.info(
                 "Webhook delivered for upload %s (attempt %d/%d, status %d)",
@@ -155,7 +163,7 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
             return
         else:
             transient_failure = f"HTTP {response.status_code}"
-    except httpx.TransportError as exc:
+    except PinnedRequestError as exc:
         transient_failure = str(exc)
 
     logger.warning(
@@ -171,7 +179,7 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
         from datetime import timedelta
 
         backoff = _BACKOFF_SECONDS[attempt - 1]
-        arq = ctx.get("arq")
+        arq = ctx.get("redis") or ctx.get("arq")
         if arq is not None:
             await arq.enqueue_job(
                 "dispatch_webhook",

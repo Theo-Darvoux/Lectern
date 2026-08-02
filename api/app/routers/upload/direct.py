@@ -1,5 +1,6 @@
 """POST /api/upload -- direct file upload to quarantine."""
 
+import contextlib
 import logging
 import mimetypes
 from typing import Annotated
@@ -7,27 +8,30 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request, UploadFile
 from redis.asyncio import Redis
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError
-from app.core.file_security import SvgSecurityError, check_svg_safety_stream
-from app.core.mimetypes import guess_mime_from_bytes
-from app.core.processing import ProcessingFile
-from app.core.redis import get_redis
-from app.core.storage import get_s3_client
-from app.core.upload_errors import ERR_SVG_UNSAFE
+from app.core.common.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
+from app.core.common.exceptions import BadRequestError, ForbiddenError
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
+from app.core.events.processing import ProcessingFile
+from app.core.media.mimetypes import guess_mime_from_bytes
+from app.core.security.file_security import SvgSecurityError, check_svg_safety_stream
+from app.core.storage.facade import delete_object, get_s3_client
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
+from app.models.upload import Upload
 from app.routers.upload.helpers import (
     _IDEM_KEY_PREFIX,
     _IDEM_TTL,
     _check_pending_cap,
-    _check_storage_limit,
     _create_upload_row,
-    _enqueue_processing,
+    _queue_processing_after_commit,
+    _release_storage_reservation,
+    _reserve_storage_limit,
 )
 from app.routers.upload.validators import (
     _apply_mime_correction,
@@ -94,6 +98,10 @@ async def upload_file(
     # Stream to a temp file (no full-body read into RAM)
     max_bytes = settings.max_file_size_mb * 1024 * 1024  # type: ignore[operator]
     pf = await ProcessingFile.from_upload(file, max_bytes)
+    quarantine_key: str | None = None
+    quota_reserved = False
+    storage_reserved = False
+    object_uploaded = False
 
     try:
         # MIME detection from first MAGIC_HEADER_SIZE bytes only
@@ -102,9 +110,25 @@ async def upload_file(
 
         # Content-aware idempotency (X-Upload-ID path)
         if idem_header:
-            idem_cache_key = f"{_IDEM_KEY_PREFIX}{idem_header}"
+            # Idempotency keys are caller-controlled and must never cross tenant
+            # boundaries, even when two users deliberately choose the same UUID.
+            idem_cache_key = f"{_IDEM_KEY_PREFIX}{user_id}:{idem_header}"
             if cached := await redis.get(idem_cache_key):
                 return UploadPendingOut.model_validate_json(cached)
+            existing = await db.scalar(select(Upload).where(Upload.upload_id == upload_id))
+            if existing is not None:
+                if str(existing.user_id) != user_id:
+                    raise ForbiddenError("X-Upload-ID is already owned by another user")
+                existing_key = existing.final_key or existing.quarantine_key
+                if existing_key is None:
+                    raise BadRequestError("Existing upload has no storage key")
+                return UploadPendingOut(
+                    upload_id=existing.upload_id,
+                    file_key=existing_key,
+                    status=UploadStatus(existing.status),
+                    size=existing.size_bytes or 0,
+                    mime_type=existing.mime_type or "application/octet-stream",
+                )
 
         real_mime = guess_mime_from_bytes(head)
 
@@ -120,15 +144,13 @@ async def upload_file(
 
         _check_per_type_size(mime_type, pf.size)
 
-        await _check_storage_limit(pf.size, db)
-
         # SVG safety check
         if mime_type == "image/svg+xml":
             try:
                 with pf.open("rb") as fh:
                     check_svg_safety_stream(fh, safe_name)
             except SvgSecurityError as exc:
-                raise BadRequestError(str(exc), code=ERR_SVG_UNSAFE) from exc
+                raise BadRequestError(str(exc), code=UploadErrorCode.SVG_UNSAFE) from exc
 
         file_sha256 = await pf.sha256()
 
@@ -137,6 +159,9 @@ async def upload_file(
             idem_cache_key = f"{_IDEM_KEY_PREFIX}{user_id}:{upload_id}:{file_sha256}"
             if cached := await redis.get(idem_cache_key):
                 return UploadPendingOut.model_validate_json(cached)
+
+        await _reserve_storage_limit(pf.size, upload_id, redis, db)
+        storage_reserved = True
 
         quarantine_key = f"quarantine/{user_id}/{upload_id}/{safe_name}"
 
@@ -148,6 +173,7 @@ async def upload_file(
             privileged=user.role in PRIVILEGED_ROLES,
             reserve_key=quarantine_key,
         )
+        quota_reserved = True
 
         # Stream file to quarantine
         async with get_s3_client() as s3:
@@ -157,6 +183,7 @@ async def upload_file(
                 Key=quarantine_key,
                 ExtraArgs={"ContentType": mime_type},
             )
+        object_uploaded = True
 
         await _create_upload_row(
             upload_id=upload_id,
@@ -168,8 +195,14 @@ async def upload_file(
             db=db,
         )
 
-        await _enqueue_processing(
-            user_id, upload_id, quarantine_key, safe_name, mime_type, file_size=pf.size
+        _queue_processing_after_commit(
+            db,
+            user_id,
+            upload_id,
+            quarantine_key,
+            safe_name,
+            mime_type,
+            file_size=pf.size,
         )
 
         result = UploadPendingOut(
@@ -185,5 +218,16 @@ async def upload_file(
 
         return result
 
+    except BaseException:
+        if object_uploaded and quarantine_key is not None:
+            with contextlib.suppress(Exception):
+                await delete_object(quarantine_key)
+        if quota_reserved and quarantine_key is not None:
+            with contextlib.suppress(Exception):
+                await redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+        if storage_reserved:
+            with contextlib.suppress(Exception):
+                await _release_storage_reservation(upload_id, redis)
+        raise
     finally:
         pf.cleanup()

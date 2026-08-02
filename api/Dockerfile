@@ -26,7 +26,7 @@ RUN find /venv -name "*.pyi" -delete && \
     rm -rf /venv/include
 
 # ── Stage 2: common runtime base (shared by api + worker targets) ────────────
-# libyara10: YARA runtime — imported by app.core.scanner at API startup, and
+# libyara10: YARA runtime — imported by app.core.security.scanner at API startup, and
 # used by the workers during file scanning. Kept here so both targets have it.
 FROM python:3.12-slim AS runtime-base
 
@@ -48,7 +48,7 @@ ENV PYTHONPATH="/app"
 USER appuser
 
 COPY --chown=appuser:appuser . .
-RUN chmod +x start.sh worker-start.sh
+RUN chmod +x scripts/start.sh scripts/worker-start.sh
 
 EXPOSE 8000
 
@@ -58,7 +58,7 @@ EXPOSE 8000
 # so it is deliberately excluded here to keep the public-facing image small.
 FROM runtime-base AS api
 
-ENTRYPOINT ["./start.sh"]
+ENTRYPOINT ["./scripts/start.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # ── Stage 3b: Worker ─────────────────────────────────────────────────────────
@@ -81,5 +81,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 USER appuser
 
-ENTRYPOINT ["./worker-start.sh"]
+ENTRYPOINT ["./scripts/worker-start.sh"]
 CMD ["arq", "app.workers.settings.WorkerSettings"]

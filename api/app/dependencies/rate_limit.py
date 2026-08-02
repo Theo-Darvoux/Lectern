@@ -5,10 +5,10 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.constants import PRIVILEGED_ROLES
-from app.core.database import get_db
-from app.core.exceptions import RateLimitError
-from app.core.redis import get_redis
+from app.core.common.constants import PRIVILEGED_ROLES
+from app.core.common.exceptions import RateLimitError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
 from app.dependencies.auth import CurrentUser, get_optional_user
 from app.models.user import User
 from app.services.audit import flag_user_account

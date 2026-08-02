@@ -102,14 +102,14 @@ async def _create_material_with_version(
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
 
 
 def _token(user: User) -> str:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return token
@@ -300,7 +300,7 @@ class TestGetDirectoryDownloadEntries:
             await get_directory_download_entries(db_session, directory.id)
 
     async def test_nonexistent_directory_raises(self, db_session: AsyncSession) -> None:
-        from app.core.exceptions import NotFoundError
+        from app.core.common.exceptions import NotFoundError
 
         with pytest.raises(NotFoundError):
             await get_directory_download_entries(db_session, uuid.uuid4())

@@ -165,8 +165,11 @@ async def test_upload_quota_race_condition(
     state: dict[str, typing.Any] = {}
     fake_redis = LocalFakeRedis(state)
 
-    with patch("app.routers.upload.helpers.MAX_PENDING_UPLOADS", 2):
-        from app.core.redis import get_redis
+    with (
+        patch("app.routers.upload.helpers.MAX_PENDING_UPLOADS", 2),
+        patch("app.routers.upload.direct._reserve_storage_limit", new_callable=AsyncMock),
+    ):
+        from app.core.database.redis import get_redis
         from app.main import app
 
         async def override_get_redis():
@@ -204,8 +207,11 @@ async def test_presigned_upload_quota_reservation(
     state: dict[str, typing.Any] = {}
     fake_redis = LocalFakeRedis(state)
 
-    with patch("app.routers.upload.helpers.MAX_PENDING_UPLOADS", 1):
-        from app.core.redis import get_redis
+    with (
+        patch("app.routers.upload.helpers.MAX_PENDING_UPLOADS", 1),
+        patch("app.routers.upload.presigned._reserve_storage_limit", new_callable=AsyncMock),
+    ):
+        from app.core.database.redis import get_redis
         from app.main import app
 
         app.dependency_overrides[get_redis] = lambda: fake_redis
@@ -241,11 +247,12 @@ async def test_tus_create_quota_reservation(client: AsyncClient, db_session: Asy
 
     with (
         patch("app.routers.upload.helpers.MAX_PENDING_UPLOADS", 1),
+        patch("app.routers.tus._reserve_storage_limit", new_callable=AsyncMock),
         patch("app.routers.tus.create_multipart_upload", new_callable=AsyncMock) as mock_create,
     ):
         mock_create.return_value = "s3-upload-id"
 
-        from app.core.redis import get_redis
+        from app.core.database.redis import get_redis
         from app.main import app
 
         async def override_get_redis():

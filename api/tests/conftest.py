@@ -10,9 +10,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.core.database import get_db
-from app.core.redis import get_redis
-from app.core.scanner import MalwareScanner
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
+from app.core.security.scanner import MalwareScanner
 from app.main import app
 from app.models.base import Base
 
@@ -46,7 +46,7 @@ async def db_connection(engine) -> AsyncGenerator[Any, None]:
 
 @pytest.fixture
 async def db_session(db_connection, engine) -> AsyncGenerator[AsyncSession, None]:
-    import app.core.database as c_db
+    import app.core.database.database as c_db
 
     orig_factory = c_db.async_session_factory
     c_db.engine = engine
@@ -115,6 +115,7 @@ def mock_redis() -> AsyncMock:
     pipe.__aexit__ = AsyncMock(return_value=None)
 
     redis.pipeline = MagicMock(return_value=pipe)
+    redis.register_script = MagicMock(return_value=AsyncMock(return_value=1))
 
     lock_mock = AsyncMock()
     lock_mock.__aenter__ = AsyncMock(return_value=lock_mock)
@@ -128,13 +129,39 @@ class FakeRedis:
     def __init__(self):
         self.data = {}
 
-    def lock(self, name, timeout=None):
-        from unittest.mock import AsyncMock
+    def lock(self, name, timeout=None, sleep=None, **kwargs):
+        from unittest.mock import AsyncMock, MagicMock
 
-        lock_mock = AsyncMock()
+        lock_mock = MagicMock()
+        lock_mock.acquire = AsyncMock(return_value=True)
+        lock_mock.release = AsyncMock(return_value=True)
         lock_mock.__aenter__ = AsyncMock(return_value=lock_mock)
         lock_mock.__aexit__ = AsyncMock(return_value=None)
         return lock_mock
+
+    def register_script(self, script):
+        async def run(*, keys, args, client=None):
+            if "requested_size" in script:
+                reservation_id = str(args[0])
+                requested_size = int(args[1])
+                usage = int(args[4])
+                capacity = int(args[5])
+                sizes = self.data.setdefault(keys[1], {})
+                previous = int(sizes.get(reservation_id, 0))
+                total = int(self.data.get(keys[2], 0))
+                if usage + total - previous + requested_size > capacity:
+                    return 0
+                sizes[reservation_id] = requested_size
+                self.data[keys[2]] = total - previous + requested_size
+                return 1
+
+            reservation_id = str(args[0])
+            sizes = self.data.setdefault(keys[1], {})
+            released = int(sizes.pop(reservation_id, 0))
+            self.data[keys[2]] = max(0, int(self.data.get(keys[2], 0)) - released)
+            return released
+
+        return run
 
     async def hset(self, name, key=None, value=None, mapping=None):
         if name not in self.data:
@@ -165,7 +192,7 @@ class FakeRedis:
     async def get(self, name):
         return self.data.get(name)
 
-    async def set(self, name, value, ex=None, nx=False):
+    async def set(self, name, value, ex=None, nx=False, keepttl=False):
         if nx and name in self.data:
             return False
         self.data[name] = str(value).encode() if isinstance(value, (str, int)) else value
@@ -259,34 +286,50 @@ class FakeRedis:
         # Very limited eval for our CAS scripts
         import json
 
-        # Lua: local raw = redis.call('GET', KEYS[1])
-        key = keys_and_args[0]
+        keys = keys_and_args[:numkeys]
+        args = keys_and_args[numkeys:]
+        key = keys[0]
         raw = await self.get(key)
         raw_str = raw.decode() if isinstance(raw, bytes) else raw
 
         if "ref_count" in script:
             is_incr = " + 1" in script
+            marker_index = 2 if is_incr else 1
+            marker_key = keys[marker_index] if len(keys) > marker_index else None
+            if marker_key is not None and await self.exists(marker_key):
+                if not raw_str:
+                    return 0
+                return json.loads(raw_str).get("ref_count", 0)
+
             if not raw_str:
-                if is_incr and len(keys_and_args) > 1:
+                if is_incr and args:
                     # INCR with initial_data (ARGV[1]): create new entry
-                    data = json.loads(keys_and_args[1])
+                    data = json.loads(args[0])
                     data["ref_count"] = 1
                     await self.set(key, json.dumps(data))
+                    if len(keys) > 1 and data.get("size"):
+                        usage = int(self.data.get(keys[1], 0)) + int(data["size"])
+                        await self.set(keys[1], usage)
+                    if marker_key is not None:
+                        await self.set(marker_key, "1")
                     return 1
-                return 0
+                return -1
             data = json.loads(raw_str)
             if is_incr:
                 data["ref_count"] = (data.get("ref_count") or 1) + 1
                 await self.set(key, json.dumps(data))
-                return data["ref_count"]
             else:
                 count = (data.get("ref_count") or 1) - 1
                 if count <= 0:
                     await self.delete(key)
+                    if marker_key is not None:
+                        await self.set(marker_key, "1")
                     return 0
                 data["ref_count"] = count
                 await self.set(key, json.dumps(data))
-                return count
+            if marker_key is not None:
+                await self.set(marker_key, "1")
+            return data["ref_count"]
         return 0
 
     async def execute_command(self, *args):
@@ -400,23 +443,33 @@ async def client(
 ) -> AsyncGenerator[AsyncClient, None]:
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        import app.core.redis as redis_core
-        from app.core.database import _coalesce_index_jobs
+        import app.core.database.redis as redis_core
+        from app.core.database.post_commit import PostCommitKey
+        from app.core.events.coalesce import coalesce_index_jobs
 
         # Serialize access to the shared connection to prevent SQLite transaction conflicts
         async with db_lock, AsyncSession(db_connection, expire_on_commit=False) as session:
-            session.info["post_commit_jobs"] = []
+            session.info[PostCommitKey.JOBS] = []
             try:
                 yield session
                 await session.commit()
 
-                jobs = session.info.get("post_commit_jobs", [])
+                jobs = session.info.get(PostCommitKey.JOBS, [])
                 if jobs:
-                    db_session.info.setdefault("post_commit_jobs", []).extend(jobs)
+                    db_session.info.setdefault(PostCommitKey.JOBS, []).extend(jobs)
                     if redis_core.arq_pool:
-                        coalesced = _coalesce_index_jobs(jobs)
+                        coalesced = coalesce_index_jobs(jobs)
                         for job in coalesced:
-                            await redis_core.arq_pool.enqueue_job(*job)
+                            job_args = list(job[1:])
+                            job_kwargs = {}
+                            if job_args and isinstance(job_args[-1], dict):
+                                encoded = job_args[-1].get("__outbox_kwargs__")
+                                if isinstance(encoded, dict):
+                                    job_kwargs = encoded
+                                    job_args.pop()
+                            await redis_core.arq_pool.enqueue_job(
+                                job[0], *job_args, **job_kwargs
+                            )
             except Exception:
                 await session.rollback()
                 raise
@@ -432,8 +485,8 @@ async def client(
 
     transport = ASGITransport(app=app)
     with (
-        patch("app.core.redis.arq_pool", mock_arq_pool),
-        patch("app.core.redis.redis_client", mock_redis),
+        patch("app.core.database.redis.arq_pool", mock_arq_pool),
+        patch("app.core.database.redis.redis_client", mock_redis),
     ):
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac

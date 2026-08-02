@@ -10,9 +10,9 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database import get_db
-from app.core.exceptions import NotFoundError, UnauthorizedError
-from app.core.storage import stream_object
+from app.core.common.exceptions import NotFoundError, UnauthorizedError
+from app.core.database.database import get_db
+from app.core.storage.facade import stream_object
 from app.dependencies.auth import CurrentUser
 from app.services.material import get_material_file_info, get_material_with_version
 

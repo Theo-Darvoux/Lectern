@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database.database import get_db
 from app.dependencies.auth import get_optional_user
 from app.models.user import User
 from app.schemas.directory import DirectoryBreadcrumb, DirectoryOut

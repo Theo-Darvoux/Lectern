@@ -5,8 +5,8 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-import app.core.database as db_core
-from app.core.meilisearch import meili_admin_client
+import app.core.database.database as db_core
+from app.core.events.meilisearch import meili_admin_client
 from app.models.directory import Directory
 from app.models.material import Material
 

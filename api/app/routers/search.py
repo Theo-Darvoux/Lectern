@@ -4,8 +4,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError
+from app.core.common.exceptions import BadRequestError
+from app.core.database.database import get_db
 from app.dependencies.auth import get_optional_user
 from app.dependencies.rate_limit import rate_limit_search
 from app.models.user import User

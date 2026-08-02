@@ -4,8 +4,8 @@ import uuid
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
-from app.core.sse import broadcast_to_user
+from app.core.common.exceptions import NotFoundError
+from app.core.events.sse import broadcast_to_user
 from app.models.annotation import Annotation
 from app.models.comment import Comment
 from app.models.material import Material, MaterialFavourite, MaterialLike

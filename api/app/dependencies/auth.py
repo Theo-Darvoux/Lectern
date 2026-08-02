@@ -6,10 +6,10 @@ from jwt import InvalidTokenError
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.exceptions import ForbiddenError, UnauthorizedError
-from app.core.redis import get_redis
-from app.core.security import decode_token
+from app.core.common.exceptions import ForbiddenError, UnauthorizedError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
+from app.core.security.security import decode_token
 from app.models.user import User, UserRole
 from app.services.auth import is_token_blacklisted
 from app.services.user import get_user_by_id

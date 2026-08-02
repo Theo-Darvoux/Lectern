@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.database import get_db
-from app.core.sse import (
+from app.core.database.database import get_db
+from app.core.events.sse import (
     register_user_queue,
     sse_event_stream,
     unregister_user_queue,

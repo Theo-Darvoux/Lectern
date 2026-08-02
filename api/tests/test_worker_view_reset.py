@@ -18,7 +18,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.database as c_db
+import app.core.database.database as c_db
 from app.models.material import Material
 from app.workers.view_reset import reset_14d_views, reset_daily_views
 

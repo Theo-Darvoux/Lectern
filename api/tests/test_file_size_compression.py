@@ -8,20 +8,22 @@ from app.workers.process_upload_post_scan import process_upload_post_scan
 
 
 @pytest.mark.asyncio
-async def test_post_scan_updates_size_in_db_and_cache():
-    """Test that process_upload_post_scan updates Upload.size_bytes and Redis cache."""
+async def test_post_scan_preserves_immutable_cas_metadata_in_db_and_cache():
+    """Derived processing must not replace authoritative CAS hash/size metadata."""
     # Setup mocks
     mock_redis = AsyncMock()
     mock_db = AsyncMock()
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
+    mock_upload = MagicMock(status="clean", size_bytes=10000, content_sha256="cas-sha")
+    mock_db.scalar = AsyncMock(return_value=mock_upload)
 
     ctx = {"redis": mock_redis, "db_sessionmaker": MagicMock(return_value=mock_db), "job_try": 1}
 
     # Mock ProcessingFile with a specific size
-    compressed_size = 5000
+    sanitized_size = 5000
     mock_pf = MagicMock()
-    mock_pf.size = compressed_size
+    mock_pf.size = sanitized_size
     mock_pf.path = "/tmp/fake.pdf"
     mock_pf.sha256 = AsyncMock(return_value="sha256")
     mock_pf.cleanup = MagicMock()
@@ -47,20 +49,18 @@ async def test_post_scan_updates_size_in_db_and_cache():
             AsyncMock(return_value=dr),
         ),
         patch(
-            "app.workers.process_upload_post_scan.run_compress_stage",
-            AsyncMock(return_value=MagicMock(final_mime="application/pdf", content_encoding=None)),
+            "app.workers.process_upload_post_scan.run_strip_only",
+            AsyncMock(),
         ),
         patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)
         ),
-        patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock()),
         patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
         patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
         patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
         patch("app.workers.process_upload_post_scan.notify_user", AsyncMock()),
     ):
         repo_instance = mock_repo.return_value
-        repo_instance.update_upload_status = AsyncMock()
         repo_instance.update_processing_status = AsyncMock()
         repo_instance.get_auth_config = AsyncMock(return_value={})
         repo_instance.maybe_dispatch_webhook = AsyncMock()
@@ -78,16 +78,16 @@ async def test_post_scan_updates_size_in_db_and_cache():
             initial_size=10000,
         )
 
-        # Verify DB update
-        args, kwargs = repo_instance.update_upload_status.call_args
-        assert kwargs["size_bytes"] == compressed_size
-        assert kwargs["processing_status"] == "complete"
+        # Verify the conditionally locked DB row was updated.
+        assert mock_upload.size_bytes == 10000
+        assert mock_upload.content_sha256 == "cas-sha"
+        assert mock_upload.processing_status == "complete"
 
         # Verify Redis cache update
         # emit_event calls rpush and publish
         assert mock_redis.publish.called
         published_payload = json.loads(mock_redis.publish.call_args[0][1])
-        assert published_payload["result"]["size"] == compressed_size
+        assert published_payload["result"]["size"] == 10000
         assert published_payload["result"]["processing_status"] == "complete"
 
 
@@ -109,17 +109,13 @@ async def test_exec_create_material_fetches_db_size():
         "file_size": 10000,  # Old size
     }
 
-    compressed_size = 5555
+    sanitized_size = 5555
 
-    # Mock scalar to return the compressed size when querying Upload
-    mock_db.scalar = AsyncMock(return_value=compressed_size)
-
-    # Mock material creation
-    mock_db.execute = AsyncMock(
-        return_value=MagicMock(
-            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-        )
-    )
+    # The same result shape supports the tag query and the Upload metadata query.
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    result.one_or_none.return_value = (sanitized_size, None)
+    mock_db.execute = AsyncMock(return_value=result)
 
     with (
         patch("app.services.pr.Material", return_value=MagicMock(id=uuid.uuid4())) as mock_mat,
@@ -127,10 +123,10 @@ async def test_exec_create_material_fetches_db_size():
         patch("app.services.pr._unique_material_slug", AsyncMock(return_value="slug")),
         patch("app.services.pr.Tag", MagicMock()),
         patch("app.services.pr.select", MagicMock()),
-        patch("app.core.cas.increment_cas_ref", AsyncMock()),
+        patch("app.core.security.cas.increment_cas_ref", AsyncMock()),
     ):
         await _exec_create_material(mock_db, payload, MagicMock(), id_map={})
 
-        # Verify MaterialVersion was created with the compressed size
-        args, kwargs = mock_ver.call_args
-        assert kwargs["file_size"] == compressed_size
+        # Verify MaterialVersion was created with the authoritative upload size.
+        _, kwargs = mock_ver.call_args
+        assert kwargs["file_size"] == sanitized_size

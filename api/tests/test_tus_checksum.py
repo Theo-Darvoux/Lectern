@@ -62,6 +62,10 @@ async def test_tus_patch_valid_checksum():
     mock_user.id = "user-123"
 
     mock_redis = AsyncMock()
+    mock_lock = MagicMock()
+    mock_lock.acquire = AsyncMock(return_value=True)
+    mock_lock.release = AsyncMock(return_value=True)
+    mock_redis.lock = MagicMock(return_value=mock_lock)
     mock_redis.get.return_value = None
     mock_redis.hgetall.return_value = _mock_tus_state(content)
     mock_redis.incr.return_value = 1
@@ -96,12 +100,16 @@ async def test_tus_patch_wrong_checksum():
     mock_user.id = "user-123"
 
     mock_redis = AsyncMock()
+    mock_lock = MagicMock()
+    mock_lock.acquire = AsyncMock(return_value=True)
+    mock_lock.release = AsyncMock(return_value=True)
+    mock_redis.lock = MagicMock(return_value=mock_lock)
     mock_redis.get.return_value = None
     mock_redis.hgetall.return_value = _mock_tus_state(content)
     mock_redis.incr.return_value = 1
     mock_redis.decr.return_value = 0
 
-    from app.core.exceptions import AppError
+    from app.core.common.exceptions import AppError
 
     with (
         patch("app.routers.tus.upload_part", new_callable=AsyncMock) as m_upload,

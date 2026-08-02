@@ -15,7 +15,7 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
+from app.core.common.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.flag import Flag, FlagStatus
 from app.models.material import Material
 from app.models.user import User, UserRole

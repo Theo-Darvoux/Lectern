@@ -15,7 +15,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
 from app.models.user import User, UserRole
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -117,8 +117,8 @@ class TestCritical2MultipartSizeValidation:
         with (
             patch("app.routers.upload.presigned.complete_multipart_upload", new_callable=AsyncMock),
             patch("app.routers.upload.presigned.get_object_info", new_callable=AsyncMock) as m_info,
-            patch("app.core.storage.read_object_bytes", new_callable=AsyncMock) as m_read,
-            patch("app.core.redis.arq_pool", new_callable=AsyncMock) as m_arq,
+            patch("app.core.storage.facade.read_object_bytes", new_callable=AsyncMock) as m_read,
+            patch("app.core.database.redis.arq_pool", new_callable=AsyncMock) as m_arq,
         ):
             m_read.return_value = b"%PDF-1.4 fake"
             # This is the actual size in S3 — much bigger than declared
@@ -149,23 +149,16 @@ class TestCritical2MultipartSizeValidation:
 
 
 class TestHigh1MultipartAtomicIntent:
-    """presigned_multipart_complete uses GET + lock instead of GETDEL,
-    unlike single-part complete_upload which uses atomic GETDEL."""
+    """Multipart completion must serialize work without consuming retry state early."""
 
     def test_multipart_complete_uses_atomic_intent_consumption(self):
-        """The multipart complete endpoint should use GETDEL (atomic) to consume
-        the upload intent, preventing double-completion races."""
+        """A renewable lock prevents races and intent deletion follows enqueue."""
         import app.routers.upload.presigned as presigned_mod
 
         source = inspect.getsource(presigned_mod.presigned_multipart_complete)
-
-        # Either GETDEL or execute_command("GETDEL"...) should be used
-        uses_getdel = "GETDEL" in source or "getdel" in source
-
-        assert uses_getdel, (
-            "presigned_multipart_complete uses non-atomic GET+DELETE for intent consumption. "
-            "Should use GETDEL like single-part complete_upload to prevent race conditions."
-        )
+        assert "redis_lock" in source
+        assert "GETDEL" not in source
+        assert source.index("_enqueue_processing") < source.index("redis.delete(intent_key)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -239,7 +232,7 @@ class TestMedium1HashingOffEventLoop:
     def test_hash_update_runs_in_thread(self):
         """hasher.update() should run inside asyncio.to_thread alongside f.write(),
         not on the main event loop."""
-        import app.core.storage as storage_mod
+        import app.core.storage.facade as storage_mod
 
         source = inspect.getsource(storage_mod.download_file_with_hash)
 

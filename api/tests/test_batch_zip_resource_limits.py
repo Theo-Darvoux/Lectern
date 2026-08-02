@@ -1,0 +1,66 @@
+"""Resource-admission regression tests for batch ZIP extraction."""
+
+import asyncio
+import threading
+import zipfile
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from app.core.common.exceptions import BadRequestError
+from app.routers.upload import batch_zip
+
+
+def test_extract_zip_rejects_insufficient_disk_before_writing(tmp_path) -> None:
+    archive_path = tmp_path / "upload.zip"
+    extraction_path = tmp_path / "extracted"
+    extraction_path.mkdir()
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("document.txt", b"hello")
+
+    no_free_space = SimpleNamespace(total=1, used=1, free=0)
+    with (
+        patch("app.routers.upload.batch_zip.shutil.disk_usage", return_value=no_free_space),
+        pytest.raises(BadRequestError, match="Insufficient temporary disk space"),
+    ):
+        batch_zip._extract_zip_sync(str(archive_path), str(extraction_path), max_members=10)
+
+    assert list(extraction_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_extraction_holds_global_slot_until_thread_stops() -> None:
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def blocking_extract(*_args: object) -> tuple[list[object], list[str]]:
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+            call_number = calls
+        if call_number == 1:
+            first_started.set()
+            release_first.wait(timeout=2)
+        return [], []
+
+    with (
+        patch("app.routers.upload.batch_zip._EXTRACTION_SEMAPHORE", asyncio.Semaphore(1)),
+        patch("app.routers.upload.batch_zip._extract_zip_sync", side_effect=blocking_extract),
+    ):
+        first = asyncio.create_task(batch_zip._extract_zip_bounded("one", "tmp", 1))
+        assert await asyncio.to_thread(first_started.wait, 1)
+
+        first.cancel()
+        second = asyncio.create_task(batch_zip._extract_zip_bounded("two", "tmp", 1))
+        await asyncio.sleep(0.05)
+        assert calls == 1
+
+        release_first.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await second
+
+    assert calls == 2

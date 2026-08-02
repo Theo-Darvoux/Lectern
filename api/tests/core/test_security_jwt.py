@@ -13,7 +13,7 @@ import jwt
 import pytest
 
 from app.config import settings
-from app.core.security import (
+from app.core.security.security import (
     ALGORITHM,
     create_access_token,
     create_refresh_token,

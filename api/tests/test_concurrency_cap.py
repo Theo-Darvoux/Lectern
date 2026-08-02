@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import Request
 
-from app.core.upload_errors import ERR_TUS_CONCURRENCY_LIMIT
+from app.core.common.upload_errors import UploadErrorCode
 from app.routers.tus import tus_patch
 
 
@@ -31,6 +31,6 @@ async def test_tus_concurrency_cap_enforced():
     response = await tus_patch(uuid.UUID(tus_id), mock_request, mock_user, mock_redis, AsyncMock())
 
     assert response.status_code == 429
-    assert response.headers["X-Lectern-Error"] == ERR_TUS_CONCURRENCY_LIMIT
+    assert response.headers["X-Lectern-Error"] == UploadErrorCode.TUS_CONCURRENCY_LIMIT
     # Should have decremented after seeing it's too high
     mock_redis.decr.assert_called_with(f"tus:inflight:{mock_user.id}")

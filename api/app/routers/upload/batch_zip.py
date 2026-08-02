@@ -11,6 +11,7 @@ Security model:
 """
 
 import asyncio
+import contextlib
 import logging
 import mimetypes
 import os
@@ -22,31 +23,28 @@ from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request, UploadFile
+from fastapi import APIRouter, Depends, UploadFile
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError
-from app.core.file_security import SvgSecurityError, check_svg_safety_stream
-from app.core.mimetypes import guess_mime_from_bytes
-from app.core.processing import ProcessingFile
-from app.core.redis import get_redis
-from app.core.storage import get_s3_client
-from app.core.upload_errors import (
-    ERR_BATCH_TOO_LARGE,
-    ERR_INVALID_ZIP,
-    ERR_ZIP_BOMB,
-)
+from app.core.common.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
+from app.core.common.exceptions import BadRequestError
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.database.database import async_session_factory
+from app.core.database.post_commit import dispatch_post_commit_actions, persist_post_commit_jobs
+from app.core.database.redis import get_redis
+from app.core.events.processing import ProcessingFile
+from app.core.media.mimetypes import guess_mime_from_bytes
+from app.core.security.file_security import SvgSecurityError, check_svg_safety_stream
+from app.core.storage.facade import delete_object, get_s3_client
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
 from app.routers.upload.helpers import (
     _check_pending_cap,
-    _check_storage_limit,
     _create_upload_row,
-    _enqueue_processing,
+    _queue_processing_after_commit,
+    _release_storage_reservation,
+    _reserve_storage_limit,
 )
 from app.routers.upload.validators import (
     _apply_mime_correction,
@@ -67,6 +65,7 @@ _MAX_MEMBERS_PRIVILEGED = 2_000  # moderator / bureau / vieux
 _MAX_TOTAL_EXTRACTED_BYTES = 2 * 1024**3  # 2 GiB total uncompressed
 _MAX_COMPRESSION_RATIO = 100  # uncompressed/compressed ratio (zip bomb)
 _MAX_PATH_DEPTH = 20  # folder nesting depth within zip
+_EXTRACTION_DISK_HEADROOM_FACTOR = 1.2
 
 # OS-generated junk to skip silently
 _SKIP_PREFIXES = ("__MACOSX/",)
@@ -75,6 +74,10 @@ _SKIP_BASENAME_PREFIXES = ("._",)
 
 # Concurrent S3 uploads for extracted files
 _UPLOAD_CONCURRENCY = 4
+
+# Archive expansion is CPU-, memory-, and disk-intensive. Keep this process-wide
+# rather than per request so concurrent uploads cannot all expand at once.
+_EXTRACTION_SEMAPHORE = asyncio.Semaphore(1)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -133,7 +136,7 @@ def _extract_zip_sync(
     try:
         zf_obj = zipfile.ZipFile(zip_path, "r")
     except zipfile.BadZipFile:
-        raise BadRequestError("Not a valid zip archive.", code=ERR_INVALID_ZIP)
+        raise BadRequestError("Not a valid zip archive.", code=UploadErrorCode.INVALID_ZIP)
 
     with zf_obj as zf:
         all_members = zf.infolist()
@@ -143,7 +146,7 @@ def _extract_zip_sync(
             if not _should_skip_metadata(info) and not _is_safe_zip_path(info.filename):
                 raise BadRequestError(
                     f"Zip contains an unsafe path and was rejected: {info.filename!r}",
-                    code=ERR_INVALID_ZIP,
+                    code=UploadErrorCode.INVALID_ZIP,
                 )
 
         file_members = [m for m in all_members if not _should_skip_metadata(m)]
@@ -152,7 +155,7 @@ def _extract_zip_sync(
         if len(file_members) > max_members:
             raise BadRequestError(
                 f"Zip contains {len(file_members)} files; maximum allowed is {max_members}.",
-                code=ERR_BATCH_TOO_LARGE,
+                code=UploadErrorCode.BATCH_TOO_LARGE,
             )
 
         # Total uncompressed size declared in headers
@@ -161,7 +164,14 @@ def _extract_zip_sync(
             raise BadRequestError(
                 f"Zip would extract to {total_declared // (1024**3):.1f} GiB; "
                 f"limit is {_MAX_TOTAL_EXTRACTED_BYTES // (1024**3):.0f} GiB.",
-                code=ERR_ZIP_BOMB,
+                code=UploadErrorCode.ZIP_BOMB,
+            )
+
+        required_free = int(total_declared * _EXTRACTION_DISK_HEADROOM_FACTOR)
+        if shutil.disk_usage(tmp_dir).free < required_free:
+            raise BadRequestError(
+                "Insufficient temporary disk space to safely extract this zip archive.",
+                code=UploadErrorCode.BATCH_TOO_LARGE,
             )
 
         # Compression ratio check (zip bomb via header vs payload divergence)
@@ -171,7 +181,7 @@ def _extract_zip_sync(
             if ratio > _MAX_COMPRESSION_RATIO:
                 raise BadRequestError(
                     f"Zip compression ratio ({ratio:.0f}x) exceeds safety limit.",
-                    code=ERR_ZIP_BOMB,
+                    code=UploadErrorCode.ZIP_BOMB,
                 )
 
         # Path depth check
@@ -180,7 +190,7 @@ def _extract_zip_sync(
             if depth > _MAX_PATH_DEPTH:
                 raise BadRequestError(
                     f"Zip entry is nested too deeply ({depth} levels): {m.filename!r}",
-                    code=ERR_INVALID_ZIP,
+                    code=UploadErrorCode.INVALID_ZIP,
                 )
 
         # Phase 2 — extraction with hard per-entry byte limit
@@ -209,7 +219,7 @@ def _extract_zip_sync(
                             tmp_path.unlink(missing_ok=True)
                             raise BadRequestError(
                                 "Zip entry decompresses larger than declared; possible zip bomb.",
-                                code=ERR_ZIP_BOMB,
+                                code=UploadErrorCode.ZIP_BOMB,
                             )
                         dst.write(data)
             except zipfile.BadZipFile:
@@ -231,6 +241,26 @@ def _extract_zip_sync(
         return entries, skipped
 
 
+async def _extract_zip_bounded(
+    zip_path: str,
+    tmp_dir: str,
+    max_members: int,
+) -> tuple[list[_ExtractedEntry], list[str]]:
+    """Run extraction under a process-wide slot, including after cancellation."""
+    async with _EXTRACTION_SEMAPHORE:
+        extraction = asyncio.create_task(
+            asyncio.to_thread(_extract_zip_sync, zip_path, tmp_dir, max_members)
+        )
+        try:
+            return await asyncio.shield(extraction)
+        except asyncio.CancelledError:
+            # ``to_thread`` cannot stop a running function. Do not release the slot
+            # until it has really stopped consuming extraction resources.
+            with contextlib.suppress(Exception):
+                await extraction
+            raise
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 
@@ -239,8 +269,6 @@ async def upload_batch_zip(
     file: UploadFile,
     user: CurrentUser,
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    db: Annotated[AsyncSession, Depends(get_db)],
-    request: Request,
     _: Annotated[None, Depends(rate_limit_uploads)],
 ) -> BatchZipResponse:
     """Upload a zip file; extract and queue each contained file individually.
@@ -287,23 +315,23 @@ async def upload_batch_zip(
                 if bytes_written > _MAX_ZIP_BYTES:
                     raise BadRequestError(
                         f"Zip file exceeds {_MAX_ZIP_BYTES // (1024**2)} MiB limit.",
-                        code=ERR_BATCH_TOO_LARGE,
+                        code=UploadErrorCode.BATCH_TOO_LARGE,
                     )
                 fh.write(chunk)
 
         if bytes_written == 0:
-            raise BadRequestError("Empty zip file.", code=ERR_INVALID_ZIP)
+            raise BadRequestError("Empty zip file.", code=UploadErrorCode.INVALID_ZIP)
 
         # Quick magic-byte check before full parse
         with open(zip_path, "rb") as fh:  # type: ignore[assignment]
             magic = fh.read(4)
         if magic not in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
-            raise BadRequestError("File is not a valid zip archive.", code=ERR_INVALID_ZIP)
+            raise BadRequestError(
+                "File is not a valid zip archive.", code=UploadErrorCode.INVALID_ZIP
+            )
 
         # ── Extract (runs in thread to avoid blocking event loop) ────────────
-        entries, extract_skipped = await asyncio.to_thread(
-            _extract_zip_sync, zip_path, tmp_dir, max_members
-        )
+        entries, extract_skipped = await _extract_zip_bounded(zip_path, tmp_dir, max_members)
 
         if not entries:
             return BatchZipResponse(
@@ -323,6 +351,11 @@ async def upload_batch_zip(
             nonlocal skipped_count
             async with semaphore:
                 upload_id = str(uuid4())
+                quarantine_key: str | None = None
+                storage_reserved = False
+                quota_reserved = False
+                object_uploaded = False
+                committed = False
                 try:
                     # Validate filename & extension
                     try:
@@ -363,14 +396,6 @@ async def upload_batch_zip(
                         skipped_count += 1
                         return None
 
-                    # Global storage limit
-                    try:
-                        await _check_storage_limit(pf.size, db)
-                    except BadRequestError as exc:
-                        per_file_errors.append(f"{entry.filename}: {exc.detail}")
-                        skipped_count += 1
-                        return None
-
                     # SVG safety check
                     if mime_type == "image/svg+xml":
                         try:
@@ -383,49 +408,68 @@ async def upload_batch_zip(
 
                     quarantine_key = f"quarantine/{user_id}/{upload_id}/{safe_name}"
 
-                    # Reserve quota slot
-                    try:
-                        await _check_pending_cap(
+                    # Each concurrently processed entry owns its own transaction.
+                    # AsyncSession cannot be shared between gather() tasks.
+                    async with async_session_factory() as entry_db:
+                        try:
+                            await _reserve_storage_limit(
+                                pf.size, upload_id, redis, entry_db
+                            )
+                            storage_reserved = True
+                        except BadRequestError as exc:
+                            per_file_errors.append(f"{entry.filename}: {exc.detail}")
+                            skipped_count += 1
+                            return None
+
+                        try:
+                            await _check_pending_cap(
+                                user_id,
+                                redis,
+                                entry_db,
+                                privileged=privileged,
+                                reserve_key=quarantine_key,
+                            )
+                            quota_reserved = True
+                        except BadRequestError:
+                            await _release_storage_reservation(upload_id, redis)
+                            storage_reserved = False
+                            per_file_errors.append(
+                                f"{entry.filename}: upload quota exceeded, file skipped."
+                            )
+                            skipped_count += 1
+                            return None
+
+                        async with get_s3_client() as s3:
+                            await s3.upload_file(  # type: ignore[call-arg]
+                                Filename=str(pf.path),
+                                Bucket=settings.s3_bucket,
+                                Key=quarantine_key,
+                                ExtraArgs={"ContentType": mime_type},
+                            )
+                        object_uploaded = True
+
+                        await _create_upload_row(
+                            upload_id=upload_id,
+                            user_id=user_id,
+                            quarantine_key=quarantine_key,
+                            filename=safe_name,
+                            mime_type=mime_type,
+                            size_bytes=pf.size,
+                            db=entry_db,
+                        )
+                        _queue_processing_after_commit(
+                            entry_db,
                             user_id,
-                            redis,
-                            db,
-                            privileged=privileged,
-                            reserve_key=quarantine_key,
+                            upload_id,
+                            quarantine_key,
+                            safe_name,
+                            mime_type,
+                            file_size=pf.size,
                         )
-                    except BadRequestError:
-                        per_file_errors.append(
-                            f"{entry.filename}: upload quota exceeded, file skipped."
-                        )
-                        skipped_count += 1
-                        return None
-
-                    # Upload to quarantine
-                    async with get_s3_client() as s3:
-                        await s3.upload_file(  # type: ignore[call-arg]
-                            Filename=str(pf.path),
-                            Bucket=settings.s3_bucket,
-                            Key=quarantine_key,
-                            ExtraArgs={"ContentType": mime_type},
-                        )
-
-                    await _create_upload_row(
-                        upload_id=upload_id,
-                        user_id=user_id,
-                        quarantine_key=quarantine_key,
-                        filename=safe_name,
-                        mime_type=mime_type,
-                        size_bytes=pf.size,
-                        db=db,
-                    )
-
-                    await _enqueue_processing(
-                        user_id,
-                        upload_id,
-                        quarantine_key,
-                        safe_name,
-                        mime_type,
-                        file_size=pf.size,
-                    )
+                        await persist_post_commit_jobs(entry_db)
+                        await entry_db.commit()
+                        committed = True
+                        await dispatch_post_commit_actions(entry_db)
 
                     return BatchZipEntry(
                         filename=safe_name,
@@ -440,6 +484,16 @@ async def upload_batch_zip(
                     raise
                 except Exception:
                     logger.exception("Unexpected error processing zip entry %s", entry.filename)
+                    if not committed:
+                        if object_uploaded and quarantine_key is not None:
+                            with contextlib.suppress(Exception):
+                                await delete_object(quarantine_key)
+                        if quota_reserved and quarantine_key is not None:
+                            with contextlib.suppress(Exception):
+                                await redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+                        if storage_reserved:
+                            with contextlib.suppress(Exception):
+                                await _release_storage_reservation(upload_id, redis)
                     per_file_errors.append(f"{entry.filename}: internal error, skipped.")
                     skipped_count += 1
                     return None

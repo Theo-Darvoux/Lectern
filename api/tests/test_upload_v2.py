@@ -10,6 +10,7 @@ Covers:
 - SVG DOM-based sanitisation
 """
 
+import asyncio
 import io
 import uuid
 from pathlib import Path
@@ -20,8 +21,9 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.file_security import SvgSecurityError, check_pdf_safety, check_svg_safety
-from app.core.scanner import MalwareScanner
+from app.core.security.file_security import SvgSecurityError, check_pdf_safety, check_svg_safety
+from app.core.security.scanner import MalwareScanner
+from app.models.upload import Upload
 from app.models.user import User, UserRole
 from app.routers.upload import (
     _FAST_QUEUE_NAME,
@@ -49,7 +51,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -306,6 +308,18 @@ async def test_cancel_upload_removes_quarantine_key(
     upload_id = str(uuid.uuid4())
     quarantine_key = f"quarantine/{user.id}/{upload_id}/test.pdf"
 
+    up = Upload(
+        upload_id=upload_id,
+        user_id=user.id,
+        filename="test.pdf",
+        mime_type="application/pdf",
+        size_bytes=100,
+        quarantine_key=quarantine_key,
+        status="pending",
+    )
+    db_session.add(up)
+    await db_session.commit()
+
     # Simulate the key being present in the quota sorted set
     mock_redis.zrange = AsyncMock(return_value=[quarantine_key.encode()])
 
@@ -318,6 +332,53 @@ async def test_cancel_upload_removes_quarantine_key(
     assert response.status_code == 204
     mock_delete.assert_awaited_once_with(quarantine_key)
     mock_redis.zrem.assert_awaited_once()
+
+
+async def test_concurrent_cancel_upload_releases_staging_cas_reference_once() -> None:
+    """Concurrent retries share one CAS operation and cannot double-decrement."""
+    from app.routers.upload.status import cancel_upload
+
+    user_id = uuid.uuid4()
+    upload_id = str(uuid.uuid4())
+    staging_key = f"staging:{user_id}:{upload_id}"
+    sha256 = "a" * 64
+
+    redis = AsyncMock()
+    redis.zrange = AsyncMock(return_value=[staging_key.encode()])
+    redis.zrem = AsyncMock(return_value=1)
+
+    ref_count = 2
+    completed_operations: set[str] = set()
+
+    async def eval_cas_decrement(_script: str, numkeys: int, *keys: object) -> int:
+        nonlocal ref_count
+        operation_key = str(keys[1]) if numkeys == 2 else str(uuid.uuid4())
+        if operation_key in completed_operations:
+            return ref_count
+        completed_operations.add(operation_key)
+        ref_count -= 1
+        return ref_count
+
+    redis.eval = AsyncMock(side_effect=eval_cas_decrement)
+
+    row = MagicMock(sha256=sha256, content_sha256=sha256, cas_ref_count=1)
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.scalar = AsyncMock(return_value=row)
+    session.commit = AsyncMock()
+
+    with patch(
+        "app.core.database.database.async_session_factory",
+        return_value=session,
+    ):
+        await asyncio.gather(
+            cancel_upload(upload_id, MagicMock(id=user_id), redis, session),
+            cancel_upload(upload_id, MagicMock(id=user_id), redis, session),
+        )
+
+    assert ref_count == 1
+    assert len(completed_operations) == 1
 
 
 async def test_cancel_upload_requires_auth(client: AsyncClient) -> None:
@@ -353,7 +414,7 @@ async def test_check_exists_not_found(
     assert data["file_key"] is None
 
 
-@patch("app.core.storage.object_exists", new_callable=AsyncMock, return_value=True)
+@patch("app.core.storage.facade.object_exists", new_callable=AsyncMock, return_value=True)
 async def test_check_exists_found(
     _mock_obj_exists: AsyncMock,
     client: AsyncClient,
@@ -509,6 +570,20 @@ def test_svg_dom_accepts_safe_svg() -> None:
         b"</svg>"
     )
     check_svg_safety(svg, "safe.svg")  # must not raise
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    [
+        'href=" https://tracker.example/pixel"',
+        'fill="url(https://tracker.example/pattern.svg)"',
+        'filter="url(//tracker.example/filter.svg)"',
+    ],
+)
+def test_svg_dom_rejects_external_iri_attributes(attribute: str) -> None:
+    svg = f'<svg xmlns="http://www.w3.org/2000/svg"><rect {attribute}/></svg>'.encode()
+    with pytest.raises(SvgSecurityError, match="external|CSS"):
+        check_svg_safety(svg, "external.svg")
 
 
 def test_svg_safety_two_pass_catches_encoded_payload() -> None:

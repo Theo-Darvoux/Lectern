@@ -9,9 +9,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
+from app.models.cas_staging_claim import CasStagingClaim
 from app.models.user import User, UserRole
 from app.routers.qcm import (
     QCM_MAX_QUESTIONS,
@@ -571,6 +573,13 @@ class TestStageEndpoint:
         initial = kwargs.get("initial_data", {}) or mock_cas.call_args[0][2]
         assert initial.get("mime_type") == "application/vnd.lectern.qcm+json"
         assert initial.get("file_name") == "qcm.qcm"
+        assert "ttl_seconds" not in kwargs
+
+        claim = await db_session.scalar(
+            select(CasStagingClaim).where(CasStagingClaim.sha256 == resp.json()["sha256"])
+        )
+        assert claim is not None
+        assert kwargs["operation_id"] == f"qcm-stage:{claim.id}"
 
 
 # ── /api/qcm/parse-moodle endpoint tests ─────────────────────────────────────
@@ -675,32 +684,32 @@ class TestParseMoodleEndpoint:
 
 class TestQCMMimeType:
     def test_qcm_extension_in_allowed_extensions(self):
-        from app.core.mimetypes import ALLOWED_EXTENSIONS
+        from app.core.media.mimetypes import ALLOWED_EXTENSIONS
 
         assert ".qcm" in ALLOWED_EXTENSIONS
 
     def test_qcm_mime_in_allowed_mime_types(self):
-        from app.core.mimetypes import ALLOWED_MIME_TYPES, QCM_MIME_TYPE
+        from app.core.media.mimetypes import ALLOWED_MIME_TYPES, QCM_MIME_TYPE
 
         assert QCM_MIME_TYPE in ALLOWED_MIME_TYPES
 
     def test_qcm_extension_mapping(self):
-        from app.core.mimetypes import EXTENSION_MAPPING, QCM_MIME_TYPE
+        from app.core.media.mimetypes import EXTENSION_MAPPING, QCM_MIME_TYPE
 
         assert QCM_MIME_TYPE in EXTENSION_MAPPING.get(".qcm", [])
 
     def test_qcm_mime_to_extension(self):
-        from app.core.mimetypes import MIME_TO_EXTENSION, QCM_MIME_TYPE
+        from app.core.media.mimetypes import MIME_TO_EXTENSION, QCM_MIME_TYPE
 
         assert MIME_TO_EXTENSION[QCM_MIME_TYPE] == ".qcm"
 
     def test_mime_registry_is_supported_qcm(self):
-        from app.core.mimetypes import MimeRegistry
+        from app.core.media.mimetypes import MimeRegistry
 
         assert MimeRegistry.is_supported_extension(".qcm") is True
 
     def test_mime_registry_allowed_mime_qcm(self):
-        from app.core.mimetypes import QCM_MIME_TYPE, MimeRegistry
+        from app.core.media.mimetypes import QCM_MIME_TYPE, MimeRegistry
 
         assert MimeRegistry.is_allowed_mime(QCM_MIME_TYPE) is True
 

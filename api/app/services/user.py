@@ -7,9 +7,10 @@ from datetime import UTC, datetime
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.avatar_processor import process_avatar
-from app.core.exceptions import BadRequestError
-from app.core.storage import delete_object, download_file, upload_file
+from app.core.common.exceptions import BadRequestError
+from app.core.database.post_commit import PostCommitKey
+from app.core.media.avatar_processor import process_avatar
+from app.core.storage.facade import delete_object, download_file_raw, upload_file
 from app.models.annotation import Annotation
 from app.models.comment import Comment
 from app.models.flag import Flag
@@ -249,6 +250,14 @@ async def update_user_profile(
 
                 if not upload_rec:
                     raise BadRequestError("Invalid avatar upload key or unauthorized")
+                if (
+                    upload_rec.status != "clean"
+                    or not upload_rec.mime_type
+                    or not upload_rec.mime_type.startswith("image/")
+                    or not upload_rec.final_key
+                    or not upload_rec.final_key.startswith("cas/")
+                ):
+                    raise BadRequestError("Avatar upload has not passed image security processing")
 
                 # 2. Process and Compress (Synchronous-ish)
                 import tempfile
@@ -257,26 +266,32 @@ async def update_user_profile(
 
                 with tempfile.TemporaryDirectory() as tmp_dir:
                     local_input = Path(tmp_dir) / "input_avatar"
-                    await download_file(avatar_url, local_input)
+                    await download_file_raw(
+                        upload_rec.final_key,
+                        local_input,
+                        max_bytes=20 * 1024 * 1024,
+                    )
 
                     try:
-                        processed_path = await asyncio.to_thread(process_avatar, local_input)
-                        try:
-                            # 3. Upload to permanent avatars/ prefix
-                            avatar_uuid = uuid_pkg.uuid4()
-                            new_key = f"avatars/{user.id}/{avatar_uuid}.webp"
+                        from app.core.security.file_security._concurrency import (
+                            _get_concurrency_guard,
+                        )
 
-                            with open(processed_path, "rb") as f:
-                                await upload_file(
-                                    f.read(),
-                                    new_key,
-                                    content_type="image/webp",
-                                    content_disposition="inline",  # Avatars should be viewable inline
-                                )
-                            final_url = new_key
-                        finally:
-                            if processed_path.exists():
-                                processed_path.unlink()
+                        async with _get_concurrency_guard("image"):
+                            processed_bytes = await asyncio.to_thread(
+                                process_avatar, local_input
+                            )
+                        # 3. Upload to permanent avatars/ prefix
+                        avatar_uuid = uuid_pkg.uuid4()
+                        new_key = f"avatars/{user.id}/{avatar_uuid}.webp"
+
+                        await upload_file(
+                            processed_bytes,
+                            new_key,
+                            content_type="image/webp",
+                            content_disposition="inline",  # Avatars should be viewable inline
+                        )
+                        final_url = new_key
                     except Exception as exc:
                         logger.error("Avatar processing failed: %s", exc)
                         raise BadRequestError(f"Failed to process avatar: {exc}")
@@ -405,7 +420,34 @@ async def hard_delete_user(db: AsyncSession, user: User) -> None:
     if user.avatar_url:
         await delete_object(user.avatar_url)
 
-    # 2. Cleanup orphaned Upload records (since they might not have a formal FK)
+    # 2. Durably release storage/CAS/quota resources before deleting Upload rows.
+    uploads = list((await db.scalars(select(Upload).where(Upload.user_id == user.id))).all())
+    cas_references: list[dict[str, str]] = []
+    storage_keys: set[str] = set()
+    quota_members: list[str] = []
+    for upload in uploads:
+        reference_sha = upload.content_sha256 or upload.sha256
+        if upload.cas_ref_count > 0 and reference_sha:
+            cas_references.append(
+                {
+                    "sha256": reference_sha,
+                    "operation_id": f"hard-delete:upload:{upload.id}:release",
+                }
+            )
+        for key in (upload.quarantine_key, upload.final_key):
+            if key and not key.startswith("cas/"):
+                storage_keys.add(key)
+        quota_members.append(f"staging:{upload.user_id}:{upload.upload_id}")
+
+    jobs = db.info.setdefault(PostCommitKey.JOBS, [])
+    if cas_references:
+        jobs.append(("release_cas_references", cas_references))
+    if storage_keys:
+        jobs.append(("delete_storage_objects", sorted(storage_keys)))
+    if quota_members:
+        jobs.append(("release_upload_quota", str(user.id), quota_members))
+
+    # Cleanup orphaned Upload records (since they might not have a formal FK)
     await db.execute(delete(Upload).where(Upload.user_id == user.id))
 
     # 3. Delete the user — related rows (annotations, comments, PRs) are handled

@@ -7,10 +7,15 @@ from typing import Any
 
 from PIL import Image
 
-from app.core.processing import ProcessingFile
-from app.core.telemetry import get_tracer
+from app.core.events.processing import ProcessingFile
+from app.core.observability.telemetry import get_tracer
+from app.core.security.file_security._concurrency import _get_concurrency_guard
+from app.core.security.file_security._image import _validate_image_size
+from app.core.security.sandbox import async_sandboxed_run
 
 logger = logging.getLogger(__name__)
+
+_THUMBNAIL_EMBEDDED_IMAGE_MAX_BYTES = 20 * 1024 * 1024
 
 
 async def run_thumbnail_stage(
@@ -195,43 +200,48 @@ async def _thumbnail_svg(
     We composite against white so the WebP thumbnail always has a solid background
     and renders correctly in the UI (no checkerboard transparency artefact).
     """
-    temp_png = output_path.with_suffix(".svg_thumb.png")
-    cmd = [
-        "rsvg-convert",
-        "--width",
-        str(size[0]),
-        "--height",
-        str(size[1]),
-        "--keep-aspect-ratio",
-        "--output",
-        str(temp_png),
-        str(input_path),
-    ]
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    _, stderr_bytes = await process.communicate()
-    if process.returncode != 0 or not temp_png.exists():
-        raise RuntimeError(
-            f"rsvg-convert failed for {input_path.name}: "
-            f"{stderr_bytes.decode(errors='replace')[:300]}"
-        )
+    # Bind a private directory rather than a pre-created output file.  librsvg
+    # writes by atomically replacing its output; a file bind would leave the
+    # replacement inside the sandbox mount namespace and the host would still
+    # see the original empty inode.
+    with tempfile.TemporaryDirectory(prefix="svg-thumb-") as temp_dir:
+        temp_png = Path(temp_dir) / "render.png"
+        cmd = [
+            "rsvg-convert",
+            "--width",
+            str(size[0]),
+            "--height",
+            str(size[1]),
+            "--keep-aspect-ratio",
+            "--output",
+            str(temp_png),
+            str(input_path),
+        ]
+        async with _get_concurrency_guard("subprocess"):
+            process = await async_sandboxed_run(
+                cmd,
+                ro_paths=[input_path],
+                rw_paths=[Path(temp_dir)],
+                timeout=60,
+            )
+        if process.returncode != 0 or not temp_png.exists():
+            raise RuntimeError(
+                f"rsvg-convert failed for {input_path.name}: "
+                f"{process.stderr.decode(errors='replace')[:300]}"
+            )
 
-    def _flatten_and_save() -> None:
-        with Image.open(temp_png) as img:
-            img.thumbnail(size, Image.Resampling.LANCZOS)
-            if img.mode in ("RGBA", "LA", "PA"):
-                rgba_img = img.convert("RGBA") if img.mode == "PA" else img
-                bg = Image.new("RGB", rgba_img.size, "white")
-                bg.paste(rgba_img, mask=rgba_img.split()[-1])
-                bg.save(output_path, "WEBP", quality=quality)
-            else:
-                img.convert("RGB").save(output_path, "WEBP", quality=quality)
+        def _flatten_and_save() -> None:
+            with Image.open(temp_png) as img:
+                img.thumbnail(size, Image.Resampling.LANCZOS)
+                if img.mode in ("RGBA", "LA", "PA"):
+                    rgba_img = img.convert("RGBA") if img.mode == "PA" else img
+                    bg = Image.new("RGB", rgba_img.size, "white")
+                    bg.paste(rgba_img, mask=rgba_img.split()[-1])
+                    bg.save(output_path, "WEBP", quality=quality)
+                else:
+                    img.convert("RGB").save(output_path, "WEBP", quality=quality)
 
-    try:
         await asyncio.to_thread(_flatten_and_save)
-    finally:
-        temp_png.unlink(missing_ok=True)
 
 
 async def _thumbnail_video(
@@ -240,40 +250,40 @@ async def _thumbnail_video(
     """Extract a frame from video using FFmpeg."""
     # Heuristic: seek to 2 seconds or 10%
     # We use a simple 2s seek first as it's fastest
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-ss",
-        "00:00:02",
-        "-i",
-        str(input_path),
-        "-vframes",
-        "1",
-        "-s",
-        f"{size[0]}x{size[1]}",
-        "-f",
-        "image2",
-        str(output_path.with_suffix(".jpg")),
-    ]
-
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    stdout, stderr = await process.communicate()
-
-    if process.returncode != 0:
-        # Fallback to 0s if 2s fails (e.g. very short video)
-        cmd[3] = "00:00:00"
-        process = await asyncio.create_subprocess_exec(*cmd)
-        await process.wait()
-
-    # Convert JPG to WebP for consistency
-    temp_jpg = output_path.with_suffix(".jpg")
-    if temp_jpg.exists():
-        try:
-            await _thumbnail_image(temp_jpg, output_path, size, quality)
-        finally:
+    with tempfile.TemporaryDirectory(prefix="video-thumb-") as temp_dir:
+        temp_jpg = Path(temp_dir) / "frame.jpg"
+        for seek in ("00:00:02", "00:00:00"):
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                seek,
+                "-i",
+                str(input_path),
+                "-vframes",
+                "1",
+                "-s",
+                f"{size[0]}x{size[1]}",
+                "-f",
+                "image2",
+                str(temp_jpg),
+            ]
+            async with _get_concurrency_guard("subprocess"):
+                process = await async_sandboxed_run(
+                    cmd,
+                    ro_paths=[input_path],
+                    rw_paths=[Path(temp_dir)],
+                    timeout=60,
+                )
+            if process.returncode == 0 and temp_jpg.exists():
+                await _thumbnail_image(temp_jpg, output_path, size, quality)
+                return
             temp_jpg.unlink(missing_ok=True)
+
+        raise RuntimeError(
+            f"ffmpeg failed to generate a thumbnail for {input_path.name}: "
+            f"{process.stderr.decode(errors='replace')[:300]}"
+        )
 
 
 async def _thumbnail_pdf(
@@ -284,54 +294,54 @@ async def _thumbnail_pdf(
     Tries page 1 first. If the resulting thumbnail is nearly blank (common for
     attestation covers or title pages with minimal content), falls back to page 2.
     """
-    for page_num in (1, 2):
-        temp_png = output_path.with_suffix(f".p{page_num}.png")
-        cmd = [
-            "gs",
-            "-dSAFER",
-            "-dBATCH",
-            "-dNOPAUSE",
-            "-sDEVICE=png16m",
-            f"-dFirstPage={page_num}",
-            f"-dLastPage={page_num}",
-            "-r150",
-            f"-sOutputFile={temp_png}",
-            str(input_path),
-        ]
+    with tempfile.TemporaryDirectory(prefix="pdf-thumb-") as temp_dir:
+        for page_num in (1, 2):
+            temp_png = Path(temp_dir) / f"page-{page_num}.png"
+            cmd = [
+                "gs",
+                "-dSAFER",
+                "-dBATCH",
+                "-dNOPAUSE",
+                "-sDEVICE=png16m",
+                f"-dFirstPage={page_num}",
+                f"-dLastPage={page_num}",
+                "-r150",
+                f"-sOutputFile={temp_png}",
+                str(input_path),
+            ]
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        _, stderr_bytes = await process.communicate()
+            async with _get_concurrency_guard("subprocess"):
+                process = await async_sandboxed_run(
+                    cmd,
+                    ro_paths=[input_path],
+                    rw_paths=[Path(temp_dir)],
+                    timeout=60,
+                )
 
-        if not temp_png.exists():
-            logger.warning(
-                "Ghostscript produced no output for page %d of %s (rc=%d): %s",
-                page_num,
-                input_path.name,
-                process.returncode,
-                stderr_bytes.decode(errors="replace")[:300],
-            )
-            break  # If Ghostscript fails, subsequent pages are unlikely to succeed either
+            if process.returncode != 0 or not temp_png.exists():
+                logger.warning(
+                    "Ghostscript produced no output for page %d of %s (rc=%d): %s",
+                    page_num,
+                    input_path.name,
+                    process.returncode,
+                    process.stderr.decode(errors="replace")[:300],
+                )
+                break
 
-        try:
             await _thumbnail_image(temp_png, output_path, size, quality)
-        finally:
-            temp_png.unlink(missing_ok=True)
 
-        if not output_path.exists():
-            break
+            if not output_path.exists():
+                break
 
-        # Page 1 blank → try page 2 for a more representative thumbnail.
-        if page_num == 1 and _is_blank_thumbnail(output_path):
-            logger.info(
-                "Page 1 of %s is blank — trying page 2 for a better thumbnail",
-                input_path.name,
-            )
-            output_path.unlink(missing_ok=True)
-            continue
+            if page_num == 1 and _is_blank_thumbnail(output_path):
+                logger.info(
+                    "Page 1 of %s is blank — trying page 2 for a better thumbnail",
+                    input_path.name,
+                )
+                output_path.unlink(missing_ok=True)
+                continue
 
-        return  # success
+            return
 
 
 async def _thumbnail_office(
@@ -364,14 +374,15 @@ async def _thumbnail_office(
             str(input_path),
         ]
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=120)
-        stdout_str = stdout_bytes.decode(errors="replace") if stdout_bytes else ""
-        stderr_str = stderr_bytes.decode(errors="replace") if stderr_bytes else ""
+        async with _get_concurrency_guard("subprocess"):
+            process = await async_sandboxed_run(
+                cmd,
+                ro_paths=[input_path],
+                rw_paths=[tmp_dir],
+                timeout=120,
+            )
+        stdout_str = process.stdout.decode(errors="replace") if process.stdout else ""
+        stderr_str = process.stderr.decode(errors="replace") if process.stderr else ""
 
         if process.returncode != 0:
             logger.error(
@@ -401,11 +412,6 @@ async def _thumbnail_office(
         # 3. Reuse the existing Ghostscript → Pillow → WebP pipeline
         await _thumbnail_pdf(pdf_path, output_path, size, quality)
 
-    except TimeoutError:
-        process.kill()
-        await process.wait()
-        logger.error("soffice timed out converting %s", input_path.name)
-        raise
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -434,9 +440,14 @@ async def _fallback_extract_largest_image(
                 # Sort by size descending, grab the largest image
                 image_entries.sort(key=lambda x: x.file_size, reverse=True)
                 largest = image_entries[0]
+                if largest.file_size > _THUMBNAIL_EMBEDDED_IMAGE_MAX_BYTES:
+                    raise ValueError("Embedded thumbnail candidate exceeds byte limit")
 
                 with z.open(largest) as f:
-                    return f.read()
+                    data = f.read(_THUMBNAIL_EMBEDDED_IMAGE_MAX_BYTES + 1)
+                    if len(data) > _THUMBNAIL_EMBEDDED_IMAGE_MAX_BYTES:
+                        raise ValueError("Embedded thumbnail candidate expanded beyond byte limit")
+                    return data
         except zipfile.BadZipFile:
             return None
         except Exception as e:
@@ -453,6 +464,7 @@ async def _fallback_extract_largest_image(
 
         try:
             with Image.open(io.BytesIO(img_data)) as img:
+                _validate_image_size(img)
                 img.thumbnail(size, Image.Resampling.LANCZOS)
                 img.save(output_path, "WEBP", quality=quality)
         except Exception as e:
@@ -492,17 +504,14 @@ async def _thumbnail_via_soffice(
             str(temp_file),
         ]
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=60)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            raise
+        async with _get_concurrency_guard("subprocess"):
+            process = await async_sandboxed_run(
+                cmd,
+                ro_paths=[],
+                rw_paths=[tmp_dir],
+                timeout=60,
+            )
+        stdout_bytes, stderr_bytes = process.stdout, process.stderr
 
         pdf_files = list(tmp_dir.glob("*.pdf"))
         if not pdf_files:

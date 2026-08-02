@@ -15,8 +15,11 @@ from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
-from app.core.exceptions import BadRequestError, ConflictError, ForbiddenError, NotFoundError
-from app.core.storage import copy_object, get_object_info, object_exists
+from app.core.common.exceptions import BadRequestError, ConflictError, ForbiddenError, NotFoundError
+from app.core.database.post_commit import PostCommitKey
+from app.core.events.coalesce import JobKind
+from app.core.storage.facade import copy_object, get_object_info, object_exists
+from app.models.cas_staging_claim import CasStagingClaim
 from app.models.directory import Directory
 from app.models.material import Material, MaterialVersion
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
@@ -179,7 +182,7 @@ async def _cleanup_pr_resources(
 
     # Release upload quota slots immediately
     if redis is None:
-        from app.core.redis import redis_client
+        from app.core.database.redis import redis_client
 
         redis = redis_client
 
@@ -187,10 +190,65 @@ async def _cleanup_pr_resources(
         # If delete_staging is False, it's likely an approval
         await _release_pr_upload_quota(db, pr, redis, approved=not delete_staging)
 
+    # CAS staging refs need their original SHA-256; an opaque cas/<hmac> key is
+    # intentionally insufficient. Every PR outcome releases its staging owner:
+    # approval first creates the MaterialVersion owner, while rejection does not.
+    cas_payload_refs: dict[str, str] = {}
+    for op in pr.payload:
+        file_key = op.get("file_key")
+        content_sha = op.get("content_sha256")
+        if file_key and str(file_key).startswith("cas/") and content_sha:
+            cas_payload_refs[str(file_key)] = str(content_sha)
+        attachments = op.get("attachments")
+        if not isinstance(attachments, list):
+            continue
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            attachment_key = attachment.get("file_key")
+            attachment_sha = attachment.get("content_sha256")
+            if attachment_key and str(attachment_key).startswith("cas/") and attachment_sha:
+                cas_payload_refs[str(attachment_key)] = str(attachment_sha)
+
+    if cas_payload_refs:
+        upload_rows = list(
+            (
+                await db.scalars(
+                    select(Upload).where(Upload.final_key.in_(cas_payload_refs))
+                )
+            ).all()
+        )
+        uploads_by_key = {row.final_key: row for row in upload_rows if row.final_key}
+        refs_to_release: list[str] = []
+        for key, payload_sha in cas_payload_refs.items():
+            upload = uploads_by_key.get(key)
+            if upload is None:
+                refs_to_release.append(payload_sha)
+            elif upload.cas_ref_count > 0:
+                reference_sha = upload.content_sha256 or upload.sha256
+                if reference_sha:
+                    refs_to_release.append(reference_sha)
+                upload.cas_ref_count = 0
+                if delete_staging:
+                    upload.status = "failed"
+        if refs_to_release:
+            db.info.setdefault(PostCommitKey.JOBS, []).append(
+                (
+                    "release_cas_references",
+                    [
+                        {
+                            "sha256": sha256,
+                            "operation_id": f"pr:{pr.id}:staging:{sha256}:release",
+                        }
+                        for sha256 in sorted(set(refs_to_release))
+                    ],
+                )
+            )
+
     if delete_staging:
         uploads_to_delete = get_pr_staging_files(pr)
         if uploads_to_delete:
-            db.info.setdefault("post_commit_jobs", []).append(
+            db.info.setdefault(PostCommitKey.JOBS, []).append(
                 ("delete_storage_objects", uploads_to_delete)
             )
 
@@ -296,7 +354,7 @@ async def _enqueue_deindex_material_recursive(db: AsyncSession, material_id: uui
     all_mat_ids = (await db.scalars(select(mat_cte.c.id))).all()
 
     for mid in all_mat_ids:
-        db.info.setdefault("post_commit_jobs", []).append(
+        db.info.setdefault(PostCommitKey.JOBS, []).append(
             ("delete_indexed_item", "materials", str(mid))
         )
 
@@ -319,19 +377,19 @@ async def _enqueue_reindex_directory_recursive(db: AsyncSession, directory_id: u
         await db.scalars(select(Material.id).where(Material.directory_id.in_(all_dir_ids)))
     ).all()
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
 
     for did in all_dir_ids:
         key = ("index_directory", str(did))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_directory", did))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_DIRECTORY, did))
 
     for mid in mat_ids:
         key = ("index_material", str(mid))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_material", mid))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mid))
 
 
 async def _enqueue_deindex_directory_recursive(db: AsyncSession, directory_id: uuid.UUID) -> None:
@@ -359,12 +417,12 @@ async def _enqueue_deindex_directory_recursive(db: AsyncSession, directory_id: u
         await _enqueue_deindex_material_recursive(db, mid)
 
     # 4. Enqueue the directories themselves (dedup via set)
-    seen_deindex: set[tuple[str, str, str]] = db.info.setdefault("post_commit_deindex_keys", set())
+    seen_deindex: set[tuple[str, str, str]] = db.info.setdefault(PostCommitKey.DEINDEX_KEYS, set())
     for did in all_dir_ids:
         key = ("delete_indexed_item", "directories", str(did))
         if key not in seen_deindex:
             seen_deindex.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(key)
+            db.info.setdefault(PostCommitKey.JOBS, []).append(key)
 
 
 def topo_sort_operations(operations: list[dict[str, typing.Any]]) -> list[dict[str, typing.Any]]:
@@ -460,13 +518,18 @@ async def _make_version_for_file(
     V1 keys are copied to the materials/ prefix and scheduled for deletion.
     CAS keys get their content-addressed ref incremented.
     """
+    original_sha256: str | None = None
     if file_key.startswith("cas/"):
-        upload_size = await db.scalar(
-            select(Upload.size_bytes)
+        upload_row = (
+            await db.execute(
+                select(Upload.size_bytes, Upload.content_sha256)
             .where(Upload.final_key == file_key)
             .order_by(Upload.updated_at.desc())
             .limit(1)
-        )
+            )
+        ).one_or_none()
+        upload_size = upload_row[0] if upload_row is not None else None
+        stored_content_sha256 = upload_row[1] if upload_row is not None else None
         real_size = upload_size if upload_size is not None else (payload.get("file_size") or 0)
         mime_type = payload.get("file_mime_type") or "application/octet-stream"
         thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key)
@@ -476,7 +539,7 @@ async def _make_version_for_file(
         mime_type = _resolve_mime_type(file_key, payload, s3_mime=info.get("content_type"))
         new_key = file_key.replace("uploads/", "materials/", 1)
         await copy_object(file_key, new_key)
-        db.info.setdefault("post_commit_jobs", []).append(("delete_storage_objects", [file_key]))
+        db.info.setdefault(PostCommitKey.JOBS, []).append(("delete_storage_objects", [file_key]))
         file_key = new_key
         thumbnail_key = None
         thumbnail_status = None
@@ -489,7 +552,11 @@ async def _make_version_for_file(
         file_name=payload.get("file_name"),
         file_size=real_size,
         file_mime_type=mime_type,
-        cas_sha256=payload.get("content_sha256"),
+        # CAS object keys are derived from the original upload hash. The
+        # post-sanitization content hash is useful for integrity, but is not the
+        # reference-count key when the two differ.
+        cas_sha256=(stored_content_sha256 if file_key.startswith("cas/") else None)
+        or payload.get("content_sha256"),
         author_id=author_id,
         pr_id=pr_id,
         virus_scan_result=VirusScanResult.CLEAN,
@@ -502,10 +569,23 @@ async def _make_version_for_file(
     await db.flush()
 
     if mv.file_key and mv.file_key.startswith("cas/") and mv.cas_sha256:
-        from app.core.cas import increment_cas_ref
-        from app.core.redis import redis_client
-
-        await increment_cas_ref(redis_client, mv.cas_sha256)
+        db.info.setdefault(PostCommitKey.JOBS, []).append(
+            (
+                "add_cas_references",
+                [
+                    {
+                        "sha256": mv.cas_sha256,
+                        "operation_id": f"pr:{pr_id}:version:{mv.id}:add",
+                        "initial_data": {
+                            "final_key": mv.file_key,
+                            "size": mv.file_size,
+                            "mime_type": mv.file_mime_type,
+                            "file_name": mv.file_name,
+                        },
+                    }
+                ],
+            )
+        )
 
     return mv
 
@@ -548,7 +628,7 @@ async def _exec_create_material(
     db.add(m)
     await db.flush()
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     parent_topic = str(m.directory_id) if m.directory_id else "root"
     broadcasts.append((parent_topic, {"type": "child_added", "kind": "material", "id": str(m.id)}))
 
@@ -592,11 +672,11 @@ async def _exec_create_material(
                 pr_id=pr.id,
             )
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_material", str(mat_id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_material", mat_id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat_id))
 
     return mat_id
 
@@ -662,7 +742,7 @@ async def _exec_edit_material(
         )
 
     parent_topic = str(mat.directory_id) if mat.directory_id else "root"
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     broadcasts.append(
         (parent_topic, {"type": "child_updated", "kind": "material", "id": str(mat.id)})
     )
@@ -670,11 +750,11 @@ async def _exec_edit_material(
     # file URL and re-fetch the new version's content.
     broadcasts.append((str(mat.id), {"type": "material_updated", "id": str(mat.id)}))
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_material", str(mat.id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
 
     return mat.id
 
@@ -684,7 +764,7 @@ async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
     now = datetime.now(UTC)
     mat.deleted_at = now
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     broadcasts.append((str(mat.id), {"type": "material_deleted"}))
     parent_topic = str(mat.directory_id) if mat.directory_id else "root"
     broadcasts.append(
@@ -758,15 +838,15 @@ async def _exec_create_directory(
     db.add(d)
     await db.flush()
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     parent_topic = str(d.parent_id) if d.parent_id else "root"
     broadcasts.append((parent_topic, {"type": "child_added", "kind": "directory", "id": str(d.id)}))
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_directory", str(d.id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_directory", d.id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_DIRECTORY, d.id))
 
     return dir_id
 
@@ -807,11 +887,11 @@ async def _exec_edit_directory(
         # Rename propagates ancestor_path to all descendants — reindex the whole subtree.
         await _enqueue_reindex_directory_recursive(db, dir_obj.id)
     else:
-        seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+        seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
         key = ("index_directory", str(dir_obj.id))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_directory", dir_obj.id))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_DIRECTORY, dir_obj.id))
 
     return dir_obj.id
 
@@ -838,7 +918,7 @@ async def _soft_delete_directory_tree(db: AsyncSession, directory_id: uuid.UUID)
         .where(Directory.id.in_(all_dir_ids), Directory.deleted_at.is_(None))
         .values(deleted_at=now)
     )
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     for did in all_dir_ids:
         broadcasts.append((str(did), {"type": "directory_deleted"}))
 
@@ -864,7 +944,7 @@ async def _exec_delete_directory(
     await _soft_delete_directory_tree(db, deleted_id)
 
     parent_topic = str(parent_id) if parent_id else "root"
-    db.info.setdefault("post_commit_sse_broadcasts", []).append(
+    db.info.setdefault(PostCommitKey.SSE, []).append(
         (parent_topic, {"type": "child_removed", "kind": "directory", "id": str(deleted_id)})
     )
 
@@ -914,11 +994,11 @@ async def _exec_move_item(
         # Re-slug to ensure uniqueness in new location
         mat.slug = await _unique_material_slug(db, new_parent, mat.title, exclude_id=mat.id)
         await db.flush()
-        seen_jobs: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+        seen_jobs: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
         key = ("index_material", str(mat.id))
         if key not in seen_jobs:
             seen_jobs.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
         return mat.id
 
 
@@ -1120,12 +1200,16 @@ async def create_pull_request_service(
     user_upload_prefix = f"uploads/{current_user.id}/"
     cas_prefix = "cas/"
     keys_to_check: set[str] = set()
+    declared_hashes: dict[str, str] = {}
     for op in data.operations:
         file_key = getattr(op, "file_key", None)
         if file_key:
             if not (file_key.startswith(user_upload_prefix) or file_key.startswith(cas_prefix)):
                 raise BadRequestError("One of the attached files does not belong to your account")
             keys_to_check.add(file_key)
+            content_sha = getattr(op, "content_sha256", None)
+            if content_sha:
+                declared_hashes[file_key] = str(content_sha)
 
         if getattr(op, "op", None) == "create_material":
             for att in getattr(op, "attachments", []):
@@ -1140,6 +1224,13 @@ async def create_pull_request_service(
                             "One of the attachment files does not belong to your account"
                         )
                     keys_to_check.add(att_fk)
+                    att_sha = (
+                        getattr(att, "content_sha256", None)
+                        if not isinstance(att, dict)
+                        else att.get("content_sha256")
+                    )
+                    if att_sha:
+                        declared_hashes[att_fk] = str(att_sha)
 
             pmid = getattr(op, "parent_material_id", None)
             if pmid:
@@ -1164,23 +1255,62 @@ async def create_pull_request_service(
                     "They may have expired — try uploading again."
                 )
 
-        # Verify scan results via DB — only for user-uploaded files (uploads/ prefix).
-        # CAS-staged files (cas/ prefix) are programmatically generated and already
-        # verified at stage time; they have no Upload row.
-        upload_keys_to_check = {k for k in keys_to_check if k.startswith("uploads/")}
-        if upload_keys_to_check:
-            stmt = select(Upload.final_key).where(
-                Upload.final_key.in_(list(upload_keys_to_check)),
-                Upload.status == "clean",
-                Upload.user_id == current_user.id,
-            )
-            clean_keys = set(await db.scalars(stmt))
-            for key in upload_keys_to_check:
-                if key not in clean_keys:
-                    raise BadRequestError(
-                        "One or more files are still being processed or could not be verified. "
-                        "Please wait a moment and try again."
+        # Every key must be backed by either this user's clean Upload row or an
+        # unexpired, single-use generated-CAS claim.
+        upload_rows = list(
+            (
+                await db.scalars(
+                    select(Upload).where(
+                        (Upload.final_key.in_(keys_to_check))
+                        | (Upload.quarantine_key.in_(keys_to_check)),
+                        Upload.status == "clean",
+                        Upload.user_id == current_user.id,
                     )
+                )
+            ).all()
+        )
+        authorized_hashes: dict[str, str] = {}
+        for upload in upload_rows:
+            authorized_key = (
+                upload.final_key if upload.final_key in keys_to_check else upload.quarantine_key
+            )
+            reference_sha = upload.content_sha256 or upload.sha256
+            if authorized_key:
+                # Empty hash supports pre-migration clean Upload rows while
+                # preserving ownership and scan-state authorization.
+                authorized_hashes[authorized_key] = reference_sha or ""
+
+        now = datetime.now(UTC)
+        claims = list(
+            (
+                await db.scalars(
+                    select(CasStagingClaim)
+                    .where(
+                        CasStagingClaim.user_id == current_user.id,
+                        CasStagingClaim.file_key.in_(keys_to_check),
+                        CasStagingClaim.consumed_at.is_(None),
+                        CasStagingClaim.expires_at > now,
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+        claims_by_key = {claim.file_key: claim for claim in claims}
+        for claim in claims:
+            authorized_hashes.setdefault(claim.file_key, claim.sha256)
+
+        for key in keys_to_check:
+            expected_sha = authorized_hashes.get(key)
+            if expected_sha is None:
+                raise BadRequestError(
+                    "One or more files do not have a valid security claim for your account."
+                )
+            if expected_sha and key.startswith(cas_prefix) and declared_hashes.get(key) != expected_sha:
+                raise BadRequestError("A CAS file hash does not match its verified upload claim")
+
+        for key, claim in claims_by_key.items():
+            if key not in {row.final_key for row in upload_rows}:
+                claim.consumed_at = now
 
     # Serialize operations to list[dict]
     ops_payload = [op.model_dump(mode="json") for op in data.operations]
@@ -1246,7 +1376,7 @@ async def create_pull_request_service(
             await apply_pr(db, pr)
             await _cleanup_pr_resources(db, pr, redis=redis)
 
-            broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+            broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
             closed_event = {"type": "pr_closed", "id": str(pr.id)}
             for topic in _pr_directory_topics(list(pr.payload)):
                 broadcasts.append((topic, closed_event))
@@ -1259,7 +1389,7 @@ async def create_pull_request_service(
     await db.refresh(pr, ["author", "created_at", "updated_at"])
 
     if pr.status == PRStatus.OPEN:
-        broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+        broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
         event = {"type": "pr_opened", "id": str(pr.id)}
         for topic in _pr_directory_topics(list(pr.payload)):
             broadcasts.append((topic, event))
@@ -1388,11 +1518,11 @@ async def _exec_undelete_material(
         for av in att_vs:
             av.deleted_at = None
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_material", str(mat.id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
 
     return mat.id
 
@@ -1485,10 +1615,17 @@ async def _exec_revert_edit_material(
         )
         for v in versions_to_drop:
             if v.cas_sha256 and v.file_key and v.file_key.startswith("cas/"):
-                from app.core.cas import decrement_cas_ref
-                from app.core.redis import redis_client
-
-                await decrement_cas_ref(redis_client, v.cas_sha256)
+                db.info.setdefault(PostCommitKey.JOBS, []).append(
+                    (
+                        "release_cas_references",
+                        [
+                            {
+                                "sha256": v.cas_sha256,
+                                "operation_id": f"revert:version:{v.id}:release",
+                            }
+                        ],
+                    )
+                )
             await db.delete(v)
 
         mat.current_version = pre["prev_version_number"]
@@ -1497,11 +1634,11 @@ async def _exec_revert_edit_material(
     if "tags" in pre:
         await prune_orphan_tags(db)
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_material", str(mat.id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
 
     return mat.id
 
@@ -1541,11 +1678,11 @@ async def _exec_revert_edit_directory(
     if name_changed:
         await _enqueue_reindex_directory_recursive(db, d.id)
     else:
-        seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+        seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
         key = ("index_directory", str(d.id))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_directory", d.id))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_DIRECTORY, d.id))
 
     return d.id
 
@@ -1576,11 +1713,11 @@ async def _exec_revert_move_item(
             db, prev_dir, mat.title, exclude_id=mat.id
         )
         await db.flush()
-        seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+        seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
         key = ("index_material", str(mat.id))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
         return mat.id
 
 
@@ -1866,14 +2003,12 @@ async def approve_pr_service(db: AsyncSession, pr_id: uuid.UUID, reviewer: User)
     await apply_pr(db, pr)
     await _cleanup_pr_resources(db, pr)
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     event = {"type": "pr_closed", "id": str(pr.id)}
     for topic in _pr_directory_topics(list(pr.payload)):
         broadcasts.append((topic, event))
     if pr.author_id is not None:
         broadcasts.append((f"pr_updates:{pr.author_id}", event))
-
-    await db.commit()
 
     if pr.author_id is not None:
         await notify_user(
@@ -1903,14 +2038,12 @@ async def reject_pr_service(
 
     await _cleanup_pr_resources(db, pr, delete_staging=True)
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     event = {"type": "pr_closed", "id": str(pr.id)}
     for topic in _pr_directory_topics(list(pr.payload)):
         broadcasts.append((topic, event))
     if pr.author_id is not None:
         broadcasts.append((f"pr_updates:{pr.author_id}", event))
-
-    await db.commit()
 
     if pr.author_id is not None:
         await notify_user(
@@ -1938,14 +2071,13 @@ async def cancel_pr_service(db: AsyncSession, pr_id: uuid.UUID, current_user: Us
     pr.status = PRStatus.CANCELLED
     await _cleanup_pr_resources(db, pr, delete_staging=True)
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     event = {"type": "pr_closed", "id": str(pr.id)}
     for topic in _pr_directory_topics(list(pr.payload)):
         broadcasts.append((topic, event))
     if pr.author_id is not None:
         broadcasts.append((f"pr_updates:{pr.author_id}", event))
 
-    await db.commit()
     return pr
 
 
@@ -1970,7 +2102,6 @@ async def revert_pr_service(db: AsyncSession, pr_id: uuid.UUID, admin: User) -> 
         raise BadRequestError("The 7-day revert grace period has expired")
 
     revert = await revert_pr(db, pr, admin.id)
-    await db.commit()
     await db.refresh(revert, ["author", "created_at", "updated_at"])
 
     if pr.author_id and pr.author_id != admin.id:
@@ -1989,7 +2120,7 @@ async def get_pr_preview_service(
     db: AsyncSession, pr_id: uuid.UUID, op_index: int, current_user: User
 ) -> dict[str, typing.Any]:
     """Resolve a presigned URL for a file in a PR operation."""
-    from app.core.storage import generate_presigned_get
+    from app.core.storage.facade import generate_presigned_get
 
     pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id))
     if not pr:

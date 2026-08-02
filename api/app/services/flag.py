@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
+from app.core.common.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.annotation import Annotation
 from app.models.base import UUIDMixin
 from app.models.comment import Comment

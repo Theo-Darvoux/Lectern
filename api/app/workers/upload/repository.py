@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy import select, update
 
-from app.core import redis as redis_core
+import app.core.database.redis as redis_core
 from app.models.dead_letter import DeadLetterJob
 from app.models.upload import Upload
 from app.services.auth import get_full_auth_config
@@ -64,7 +64,7 @@ class UploadWorkerRepository:
         mime_type: str | None = None,
         size_bytes: int | None = None,
     ) -> None:
-        """Best-effort DB status update with retry for transient failures."""
+        """Persist an upload lifecycle transition, retrying transient failures."""
         session_factory = self._session_factory()
         if session_factory is None:
             return
@@ -103,10 +103,43 @@ class UploadWorkerRepository:
                 )
                 await session.commit()
 
-        try:
-            await _retry_db(_do_update, context=f"update_upload_status for {upload_id}")
-        except Exception:
-            pass  # Already logged in _retry_db
+        await _retry_db(_do_update, context=f"update_upload_status for {upload_id}")
+
+    async def publish_clean_upload(
+        self,
+        upload_id: str,
+        *,
+        sha256: str,
+        content_sha256: str,
+        final_key: str,
+        cas_key: str,
+        cas_ref_count: int | None,
+    ) -> bool:
+        """Publish CLEAN unless an authoritative cancellation already won."""
+        session_factory = self._session_factory()
+        if session_factory is None:
+            return True
+
+        async def _do_update() -> bool:
+            async with session_factory() as session:
+                result = await session.execute(
+                    update(Upload)
+                    .where(Upload.upload_id == upload_id, Upload.status != "cancelled")
+                    .values(
+                        status="clean",
+                        updated_at=datetime.now(UTC),
+                        sha256=sha256,
+                        content_sha256=content_sha256,
+                        final_key=final_key,
+                        cas_key=cas_key,
+                        cas_ref_count=cas_ref_count,
+                        processing_status="pending",
+                    )
+                )
+                await session.commit()
+                return bool(result.rowcount)
+
+        return await _retry_db(_do_update, context=f"publish_clean_upload for {upload_id}")
 
     async def update_processing_status(self, upload_id: str, processing_status: str) -> None:
         """Best-effort update of processing_status only (does not touch status)."""

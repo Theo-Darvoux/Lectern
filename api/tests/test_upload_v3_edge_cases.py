@@ -5,7 +5,7 @@ from fastapi import Request
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.upload_errors import ERR_TUS_CONCURRENCY_LIMIT
+from app.core.common.upload_errors import UploadErrorCode
 from app.routers.tus import tus_patch
 from tests.test_tus import _create_user
 
@@ -90,7 +90,7 @@ async def test_tus_concurrency_limit_hit(
     response = await tus_patch(uuid.UUID(tus_id), mock_request, user, fake_redis_setup, db_session)
 
     assert response.status_code == 429
-    assert response.headers["X-Lectern-Error"] == ERR_TUS_CONCURRENCY_LIMIT
+    assert response.headers["X-Lectern-Error"] == UploadErrorCode.TUS_CONCURRENCY_LIMIT
 
 
 @pytest.mark.asyncio

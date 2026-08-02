@@ -40,7 +40,7 @@ async def test_admin_get_auth_config_does_not_return_secrets(
     db_session.add(admin)
     await db_session.flush()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
@@ -67,13 +67,13 @@ async def test_prune_rejects_non_pruneable_prefix(
     db_session.add(admin)
     await db_session.commit()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
     fake_rc = AsyncMock()
     fake_rc.delete = AsyncMock()
-    with patch("app.core.redis.redis_client", fake_rc):
+    with patch("app.core.database.redis.redis_client", fake_rc):
         for bad_key in [
             "materials/some/file.pdf",
             "uploads/user123/upload-id/file.pdf",
@@ -100,7 +100,7 @@ async def test_prune_accepts_valid_prefixes(
     db_session.add(admin)
     await db_session.flush()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
@@ -344,7 +344,7 @@ def test_pdf_quality_zero_not_ignored():
     """pdf_quality=0 from config must be used, not replaced by settings default."""
     import inspect
 
-    from app.core.file_security._pdf import _compress_pdf_path
+    from app.core.security.file_security._pdf import _compress_pdf_path
 
     src = inspect.getsource(_compress_pdf_path)
     assert "is not None" in src, "pdf_quality config read must use 'is not None' check"
@@ -354,7 +354,7 @@ def test_video_profile_config_zero_not_ignored():
     """video_compression_profile from config must use is-not-None guard."""
     import inspect
 
-    from app.core.file_security._audio_video import _build_video_codec_args
+    from app.core.security.file_security._audio_video import _build_video_codec_args
 
     src = inspect.getsource(_build_video_codec_args)
     assert "is not None" in src, (
@@ -375,7 +375,7 @@ async def test_admin_cannot_set_pending_role(
     db_session.add_all([admin, target])
     await db_session.flush()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
@@ -400,7 +400,7 @@ async def test_admin_test_email_rejects_invalid_email(
     db_session.add(admin)
     await db_session.commit()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
@@ -419,7 +419,7 @@ async def test_admin_test_email_rejects_invalid_email(
 @pytest.mark.asyncio
 async def test_check_storage_limit_clamps_negative_redis_value():
     """A negative Redis counter (post-flush scenario) must not allow unlimited uploads."""
-    import app.core.redis as redis_core
+    import app.core.database.redis as redis_core
     from app.routers.upload.helpers import _check_storage_limit
 
     fake_redis = AsyncMock()
@@ -501,7 +501,7 @@ def test_get_s3_client_accepts_cfg_param():
     """get_s3_client must accept an optional cfg dict to prevent double Redis lookup."""
     import inspect
 
-    from app.core.storage import get_s3_client
+    from app.core.storage.facade import get_s3_client
 
     sig = inspect.signature(get_s3_client)
     assert "cfg" in sig.parameters, "get_s3_client must have a cfg parameter"

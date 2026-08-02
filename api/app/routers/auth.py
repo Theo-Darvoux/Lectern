@@ -14,15 +14,15 @@ from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database import get_db
-from app.core.exceptions import (
+from app.core.common.exceptions import (
     BadRequestError,
     ConflictError,
     RateLimitError,
     UnauthorizedError,
 )
-from app.core.redis import get_redis
-from app.core.security import decode_token
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
+from app.core.security.security import decode_token
 from app.dependencies.auth import CurrentUser
 from app.models.user import User, UserRole
 from app.schemas.auth import (
@@ -53,10 +53,9 @@ async def require_client_id(request: Request) -> None:
 
 
 def get_client_id(request: Request) -> str:
-    ip = get_remote_address(request)
-    client_id = request.headers.get("x-client-id", "unknown")
-
-    return f"{ip}:{client_id}"
+    # X-Client-ID is client-controlled and can be rotated trivially. The proxy
+    # middleware has already limited forwarding headers to trusted peers.
+    return get_remote_address(request)
 
 
 limiter = Limiter(key_func=get_client_id, enabled=not settings.is_dev)

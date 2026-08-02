@@ -16,7 +16,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
 from app.models.directory import Directory, DirectoryType
 from app.models.material import Material
 from app.models.pull_request import PRStatus, PullRequest

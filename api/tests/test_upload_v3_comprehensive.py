@@ -62,7 +62,7 @@ async def test_presigned_multipart_flow(
             patch(
                 "app.routers.upload.presigned.complete_multipart_upload", new_callable=AsyncMock
             ) as m_complete,
-            patch("app.core.storage.read_object_bytes", new_callable=AsyncMock) as m_read,
+            patch("app.core.storage.facade.read_object_bytes", new_callable=AsyncMock) as m_read,
             patch("app.routers.upload.presigned.get_object_info", new_callable=AsyncMock) as m_info,
             patch(
                 "app.routers.upload.presigned._enqueue_processing", new_callable=AsyncMock
@@ -140,24 +140,40 @@ async def test_sse_replay_logic(client: AsyncClient, db_session: AsyncSession, f
 @pytest.mark.asyncio
 async def test_atomic_cas_ref_counts(fake_redis_setup):
     """Test Phase 1.2: Atomic Lua scripts for ref counting."""
-    from app.core.cas import _LUA_CAS_DECR, _LUA_CAS_INCR
+    from app.core.security.cas import _LUA_CAS_DECR, _LUA_CAS_INCR
 
     cas_key = "upload:cas:test"
     # Initial state: ref_count = 1
     await fake_redis_setup.set(cas_key, json.dumps({"ref_count": 1, "file_key": "k1"}))
 
     # Increment
-    new_count = await fake_redis_setup.eval(_LUA_CAS_INCR, 1, cas_key)
+    new_count = await fake_redis_setup.eval(
+        _LUA_CAS_INCR,
+        3,
+        cas_key,
+        "storage:total_usage_bytes",
+        "cas:operation:upload-v3-increment",
+    )
     assert new_count == 2
     data = json.loads(await fake_redis_setup.get(cas_key))
     assert data["ref_count"] == 2
 
     # Decrement
-    new_count = await fake_redis_setup.eval(_LUA_CAS_DECR, 1, cas_key)
+    new_count = await fake_redis_setup.eval(
+        _LUA_CAS_DECR,
+        2,
+        cas_key,
+        "cas:operation:upload-v3-decrement-1",
+    )
     assert new_count == 1
 
     # Decrement to zero (should delete)
-    new_count = await fake_redis_setup.eval(_LUA_CAS_DECR, 1, cas_key)
+    new_count = await fake_redis_setup.eval(
+        _LUA_CAS_DECR,
+        2,
+        cas_key,
+        "cas:operation:upload-v3-decrement-2",
+    )
     assert new_count == 0
     assert await fake_redis_setup.get(cas_key) is None
 
@@ -165,7 +181,7 @@ async def test_atomic_cas_ref_counts(fake_redis_setup):
 @pytest.mark.asyncio
 async def test_download_file_with_hash_optimization(fake_redis_setup, tmp_path):
     """Test Phase 6.1: download_file_with_hash single-pass optimization."""
-    from app.core.storage import download_file_with_hash
+    from app.core.storage.facade import download_file_with_hash
 
     content = b"optimised streaming content"
     expected_hash = (
@@ -187,7 +203,7 @@ async def test_download_file_with_hash_optimization(fake_redis_setup, tmp_path):
     mock_s3 = AsyncMock()
     mock_s3.get_object.return_value = {"Body": mock_body}
 
-    with patch("app.core.storage.get_s3_client") as m_get_client:
+    with patch("app.core.storage.s3.S3Backend.get_s3_client") as m_get_client:
         m_get_client.return_value.__aenter__.return_value = mock_s3
 
         sha256 = await download_file_with_hash("some-key", dest)

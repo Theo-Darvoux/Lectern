@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database.database import get_db
 from app.dependencies.auth import OnboardedUser, require_moderator
 from app.dependencies.pagination import PaginationParams
 from app.models.user import User

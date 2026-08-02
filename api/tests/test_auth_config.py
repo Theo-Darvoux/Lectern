@@ -37,7 +37,7 @@ async def _seed_domain(db: AsyncSession, domain: str, auto_approve: bool = True)
 
 
 def _auth(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -215,7 +215,7 @@ async def test_pending_user_blocked(client: AsyncClient, db_session: AsyncSessio
     db_session.add(pending)
     await db_session.flush()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(pending.id), pending.role.value, pending.email)
     headers = {"Authorization": f"Bearer {token}"}

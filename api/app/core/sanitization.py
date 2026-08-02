@@ -3,20 +3,7 @@ from typing import Annotated, Any
 
 from pydantic import BeforeValidator
 
-# ---------------------------------------------------------------------------
-# Dangerous character stripping
-# ---------------------------------------------------------------------------
-
-# Strips characters that are invisible, dangerous, or have no place in
-# user-supplied text:
-#   - C0 controls except HT (\x09), LF (\x0a), CR (\x0d)
-#   - DEL (\x7f)
-#   - C1 controls (\x80-\x9f)
-#   - Zero-width / invisible Unicode formatting chars
-#   - BIDI override / isolate chars (used in homograph/spoofing attacks)
-#   - Deprecated formatting chars
-#   - BOM (U+FEFF)
-#   - Interlinear annotation anchors
+# Strips characters that are invisible, dangerous, or otherwise not useful in user-supplied text.
 _DANGEROUS_CHARS_RE = re.compile(
     "["
     "\x00-\x08"  # C0: NUL..BS  (HT=\x09 kept)
@@ -39,21 +26,11 @@ _DANGEROUS_CHARS_RE = re.compile(
 )
 
 # Matches characters not allowed in name/title fields.
-# Allowed: printable ASCII (U+0020–U+007E) plus precomposed Latin accented
-# characters used in French and other Western European languages:
-#   U+00C0–U+00D6  À–Ö  (Latin-1 uppercase, excl. × U+00D7)
-#   U+00D8–U+00F6  Ø–ö  (Latin-1 mixed, excl. ÷ U+00F7)
-#   U+00F8–U+017F  ø–ſ  (Latin-1 remainder + Latin Extended-A: ç œ Œ æ Æ …)
-# Combining marks are already stripped by _DANGEROUS_CHARS_RE before this check.
 _INVALID_NAME_CHAR_RE = re.compile(r"[^\x20-\x7e\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f]")
 
 
 def clean_text(v: str) -> str:
-    """Strip invisible/dangerous Unicode from a string.
-
-    Keeps printable chars plus whitespace that has legitimate text use
-    (tab, newline, carriage-return).
-    """
+    """Strip invisible/dangerous Unicode from a string."""
     return _DANGEROUS_CHARS_RE.sub("", v)
 
 
@@ -68,20 +45,11 @@ def _sanitize_value(v: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 # SanitizedStr: strips all invisible/dangerous chars (including Zalgo combining marks).
-# Use as the type annotation for any user-supplied text field.
 SanitizedStr = Annotated[str, BeforeValidator(_sanitize_value)]
 
 
 def _validate_name_value(v: Any) -> Any:
-    """Reject strings containing characters outside the name allowlist.
-
-    Folder names and material titles must contain only:
-    - Printable ASCII (U+0020–U+007E)
-    - Precomposed Latin accented characters (U+00C0–U+017F, covers all French)
-
-    Zalgo/combining marks are stripped by clean_text before this check,
-    so only precomposed forms (e.g. é U+00E9) pass through.
-    """
+    """Reject strings containing characters outside the name allowlist."""
     if isinstance(v, str):
         v = clean_text(v)
         if _INVALID_NAME_CHAR_RE.search(v):
@@ -93,16 +61,11 @@ def _validate_name_value(v: Any) -> Any:
 
 
 # NameStr: printable ASCII + precomposed Latin accents, Zalgo/emoji/etc. rejected.
-# Use for folder names and material titles.
 NameStr = Annotated[str, BeforeValidator(_validate_name_value)]
 
 
 def strip_null_chars(v: Any) -> Any:
-    """Recursively strip null bytes from strings/lists/dicts (Postgres compat).
-
-    Also strips the full set of dangerous Unicode chars – kept as a
-    convenience for recursive JSON-payload validators.
-    """
+    """Recursively strip null bytes from strings/lists/dicts."""
     if isinstance(v, str):
         return clean_text(v)
     if isinstance(v, list):

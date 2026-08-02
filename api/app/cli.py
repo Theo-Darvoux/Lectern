@@ -16,7 +16,7 @@ def seed(
 async def _seed(email: str, role: str) -> None:
     from sqlalchemy import select
 
-    from app.core.database import async_session_factory
+    from app.core.database.database import async_session_factory
     from app.models.user import User, UserRole
 
     async with async_session_factory() as session:
@@ -45,8 +45,8 @@ async def _reindex() -> None:
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
-    from app.core.database import async_session_factory
-    from app.core.meilisearch import meili_client, setup_meilisearch
+    from app.core.database.database import async_session_factory
+    from app.core.events.meilisearch import meili_admin_client, setup_meilisearch
     from app.models.directory import Directory
     from app.models.material import Material
     from app.services.directory import get_directory_path
@@ -119,7 +119,7 @@ async def _reindex() -> None:
             )
 
         if m_docs:
-            await meili_client.index("materials").add_documents(m_docs)
+            await meili_admin_client.index("materials").add_documents(m_docs)
             typer.echo(f"Reindexed {len(m_docs)} materials.")
         else:
             typer.echo("0 materials to reindex.")
@@ -166,7 +166,7 @@ async def _reindex() -> None:
             )
 
         if d_docs:
-            await meili_client.index("directories").add_documents(d_docs)
+            await meili_admin_client.index("directories").add_documents(d_docs)
             typer.echo(f"Reindexed {len(d_docs)} directories.")
         else:
             typer.echo("0 directories to reindex.")
@@ -221,10 +221,10 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
 
     from sqlalchemy import func, select
 
-    from app.core.cas import hmac_cas_key, increment_cas_ref
-    from app.core.database import async_session_factory
-    from app.core.redis import redis_client
-    from app.core.storage import copy_object, init_s3_client, object_exists
+    from app.core.database.database import async_session_factory
+    from app.core.database.redis import redis_client
+    from app.core.security.cas import hmac_cas_key, increment_cas_ref
+    from app.core.storage.facade import copy_object, init_s3_client, object_exists
     from app.models.material import MaterialVersion
     from app.models.upload import Upload
 
@@ -319,7 +319,17 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
                     mv.cas_sha256 = sha256
 
                     # Initialize CAS ref count
-                    await increment_cas_ref(redis_client, sha256)
+                    await increment_cas_ref(
+                        redis_client,
+                        sha256,
+                        initial_data={
+                            "final_key": cas_s3_key,
+                            "size": mv.file_size,
+                            "mime_type": mv.file_mime_type,
+                            "file_name": mv.file_name,
+                        },
+                        operation_id=f"migrate-cas:material-version:{mv.id}:add",
+                    )
 
                     migrated += 1
 
@@ -358,9 +368,9 @@ async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -
 
     from sqlalchemy import func, or_, select, update
 
-    from app.core.database import async_session_factory
-    from app.core.processing import ProcessingFile
-    from app.core.storage import download_file, init_s3_client, upload_file
+    from app.core.database.database import async_session_factory
+    from app.core.events.processing import ProcessingFile
+    from app.core.storage.facade import download_file, init_s3_client, upload_file
     from app.models.material import MaterialVersion
     from app.services.auth import get_full_auth_config
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
@@ -409,7 +419,7 @@ async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -
         try:
             # 1. Download source
             local_path = tmp_dir / mv.file_name
-            await download_file(mv.file_key, local_path)
+            await download_file(mv.file_key, local_path, decompress=True)
 
             # 2. Setup processing file
             pf = ProcessingFile(local_path, local_path.stat().st_size)
@@ -490,7 +500,7 @@ async def _config_export_env() -> None:
 
     from sqlalchemy import text
 
-    from app.core.database import async_session_factory
+    from app.core.database.database import async_session_factory
 
     # Column → env-var name overrides.  Columns not listed here map to UPPERCASE(column).
     column_map: dict[str, str] = {
@@ -560,7 +570,7 @@ def magic_link(
 
 async def _magic_link(email: str) -> None:
     from app.config import settings
-    from app.core.redis import redis_client
+    from app.core.database.redis import redis_client
     from app.services.auth import generate_magic_token, store_magic_token
 
     token = generate_magic_token()
@@ -583,7 +593,7 @@ def change_email(
 async def _change_email(current_email: str, new_email: str) -> None:
     from sqlalchemy import func, select
 
-    from app.core.database import async_session_factory
+    from app.core.database.database import async_session_factory
     from app.models.user import User
 
     current = current_email.strip().lower()

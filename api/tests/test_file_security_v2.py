@@ -11,18 +11,18 @@ import pikepdf
 import pytest
 from PIL import Image
 
-from app.core.file_security import (
+from app.core.security.file_security import check_pdf_safety
+from app.core.security.file_security._pdf import (
     _PDF_DANGEROUS_ACTION_KEYS,
     _walk_page_tree_for_actions,
-    check_pdf_safety,
 )
 
 # ── PIL MAX_IMAGE_PIXELS ────────────────────────────────────────────────
 
 
 class TestPilMaxPixels:
-    def test_max_image_pixels_is_set(self):
-        assert Image.MAX_IMAGE_PIXELS == 50_000_000
+    def test_core_sets_pillow_global_limit(self):
+        assert Image.MAX_IMAGE_PIXELS == 25_000_000
 
 
 # ── PDF action checks ──────────────────────────────────────────────────
@@ -77,6 +77,67 @@ class TestCheckPdfSafety:
         with pytest.raises(ValueError, match="dangerous action"):
             check_pdf_safety(pdf_path)
 
+    def test_annotation_additional_action_detected(self, tmp_path):
+        pdf_path = _make_pdf(tmp_path)
+        with pikepdf.open(str(pdf_path), allow_overwriting_input=True) as pdf:
+            annotation = pikepdf.Dictionary(
+                Type=pikepdf.Name("/Annot"),
+                Subtype=pikepdf.Name("/Text"),
+                Rect=pikepdf.Array([0, 0, 10, 10]),
+                AA=pikepdf.Dictionary(
+                    E=pikepdf.Dictionary(
+                        S=pikepdf.Name("/JavaScript"), JS=pikepdf.String("app.alert(1)")
+                    )
+                ),
+            )
+            pdf.pages[0]["/Annots"] = pikepdf.Array([pdf.make_indirect(annotation)])
+            pdf.save(str(pdf_path))
+
+        with pytest.raises(ValueError, match="dangerous action"):
+            check_pdf_safety(pdf_path)
+
+    @pytest.mark.parametrize("subtype", ["/RichMedia", "/Screen", "/Movie"])
+    def test_active_annotation_subtype_detected(self, tmp_path, subtype):
+        pdf_path = _make_pdf(tmp_path)
+        with pikepdf.open(str(pdf_path), allow_overwriting_input=True) as pdf:
+            annotation = pikepdf.Dictionary(
+                Type=pikepdf.Name("/Annot"),
+                Subtype=pikepdf.Name(subtype),
+                Rect=pikepdf.Array([0, 0, 10, 10]),
+            )
+            pdf.pages[0]["/Annots"] = pikepdf.Array([pdf.make_indirect(annotation)])
+            pdf.save(str(pdf_path))
+
+        with pytest.raises(ValueError, match="active content"):
+            check_pdf_safety(pdf_path)
+
+    @pytest.mark.parametrize("action_subtype", ["/Rendition", "/CustomAction"])
+    def test_unknown_annotation_actions_fail_closed(self, tmp_path, action_subtype):
+        pdf_path = _make_pdf(tmp_path)
+        with pikepdf.open(str(pdf_path), allow_overwriting_input=True) as pdf:
+            annotation = pikepdf.Dictionary(
+                Type=pikepdf.Name("/Annot"),
+                Subtype=pikepdf.Name("/Link"),
+                Rect=pikepdf.Array([0, 0, 10, 10]),
+                A=pikepdf.Dictionary(S=pikepdf.Name(action_subtype)),
+            )
+            pdf.pages[0]["/Annots"] = pikepdf.Array([pdf.make_indirect(annotation)])
+            pdf.save(str(pdf_path))
+
+        with pytest.raises(ValueError, match="dangerous action"):
+            check_pdf_safety(pdf_path)
+
+    def test_xfa_form_detected(self, tmp_path):
+        pdf_path = _make_pdf(tmp_path)
+        with pikepdf.open(str(pdf_path), allow_overwriting_input=True) as pdf:
+            pdf.Root["/AcroForm"] = pikepdf.Dictionary(
+                Fields=pikepdf.Array(), XFA=pikepdf.String("<script/>")
+            )
+            pdf.save(str(pdf_path))
+
+        with pytest.raises(ValueError, match="XFA"):
+            check_pdf_safety(pdf_path)
+
     def test_corrupt_pdf_fails_closed(self, tmp_path):
         p = tmp_path / "corrupt.pdf"
         p.write_bytes(b"not-a-pdf")
@@ -92,9 +153,9 @@ class TestPdfDangerousActionKeys:
 
 class TestWalkPageTreeForActions:
     def test_depth_guard(self):
-        # Should return silently at depth > 50 (no infinite recursion)
         node = pikepdf.Dictionary()
-        _walk_page_tree_for_actions(node, depth=51)  # Should not raise
+        with pytest.raises(ValueError, match="depth"):
+            _walk_page_tree_for_actions(node, depth=51)
 
     def test_detects_nested_action(self):
         child = pikepdf.Dictionary({"/Launch": pikepdf.String("cmd")})

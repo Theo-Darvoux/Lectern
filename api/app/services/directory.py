@@ -7,8 +7,8 @@ from sqlalchemy import String, case, exists, func, literal, select, tuple_, upda
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
-from app.core.exceptions import NotFoundError
-from app.core.sorting import natural_sort_key
+from app.core.common.exceptions import NotFoundError
+from app.core.common.natural_sorting import natural_sort_key
 from app.models.directory import Directory, DirectoryFavourite, DirectoryLike
 from app.models.material import Material, MaterialVersion
 

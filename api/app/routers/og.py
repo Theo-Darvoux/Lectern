@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database import get_db
+from app.core.database.database import get_db
 from app.services.directory import resolve_browse_path
 from app.services.material import get_material_by_id
 from app.services.user import get_user_by_id

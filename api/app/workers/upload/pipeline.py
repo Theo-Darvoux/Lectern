@@ -8,16 +8,17 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from app.config import settings
-from app.core.metrics import mime_category as _mime_cat
-from app.core.metrics import (
+from app.core.events.processing import ProcessingFile
+from app.core.observability.metrics import mime_category as _mime_cat
+from app.core.observability.metrics import (
     upload_file_size,
     upload_pipeline_duration,
     upload_pipeline_total,
 )
-from app.core.processing import ProcessingFile
-from app.core.scanner import MalwareScanner
-from app.core.storage import delete_object
-from app.core.telemetry import get_tracer
+from app.core.observability.telemetry import get_tracer
+from app.core.security.cas import decrement_cas_ref
+from app.core.security.scanner import MalwareScanner
+from app.core.storage.facade import delete_object
 from app.schemas.material import UploadStatus
 from app.workers.upload.cache_repo import UploadCacheRepository
 from app.workers.upload.constants import (
@@ -140,6 +141,17 @@ class UploadPipeline:
         await self.emit_status(status, detail=detail)
         status_str = "malicious" if status == UploadStatus.MALICIOUS else "failed"
         await self.repo.update_upload_status(self.upload_id, status_str, error_detail=detail)
+        try:
+            from app.routers.upload.helpers import _release_storage_reservation
+
+            await _release_storage_reservation(self.upload_id, self.redis)
+        except Exception as exc:
+            # Capacity reservations self-expire and are reconciled by the next reserve.
+            logger.warning(
+                "Failed to release storage reservation for upload %s: %s",
+                self.upload_id,
+                exc,
+            )
 
     def _check_deadline(self, stage_name: str) -> None:
         elapsed = self._elapsed()
@@ -151,17 +163,29 @@ class UploadPipeline:
         logger.info("Upload %s cancelled %s", self.upload_id, where)
         await self._fail_upload("Upload cancelled by user")
         try:
-            await delete_object(self.quarantine_key)
+            await self._delete_quarantine_object()
         except Exception as exc:
             logger.warning("Failed to delete quarantined object on cancel: %s", exc)
+
+    async def _delete_quarantine_object(self) -> None:
+        """Delete quarantine bytes and release their upload-quota membership."""
+        await delete_object(self.quarantine_key)
+        try:
+            await self.redis.zrem(f"quota:uploads:{self.user_id}", self.quarantine_key)
+        except Exception as exc:
+            logger.warning(
+                "Deleted quarantine object %s but failed to release quota membership: %s",
+                self.quarantine_key,
+                exc,
+            )
 
     async def _run_stages(self) -> None:
         """Core pipeline execution logic.
 
         Stage 1-2: scan + strip (the security gate — user blocks until here).
-        Stage 5:   fast finalize — upload uncompressed stripped file to CAS,
+        Stage 5:   fast finalize — upload stripped file to immutable CAS,
                    emit CLEAN so the user is immediately unblocked, then enqueue
-                   process_upload_post_scan for background compression/thumbnailing.
+                   process_upload_post_scan for background thumbnailing.
         """
         # Checkpoint 1: Metadata Strip + Scan
         if self.completed_stage < 2:
@@ -212,9 +236,9 @@ class UploadPipeline:
         await self._check_cancellation("after scan+strip stage")
 
         # Checkpoint 5: Fast finalize (idempotent via completed_stage guard).
-        # Uploads the stripped (uncompressed) file to CAS so the user can
-        # immediately add it to a PR draft.  Background compression/thumbnail
-        # is handled by process_upload_post_scan.
+        # Uploads the stripped file to immutable CAS so the user can
+        # immediately add it to a PR draft. Background thumbnail generation is
+        # handled by process_upload_post_scan.
         if self.completed_stage < 5:
             await self._fast_finalize_and_enqueue_post_scan()
             await self.repo.checkpoint_pipeline_stage(self.upload_id, 5)
@@ -246,12 +270,11 @@ class UploadPipeline:
             raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
 
     async def _fast_finalize_and_enqueue_post_scan(self) -> None:
-        """Upload the stripped (uncompressed) file to CAS, emit CLEAN, enqueue post-scan job.
+        """Upload stripped bytes to immutable CAS, emit CLEAN, and enqueue post-scan.
 
         This unblocks the user immediately after the scan gate passes.
-        Compression and thumbnail generation happen in process_upload_post_scan
-        running in the background.  The quarantine object is NOT deleted here —
-        the post-scan job re-downloads it to compress, then deletes it.
+        Thumbnail generation happens in process_upload_post_scan. The quarantine
+        object is retained until that job completes its second sanitization pass.
         """
         self._check_deadline("finalizing")
         await self.emit_status(
@@ -263,6 +286,8 @@ class UploadPipeline:
 
         if self.pf is None:
             raise UploadError(UploadStatus.FAILED, "Pipeline state missing at finalizing stage")
+
+        await self._check_bazaar_before_finalize()
 
         final_input = FinalizeInput(
             pf=self.pf,
@@ -287,6 +312,30 @@ class UploadPipeline:
             "content_encoding": None,
             "processing_status": "pending",
         }
+        published = await self.repo.publish_clean_upload(
+            self.upload_id,
+            sha256=self.original_sha256,
+            content_sha256=final_res.content_sha256,
+            final_key=final_res.final_key,
+            cas_key=final_res.db_cas_key,
+            cas_ref_count=final_res.new_cas_ref if final_res.new_cas_ref > 0 else None,
+        )
+        if not published:
+            # Cancellation won after the last Redis check but before CLEAN was
+            # persisted. Release the CAS ownership acquired by finalization with
+            # a stable operation ID so retries cannot double-decrement it.
+            await decrement_cas_ref(
+                self.redis,
+                final_res.content_sha256,
+                operation_id=f"upload-finalize:{self.upload_id}:cancel-compensation",
+            )
+            await self.redis.zrem(
+                f"quota:uploads:{self.user_id}",
+                f"staging:{self.user_id}:{self.upload_id}",
+            )
+            raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
+
+        # Publish CLEAN only after the authoritative DB transition succeeds.
         await self.emit_status(
             UploadStatus.CLEAN,
             detail="File ready — optimising in background",
@@ -295,24 +344,16 @@ class UploadPipeline:
             stage_percent=1.0,
         )
 
-        await self.repo.update_upload_status(
-            self.upload_id,
-            "clean",
-            sha256=self.original_sha256,
-            content_sha256=final_res.content_sha256,
-            final_key=final_res.final_key,
-            thumbnail_key=None,
-            cas_key=final_res.db_cas_key,
-            cas_ref_count=final_res.new_cas_ref if final_res.new_cas_ref > 0 else None,
-            processing_status="pending",
-        )
-
-        from app.core import redis as redis_core
+        import app.core.database.redis as redis_core
 
         # Fire-and-forget MalwareBazaar check — runs against the original SHA-256,
-        # independent of whether the file is later compressed.  If Bazaar flags it,
+        # independent of later thumbnail processing. If Bazaar flags it,
         # retroactive_quarantine() handles the cleanup.
-        if settings.bazaar_async_enabled and redis_core.arq_pool is not None:
+        if (
+            settings.bazaar_async_enabled
+            and not settings.malwarebazaar_fail_closed
+            and redis_core.arq_pool is not None
+        ):
             try:
                 await redis_core.arq_pool.enqueue_job(
                     "check_bazaar",
@@ -327,13 +368,13 @@ class UploadPipeline:
                     self.upload_id,
                     exc,
                 )
-        elif settings.bazaar_async_enabled:
+        elif settings.bazaar_async_enabled and not settings.malwarebazaar_fail_closed:
             logger.warning(
                 "arq_pool unavailable — check_bazaar skipped for upload %s.",
                 self.upload_id,
             )
 
-        # Enqueue background compression + thumbnail job.
+        # Enqueue background thumbnail and derived-metadata job.
         if redis_core.arq_pool is not None:
             try:
                 await redis_core.arq_pool.enqueue_job(
@@ -351,7 +392,7 @@ class UploadPipeline:
             except Exception as exc:
                 logger.error(
                     "Failed to enqueue process_upload_post_scan for upload %s: %s — "
-                    "file will remain uncompressed and without thumbnail.",
+                    "file will remain available without a thumbnail.",
                     self.upload_id,
                     exc,
                 )
@@ -360,13 +401,38 @@ class UploadPipeline:
         else:
             logger.warning(
                 "arq_pool unavailable — post-scan processing skipped for upload %s. "
-                "File will remain uncompressed.",
+                "File will remain available without a thumbnail.",
                 self.upload_id,
             )
             await self.repo.update_processing_status(self.upload_id, "degraded")
 
         self._record_pipeline_metrics("clean")
         upload_file_size.labels(mime_category=self.mime_category).observe(self.initial_size)
+
+    async def _check_bazaar_before_finalize(self) -> None:
+        """Honor fail-closed and legacy synchronous Bazaar policy before publication."""
+        if settings.bazaar_async_enabled and not settings.malwarebazaar_fail_closed:
+            return
+        if await self.redis.get(f"bazaar:clean:{self.original_sha256}"):
+            return
+
+        scanner = self.ctx.scanner
+        owns_scanner = scanner is None
+        if scanner is None:
+            scanner = _get_fallback_scanner()
+        try:
+            threat = await scanner.check_malwarebazaar(
+                self.original_sha256, self.original_filename
+            )
+        finally:
+            if owns_scanner:
+                await scanner.close()
+
+        if threat is not None:
+            raise UploadError(
+                UploadStatus.MALICIOUS,
+                f"Known malware detected: {threat}",
+            )
 
     async def run(self) -> None:
         self.completed_stage = await self.repo.get_pipeline_stage(self.upload_id)
@@ -438,11 +504,13 @@ class UploadPipeline:
                 )
 
                 try:
-                    await delete_object(self.quarantine_key)
+                    await self._delete_quarantine_object()
                 except Exception as del_exc:
                     logger.warning(
                         "Failed to clean up quarantine object %s: %s", self.quarantine_key, del_exc
                     )
+            else:
+                raise
         finally:
             if self.pf is not None:
                 self.pf.cleanup()

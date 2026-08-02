@@ -12,12 +12,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.cas import decrement_cas_ref, hmac_cas_key
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError, ForbiddenError
-from app.core.mimetypes import ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES
-from app.core.redis import get_redis
-from app.core.storage import delete_object, generate_presigned_get
+from app.core.common.exceptions import BadRequestError, ForbiddenError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
+from app.core.media.mimetypes import ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES
+from app.core.security.cas import CasReferenceMissingError, decrement_cas_ref, hmac_cas_key
+from app.core.storage.facade import delete_object, generate_presigned_get
 from app.dependencies.auth import CurrentUser
 from app.models.upload import Upload
 from app.routers.upload.helpers import _QUOTA_KEY_PREFIX, _STATUS_CACHE_PREFIX
@@ -78,6 +78,7 @@ async def cancel_upload(
     upload_id: str,
     user: CurrentUser,
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     """Cancel a pending or in-progress upload.
 
@@ -88,7 +89,23 @@ async def cancel_upload(
     """
     user_id = str(user.id)
 
-    # Signal the worker to abort between stages (1-hour TTL as safety net)
+    # Authorize and persist cancellation before publishing the Redis signal. The
+    # worker's final CLEAN transition is conditional on this authoritative state,
+    # which closes the cancel/finalize race. Unknown and foreign IDs are both a
+    # no-op so this idempotent endpoint does not disclose upload ownership.
+    row = await db.scalar(
+        select(Upload)
+        .where(Upload.upload_id == upload_id, Upload.user_id == user.id)
+        .with_for_update()
+    )
+    if row is None:
+        return
+
+    row.status = "cancelled"
+    row.error_detail = "Cancelled by user"
+    await db.commit()
+
+    # Signal the worker to abort between stages (1-hour TTL as safety net).
     cancel_key = f"upload:cancel:{upload_id}"
     await redis.set(cancel_key, "1", ex=3600)
 
@@ -98,34 +115,49 @@ async def cancel_upload(
     staging_key = f"staging:{user_id}:{upload_id}"  # V2 synthetic quota key
 
     members: list[bytes] = await redis.zrange(quota_key, 0, -1)
-    target_key: str | None = None
-    for raw in members:
-        key = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[ignore-without-code]
-        if key.startswith(quarantine_prefix) or key.startswith(uploads_prefix):
-            target_key = key
-            break
-        if key == staging_key:
-            target_key = key
-            break
+    quota_members = {
+        raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[ignore-without-code]
+        for raw in members
+    }
 
-    if target_key is None:
-        return
-
-    # For S3-backed keys (quarantine/, uploads/), delete the object.
-    # For synthetic staging keys, decrement the CAS ref instead.
-    if target_key.startswith("staging:"):
-        # Look up the upload's SHA-256 to decrement the correct CAS ref
-        from app.core.database import async_session_factory
-
-        async with async_session_factory() as session:
-            row = await session.scalar(select(Upload).where(Upload.upload_id == upload_id))
-            if row and row.sha256:
-                await decrement_cas_ref(redis, row.sha256)
-    else:
+    # Delete only user-owned, non-shared objects. CAS objects are shared and are
+    # reclaimed by the reference-counted GC path instead.
+    object_keys = {
+        key
+        for key in (row.quarantine_key, row.final_key)
+        if key
+        and (
+            key.startswith(quarantine_prefix)
+            or key.startswith(uploads_prefix)
+        )
+    }
+    for object_key in object_keys:
         with contextlib.suppress(Exception):
-            await delete_object(target_key)
+            await delete_object(object_key)
 
-    await redis.zrem(quota_key, target_key)
+    if row.cas_ref_count > 0 and row.content_sha256:
+        try:
+            await decrement_cas_ref(
+                redis,
+                row.content_sha256,
+                operation_id=f"cancel-upload:{upload_id}:release",
+            )
+        except CasReferenceMissingError:
+            # Redis is evictable; absence already means there is no cached
+            # reference to release. DB ownership still must end.
+            logger.warning("CAS cache entry already absent while cancelling %s", upload_id)
+        row.cas_ref_count = 0
+        await db.commit()
+
+    cleanup_members = {
+        key
+        for key in quota_members
+        if key == staging_key
+        or key.startswith(quarantine_prefix)
+        or key.startswith(uploads_prefix)
+    }
+    if cleanup_members:
+        await redis.zrem(quota_key, *cleanup_members)
 
 
 # ── POST /api/upload/check-exists ────────────────────────────────────────────
@@ -144,7 +176,7 @@ async def check_file_exists(
     cached = await redis.get(sha256_cache_key)
     if cached:
         file_key = cached.decode() if isinstance(cached, bytes) else str(cached)
-        from app.core.storage import object_exists
+        from app.core.storage.facade import object_exists
 
         if await object_exists(file_key):
             return CheckExistsOut(exists=True, file_key=file_key)
@@ -159,7 +191,7 @@ async def check_file_exists(
         cas_data = json.loads(cas_raw)
         file_key = cas_data.get("final_key")
         if file_key:
-            from app.core.storage import object_exists
+            from app.core.storage.facade import object_exists
 
             if await object_exists(file_key):
                 await redis.set(sha256_cache_key, file_key, ex=24 * 3600)
@@ -198,7 +230,7 @@ async def batch_upload_status(
 
     # Verify CAS key ownership via Upload table
     if cas_keys_to_verify:
-        from app.core.database import async_session_factory
+        from app.core.database.database import async_session_factory
 
         async with async_session_factory() as _db:
             verified = set(
@@ -237,7 +269,7 @@ async def batch_upload_status(
                 keys_needing_fallback.add(file_key)
 
     if keys_needing_fallback:
-        from app.core.database import async_session_factory
+        from app.core.database.database import async_session_factory
 
         async with async_session_factory() as _db:
             db_res = await _db.execute(

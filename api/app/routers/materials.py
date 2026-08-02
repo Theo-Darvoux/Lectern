@@ -12,15 +12,17 @@ from fastapi.security import HTTPAuthorizationCredentials
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.exceptions import AppError, BadRequestError, NotFoundError, UnauthorizedError
-from app.core.redis import get_redis, redis_client
-from app.core.storage import (
-    generate_presigned_get_url,
-    generate_presigned_get_url_cached,
+from app.core.common.exceptions import AppError, BadRequestError, NotFoundError, UnauthorizedError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis, redis_client
+from app.core.storage.facade import (
+    generate_presigned_get,
+    generate_presigned_get_cached,
     read_full_object,
 )
-from app.core.storage import upload_file as storage_upload_file
+from app.core.storage.facade import (
+    upload_file as storage_upload_file,
+)
 from app.dependencies.auth import CurrentUser, get_user_from_token, security
 from app.dependencies.rate_limit import rate_limit_downloads, rate_limit_views
 from app.models.upload import Upload
@@ -70,14 +72,14 @@ async def _presigned_url(
 ) -> str:
     """Return a presigned URL, using the Redis-cached variant when Redis is available."""
     if redis is not None:
-        return await generate_presigned_get_url_cached(
+        return await generate_presigned_get_cached(
             key,
             redis=redis,
             force_download=force_download,
             filename=filename,
             content_type=content_type,
         )
-    return await generate_presigned_get_url(
+    return await generate_presigned_get(
         key,
         force_download=force_download,
         filename=filename,

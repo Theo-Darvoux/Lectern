@@ -6,9 +6,9 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.exceptions import NotFoundError
-from app.core.storage import generate_presigned_get_url
+from app.core.common.exceptions import NotFoundError
+from app.core.database.database import get_db
+from app.core.storage.facade import generate_presigned_get
 from app.dependencies.auth import CurrentUser, get_optional_user
 from app.dependencies.pagination import PaginationParams
 from app.models.material import Material, MaterialFavourite, MaterialVersion
@@ -196,10 +196,10 @@ async def get_user_avatar(
 
     if target.avatar_url.startswith("quarantine/"):
         # Unscanned avatar from a stuck/stale upload.
-        # Refuse to serve to avoid 500 error in generate_presigned_get_url.
+        # Refuse to serve to avoid 500 error in generate_presigned_get.
         raise NotFoundError("Avatar still processing or invalid")
 
-    url = await generate_presigned_get_url(target.avatar_url)
+    url = await generate_presigned_get(target.avatar_url)
     return RedirectResponse(url)
 
 

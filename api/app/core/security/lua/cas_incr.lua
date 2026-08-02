@@ -1,0 +1,53 @@
+local raw = redis.call('GET', KEYS[1])
+local usage_key = KEYS[2]
+local data
+local previous_ttl = -2
+if redis.call('EXISTS', KEYS[3]) == 1 then
+  if not raw then return 0 end
+  local duplicate_ok, duplicate_data = pcall(cjson.decode, raw)
+  if not duplicate_ok then return -2 end
+  return duplicate_data['ref_count'] or 0
+end
+if not raw then
+  if ARGV[1] then
+    data = cjson.decode(ARGV[1])
+    data['ref_count'] = 1
+    -- Physical storage increment: only on first creation
+    if data['size'] then
+        redis.call('INCRBY', usage_key, data['size'])
+    end
+  else
+    return -1
+  end
+else
+  previous_ttl = redis.call('TTL', KEYS[1])
+  local ok, decoded = pcall(cjson.decode, raw)
+  if not ok then return -2 end
+  data = decoded
+  data['ref_count'] = (data['ref_count'] or 1) + 1
+  if ARGV[1] then
+    local arg_data = cjson.decode(ARGV[1])
+    if arg_data['scanned_at'] then
+      data['scanned_at'] = arg_data['scanned_at']
+    end
+    -- Keep original file_name if present, or update if missing
+    if arg_data['file_name'] and not data['file_name'] then
+      data['file_name'] = arg_data['file_name']
+    end
+    -- Also sync mime_type and size if they were missing
+    if arg_data['mime_type'] and not data['mime_type'] then
+      data['mime_type'] = arg_data['mime_type']
+    end
+    if arg_data['size'] and not data['size'] then
+      data['size'] = arg_data['size']
+    end
+  end
+end
+redis.call('SET', KEYS[1], cjson.encode(data))
+-- A staging TTL may be created or renewed, but must never be applied to a
+-- durable shared record (TTL == -1).
+if ARGV[2] and (not raw or previous_ttl >= 0) then
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+end
+redis.call('SET', KEYS[3], '1', 'EX', 2592000)
+return data['ref_count']

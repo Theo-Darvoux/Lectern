@@ -1,7 +1,7 @@
 import logging
 from typing import Any
 
-from app.core.telemetry import extract_trace_context
+from app.core.observability.telemetry import extract_trace_context
 from app.workers.upload.constants import _STAGES, _overall
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.pipeline import UploadPipeline, _get_fallback_scanner
@@ -19,7 +19,7 @@ async def process_upload(
     expected_sha256: str | None = None,
     trace_context: dict[str, Any] | None = None,
 ) -> None:
-    """Background task: download -> scan -> strip metadata -> compress -> stage.
+    """Background task: download -> scan -> strip metadata -> immutable CAS finalize.
 
     The parallel scan+strip path uses asyncio.gather in
     app.workers.upload.stages.scan_strip.run_scan_and_strip with _run_scan and _run_strip.

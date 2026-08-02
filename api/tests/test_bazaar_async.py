@@ -8,9 +8,9 @@ Covers:
   - check_bazaar worker: tombstone idempotency
   - check_bazaar worker: timeout handling (fail-closed / fail-open)
   - retroactive_quarantine: marks DB malicious
-  - retroactive_quarantine: idempotent (no double-delete)
-  - retroactive_quarantine: shared CAS — S3 not deleted when ref_count > 1
-  - retroactive_quarantine: S3 deleted when ref_count reaches 0
+  - retroactive_quarantine: idempotent durable CAS release
+  - retroactive_quarantine: queues upload-owned CAS releases
+  - retroactive_quarantine: skips releases for uploads without a CAS reference
   - retroactive_quarantine: soft-deletes MaterialVersion rows when enabled
 """
 
@@ -24,8 +24,8 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from app.core.cas import hmac_cas_key
 from app.models.material import Material, MaterialVersion
+from app.models.outbox import OutboxJob
 from app.models.upload import Upload
 from app.workers.upload.context import WorkerContext
 
@@ -67,7 +67,7 @@ async def test_scan_file_path_skips_bazaar_when_async_enabled(
     mock_redis: AsyncMock,
 ) -> None:
     """When bazaar_async_enabled=True, scan_file_path must not call check_malwarebazaar."""
-    from app.core.scanner import MalwareScanner
+    from app.core.security.scanner import MalwareScanner
 
     scanner = MalwareScanner()
     # Patch rules so YARA scan returns None (no matches)
@@ -79,13 +79,13 @@ async def test_scan_file_path_skips_bazaar_when_async_enabled(
     test_file = tmp_path / "file.pdf"
     test_file.write_bytes(b"%PDF-1.4 test content")
 
-    with patch("app.core.scanner.settings") as mock_settings:
+    with patch("app.core.security.scanner.settings") as mock_settings:
         mock_settings.bazaar_async_enabled = True
         mock_settings.yara_scan_timeout = 10
         bazaar_spy = AsyncMock(return_value=None)
         scanner.check_malwarebazaar = bazaar_spy
 
-        await scanner.scan_file_path(test_file, "file.pdf", bazaar_hash="abc123")
+        await scanner.scan_file_path(test_file, "file.pdf")
 
     bazaar_spy.assert_not_called()
 
@@ -142,13 +142,15 @@ async def test_pipeline_enqueues_check_bazaar_on_clean(mock_redis: AsyncMock) ->
             "app.workers.upload.pipeline.run_finalize_storage",
             AsyncMock(return_value=final_res_mock),
         ),
-        patch("app.core.redis.arq_pool", arq_pool_mock),
+        patch("app.core.database.redis.arq_pool", arq_pool_mock),
     ):
         mock_settings.bazaar_async_enabled = True
+        mock_settings.malwarebazaar_fail_closed = False
         mock_settings.upload_pipeline_max_seconds = 600
         pipeline.cache = MagicMock()
         pipeline.cache.emit_event = AsyncMock()
         pipeline.repo = MagicMock()
+        pipeline.repo.publish_clean_upload = AsyncMock()
         pipeline.repo.update_upload_status = AsyncMock()
         pipeline.repo.update_processing_status = AsyncMock()
 
@@ -176,7 +178,9 @@ async def test_pipeline_no_enqueue_when_bazaar_async_disabled(mock_redis: AsyncM
     arq_pool_mock = AsyncMock()
     arq_pool_mock.enqueue_job = AsyncMock()
 
-    ctx = WorkerContext(redis=mock_redis, db_sessionmaker=None, job_try=1, scanner=None)
+    scanner = MagicMock()
+    scanner.check_malwarebazaar = AsyncMock(return_value=None)
+    ctx = WorkerContext(redis=mock_redis, db_sessionmaker=None, job_try=1, scanner=scanner)
     pipeline = UploadPipeline(
         ctx,
         user_id="user-123",
@@ -210,13 +214,15 @@ async def test_pipeline_no_enqueue_when_bazaar_async_disabled(mock_redis: AsyncM
             "app.workers.upload.pipeline.run_finalize_storage",
             AsyncMock(return_value=final_res_mock),
         ),
-        patch("app.core.redis.arq_pool", arq_pool_mock),
+        patch("app.core.database.redis.arq_pool", arq_pool_mock),
     ):
         mock_settings.bazaar_async_enabled = False
+        mock_settings.malwarebazaar_fail_closed = False
         mock_settings.upload_pipeline_max_seconds = 600
         pipeline.cache = MagicMock()
         pipeline.cache.emit_event = AsyncMock()
         pipeline.repo = MagicMock()
+        pipeline.repo.publish_clean_upload = AsyncMock()
         pipeline.repo.update_upload_status = AsyncMock()
         pipeline.repo.update_processing_status = AsyncMock()
 
@@ -226,6 +232,53 @@ async def test_pipeline_no_enqueue_when_bazaar_async_disabled(mock_redis: AsyncM
     assert "check_bazaar" not in enqueued_job_names, (
         f"check_bazaar must NOT be enqueued when bazaar_async_enabled=False; got {enqueued_job_names}"
     )
+    scanner.check_malwarebazaar.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_bazaar_error_prevents_publication(mock_redis: AsyncMock) -> None:
+    """Fail-closed mode checks Bazaar before CAS promotion or CLEAN publication."""
+    from pathlib import Path
+
+    from app.workers.upload.pipeline import UploadPipeline
+
+    scanner = MagicMock()
+    scanner.check_malwarebazaar = AsyncMock(side_effect=RuntimeError("Bazaar unavailable"))
+    ctx = WorkerContext(redis=mock_redis, db_sessionmaker=None, job_try=1, scanner=scanner)
+    pipeline = UploadPipeline(
+        ctx,
+        user_id="user-123",
+        upload_id="upload-abc",
+        quarantine_key="quarantine/user-123/upload-abc/file.pdf",
+        original_filename="file.pdf",
+        mime_type="application/pdf",
+        expected_sha256=None,
+    )
+    pipeline.original_sha256 = "deadbeef" * 8
+    pipeline.initial_size = 1024
+    pipeline.cas_key = "upload:cas:abc"
+    pipeline.pf = MagicMock()
+    pipeline.tmp_path = Path("/tmp/t")
+    pipeline.cache = MagicMock()
+    pipeline.cache.emit_event = AsyncMock()
+    pipeline.repo = MagicMock()
+    pipeline.repo.update_upload_status = AsyncMock()
+    mock_redis.get.return_value = None
+    finalize = AsyncMock()
+
+    with (
+        patch("app.workers.upload.pipeline.settings") as mock_settings,
+        patch("app.workers.upload.pipeline.run_finalize_storage", finalize),
+        pytest.raises(RuntimeError, match="Bazaar unavailable"),
+    ):
+        mock_settings.bazaar_async_enabled = True
+        mock_settings.malwarebazaar_fail_closed = True
+        mock_settings.upload_pipeline_max_seconds = 600
+        await pipeline._fast_finalize_and_enqueue_post_scan()
+
+    finalize.assert_not_awaited()
+    emitted = [call.args[3] for call in pipeline.cache.emit_event.await_args_list]
+    assert all('"status": "clean"' not in payload for payload in emitted)
 
 
 # ── check_bazaar worker ───────────────────────────────────────────────────────
@@ -384,6 +437,8 @@ async def test_retroactive_quarantine_marks_upload_malicious(
         quarantine_key="quarantine/u/id/file.pdf",
         status="clean",
         filename="file.pdf",
+        content_sha256="aabbccdd" * 8,
+        cas_ref_count=1,
     )
     db_session.add(upload)
     await db_session.commit()
@@ -394,8 +449,10 @@ async def test_retroactive_quarantine_marks_upload_malicious(
     ctx = _make_ctx(mock_redis, session_factory)
 
     with (
-        patch("app.workers.retroactive_quarantine.decrement_cas_ref", new_callable=AsyncMock),
-        patch("app.workers.retroactive_quarantine.delete_object", new_callable=AsyncMock),
+        patch(
+            "app.workers.retroactive_quarantine.dispatch_post_commit_actions",
+            new_callable=AsyncMock,
+        ) as dispatch_mock,
         patch("app.workers.retroactive_quarantine.settings") as mock_settings,
     ):
         mock_settings.bazaar_retroactive_check_materials = False
@@ -415,6 +472,20 @@ async def test_retroactive_quarantine_marks_upload_malicious(
     assert row is not None
     assert row.status == "malicious"
     assert "Mirai.Botnet" in (row.error_detail or "")
+    assert row.cas_ref_count == 0
+    async with session_factory() as session:
+        jobs = list((await session.scalars(select(OutboxJob))).all())
+    assert len(jobs) == 1
+    assert jobs[0].job_name == "release_cas_references"
+    assert jobs[0].args == [
+        [
+            {
+                "sha256": sha256,
+                "operation_id": "quarantine:upload:upload-rq-001:release",
+            }
+        ]
+    ]
+    dispatch_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -423,7 +494,7 @@ async def test_retroactive_quarantine_idempotent(
     fake_redis_setup,
     mock_redis: AsyncMock,
 ) -> None:
-    """Calling retroactive_quarantine twice must not double-delete S3."""
+    """A terminal upload must not queue a duplicate durable CAS release."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from app.workers.retroactive_quarantine import retroactive_quarantine
@@ -434,6 +505,8 @@ async def test_retroactive_quarantine_idempotent(
         quarantine_key="quarantine/u/id/file.pdf",
         status="malicious",  # Already terminal
         filename="file.pdf",
+        content_sha256="aabbccdd" * 8,
+        cas_ref_count=1,
     )
     db_session.add(upload)
     await db_session.commit()
@@ -442,10 +515,11 @@ async def test_retroactive_quarantine_idempotent(
     sha256 = "aabbccdd" * 8
     ctx = _make_ctx(mock_redis, session_factory)
 
-    delete_mock = AsyncMock()
     with (
-        patch("app.workers.retroactive_quarantine.decrement_cas_ref", new_callable=AsyncMock),
-        patch("app.workers.retroactive_quarantine.delete_object", delete_mock),
+        patch(
+            "app.workers.retroactive_quarantine.dispatch_post_commit_actions",
+            new_callable=AsyncMock,
+        ) as dispatch_mock,
         patch("app.workers.retroactive_quarantine.settings") as mock_settings,
     ):
         mock_settings.bazaar_retroactive_check_materials = False
@@ -468,19 +542,22 @@ async def test_retroactive_quarantine_idempotent(
             threat="Mirai",
         )
 
-    # delete_object must not be called at all (row was already terminal on first call)
-    delete_mock.assert_not_called()
+    async with session_factory() as session:
+        jobs = list((await session.scalars(select(OutboxJob))).all())
+        row = await session.scalar(select(Upload).where(Upload.upload_id == "upload-rq-idem"))
+    assert jobs == []
+    assert row is not None
+    assert row.cas_ref_count == 1
+    dispatch_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_retroactive_quarantine_preserves_s3_when_cas_ref_gt_0(
+async def test_retroactive_quarantine_queues_upload_cas_release(
     db_session,
     fake_redis_setup,
     mock_redis: AsyncMock,
 ) -> None:
-    """S3 object must not be deleted if ref_count > 1 (other uploads share the file)."""
-    import json as _json
-
+    """CAS cleanup is represented by a durable, uniquely identified release job."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from app.workers.retroactive_quarantine import retroactive_quarantine
@@ -491,6 +568,8 @@ async def test_retroactive_quarantine_preserves_s3_when_cas_ref_gt_0(
         quarantine_key="quarantine/u/id/file.pdf",
         status="clean",
         filename="file.pdf",
+        content_sha256="bbccddaa" * 8,
+        cas_ref_count=1,
     )
     db_session.add(upload)
     await db_session.commit()
@@ -498,15 +577,13 @@ async def test_retroactive_quarantine_preserves_s3_when_cas_ref_gt_0(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     sha256 = "aabbccdd" * 8
 
-    # Pre-seed CAS entry with ref_count=2 in fake redis
-    cas_key = hmac_cas_key(sha256)
-    await mock_redis.set(cas_key, _json.dumps({"ref_count": 2, "size": 1024}))
-
     ctx = _make_ctx(mock_redis, session_factory)
-    delete_mock = AsyncMock()
 
     with (
-        patch("app.workers.retroactive_quarantine.delete_object", delete_mock),
+        patch(
+            "app.workers.retroactive_quarantine.dispatch_post_commit_actions",
+            new_callable=AsyncMock,
+        ),
         patch("app.workers.retroactive_quarantine.settings") as mock_settings,
     ):
         mock_settings.bazaar_retroactive_check_materials = False
@@ -520,19 +597,22 @@ async def test_retroactive_quarantine_preserves_s3_when_cas_ref_gt_0(
             threat="Mirai",
         )
 
-    # ref went from 2 → 1 so S3 must NOT be deleted
-    delete_mock.assert_not_called()
+    async with session_factory() as session:
+        jobs = list((await session.scalars(select(OutboxJob))).all())
+    assert len(jobs) == 1
+    assert jobs[0].args[0][0] == {
+        "sha256": "bbccddaa" * 8,
+        "operation_id": "quarantine:upload:upload-rq-shared:release",
+    }
 
 
 @pytest.mark.asyncio
-async def test_retroactive_quarantine_deletes_s3_when_ref_zero(
+async def test_retroactive_quarantine_skips_release_when_upload_has_no_cas_ref(
     db_session,
     fake_redis_setup,
     mock_redis: AsyncMock,
 ) -> None:
-    """S3 object must be deleted when CAS ref_count drops to 0."""
-    import json as _json
-
+    """An upload that owns no CAS reference must not queue a release."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from app.workers.retroactive_quarantine import retroactive_quarantine
@@ -543,6 +623,8 @@ async def test_retroactive_quarantine_deletes_s3_when_ref_zero(
         quarantine_key="quarantine/u/id/file.pdf",
         status="clean",
         filename="file.pdf",
+        content_sha256="aabbccdd" * 8,
+        cas_ref_count=0,
     )
     db_session.add(upload)
     await db_session.commit()
@@ -550,15 +632,13 @@ async def test_retroactive_quarantine_deletes_s3_when_ref_zero(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     sha256 = "aabbccdd" * 8
 
-    # ref_count=1 → after decrement it will be 0 → S3 should be deleted
-    cas_key = hmac_cas_key(sha256)
-    await mock_redis.set(cas_key, _json.dumps({"ref_count": 1, "size": 1024}))
-
     ctx = _make_ctx(mock_redis, session_factory)
-    delete_mock = AsyncMock()
 
     with (
-        patch("app.workers.retroactive_quarantine.delete_object", delete_mock),
+        patch(
+            "app.workers.retroactive_quarantine.dispatch_post_commit_actions",
+            new_callable=AsyncMock,
+        ),
         patch("app.workers.retroactive_quarantine.settings") as mock_settings,
     ):
         mock_settings.bazaar_retroactive_check_materials = False
@@ -572,7 +652,13 @@ async def test_retroactive_quarantine_deletes_s3_when_ref_zero(
             threat="Mirai",
         )
 
-    delete_mock.assert_awaited_once_with("cas/abc123")
+    async with session_factory() as session:
+        jobs = list((await session.scalars(select(OutboxJob))).all())
+        row = await session.scalar(select(Upload).where(Upload.upload_id == "upload-rq-delete"))
+    assert jobs == []
+    assert row is not None
+    assert row.status == "malicious"
+    assert row.cas_ref_count == 0
 
 
 @pytest.mark.asyncio
@@ -620,8 +706,10 @@ async def test_retroactive_quarantine_soft_deletes_material_version(
     ctx = _make_ctx(mock_redis, session_factory)
 
     with (
-        patch("app.workers.retroactive_quarantine.decrement_cas_ref", new_callable=AsyncMock),
-        patch("app.workers.retroactive_quarantine.delete_object", new_callable=AsyncMock),
+        patch(
+            "app.workers.retroactive_quarantine.dispatch_post_commit_actions",
+            new_callable=AsyncMock,
+        ),
         patch("app.workers.retroactive_quarantine.settings") as mock_settings,
     ):
         mock_settings.bazaar_retroactive_check_materials = True
@@ -642,3 +730,15 @@ async def test_retroactive_quarantine_soft_deletes_material_version(
     v = await db_session.get(MaterialVersion, version_id)
     assert v is not None
     assert v.deleted_at is not None, "MaterialVersion should have been soft-deleted"
+    async with session_factory() as session:
+        jobs = list((await session.scalars(select(OutboxJob))).all())
+    assert len(jobs) == 1
+    assert jobs[0].job_name == "release_cas_references"
+    assert jobs[0].args == [
+        [
+            {
+                "sha256": sha256,
+                "operation_id": f"quarantine:version:{version_id}:release",
+            }
+        ]
+    ]

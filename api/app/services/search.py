@@ -7,7 +7,7 @@ from meilisearch_python_sdk.models.search import SearchParams
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.meilisearch import meili_search_client
+from app.core.events.meilisearch import get_search_client
 from app.models.directory import DirectoryLike
 from app.models.material import MaterialLike
 
@@ -58,7 +58,7 @@ async def perform_search(
         filter=directory_filters or None,  # type: ignore[arg-type]
     )
 
-    results = await meili_search_client.multi_search([mat_params, dir_params])
+    results = await get_search_client().multi_search([mat_params, dir_params])
     materials_res = results[0]  # type: ignore[index]
     directories_res = results[1]  # type: ignore[index]
 

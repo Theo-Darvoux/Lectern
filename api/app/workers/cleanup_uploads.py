@@ -2,12 +2,18 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
-from sqlalchemy import select, update
-from sqlalchemy.engine import CursorResult
+from sqlalchemy import delete, select, update
 
 from app.config import settings
-from app.core.database import async_session_factory
-from app.core.storage import abort_multipart_upload, get_s3_client, list_multipart_uploads
+from app.core.database.database import async_session_factory
+from app.core.database.post_commit import (
+    PostCommitKey,
+    dispatch_post_commit_actions,
+    persist_post_commit_jobs,
+)
+from app.core.security.cas import _STORAGE_USAGE_KEY
+from app.core.storage.facade import abort_multipart_upload, get_s3_client, list_multipart_uploads
+from app.models.cas_staging_claim import CasStagingClaim
 from app.models.material import MaterialVersion
 from app.models.pull_request import PRStatus, PullRequest
 from app.models.upload import Upload
@@ -22,31 +28,90 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     pending_cutoff = datetime.now(UTC) - timedelta(hours=2)
 
     async with async_session_factory() as db:
+        db.info[PostCommitKey.JOBS] = []
         pending_stmt = (
             update(Upload)
             .where(Upload.status == "pending")
             .where(Upload.created_at < pending_cutoff)
             .values(status="failed", error_detail="Upload never completed (timed out)")
+            .returning(Upload.upload_id, Upload.user_id, Upload.quarantine_key)
         )
-        pending_res = cast(CursorResult, await db.execute(pending_stmt))  # type: ignore[type-arg]
+        pending_rows = list((await db.execute(pending_stmt)).all())
+        if pending_rows:
+            logger.info("Expired %d stale pending uploads (older than 2h)", len(pending_rows))
+
+        now = datetime.now(UTC)
+        expired_claims = list(
+            (
+                await db.scalars(
+                    select(CasStagingClaim)
+                    .where(
+                        CasStagingClaim.expires_at < now,
+                        CasStagingClaim.consumed_at.is_(None),
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
+        )
+        if expired_claims:
+            db.info[PostCommitKey.JOBS].append(
+                (
+                    "release_cas_references",
+                    [
+                        {
+                            "sha256": claim.sha256,
+                            "operation_id": f"qcm-claim:{claim.id}:expire",
+                        }
+                        for claim in expired_claims
+                    ],
+                )
+            )
+        await db.execute(
+            delete(CasStagingClaim).where(
+                (CasStagingClaim.expires_at < now)
+                | (CasStagingClaim.consumed_at < now - timedelta(days=7))
+            )
+        )
+        await persist_post_commit_jobs(db)
         await db.commit()
-        if pending_res.rowcount > 0:
-            logger.info("Expired %d stale pending uploads (older than 2h)", pending_res.rowcount)
+        await dispatch_post_commit_actions(db)
+
+        from app.routers.upload.helpers import (
+            _QUOTA_KEY_PREFIX,
+            _release_storage_reservation,
+        )
+
+        for upload_id, user_id, quarantine_key in pending_rows:
+            await _release_storage_reservation(upload_id, ctx["redis"])
+            await ctx["redis"].zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", quarantine_key)
 
     # ── 2. Expire old Pull Requests (7 days) ─────────────────────────────────
     pr_cutoff = datetime.now(UTC) - timedelta(days=7)
 
     async with async_session_factory() as db:
-        expire_stmt = (
-            update(PullRequest)
-            .where(PullRequest.status == PRStatus.OPEN)
-            .where(PullRequest.updated_at < pr_cutoff)
-            .values(status=PRStatus.REJECTED)
+        from app.services.pr import _cleanup_pr_resources
+
+        db.info[PostCommitKey.JOBS] = []
+        stale_prs = list(
+            (
+                await db.scalars(
+                    select(PullRequest)
+                    .where(
+                        PullRequest.status == PRStatus.OPEN,
+                        PullRequest.updated_at < pr_cutoff,
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
         )
-        res = cast(CursorResult, await db.execute(expire_stmt))  # type: ignore[type-arg]
+        for pr in stale_prs:
+            pr.status = PRStatus.REJECTED
+            await _cleanup_pr_resources(db, pr, delete_staging=True, redis=ctx["redis"])
+        await persist_post_commit_jobs(db)
         await db.commit()
-        if res.rowcount > 0:
-            logger.info("Expired %d stale Pull Requests (older than 7 days)", res.rowcount)
+        await dispatch_post_commit_actions(db)
+        if stale_prs:
+            logger.info("Expired %d stale Pull Requests (older than 7 days)", len(stale_prs))
 
     # ── 3. Abort stale Multipart Uploads (24 hours) ──────────────────────────
     mp_cutoff = datetime.now(UTC) - timedelta(hours=24)
@@ -86,31 +151,43 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     quarantine_cutoff = datetime.now(UTC) - timedelta(hours=2)
 
     non_cas_to_delete: list[str] = []
-    cas_refs_to_decrement: list[str] = []  # SHA-256 values
-
     async with async_session_factory() as db:
+        db.info[PostCommitKey.JOBS] = []
         terminal_statuses = ["clean", "failed", "malicious", "applied"]
         upload_result = await db.execute(
-            select(Upload).where(
+            select(Upload)
+            .where(
                 Upload.status.in_(terminal_statuses),
                 Upload.updated_at < orphan_cutoff,
             )
+            .with_for_update(skip_locked=True)
         )
         terminal_uploads: list[Upload] = list(upload_result.scalars().all())
 
-    for upload in terminal_uploads:
-        key = upload.final_key or upload.quarantine_key
-        if not key or key in protected_keys:
-            continue
+        release_refs: list[dict[str, str]] = []
+        for upload in terminal_uploads:
+            key = upload.final_key or upload.quarantine_key
+            if not key or key in protected_keys:
+                continue
 
-        if key.startswith("cas/"):
-            # CAS V2: decrement ref count instead of deleting shared object.
-            # Use the upload's original SHA-256 for proper ref counting.
-            if upload.sha256:
-                cas_refs_to_decrement.append(upload.sha256)
-        else:
-            # Legacy V1 keys (uploads/, quarantine/) — direct S3 delete
-            non_cas_to_delete.append(key)
+            if key.startswith("cas/"):
+                reference_sha = upload.content_sha256 or upload.sha256
+                if reference_sha and upload.cas_ref_count > 0:
+                    release_refs.append(
+                        {
+                            "sha256": reference_sha,
+                            "operation_id": f"cleanup:upload:{upload.id}:release",
+                        }
+                    )
+                    upload.cas_ref_count = 0
+            else:
+                non_cas_to_delete.append(key)
+
+        if release_refs:
+            db.info[PostCommitKey.JOBS].append(("release_cas_references", release_refs))
+        await persist_post_commit_jobs(db)
+        await db.commit()
+        await dispatch_post_commit_actions(db)
 
     # Also clean up the synthetic staging quota entries
     redis = ctx["redis"]
@@ -136,31 +213,47 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
         await delete_storage_objects(ctx, non_cas_to_delete)
         logger.info("Cleanup triggered for %d staging/quarantine objects", len(non_cas_to_delete))
 
-    if cas_refs_to_decrement:
-        from app.core.cas import decrement_cas_ref
-
-        for sha256 in cas_refs_to_decrement:
-            await decrement_cas_ref(redis, sha256)
-        logger.info("Decremented CAS refs for %d expired uploads", len(cas_refs_to_decrement))
-
     # ── 6. Clean orphaned cas/ objects ───────────────────────────────────────
     # CAS objects without a Redis ref entry are orphans. The 48h safety margin
     # prevents deleting objects that are mid-upload or mid-finalize.
     async with async_session_factory() as db:
-        # Collect all active legacy file_keys to prevent deleting valid production data
-        result = await db.execute(
+        legacy_result = await db.execute(
             select(MaterialVersion.file_key).where(
                 MaterialVersion.file_key.is_not(None), MaterialVersion.file_key.not_like("cas/%")
             )
         )
-        valid_legacy_keys = {row[0] for row in result if row[0]}
+        valid_legacy_keys = {row[0] for row in legacy_result if row[0]}
+
+        revert_cutoff = datetime.now(UTC) - timedelta(days=7)
+        material_cas_result = await db.execute(
+            select(MaterialVersion.file_key)
+            .where(
+                MaterialVersion.file_key.like("cas/%"),
+                (MaterialVersion.deleted_at.is_(None))
+                | (MaterialVersion.deleted_at >= revert_cutoff),
+            )
+            .execution_options(include_deleted=True)
+        )
+        valid_cas_keys = {row[0] for row in material_cas_result if row[0]}
+
+        # Upload rows own a CAS reference until cleanup marks cas_ref_count=0.
+        # Recent rows are also protected during finalization even if the count
+        # has not yet been persisted.
+        upload_cas_result = await db.execute(
+            select(Upload.final_key).where(
+                Upload.final_key.like("cas/%"),
+                (Upload.cas_ref_count > 0) | (Upload.updated_at >= orphan_cutoff),
+            )
+        )
+        valid_cas_keys.update(row[0] for row in upload_cas_result if row[0])
 
     orphans_to_delete: list[str] = []
+    cas_object_sizes: dict[str, int] = {}
 
     async with get_s3_client() as client:
         paginator = client.get_paginator("list_objects_v2")
 
-        valid_cas_ids: set[str] = set()
+        valid_cas_ids = {key.split("/", 1)[1] for key in valid_cas_keys}
         async for cas_key in redis.scan_iter("upload:cas:*"):
             k = cas_key.decode() if isinstance(cas_key, bytes) else cas_key
             valid_cas_ids.add(k.split(":")[-1])
@@ -168,6 +261,7 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
         async for page in paginator.paginate(Bucket=settings.s3_bucket, Prefix="cas/"):
             for obj in page.get("Contents", []):
                 key = obj["Key"]
+                cas_object_sizes[key] = max(0, int(obj.get("Size", 0)))
                 cas_id = key.split("/")[-1]
                 if cas_id in valid_cas_ids:
                     continue
@@ -187,18 +281,35 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
                         orphans_to_delete.append(key)
 
     if orphans_to_delete:
+        from app.core.storage.facade import delete_object
         from app.workers.storage_ops import delete_storage_objects
 
-        await delete_storage_objects(ctx, orphans_to_delete)
+        cas_orphans = [key for key in orphans_to_delete if key.startswith("cas/")]
+        legacy_orphans = [key for key in orphans_to_delete if not key.startswith("cas/")]
+        # These CAS objects are proven absent from both authoritative DB refs
+        # and Redis's cache; do not attempt to re-HMAC their opaque object IDs.
+        for key in cas_orphans:
+            await delete_object(key)
+            cas_object_sizes.pop(key, None)
+        if legacy_orphans:
+            await delete_storage_objects(ctx, legacy_orphans)
         logger.info("Cleanup triggered for %d orphaned objects", len(orphans_to_delete))
     else:
         logger.info("No orphaned objects found to clean up")
+
+    # Redis ref records are an evictable coordination cache. Rebuild physical
+    # CAS usage from the object store so capacity accounting cannot drift after
+    # cache eviction, interrupted staging, or orphan collection.
+    try:
+        await redis.set(_STORAGE_USAGE_KEY, sum(cas_object_sizes.values()))
+    except Exception as exc:
+        logger.warning("Failed to reconcile physical CAS usage: %s", exc)
 
     # ── 7. Integrity: verify CAS objects referenced by MaterialVersions exist ─
     # If a CAS object is missing from S3 but still referenced in the DB, log
     # a warning. We do NOT delete the DB row automatically — this requires
     # manual investigation.
-    from app.core.storage import object_exists
+    from app.core.storage.facade import object_exists
 
     async with async_session_factory() as db:
         result = await db.execute(

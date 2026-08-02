@@ -8,7 +8,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
 from app.models.user import User, UserRole
 
 

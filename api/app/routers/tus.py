@@ -31,37 +31,32 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
 from redis.asyncio import Redis
+from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
-from app.core.database import get_db
-from app.core.exceptions import AppError, BadRequestError, ForbiddenError, NotFoundError
-from app.core.mimetypes import MimeRegistry, guess_mime_from_bytes
-from app.core.redis import get_redis, redis_lock
-from app.core.storage import (
+from app.core.common.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
+from app.core.common.exceptions import AppError, BadRequestError, ForbiddenError, NotFoundError
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis, redis_lock
+from app.core.media.mimetypes import MimeRegistry, guess_mime_from_bytes
+from app.core.storage.facade import (
     abort_multipart_upload,
     complete_multipart_upload,
     create_multipart_upload,
     object_exists,
     upload_part,
 )
-from app.core.upload_errors import (
-    ERR_FILE_TOO_LARGE,
-    ERR_TUS_CHECKSUM_MISMATCH,
-    ERR_TUS_CONCURRENCY_LIMIT,
-    ERR_TUS_CONTENT_TYPE,
-    ERR_TUS_INVALID_OFFSET,
-    ERR_TUS_UPLOAD_NOT_FOUND,
-    ERR_TYPE_NOT_ALLOWED,
-)
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
+from app.models.upload import Upload
 from app.routers.upload.helpers import (
     _check_pending_cap,
-    _check_storage_limit,
     _create_upload_row,
     _enqueue_processing,
+    _release_storage_reservation,
+    _reserve_storage_limit,
 )
 from app.routers.upload.validators import _check_per_type_size, _validate_filename
 
@@ -83,6 +78,34 @@ _TUS_HEADERS = {
 
 def _tus_headers(**extra: str) -> dict[str, str]:
     return {**_TUS_HEADERS, **extra}
+
+
+async def _cleanup_failed_completion(
+    *,
+    tus_id: str,
+    state: dict[str, str],
+    redis: Redis,  # type: ignore[type-arg]
+    db: AsyncSession,
+) -> None:
+    """Make a failed final S3 completion terminal and release its resources."""
+    state_key = f"{_TUS_STATE_PREFIX}{tus_id}"
+    quarantine_key = state["quarantine_key"]
+    upload_id = state["upload_id"]
+    user_id = state["user_id"]
+
+    with contextlib.suppress(Exception):
+        await abort_multipart_upload(quarantine_key, state["s3_upload_id"])
+    await redis.delete(state_key)
+    await redis.srem(_TUS_ACTIVE_SESSIONS, tus_id)  # type: ignore[misc]
+    await redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+    await redis.zrem(f"quota:uploads:{user_id}", f"staging:{user_id}:{upload_id}")
+    await _release_storage_reservation(upload_id, redis)
+    await db.execute(
+        sql_update(Upload)
+        .where(Upload.upload_id == upload_id)
+        .values(status="failed", error_detail="S3 multipart completion failed")
+    )
+    await db.commit()
 
 
 def _decode_upload_metadata(header: str | None) -> dict[str, str]:
@@ -143,16 +166,18 @@ async def tus_create(
     try:
         upload_length = int(raw_length)
     except ValueError:
-        raise BadRequestError("Upload-Length header must be an integer", code=ERR_FILE_TOO_LARGE)
+        raise BadRequestError(
+            "Upload-Length header must be an integer", code=UploadErrorCode.FILE_TOO_LARGE
+        )
 
     if upload_length <= 0:
-        raise BadRequestError("Upload-Length must be > 0", code=ERR_FILE_TOO_LARGE)
+        raise BadRequestError("Upload-Length must be > 0", code=UploadErrorCode.FILE_TOO_LARGE)
 
     max_bytes = settings.max_file_size_mb * 1024 * 1024  # type: ignore[operator]
     if upload_length > max_bytes:
         raise BadRequestError(
             f"Upload-Length {upload_length // (1024 * 1024)} MiB exceeds server maximum of {max_bytes // (1024 * 1024)} MiB.",
-            code=ERR_FILE_TOO_LARGE,
+            code=UploadErrorCode.FILE_TOO_LARGE,
         )
 
     metadata = _decode_upload_metadata(request.headers.get("Upload-Metadata", ""))
@@ -185,56 +210,69 @@ async def tus_create(
     if not MimeRegistry.is_allowed_mime(resolved_mime, allowed=allowed_mimes):
         raise BadRequestError(
             f"MIME type '{resolved_mime}' is not allowed for upload.",
-            code=ERR_TYPE_NOT_ALLOWED,
+            code=UploadErrorCode.TYPE_NOT_ALLOWED,
         )
-
-    await _check_storage_limit(upload_length, db)
 
     _check_per_type_size(raw_mime, upload_length)
 
     tus_id = str(uuid.uuid4())
     upload_id = str(uuid.uuid4())
+    await _reserve_storage_limit(upload_length, upload_id, redis, db)
     quarantine_key = f"quarantine/{user_id}/{upload_id}/{safe_name}"
-    await _check_pending_cap(
-        user_id,
-        redis,
-        db,
-        privileged=user.role in PRIVILEGED_ROLES,
-        reserve_key=quarantine_key,
-    )
+    s3_upload_id: str | None = None
+    state_key = f"{_TUS_STATE_PREFIX}{tus_id}"
+    try:
+        await _check_pending_cap(
+            user_id,
+            redis,
+            db,
+            privileged=user.role in PRIVILEGED_ROLES,
+            reserve_key=quarantine_key,
+        )
 
-    # Flush the DB row before opening the S3 multipart upload so that any DB
-    # failure aborts early without leaving an orphaned multipart on S3.
-    await _create_upload_row(
-        upload_id=upload_id,
-        user_id=user_id,
-        quarantine_key=quarantine_key,
-        filename=safe_name,
-        mime_type=resolved_mime,
-        size_bytes=upload_length,
-        db=db,
-    )
+        # Flush the DB row before opening the S3 multipart upload so that any DB
+        # failure aborts early without leaving an orphaned multipart on S3.
+        await _create_upload_row(
+            upload_id=upload_id,
+            user_id=user_id,
+            quarantine_key=quarantine_key,
+            filename=safe_name,
+            mime_type=resolved_mime,
+            size_bytes=upload_length,
+            db=db,
+        )
 
-    s3_upload_id = await create_multipart_upload(
-        quarantine_key,
-        content_type=resolved_mime,
-        content_disposition="",
-    )
+        s3_upload_id = await create_multipart_upload(
+            quarantine_key,
+            content_type=resolved_mime,
+            content_disposition="",
+        )
 
-    state: dict[str, str] = {
-        "user_id": user_id,
-        "upload_id": upload_id,
-        "quarantine_key": quarantine_key,
-        "s3_upload_id": s3_upload_id,
-        "filename": safe_name,
-        "mime_type": resolved_mime,
-        "offset": "0",
-        "length": str(upload_length),
-        "parts": "[]",
-    }
-    await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id}", mapping=state)  # type: ignore[arg-type, misc]
-    await redis.expire(f"{_TUS_STATE_PREFIX}{tus_id}", _TUS_STATE_TTL)
-    await redis.sadd(_TUS_ACTIVE_SESSIONS, tus_id)  # type: ignore[misc]
+        state: dict[str, str] = {
+            "user_id": user_id,
+            "upload_id": upload_id,
+            "quarantine_key": quarantine_key,
+            "s3_upload_id": s3_upload_id,
+            "filename": safe_name,
+            "mime_type": resolved_mime,
+            "offset": "0",
+            "length": str(upload_length),
+            "parts": "[]",
+        }
+        await redis.hset(state_key, mapping=state)  # type: ignore[arg-type, misc]
+        await redis.expire(state_key, _TUS_STATE_TTL)
+        await redis.sadd(_TUS_ACTIVE_SESSIONS, tus_id)  # type: ignore[misc]
+    except BaseException:
+        if s3_upload_id is not None:
+            with contextlib.suppress(Exception):
+                await abort_multipart_upload(quarantine_key, s3_upload_id)
+        with contextlib.suppress(Exception):
+            await redis.delete(state_key)
+            await redis.srem(_TUS_ACTIVE_SESSIONS, tus_id)  # type: ignore[misc]
+            await redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+        with contextlib.suppress(Exception):
+            await _release_storage_reservation(upload_id, redis)
+        raise
 
     location = f"{request.base_url}api/upload/tus/{tus_id}"
     return Response(
@@ -279,21 +317,21 @@ async def tus_patch(
     tus_id_str = str(tus_id)
     _inflight_key = f"tus:inflight:{user.id}"
     inflight = await redis.incr(_inflight_key)
-    # TTL ensures the counter self-heals if the process crashes before decr.
-    await redis.expire(_inflight_key, 300)
-
-    if inflight > settings.tus_max_concurrent_per_user:
-        await redis.decr(_inflight_key)
-        return Response(
-            status_code=429,
-            headers=_tus_headers(**{"X-Lectern-Error": ERR_TUS_CONCURRENCY_LIMIT}),
-        )
-
     try:
+        # TTL ensures the counter self-heals if the process crashes before decr.
+        await redis.expire(_inflight_key, 300)
+        if inflight > settings.tus_max_concurrent_per_user:
+            return Response(
+                status_code=429,
+                headers=_tus_headers(
+                    **{"X-Lectern-Error": UploadErrorCode.TUS_CONCURRENCY_LIMIT}
+                ),
+            )
+
         if request.headers.get("Content-Type", "") != "application/offset+octet-stream":
             raise BadRequestError(
                 "Content-Type must be application/offset+octet-stream",
-                code=ERR_TUS_CONTENT_TYPE,
+                code=UploadErrorCode.TUS_CONTENT_TYPE,
             )
 
         raw_offset = request.headers.get("Upload-Offset", "")
@@ -301,7 +339,7 @@ async def tus_patch(
             client_offset = int(raw_offset)
         except ValueError:
             raise BadRequestError(
-                "Upload-Offset header must be an integer", code=ERR_TUS_INVALID_OFFSET
+                "Upload-Offset header must be an integer", code=UploadErrorCode.TUS_INVALID_OFFSET
             )
 
         try:
@@ -350,7 +388,7 @@ async def tus_patch(
                             raise AppError(
                                 status_code=460,
                                 detail="Upload-Checksum mismatch.",
-                                code=ERR_TUS_CHECKSUM_MISMATCH,
+                                code=UploadErrorCode.TUS_CHECKSUM_MISMATCH,
                             )
 
             async with redis_lock(redis, f"tus:{tus_id_str}", timeout=120.0):
@@ -395,7 +433,7 @@ async def tus_patch(
                                 )
                                 raise BadRequestError(
                                     f"File content ({detected_mime}) does not match declared type ({state['mime_type']}).",
-                                    code=ERR_TUS_CONTENT_TYPE,
+                                    code=UploadErrorCode.TUS_CONTENT_TYPE,
                                 )
                             await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id_str}", "sniffed", "1")  # type: ignore[misc]
                         elif (
@@ -407,10 +445,41 @@ async def tus_patch(
                     raise AppError(
                         status_code=409,
                         detail=f"Upload-Offset mismatch: expected {current_offset}, got {client_offset}.",
-                        code=ERR_TUS_INVALID_OFFSET,
+                        code=UploadErrorCode.TUS_INVALID_OFFSET,
                     )
 
                 if chunk_size == 0:
+                    if (
+                        current_offset == total_length
+                        and (
+                            state.get("multipart_completed") == "1"
+                            or await object_exists(state["quarantine_key"])
+                        )
+                    ):
+                        quarantine_key = state["quarantine_key"]
+                        await redis.zadd(
+                            f"quota:uploads:{state['user_id']}", {quarantine_key: time.time()}
+                        )
+                        await _enqueue_processing(
+                            user_id=state["user_id"],
+                            upload_id=state["upload_id"],
+                            quarantine_key=quarantine_key,
+                            filename=state["filename"],
+                            mime_type=state["mime_type"],
+                            file_size=total_length,
+                            job_id=f"tus-process:{state['upload_id']}",
+                        )
+                        await redis.delete(f"{_TUS_STATE_PREFIX}{tus_id_str}")
+                        await redis.srem(_TUS_ACTIVE_SESSIONS, tus_id_str)  # type: ignore[misc]
+                        return Response(
+                            status_code=204,
+                            headers=_tus_headers(
+                                **{
+                                    "Upload-Offset": str(current_offset),
+                                    "X-Lectern-File-Key": quarantine_key,
+                                }
+                            ),
+                        )
                     return Response(
                         status_code=204,
                         headers=_tus_headers(**{"Upload-Offset": str(current_offset)}),
@@ -419,7 +488,7 @@ async def tus_patch(
                 if current_offset + chunk_size > total_length:
                     raise BadRequestError(
                         f"Chunk overflows declared Upload-Length by {(current_offset + chunk_size) - total_length} bytes.",
-                        code=ERR_FILE_TOO_LARGE,
+                        code=UploadErrorCode.FILE_TOO_LARGE,
                     )
 
                 is_final = (current_offset + chunk_size) == total_length
@@ -473,7 +542,12 @@ async def tus_patch(
                                     tus_id_str,
                                     exc,
                                 )
-                                await redis.delete(state_key)
+                                await _cleanup_failed_completion(
+                                    tus_id=tus_id_str,
+                                    state=state,
+                                    redis=redis,
+                                    db=db,
+                                )
                                 raise BadRequestError(
                                     "Failed to complete upload (not found). Please restart."
                                 )
@@ -483,10 +557,18 @@ async def tus_patch(
                                 tus_id_str,
                                 exc,
                             )
-                            await abort_multipart_upload(quarantine_key, state["s3_upload_id"])
-                            await redis.delete(state_key)
-                            raise BadRequestError("Failed to complete upload. Please retry.")
+                            await _cleanup_failed_completion(
+                                tus_id=tus_id_str,
+                                state=state,
+                                redis=redis,
+                                db=db,
+                            )
+                            raise BadRequestError("Failed to complete upload. Please restart.")
 
+                    # Persist completion before enqueueing. If Redis/ARQ is
+                    # transiently unavailable, a zero-byte PATCH at the final
+                    # offset can safely retry the deterministic job enqueue.
+                    await redis.hset(state_key, "multipart_completed", "1")  # type: ignore[misc]
                     await redis.zadd(
                         f"quota:uploads:{state['user_id']}", {quarantine_key: time.time()}
                     )
@@ -498,6 +580,7 @@ async def tus_patch(
                         filename=state["filename"],
                         mime_type=state["mime_type"],
                         file_size=total_length,
+                        job_id=f"tus-process:{state['upload_id']}",
                     )
 
                     await redis.delete(state_key)
@@ -528,6 +611,7 @@ async def tus_delete(
     tus_id: uuid.UUID,
     user: CurrentUser,
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Terminate a pending upload.  Aborts the S3 multipart upload."""
     state = await _load_state(str(tus_id), user, redis)
@@ -536,6 +620,19 @@ async def tus_delete(
 
     await redis.delete(f"{_TUS_STATE_PREFIX}{str(tus_id)}")
     await redis.srem(_TUS_ACTIVE_SESSIONS, str(tus_id))  # type: ignore[misc]
+    await redis.zrem(f"quota:uploads:{state['user_id']}", state["quarantine_key"])
+    upload_id = state.get("upload_id")
+    if upload_id is not None:
+        await redis.zrem(
+            f"quota:uploads:{state['user_id']}",
+            f"staging:{state['user_id']}:{upload_id}",
+        )
+        await _release_storage_reservation(upload_id, redis)
+        await db.execute(
+            sql_update(Upload)
+            .where(Upload.upload_id == upload_id)
+            .values(status="cancelled", error_detail="Aborted by user")
+        )
 
     return Response(status_code=204, headers=_TUS_HEADERS)
 
@@ -545,7 +642,9 @@ async def _load_state(tus_id: str, user: CurrentUser, redis: Redis) -> dict[str,
     state_key = f"{_TUS_STATE_PREFIX}{tus_id}"
     state: dict[bytes | str, bytes | str] = await redis.hgetall(state_key)  # type: ignore[misc]
     if not state:
-        raise NotFoundError("Upload not found or expired.", code=ERR_TUS_UPLOAD_NOT_FOUND)
+        raise NotFoundError(
+            "Upload not found or expired.", code=UploadErrorCode.TUS_UPLOAD_NOT_FOUND
+        )
 
     decoded: dict[str, str] = {
         (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)

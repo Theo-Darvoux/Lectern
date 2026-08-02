@@ -13,9 +13,9 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
-from app.core.redis import get_redis
+from app.core.common.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
 from app.dependencies.auth import require_role
 from app.models.auth_config import AllowedDomain
 from app.models.dead_letter import DeadLetterJob
@@ -239,7 +239,7 @@ async def retry_dead_letter_job(
     if job.resolved_at is not None:
         raise BadRequestError("Job has already been resolved")
 
-    import app.core.redis as redis_core
+    import app.core.database.redis as redis_core
 
     if redis_core.arq_pool is None:
         raise BadRequestError("Background job queue is unavailable")
@@ -278,8 +278,8 @@ async def get_detailed_health(
 ) -> DetailedHealthResponse:
     from sqlalchemy import text
 
-    from app.core.meilisearch import meili_admin_client
-    from app.core.scanner import MalwareScanner
+    from app.core.events.meilisearch import meili_admin_client
+    from app.core.security.scanner import MalwareScanner
     from app.models.material import Material, MaterialVersion
 
     services: dict[str, ServiceStatus] = {}
@@ -305,7 +305,7 @@ async def get_detailed_health(
     # 3. S3 Check (Dynamic)
     start = time.perf_counter()
     try:
-        from app.core.storage import get_s3_client
+        from app.core.storage.facade import get_s3_client
 
         bucket = settings.s3_bucket
         endpoint = settings.s3_endpoint
@@ -336,6 +336,8 @@ async def get_detailed_health(
     try:
         import aiosmtplib
 
+        from app.core.events.email import get_smtp_tls_mode
+
         host = settings.smtp_host
         port = settings.smtp_port
 
@@ -343,13 +345,19 @@ async def get_detailed_health(
             # Quick ping to SMTP port
             # Use IP if provided, otherwise hostname
             connect_host = settings.smtp_ip or host
-            # Health check is a reachability probe only — disable cert validation
-            # so connecting via IP address doesn't trigger SSL hostname mismatch.
+            tls_mode = get_smtp_tls_mode()
+            if settings.smtp_ip and tls_mode == "implicit":
+                raise ValueError("SMTP_IP is incompatible with implicit TLS certificate SNI")
             smtp = aiosmtplib.SMTP(
-                hostname=connect_host, port=port, timeout=2, validate_certs=False
+                hostname=connect_host,
+                port=port,
+                timeout=2,
+                use_tls=tls_mode == "implicit",
+                start_tls=False,
             )
-            # connect() does not accept server_hostname — just open the connection
             await smtp.connect()
+            if tls_mode == "starttls":
+                await smtp.starttls(server_hostname=host if settings.smtp_ip else None)
             await smtp.quit()
             latency = (time.perf_counter() - start) * 1000
             services["email"] = ServiceStatus(
@@ -573,7 +581,7 @@ async def admin_test_email(
     body: Annotated[TestEmailIn, Body()],
     _user: AdminUser,
 ) -> dict:  # type: ignore[type-arg]
-    from app.core.email import send_email
+    from app.core.events.email import send_email
 
     sitename = settings.site_name
     subject = f"{sitename} - Test Email"

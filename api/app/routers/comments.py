@@ -4,8 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.limiter import limiter
+from app.core.database.database import get_db
+from app.core.events.limiter import limiter
 from app.dependencies.auth import CurrentUser, OnboardedUser
 from app.dependencies.pagination import PaginationParams
 from app.schemas.comment import CommentCreateIn, CommentOut, CommentUpdateIn

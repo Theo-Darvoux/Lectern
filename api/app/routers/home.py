@@ -11,8 +11,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.database import get_db
-from app.core.redis import get_redis, redis_lock
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis, redis_lock
 from app.dependencies.auth import CurrentUser
 from app.models.directory import Directory
 from app.models.featured import FeaturedItem

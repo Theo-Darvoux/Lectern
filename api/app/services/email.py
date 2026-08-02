@@ -1,7 +1,7 @@
 import json
 
 from app.config import settings
-from app.core.email import send_email
+from app.core.events.email import send_email
 
 
 def _parse_name_segments(raw: str | None) -> list[dict] | None:

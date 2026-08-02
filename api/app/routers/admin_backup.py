@@ -10,8 +10,8 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.common.exceptions import BadRequestError, NotFoundError
+from app.core.database.database import get_db
 from app.routers.admin import AdminUser
 from app.services.backup import (
     MAX_LOCAL_BACKUPS,

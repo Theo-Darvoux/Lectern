@@ -9,11 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.database import get_db
-from app.core.exceptions import NotFoundError
-from app.core.limiter import limiter
-from app.core.redis import get_redis
-from app.core.sse import register_topic_queue, sse_event_stream, unregister_topic_queue
+from app.core.common.exceptions import NotFoundError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
+from app.core.events.limiter import limiter
+from app.core.events.sse import register_topic_queue, sse_event_stream, unregister_topic_queue
 from app.dependencies.auth import (
     SSEUser,
     get_current_user,
@@ -68,7 +68,6 @@ async def create_pull_request(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> PullRequestOut:
     pr = await create_pull_request_service(db, data, current_user, redis=redis)
-    await db.commit()
     return PullRequestOut.model_validate(pr)
 
 

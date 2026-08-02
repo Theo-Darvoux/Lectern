@@ -5,14 +5,9 @@ import re
 from typing import Any
 
 from app.config import settings
-from app.core.exceptions import BadRequestError
-from app.core.mimetypes import MimeRegistry
-from app.core.upload_errors import (
-    ERR_FILE_TOO_LARGE,
-    ERR_FILENAME_TOO_LONG,
-    ERR_MIME_MISMATCH,
-    ERR_TYPE_NOT_ALLOWED,
-)
+from app.core.common.exceptions import BadRequestError
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.media.mimetypes import MimeRegistry
 
 _MAX_FILENAME_LENGTH = 255
 
@@ -74,7 +69,7 @@ def _check_per_type_size(mime_type: str, size: int, config: dict[str, Any] | Non
             msg = f"File size {size // (1024 * 1024)} MiB exceeds the global limit of {mb} MiB."
         else:
             msg = f"File size exceeds the {mb} MiB limit for this file type."
-        raise BadRequestError(msg, code=ERR_FILE_TOO_LARGE)
+        raise BadRequestError(msg, code=UploadErrorCode.FILE_TOO_LARGE)
 
 
 def _sanitize_filename(raw: str) -> str:
@@ -105,17 +100,17 @@ def _validate_filename(
     """Return (safe_name, ext) or raise BadRequestError with structured code."""
     safe_name = _sanitize_filename(raw or "unnamed")
     if not safe_name:
-        raise BadRequestError("Invalid filename", code=ERR_TYPE_NOT_ALLOWED)
+        raise BadRequestError("Invalid filename", code=UploadErrorCode.TYPE_NOT_ALLOWED)
     if len(safe_name) > _MAX_FILENAME_LENGTH:
         raise BadRequestError(
             f"Filename too long ({len(safe_name)} chars, max {_MAX_FILENAME_LENGTH}).",
-            code=ERR_FILENAME_TOO_LONG,
+            code=UploadErrorCode.FILENAME_TOO_LONG,
         )
     ext = MimeRegistry.get_extension(safe_name)
     if not MimeRegistry.is_supported_extension(ext, allowed=allowed_extensions):
         raise BadRequestError(
             f"File extension '{ext}' is not supported.",
-            code=ERR_TYPE_NOT_ALLOWED,
+            code=UploadErrorCode.TYPE_NOT_ALLOWED,
         )
     return safe_name, ext
 
@@ -130,7 +125,7 @@ def _apply_mime_correction(
     if not MimeRegistry.is_allowed_mime(detected_mime, allowed=allowed_mimes):
         raise BadRequestError(
             f"Detected file type '{detected_mime}' is not allowed.",
-            code=ERR_TYPE_NOT_ALLOWED,
+            code=UploadErrorCode.TYPE_NOT_ALLOWED,
         )
 
     allowed_mimes = MimeRegistry.get_allowed_mimes_for_extension(ext)  # type: ignore[assignment]
@@ -138,7 +133,7 @@ def _apply_mime_correction(
     if allowed_mimes and detected_mime not in allowed_mimes:
         raise BadRequestError(
             f"File extension '{ext}' does not match detected type '{detected_mime}'.",
-            code=ERR_MIME_MISMATCH,
+            code=UploadErrorCode.MIME_MISMATCH,
         )
 
     if not ext:

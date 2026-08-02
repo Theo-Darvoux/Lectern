@@ -3,8 +3,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.file_security import compress_file_path
-from app.core.processing import ProcessingFile
+from app.core.events.processing import ProcessingFile
+from app.core.security.file_security import compress_file_path
+from app.core.security.file_security.errors import SanitizationError
 from app.workers.upload.constants import _compression_timeout
 
 logger = logging.getLogger(__name__)
@@ -39,9 +40,11 @@ async def run_compress_stage(
                 timeout=comp_timeout,
             )
             if comp_res.path != pf.path:
-                pf.replace_with(comp_res.path)
+                await pf.replace_with(comp_res.path)
             final_mime = comp_res.mime_type
             content_encoding = comp_res.content_encoding
+        except SanitizationError:
+            raise
         except Exception as exc:
             logger.warning(
                 "Compression failed for %s: %s - proceeding uncompressed",

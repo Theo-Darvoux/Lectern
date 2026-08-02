@@ -3,14 +3,14 @@
 An upload is considered orphaned when:
 - it exists in S3 under the quarantine/ prefix, AND
 - no live tus:state:* Redis key references its S3 upload ID, AND
-- the uploads DB table has no row with status 'processing' for that upload_id, AND
+- the uploads DB table has no row with status 'pending' or 'processing' for that upload_id, AND
 - the multipart upload was initiated more than 2 hours ago.
 """
 
 import logging
 from datetime import UTC, datetime
 
-from app.core.storage import abort_multipart_upload, list_multipart_uploads
+from app.core.storage.facade import abort_multipart_upload, list_multipart_uploads
 
 logger = logging.getLogger(__name__)
 
@@ -36,21 +36,24 @@ async def reconcile_multipart_uploads(ctx: dict) -> None:  # type: ignore[type-a
             # Clean up stale ID from set if state is gone
             await redis.srem(_TUS_ACTIVE_SESSIONS, tid)  # type: ignore[unused-ignore]
 
-    # 2. Build set of upload_ids that are still processing (from DB)
-    processing_upload_ids: set[str] = set()
-    if session_factory is not None:
-        try:
-            from sqlalchemy import select
+    # 2. The DB is authoritative for live upload ownership. Never perform
+    # destructive reconciliation when that protection set cannot be loaded.
+    if session_factory is None:
+        logger.error("reconcile_multipart: DB session factory unavailable; skipping")
+        return
+    try:
+        from sqlalchemy import select
 
-            from app.models.upload import Upload
+        from app.models.upload import Upload
 
-            async with session_factory() as session:
-                rows = await session.scalars(
-                    select(Upload.upload_id).where(Upload.status == "processing")
-                )
-                processing_upload_ids = {str(r) for r in rows}
-        except Exception as exc:
-            logger.warning("reconcile_multipart: DB query failed: %s", exc)
+        async with session_factory() as session:
+            rows = await session.scalars(
+                select(Upload.upload_id).where(Upload.status.in_(("pending", "processing")))
+            )
+            live_upload_ids = {str(r) for r in rows}
+    except Exception as exc:
+        logger.error("reconcile_multipart: DB query failed; skipping destructive pass: %s", exc)
+        return
 
     # 3. List all in-progress multipart uploads under quarantine/
     aborted = 0
@@ -75,8 +78,8 @@ async def reconcile_multipart_uploads(ctx: dict) -> None:  # type: ignore[type-a
         parts = s3_key.split("/")
         upload_id = parts[2] if len(parts) >= 4 else None
 
-        # Skip if DB shows this upload is still processing
-        if upload_id and upload_id in processing_upload_ids:
+        # Skip if DB shows this upload is still pending or processing.
+        if upload_id and upload_id in live_upload_ids:
             skipped += 1
             continue
 

@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
+from app.core.common.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.comment import Comment
 from app.models.directory import Directory
 from app.models.material import Material

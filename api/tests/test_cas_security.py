@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.core.cas import hmac_cas_key
+from app.core.security.cas import hmac_cas_key
 from app.routers.upload import check_file_exists
 from app.schemas.material import CheckExistsRequest
 

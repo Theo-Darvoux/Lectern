@@ -18,7 +18,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.database as c_db
+import app.core.database.database as c_db
 from app.models.user import User, UserRole
 from app.workers.year_rollover import ROLLOVER_MAP, year_rollover
 

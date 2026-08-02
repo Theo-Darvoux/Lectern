@@ -3,13 +3,14 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.core.cas import hmac_cas_key
-from app.core.file_security import check_svg_safety, get_uncompressed_size
-from app.core.metrics import mime_category as _mime_cat
-from app.core.mimetypes import ZIP_MIME_TYPES, MimeRegistry, guess_mime_from_file_path
-from app.core.polyglot import check_polyglot
-from app.core.processing import ProcessingFile
-from app.core.storage import download_file_with_hash, get_object_info
+from app.config import settings
+from app.core.events.processing import ProcessingFile
+from app.core.media.mimetypes import ZIP_MIME_TYPES, MimeRegistry, guess_mime_from_file_path
+from app.core.observability.metrics import mime_category as _mime_cat
+from app.core.security.cas import hmac_cas_key
+from app.core.security.file_security import check_svg_safety, get_uncompressed_size
+from app.core.security.polyglot import check_polyglot
+from app.core.storage.facade import download_file_with_hash, get_object_info
 from app.schemas.material import UploadStatus
 from app.workers.upload.constants import ensure_disk_space
 from app.workers.upload.exceptions import MalwareError, UploadError
@@ -37,6 +38,9 @@ async def run_download_and_validate(
 ) -> DownloadResult:
     info = await get_object_info(quarantine_key)
     initial_size = info["size"]
+    download_limit = settings.max_file_size_mb * 1024 * 1024
+    if initial_size > download_limit:
+        raise UploadError(UploadStatus.FAILED, "File exceeds configured upload size limit")
 
     # Cut-off for suspicious expansion, matching ZIP_MAX_TOTAL_BYTES.
     expansion_hard_limit = 500 * 1024 * 1024
@@ -47,6 +51,8 @@ async def run_download_and_validate(
     original_sha256 = await download_file_with_hash(
         quarantine_key,
         tmp_path,
+        max_bytes=download_limit,
+        expected_size=initial_size,
     )
 
     is_zip_family = mime_type in ZIP_MIME_TYPES or original_filename.lower().endswith(
@@ -74,16 +80,18 @@ async def run_download_and_validate(
         )
         raise UploadError(UploadStatus.FAILED, msg)
 
-    actual_mime = guess_mime_from_file_path(tmp_path)
-    if actual_mime != "application/octet-stream" and actual_mime != mime_type:
+    detected_mime = guess_mime_from_file_path(tmp_path)
+    actual_mime = MimeRegistry.get_authoritative_mime(original_filename, detected_mime)
+    declared_mime = MimeRegistry.normalize_mime(mime_type)
+    if actual_mime != "application/octet-stream" and actual_mime != declared_mime:
         logger.info(
             "MIME mismatch for %s: declared %s, detected %s",
             upload_id,
-            mime_type,
+            declared_mime,
             actual_mime,
         )
     else:
-        actual_mime = mime_type
+        actual_mime = declared_mime
 
     mime_category = _mime_cat(actual_mime)
 

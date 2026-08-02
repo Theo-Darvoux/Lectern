@@ -2,7 +2,7 @@
 name = "lectern-api"
 version = "0.1.0"
 description = "API — Course materials platform backend"
-requires-python = ">=3.12"
+requires-python = ">=3.12, <3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
@@ -22,10 +22,11 @@ dependencies = [
     "slowapi>=0.1.9",
     "typer>=0.15",
     "httpx>=0.28",
+    "aiohttp>=3.12",
     "sqladmin>=0.23",
     "gunicorn>=25.1.0",
     "Pillow>=11.0.0",
-    "pikepdf>=9.0.0",
+    "pikepdf>=10.10.0,<11",
     "mutagen>=1.47",
     "yara-python>=4.5",
     "scour>=0.38",
@@ -56,17 +57,6 @@ dev = [
 target-version = "py312"
 line-length = 100
 exclude = [
-    "analyze_pdf.py",
-    "analyze_pdf_brute.py",
-    "analyze_pdf_fonts.py",
-    "analyze_pdf_objects.py",
-    "analyze_pdf_recursive.py",
-    "analyze_pdf_streams.py",
-    "analyze_pdf_v2.py",
-    "test_pikepdf_images.py",
-    "test_pdf_strip.py",
-    "test_user_pdf.py",
-    "yara.py",
     "scratch/",
 ]
 
@@ -75,7 +65,6 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "ERA", "SIM", "S", "PTH"]
 ignore = ["E501", "S101", "SIM117", "PTH123", "F841", "SIM115", "SIM105", "S110", "B904", "PTH118", "PTH109", "PTH110", "SIM102", "E402", "B007", "ERA001", "PTH202", "S108", "S603", "N801", "B008", "PTH119", "PTH122", "S608", "S105"]
 
 [tool.ruff.lint.per-file-ignores]
-"app/core/typing_ext.py" = ["N803"]
 "app/routers/qcm.py" = ["N802", "N806"]
 "tests/**/*.py" = ["S", "ERA", "SIM117", "PTH123", "F841"]
 
@@ -92,7 +81,7 @@ markers = [
     "integration: requires external tools (soffice, rsvg-convert) or a live S3/MinIO endpoint; deselected in the hermetic CI gate with -m 'not integration'",
 ]
 filterwarnings = [
-    "ignore::pytest.PytestRemovedIn9Warning",
+    "ignore::pytest.PytestRemovedIn10Warning",
     "ignore::DeprecationWarning",
     "ignore::RuntimeWarning",
 ]
@@ -110,6 +99,7 @@ dev = [
     "mypy>=1.19.1",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
+    "ruff>=0.15.13",
     "types-defusedxml>=0.7.0",
     "types-aioboto3>=13.0.0",
     "types-redis>=4.6.0",
@@ -129,3 +119,6 @@ show_error_codes = true
 enable_error_code = ["truthy-bool"]
 exclude = ["tests/", "app/migrations/"]
 
+[tool.uv]
+cache-dir = ".uv/cache"
+python-preference = "only-managed"

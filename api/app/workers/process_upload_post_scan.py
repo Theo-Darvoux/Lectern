@@ -1,13 +1,14 @@
-"""Background post-scan processing: compress, thumbnail, and update CAS.
+"""Background post-scan processing: thumbnail and publish derived metadata.
 
 Called by process_upload after the scan gate passes.  The file is already in
-CAS (uncompressed, no thumbnail) and the upload row is status=clean,
+CAS (without a thumbnail) and the upload row is status=clean,
 processing_status=pending.
 
-Failure behaviour (Option A + B):
-  - Compression or thumbnail failures are soft: file stays accessible uncompressed.
-  - CAS overwrite failures trigger arq retries (up to _POST_MAX_RETRIES attempts).
-  - After max retries: processing_status=degraded, dead-letter record, admin alert.
+Failure behaviour:
+  - Thumbnail failures are soft: the sanitized CAS object remains accessible.
+  - A second metadata-strip failure preserves the original sanitized CAS bytes and
+    marks post-processing degraded.
+  - Unexpected failures retry up to ``_POST_MAX_RETRIES`` before dead-lettering.
   - A settled state (complete | degraded) triggers pending auto-merge PRs.
 """
 
@@ -22,16 +23,15 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy import update as sa_update
 
-from app.core import redis as redis_core
-from app.core.database import _coalesce_index_jobs
-from app.core.metrics import mime_category as _mime_cat
-from app.core.metrics import upload_compression_ratio, upload_file_size
-from app.core.sse import broadcast_to_topic
-from app.core.storage import delete_object, upload_file_multipart
-from app.core.telemetry import get_tracer
-from app.models.material import MaterialVersion
+from app.core.database.post_commit import (
+    PostCommitKey,
+    dispatch_post_commit_actions,
+    persist_post_commit_jobs,
+)
+from app.core.events.sse import broadcast_to_topic
+from app.core.observability.telemetry import get_tracer
+from app.core.storage.facade import delete_object, upload_file_multipart
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
 from app.models.upload import Upload
 from app.schemas.material import UploadStatus
@@ -43,10 +43,9 @@ from app.services.pr import (
     get_pr_all_file_keys,
 )
 from app.workers.upload.cache_repo import UploadCacheRepository
-from app.workers.upload.constants import _STATUS_CACHE_PREFIX, _compression_timeout
+from app.workers.upload.constants import _STATUS_CACHE_PREFIX
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.repository import UploadWorkerRepository
-from app.workers.upload.stages.compress import run_compress_stage
 from app.workers.upload.stages.download import run_download_and_validate
 from app.workers.upload.stages.scan_strip import run_strip_only
 from app.workers.upload.stages.thumbnail import run_thumbnail_stage
@@ -58,6 +57,36 @@ _POST_MAX_RETRIES = 3
 _THUMB_MAX_ATTEMPTS = 2
 # Settled processing statuses — a PR can auto-merge when all its files reach one of these.
 _SETTLED_STATUSES = frozenset({"complete", "degraded"})
+
+
+async def _publish_postprocessed_upload(
+    worker_ctx: WorkerContext,
+    *,
+    upload_id: str,
+    update_values: dict[str, Any],
+) -> bool:
+    """Serialize the completion transition against retroactive quarantine."""
+    session_factory = worker_ctx.db_sessionmaker
+    if session_factory is None:
+        return False
+
+    async with session_factory() as session:
+        upload = await session.scalar(
+            select(Upload).where(Upload.upload_id == upload_id).with_for_update()
+        )
+        if upload is None or upload.status != "clean":
+            logger.warning(
+                "Skipping post-scan publication for upload %s in status %s",
+                upload_id,
+                upload.status if upload is not None else "missing",
+            )
+            return False
+
+        for key, value in update_values.items():
+            setattr(upload, key, value)
+        upload.status = "clean"
+        await session.commit()
+        return True
 
 
 async def process_upload_post_scan(
@@ -72,14 +101,12 @@ async def process_upload_post_scan(
     cas_s3_key: str,
     initial_size: int,
 ) -> None:
-    """Compress, thumbnail, and overwrite the CAS object for a previously scanned upload.
+    """Generate derived metadata for a previously scanned, immutable CAS object.
 
-    The quarantine object is re-downloaded, stripped (idempotent), compressed, and
-    thumbnailed.  The resulting file overwrites the uncompressed placeholder uploaded
-    by the scan job.  The quarantine object is deleted on success.
+    The quarantine object is re-downloaded and stripped again before thumbnailing.
+    The CAS object created by the scan job is never overwritten.
 
-    On soft failure (compress or thumbnail), we proceed with the original and mark
-    the upload degraded.  On hard failure (CAS upload), arq retries the whole job.
+    A thumbnail failure is soft; unexpected infrastructure failures retry the job.
     """
     worker_ctx = WorkerContext.from_arq_ctx(ctx)
     repo = UploadWorkerRepository(worker_ctx)
@@ -109,7 +136,7 @@ async def process_upload_post_scan(
         except Exception as exc:
             logger.error(
                 "Post-scan download from quarantine failed for upload %s: %s — "
-                "file remains uncompressed (already in CAS from scan job).",
+                "sanitized file remains available in CAS.",
                 upload_id,
                 exc,
             )
@@ -125,9 +152,15 @@ async def process_upload_post_scan(
         try:
             await run_strip_only(pf, tmp_path, actual_mime, upload_id, tracer)
         except Exception as exc:
-            logger.warning(
-                "Post-scan metadata strip failed for upload %s: %s — continuing.", upload_id, exc
+            logger.error(
+                "Post-scan metadata strip failed for upload %s: %s — preserving existing "
+                "sanitized CAS object.",
+                upload_id,
+                exc,
             )
+            await repo.update_processing_status(upload_id, "degraded")
+            await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
+            return
 
         # ── 3. Generate thumbnail (soft failure — retried, then accepted without) ─
         thumbnail_status: str = "skipped"
@@ -159,43 +192,8 @@ async def process_upload_post_scan(
                     )
                     thumbnail_status = "failed"
 
-        # ── 4. Compress (soft failure — degrade gracefully) ──────────────────
-        final_mime = actual_mime
-        content_encoding: str | None = None
-        compress_ok = False
-        try:
-            comp_timeout = _compression_timeout(actual_mime)
-            comp_heartbeat = asyncio.create_task(_compress_heartbeat(comp_timeout))
-            try:
-                comp_res = await run_compress_stage(
-                    pf, actual_mime, original_filename, tracer, config=auth_config
-                )
-            finally:
-                comp_heartbeat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await comp_heartbeat
-            final_mime = comp_res.final_mime
-            content_encoding = comp_res.content_encoding
-            compress_ok = True
-        except Exception as exc:
-            logger.warning(
-                "Post-scan compression failed for upload %s: %s — serving uncompressed original.",
-                upload_id,
-                exc,
-            )
-
-        # ── 5. Overwrite CAS object with compressed file (may raise → retry) ─
-        content_sha256 = await pf.sha256()
-        await asyncio.wait_for(
-            upload_file_multipart(
-                pf.path,
-                cas_s3_key,
-                content_type=final_mime,
-                content_encoding=content_encoding,
-            ),
-            timeout=120.0,
-        )
-
+        # CAS objects are immutable and already contain the sanitized bytes.
+        # Background processing adds a thumbnail but never rewrites the CAS key.
         # ── 6. Upload thumbnail ───────────────────────────────────────────────
         thumbnail_key: str | None = None
         if thumbnail_path:
@@ -225,38 +223,29 @@ async def process_upload_post_scan(
 
         # ── 7. Persist results ────────────────────────────────────────────────
         update_kwargs: dict[str, Any] = {
-            "content_sha256": content_sha256,
             "processing_status": "complete",
-            "size_bytes": pf.size,
             "thumbnail_status": thumbnail_status,
         }
         if thumbnail_key:
             update_kwargs["thumbnail_key"] = thumbnail_key
-        if final_mime != mime_type:
-            update_kwargs["mime_type"] = final_mime
 
-        await repo.update_upload_status(upload_id, "clean", **update_kwargs)
-
-        # Backfill MaterialVersion.file_size for any PRs merged before compression
-        # finished (manual approvals where apply_pr ran while size_bytes was still
-        # the pre-compression value).
-        if worker_ctx.db_sessionmaker is not None:
-            try:
-                async with worker_ctx.db_sessionmaker() as db:
-                    await db.execute(
-                        sa_update(MaterialVersion)
-                        .where(MaterialVersion.file_key == cas_s3_key)
-                        .values(file_size=pf.size)
+        if not await _publish_postprocessed_upload(
+            worker_ctx,
+            upload_id=upload_id,
+            update_values=update_kwargs,
+        ):
+            if thumbnail_key:
+                try:
+                    await delete_object(thumbnail_key)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to remove unpublished thumbnail %s: %s",
+                        thumbnail_key,
+                        exc,
                     )
-                    await db.commit()
-            except Exception as exc:
-                logger.warning(
-                    "Failed to backfill MaterialVersion.file_size for %s: %s",
-                    cas_s3_key,
-                    exc,
-                )
+            return
 
-        # Update Redis status cache so frontend sees the compressed size
+        # Update the status cache with the derived-processing result.
         cache = UploadCacheRepository(worker_ctx.redis)
         status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
         event_channel = f"upload:events:{quarantine_key}"
@@ -267,9 +256,7 @@ async def process_upload_post_scan(
             try:
                 payload = json.loads(cached_json)
                 if payload.get("result"):
-                    payload["result"]["size"] = pf.size
                     payload["result"]["processing_status"] = "complete"
-                    # If the file was compressed, it's now "correct" to say it's ready
                     payload["status"] = UploadStatus.CLEAN
                     payload["detail"] = "Processing complete"
 
@@ -289,22 +276,23 @@ async def process_upload_post_scan(
         # ── 8. Delete quarantine object ───────────────────────────────────────
         try:
             await delete_object(quarantine_key)
+            try:
+                await worker_ctx.redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+            except Exception as exc:
+                logger.warning(
+                    "Deleted quarantine %s but failed to release quota membership: %s",
+                    quarantine_key,
+                    exc,
+                )
         except Exception as exc:
             logger.warning("Failed to delete quarantine %s: %s", quarantine_key, exc)
 
         # ── 9. Dispatch webhook ───────────────────────────────────────────────
         await repo.maybe_dispatch_webhook(upload_id)
 
-        # ── 10. Prometheus metrics ────────────────────────────────────────────
-        mime_cat = _mime_cat(final_mime)
-        upload_file_size.labels(mime_category=mime_cat).observe(initial_size)
-        if compress_ok and initial_size > 0 and pf.size > 0:
-            upload_compression_ratio.labels(mime_category=mime_cat).observe(initial_size / pf.size)
-
         logger.info(
-            "Post-scan processing complete for upload %s (compressed=%s, thumbnail=%s).",
+            "Post-scan processing complete for upload %s (thumbnail=%s).",
             upload_id,
-            compress_ok,
             thumbnail_key is not None,
         )
 
@@ -337,15 +325,6 @@ async def process_upload_post_scan(
                 Path(thumbnail_path).unlink(missing_ok=True)
 
 
-async def _compress_heartbeat(max_duration: float) -> None:
-    """Yield control periodically so the event loop stays responsive during compression."""
-    elapsed = 0.0
-    interval = 5.0
-    while elapsed < max_duration:
-        await asyncio.sleep(interval)
-        elapsed += interval
-
-
 async def _handle_permanent_failure(
     repo: UploadWorkerRepository,
     upload_id: str,
@@ -364,7 +343,7 @@ async def _handle_permanent_failure(
     )
     logger.error(
         "Post-scan processing permanently failed for upload %s after %d attempts — "
-        "serving uncompressed original.  Dead-letter record inserted.",
+        "serving the sanitized CAS object without derived metadata. Dead-letter inserted.",
         upload_id,
         attempts,
     )
@@ -419,26 +398,28 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
             pr.auto_merge_pending = False
 
             jobs: list[Any] = []
-            db.info["post_commit_jobs"] = jobs
-            db.info.setdefault("post_commit_job_keys", set())
+            db.info[PostCommitKey.JOBS] = jobs
+            db.info.setdefault(PostCommitKey.JOB_KEYS, set())
 
             await apply_pr(db, pr)
             await _cleanup_pr_resources(db, pr, redis=ctx.redis)  # type: ignore[arg-type]
 
-            sse_broadcasts = db.info.pop("post_commit_sse_broadcasts", [])
+            sse_broadcasts = db.info.pop(PostCommitKey.SSE, [])
             event = {"type": "pr_closed", "id": str(pr.id)}
             for topic in _pr_directory_topics(list(pr.payload)):
                 sse_broadcasts.append((topic, event))
             if pr.author_id:
                 sse_broadcasts.append((f"pr_updates:{pr.author_id}", event))
 
+            await persist_post_commit_jobs(db)
             await db.commit()
 
             for topic, event in sse_broadcasts:
                 broadcast_to_topic(topic, event)
 
-            # Dispatch arq jobs queued inside apply_pr (index_material, etc.)
-            await _dispatch_post_commit_jobs(jobs)
+            # Dispatch jobs from the durable DB outbox. Queue outages leave
+            # rows pending for the minute-level retry worker.
+            await dispatch_post_commit_actions(db)
 
             if pr.author_id:
                 async with ctx.db_sessionmaker() as notify_db:
@@ -455,22 +436,3 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
 
     except Exception as exc:
         logger.error("Failed to trigger auto-merge for cas_s3_key=%s: %s", cas_s3_key, exc)
-
-
-async def _dispatch_post_commit_jobs(jobs: list[Any]) -> None:
-    """Enqueue arq jobs accumulated in db.info['post_commit_jobs'] during apply_pr."""
-    if not jobs:
-        return
-
-    coalesced = _coalesce_index_jobs(jobs)
-    if redis_core.arq_pool is None:
-        logger.error(
-            "arq_pool unavailable — %d post-commit jobs from auto-merge lost.", len(coalesced)
-        )
-        return
-
-    for job in coalesced:
-        try:
-            await redis_core.arq_pool.enqueue_job(*job)
-        except Exception as exc:
-            logger.error("Failed to enqueue post-commit job %s after auto-merge: %s", job, exc)

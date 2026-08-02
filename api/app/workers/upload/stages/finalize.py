@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.core.cas import hmac_cas_key, increment_cas_ref
-from app.core.mimetypes import MimeRegistry
-from app.core.processing import ProcessingFile
-from app.core.storage import upload_file_multipart
+from app.core.events.processing import ProcessingFile
+from app.core.media.mimetypes import MimeRegistry
+from app.core.security.cas import hmac_cas_key, increment_cas_ref
+from app.core.storage.facade import upload_file_multipart
 from app.workers.upload.constants import _SCAN_CACHE_PREFIX, _SHA256_CACHE_PREFIX
 
 logger = logging.getLogger(__name__)
@@ -53,14 +53,14 @@ async def run_finalize_storage(
             safe_name = f"{stem}{ext}"
 
         content_sha256 = await input_data.pf.sha256()
-        cas_id = input_data.cas_key.split(":")[-1]
+        # CAS identity is the exact sanitized byte sequence that is stored.
+        content_cas_key = hmac_cas_key(content_sha256)
+        cas_id = content_cas_key.split(":")[-1]
         cas_s3_key = f"cas/{cas_id}"
 
         final_span.set_attribute("upload.final_key", cas_s3_key)
 
-        # CAS V2: always upload the processed file, replacing any existing object.
-        # This ensures compression/stripping improvements are applied even when the
-        # same source file was previously uploaded under an older pipeline.
+        # Concurrent writes for the same content hash contain identical bytes.
         await asyncio.wait_for(
             upload_file_multipart(
                 input_data.pf.path,
@@ -102,10 +102,23 @@ async def run_finalize_storage(
     }
     new_cas_ref = await increment_cas_ref(
         redis_client,
-        input_data.original_sha256,
+        content_sha256,
         initial_data=cas_data,
+        operation_id=f"upload-finalize:{input_data.upload_id}",
     )
-    db_cas_key = hmac_cas_key(input_data.original_sha256)
+    # The in-flight object is now represented by authoritative CAS usage.
+    from app.routers.upload.helpers import _release_storage_reservation
+
+    try:
+        await _release_storage_reservation(input_data.upload_id, redis_client)
+    except Exception as exc:
+        # Reservations expire and are reconciled by the next reservation attempt.
+        logger.warning(
+            "Failed to release storage reservation for upload %s: %s",
+            input_data.upload_id,
+            exc,
+        )
+    db_cas_key = content_cas_key
 
     # Quota tracking: use a synthetic staging key (no S3 object) so quota
     # cleanup doesn't interfere with shared CAS objects.

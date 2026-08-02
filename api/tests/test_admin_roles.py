@@ -26,7 +26,7 @@ async def _make_user(db: AsyncSession, role: UserRole) -> User:
 
 
 def _auth(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}

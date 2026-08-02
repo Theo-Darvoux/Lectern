@@ -5,11 +5,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.core.exceptions import BadRequestError
-from app.core.file_security import check_pdf_safety, strip_metadata_file
-from app.core.metrics import upload_scan_duration
-from app.core.processing import ProcessingFile
-from app.core.scanner import MalwareScanner
+from app.core.common.exceptions import BadRequestError
+from app.core.events.processing import ProcessingFile
+from app.core.observability.metrics import upload_scan_duration
+from app.core.security.file_security import check_pdf_safety, strip_metadata_file
+from app.core.security.file_security._concurrency import _shielded_to_thread
+from app.core.security.scanner import MalwareScanner
 from app.schemas.material import UploadStatus
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.exceptions import MalwareError, UploadError
@@ -36,7 +37,13 @@ async def run_scan_and_strip(
     scan_start = time.monotonic()
 
     scan_copy = tmp_path.with_suffix(".scan")
-    await asyncio.to_thread(shutil.copyfile, tmp_path, scan_copy)
+    try:
+        await _shielded_to_thread(shutil.copyfile, tmp_path, scan_copy)
+    except BaseException:
+        scan_copy.unlink(missing_ok=True)
+        if owns_scanner:
+            await scanner.close()
+        raise
 
     async def _run_scan() -> None:
         try:
@@ -47,7 +54,6 @@ async def run_scan_and_strip(
                     scanner.scan_file_path(
                         scan_copy,
                         original_filename,
-                        bazaar_hash=original_sha256,
                     ),
                     timeout=120.0,
                 )
@@ -85,9 +91,9 @@ async def run_scan_and_strip(
         if isinstance(strip_res, ValueError):
             raise MalwareError(str(strip_res))
         if isinstance(strip_res, BaseException):
-            logger.warning("Strip failed for %s (ignored): %s", upload_id, strip_res)
-        elif isinstance(strip_res, Path) and strip_res != tmp_path:
-            pf.replace_with(strip_res)
+            raise strip_res
+        if isinstance(strip_res, Path) and strip_res != tmp_path:
+            await pf.replace_with(strip_res)
     except Exception:
         if isinstance(strip_res, Path) and strip_res != tmp_path and pf.path != strip_res:
             try:
@@ -112,7 +118,7 @@ async def run_strip_only(
                 timeout=60.0,
             )
             if clean_path != tmp_path:
-                pf.replace_with(clean_path)
+                await pf.replace_with(clean_path)
         except TimeoutError:
             if clean_path is not None and clean_path != tmp_path and pf.path != clean_path:
                 clean_path.unlink(missing_ok=True)
@@ -133,6 +139,6 @@ async def run_post_strip_pdf_check(
         return
 
     try:
-        await asyncio.to_thread(check_pdf_safety, pf.path)
+        await _shielded_to_thread(check_pdf_safety, pf.path)
     except ValueError as exc:
         raise MalwareError(str(exc))

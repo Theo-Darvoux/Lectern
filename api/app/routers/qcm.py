@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import uuid
+from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from typing import Annotated, Any
 from xml.etree.ElementTree import Element
@@ -24,13 +25,14 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cas import hmac_cas_key, increment_cas_ref
-from app.core.database import get_db
-from app.core.mimetypes import QCM_MIME_TYPE
-from app.core.redis import redis_client
-from app.core.storage import _get_s3_settings, get_s3_client
-from app.core.storage import upload_file as storage_upload_file
+from app.core.database.database import get_db
+from app.core.database.redis import redis_client
+from app.core.media.mimetypes import QCM_MIME_TYPE
+from app.core.security.cas import hmac_cas_key, increment_cas_ref
+from app.core.storage.facade import _get_s3_settings, get_s3_client
+from app.core.storage.facade import upload_file as storage_upload_file
 from app.dependencies.auth import CurrentUser
+from app.models.cas_staging_claim import CasStagingClaim
 from app.services.material import get_material_with_version
 
 logger = logging.getLogger(__name__)
@@ -189,6 +191,7 @@ async def get_qcm_limits() -> dict[str, Any]:
 async def stage_qcm(
     body: QCMStageRequest,
     user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> QCMStageResponse:
     """Validate a QCM JSON structure, write it to the CAS, and return the file key.
 
@@ -218,6 +221,7 @@ async def stage_qcm(
     )
 
     # Increment CAS ref count so the PR workflow can track the blob
+    claim_id = uuid.uuid4()
     await increment_cas_ref(
         redis_client,
         sha256,
@@ -227,6 +231,16 @@ async def stage_qcm(
             "mime_type": QCM_MIME_TYPE,
             "file_name": "qcm.qcm",
         },
+        operation_id=f"qcm-stage:{claim_id}",
+    )
+    db.add(
+        CasStagingClaim(
+            id=claim_id,
+            user_id=user.id,
+            file_key=file_key,
+            sha256=sha256,
+            expires_at=datetime.now(UTC) + timedelta(hours=48),
+        )
     )
 
     logger.info(

@@ -265,10 +265,14 @@ class PresignedMultipartInitOut(BaseModel):
 
 
 class S3PartETag(BaseModel):
-    PartNumber: int
-    ETag: str
+    PartNumber: int = Field(ge=1, le=10_000)
+    ETag: str = Field(min_length=1, max_length=256)
+
+    model_config = {"extra": "forbid"}
 
 
 class PresignedMultipartCompleteRequest(BaseModel):
-    upload_id: str
-    parts: list[S3PartETag]
+    upload_id: str = Field(min_length=1, max_length=128)
+    parts: list[S3PartETag] = Field(min_length=1, max_length=10_000)
+
+    model_config = {"extra": "forbid"}

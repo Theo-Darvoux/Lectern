@@ -2,7 +2,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from app.core.mimetypes import ZIP_MIME_TYPES
+from app.core.media.mimetypes import ZIP_MIME_TYPES
 
 logger = logging.getLogger(__name__)
 

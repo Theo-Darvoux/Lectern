@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.core.storage import download_file, download_file_raw, get_object_headers
+from app.core.storage.facade import download_file, download_file_raw, get_object_headers
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -39,8 +39,8 @@ def _make_streaming_body(data: bytes) -> AsyncMock:
 
 
 _S3_SETTINGS = {"bucket": "test-bucket"}
-_SETTINGS_PATH = "app.core.storage._get_s3_settings"
-_CLIENT_PATH = "app.core.storage.get_s3_client"
+_SETTINGS_PATH = "app.core.storage.s3.S3Backend._settings"
+_CLIENT_PATH = "app.core.storage.s3.S3Backend.get_s3_client"
 
 
 # ── download_file_raw ─────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ async def test_download_file_decompresses_but_raw_does_not(tmp_path: Path) -> No
         patch(_CLIENT_PATH, return_value=_make_s3_ctx(client)),
     ):
         dest_decomp = tmp_path / "decomp"
-        await download_file("cas/k", dest_decomp)
+        await download_file("cas/k", dest_decomp, decompress=True)
 
     # Second call → download_file_raw (keeps gzip)
     client.get_object = AsyncMock(return_value=_make_resp())

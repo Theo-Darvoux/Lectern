@@ -6,7 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
 from app.models.upload import Upload
 from app.models.user import User, UserRole
 
@@ -34,10 +34,12 @@ def auth_headers(user: User) -> dict[str, str]:
 async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession, test_user: User):
     # 1. Simulate a successful upload to quarantine
     quarantine_key = f"quarantine/{test_user.id}/{uuid.uuid4()}/avatar.png"
+    final_key = f"cas/{uuid.uuid4().hex}"
     upload = Upload(
         upload_id=str(uuid.uuid4()),
         user_id=test_user.id,
         quarantine_key=quarantine_key,
+        final_key=final_key,
         filename="avatar.png",
         status="clean",
         mime_type="image/png",
@@ -48,7 +50,7 @@ async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession,
 
     # 2. Mock storage and processing
     with (
-        patch("app.services.user.download_file", new_callable=AsyncMock) as mock_download,
+        patch("app.services.user.download_file_raw", new_callable=AsyncMock) as mock_download,
         patch("app.services.user.upload_file", new_callable=AsyncMock) as mock_upload,
         patch("app.services.user.delete_object", new_callable=AsyncMock) as mock_delete,
         patch("app.services.user.process_avatar") as mock_process,
@@ -80,7 +82,11 @@ async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession,
     assert data["avatar_url"].endswith(".webp")
 
     # Verify storage calls
-    mock_download.assert_called_once()
+    mock_download.assert_awaited_once_with(
+        final_key,
+        mock_download.call_args.args[1],
+        max_bytes=20 * 1024 * 1024,
+    )
     mock_upload.assert_called_once()
     # Should delete the quarantine file
     mock_delete.assert_any_call(quarantine_key)
@@ -113,3 +119,44 @@ async def test_avatar_upload_unauthorized(
     # 3. Assertions
     assert response.status_code == 400
     assert "Invalid avatar upload key" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "mime_type", "final_key"),
+    [
+        ("pending", "image/png", "cas/image"),
+        ("malicious", "image/png", "cas/image"),
+        ("clean", "application/pdf", "cas/pdf"),
+        ("clean", "image/png", None),
+    ],
+)
+async def test_avatar_rejects_unprocessed_or_non_image_upload(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    test_user: User,
+    status: str,
+    mime_type: str,
+    final_key: str | None,
+):
+    quarantine_key = f"quarantine/{test_user.id}/{uuid.uuid4()}/avatar.png"
+    db_session.add(
+        Upload(
+            upload_id=str(uuid.uuid4()),
+            user_id=test_user.id,
+            quarantine_key=quarantine_key,
+            final_key=final_key,
+            filename="avatar.png",
+            status=status,
+            mime_type=mime_type,
+            size_bytes=1024,
+        )
+    )
+    await db_session.commit()
+
+    response = await client.patch(
+        "/api/users/me", json={"avatar_url": quarantine_key}, headers=auth_headers(test_user)
+    )
+
+    assert response.status_code == 400
+    assert "security processing" in response.json()["detail"]

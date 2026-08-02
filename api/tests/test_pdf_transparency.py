@@ -1,9 +1,56 @@
 import zlib
 from pathlib import Path
+from unittest.mock import patch
 
 import pikepdf
+import pytest
+from pikepdf.models.image import PdfImage
 
-from app.core.file_security._pdf import _pikepdf_repack_streams
+from app.core.security.file_security._image import MAX_IMAGE_PIXELS
+from app.core.security.file_security._pdf import _pikepdf_repack_streams
+
+
+def _write_pdf_with_image(
+    path: Path,
+    *,
+    image_size: tuple[int, int] = (100, 100),
+    mask_size: tuple[int, int] | None = None,
+) -> None:
+    pdf = pikepdf.new()
+    width, height = image_size
+    image_data = zlib.compress(bytes([255, 0, 0] * min(width * height, 10_000)))
+    image = pdf.make_stream(image_data)
+    image.Type = pikepdf.Name("/XObject")
+    image.Subtype = pikepdf.Name("/Image")
+    image.Width = width
+    image.Height = height
+    image.ColorSpace = pikepdf.Name("/DeviceRGB")
+    image.BitsPerComponent = 8
+    image.Filter = pikepdf.Name("/FlateDecode")
+
+    if mask_size is not None:
+        mask_width, mask_height = mask_size
+        mask_data = zlib.compress(bytes([255] * min(mask_width * mask_height, 10_000)))
+        mask = pdf.make_stream(mask_data)
+        mask.Type = pikepdf.Name("/XObject")
+        mask.Subtype = pikepdf.Name("/Image")
+        mask.Width = mask_width
+        mask.Height = mask_height
+        mask.ColorSpace = pikepdf.Name("/DeviceGray")
+        mask.BitsPerComponent = 8
+        mask.Filter = pikepdf.Name("/FlateDecode")
+        image.SMask = mask
+
+    resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(Im1=image))
+    page = pikepdf.Dictionary(
+        Type=pikepdf.Name("/Page"),
+        MediaBox=pikepdf.Array([0, 0, 100, 100]),
+        Resources=resources,
+        Contents=pdf.make_stream(b"q 100 0 0 100 0 0 cm /Im1 Do Q"),
+    )
+    pdf.pages.append(pikepdf.Page(pdf.make_indirect(page)))
+    pdf.save(path)
+    pdf.close()
 
 
 def test_repack_streams_preserves_smask(tmp_path: Path):
@@ -191,3 +238,35 @@ def test_repack_streams_preserves_stencil_mask(tmp_path: Path):
             # Stencil mask must have been converted to /SMask
             assert "/SMask" in raw_img
             assert "/Mask" not in raw_img
+
+
+def test_oversized_pdf_image_is_rejected_before_decode(tmp_path: Path) -> None:
+    source = tmp_path / "oversized-image.pdf"
+    output = tmp_path / "output.pdf"
+    _write_pdf_with_image(source, image_size=(MAX_IMAGE_PIXELS + 1, 1))
+
+    with (
+        patch("app.core.security.file_security._pdf.PdfImage", wraps=PdfImage) as decoder,
+        pytest.raises(ValueError, match="pixel limit"),
+    ):
+        _pikepdf_repack_streams(source, str(output), quality=75)
+
+    decoder.assert_not_called()
+
+
+def test_oversized_pdf_mask_is_rejected_before_mask_decode(tmp_path: Path) -> None:
+    source = tmp_path / "oversized-mask.pdf"
+    output = tmp_path / "output.pdf"
+    _write_pdf_with_image(
+        source,
+        image_size=(100, 100),
+        mask_size=(MAX_IMAGE_PIXELS + 1, 1),
+    )
+
+    with (
+        patch("app.core.security.file_security._pdf.PdfImage", wraps=PdfImage) as decoder,
+        pytest.raises(ValueError, match="pixel limit"),
+    ):
+        _pikepdf_repack_streams(source, str(output), quality=75)
+
+    decoder.assert_not_called()
