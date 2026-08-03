@@ -1,4 +1,20 @@
 services:
+  seaweedfs-image-policy:
+    profiles: [ seaweedfs-prod ]
+    image: alpine:3.20
+    environment:
+      SEAWEEDFS_IMAGE: ${SEAWEEDFS_IMAGE:-}
+    command: >-
+      /bin/sh -ec 'case "$$SEAWEEDFS_IMAGE" in
+      *@sha256:*) exit 0 ;;
+      *) echo "SEAWEEDFS_IMAGE must be pinned to an immutable @sha256 digest in production" >&2; exit 64 ;;
+      esac'
+
+  seaweedfs-master:
+    depends_on:
+      seaweedfs-image-policy:
+        condition: service_completed_successfully
+
   api:
     command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
 

@@ -156,7 +156,12 @@ async def create_multipart_upload(
     )
 
 
-async def upload_part(file_key: str, s3_upload_id: str, part_number: int, body: bytes) -> str:
+async def upload_part(
+    file_key: str,
+    s3_upload_id: str,
+    part_number: int,
+    body: bytes | IO[bytes] | Any,
+) -> str:
     return await get_storage().upload_part(file_key, s3_upload_id, part_number, body)
 
 
@@ -171,10 +176,18 @@ async def abort_multipart_upload(file_key: str, s3_upload_id: str) -> None:
 
 
 async def generate_presigned_upload_part(
-    file_key: str, s3_upload_id: str, part_number: int, ttl: int = 3600
+    file_key: str,
+    s3_upload_id: str,
+    part_number: int,
+    ttl: int = 3600,
+    content_length: int | None = None,
 ) -> str:
     return await get_storage().generate_presigned_upload_part(
-        file_key, s3_upload_id, part_number, ttl=ttl
+        file_key,
+        s3_upload_id,
+        part_number,
+        ttl=ttl,
+        content_length=content_length,
     )
 
 

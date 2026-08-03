@@ -253,6 +253,7 @@ class UploadHistoryOut(BaseModel):
 
 class PresignedMultipartPart(BaseModel):
     part_number: int
+    size: int = Field(ge=1)
     url: str
 
 

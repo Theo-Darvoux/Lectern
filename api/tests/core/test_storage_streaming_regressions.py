@@ -165,9 +165,9 @@ async def test_seaweedfs_content_type_update_reuploads_raw_bytes(
         async def put_object(
             self,
             *,
-            Body: Any,
-            ContentLength: int,
-            ContentType: str,
+            Body: Any,  # noqa: N803
+            ContentLength: int,  # noqa: N803
+            ContentType: str,  # noqa: N803
             **kwargs: Any,
         ) -> None:
             self.uploaded = Body.read()

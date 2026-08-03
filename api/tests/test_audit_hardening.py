@@ -44,7 +44,7 @@ def _auth_headers(user: User) -> dict[str, str]:
 def mock_storage_audit():
     with (
         patch(
-            "app.routers.upload.presigned.complete_multipart_upload", new_callable=AsyncMock
+            "app.routers.upload.presigned.complete_multipart_verified", new_callable=AsyncMock
         ) as m_complete,
         patch("app.core.storage.facade.read_object_bytes", new_callable=AsyncMock) as m_read,
         patch("app.core.storage.facade.delete_object", new_callable=AsyncMock) as m_delete,
@@ -135,9 +135,12 @@ async def test_presigned_multipart_abort_cleans_db_and_quota(
     db_session.add(up)
     await db_session.commit()
 
-    with patch(
-        "app.routers.upload.presigned.abort_multipart_upload", new_callable=AsyncMock
-    ) as m_abort:
+    with (
+        patch(
+            "app.routers.upload.presigned.abort_multipart_upload", new_callable=AsyncMock
+        ) as m_abort,
+        patch("app.routers.upload.presigned.delete_object", new_callable=AsyncMock),
+    ):
         headers = _auth_headers(user)
         response = await client.delete(
             f"/api/upload/presigned-multipart/{upload_id}", headers=headers

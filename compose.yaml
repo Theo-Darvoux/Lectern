@@ -413,7 +413,7 @@ services:
   seaweedfs:
     profiles: [ seaweedfs-dev ]
     restart: unless-stopped
-    image: chrislusf/seaweedfs:latest
+    image: ${SEAWEEDFS_IMAGE:-chrislusf/seaweedfs:4.29}
     networks:
       - backend
     command: >
@@ -460,12 +460,12 @@ services:
 
   seaweedfs-master:
     profiles: [ seaweedfs-prod ]
-    image: chrislusf/seaweedfs:latest
+    image: ${SEAWEEDFS_IMAGE:-chrislusf/seaweedfs:4.29}
     restart: unless-stopped
     networks:
       - backend
     command: >
-      master -ip=seaweedfs-master -ip.bind=0.0.0.0 -port=9333 -defaultReplication=001 -volumeSizeLimitMB=1024
+      master -ip=seaweedfs-master -ip.bind=0.0.0.0 -port=9333 -defaultReplication=010 -volumeSizeLimitMB=1024
     volumes:
       - /opt/seaweedfs/master:/data
     healthcheck:
@@ -476,7 +476,7 @@ services:
 
   seaweedfs-volume1:
     profiles: [ seaweedfs-prod ]
-    image: chrislusf/seaweedfs:latest
+    image: ${SEAWEEDFS_IMAGE:-chrislusf/seaweedfs:4.29}
     restart: unless-stopped
     networks:
       - backend
@@ -490,7 +490,7 @@ services:
 
   seaweedfs-volume2:
     profiles: [ seaweedfs-prod ]
-    image: chrislusf/seaweedfs:latest
+    image: ${SEAWEEDFS_IMAGE:-chrislusf/seaweedfs:4.29}
     restart: unless-stopped
     networks:
       - backend
@@ -504,7 +504,7 @@ services:
 
   seaweedfs-filer:
     profiles: [ seaweedfs-prod ]
-    image: chrislusf/seaweedfs:latest
+    image: ${SEAWEEDFS_IMAGE:-chrislusf/seaweedfs:4.29}
     restart: unless-stopped
     networks:
       - backend
@@ -512,13 +512,13 @@ services:
       seaweedfs-master:
         condition: service_healthy
     command: >
-      filer -ip.bind=0.0.0.0 -master=seaweedfs-master:9333
+      filer -ip.bind=0.0.0.0 -master=seaweedfs-master:9333 -defaultReplicaPlacement=010
     volumes:
       - /opt/seaweedfs/filer:/data
 
   seaweedfs-s3:
     profiles: [ seaweedfs-prod ]
-    image: chrislusf/seaweedfs:latest
+    image: ${SEAWEEDFS_IMAGE:-chrislusf/seaweedfs:4.29}
     restart: unless-stopped
     networks:
       - backend

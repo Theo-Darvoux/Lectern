@@ -1,20 +1,61 @@
 name: SeaweedFS Integration
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - ".github/workflows/seaweedfs-integration.yml"
+      - "api/app/config.py"
       - "api/app/core/events/processing.py"
       - "api/app/core/media/**"
       - "api/app/core/security/**"
       - "api/app/core/storage/**"
+      - "api/app/routers/tus.py"
+      - "api/app/routers/upload/**"
+      - "api/app/schemas/material.py"
+      - "api/app/workers/cleanup_uploads.py"
+      - "api/app/workers/reconcile_multipart.py"
       - "api/app/workers/upload/**"
       - "api/pyproject.toml"
       - "api/uv.lock"
       - "api/scripts/run-seaweedfs-integration-tests.sh"
+      - "api/scripts/run-seaweedfs-topology-tests.sh"
       - "api/tests/integration/storage/**"
-      - "infra/docker/seaweedfs/s3.json"
+      - "compose.yaml"
+      - "compose.prod.yaml"
+      - "infra/docker/seaweedfs/**"
+      - "infra/docker/redis/redis.conf"
+      - "web/src/lib/upload-client.ts"
+  pull_request:
+    paths:
+      - ".github/workflows/seaweedfs-integration.yml"
+      - "api/app/config.py"
+      - "api/app/core/events/processing.py"
+      - "api/app/core/media/**"
+      - "api/app/core/security/**"
+      - "api/app/core/storage/**"
+      - "api/app/routers/tus.py"
+      - "api/app/routers/upload/**"
+      - "api/app/schemas/material.py"
+      - "api/app/workers/cleanup_uploads.py"
+      - "api/app/workers/reconcile_multipart.py"
+      - "api/app/workers/upload/**"
+      - "api/pyproject.toml"
+      - "api/uv.lock"
+      - "api/scripts/run-seaweedfs-integration-tests.sh"
+      - "api/scripts/run-seaweedfs-topology-tests.sh"
+      - "api/tests/integration/storage/**"
+      - "compose.yaml"
+      - "compose.prod.yaml"
+      - "infra/docker/seaweedfs/**"
+      - "infra/docker/redis/redis.conf"
+      - "web/src/lib/upload-client.ts"
   workflow_dispatch:
+    inputs:
+      seaweedfs_image:
+        description: SeaweedFS release tag or immutable digest to test
+        required: false
+        default: chrislusf/seaweedfs:4.29
 
 permissions:
   contents: read
@@ -27,6 +68,8 @@ jobs:
   seaweedfs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      SEAWEEDFS_SOURCE_IMAGE: ${{ inputs.seaweedfs_image || 'chrislusf/seaweedfs:4.29' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -40,5 +83,42 @@ jobs:
         working-directory: api
         run: uv sync --frozen --extra dev
 
+      - name: Resolve SeaweedFS to an immutable digest
+        run: |
+          docker pull "$SEAWEEDFS_SOURCE_IMAGE"
+          resolved=$(docker image inspect --format '{{index .RepoDigests 0}}' "$SEAWEEDFS_SOURCE_IMAGE")
+          test -n "$resolved"
+          echo "SEAWEEDFS_IMAGE=$resolved" >> "$GITHUB_ENV"
+          echo "Testing $resolved"
+
       - name: Run live SeaweedFS integration suite
         run: ./api/scripts/run-seaweedfs-integration-tests.sh
+
+  seaweedfs-production-topology:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SEAWEEDFS_SOURCE_IMAGE: ${{ inputs.seaweedfs_image || 'chrislusf/seaweedfs:4.29' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+
+      - name: Install API dependencies
+        working-directory: api
+        run: uv sync --frozen --extra dev
+
+      - name: Resolve SeaweedFS to an immutable digest
+        run: |
+          docker pull "$SEAWEEDFS_SOURCE_IMAGE"
+          resolved=$(docker image inspect --format '{{index .RepoDigests 0}}' "$SEAWEEDFS_SOURCE_IMAGE")
+          test -n "$resolved"
+          echo "SEAWEEDFS_IMAGE=$resolved" >> "$GITHUB_ENV"
+          echo "Testing $resolved"
+
+      - name: Run production-topology SeaweedFS integration suite
+        run: ./api/scripts/run-seaweedfs-topology-tests.sh

@@ -60,7 +60,7 @@ async def test_presigned_multipart_flow(
 
         with (
             patch(
-                "app.routers.upload.presigned.complete_multipart_upload", new_callable=AsyncMock
+                "app.routers.upload.presigned.complete_multipart_verified", new_callable=AsyncMock
             ) as m_complete,
             patch("app.core.storage.facade.read_object_bytes", new_callable=AsyncMock) as m_read,
             patch("app.routers.upload.presigned.get_object_info", new_callable=AsyncMock) as m_info,

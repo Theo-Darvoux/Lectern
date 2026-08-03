@@ -1,5 +1,6 @@
 """Presigned upload endpoints: single-part and multipart."""
 
+import contextlib
 import json
 import logging
 import time
@@ -13,19 +14,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.common.constants import PRIVILEGED_ROLES
-from app.core.common.exceptions import BadRequestError, ForbiddenError
+from app.core.common.exceptions import BadRequestError, ForbiddenError, ServiceUnavailableError
 from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_lock
 from app.core.media.mimetypes import MimeRegistry, guess_mime_from_bytes
 from app.core.storage.facade import (
     abort_multipart_upload,
-    complete_multipart_upload,
     create_multipart_upload,
     delete_object,
     generate_presigned_put,
     generate_presigned_upload_part,
     get_object_info,
+)
+from app.core.storage.multipart_completion import (
+    MultipartCompletionError,
+    complete_multipart_verified,
 )
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
@@ -105,6 +109,39 @@ def _validated_multipart_manifest(
         {"PartNumber": part.PartNumber, "ETag": part.ETag}
         for part in sorted(data.parts, key=lambda part: part.PartNumber)
     ]
+
+
+async def _discard_multipart_intent(
+    intent: dict[str, Any],
+    *,
+    redis: Redis,  # type: ignore[type-arg]
+    db: AsyncSession,
+    reason: str,
+) -> None:
+    """Delete terminal multipart data before releasing its tracking state."""
+    with contextlib.suppress(Exception):
+        await abort_multipart_upload(intent["quarantine_key"], intent["s3_multipart_id"])
+    try:
+        await delete_object(intent["quarantine_key"])
+    except Exception as exc:
+        # Retain intent and reservation so a retry or cleanup worker can finish
+        # deletion. Never turn a failed quarantine cleanup into silent success.
+        raise ServiceUnavailableError(
+            "The invalid multipart object could not be removed. Retry completion or abort."
+        ) from exc
+
+    await redis.delete(f"{_UPLOAD_INTENT_PREFIX}{intent['upload_id']}")
+    await _release_storage_reservation(intent["upload_id"], redis)
+    await redis.zrem(
+        f"{_QUOTA_KEY_PREFIX}{intent['user_id']}",
+        intent["quarantine_key"],
+    )
+    await db.execute(
+        sql_update(Upload)
+        .where(Upload.upload_id == intent["upload_id"])
+        .values(status="failed", error_detail=reason)
+    )
+    await db.commit()
 
 
 @router.post("/init", response_model=PresignedUploadOut)
@@ -312,10 +349,24 @@ async def presigned_multipart_init(
         parts: list[PresignedMultipartPart] = []
 
         for i in range(1, num_parts + 1):
-            url = await generate_presigned_upload_part(
-                quarantine_key, s3_multipart_id, i, ttl=_UPLOAD_INTENT_TTL
+            expected_part_size = min(
+                part_size,
+                data.size - ((i - 1) * part_size),
             )
-            parts.append(PresignedMultipartPart(part_number=i, url=url))
+            url = await generate_presigned_upload_part(
+                quarantine_key,
+                s3_multipart_id,
+                i,
+                ttl=_UPLOAD_INTENT_TTL,
+                content_length=expected_part_size,
+            )
+            parts.append(
+                PresignedMultipartPart(
+                    part_number=i,
+                    size=expected_part_size,
+                    url=url,
+                )
+            )
 
         intent = json.dumps(
             {
@@ -390,13 +441,47 @@ async def presigned_multipart_complete(
         part_manifest = _validated_multipart_manifest(data, intent)
 
         if not intent.get("multipart_completed"):
-            await complete_multipart_upload(
-                intent["quarantine_key"],
-                intent["s3_multipart_id"],
-                part_manifest,
-            )
+            stored_manifest = intent.get("part_manifest")
+            if stored_manifest is not None and stored_manifest != part_manifest:
+                raise BadRequestError(
+                    "Multipart completion manifest changed during finalization.",
+                    code=UploadErrorCode.INTENT_MISMATCH,
+                )
+
+            # Persist the exact manifest before the non-atomic S3 operation. A
+            # retry can now reconcile a committed object even if this process
+            # exits before recording multipart_completed.
+            intent["part_manifest"] = part_manifest
+            intent["finalizing"] = True
+            await redis.set(intent_key, json.dumps(intent), ex=_UPLOAD_INTENT_TTL)
+
+            try:
+                await complete_multipart_verified(
+                    intent["quarantine_key"],
+                    intent["s3_multipart_id"],
+                    part_manifest,
+                    expected_size=int(intent["size"]),
+                )
+            except MultipartCompletionError as exc:
+                if exc.retryable:
+                    raise ServiceUnavailableError(
+                        "Multipart completion status is uncertain. Retry the same completion request."
+                    ) from exc
+                await _discard_multipart_intent(
+                    intent,
+                    redis=redis,
+                    db=db,
+                    reason=exc.detail,
+                )
+                raise BadRequestError(
+                    "Multipart upload could not be completed. Please restart the upload.",
+                    code=UploadErrorCode.INTENT_MISMATCH,
+                ) from exc
+
             intent["multipart_completed"] = True
-            await redis.set(intent_key, json.dumps(intent), keepttl=True)
+            intent["finalizing"] = False
+            intent["actual_size"] = int(intent["size"])
+            await redis.set(intent_key, json.dumps(intent), ex=_UPLOAD_INTENT_TTL)
 
         from app.core.storage.facade import read_object_bytes
 
@@ -404,18 +489,42 @@ async def presigned_multipart_complete(
         real_mime = guess_mime_from_bytes(head)
         ext = MimeRegistry.get_extension(intent["filename"])
         if real_mime != "application/octet-stream":
-            safe_name, ext = _apply_mime_correction(intent["filename"], real_mime, ext)
+            try:
+                safe_name, ext = _apply_mime_correction(intent["filename"], real_mime, ext)
+            except BadRequestError:
+                await _discard_multipart_intent(
+                    intent,
+                    redis=redis,
+                    db=db,
+                    reason="Completed multipart object failed authoritative MIME validation",
+                )
+                raise
             intent["filename"] = safe_name
             intent["mime_type"] = real_mime
 
         actual_info = await get_object_info(intent["quarantine_key"])
         actual_size = actual_info["size"]
         if actual_size != int(intent["size"]):
+            await _discard_multipart_intent(
+                intent,
+                redis=redis,
+                db=db,
+                reason="Completed multipart object size did not match upload intent",
+            )
             raise BadRequestError(
                 "Completed multipart object size does not match the upload intent.",
                 code=UploadErrorCode.INTENT_MISMATCH,
             )
-        _check_per_type_size(intent["mime_type"], actual_size)
+        try:
+            _check_per_type_size(intent["mime_type"], actual_size)
+        except BadRequestError:
+            await _discard_multipart_intent(
+                intent,
+                redis=redis,
+                db=db,
+                reason="Completed multipart object exceeded its authoritative MIME limit",
+            )
+            raise
         await _reserve_storage_limit(actual_size, data.upload_id, redis, db)
         await redis.zadd(f"{_QUOTA_KEY_PREFIX}{user_id}", {intent["quarantine_key"]: time.time()})
         await _enqueue_processing(
@@ -455,10 +564,17 @@ async def presigned_multipart_abort(
     if intent["user_id"] != user_id:
         raise ForbiddenError("You do not own this upload intent")
 
-    if intent.get("multipart_completed"):
-        await delete_object(intent["quarantine_key"])
-    else:
+    # Completion may have committed even if the response or Redis update was
+    # lost. Always attempt both cleanup operations; both are idempotent for the
+    # unique quarantine key. Preserve the intent if object deletion is unavailable.
+    with contextlib.suppress(Exception):
         await abort_multipart_upload(intent["quarantine_key"], intent["s3_multipart_id"])
+    try:
+        await delete_object(intent["quarantine_key"])
+    except Exception as exc:
+        raise ServiceUnavailableError(
+            "Multipart abort could not verify object deletion. Retry the abort request."
+        ) from exc
     await redis.delete(f"{_UPLOAD_INTENT_PREFIX}{upload_id}")
     await _release_storage_reservation(upload_id, redis)
 

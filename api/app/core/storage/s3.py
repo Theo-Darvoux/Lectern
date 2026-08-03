@@ -250,7 +250,7 @@ class S3Backend:
         file_key: str,
         s3_upload_id: str,
         part_number: int,
-        body: bytes,
+        body: bytes | IO[bytes] | Any,
     ) -> str:
         """Upload one part of a multipart upload. Returns the ETag."""
         cfg = self._cfg()
@@ -407,18 +407,24 @@ class S3Backend:
         s3_upload_id: str,
         part_number: int,
         ttl: int = 3600,
+        content_length: int | None = None,
     ) -> str:
         """Generate a presigned URL for uploading one part of a multipart upload."""
         cfg = self._cfg()
+        params: dict[str, Any] = {
+            "Bucket": cfg["bucket"],
+            "Key": file_key,
+            "UploadId": s3_upload_id,
+            "PartNumber": part_number,
+        }
+        if content_length is not None:
+            if content_length < 1:
+                raise ValueError("Multipart part content length must be positive")
+            params["ContentLength"] = content_length
         async with self._client(cfg) as s3:
             url = await s3.generate_presigned_url(
                 "upload_part",
-                Params={
-                    "Bucket": cfg["bucket"],
-                    "Key": file_key,
-                    "UploadId": s3_upload_id,
-                    "PartNumber": part_number,
-                },
+                Params=params,
                 ExpiresIn=ttl,
             )
         return self._rewrite_host(url, cfg=cfg)

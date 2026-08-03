@@ -128,6 +128,7 @@ class Settings(BaseSettings):
     tus_chunk_max_bytes: int = 100 * 1024 * 1024  # 100 MiB
     tus_max_size_bytes: int = 500 * 1024 * 1024  # 500 MiB
     tus_max_concurrent_per_user: int = 8
+    tus_max_concurrent_global: int = Field(default=8, ge=1, le=64)
 
     yara_rules_dir: str = "yara_rules"
     yara_scan_timeout: int = 60

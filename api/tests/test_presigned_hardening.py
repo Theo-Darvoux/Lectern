@@ -410,7 +410,7 @@ async def test_multipart_complete_checkpoint_makes_downstream_failure_retryable(
     read_header = AsyncMock(side_effect=[OSError("range read failed"), b"%PDF-1.7"])
     with (
         patch(
-            "app.routers.upload.presigned.complete_multipart_upload",
+            "app.routers.upload.presigned.complete_multipart_verified",
             new_callable=AsyncMock,
         ) as complete_multipart,
         patch("app.core.storage.facade.read_object_bytes", read_header),
@@ -472,7 +472,15 @@ async def test_multipart_complete_rejects_object_size_different_from_intent(
     )
 
     with (
-        patch("app.routers.upload.presigned.complete_multipart_upload", new_callable=AsyncMock),
+        patch("app.routers.upload.presigned.complete_multipart_verified", new_callable=AsyncMock),
+        patch(
+            "app.routers.upload.presigned.abort_multipart_upload",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "app.routers.upload.presigned.delete_object",
+            new_callable=AsyncMock,
+        ) as delete_object,
         patch(
             "app.core.storage.facade.read_object_bytes",
             new_callable=AsyncMock,
@@ -494,6 +502,7 @@ async def test_multipart_complete_rejects_object_size_different_from_intent(
         )
 
     assert response.status_code == 400
+    delete_object.assert_awaited_once_with(quarantine_key)
     assert response.json()["error_code"] == "ERR_INTENT_MISMATCH"
     enqueue.assert_not_awaited()
 

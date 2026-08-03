@@ -36,7 +36,7 @@ def mock_storage():
     with (
         patch("app.routers.tus.create_multipart_upload", new_callable=AsyncMock) as m_create,
         patch("app.routers.tus.upload_part", new_callable=AsyncMock) as m_upload,
-        patch("app.routers.tus.complete_multipart_upload", new_callable=AsyncMock) as m_complete,
+        patch("app.routers.tus.complete_multipart_verified", new_callable=AsyncMock) as m_complete,
         patch("app.routers.tus.abort_multipart_upload", new_callable=AsyncMock) as m_abort,
     ):
         m_create.return_value = "mock_s3_upload_id"

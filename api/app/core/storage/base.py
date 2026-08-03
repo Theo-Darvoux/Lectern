@@ -59,14 +59,23 @@ class ObjectStorage(Protocol):
         content_disposition: str | None = "attachment",
     ) -> str: ...
     async def upload_part(
-        self, file_key: str, s3_upload_id: str, part_number: int, body: bytes
+        self,
+        file_key: str,
+        s3_upload_id: str,
+        part_number: int,
+        body: bytes | IO[bytes] | Any,
     ) -> str: ...
     async def complete_multipart_upload(
         self, file_key: str, s3_upload_id: str, parts: list[dict[str, int | str]]
     ) -> None: ...
     async def abort_multipart_upload(self, file_key: str, s3_upload_id: str) -> None: ...
     async def generate_presigned_upload_part(
-        self, file_key: str, s3_upload_id: str, part_number: int, ttl: int = 3600
+        self,
+        file_key: str,
+        s3_upload_id: str,
+        part_number: int,
+        ttl: int = 3600,
+        content_length: int | None = None,
     ) -> str: ...
 
     async def download_file(

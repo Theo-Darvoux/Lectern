@@ -80,9 +80,6 @@ const PRESIGNED_MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024; // 100 MiB
 /** tus chunk size — must satisfy S3 minimum part size (5 MiB) for non-final parts. */
 const TUS_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB
 
-/** Direct S3 multipart part size. */
-const S3_PART_SIZE = 8 * 1024 * 1024; // 8 MiB
-
 // ── Internal types ────────────────────────────────────────────────────────────
 
 interface InitUploadResponse {
@@ -97,6 +94,7 @@ interface InitMultipartResponse {
     s3_multipart_id: string;
     parts: Array<{
         part_number: number;
+        size: number;
         url: string;
     }>;
 }
@@ -336,11 +334,27 @@ async function _presignedMultipartUpload(
         onBytesProgress?.(totalUploaded, file.size);
     };
 
-    const tasks = parts.map((p) => async () => {
-        const start = (p.part_number - 1) * S3_PART_SIZE;
-        const end = Math.min(start + S3_PART_SIZE, file.size);
+    let nextPartOffset = 0;
+    const partSpecs = parts.map((part) => {
+        const start = nextPartOffset;
+        const end = start + part.size;
+        nextPartOffset = end;
+        return { part, start, end };
+    });
+    if (nextPartOffset !== file.size) {
+        throw new Error(
+            `Server multipart plan totals ${nextPartOffset} bytes, expected ${file.size}`,
+        );
+    }
+
+    const tasks = partSpecs.map(({ part: p, start, end }) => async () => {
         const blob = file.slice(start, end);
-        const partSize = end - start;
+        if (blob.size !== p.size) {
+            throw new Error(
+                `Server/client multipart size mismatch for part ${p.part_number}: ${blob.size} !== ${p.size}`,
+            );
+        }
+        const partSize = p.size;
 
         const onPartProgress = (partPct: number) => {
             progressPerPart[p.part_number] = (partPct / 100) * partSize;
@@ -360,6 +374,7 @@ async function _presignedMultipartUpload(
         calculateProgress();
     });
 
+    let completionStarted = false;
     try {
         for (const task of tasks) {
             const promise = task().finally(() => {
@@ -375,25 +390,47 @@ async function _presignedMultipartUpload(
 
         _onStatusUpdate(onStatusUpdate, "finalizingMultipart", options.t);
 
-        await apiRequest("/upload/presigned-multipart/complete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...baseHeaders },
-            body: JSON.stringify({
-                upload_id: initResp.upload_id,
-                parts: etags,
-            }),
-            signal,
-        });
+        completionStarted = true;
+        let completionAttempts = 0;
+        while (true) {
+            try {
+                await apiRequest("/upload/presigned-multipart/complete", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", ...baseHeaders },
+                    body: JSON.stringify({
+                        upload_id: initResp.upload_id,
+                        parts: etags,
+                    }),
+                    signal,
+                });
+                break;
+            } catch (err) {
+                completionAttempts++;
+                const retryable =
+                    (err instanceof ApiError && _isRetryable(err.status)) ||
+                    (!(err instanceof ApiError) && !signal?.aborted);
+                if (!retryable || completionAttempts >= _MAX_RETRIES) throw err;
+                await _sleep(Math.min(1000 * 2 ** completionAttempts, 30_000), signal);
+            }
+        }
 
         return initResp.quarantine_key;
     } catch (err) {
-        // Abort S3 multipart to free orphaned parts immediately (audit review fix)
-        try {
-            await apiRequest(`/upload/presigned-multipart/${initResp.upload_id}`, {
-                method: "DELETE",
-                headers: baseHeaders,
-            });
-        } catch { /* best-effort cleanup */ }
+        const uncertainCompletion =
+            completionStarted &&
+            !signal?.aborted &&
+            ((err instanceof ApiError && _isRetryable(err.status)) || !(err instanceof ApiError));
+
+        // A timeout or 5xx may mean S3 committed and only the response was lost.
+        // Preserve that intent so the exact manifest can be retried/reconciled.
+        if (!uncertainCompletion) {
+            try {
+                await apiRequest(`/upload/presigned-multipart/${initResp.upload_id}`, {
+                    method: "DELETE",
+                    headers: baseHeaders,
+                });
+            } catch { /* best-effort cleanup */ }
+        }
         throw err;
     }
 }
