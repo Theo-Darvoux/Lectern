@@ -159,7 +159,8 @@ class TestHigh1MultipartAtomicIntent:
         source = inspect.getsource(presigned_mod.presigned_multipart_complete)
         assert "redis_lock" in source
         assert "GETDEL" not in source
-        assert source.index("_enqueue_processing") < source.index("redis.delete(intent_key)")
+        assert source.index("_enqueue_processing") < source.index('intent["enqueued"] = True')
+        assert "redis.delete(intent_key)" not in source
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

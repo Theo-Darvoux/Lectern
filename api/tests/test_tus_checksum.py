@@ -68,6 +68,8 @@ async def test_tus_patch_valid_checksum():
     mock_redis.lock = MagicMock(return_value=mock_lock)
     mock_redis.get.return_value = None
     mock_redis.hgetall.return_value = _mock_tus_state(content)
+    mock_redis.register_script = MagicMock(return_value=AsyncMock(return_value=1))
+    mock_redis.zrem.return_value = 1
     mock_redis.incr.return_value = 1
     mock_redis.decr.return_value = 0
 
@@ -106,6 +108,8 @@ async def test_tus_patch_wrong_checksum():
     mock_redis.lock = MagicMock(return_value=mock_lock)
     mock_redis.get.return_value = None
     mock_redis.hgetall.return_value = _mock_tus_state(content)
+    mock_redis.register_script = MagicMock(return_value=AsyncMock(return_value=1))
+    mock_redis.zrem.return_value = 1
     mock_redis.incr.return_value = 1
     mock_redis.decr.return_value = 0
 

@@ -260,11 +260,11 @@ async def test_redis_expired_lease_renewal_fails():
             return 1
         return 0
 
-    with patch("app.core.database.redis._semaphore_script", side_effect=mock_script):
-        with pytest.raises(RedisConcurrencyError, match="Lost semaphore lease"):
-            async with redis_semaphore(mock_client, "test_sem", limit=1, timeout=1.0, expire=0.03):
-                # Wait long enough for renewal loop to run
-                await asyncio.sleep(0.05)
+    mock_client.register_script = MagicMock(return_value=mock_script)
+    with pytest.raises(RedisConcurrencyError, match="Lost semaphore lease"):
+        async with redis_semaphore(mock_client, "test_sem", limit=1, timeout=1.0, expire=0.03):
+            # Wait long enough for renewal loop to run
+            await asyncio.sleep(0.05)
 
 
 @pytest.mark.asyncio
@@ -281,10 +281,10 @@ async def test_redis_body_exception_preserved_over_cleanup_error():
     async def mock_script(keys, args, client=None):
         return 1
 
-    with patch("app.core.database.redis._semaphore_script", side_effect=mock_script):
-        with pytest.raises(ZeroDivisionError):
-            async with redis_semaphore(mock_client, "test_sem", limit=1, timeout=1.0, expire=10):
-                raise ZeroDivisionError("Original body error")
+    mock_client.register_script = MagicMock(return_value=mock_script)
+    with pytest.raises(ZeroDivisionError):
+        async with redis_semaphore(mock_client, "test_sem", limit=1, timeout=1.0, expire=10):
+            raise ZeroDivisionError("Original body error")
 
 
 # =============================================================================

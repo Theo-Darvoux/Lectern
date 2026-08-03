@@ -38,6 +38,7 @@ def mock_storage():
         patch("app.routers.tus.upload_part", new_callable=AsyncMock) as m_upload,
         patch("app.routers.tus.complete_multipart_verified", new_callable=AsyncMock) as m_complete,
         patch("app.routers.tus.abort_multipart_upload", new_callable=AsyncMock) as m_abort,
+        patch("app.routers.tus.delete_object", new_callable=AsyncMock) as m_delete,
     ):
         m_create.return_value = "mock_s3_upload_id"
         m_upload.return_value = "mock_etag"
@@ -46,6 +47,7 @@ def mock_storage():
             "upload": m_upload,
             "complete": m_complete,
             "abort": m_abort,
+            "delete": m_delete,
         }
 
 
@@ -252,8 +254,10 @@ async def test_tus_patch_success_final(
     mock_storage["complete"].assert_called_once()
     mock_arq_pool.enqueue_job.assert_called_once()
 
-    # State should be deleted
-    assert f"tus:state:{tus_id}" not in fake_redis_setup.data
+    # A complete tombstone remains so response-loss retries and DELETE are safe.
+    completed_state = await fake_redis_setup.hgetall(f"tus:state:{tus_id}")
+    assert completed_state[b"enqueued"] == b"1"
+    assert completed_state[b"multipart_completed"] == b"1"
 
 
 @pytest.mark.asyncio
@@ -304,7 +308,13 @@ async def test_tus_patch_offset_mismatch(
     await db_session.commit()
 
     tus_id = str(uuid.uuid4())
-    state = {"user_id": str(user.id), "offset": "500", "length": "1000", "parts": "[]"}
+    state = {
+        "user_id": str(user.id),
+        "upload_id": "empty-chunk-upload",
+        "offset": "500",
+        "length": "1000",
+        "parts": "[]",
+    }
     await fake_redis_setup.hset(f"tus:state:{tus_id}", state)
 
     headers = _auth_headers(user)
@@ -329,7 +339,13 @@ async def test_tus_patch_chunk_too_small(
     await db_session.commit()
 
     tus_id = str(uuid.uuid4())
-    state = {"user_id": str(user.id), "offset": "0", "length": "20000000", "parts": "[]"}
+    state = {
+        "user_id": str(user.id),
+        "upload_id": "small-chunk-upload",
+        "offset": "0",
+        "length": "20000000",
+        "parts": "[]",
+    }
     await fake_redis_setup.hset(f"tus:state:{tus_id}", state)
 
     headers = _auth_headers(user)
@@ -386,7 +402,13 @@ async def test_tus_patch_empty_chunk(
     await db_session.commit()
 
     tus_id = str(uuid.uuid4())
-    state = {"user_id": str(user.id), "offset": "500", "length": "1000", "parts": "[]"}
+    state = {
+        "user_id": str(user.id),
+        "upload_id": "empty-patch-upload",
+        "offset": "500",
+        "length": "1000",
+        "parts": "[]",
+    }
     await fake_redis_setup.hset(f"tus:state:{tus_id}", state)
 
     headers = _auth_headers(user)
@@ -411,7 +433,13 @@ async def test_tus_delete_success(
     await db_session.commit()
 
     tus_id = str(uuid.uuid4())
-    state = {"user_id": str(user.id), "quarantine_key": "q-key", "s3_upload_id": "s3-id"}
+    upload_id = str(uuid.uuid4())
+    state = {
+        "user_id": str(user.id),
+        "upload_id": upload_id,
+        "quarantine_key": "q-key",
+        "s3_upload_id": "s3-id",
+    }
     await fake_redis_setup.hset(f"tus:state:{tus_id}", state)
 
     headers = _auth_headers(user)
@@ -420,6 +448,8 @@ async def test_tus_delete_success(
     assert response.status_code == 204
 
     mock_storage["abort"].assert_called_once_with("q-key", "s3-id")
+    mock_storage["delete"].assert_called_once_with("q-key")
+    assert await fake_redis_setup.get(f"upload:cancel:{upload_id}")
     assert f"tus:state:{tus_id}" not in fake_redis_setup.data
 
 

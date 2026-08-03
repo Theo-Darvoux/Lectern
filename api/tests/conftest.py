@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -73,8 +74,9 @@ async def db_session(db_connection, engine) -> AsyncGenerator[AsyncSession, None
     c_db.async_session_factory = orig_factory
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def db_lock():
+    # asyncio primitives are loop-bound; pytest uses a fresh loop per test.
     return asyncio.Lock()
 
 
@@ -141,15 +143,41 @@ class FakeRedis:
 
     def register_script(self, script):
         async def run(*, keys, args, client=None):
+            if "holder_id" in script and "ZREMRANGEBYSCORE" in script:
+                import time
+
+                sem_key = keys[0]
+                limit = int(args[0])
+                holder_id = str(args[1])
+                operation = str(args[2])
+                expire_ms = int(args[4])
+                now_ms = int(time.monotonic() * 1000)
+                holders = self.data.setdefault(sem_key, {})
+                expired = [holder for holder, deadline in holders.items() if deadline <= now_ms]
+                for holder in expired:
+                    holders.pop(holder, None)
+                if operation == "renew":
+                    if holder_id not in holders:
+                        return 0
+                    holders[holder_id] = now_ms + expire_ms
+                    return 1
+                if holder_id in holders or len(holders) < limit:
+                    holders[holder_id] = now_ms + expire_ms
+                    return 1
+                return 0
+
             if "requested_size" in script:
                 reservation_id = str(args[0])
                 requested_size = int(args[1])
-                usage = int(args[4])
-                capacity = int(args[5])
+                capacity = int(args[4])
+                usage_raw = self.data.get(keys[3], 0)
+                usage = int(usage_raw.decode() if isinstance(usage_raw, bytes) else usage_raw)
                 sizes = self.data.setdefault(keys[1], {})
                 previous = int(sizes.get(reservation_id, 0))
-                total = int(self.data.get(keys[2], 0))
+                total_raw = self.data.get(keys[2], 0)
+                total = int(total_raw.decode() if isinstance(total_raw, bytes) else total_raw)
                 if usage + total - previous + requested_size > capacity:
+                    self.data[keys[2]] = total
                     return 0
                 sizes[reservation_id] = requested_size
                 self.data[keys[2]] = total - previous + requested_size
@@ -393,8 +421,35 @@ class FakeRedis:
 
 
 @pytest.fixture
-def fake_redis_setup(mock_redis):
+def fake_redis_setup(mock_redis, monkeypatch):
     fr = FakeRedis()
+
+    # Route-level tests use an AsyncMock Redis wrapper for call assertions. Run
+    # the real semaphore implementation against the backing FakeRedis so lease
+    # ownership and renewal semantics are deterministic instead of depending on
+    # nested AsyncMock return values.
+    from app.core.database.redis import redis_semaphore as real_redis_semaphore
+
+    @asynccontextmanager
+    async def fake_route_semaphore(
+        _redis,
+        sem_name,
+        limit,
+        timeout=60.0,
+        retry_interval=0.2,
+        expire=300,
+    ):
+        async with real_redis_semaphore(
+            fr,
+            sem_name,
+            limit,
+            timeout=timeout,
+            retry_interval=retry_interval,
+            expire=expire,
+        ):
+            yield
+
+    monkeypatch.setattr("app.routers.tus.redis_semaphore", fake_route_semaphore)
     mock_redis.hset.side_effect = fr.hset
     mock_redis.hgetall.side_effect = fr.hgetall
     mock_redis.hget.side_effect = fr.hget
@@ -423,6 +478,7 @@ def fake_redis_setup(mock_redis):
     mock_redis.srem.side_effect = fr.srem
     mock_redis.smembers.side_effect = fr.smembers
     mock_redis.execute_command.side_effect = fr.execute_command
+    mock_redis.register_script.side_effect = fr.register_script
     return fr
 
 

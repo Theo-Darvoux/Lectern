@@ -86,13 +86,14 @@ async def test_redis_semaphore_successful_acquisition():
     mock_redis = AsyncMock()
     mock_redis.zrem.return_value = 1
 
-    with patch("app.core.database.redis._semaphore_script", new_callable=AsyncMock) as mock_sem:
-        mock_sem.return_value = 1
-        async with redis_semaphore(mock_redis, "test_sem", limit=2, timeout=1.0):
-            pass
+    mock_sem = AsyncMock(return_value=1)
+    mock_redis.register_script = MagicMock(return_value=mock_sem)
 
-        mock_sem.assert_called_once()
-        mock_redis.zrem.assert_called_once()
+    async with redis_semaphore(mock_redis, "test_sem", limit=2, timeout=1.0):
+        pass
+
+    mock_sem.assert_called_once()
+    mock_redis.zrem.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -100,14 +101,15 @@ async def test_redis_semaphore_renews_lease_while_body_is_running():
     mock_redis = AsyncMock()
     mock_redis.zrem.return_value = 1
 
-    with patch("app.core.database.redis._semaphore_script", new_callable=AsyncMock) as mock_sem:
-        mock_sem.return_value = 1
-        async with redis_semaphore(mock_redis, "renewed", limit=1, expire=0.03):
-            import asyncio
+    mock_sem = AsyncMock(return_value=1)
+    mock_redis.register_script = MagicMock(return_value=mock_sem)
 
-            await asyncio.sleep(0.025)
+    async with redis_semaphore(mock_redis, "renewed", limit=1, expire=0.03):
+        import asyncio
 
-        assert mock_sem.await_count >= 2
+        await asyncio.sleep(0.025)
+
+    assert mock_sem.await_count >= 2
 
 
 @pytest.mark.asyncio
@@ -115,22 +117,24 @@ async def test_redis_semaphore_preserves_body_timeout_error():
     mock_redis = AsyncMock()
     mock_redis.zrem.return_value = 1
 
-    with patch("app.core.database.redis._semaphore_script", new_callable=AsyncMock) as mock_sem:
-        mock_sem.return_value = 1
-        with pytest.raises(TimeoutError, match="body deadline"):
-            async with redis_semaphore(mock_redis, "body_timeout", limit=1):
-                raise TimeoutError("body deadline")
+    mock_sem = AsyncMock(return_value=1)
+    mock_redis.register_script = MagicMock(return_value=mock_sem)
+
+    with pytest.raises(TimeoutError, match="body deadline"):
+        async with redis_semaphore(mock_redis, "body_timeout", limit=1):
+            raise TimeoutError("body deadline")
 
 
 @pytest.mark.asyncio
 async def test_redis_semaphore_preserves_redis_unavailable_error():
     mock_redis = AsyncMock()
 
-    with patch("app.core.database.redis._semaphore_script", new_callable=AsyncMock) as mock_sem:
-        mock_sem.side_effect = RedisConnectionError("down")
-        with pytest.raises(RedisSemaphoreUnavailableError):
-            async with redis_semaphore(mock_redis, "unavailable", limit=1):
-                pass
+    mock_sem = AsyncMock(side_effect=RedisConnectionError("down"))
+    mock_redis.register_script = MagicMock(return_value=mock_sem)
+
+    with pytest.raises(RedisSemaphoreUnavailableError):
+        async with redis_semaphore(mock_redis, "unavailable", limit=1):
+            pass
 
 
 @pytest.mark.asyncio
@@ -138,29 +142,31 @@ async def test_redis_semaphore_reports_expired_holder_on_release():
     mock_redis = AsyncMock()
     mock_redis.zrem.return_value = 0
 
-    with patch("app.core.database.redis._semaphore_script", new_callable=AsyncMock) as mock_sem:
-        mock_sem.return_value = 1
-        with pytest.raises(RedisConcurrencyError, match="before release"):
-            async with redis_semaphore(mock_redis, "expired", limit=1):
-                pass
+    mock_sem = AsyncMock(return_value=1)
+    mock_redis.register_script = MagicMock(return_value=mock_sem)
+
+    with pytest.raises(RedisConcurrencyError, match="before release"):
+        async with redis_semaphore(mock_redis, "expired", limit=1):
+            pass
 
 
 @pytest.mark.asyncio
 async def test_redis_semaphore_timeout_raises_error():
     mock_redis = AsyncMock()
 
-    with patch("app.core.database.redis._semaphore_script", new_callable=AsyncMock) as mock_sem:
-        mock_sem.return_value = 0
-        with pytest.raises(
-            RedisSemaphoreTimeoutError, match="Could not acquire semaphore test_sem"
-        ) as exc_info:
-            async with redis_semaphore(
-                mock_redis, "test_sem", limit=2, timeout=0.1, retry_interval=0.02
-            ):
-                pass
+    mock_sem = AsyncMock(return_value=0)
+    mock_redis.register_script = MagicMock(return_value=mock_sem)
 
-        assert isinstance(exc_info.value, TimeoutError)
-        assert isinstance(exc_info.value, RedisConcurrencyError)
+    with pytest.raises(
+        RedisSemaphoreTimeoutError, match="Could not acquire semaphore test_sem"
+    ) as exc_info:
+        async with redis_semaphore(
+            mock_redis, "test_sem", limit=2, timeout=0.1, retry_interval=0.02
+        ):
+            pass
+
+    assert isinstance(exc_info.value, TimeoutError)
+    assert isinstance(exc_info.value, RedisConcurrencyError)
 
 
 def test_build_redis_settings():
@@ -215,11 +221,12 @@ async def test_redis_semaphore_repeated_cancellation_waits_for_release():
 
     entered = asyncio.Event()
 
+    mock_redis.register_script = MagicMock(return_value=mock_script)
+
     async def guarded_body() -> None:
-        with patch("app.core.database.redis._semaphore_script", side_effect=mock_script):
-            async with redis_semaphore(mock_redis, "cancel_cleanup", limit=1, expire=10):
-                entered.set()
-                await asyncio.Event().wait()
+        async with redis_semaphore(mock_redis, "cancel_cleanup", limit=1, expire=10):
+            entered.set()
+            await asyncio.Event().wait()
 
     task = asyncio.create_task(guarded_body())
     await entered.wait()
@@ -254,11 +261,12 @@ async def test_external_cancellation_wins_lease_loss_race():
 
     entered = asyncio.Event()
 
+    mock_redis.register_script = MagicMock(return_value=mock_script)
+
     async def guarded_body() -> None:
-        with patch("app.core.database.redis._semaphore_script", side_effect=mock_script):
-            async with redis_semaphore(mock_redis, "cancel_race", limit=1, expire=0.03):
-                entered.set()
-                await asyncio.Event().wait()
+        async with redis_semaphore(mock_redis, "cancel_race", limit=1, expire=0.03):
+            entered.set()
+            await asyncio.Event().wait()
 
     task = asyncio.create_task(guarded_body())
     await entered.wait()

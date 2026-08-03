@@ -9,12 +9,18 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from redis.asyncio import Redis
+from sqlalchemy import select
 from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.common.constants import PRIVILEGED_ROLES
-from app.core.common.exceptions import BadRequestError, ForbiddenError, ServiceUnavailableError
+from app.core.common.exceptions import (
+    BadRequestError,
+    ConflictError,
+    ForbiddenError,
+    ServiceUnavailableError,
+)
 from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_lock
@@ -74,6 +80,38 @@ _PRESIGNED_DEPRECATION_HEADERS = {
     "Link": '</api/upload>; rel="successor-version"',
 }
 _PRESIGNED_MULTIPART_PART_SIZE = 8 * 1024 * 1024
+_UPLOAD_CANCEL_TTL = 24 * 3600
+
+
+def _upload_cancel_key(upload_id: str) -> str:
+    return f"upload:cancel:{upload_id}"
+
+
+async def _presigned_upload_is_cancelled(
+    intent: dict[str, Any],
+    redis: Redis,  # type: ignore[type-arg]
+    db: AsyncSession,
+) -> bool:
+    if intent.get("cancelled"):
+        return True
+    try:
+        if await redis.get(_upload_cancel_key(str(intent["upload_id"]))):
+            return True
+    except Exception as exc:
+        raise ServiceUnavailableError(
+            "Upload cancellation state is temporarily unavailable. Retry the request."
+        ) from exc
+    status = await db.scalar(select(Upload.status).where(Upload.upload_id == intent["upload_id"]))
+    return status == "cancelled"
+
+
+async def _ensure_presigned_upload_active(
+    intent: dict[str, Any],
+    redis: Redis,  # type: ignore[type-arg]
+    db: AsyncSession,
+) -> None:
+    if await _presigned_upload_is_cancelled(intent, redis, db):
+        raise ConflictError("Upload was cancelled")
 
 
 def _validated_multipart_manifest(
@@ -138,7 +176,7 @@ async def _discard_multipart_intent(
     )
     await db.execute(
         sql_update(Upload)
-        .where(Upload.upload_id == intent["upload_id"])
+        .where(Upload.upload_id == intent["upload_id"], Upload.status != "cancelled")
         .values(status="failed", error_detail=reason)
     )
     await db.commit()
@@ -422,10 +460,10 @@ async def presigned_multipart_complete(
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadPendingOut:
-    """Finalise a presigned multipart upload."""
+    """Finalise a presigned multipart upload under the cancellation lock."""
     user_id = str(user.id)
-
     intent_key = f"{_UPLOAD_INTENT_PREFIX}{data.upload_id}"
+
     async with redis_lock(redis, f"upload-complete:{data.upload_id}", timeout=5, expire=120):
         intent_raw = await redis.get(intent_key)
         if not intent_raw:
@@ -437,8 +475,25 @@ async def presigned_multipart_complete(
         intent = json.loads(intent_raw)
         if intent["user_id"] != user_id:
             raise ForbiddenError("You do not own this upload intent")
+        await _ensure_presigned_upload_active(intent, redis, db)
 
         part_manifest = _validated_multipart_manifest(data, intent)
+
+        # Retain a complete tombstone after enqueue. This makes response-loss
+        # retries idempotent and keeps cancellation possible after enqueue.
+        if intent.get("enqueued"):
+            if intent.get("part_manifest") != part_manifest:
+                raise BadRequestError(
+                    "Multipart completion manifest changed after enqueue.",
+                    code=UploadErrorCode.INTENT_MISMATCH,
+                )
+            return UploadPendingOut(
+                upload_id=data.upload_id,
+                file_key=intent["quarantine_key"],
+                status=UploadStatus.PROCESSING,
+                size=int(intent["actual_size"]),
+                mime_type=intent["mime_type"],
+            )
 
         if not intent.get("multipart_completed"):
             stored_manifest = intent.get("part_manifest")
@@ -448,9 +503,7 @@ async def presigned_multipart_complete(
                     code=UploadErrorCode.INTENT_MISMATCH,
                 )
 
-            # Persist the exact manifest before the non-atomic S3 operation. A
-            # retry can now reconcile a committed object even if this process
-            # exits before recording multipart_completed.
+            # Checkpoint the exact manifest before the non-atomic S3 operation.
             intent["part_manifest"] = part_manifest
             intent["finalizing"] = True
             await redis.set(intent_key, json.dumps(intent), ex=_UPLOAD_INTENT_TTL)
@@ -478,6 +531,7 @@ async def presigned_multipart_complete(
                     code=UploadErrorCode.INTENT_MISMATCH,
                 ) from exc
 
+            await _ensure_presigned_upload_active(intent, redis, db)
             intent["multipart_completed"] = True
             intent["finalizing"] = False
             intent["actual_size"] = int(intent["size"])
@@ -525,8 +579,14 @@ async def presigned_multipart_complete(
                 reason="Completed multipart object exceeded its authoritative MIME limit",
             )
             raise
+
+        await _ensure_presigned_upload_active(intent, redis, db)
         await _reserve_storage_limit(actual_size, data.upload_id, redis, db)
-        await redis.zadd(f"{_QUOTA_KEY_PREFIX}{user_id}", {intent["quarantine_key"]: time.time()})
+        await redis.zadd(
+            f"{_QUOTA_KEY_PREFIX}{user_id}",
+            {intent["quarantine_key"]: time.time()},
+        )
+        await _ensure_presigned_upload_active(intent, redis, db)
         await _enqueue_processing(
             user_id=user_id,
             upload_id=intent["upload_id"],
@@ -536,7 +596,10 @@ async def presigned_multipart_complete(
             file_size=actual_size,
             job_id=f"presigned-process:{intent['upload_id']}",
         )
-        await redis.delete(intent_key)
+
+        intent["actual_size"] = actual_size
+        intent["enqueued"] = True
+        await redis.set(intent_key, json.dumps(intent), ex=_UPLOAD_INTENT_TTL)
 
     return UploadPendingOut(
         upload_id=data.upload_id,
@@ -546,53 +609,57 @@ async def presigned_multipart_complete(
         mime_type=intent["mime_type"],
     )
 
-
 @router.delete("/presigned-multipart/{upload_id}", status_code=204)
 async def presigned_multipart_abort(
     upload_id: str,
     user: CurrentUser,
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
-    """Abort an in-progress multipart upload."""
+    """Serialize cancellation with completion and retain cleanup retry state."""
     user_id = str(user.id)
+    intent_key = f"{_UPLOAD_INTENT_PREFIX}{upload_id}"
 
-    intent_raw = await redis.get(f"{_UPLOAD_INTENT_PREFIX}{upload_id}")
-    if not intent_raw:
-        return
+    async with redis_lock(redis, f"upload-complete:{upload_id}", timeout=5, expire=120):
+        intent_raw = await redis.get(intent_key)
+        if not intent_raw:
+            return
 
-    intent = json.loads(intent_raw)
-    if intent["user_id"] != user_id:
-        raise ForbiddenError("You do not own this upload intent")
+        intent = json.loads(intent_raw)
+        if intent["user_id"] != user_id:
+            raise ForbiddenError("You do not own this upload intent")
 
-    # Completion may have committed even if the response or Redis update was
-    # lost. Always attempt both cleanup operations; both are idempotent for the
-    # unique quarantine key. Preserve the intent if object deletion is unavailable.
-    with contextlib.suppress(Exception):
-        await abort_multipart_upload(intent["quarantine_key"], intent["s3_multipart_id"])
-    try:
-        await delete_object(intent["quarantine_key"])
-    except Exception as exc:
-        raise ServiceUnavailableError(
-            "Multipart abort could not verify object deletion. Retry the abort request."
-        ) from exc
-    await redis.delete(f"{_UPLOAD_INTENT_PREFIX}{upload_id}")
-    await _release_storage_reservation(upload_id, redis)
-
-    # Clean up quota and DB row (audit fix #14)
-    await redis.zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", intent["quarantine_key"])
-    try:
-        from app.core.database.database import async_session_factory
-
-        async with async_session_factory() as session:
-            await session.execute(
-                sql_update(Upload)
-                .where(Upload.upload_id == intent["upload_id"])
-                .values(status="cancelled", error_detail="Aborted by user")
-            )
-            await session.commit()
-    except Exception as exc:
-        logger.warning(
-            "Failed to update upload %s to cancelled: %s",
-            intent["upload_id"],
-            exc,
+        # Cancellation is authoritative before any fallible storage cleanup.
+        intent["cancelled"] = True
+        await redis.set(intent_key, json.dumps(intent), ex=_UPLOAD_INTENT_TTL)
+        await db.execute(
+            sql_update(Upload)
+            .where(Upload.upload_id == intent["upload_id"])
+            .values(status="cancelled", error_detail="Aborted by user")
         )
+        await db.commit()
+        await redis.set(_upload_cancel_key(upload_id), "1", ex=_UPLOAD_CANCEL_TTL)
+
+        cleanup_errors: list[BaseException] = []
+        try:
+            await abort_multipart_upload(intent["quarantine_key"], intent["s3_multipart_id"])
+        except Exception as exc:
+            cleanup_errors.append(exc)
+        try:
+            await delete_object(intent["quarantine_key"])
+        except Exception as exc:
+            cleanup_errors.append(exc)
+
+        if cleanup_errors:
+            logger.warning(
+                "Presigned multipart cancellation for %s retained retry state: %s",
+                upload_id,
+                cleanup_errors[0],
+            )
+            raise ServiceUnavailableError(
+                "Upload was cancelled, but storage cleanup is incomplete. Retry the abort request."
+            ) from cleanup_errors[0]
+
+        await redis.delete(intent_key)
+        await _release_storage_reservation(upload_id, redis)
+        await redis.zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", intent["quarantine_key"])

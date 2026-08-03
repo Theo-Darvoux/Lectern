@@ -1,15 +1,16 @@
 # compose.yaml — unified compose file for all environments.
 #
-# Environment is controlled entirely via .env — no -f flags needed:
+# Development is controlled by .env. Production must merge compose.prod.yaml:
 #
 #   Development (SeaweedFS local storage, default):
 #     COMPOSE_PROFILES=seaweedfs-dev   →   docker compose up [--watch]
 #
 #   Production (Cloudflare R2 or external S3):
-#     COMPOSE_PROFILES=                →   docker compose up -d
+#     docker compose -f compose.yaml -f compose.prod.yaml up -d
 #
 #   Production (self-hosted SeaweedFS cluster):
-#     COMPOSE_PROFILES=seaweedfs-prod  →   docker compose up -d
+#     COMPOSE_PROFILES=seaweedfs-prod docker compose \
+#       -f compose.yaml -f compose.prod.yaml up -d
 #
 #   Add self-hosted delivery worker to either prod variant:
 #     COMPOSE_PROFILES=seaweedfs-prod,selfhost-worker
@@ -189,7 +190,8 @@ services:
     volumes:
       - lectern_backups:/var/lib/lectern
     ports:
-      - "8000:8000"
+      # Loopback-only: public traffic must pass through nginx/proxy policy.
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
     ulimits:
       core: 0
     healthcheck:
@@ -455,7 +457,7 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
 
   # ── SeaweedFS — production cluster ─────────────────────────────────────────
-  # Activate with COMPOSE_PROFILES=seaweedfs-prod in .env.
+  # Activate with COMPOSE_PROFILES=seaweedfs-prod and merge compose.prod.yaml.
   # Before first run: envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
 
   seaweedfs-master:

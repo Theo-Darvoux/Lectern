@@ -440,7 +440,9 @@ async def test_multipart_complete_checkpoint_makes_downstream_failure_retryable(
 
     assert response.status_code == 202
     complete_multipart.assert_awaited_once()
-    assert await fake_redis_setup.get(intent_key) is None
+    tombstone = json.loads(await fake_redis_setup.get(intent_key))
+    assert tombstone["enqueued"] is True
+    assert tombstone["actual_size"] == 8 * 1024 * 1024
 
 
 @pytest.mark.asyncio

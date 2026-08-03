@@ -292,36 +292,21 @@ async def test_allow_all_domains_new_user_unlisted_gets_pending(
     assert user.role == UserRole.PENDING
 
 
-# ── Issue #6: TUS inflight TTL ────────────────────────────────────────────────
+# ── Issue #6: TUS renewable concurrency leases ───────────────────────────────
 
 
-def test_tus_patch_sets_inflight_ttl_in_source():
-    """PATCH handler must call expire() on the inflight key immediately after incr().
-
-    We verify via source inspection since the full S3-backed PATCH flow
-    cannot be exercised in unit tests without a live S3 backend.
-    """
+def test_tus_patch_uses_renewable_global_and_user_semaphores() -> None:
+    """PATCH admission must not use fixed-expiry shared counters."""
     import inspect
 
     from app.routers.tus import tus_patch
 
     src = inspect.getsource(tus_patch)
-    # Both calls must appear and expire must follow incr
-    assert "redis.incr(_inflight_key)" in src
-    assert "redis.expire(_inflight_key" in src
-
-    incr_pos = src.index("redis.incr(_inflight_key)")
-    expire_pos = src.index("redis.expire(_inflight_key")
-    assert expire_pos > incr_pos, "expire() must come after incr() in the source"
-
-    # Extract the TTL argument — must be >= 60
-    import re
-
-    ttl_match = re.search(r"redis\.expire\(_inflight_key,\s*(\d+)\)", src)
-    assert ttl_match, "expire() must have a literal integer TTL argument"
-    ttl = int(ttl_match.group(1))
-    assert ttl >= 60, f"Inflight TTL must be >= 60s, got {ttl}"
-
+    assert src.count("redis_semaphore(") == 2
+    assert '"tus:global"' in src
+    assert 'f"tus:user:{user.id}"' in src
+    assert "redis.incr(" not in src
+    assert "redis.decr(" not in src
 
 # ── Issue #7: 0 quality values not silently ignored ──────────────────────────
 

@@ -63,13 +63,13 @@ class UploadWorkerRepository:
         processing_status: str | None = None,
         mime_type: str | None = None,
         size_bytes: int | None = None,
-    ) -> None:
-        """Persist an upload lifecycle transition, retrying transient failures."""
+    ) -> bool:
+        """Persist a lifecycle transition without overwriting cancellation."""
         session_factory = self._session_factory()
         if session_factory is None:
-            return
+            return True
 
-        async def _do_update() -> None:
+        async def _do_update() -> bool:
             async with session_factory() as session:
                 values: dict[str, Any] = {
                     "status": status,
@@ -98,12 +98,14 @@ class UploadWorkerRepository:
                 if size_bytes is not None:
                     values["size_bytes"] = size_bytes
 
-                await session.execute(
-                    update(Upload).where(Upload.upload_id == upload_id).values(**values)
-                )
+                statement = update(Upload).where(Upload.upload_id == upload_id)
+                if status != "cancelled":
+                    statement = statement.where(Upload.status != "cancelled")
+                result = await session.execute(statement.values(**values))
                 await session.commit()
+                return bool(getattr(result, "rowcount", 0))
 
-        await _retry_db(_do_update, context=f"update_upload_status for {upload_id}")
+        return await _retry_db(_do_update, context=f"update_upload_status for {upload_id}")
 
     async def publish_clean_upload(
         self,

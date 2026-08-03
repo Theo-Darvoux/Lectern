@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from app.config import settings
-from app.core.common.exceptions import BadRequestError
+from app.core.common.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.core.database.post_commit import dispatch_pending_outbox, persist_post_commit_jobs
 from app.models.user import User, UserRole
 from app.routers.upload.helpers import _queue_processing_after_commit, _reserve_storage_limit
@@ -277,21 +277,48 @@ async def test_tus_create_unwinds_multipart_and_reservations_on_state_failure(
 
 
 @pytest.mark.asyncio
-async def test_tus_inflight_counter_is_released_when_expire_fails(
+@pytest.mark.parametrize(
+    "state_error",
+    [NotFoundError("Upload not found"), ForbiddenError("Foreign upload")],
+)
+async def test_tus_invalid_or_foreign_resource_is_rejected_before_body_consumption(
     db_session: AsyncSession,
     mock_redis: AsyncMock,
+    state_error: Exception,
 ) -> None:
     from app.routers.tus import tus_patch
 
     user = await _create_user(db_session)
-    mock_redis.incr.return_value = 1
-    mock_redis.expire.side_effect = RuntimeError("expire failed")
-    request = Request({"type": "http", "method": "PATCH", "path": "/", "headers": []})
+    body_reads = 0
 
-    with pytest.raises(RuntimeError, match="expire failed"):
-        await tus_patch(uuid.uuid4(), request, user, mock_redis, db_session)
+    async def receive() -> dict[str, object]:
+        nonlocal body_reads
+        body_reads += 1
+        return {"type": "http.request", "body": b"x", "more_body": False}
 
-    mock_redis.decr.assert_awaited_once_with(f"tus:inflight:{user.id}")
+    request = Request(
+        {
+            "type": "http",
+            "method": "PATCH",
+            "path": "/",
+            "headers": [
+                (b"content-type", b"application/offset+octet-stream"),
+                (b"upload-offset", b"0"),
+                (b"content-length", b"1"),
+            ],
+        },
+        receive,
+    )
+
+    with patch(
+        "app.routers.tus._load_state",
+        new_callable=AsyncMock,
+        side_effect=state_error,
+    ):
+        with pytest.raises(type(state_error)):
+            await tus_patch(uuid.uuid4(), request, user, mock_redis, db_session)
+
+    assert body_reads == 0
 
 
 @pytest.mark.asyncio
@@ -328,7 +355,7 @@ async def test_tus_completed_upload_can_retry_enqueue_with_zero_byte_patch(
             ],
         }
     )
-    mock_redis.incr.return_value = 1
+    mock_redis.zrem.return_value = 1
 
     @asynccontextmanager
     async def unlocked(*_args: object, **_kwargs: object):
@@ -336,6 +363,7 @@ async def test_tus_completed_upload_can_retry_enqueue_with_zero_byte_patch(
 
     with (
         patch("app.routers.tus.redis_lock", unlocked),
+        patch("app.routers.tus.redis_semaphore", unlocked),
         patch("app.routers.tus._load_state", new_callable=AsyncMock, return_value=state),
         patch("app.routers.tus._enqueue_processing", new_callable=AsyncMock) as enqueue,
     ):
@@ -345,7 +373,9 @@ async def test_tus_completed_upload_can_retry_enqueue_with_zero_byte_patch(
     enqueue.assert_awaited_once()
     assert enqueue.await_args is not None
     assert enqueue.await_args.kwargs["job_id"] == f"tus-process:{state['upload_id']}"
-    mock_redis.delete.assert_awaited_with(f"tus:state:{tus_id}")
+    mock_redis.hset.assert_awaited()
+    assert mock_redis.hset.await_args is not None
+    assert mock_redis.hset.await_args.kwargs["mapping"]["enqueued"] == "1"
 
 
 @pytest.mark.asyncio
@@ -367,11 +397,14 @@ async def test_tus_delete_releases_all_lifecycle_ownership(
     with (
         patch("app.routers.tus._load_state", new_callable=AsyncMock, return_value=state),
         patch("app.routers.tus.abort_multipart_upload", new_callable=AsyncMock) as abort,
+        patch("app.routers.tus.delete_object", new_callable=AsyncMock) as delete_object,
         patch("app.routers.tus._release_storage_reservation", new_callable=AsyncMock) as release,
     ):
         response = await tus_delete(uuid.uuid4(), user, mock_redis, db_session)
 
     assert response.status_code == 204
     abort.assert_awaited_once_with(state["quarantine_key"], "s3-id")
+    delete_object.assert_awaited_once_with(state["quarantine_key"])
     release.assert_awaited_once_with(upload_id, mock_redis)
+    mock_redis.set.assert_awaited_with(f"upload:cancel:{upload_id}", "1", ex=24 * 3600)
     assert mock_redis.zrem.await_count == 2

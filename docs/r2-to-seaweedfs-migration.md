@@ -9,7 +9,7 @@ uses the lossless backup system (v2.0) built into the admin panel.
 ## Prerequisites
 
 - [ ] SeaweedFS prod server provisioned (two disks/volumes minimum)
-- [ ] SeaweedFS prod cluster deployed (`COMPOSE_PROFILES=seaweedfs-prod`) and `seaweedfs-s3` healthy
+- [ ] SeaweedFS prod cluster deployed with `-f compose.yaml -f compose.prod.yaml` and `seaweedfs-s3` healthy
 - [ ] `s3.json` rendered from template with prod credentials:
   ```sh
   envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
@@ -58,13 +58,18 @@ curl -O https://api.example.com/api/admin/backup/{id}/download \
 # Render credentials
 envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
 
-# Set the profile and bring up the storage stack
-# (COMPOSE_PROFILES can be set in .env or passed on the command line)
-COMPOSE_PROFILES=seaweedfs-prod docker compose up -d \
-  seaweedfs-master seaweedfs-volume1 seaweedfs-volume2 seaweedfs-filer seaweedfs-s3
+# Use the immutable digest produced by the passing SeaweedFS CI gate.
+export SEAWEEDFS_IMAGE='chrislusf/seaweedfs:4.29@sha256:<tested-manifest-digest>'
 
-# Wait for S3 gateway to be healthy
-docker compose ps seaweedfs-s3
+# Production always merges the policy override; never start seaweedfs-prod from
+# compose.yaml alone.
+COMPOSE_PROFILES=seaweedfs-prod docker compose \
+  -f compose.yaml -f compose.prod.yaml up -d \
+  seaweedfs-image-policy seaweedfs-master seaweedfs-volume1 \
+  seaweedfs-volume2 seaweedfs-filer seaweedfs-s3
+
+# Wait for S3 gateway to be healthy using the same merged configuration.
+docker compose -f compose.yaml -f compose.prod.yaml ps seaweedfs-s3
 ```
 
 The `seaweedfs-dev` profile's `seaweedfs-setup` one-shot container is not available
@@ -152,7 +157,7 @@ Redeploy — R2 was never wiped.
 ## Checklist Summary
 
 - [ ] Backup ZIP downloaded and verified (v2.0, s3_metadata.json present)
-- [ ] SeaweedFS running with replication=001 (2 volume nodes)
+- [ ] SeaweedFS running with replication=010 (2 volume nodes in separate racks)
 - [ ] `s3.json` uses prod credentials (not minioadmin)
 - [ ] API `.env` updated to `STORAGE_BACKEND=seaweedfs`
 - [ ] Restore completed without errors

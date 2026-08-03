@@ -9,6 +9,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database.redis import RedisSemaphoreTimeoutError
 from app.core.storage.multipart_completion import MultipartCompletionError
 from app.routers.upload.helpers import _UPLOAD_INTENT_PREFIX
 from tests.test_tus import _auth_headers, _create_user
@@ -245,7 +246,8 @@ async def test_tus_zero_byte_patch_recovers_persisted_final_manifest(
     assert response.status_code == 204
     complete.assert_awaited_once()
     enqueue.assert_awaited_once()
-    assert await fake_redis_setup.hgetall(f"tus:state:{tus_id}") == {}
+    retained = await fake_redis_setup.hgetall(f"tus:state:{tus_id}")
+    assert retained[b"enqueued"] == b"1"
 
 
 @pytest.mark.asyncio
@@ -307,21 +309,33 @@ async def test_tus_global_concurrency_limit_is_enforced(
 ) -> None:
     user = await _create_user(db_session)
     await db_session.commit()
-    await fake_redis_setup.set("tus:inflight:global", 1)
+    tus_id = uuid.uuid4()
 
-    with patch("app.routers.tus.settings.tus_max_concurrent_global", 1):
+    with (
+        patch(
+            "app.routers.tus._load_state",
+            new_callable=AsyncMock,
+            return_value={"user_id": str(user.id), "upload_id": "upload-123"},
+        ),
+        patch(
+            "app.routers.tus.redis_semaphore",
+            side_effect=RedisSemaphoreTimeoutError("full"),
+        ),
+    ):
         response = await client.patch(
-            f"/api/upload/tus/{uuid.uuid4()}",
+            f"/api/upload/tus/{tus_id}",
             headers={
                 **_auth_headers(user),
                 "Tus-Resumable": "1.0.0",
                 "Content-Type": "application/offset+octet-stream",
                 "Upload-Offset": "0",
+                "Content-Length": "0",
             },
             content=b"",
         )
 
     assert response.status_code == 429
+    assert response.headers["X-Lectern-Error"] == "ERR_TUS_CONCURRENCY_LIMIT"
 
 
 @pytest.mark.asyncio
@@ -496,7 +510,8 @@ async def test_tus_enqueue_failure_is_retryable_without_recompleting(
     assert response.status_code == 204
     assert complete.await_count == 1
     enqueue.assert_awaited_once()
-    assert await fake_redis_setup.hgetall(state_key) == {}
+    retained = await fake_redis_setup.hgetall(state_key)
+    assert retained[b"enqueued"] == b"1"
 
 
 def test_redis_preserves_upload_state_instead_of_eviction() -> None:

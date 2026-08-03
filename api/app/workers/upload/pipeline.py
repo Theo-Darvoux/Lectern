@@ -442,11 +442,14 @@ class UploadPipeline:
         except UploadError:
             return
 
+        if not await self.repo.update_upload_status(self.upload_id, "processing"):
+            logger.info("Upload %s was cancelled before processing began", self.upload_id)
+            return
+
         stage_name, stage_label, _ = _STAGES[0]
         await self.emit_status(
             UploadStatus.PROCESSING, detail=stage_label, stage_name_or_label=stage_name
         )
-        await self.repo.update_upload_status(self.upload_id, "processing")
 
         tmp = NamedTemporaryFile(delete=False)
         self.tmp_path = Path(tmp.name)

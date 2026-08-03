@@ -96,9 +96,73 @@ jobs:
       - name: Tests (vitest)
         run: pnpm test
 
+
+  # ── Live storage gates for publishable API/worker images ───────────────────
+  resolve-seaweedfs-image:
+    needs: changes
+    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+    steps:
+      - name: Resolve tested SeaweedFS release to an immutable digest
+        id: resolve
+        env:
+          SEAWEEDFS_SOURCE_IMAGE: chrislusf/seaweedfs:4.29
+        run: |
+          docker pull "$SEAWEEDFS_SOURCE_IMAGE"
+          resolved=$(docker image inspect --format '{{index .RepoDigests 0}}' "$SEAWEEDFS_SOURCE_IMAGE")
+          test -n "$resolved"
+          echo "image=$resolved" >> "$GITHUB_OUTPUT"
+          echo "Testing $resolved"
+
+  test-seaweedfs:
+    needs: [changes, resolve-seaweedfs-image]
+    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - name: Install API dependencies
+        working-directory: api
+        run: uv sync --frozen --extra dev
+      - name: Run live SeaweedFS integration suite
+        run: ./api/scripts/run-seaweedfs-integration-tests.sh
+
+  test-seaweedfs-topology:
+    needs: [changes, resolve-seaweedfs-image]
+    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - name: Install API dependencies
+        working-directory: api
+        run: uv sync --frozen --extra dev
+      - name: Run production-topology SeaweedFS integration suite
+        run: ./api/scripts/run-seaweedfs-topology-tests.sh
+
   # ── Build & push API + Worker images (shared layers) ───────────────────────
   build-api:
-    needs: [changes, test-api]
+    needs: [changes, test-api, test-seaweedfs, test-seaweedfs-topology]
     if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     permissions:
