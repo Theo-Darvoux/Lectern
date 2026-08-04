@@ -85,6 +85,8 @@ _PRESIGNED_DEPRECATION_HEADERS = {
     "Link": '</api/upload>; rel="successor-version"',
 }
 _PRESIGNED_MULTIPART_PART_SIZE = 8 * 1024 * 1024
+
+
 async def _presigned_upload_is_cancelled(
     intent: dict[str, Any],
     redis: Redis,  # type: ignore[type-arg]
@@ -292,6 +294,7 @@ async def complete_upload(
                 "quarantine_key does not match the initiated upload.",
                 code=UploadErrorCode.INTENT_MISMATCH,
             )
+        await _ensure_presigned_upload_active(intent, redis, db)
 
         try:
             info = await get_object_info(data.quarantine_key)
@@ -606,6 +609,7 @@ async def presigned_multipart_complete(
         size=actual_size,
         mime_type=intent["mime_type"],
     )
+
 
 @router.delete("/presigned-multipart/{upload_id}", status_code=204)
 async def presigned_multipart_abort(

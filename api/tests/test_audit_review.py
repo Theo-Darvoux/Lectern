@@ -115,7 +115,9 @@ class TestCritical2MultipartSizeValidation:
         actual_s3_size = 201 * 1024 * 1024
 
         with (
-            patch("app.routers.upload.presigned.complete_multipart_verified", new_callable=AsyncMock),
+            patch(
+                "app.routers.upload.presigned.complete_multipart_verified", new_callable=AsyncMock
+            ),
             patch("app.routers.upload.presigned.get_object_info", new_callable=AsyncMock) as m_info,
             patch("app.core.storage.facade.read_object_bytes", new_callable=AsyncMock) as m_read,
             patch("app.routers.upload.presigned.delete_object", new_callable=AsyncMock),

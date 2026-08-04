@@ -233,8 +233,13 @@ class FakeRedis:
     async def expire(self, name, time):
         pass
 
-    async def delete(self, name):
-        self.data.pop(name, None)
+    async def delete(self, *names):
+        deleted = 0
+        for name in names:
+            if name in self.data:
+                deleted += 1
+                self.data.pop(name, None)
+        return deleted
 
     async def publish(self, channel, message):
         pass

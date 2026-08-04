@@ -10,7 +10,7 @@ from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import MimeRegistry
 from app.core.security.cas import hmac_cas_key, increment_cas_ref
 from app.core.storage.facade import upload_file_multipart
-from app.workers.upload.constants import _SCAN_CACHE_PREFIX, _SHA256_CACHE_PREFIX
+from app.workers.upload.constants import _SCAN_CACHE_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +89,6 @@ async def run_finalize_storage(
     final_size = input_data.pf.size
 
     await redis_client.set(f"{_SCAN_CACHE_PREFIX}{cas_s3_key}", "CLEAN", ex=24 * 3600)
-
-    sha256_key = f"{_SHA256_CACHE_PREFIX}{input_data.user_id}:{input_data.original_sha256}"
-    await redis_client.set(sha256_key, cas_s3_key, ex=24 * 3600)
 
     cas_data = {
         "final_key": cas_s3_key,

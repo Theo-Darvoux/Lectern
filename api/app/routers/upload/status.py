@@ -109,6 +109,7 @@ async def check_file_exists(
     data: CheckExistsRequest,
     user: CurrentUser,
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> CheckExistsOut:
     """Check whether an identical file (by SHA-256) has already been processed."""
     user_id = str(user.id)
@@ -117,10 +118,21 @@ async def check_file_exists(
     cached = await redis.get(sha256_cache_key)
     if cached:
         file_key = cached.decode() if isinstance(cached, bytes) else str(cached)
-        from app.core.storage.facade import object_exists
+        cached_owner = await db.scalar(
+            select(Upload.id).where(
+                Upload.user_id == user.id,
+                Upload.sha256 == data.sha256,
+                Upload.final_key == file_key,
+                Upload.status == "clean",
+                Upload.cas_ref_count > 0,
+            )
+        )
+        if cached_owner is not None:
+            from app.core.storage.facade import object_exists
 
-        if await object_exists(file_key):
-            return CheckExistsOut(exists=True, file_key=file_key)
+            if await object_exists(file_key):
+                return CheckExistsOut(exists=True, file_key=file_key)
+        await redis.delete(sha256_cache_key)
 
     # ── Global CAS fallback (Audit Fix #15) ──
     # Return exists=True but WITHOUT a raw cas/ key to avoid leaking
@@ -135,9 +147,8 @@ async def check_file_exists(
             from app.core.storage.facade import object_exists
 
             if await object_exists(file_key):
-                await redis.set(sha256_cache_key, file_key, ex=24 * 3600)
-                # Signal that the file exists but let the upload path
-                # handle the per-user copy — don't expose internal keys
+                # A global CAS hit is only a hint. The upload flow must acquire
+                # new ownership before any user-scoped cache points at the object.
                 return CheckExistsOut(exists=True, file_key=None)
 
     return CheckExistsOut(exists=False, file_key=None)
@@ -179,6 +190,8 @@ async def batch_upload_status(
                     select(Upload.final_key).where(
                         Upload.final_key.in_(cas_keys_to_verify),
                         Upload.user_id == user.id,
+                        Upload.status == "clean",
+                        Upload.cas_ref_count > 0,
                     )
                 )
             )
@@ -192,48 +205,57 @@ async def batch_upload_status(
     cache_keys = [f"{_STATUS_CACHE_PREFIX}{k}" for k in owned_keys]
     values = await redis.mget(*cache_keys)
 
-    # Secondary lookup for data if missing from cache (e.g. for CAS hits or older entries)
-    missing_keys = [k for k, v in zip(owned_keys, values, strict=False) if not v]
-
-    # Also include keys that have a result but are missing file_name or original_size
+    # Always load authoritative rows for the requested keys. Redis is a
+    # presentation cache and must not resurrect a database-cancelled upload.
     fallback_data: dict[str, dict[str, Any]] = {}
+    authoritative_rows: dict[str, Upload] = {}
+    from app.core.database.database import async_session_factory
 
-    keys_needing_fallback = set(missing_keys)
-    for file_key, cached in zip(owned_keys, values, strict=False):
-        if cached:
-            try:
-                d = json.loads(cached)
-                if d.get("status") == "clean" and d.get("result"):
-                    if not d["result"].get("file_name") or not d["result"].get("original_size"):
-                        keys_needing_fallback.add(file_key)
-            except Exception:
-                keys_needing_fallback.add(file_key)
-
-    if keys_needing_fallback:
-        from app.core.database.database import async_session_factory
-
-        async with async_session_factory() as _db:
-            db_res = await _db.execute(
-                select(Upload)
-                .where(Upload.final_key.in_(list(keys_needing_fallback)), Upload.user_id == user.id)
-                .order_by(Upload.created_at.desc())
+    async with async_session_factory() as _db:
+        db_res = await _db.execute(
+            select(Upload)
+            .where(
+                Upload.user_id == user.id,
+                (Upload.final_key.in_(owned_keys)) | (Upload.quarantine_key.in_(owned_keys)),
             )
-            for row in db_res.scalars().all():
-                if row.final_key and row.status in ("clean", "failed", "malicious"):
-                    fallback_data[row.final_key] = {
+            .order_by(Upload.created_at.desc())
+        )
+        for row in db_res.scalars().all():
+            for key in (row.final_key, row.quarantine_key):
+                if key in owned_keys:
+                    authoritative_rows.setdefault(key, row)
+            has_active_cas_ref = int(row.cas_ref_count or 0) > 0
+            response_status = row.status
+            if response_status == "cancelled" or (
+                response_status == "clean" and not has_active_cas_ref
+            ):
+                response_status = "failed"
+            for key in (row.final_key, row.quarantine_key):
+                if key in owned_keys and row.status in (
+                    "clean",
+                    "failed",
+                    "malicious",
+                    "cancelled",
+                    "applied",
+                ):
+                    fallback_data[key] = {
                         "upload_id": row.upload_id,
-                        "file_key": row.final_key,
-                        "status": row.status,
+                        "file_key": key,
+                        "status": response_status,
                         "detail": row.error_detail
-                        or ("Success" if row.status == "clean" else "Failed"),
+                        or (
+                            "Success"
+                            if row.status == "clean" and has_active_cas_ref
+                            else "Upload is no longer active"
+                        ),
                         "result": {
-                            "file_key": row.final_key,
+                            "file_key": row.final_key or key,
                             "size": row.size_bytes,
                             "original_size": row.size_bytes,
                             "mime_type": row.mime_type,
                             "file_name": row.filename,
                         }
-                        if row.status == "clean"
+                        if row.status == "clean" and has_active_cas_ref
                         else None,
                         "overall_percent": 1.0,
                     }
@@ -242,13 +264,29 @@ async def batch_upload_status(
         if cached:
             try:
                 cached_data = json.loads(cached)
+                authoritative_row = authoritative_rows.get(file_key)
+                if (
+                    cached_data.get("status") == "clean"
+                    and authoritative_row is not None
+                    and (
+                        authoritative_row.status != "clean"
+                        or int(authoritative_row.cas_ref_count or 0) <= 0
+                    )
+                ):
+                    await redis.delete(f"{_STATUS_CACHE_PREFIX}{file_key}")
+                    results[file_key] = fallback_data.get(file_key) or {
+                        "file_key": file_key,
+                        "status": UploadStatus.PENDING,
+                    }
+                    continue
                 # Apply fallback fields if needed
                 if cached_data.get("status") == "clean" and cached_data.get("result"):
                     if not cached_data["result"].get("file_name") or not cached_data["result"].get(
                         "original_size"
                     ):
-                        if file_key in fallback_data:
-                            fb = fallback_data[file_key]["result"]
+                        fb_entry = fallback_data.get(file_key)
+                        fb = fb_entry.get("result") if fb_entry else None
+                        if fb:
                             if not cached_data["result"].get("file_name"):
                                 cached_data["result"]["file_name"] = fb["file_name"]
                             if not cached_data["result"].get("original_size"):

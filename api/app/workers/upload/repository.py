@@ -143,23 +143,41 @@ class UploadWorkerRepository:
 
         return await _retry_db(_do_update, context=f"publish_clean_upload for {upload_id}")
 
-    async def update_processing_status(self, upload_id: str, processing_status: str) -> None:
-        """Best-effort update of processing_status only (does not touch status)."""
+    async def update_processing_status(self, upload_id: str, processing_status: str) -> bool:
+        """Best-effort processing transition that never revives a cancelled upload."""
         session_factory = self._session_factory()
         if session_factory is None:
-            return
+            return True
 
-        async def _do_update() -> None:
+        async def _do_update() -> bool:
             async with session_factory() as session:
-                await session.execute(
+                result = await session.execute(
                     update(Upload)
-                    .where(Upload.upload_id == upload_id)
+                    .where(Upload.upload_id == upload_id, Upload.status != "cancelled")
                     .values(processing_status=processing_status, updated_at=datetime.now(UTC))
                 )
                 await session.commit()
+                return bool(getattr(result, "rowcount", 0))
 
-        with contextlib.suppress(Exception):
-            await _retry_db(_do_update, context=f"update_processing_status for {upload_id}")
+        try:
+            return await _retry_db(_do_update, context=f"update_processing_status for {upload_id}")
+        except Exception:
+            return False
+
+    async def is_upload_cancelled(self, upload_id: str) -> bool:
+        """Read the authoritative cancellation state from the upload row."""
+        session_factory = self._session_factory()
+        if session_factory is None:
+            return False
+
+        async def _do_get() -> bool:
+            async with session_factory() as session:
+                status = await session.scalar(
+                    select(Upload.status).where(Upload.upload_id == upload_id)
+                )
+                return status == "cancelled"
+
+        return await _retry_db(_do_get, context=f"is_upload_cancelled for {upload_id}")
 
     async def checkpoint_pipeline_stage(self, upload_id: str, stage: int) -> None:
         """Persist a completed pipeline stage for resume-on-retry behavior."""

@@ -16,24 +16,28 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.database.post_commit import (
     PostCommitKey,
     dispatch_post_commit_actions,
     persist_post_commit_jobs,
 )
+from app.core.database.redis import redis_lock
 from app.core.events.sse import broadcast_to_topic
 from app.core.observability.telemetry import get_tracer
 from app.core.storage.facade import delete_object, upload_file_multipart
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
 from app.models.upload import Upload
+from app.routers.upload.cancellation import upload_cancel_key, upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
 from app.services.notification import notify_user
 from app.services.pr import (
@@ -74,12 +78,16 @@ async def _publish_postprocessed_upload(
         upload = await session.scalar(
             select(Upload).where(Upload.upload_id == upload_id).with_for_update()
         )
-        if upload is None or upload.status != "clean":
+        if upload is None or upload.status != "clean" or int(upload.cas_ref_count or 0) <= 0:
             logger.warning(
-                "Skipping post-scan publication for upload %s in status %s",
+                "Skipping post-scan publication for upload %s in status %s with CAS refs %s",
                 upload_id,
                 upload.status if upload is not None else "missing",
+                upload.cas_ref_count if upload is not None else "missing",
             )
+            return False
+        if await worker_ctx.redis.exists(upload_cancel_key(upload_id)) == 1:
+            logger.info("Skipping post-scan publication for cancelled upload %s", upload_id)
             return False
 
         for key, value in update_values.items():
@@ -87,6 +95,37 @@ async def _publish_postprocessed_upload(
         upload.status = "clean"
         await session.commit()
         return True
+
+
+def _post_scan_lifecycle_guard(worker_ctx: WorkerContext, upload_id: str) -> Any:
+    # Production uses SQLAlchemy's async_sessionmaker. The integration fixture
+    # supplies a plain function returning an AsyncSession bound to its test
+    # transaction. Mock callables are intentionally excluded because they do
+    # not provide a real Redis lock or authoritative database state.
+    session_factory = worker_ctx.db_sessionmaker
+    if not (isinstance(session_factory, async_sessionmaker) or inspect.isfunction(session_factory)):
+        return contextlib.nullcontext()
+    return redis_lock(
+        cast(Any, worker_ctx.redis),
+        upload_lifecycle_lock_name(upload_id),
+        timeout=120.0,
+        expire=300.0,
+    )
+
+
+async def _settle_degraded_post_scan(
+    worker_ctx: WorkerContext,
+    repo: UploadWorkerRepository,
+    *,
+    upload_id: str,
+    cas_s3_key: str,
+) -> None:
+    async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
+        if not await repo.update_processing_status(upload_id, "degraded"):
+            return
+        if await worker_ctx.redis.exists(upload_cancel_key(upload_id)) == 1:
+            return
+        await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
 
 
 async def process_upload_post_scan(
@@ -113,7 +152,8 @@ async def process_upload_post_scan(
     tracer = get_tracer()
     job_try: int = ctx.get("job_try", 1)
 
-    await repo.update_processing_status(upload_id, "running")
+    if not await repo.update_processing_status(upload_id, "running"):
+        return
 
     tmp = NamedTemporaryFile(delete=False)
     tmp_path = Path(tmp.name)
@@ -140,8 +180,12 @@ async def process_upload_post_scan(
                 upload_id,
                 exc,
             )
-            await repo.update_processing_status(upload_id, "degraded")
-            await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
+            await _settle_degraded_post_scan(
+                worker_ctx,
+                repo,
+                upload_id=upload_id,
+                cas_s3_key=cas_s3_key,
+            )
             return
 
         pf = download_result.pf
@@ -158,8 +202,12 @@ async def process_upload_post_scan(
                 upload_id,
                 exc,
             )
-            await repo.update_processing_status(upload_id, "degraded")
-            await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
+            await _settle_degraded_post_scan(
+                worker_ctx,
+                repo,
+                upload_id=upload_id,
+                cas_s3_key=cas_s3_key,
+            )
             return
 
         # ── 3. Generate thumbnail (soft failure — retried, then accepted without) ─
@@ -229,11 +277,42 @@ async def process_upload_post_scan(
         if thumbnail_key:
             update_kwargs["thumbnail_key"] = thumbnail_key
 
-        if not await _publish_postprocessed_upload(
-            worker_ctx,
-            upload_id=upload_id,
-            update_values=update_kwargs,
-        ):
+        published = False
+        async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
+            published = await _publish_postprocessed_upload(
+                worker_ctx,
+                upload_id=upload_id,
+                update_values=update_kwargs,
+            )
+            if published:
+                # Read and publish the derived CLEAN payload while cancellation is
+                # excluded by the same upload lifecycle lock.
+                cache = UploadCacheRepository(worker_ctx.redis)
+                status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
+                event_channel = f"upload:events:{quarantine_key}"
+                event_log_key = f"upload:eventlog:{quarantine_key}"
+
+                cached_json = await worker_ctx.redis.get(status_key)
+                if isinstance(cached_json, (str, bytes, bytearray)) and cached_json:
+                    payload = json.loads(cached_json)
+                    if payload.get("result"):
+                        payload["result"]["processing_status"] = "complete"
+                        payload["status"] = UploadStatus.CLEAN
+                        payload["detail"] = "Processing complete"
+                        payload["stage_index"] = 4
+                        payload["stage_percent"] = 1.0
+                        payload["overall_percent"] = 100
+                        await cache.emit_event(
+                            status_key,
+                            event_channel,
+                            event_log_key,
+                            json.dumps(payload),
+                        )
+
+                await repo.maybe_dispatch_webhook(upload_id)
+                await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
+
+        if not published:
             if thumbnail_key:
                 try:
                     await delete_object(thumbnail_key)
@@ -244,34 +323,6 @@ async def process_upload_post_scan(
                         exc,
                     )
             return
-
-        # Update the status cache with the derived-processing result.
-        cache = UploadCacheRepository(worker_ctx.redis)
-        status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
-        event_channel = f"upload:events:{quarantine_key}"
-        event_log_key = f"upload:eventlog:{quarantine_key}"
-
-        cached_json = await worker_ctx.redis.get(status_key)
-        if cached_json:
-            try:
-                payload = json.loads(cached_json)
-                if payload.get("result"):
-                    payload["result"]["processing_status"] = "complete"
-                    payload["status"] = UploadStatus.CLEAN
-                    payload["detail"] = "Processing complete"
-
-                    # Also update progress to 100% (finalizing stage index is 4, 1.0)
-                    # Actually _overall(4, 1.0) is 100.
-                    payload["stage_index"] = 4
-                    payload["stage_percent"] = 1.0
-                    payload["overall_percent"] = 100
-
-                    new_payload_json = json.dumps(payload)
-                    await cache.emit_event(
-                        status_key, event_channel, event_log_key, new_payload_json
-                    )
-            except Exception as exc:
-                logger.warning("Failed to update status cache for %s: %s", upload_id, exc)
 
         # ── 8. Delete quarantine object ───────────────────────────────────────
         try:
@@ -287,9 +338,6 @@ async def process_upload_post_scan(
         except Exception as exc:
             logger.warning("Failed to delete quarantine %s: %s", quarantine_key, exc)
 
-        # ── 9. Dispatch webhook ───────────────────────────────────────────────
-        await repo.maybe_dispatch_webhook(upload_id)
-
         logger.info(
             "Post-scan processing complete for upload %s (thumbnail=%s).",
             upload_id,
@@ -303,16 +351,13 @@ async def process_upload_post_scan(
         )
 
         if job_try >= _POST_MAX_RETRIES:
-            await _handle_permanent_failure(repo, upload_id, cas_s3_key, exc, job_try)
-            await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
+            async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
+                if await _handle_permanent_failure(repo, upload_id, cas_s3_key, exc, job_try):
+                    await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
         else:
             # Reset to pending so status reflects "not yet settled" during retry wait.
             await repo.update_processing_status(upload_id, "pending")
             raise  # Let arq schedule the retry.
-
-    else:
-        # Success — check for PRs waiting on this upload.
-        await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
 
     finally:
         if pf is not None:
@@ -331,9 +376,10 @@ async def _handle_permanent_failure(
     cas_s3_key: str,
     exc: Exception,
     attempts: int,
-) -> None:
-    """Mark the upload degraded and insert a dead-letter record after max retries."""
-    await repo.update_processing_status(upload_id, "degraded")
+) -> bool:
+    """Mark the upload degraded unless authoritative cancellation already won."""
+    if not await repo.update_processing_status(upload_id, "degraded"):
+        return False
     await repo.insert_dead_letter(
         upload_id,
         job_name="process_upload_post_scan",
@@ -347,6 +393,7 @@ async def _handle_permanent_failure(
         upload_id,
         attempts,
     )
+    return True
 
 
 async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> None:
@@ -386,6 +433,7 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
                     .select_from(Upload)
                     .where(
                         Upload.final_key.in_(all_cas_keys),
+                        Upload.status.in_(("clean", "applied")),
                         Upload.processing_status.in_(list(_SETTLED_STATUSES)),
                     )
                 )

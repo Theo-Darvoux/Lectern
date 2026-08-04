@@ -255,8 +255,7 @@ async def test_prefix_listing_is_complete_and_isolated(storage_key: Any) -> None
 @pytest.mark.asyncio
 async def test_concurrent_put_get_and_overwrite(storage_key: Any) -> None:
     objects = {
-        storage_key(f"concurrent/{index}.bin"): _payload(64 * 1024 + index)
-        for index in range(16)
+        storage_key(f"concurrent/{index}.bin"): _payload(64 * 1024 + index) for index in range(16)
     }
     await asyncio.gather(*(facade.upload_file(value, key) for key, value in objects.items()))
     downloaded = await asyncio.gather(*(facade.read_full_object(key) for key in objects))

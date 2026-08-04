@@ -308,6 +308,7 @@ def test_tus_patch_uses_renewable_global_and_user_semaphores() -> None:
     assert "redis.incr(" not in src
     assert "redis.decr(" not in src
 
+
 # ── Issue #7: 0 quality values not silently ignored ──────────────────────────
 
 

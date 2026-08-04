@@ -517,9 +517,7 @@ async def _tus_patch_admitted(
             async for data_chunk in request.stream():
                 total_read += len(data_chunk)
                 if total_read > chunk_size or total_read > chunk_max:
-                    raise BadRequestError(
-                        "Payload size exceeded Content-Length or maximum limits."
-                    )
+                    raise BadRequestError("Payload size exceeded Content-Length or maximum limits.")
                 await asyncio.to_thread(_write_and_hash, data_chunk)
 
             if total_read != chunk_size:
@@ -595,9 +593,7 @@ async def _tus_patch_admitted(
                                     f"File content ({detected_mime}) does not match declared type ({state['mime_type']}).",
                                     code=UploadErrorCode.TUS_CONTENT_TYPE,
                                 )
-                            await redis.hset(
-                                f"{_TUS_STATE_PREFIX}{tus_id_str}", "sniffed", "1"
-                            )  # type: ignore[misc]
+                            await redis.hset(f"{_TUS_STATE_PREFIX}{tus_id_str}", "sniffed", "1")  # type: ignore[misc]
 
                 await _ensure_upload_active(state, redis, db)
 

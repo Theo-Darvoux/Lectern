@@ -446,6 +446,21 @@ async def test_check_exists_found(
     sha256 = "b" * 64
 
     user = await _create_user(db_session)
+    db_session.add(
+        Upload(
+            upload_id=str(uuid.uuid4()),
+            user_id=user.id,
+            quarantine_key=f"quarantine/{user.id}/dedup/file.pdf",
+            final_key=cached_key,
+            filename="file.pdf",
+            mime_type="application/pdf",
+            size_bytes=2048,
+            sha256=sha256,
+            content_sha256=sha256,
+            cas_ref_count=1,
+            status="clean",
+        )
+    )
     await db_session.commit()
 
     # Only return the cached key for the sha256 lookup; everything else returns None

@@ -5,8 +5,9 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -160,8 +161,10 @@ async def test_worker_status_transition_cannot_revive_cancelled_upload(
         WorkerContext(redis=AsyncMock(), db_sessionmaker=database.async_session_factory)
     )
     updated = await repo.update_upload_status(upload_id, "processing")
+    processing_updated = await repo.update_processing_status(upload_id, "running")
 
     assert updated is False
+    assert processing_updated is False
     db_session.expire_all()
     await db_session.refresh(row)
     assert row.status == "cancelled"
@@ -230,13 +233,9 @@ async def test_tus_head_finalization_and_delete_are_serialized_cancellation_wins
         patch("app.routers.tus.delete_object", new_callable=AsyncMock) as delete_object,
         patch("app.routers.tus._release_storage_reservation", new_callable=AsyncMock),
     ):
-        head_task = asyncio.create_task(
-            tus_head(uuid.UUID(tus_id), user, fake_redis_setup, db)
-        )
+        head_task = asyncio.create_task(tus_head(uuid.UUID(tus_id), user, fake_redis_setup, db))
         await asyncio.wait_for(enqueue_entered.wait(), timeout=2)
-        delete_task = asyncio.create_task(
-            tus_delete(uuid.UUID(tus_id), user, fake_redis_setup, db)
-        )
+        delete_task = asyncio.create_task(tus_delete(uuid.UUID(tus_id), user, fake_redis_setup, db))
         await asyncio.sleep(0)
         assert not delete_task.done()
         release_enqueue.set()
@@ -356,9 +355,7 @@ async def test_presigned_completion_and_abort_are_serialized_cancellation_wins(
         await asyncio.sleep(0)
         assert not abort_task.done()
         release_enqueue.set()
-        complete_response, abort_response = await asyncio.gather(
-            complete_task, abort_task
-        )
+        complete_response, abort_response = await asyncio.gather(complete_task, abort_task)
 
     assert complete_response.status.value == "processing"
     assert abort_response is None
@@ -410,9 +407,7 @@ async def test_tus_cleanup_failure_retains_cancelled_retry_state(
             side_effect=OSError("storage unavailable"),
         ),
     ):
-        response = await client.delete(
-            f"/api/upload/tus/{tus_id}", headers=_auth_headers(user)
-        )
+        response = await client.delete(f"/api/upload/tus/{tus_id}", headers=_auth_headers(user))
 
     assert response.status_code == 503
     retained = await fake_redis_setup.hgetall(state_key)
@@ -491,14 +486,15 @@ async def test_shared_cancellation_releases_published_cas_exactly_once(
         quarantine_key=f"quarantine/pending/{upload_id}/document.pdf",
         size=128,
     )
-    quarantine_key = f"quarantine/{user.id}/{upload_id}/document.pdf"
-    row = await db_session.scalar(
-        select(Upload).where(Upload.upload_id == upload_id)
-    )
+    user_id = str(user.id)
+    quarantine_key = f"quarantine/{user_id}/{upload_id}/document.pdf"
+    row = await db_session.scalar(select(Upload).where(Upload.upload_id == upload_id))
     assert row is not None
+    original_sha256 = "f" * 64
     content_sha256 = "a" * 64
     row.quarantine_key = quarantine_key
     row.final_key = "cas/published-object"
+    row.sha256 = original_sha256
     row.content_sha256 = content_sha256
     row.cas_ref_count = 1
     row.status = "clean"
@@ -510,6 +506,7 @@ async def test_shared_cancellation_releases_published_cas_exactly_once(
     )
     await fake_redis_setup.set(f"upload:status:{quarantine_key}", "clean")
     await fake_redis_setup.set(f"upload:eventlog:{quarantine_key}", "clean-event")
+    await fake_redis_setup.set(f"upload:sha256:{user_id}:{original_sha256}", row.final_key)
 
     from app.core.common.exceptions import ServiceUnavailableError
 
@@ -522,7 +519,7 @@ async def test_shared_cancellation_releases_published_cas_exactly_once(
         with pytest.raises(ServiceUnavailableError):
             await cancel_upload_lifecycle(
                 upload_id=upload_id,
-                user_id=str(user.id),
+                user_id=user_id,
                 redis=fake_redis_setup,
                 db=db_session,
                 reason="Cancelled by user",
@@ -531,7 +528,7 @@ async def test_shared_cancellation_releases_published_cas_exactly_once(
             )
         await cancel_upload_lifecycle(
             upload_id=upload_id,
-            user_id=str(user.id),
+            user_id=user_id,
             redis=fake_redis_setup,
             db=db_session,
             reason="Cancelled by user",
@@ -547,6 +544,7 @@ async def test_shared_cancellation_releases_published_cas_exactly_once(
     assert await fake_redis_setup.get(hmac_cas_key(content_sha256)) is None
     assert await fake_redis_setup.get(f"upload:status:{quarantine_key}") is None
     assert await fake_redis_setup.get(f"upload:eventlog:{quarantine_key}") is None
+    assert await fake_redis_setup.get(f"upload:sha256:{user_id}:{original_sha256}") is None
 
 
 @pytest.mark.asyncio
@@ -767,3 +765,540 @@ async def test_presigned_abort_releases_cas_published_before_tombstone_expiry(
     assert row.status == "cancelled"
     assert row.cas_ref_count == 0
     assert await fake_redis_setup.get(hmac_cas_key(content_sha256)) is None
+
+
+@pytest.mark.asyncio
+async def test_worker_database_cancellation_is_authoritative_without_redis_marker(
+    db_session: AsyncSession,
+) -> None:
+    import app.core.database.database as database
+    from app.workers.upload.exceptions import UploadError
+    from app.workers.upload.pipeline import UploadPipeline
+
+    upload_id = str(uuid.uuid4())
+    user = await _create_user_and_upload(
+        db_session,
+        upload_id=upload_id,
+        quarantine_key=f"quarantine/pending/{upload_id}/document.pdf",
+        size=128,
+    )
+    row = await db_session.scalar(select(Upload).where(Upload.upload_id == upload_id))
+    assert row is not None
+    row.status = "cancelled"
+    await db_session.commit()
+
+    redis = AsyncMock()
+    pipeline = UploadPipeline(
+        WorkerContext(redis=redis, db_sessionmaker=database.async_session_factory),
+        user_id=str(user.id),
+        upload_id=upload_id,
+        quarantine_key=row.quarantine_key,
+        original_filename=row.filename,
+        mime_type=row.mime_type,
+        expected_sha256=None,
+    )
+    pipeline.cache.is_cancelled = AsyncMock(return_value=False)
+    pipeline._cancel_current_upload = AsyncMock()  # type: ignore[method-assign]
+
+    with pytest.raises(UploadError, match="cancelled"):
+        await pipeline._check_cancellation("after clean publication")
+
+    pipeline._cancel_current_upload.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_post_scan_database_cancellation_without_marker_blocks_republication(
+    db_session: AsyncSession,
+    fake_redis_setup: Any,
+) -> None:
+    from types import SimpleNamespace
+
+    import app.core.database.database as database
+    from app.workers.process_upload_post_scan import process_upload_post_scan
+
+    upload_id = str(uuid.uuid4())
+    user = await _create_user_and_upload(
+        db_session,
+        upload_id=upload_id,
+        quarantine_key=f"quarantine/pending/{upload_id}/document.pdf",
+        size=128,
+    )
+    quarantine_key = f"quarantine/{user.id}/{upload_id}/document.pdf"
+    row = await db_session.scalar(select(Upload).where(Upload.upload_id == upload_id))
+    assert row is not None
+    row.quarantine_key = quarantine_key
+    row.final_key = "cas/post-scan-cancelled"
+    row.sha256 = "1" * 64
+    row.content_sha256 = "2" * 64
+    row.cas_ref_count = 1
+    row.status = "clean"
+    row.processing_status = "pending"
+    await db_session.commit()
+
+    pf = MagicMock()
+    pf.path = Path("/tmp/post-scan-cancelled.pdf")
+    pf.cleanup = MagicMock()
+    download_result = SimpleNamespace(pf=pf, actual_mime="application/pdf")
+
+    @asynccontextmanager
+    async def cancel_before_publish(*_args: Any, **_kwargs: Any) -> AsyncIterator[None]:
+        async with database.async_session_factory() as session:
+            locked = await session.scalar(
+                select(Upload).where(Upload.upload_id == upload_id).with_for_update()
+            )
+            assert locked is not None
+            locked.status = "cancelled"
+            await session.commit()
+        yield
+
+    emit_event = AsyncMock()
+    webhook = AsyncMock()
+    auto_merge = AsyncMock()
+    delete_object = AsyncMock()
+
+    with (
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            new=AsyncMock(return_value=download_result),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_strip_only",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage",
+            new=AsyncMock(return_value="/tmp/post-scan-thumb.webp"),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.upload_file_multipart",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan._post_scan_lifecycle_guard",
+            new=cancel_before_publish,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.UploadCacheRepository.emit_event",
+            new=emit_event,
+        ),
+        patch(
+            "app.workers.upload.repository.UploadWorkerRepository.get_auth_config",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "app.workers.upload.repository.UploadWorkerRepository.maybe_dispatch_webhook",
+            new=webhook,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan._trigger_pending_auto_merges",
+            new=auto_merge,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.delete_object",
+            new=delete_object,
+        ),
+    ):
+        await process_upload_post_scan(
+            {
+                "redis": fake_redis_setup,
+                "db_sessionmaker": database.async_session_factory,
+                "job_try": 1,
+            },
+            upload_id=upload_id,
+            user_id=str(user.id),
+            quarantine_key=quarantine_key,
+            original_filename="document.pdf",
+            mime_type="application/pdf",
+            original_sha256="1" * 64,
+            cas_key="upload:cas:post-scan-cancelled",
+            cas_s3_key=row.final_key,
+            initial_size=128,
+        )
+
+    db_session.expire_all()
+    await db_session.refresh(row)
+    assert row.status == "cancelled"
+    emit_event.assert_not_awaited()
+    webhook.assert_not_awaited()
+    auto_merge.assert_not_awaited()
+    delete_object.assert_awaited_once_with("thumbnails/post-scan-cancelled.webp")
+
+
+@pytest.mark.asyncio
+async def test_post_scan_holds_lifecycle_lock_through_clean_event_and_followups(
+    db_session: AsyncSession,
+    fake_redis_setup: Any,
+) -> None:
+    from types import SimpleNamespace
+
+    import app.core.database.database as database
+    from app.core.security.cas import hmac_cas_key
+    from app.routers.upload.cancellation import (
+        cancel_upload_lifecycle,
+        upload_lifecycle_lock_name,
+    )
+    from app.workers.process_upload_post_scan import process_upload_post_scan
+    from app.workers.upload.cache_repo import UploadCacheRepository
+
+    upload_id = str(uuid.uuid4())
+    user = await _create_user_and_upload(
+        db_session,
+        upload_id=upload_id,
+        quarantine_key=f"quarantine/pending/{upload_id}/document.pdf",
+        size=128,
+    )
+    quarantine_key = f"quarantine/{user.id}/{upload_id}/document.pdf"
+    row = await db_session.scalar(select(Upload).where(Upload.upload_id == upload_id))
+    assert row is not None
+    original_sha256 = "3" * 64
+    content_sha256 = "4" * 64
+    row.quarantine_key = quarantine_key
+    row.final_key = "cas/post-scan-serialized"
+    row.sha256 = original_sha256
+    row.content_sha256 = content_sha256
+    row.cas_ref_count = 1
+    row.status = "clean"
+    row.processing_status = "pending"
+    await db_session.commit()
+
+    await fake_redis_setup.set(
+        hmac_cas_key(content_sha256),
+        json.dumps({"ref_count": 1, "final_key": row.final_key, "size": 128}),
+    )
+    status_key = f"upload:status:{quarantine_key}"
+    await fake_redis_setup.set(
+        status_key,
+        json.dumps(
+            {
+                "upload_id": upload_id,
+                "file_key": quarantine_key,
+                "status": "clean",
+                "result": {
+                    "file_key": row.final_key,
+                    "size": 128,
+                    "original_size": 128,
+                    "mime_type": "application/pdf",
+                },
+            }
+        ),
+    )
+
+    pf = MagicMock()
+    pf.path = Path("/tmp/post-scan-serialized.pdf")
+    pf.cleanup = MagicMock()
+    download_result = SimpleNamespace(pf=pf, actual_mime="application/pdf")
+
+    _locks, shared_lock = _serialized_lock()
+    emit_entered = asyncio.Event()
+    release_emit = asyncio.Event()
+    original_emit = UploadCacheRepository.emit_event
+
+    async def blocked_emit(
+        cache: UploadCacheRepository,
+        event_status_key: str,
+        event_channel: str,
+        event_log_key: str,
+        payload_json: str,
+    ) -> None:
+        emit_entered.set()
+        await release_emit.wait()
+        await original_emit(
+            cache,
+            event_status_key,
+            event_channel,
+            event_log_key,
+            payload_json,
+        )
+
+    webhook = AsyncMock()
+    auto_merge = AsyncMock()
+    delete_object = AsyncMock()
+    release_reservation = AsyncMock()
+
+    async def cancel() -> None:
+        async with shared_lock(
+            fake_redis_setup,
+            upload_lifecycle_lock_name(upload_id),
+        ):
+            async with database.async_session_factory() as session:
+                await cancel_upload_lifecycle(
+                    upload_id=upload_id,
+                    user_id=str(user.id),
+                    redis=fake_redis_setup,
+                    db=session,
+                    reason="Cancelled by user",
+                    delete_object_fn=delete_object,
+                    release_reservation_fn=release_reservation,
+                )
+
+    with (
+        patch(
+            "app.workers.process_upload_post_scan.redis_lock",
+            new=shared_lock,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            new=AsyncMock(return_value=download_result),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_strip_only",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.UploadCacheRepository.emit_event",
+            new=blocked_emit,
+        ),
+        patch(
+            "app.workers.upload.repository.UploadWorkerRepository.get_auth_config",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "app.workers.upload.repository.UploadWorkerRepository.maybe_dispatch_webhook",
+            new=webhook,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan._trigger_pending_auto_merges",
+            new=auto_merge,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.delete_object",
+            new=delete_object,
+        ),
+    ):
+        post_scan_task = asyncio.create_task(
+            process_upload_post_scan(
+                {
+                    "redis": fake_redis_setup,
+                    "db_sessionmaker": database.async_session_factory,
+                    "job_try": 1,
+                },
+                upload_id=upload_id,
+                user_id=str(user.id),
+                quarantine_key=quarantine_key,
+                original_filename="document.pdf",
+                mime_type="application/pdf",
+                original_sha256=original_sha256,
+                cas_key="upload:cas:post-scan-serialized",
+                cas_s3_key=row.final_key,
+                initial_size=128,
+            )
+        )
+        await asyncio.wait_for(emit_entered.wait(), timeout=2)
+        cancellation_task = asyncio.create_task(cancel())
+        await asyncio.sleep(0)
+        assert not cancellation_task.done()
+        release_emit.set()
+        await asyncio.gather(post_scan_task, cancellation_task)
+
+    db_session.expire_all()
+    await db_session.refresh(row)
+    assert row.status == "cancelled"
+    assert row.cas_ref_count == 0
+    assert await fake_redis_setup.get(status_key) is None
+    assert await fake_redis_setup.get(f"upload:eventlog:{quarantine_key}") is None
+    webhook.assert_awaited_once_with(upload_id)
+    auto_merge.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "cas_ref_count"),
+    [
+        ("cancelled", 1),
+        ("failed", 1),
+        ("malicious", 1),
+        ("applied", 1),
+        ("clean", 0),
+    ],
+)
+async def test_check_exists_discards_stale_personal_dedup_entries(
+    status: str,
+    cas_ref_count: int,
+    db_session: AsyncSession,
+    fake_redis_setup: Any,
+) -> None:
+    from app.routers.upload.status import check_file_exists
+    from app.schemas.material import CheckExistsRequest
+
+    upload_id = str(uuid.uuid4())
+    user = await _create_user_and_upload(
+        db_session,
+        upload_id=upload_id,
+        quarantine_key=f"quarantine/pending/{upload_id}/document.pdf",
+        size=128,
+    )
+    sha256 = "5" * 64
+    file_key = f"cas/stale-{status}-{cas_ref_count}"
+    row = await db_session.scalar(select(Upload).where(Upload.upload_id == upload_id))
+    assert row is not None
+    row.sha256 = sha256
+    row.content_sha256 = "6" * 64
+    row.final_key = file_key
+    row.cas_ref_count = cas_ref_count
+    row.status = status
+    await db_session.commit()
+
+    cache_key = f"upload:sha256:{user.id}:{sha256}"
+    await fake_redis_setup.set(cache_key, file_key)
+
+    with patch(
+        "app.core.storage.facade.object_exists",
+        new=AsyncMock(return_value=True),
+    ) as object_exists:
+        response = await check_file_exists(
+            CheckExistsRequest(sha256=sha256, size=128),
+            user,
+            fake_redis_setup,
+            db_session,
+        )
+
+    assert response.exists is False
+    assert response.file_key is None
+    assert await fake_redis_setup.get(cache_key) is None
+    object_exists.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_status_does_not_resurrect_cached_clean_after_cancellation(
+    db_session: AsyncSession,
+    fake_redis_setup: Any,
+) -> None:
+    from app.routers.upload.status import batch_upload_status
+    from app.schemas.material import BatchStatusRequest
+
+    upload_id = str(uuid.uuid4())
+    user = await _create_user_and_upload(
+        db_session,
+        upload_id=upload_id,
+        quarantine_key=f"quarantine/pending/{upload_id}/document.pdf",
+        size=128,
+    )
+    quarantine_key = f"quarantine/{user.id}/{upload_id}/document.pdf"
+    row = await db_session.scalar(select(Upload).where(Upload.upload_id == upload_id))
+    assert row is not None
+    row.quarantine_key = quarantine_key
+    row.final_key = "cas/cancelled-status"
+    row.cas_ref_count = 0
+    row.status = "cancelled"
+    row.error_detail = "Cancelled by user"
+    await db_session.commit()
+
+    status_key = f"upload:status:{quarantine_key}"
+    await fake_redis_setup.set(
+        status_key,
+        json.dumps(
+            {
+                "file_key": quarantine_key,
+                "status": "clean",
+                "result": {"file_key": row.final_key, "size": 128},
+            }
+        ),
+    )
+
+    response = await batch_upload_status(
+        BatchStatusRequest(file_keys=[quarantine_key]),
+        user,
+        fake_redis_setup,
+    )
+
+    assert response["statuses"][quarantine_key]["status"] == "failed"
+    assert response["statuses"][quarantine_key]["detail"] == "Cancelled by user"
+    assert await fake_redis_setup.get(status_key) is None
+
+
+@pytest.mark.asyncio
+async def test_single_part_presigned_completion_rejects_database_cancelled_intent(
+    fake_redis_setup: Any,
+) -> None:
+    from types import SimpleNamespace
+
+    from app.core.common.exceptions import ConflictError
+    from app.routers.upload.presigned import complete_upload
+    from app.schemas.material import UploadCompleteRequest
+
+    upload_id = str(uuid.uuid4())
+    user = SimpleNamespace(id=uuid.uuid4())
+    quarantine_key = f"quarantine/{user.id}/{upload_id}/document.pdf"
+    await fake_redis_setup.set(
+        f"upload:intent:{upload_id}",
+        json.dumps(
+            {
+                "user_id": str(user.id),
+                "upload_id": upload_id,
+                "quarantine_key": quarantine_key,
+                "filename": "document.pdf",
+                "mime_type": "application/pdf",
+                "size": 128,
+            }
+        ),
+    )
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value="cancelled")
+    _locks, shared_lock = _serialized_lock()
+
+    with (
+        patch("app.routers.upload.presigned.redis_lock", new=shared_lock),
+        patch(
+            "app.routers.upload.presigned.get_object_info",
+            new_callable=AsyncMock,
+        ) as get_object_info,
+    ):
+        with pytest.raises(ConflictError):
+            await complete_upload(
+                UploadCompleteRequest(
+                    upload_id=upload_id,
+                    quarantine_key=quarantine_key,
+                ),
+                user,
+                fake_redis_setup,
+                db,
+            )
+
+    get_object_info.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_global_cas_hint_does_not_create_personal_dedup_ownership(
+    db_session: AsyncSession,
+    fake_redis_setup: Any,
+) -> None:
+    from app.core.security.cas import hmac_cas_key
+    from app.routers.upload.status import check_file_exists
+    from app.schemas.material import CheckExistsRequest
+
+    user = User(
+        id=uuid.uuid4(),
+        email=f"{uuid.uuid4().hex}@example.com",
+        display_name="Global CAS hint tester",
+        role=UserRole.STUDENT,
+        onboarded=True,
+        gdpr_consent=True,
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    sha256 = "7" * 64
+    file_key = "cas/global-hint"
+    await fake_redis_setup.set(
+        hmac_cas_key(sha256),
+        json.dumps({"ref_count": 1, "final_key": file_key, "size": 128}),
+    )
+
+    with patch(
+        "app.core.storage.facade.object_exists",
+        new=AsyncMock(return_value=True),
+    ):
+        response = await check_file_exists(
+            CheckExistsRequest(sha256=sha256, size=128),
+            user,
+            fake_redis_setup,
+            db_session,
+        )
+
+    assert response.exists is True
+    assert response.file_key is None
+    assert await fake_redis_setup.get(f"upload:sha256:{user.id}:{sha256}") is None

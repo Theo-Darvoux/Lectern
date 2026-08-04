@@ -31,7 +31,6 @@ def test_appended_zip_with_trailing_bytes_is_rejected(tmp_path: Path) -> None:
         check_polyglot(path, "image/jpeg")
 
 
-
 def test_encrypted_appended_zip_is_rejected(tmp_path: Path) -> None:
     payload = io.BytesIO(_jpeg_prefix())
     with zipfile.ZipFile(payload, "a", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -51,6 +50,7 @@ def test_encrypted_appended_zip_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="extractable ZIP payload"):
         check_polyglot(path, "image/jpeg")
 
+
 def test_truncated_central_directory_is_not_treated_as_zip(tmp_path: Path) -> None:
     fake_tail = b"PK\x01\x02" + _EOCD.pack(
         b"PK\x05\x06",
@@ -69,15 +69,19 @@ def test_truncated_central_directory_is_not_treated_as_zip(tmp_path: Path) -> No
 
 
 def test_marker_only_zip64_locator_is_not_treated_as_zip(tmp_path: Path) -> None:
-    fake_tail = b"PK\x06\x07" + b"\x00" * 16 + _EOCD.pack(
-        b"PK\x05\x06",
-        0,
-        0,
-        0xFFFF,
-        0xFFFF,
-        0xFFFFFFFF,
-        0xFFFFFFFF,
-        0,
+    fake_tail = (
+        b"PK\x06\x07"
+        + b"\x00" * 16
+        + _EOCD.pack(
+            b"PK\x05\x06",
+            0,
+            0,
+            0xFFFF,
+            0xFFFF,
+            0xFFFFFFFF,
+            0xFFFFFFFF,
+            0,
+        )
     )
     path = tmp_path / "clean.jpg"
     path.write_bytes(_jpeg_prefix() + fake_tail)

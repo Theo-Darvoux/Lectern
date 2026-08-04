@@ -10,13 +10,10 @@ def test_api_image_publication_depends_on_both_live_seaweedfs_jobs() -> None:
     assert "tags: ['alpha-*']" in workflow
     assert "test-seaweedfs:" in workflow
     assert "test-seaweedfs-topology:" in workflow
+    assert "needs: [changes, test-api, test-seaweedfs, test-seaweedfs-topology]" in workflow
     assert (
-        "needs: [changes, test-api, test-seaweedfs, test-seaweedfs-topology]"
-        in workflow
+        workflow.count("SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}") == 2
     )
-    assert workflow.count(
-        "SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}"
-    ) == 2
     build_section = workflow.split("  build-api:", 1)[1].split("\n  build-web:", 1)[0]
     assert "push: true" in build_section
 
@@ -28,9 +25,9 @@ def test_standalone_seaweedfs_workflow_is_premerge_not_independent_publish_gate(
     assert "workflow_dispatch:" in trigger_block
     assert "  push:" not in trigger_block
     assert "resolve-seaweedfs-image:" in workflow
-    assert workflow.count(
-        "SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}"
-    ) == 2
+    assert (
+        workflow.count("SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}") == 2
+    )
 
 
 def test_migration_runbook_always_uses_production_override_and_digest() -> None:
@@ -49,4 +46,4 @@ def test_base_compose_does_not_advertise_profile_only_production_startup() -> No
     compose = (_REPO_ROOT / "compose.yaml").read_text()
     header = "\n".join(compose.splitlines()[:30])
     assert "-f compose.yaml -f compose.prod.yaml" in header
-    assert '127.0.0.1:${API_HOST_PORT:-8000}:8000' in compose
+    assert "127.0.0.1:${API_HOST_PORT:-8000}:8000" in compose

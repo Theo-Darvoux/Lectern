@@ -1,11 +1,14 @@
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, cast
+
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config import settings
 from app.core.database.redis import redis_lock
@@ -26,6 +29,7 @@ from app.workers.upload.cache_repo import UploadCacheRepository
 from app.workers.upload.constants import (
     _CANCEL_KEY_PREFIX,
     _MAX_ARQ_RETRIES,
+    _SHA256_CACHE_PREFIX,
     _STAGE_TOTAL,
     _STAGES,
     _overall,
@@ -266,7 +270,12 @@ class UploadPipeline:
 
     async def _check_cancellation(self, where: str) -> None:
         cancel_key = f"{_CANCEL_KEY_PREFIX}{self.upload_id}"
-        if await self.cache.is_cancelled(cancel_key):
+        redis_cancelled = await self.cache.is_cancelled(cancel_key)
+        db_cancelled = False
+        session_factory = self.ctx.db_sessionmaker
+        if isinstance(session_factory, async_sessionmaker) or inspect.isfunction(session_factory):
+            db_cancelled = await self.repo.is_upload_cancelled(self.upload_id)
+        if redis_cancelled or db_cancelled:
             await self._cancel_current_upload(where)
             # We raise a special error to stop execution but it's handled gracefully
             raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
@@ -353,6 +362,18 @@ class UploadPipeline:
         async with lifecycle_guard:
             if has_authoritative_db:
                 await self._check_cancellation("after clean publication")
+            try:
+                await self.redis.set(
+                    f"{_SHA256_CACHE_PREFIX}{self.user_id}:{self.original_sha256}",
+                    final_res.final_key,
+                    ex=24 * 3600,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to publish personal dedup cache for upload %s: %s",
+                    self.upload_id,
+                    exc,
+                )
             await self.emit_status(
                 UploadStatus.CLEAN,
                 detail="File ready — optimising in background",

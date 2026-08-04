@@ -281,9 +281,7 @@ async def redis_semaphore(
     holder_id = f"{settings.environment}:{uuid.uuid4()}"
     expire_ms = max(1, int(expire * 1000))
     semaphore_script = (
-        _semaphore_script
-        if redis is redis_client
-        else redis.register_script(_SEMAPHORE_LUA_SCRIPT)
+        _semaphore_script if redis is redis_client else redis.register_script(_SEMAPHORE_LUA_SCRIPT)
     )
 
     async def _run_script(op: str = "acquire") -> int:

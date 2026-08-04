@@ -520,11 +520,7 @@ async def test_tus_enqueue_failure_is_retryable_without_recompleting(
 
 def test_redis_preserves_upload_state_instead_of_eviction() -> None:
     redis_config = (
-        Path(__file__).parents[2]
-        / "infra"
-        / "docker"
-        / "redis"
-        / "redis.conf"
+        Path(__file__).parents[2] / "infra" / "docker" / "redis" / "redis.conf"
     ).read_text(encoding="utf-8")
     assert "appendonly yes" in redis_config
     assert "appendfsync everysec" in redis_config
@@ -545,10 +541,7 @@ def test_production_seaweedfs_policy_is_rack_aware_and_immutable() -> None:
 
 def test_live_storage_workflow_covers_multipart_callers_and_deployment() -> None:
     workflow = (
-        Path(__file__).parents[2]
-        / ".github"
-        / "workflows"
-        / "seaweedfs-integration.yml"
+        Path(__file__).parents[2] / ".github" / "workflows" / "seaweedfs-integration.yml"
     ).read_text(encoding="utf-8")
 
     for path in (
@@ -679,9 +672,9 @@ async def test_presigned_cleanup_failure_retains_intent_for_retry(
 
 
 def test_frontend_retries_uncertain_completion_without_abort() -> None:
-    source = (
-        Path(__file__).parents[2] / "web" / "src" / "lib" / "upload-client.ts"
-    ).read_text(encoding="utf-8")
+    source = (Path(__file__).parents[2] / "web" / "src" / "lib" / "upload-client.ts").read_text(
+        encoding="utf-8"
+    )
 
     assert "let completionStarted = false" in source
     assert "let completionAttempts = 0" in source

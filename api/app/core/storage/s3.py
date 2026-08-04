@@ -602,9 +602,7 @@ class S3Backend:
                         break
                     total += len(chunk)
                     if total > _READ_FULL_OBJECT_MAX_BYTES:
-                        raise ValueError(
-                            f"Object {file_key!r} exceeds the read_full_object limit"
-                        )
+                        raise ValueError(f"Object {file_key!r} exceeds the read_full_object limit")
                     chunks.append(chunk)
                 return b"".join(chunks)
             finally:

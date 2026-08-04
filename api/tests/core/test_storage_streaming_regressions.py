@@ -45,7 +45,9 @@ async def _client_context(client: Any) -> AsyncIterator[Any]:
 
 
 @pytest.mark.asyncio
-async def test_read_full_object_collects_short_stream_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_read_full_object_collects_short_stream_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = b"first" + b"-second" + b"-third"
     body = _ChunkedBody([b"first", b"-second", b"-third", b""])
 

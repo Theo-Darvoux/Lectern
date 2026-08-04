@@ -36,7 +36,8 @@ async def test_check_exists_uses_hmac_key():
 
     mock_user = User(id="user-123", email="test@example.com")
 
-    await check_file_exists(data, mock_user, mock_redis)
+    mock_db = AsyncMock()
+    await check_file_exists(data, mock_user, mock_redis, mock_db)
 
     # Verify redis.get was called with the HKDF-derived CAS key
     mock_redis.get.assert_any_call(expected_key)

@@ -66,11 +66,25 @@ def _owned_non_shared_keys(
     return row_keys | protocol_keys
 
 
-async def _clear_cached_upload_status(redis: Redis[Any], quarantine_key: str | None) -> None:
-    if not quarantine_key:
-        return
-    await redis.delete(f"{_STATUS_CACHE_PREFIX}{quarantine_key}")
-    await redis.delete(f"upload:eventlog:{quarantine_key}")
+async def _clear_cached_upload_state(
+    redis: Redis[Any],
+    *,
+    quarantine_key: str | None,
+    user_id: str,
+    original_sha256: str | None,
+) -> None:
+    keys: list[str] = []
+    if quarantine_key:
+        keys.extend(
+            (
+                f"{_STATUS_CACHE_PREFIX}{quarantine_key}",
+                f"upload:eventlog:{quarantine_key}",
+            )
+        )
+    if original_sha256:
+        keys.append(f"upload:sha256:{user_id}:{original_sha256}")
+    if keys:
+        await redis.delete(*keys)
 
 
 async def _release_quota_members(
@@ -83,10 +97,7 @@ async def _release_quota_members(
     quota_key = f"{_QUOTA_KEY_PREFIX}{user_id}"
     staging_key = f"staging:{user_id}:{upload_id}"
     raw_members = await redis.zrange(quota_key, 0, -1)
-    members = {
-        value.decode() if isinstance(value, bytes) else str(value)
-        for value in raw_members
-    }
+    members = {value.decode() if isinstance(value, bytes) else str(value) for value in raw_members}
     cleanup_members = {staging_key, *object_keys}
     cleanup_members.update(
         value
@@ -120,9 +131,7 @@ async def cancel_upload_lifecycle(
     """
 
     owner_id = uuid.UUID(user_id)
-    row = await db.scalar(
-        select(Upload).where(Upload.upload_id == upload_id).with_for_update()
-    )
+    row = await db.scalar(select(Upload).where(Upload.upload_id == upload_id).with_for_update())
     if row is not None and row.user_id != owner_id:
         if known_owned:
             raise ServiceUnavailableError(
@@ -134,6 +143,7 @@ async def cancel_upload_lifecycle(
 
     row_quarantine_key = row.quarantine_key if row is not None else None
     row_final_key = row.final_key if row is not None else None
+    original_sha256 = row.sha256 if row is not None else None
     content_sha256 = None
     cas_ref_count = 0
     if row is not None:
@@ -147,7 +157,12 @@ async def cancel_upload_lifecycle(
     # cancellation check and is intentionally written before any fallible cleanup.
     try:
         await redis.set(upload_cancel_key(upload_id), "1", ex=_UPLOAD_CANCEL_TTL)
-        await _clear_cached_upload_status(redis, row_quarantine_key)
+        await _clear_cached_upload_state(
+            redis,
+            quarantine_key=row_quarantine_key,
+            user_id=user_id,
+            original_sha256=original_sha256,
+        )
     except Exception as exc:
         raise ServiceUnavailableError(
             "Upload was cancelled, but cancellation coordination is incomplete. Retry cancellation."
