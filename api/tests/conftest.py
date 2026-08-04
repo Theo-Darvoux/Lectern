@@ -90,6 +90,7 @@ def mock_redis() -> AsyncMock:
     redis.expire = AsyncMock()
     redis.zadd = AsyncMock()
     redis.zcard = AsyncMock(return_value=0)
+    redis.zrange = AsyncMock(return_value=[])
     redis.zremrangebyscore = AsyncMock()
     redis.zrem = AsyncMock()
     redis.ltrim = AsyncMock()

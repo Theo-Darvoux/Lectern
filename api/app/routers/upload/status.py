@@ -1,8 +1,6 @@
 """Upload status endpoints: config, check-exists, batch-status, history, cancel."""
 
-import contextlib
 import json
-import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -14,13 +12,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.common.exceptions import BadRequestError, ForbiddenError
 from app.core.database.database import get_db
-from app.core.database.redis import get_redis
+from app.core.database.redis import get_redis, redis_lock
 from app.core.media.mimetypes import ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES
-from app.core.security.cas import CasReferenceMissingError, decrement_cas_ref, hmac_cas_key
+from app.core.security.cas import hmac_cas_key
 from app.core.storage.facade import delete_object, generate_presigned_get
 from app.dependencies.auth import CurrentUser
 from app.models.upload import Upload
-from app.routers.upload.helpers import _QUOTA_KEY_PREFIX, _STATUS_CACHE_PREFIX
+from app.routers.upload.cancellation import (
+    cancel_upload_lifecycle,
+    upload_lifecycle_lock_name,
+)
+from app.routers.upload.helpers import (
+    _STATUS_CACHE_PREFIX,
+    _release_storage_reservation,
+)
 from app.schemas.material import (
     BatchStatusRequest,
     CheckExistsOut,
@@ -29,8 +34,6 @@ from app.schemas.material import (
     UploadHistoryOut,
     UploadStatus,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -80,78 +83,22 @@ async def cancel_upload(
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
-    """Cancel a pending or in-progress upload.
-
-    Sets a Redis cancellation flag so the background worker aborts between
-    stages, then deletes the quarantine object from S3 and removes it from
-    the user's quota sorted set. Idempotent -- returns 204 even if the
-    upload_id is not found.
-    """
-    user_id = str(user.id)
-
-    # Authorize and persist cancellation before publishing the Redis signal. The
-    # worker's final CLEAN transition is conditional on this authoritative state,
-    # which closes the cancel/finalize race. Unknown and foreign IDs are both a
-    # no-op so this idempotent endpoint does not disclose upload ownership.
-    row = await db.scalar(
-        select(Upload)
-        .where(Upload.upload_id == upload_id, Upload.user_id == user.id)
-        .with_for_update()
-    )
-    if row is None:
-        return
-
-    row.status = "cancelled"
-    row.error_detail = "Cancelled by user"
-    await db.commit()
-
-    # Signal the worker to abort between stages (1-hour TTL as safety net).
-    cancel_key = f"upload:cancel:{upload_id}"
-    await redis.set(cancel_key, "1", ex=3600)
-
-    quota_key = f"{_QUOTA_KEY_PREFIX}{user_id}"
-    quarantine_prefix = f"quarantine/{user_id}/{upload_id}/"
-    uploads_prefix = f"uploads/{user_id}/{upload_id}/"  # legacy V1 keys
-    staging_key = f"staging:{user_id}:{upload_id}"  # V2 synthetic quota key
-
-    members: list[bytes] = await redis.zrange(quota_key, 0, -1)
-    quota_members = {
-        raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[ignore-without-code]
-        for raw in members
-    }
-
-    # Delete only user-owned, non-shared objects. CAS objects are shared and are
-    # reclaimed by the reference-counted GC path instead.
-    object_keys = {
-        key
-        for key in (row.quarantine_key, row.final_key)
-        if key and (key.startswith(quarantine_prefix) or key.startswith(uploads_prefix))
-    }
-    for object_key in object_keys:
-        with contextlib.suppress(Exception):
-            await delete_object(object_key)
-
-    if row.cas_ref_count > 0 and row.content_sha256:
-        try:
-            await decrement_cas_ref(
-                redis,
-                row.content_sha256,
-                operation_id=f"cancel-upload:{upload_id}:release",
-            )
-        except CasReferenceMissingError:
-            # Redis is evictable; absence already means there is no cached
-            # reference to release. DB ownership still must end.
-            logger.warning("CAS cache entry already absent while cancelling %s", upload_id)
-        row.cas_ref_count = 0
-        await db.commit()
-
-    cleanup_members = {
-        key
-        for key in quota_members
-        if key == staging_key or key.startswith(quarantine_prefix) or key.startswith(uploads_prefix)
-    }
-    if cleanup_members:
-        await redis.zrem(quota_key, *cleanup_members)
+    """Cancel any upload through the shared CAS-aware lifecycle operation."""
+    async with redis_lock(
+        redis,
+        upload_lifecycle_lock_name(upload_id),
+        timeout=120.0,
+        expire=300.0,
+    ):
+        await cancel_upload_lifecycle(
+            upload_id=upload_id,
+            user_id=str(user.id),
+            redis=redis,
+            db=db,
+            reason="Cancelled by user",
+            delete_object_fn=delete_object,
+            release_reservation_fn=_release_storage_reservation,
+        )
 
 
 # ── POST /api/upload/check-exists ────────────────────────────────────────────

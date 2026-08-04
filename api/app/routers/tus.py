@@ -68,6 +68,11 @@ from app.core.storage.multipart_completion import (
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
 from app.models.upload import Upload
+from app.routers.upload.cancellation import (
+    cancel_upload_lifecycle,
+    upload_cancel_key,
+    upload_lifecycle_lock_name,
+)
 from app.routers.upload.helpers import (
     _check_pending_cap,
     _create_upload_row,
@@ -87,8 +92,6 @@ _TUS_STATE_TTL = 24 * 3600
 _TUS_ACTIVE_SESSIONS = "tus:active_sessions"
 _TUS_SEMAPHORE_ACQUIRE_TIMEOUT = 0.05
 _TUS_SEMAPHORE_LEASE_SECONDS = 300.0
-_UPLOAD_CANCEL_TTL = 24 * 3600
-
 _S3_MIN_PART_BYTES = 5 * 1024 * 1024
 
 _TUS_HEADERS = {
@@ -104,10 +107,6 @@ def _tus_lock_name(tus_id: str) -> str:
     return f"tus:{tus_id}"
 
 
-def _upload_cancel_key(upload_id: str) -> str:
-    return f"upload:cancel:{upload_id}"
-
-
 async def _upload_is_cancelled(
     state: dict[str, str],
     redis: Redis,  # type: ignore[type-arg]
@@ -116,14 +115,14 @@ async def _upload_is_cancelled(
     if state.get("cancelled") == "1":
         return True
     try:
-        if await redis.get(_upload_cancel_key(state["upload_id"])):
+        if await redis.get(upload_cancel_key(state["upload_id"])):
             return True
     except Exception as exc:
         raise ServiceUnavailableError(
             "Upload cancellation state is temporarily unavailable. Retry the request."
         ) from exc
     status = await db.scalar(select(Upload.status).where(Upload.upload_id == state["upload_id"]))
-    return status == "cancelled"
+    return status in {"cancelled", "failed", "malicious", "applied"}
 
 
 async def _ensure_upload_active(
@@ -462,12 +461,18 @@ async def tus_head(
         if int(state["offset"]) == int(state["length"]) and (
             state.get("finalizing") == "1" or state.get("multipart_completed") == "1"
         ):
-            finalized = await _finalize_tus_upload(
-                tus_id=tus_id_str,
-                state=state,
-                redis=redis,
-                db=db,
-            )
+            async with redis_lock(
+                redis,
+                upload_lifecycle_lock_name(state["upload_id"]),
+                timeout=120.0,
+                expire=300.0,
+            ):
+                finalized = await _finalize_tus_upload(
+                    tus_id=tus_id_str,
+                    state=state,
+                    redis=redis,
+                    db=db,
+                )
             extra["X-Lectern-File-Key"] = finalized.headers["X-Lectern-File-Key"]
 
         return Response(
@@ -539,118 +544,124 @@ async def _tus_patch_admitted(
             # The preflight ownership check happened before reading the body. Reload
             # under the mutation lock so DELETE/HEAD/PATCH cannot act on stale state.
             state = await _load_state(tus_id_str, user, redis)
-            current_offset = int(state["offset"])
-            total_length = int(state["length"])
+            async with redis_lock(
+                redis,
+                upload_lifecycle_lock_name(state["upload_id"]),
+                timeout=120.0,
+                expire=300.0,
+            ):
+                current_offset = int(state["offset"])
+                total_length = int(state["length"])
 
-            if state.get("sniffed") != "1" and current_offset < MAGIC_HEADER_SIZE:
-                if (current_offset == 0 and chunk_size > 0) or (
-                    current_offset < MAGIC_HEADER_SIZE and chunk_size > 0
-                ):
-                    is_final = (current_offset + chunk_size) == total_length
+                if client_offset != current_offset:
+                    raise AppError(
+                        status_code=409,
+                        detail=f"Upload-Offset mismatch: expected {current_offset}, got {client_offset}.",
+                        code=UploadErrorCode.TUS_INVALID_OFFSET,
+                    )
 
-                    if current_offset == 0 and (chunk_size >= MAGIC_HEADER_SIZE or is_final):
-                        with tmp_path.open("rb") as file_handle:
-                            head = file_handle.read(MAGIC_HEADER_SIZE)
-                        detected_mime = guess_mime_from_bytes(head)
+                if state.get("sniffed") != "1" and current_offset < MAGIC_HEADER_SIZE:
+                    if (current_offset == 0 and chunk_size > 0) or (
+                        current_offset < MAGIC_HEADER_SIZE and chunk_size > 0
+                    ):
+                        is_final = (current_offset + chunk_size) == total_length
 
-                        ext = Path(state["filename"]).suffix.lower()
-                        allowed_for_ext = MimeRegistry.get_allowed_mimes_for_extension(ext)
-                        is_compatible = (
-                            detected_mime in allowed_for_ext
-                            and state["mime_type"] in allowed_for_ext
-                            if allowed_for_ext
-                            else False
+                        if current_offset == 0 and (chunk_size >= MAGIC_HEADER_SIZE or is_final):
+                            with tmp_path.open("rb") as file_handle:
+                                head = file_handle.read(MAGIC_HEADER_SIZE)
+                            detected_mime = guess_mime_from_bytes(head)
+
+                            ext = Path(state["filename"]).suffix.lower()
+                            allowed_for_ext = MimeRegistry.get_allowed_mimes_for_extension(ext)
+                            is_compatible = (
+                                detected_mime in allowed_for_ext
+                                and state["mime_type"] in allowed_for_ext
+                                if allowed_for_ext
+                                else False
+                            )
+
+                            if (
+                                detected_mime != "application/octet-stream"
+                                and detected_mime != state["mime_type"]
+                                and not is_compatible
+                            ):
+                                logger.warning(
+                                    "TUS MIME mismatch for %s: declared %s, detected %s",
+                                    tus_id_str,
+                                    state["mime_type"],
+                                    detected_mime,
+                                )
+                                raise BadRequestError(
+                                    f"File content ({detected_mime}) does not match declared type ({state['mime_type']}).",
+                                    code=UploadErrorCode.TUS_CONTENT_TYPE,
+                                )
+                            await redis.hset(
+                                f"{_TUS_STATE_PREFIX}{tus_id_str}", "sniffed", "1"
+                            )  # type: ignore[misc]
+
+                await _ensure_upload_active(state, redis, db)
+
+                if chunk_size == 0:
+                    if current_offset == total_length:
+                        return await _finalize_tus_upload(
+                            tus_id=tus_id_str,
+                            state=state,
+                            redis=redis,
+                            db=db,
                         )
+                    return Response(
+                        status_code=204,
+                        headers=_tus_headers(**{"Upload-Offset": str(current_offset)}),
+                    )
 
-                        if (
-                            detected_mime != "application/octet-stream"
-                            and detected_mime != state["mime_type"]
-                            and not is_compatible
-                        ):
-                            logger.warning(
-                                "TUS MIME mismatch for %s: declared %s, detected %s",
-                                tus_id_str,
-                                state["mime_type"],
-                                detected_mime,
-                            )
-                            raise BadRequestError(
-                                f"File content ({detected_mime}) does not match declared type ({state['mime_type']}).",
-                                code=UploadErrorCode.TUS_CONTENT_TYPE,
-                            )
-                        await redis.hset(
-                            f"{_TUS_STATE_PREFIX}{tus_id_str}", "sniffed", "1"
-                        )  # type: ignore[misc]
+                if current_offset + chunk_size > total_length:
+                    raise BadRequestError(
+                        f"Chunk overflows declared Upload-Length by {(current_offset + chunk_size) - total_length} bytes.",
+                        code=UploadErrorCode.FILE_TOO_LARGE,
+                    )
 
-            if client_offset != current_offset:
-                raise AppError(
-                    status_code=409,
-                    detail=f"Upload-Offset mismatch: expected {current_offset}, got {client_offset}.",
-                    code=UploadErrorCode.TUS_INVALID_OFFSET,
-                )
+                is_final = (current_offset + chunk_size) == total_length
+                chunk_min = settings.tus_chunk_min_bytes
+                if not is_final and chunk_size < chunk_min:
+                    raise BadRequestError(
+                        f"Non-final chunk too small: minimum {chunk_min} bytes, got {chunk_size}"
+                    )
 
-            await _ensure_upload_active(state, redis, db)
+                parts: list[dict[str, int | str]] = json.loads(state["parts"])
+                part_number = len(parts) + 1
+                with tmp_path.open("rb") as chunk_file:
+                    etag = await upload_part(
+                        state["quarantine_key"],
+                        state["s3_upload_id"],
+                        part_number,
+                        chunk_file,
+                    )
 
-            if chunk_size == 0:
-                if current_offset == total_length:
+                parts.append({"PartNumber": part_number, "ETag": etag})
+                new_offset = current_offset + chunk_size
+                state_key = f"{_TUS_STATE_PREFIX}{tus_id_str}"
+                state_update: dict[str, str] = {
+                    "offset": str(new_offset),
+                    "parts": json.dumps(parts),
+                }
+                if is_final:
+                    state_update["finalizing"] = "1"
+                await redis.hset(state_key, mapping=state_update)  # type: ignore[arg-type]
+                await redis.expire(state_key, _TUS_STATE_TTL)  # type: ignore[misc]
+                state.update(state_update)
+
+                if is_final:
                     return await _finalize_tus_upload(
                         tus_id=tus_id_str,
                         state=state,
                         redis=redis,
                         db=db,
                     )
+
                 return Response(
                     status_code=204,
-                    headers=_tus_headers(**{"Upload-Offset": str(current_offset)}),
+                    headers=_tus_headers(**{"Upload-Offset": str(new_offset)}),
                 )
-
-            if current_offset + chunk_size > total_length:
-                raise BadRequestError(
-                    f"Chunk overflows declared Upload-Length by {(current_offset + chunk_size) - total_length} bytes.",
-                    code=UploadErrorCode.FILE_TOO_LARGE,
-                )
-
-            is_final = (current_offset + chunk_size) == total_length
-            chunk_min = settings.tus_chunk_min_bytes
-            if not is_final and chunk_size < chunk_min:
-                raise BadRequestError(
-                    f"Non-final chunk too small: minimum {chunk_min} bytes, got {chunk_size}"
-                )
-
-            parts: list[dict[str, int | str]] = json.loads(state["parts"])
-            part_number = len(parts) + 1
-            with tmp_path.open("rb") as chunk_file:
-                etag = await upload_part(
-                    state["quarantine_key"],
-                    state["s3_upload_id"],
-                    part_number,
-                    chunk_file,
-                )
-
-            parts.append({"PartNumber": part_number, "ETag": etag})
-            new_offset = current_offset + chunk_size
-            state_key = f"{_TUS_STATE_PREFIX}{tus_id_str}"
-            state_update: dict[str, str] = {
-                "offset": str(new_offset),
-                "parts": json.dumps(parts),
-            }
-            if is_final:
-                state_update["finalizing"] = "1"
-            await redis.hset(state_key, mapping=state_update)  # type: ignore[arg-type]
-            await redis.expire(state_key, _TUS_STATE_TTL)  # type: ignore[misc]
-            state.update(state_update)
-
-            if is_final:
-                return await _finalize_tus_upload(
-                    tus_id=tus_id_str,
-                    state=state,
-                    redis=redis,
-                    db=db,
-                )
-
-            return Response(
-                status_code=204,
-                headers=_tus_headers(**{"Upload-Offset": str(new_offset)}),
-            )
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -694,6 +705,13 @@ async def tus_patch(
     # Reject unknown, foreign, and terminal resources before consuming a potentially large body.
     preflight_state = await _load_state(tus_id_str, user, redis)
     await _ensure_upload_active(preflight_state, redis, db)
+    preflight_offset = int(preflight_state["offset"])
+    if client_offset != preflight_offset:
+        raise AppError(
+            status_code=409,
+            detail=f"Upload-Offset mismatch: expected {preflight_offset}, got {client_offset}.",
+            code=UploadErrorCode.TUS_INVALID_OFFSET,
+        )
 
     try:
         async with redis_semaphore(
@@ -737,7 +755,7 @@ async def tus_delete(
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
-    """Persist cancellation, then abort parts and delete any committed object."""
+    """Cancel through the shared CAS-aware lifecycle operation."""
     tus_id_str = str(tus_id)
     state_key = f"{_TUS_STATE_PREFIX}{tus_id_str}"
 
@@ -747,42 +765,37 @@ async def tus_delete(
         user_id = state["user_id"]
         quarantine_key = state["quarantine_key"]
 
-        # Cancellation is authoritative before any fallible storage cleanup.
+        # Preserve protocol retry state before cancellation starts. The state is
+        # removed only after multipart, object, CAS, quota, and reservation cleanup succeed.
         await redis.hset(state_key, mapping={"cancelled": "1"})  # type: ignore[arg-type]
         await redis.expire(state_key, _TUS_STATE_TTL)
-        await db.execute(
-            sql_update(Upload)
-            .where(Upload.upload_id == upload_id)
-            .values(status="cancelled", error_detail="Aborted by user")
-        )
-        await db.commit()
-        await redis.set(_upload_cancel_key(upload_id), "1", ex=_UPLOAD_CANCEL_TTL)
 
-        cleanup_errors: list[BaseException] = []
-        try:
-            await abort_multipart_upload(quarantine_key, state["s3_upload_id"])
-        except Exception as exc:
-            cleanup_errors.append(exc)
-        try:
-            await delete_object(quarantine_key)
-        except Exception as exc:
-            cleanup_errors.append(exc)
-
-        if cleanup_errors:
-            logger.warning(
-                "TUS cancellation for %s retained retry state after storage cleanup failure: %s",
-                tus_id_str,
-                cleanup_errors[0],
+        async with redis_lock(
+            redis,
+            upload_lifecycle_lock_name(upload_id),
+            timeout=120.0,
+            expire=300.0,
+        ):
+            await cancel_upload_lifecycle(
+                upload_id=upload_id,
+                user_id=user_id,
+                redis=redis,
+                db=db,
+                reason="Aborted by user",
+                delete_object_fn=delete_object,
+                release_reservation_fn=_release_storage_reservation,
+                cleanup_operations=(
+                    lambda: abort_multipart_upload(
+                        quarantine_key,
+                        state["s3_upload_id"],
+                    ),
+                ),
+                extra_object_keys=(quarantine_key,),
+                known_owned=True,
             )
-            raise ServiceUnavailableError(
-                "Upload was cancelled, but storage cleanup is incomplete. Retry DELETE."
-            ) from cleanup_errors[0]
 
         await redis.delete(state_key)
         await redis.srem(_TUS_ACTIVE_SESSIONS, tus_id_str)  # type: ignore[misc]
-        await redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
-        await redis.zrem(f"quota:uploads:{user_id}", f"staging:{user_id}:{upload_id}")
-        await _release_storage_reservation(upload_id, redis)
 
     return Response(status_code=204, headers=_TUS_HEADERS)
 

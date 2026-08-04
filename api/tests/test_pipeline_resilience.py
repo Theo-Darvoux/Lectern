@@ -92,7 +92,7 @@ async def test_cancel_upload_endpoint(
         assert response.status_code == 204
 
         cancel_key = f"upload:cancel:{upload_id}"
-        mock_redis.set.assert_awaited_with(cancel_key, "1", ex=3600)
+        mock_redis.set.assert_awaited_with(cancel_key, "1", ex=24 * 3600)
 
 
 @pytest.mark.asyncio

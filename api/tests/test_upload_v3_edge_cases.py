@@ -82,7 +82,11 @@ async def test_tus_concurrency_limit_hit(
         patch(
             "app.routers.tus._load_state",
             new_callable=AsyncMock,
-            return_value={"user_id": str(user.id), "upload_id": "upload-123"},
+            return_value={
+                "user_id": str(user.id),
+                "upload_id": "upload-123",
+                "offset": "0",
+            },
         ),
         patch(
             "app.routers.tus.redis_semaphore",

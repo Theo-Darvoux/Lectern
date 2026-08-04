@@ -13,6 +13,7 @@ Covers:
 import asyncio
 import io
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -361,16 +362,35 @@ async def test_concurrent_cancel_upload_releases_staging_cas_reference_once() ->
 
     redis.eval = AsyncMock(side_effect=eval_cas_decrement)
 
-    row = MagicMock(sha256=sha256, content_sha256=sha256, cas_ref_count=1)
+    row = MagicMock(
+        sha256=sha256,
+        content_sha256=sha256,
+        cas_ref_count=1,
+        quarantine_key=None,
+        final_key=None,
+        status="clean",
+        error_detail=None,
+        user_id=user_id,
+    )
     session = AsyncMock()
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.scalar = AsyncMock(return_value=row)
     session.commit = AsyncMock()
 
-    with patch(
-        "app.core.database.database.async_session_factory",
-        return_value=session,
+    locks: dict[str, asyncio.Lock] = {}
+
+    @asynccontextmanager
+    async def serialized_lock(_redis, name: str, **_kwargs):
+        async with locks.setdefault(name, asyncio.Lock()):
+            yield
+
+    with (
+        patch("app.routers.upload.status.redis_lock", serialized_lock),
+        patch(
+            "app.routers.upload.status._release_storage_reservation",
+            new_callable=AsyncMock,
+        ),
     ):
         await asyncio.gather(
             cancel_upload(upload_id, MagicMock(id=user_id), redis, session),

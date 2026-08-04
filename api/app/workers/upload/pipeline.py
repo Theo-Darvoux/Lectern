@@ -5,9 +5,10 @@ import logging
 import time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, cast
 
 from app.config import settings
+from app.core.database.redis import redis_lock
 from app.core.events.processing import ProcessingFile
 from app.core.observability.metrics import mime_category as _mime_cat
 from app.core.observability.metrics import (
@@ -19,6 +20,7 @@ from app.core.observability.telemetry import get_tracer
 from app.core.security.cas import decrement_cas_ref
 from app.core.security.scanner import MalwareScanner
 from app.core.storage.facade import delete_object
+from app.routers.upload.cancellation import upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
 from app.workers.upload.cache_repo import UploadCacheRepository
 from app.workers.upload.constants import (
@@ -270,12 +272,7 @@ class UploadPipeline:
             raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
 
     async def _fast_finalize_and_enqueue_post_scan(self) -> None:
-        """Upload stripped bytes to immutable CAS, emit CLEAN, and enqueue post-scan.
-
-        This unblocks the user immediately after the scan gate passes.
-        Thumbnail generation happens in process_upload_post_scan. The quarantine
-        object is retained until that job completes its second sanitization pass.
-        """
+        """Publish CLEAN and schedule follow-up work without losing cancellation."""
         self._check_deadline("finalizing")
         await self.emit_status(
             UploadStatus.PROCESSING,
@@ -288,6 +285,9 @@ class UploadPipeline:
             raise UploadError(UploadStatus.FAILED, "Pipeline state missing at finalizing stage")
 
         await self._check_bazaar_before_finalize()
+        has_authoritative_db = self.ctx.db_sessionmaker is not None
+        if has_authoritative_db:
+            await self._check_cancellation("immediately before final publication")
 
         final_input = FinalizeInput(
             pf=self.pf,
@@ -299,7 +299,7 @@ class UploadPipeline:
             initial_size=self.initial_size,
             final_mime=self.mime_type,
             content_encoding=None,
-            thumbnail_path=None,  # generated later by post-scan job
+            thumbnail_path=None,
         )
         final_res = await run_finalize_storage(final_input, self.redis, self.tracer)
 
@@ -321,9 +321,8 @@ class UploadPipeline:
             cas_ref_count=final_res.new_cas_ref if final_res.new_cas_ref > 0 else None,
         )
         if not published:
-            # Cancellation won after the last Redis check but before CLEAN was
-            # persisted. Release the CAS ownership acquired by finalization with
-            # a stable operation ID so retries cannot double-decrement it.
+            # Cancellation committed first. Release the CAS reference acquired by
+            # finalization using an idempotent operation ID.
             await decrement_cas_ref(
                 self.redis,
                 final_res.content_sha256,
@@ -335,79 +334,94 @@ class UploadPipeline:
             )
             raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
 
-        # Publish CLEAN only after the authoritative DB transition succeeds.
-        await self.emit_status(
-            UploadStatus.CLEAN,
-            detail="File ready — optimising in background",
-            result=res_data,
-            stage_name_or_label="finalizing",
-            stage_percent=1.0,
+        # Publication and cancellation race through the conditional DB update.
+        # After publication, compete for the shared lifecycle lock once more:
+        # a cancellation that is already pending can acquire it first, release
+        # CAS ownership, and set the marker before CLEAN is emitted or follow-up
+        # work is scheduled. If this worker acquires it first, publication wins
+        # and a later cancellation will clear the cached CLEAN state and CAS ref.
+        lifecycle_guard = (
+            redis_lock(
+                cast(Any, self.redis),
+                upload_lifecycle_lock_name(self.upload_id),
+                timeout=120.0,
+                expire=300.0,
+            )
+            if has_authoritative_db
+            else contextlib.nullcontext()
         )
+        async with lifecycle_guard:
+            if has_authoritative_db:
+                await self._check_cancellation("after clean publication")
+            await self.emit_status(
+                UploadStatus.CLEAN,
+                detail="File ready — optimising in background",
+                result=res_data,
+                stage_name_or_label="finalizing",
+                stage_percent=1.0,
+            )
+            if has_authoritative_db:
+                await self._check_cancellation("after CLEAN emission")
 
-        import app.core.database.redis as redis_core
+            import app.core.database.redis as redis_core
 
-        # Fire-and-forget MalwareBazaar check — runs against the original SHA-256,
-        # independent of later thumbnail processing. If Bazaar flags it,
-        # retroactive_quarantine() handles the cleanup.
-        if (
-            settings.bazaar_async_enabled
-            and not settings.malwarebazaar_fail_closed
-            and redis_core.arq_pool is not None
-        ):
-            try:
-                await redis_core.arq_pool.enqueue_job(
-                    "check_bazaar",
-                    upload_id=self.upload_id,
-                    sha256=self.original_sha256,
-                    cas_s3_key=final_res.final_key,
-                    user_id=self.user_id,
-                )
-            except Exception as exc:
+            if (
+                settings.bazaar_async_enabled
+                and not settings.malwarebazaar_fail_closed
+                and redis_core.arq_pool is not None
+            ):
+                try:
+                    await redis_core.arq_pool.enqueue_job(
+                        "check_bazaar",
+                        upload_id=self.upload_id,
+                        sha256=self.original_sha256,
+                        cas_s3_key=final_res.final_key,
+                        user_id=self.user_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to enqueue check_bazaar for upload %s: %s — Bazaar check skipped.",
+                        self.upload_id,
+                        exc,
+                    )
+            elif settings.bazaar_async_enabled and not settings.malwarebazaar_fail_closed:
                 logger.warning(
-                    "Failed to enqueue check_bazaar for upload %s: %s — Bazaar check skipped.",
+                    "arq_pool unavailable — check_bazaar skipped for upload %s.",
                     self.upload_id,
-                    exc,
                 )
-        elif settings.bazaar_async_enabled and not settings.malwarebazaar_fail_closed:
-            logger.warning(
-                "arq_pool unavailable — check_bazaar skipped for upload %s.",
-                self.upload_id,
-            )
 
-        # Enqueue background thumbnail and derived-metadata job.
-        if redis_core.arq_pool is not None:
-            try:
-                await redis_core.arq_pool.enqueue_job(
-                    "process_upload_post_scan",
-                    upload_id=self.upload_id,
-                    user_id=self.user_id,
-                    quarantine_key=self.quarantine_key,
-                    original_filename=self.original_filename,
-                    mime_type=self.mime_type,
-                    original_sha256=self.original_sha256,
-                    cas_key=self.cas_key,
-                    cas_s3_key=final_res.final_key,
-                    initial_size=self.initial_size,
-                )
-            except Exception as exc:
-                logger.error(
-                    "Failed to enqueue process_upload_post_scan for upload %s: %s — "
-                    "file will remain available without a thumbnail.",
+            if redis_core.arq_pool is not None:
+                try:
+                    await redis_core.arq_pool.enqueue_job(
+                        "process_upload_post_scan",
+                        upload_id=self.upload_id,
+                        user_id=self.user_id,
+                        quarantine_key=self.quarantine_key,
+                        original_filename=self.original_filename,
+                        mime_type=self.mime_type,
+                        original_sha256=self.original_sha256,
+                        cas_key=self.cas_key,
+                        cas_s3_key=final_res.final_key,
+                        initial_size=self.initial_size,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Failed to enqueue process_upload_post_scan for upload %s: %s — "
+                        "file will remain available without a thumbnail.",
+                        self.upload_id,
+                        exc,
+                    )
+                    await self.repo.update_processing_status(self.upload_id, "degraded")
+            else:
+                logger.warning(
+                    "arq_pool unavailable — post-scan processing skipped for upload %s. "
+                    "File will remain available without a thumbnail.",
                     self.upload_id,
-                    exc,
                 )
-                # Mark as degraded immediately since we can't schedule the optimization.
                 await self.repo.update_processing_status(self.upload_id, "degraded")
-        else:
-            logger.warning(
-                "arq_pool unavailable — post-scan processing skipped for upload %s. "
-                "File will remain available without a thumbnail.",
-                self.upload_id,
-            )
-            await self.repo.update_processing_status(self.upload_id, "degraded")
 
-        self._record_pipeline_metrics("clean")
-        upload_file_size.labels(mime_category=self.mime_category).observe(self.initial_size)
+            self._record_pipeline_metrics("clean")
+            upload_file_size.labels(mime_category=self.mime_category).observe(self.initial_size)
 
     async def _check_bazaar_before_finalize(self) -> None:
         """Honor fail-closed and legacy synchronous Bazaar policy before publication."""

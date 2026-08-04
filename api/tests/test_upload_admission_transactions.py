@@ -407,4 +407,4 @@ async def test_tus_delete_releases_all_lifecycle_ownership(
     delete_object.assert_awaited_once_with(state["quarantine_key"])
     release.assert_awaited_once_with(upload_id, mock_redis)
     mock_redis.set.assert_awaited_with(f"upload:cancel:{upload_id}", "1", ex=24 * 3600)
-    assert mock_redis.zrem.await_count == 2
+    assert mock_redis.zrem.await_count == 1
