@@ -159,10 +159,7 @@ class UploadWorkerRepository:
                 await session.commit()
                 return bool(getattr(result, "rowcount", 0))
 
-        try:
-            return await _retry_db(_do_update, context=f"update_processing_status for {upload_id}")
-        except Exception:
-            return False
+        return await _retry_db(_do_update, context=f"update_processing_status for {upload_id}")
 
     async def is_upload_cancelled(self, upload_id: str) -> bool:
         """Read the authoritative cancellation state from the upload row."""
@@ -275,7 +272,14 @@ class UploadWorkerRepository:
         async def _check_webhook() -> str | None:
             async with session_factory() as session:
                 row = await session.scalar(select(Upload).where(Upload.upload_id == upload_id))
-                return row.webhook_url if row else None
+                if (
+                    row is None
+                    or row.status != "clean"
+                    or not row.final_key
+                    or (row.final_key.startswith("cas/") and int(row.cas_ref_count or 0) <= 0)
+                ):
+                    return None
+                return row.webhook_url
 
         try:
             webhook_url = await _retry_db(

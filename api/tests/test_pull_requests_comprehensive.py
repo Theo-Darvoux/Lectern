@@ -190,6 +190,7 @@ class TestOptimisticLocking:
             final_key="cas/abc",
             status="clean",
             processing_status="complete",
+            cas_ref_count=1,
             filename="test.txt",
         )
         db_session.add(u_row)
@@ -239,6 +240,7 @@ class TestOptimisticLocking:
             final_key="cas/xyz",
             status="clean",
             processing_status="complete",
+            cas_ref_count=1,
             filename="test.txt",
         )
         db_session.add(u_row)
@@ -307,6 +309,7 @@ class TestOptimisticLocking:
             final_key="cas/ok",
             status="clean",
             processing_status="complete",
+            cas_ref_count=1,
             filename="ok.txt",
         )
         db_session.add(u_row)
@@ -362,6 +365,7 @@ class TestFileClaiming:
                 user_id=u.id,
                 final_key=file_key,
                 status="clean",
+                cas_ref_count=1,
                 filename="test.pdf",
             )
             db_session.add(u_row)

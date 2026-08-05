@@ -138,7 +138,8 @@ async def test_webhook_dlq_uses_worker_context() -> None:
     row.webhook_url = "https://example.com/hook"
     row.upload_id = upload_id
     row.status = "clean"
-    row.final_key = None
+    row.final_key = "cas/webhook-dlq"
+    row.cas_ref_count = 1
     row.sha256 = None
     row.mime_type = None
     row.size_bytes = None

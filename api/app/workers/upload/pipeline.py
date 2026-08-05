@@ -432,14 +432,28 @@ class UploadPipeline:
                         self.upload_id,
                         exc,
                     )
-                    await self.repo.update_processing_status(self.upload_id, "degraded")
+                    try:
+                        await self.repo.update_processing_status(self.upload_id, "degraded")
+                    except Exception as status_exc:
+                        logger.warning(
+                            "Failed to mark post-scan processing degraded for upload %s: %s",
+                            self.upload_id,
+                            status_exc,
+                        )
             else:
                 logger.warning(
                     "arq_pool unavailable — post-scan processing skipped for upload %s. "
                     "File will remain available without a thumbnail.",
                     self.upload_id,
                 )
-                await self.repo.update_processing_status(self.upload_id, "degraded")
+                try:
+                    await self.repo.update_processing_status(self.upload_id, "degraded")
+                except Exception as status_exc:
+                    logger.warning(
+                        "Failed to mark post-scan processing degraded for upload %s: %s",
+                        self.upload_id,
+                        status_exc,
+                    )
 
             self._record_pipeline_metrics("clean")
             upload_file_size.labels(mime_category=self.mime_category).observe(self.initial_size)

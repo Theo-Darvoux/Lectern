@@ -103,6 +103,7 @@ def _make_upload(webhook_url: str | None = "https://example.com/hook") -> Upload
         quarantine_key="quarantine/user/id/file.pdf",
         final_key="uploads/user/id/file.pdf",
         status="clean",
+        cas_ref_count=1,
         sha256="abc123",
         webhook_url=webhook_url,
         filename="file.pdf",
@@ -318,3 +319,45 @@ async def test_webhook_no_raise_on_network_error() -> None:
         with patch("asyncio.sleep", new_callable=AsyncMock):
             # Must not raise even after all retries exhausted
             await dispatch_webhook(ctx, upload_id=upload.upload_id)
+
+
+@pytest.mark.asyncio
+async def test_webhook_skips_cancelled_upload() -> None:
+    from app.workers.webhook_dispatch import dispatch_webhook
+
+    upload = _make_upload()
+    upload.status = "cancelled"
+    upload.cas_ref_count = 0
+    ctx = _make_ctx(upload)
+
+    with patch(
+        "app.workers.webhook_dispatch.post_pinned_https", new_callable=AsyncMock
+    ) as mock_post:
+        await dispatch_webhook(ctx, upload_id=upload.upload_id)
+
+    mock_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_webhook_applied_upload_uses_clean_snapshot_status() -> None:
+    from app.workers.webhook_dispatch import dispatch_webhook
+
+    upload = _make_upload()
+    upload.status = "applied"
+    upload.cas_ref_count = 0
+    ctx = _make_ctx(upload)
+    captured_body: bytes | None = None
+
+    async def fake_post(url, *, content, headers, **kwargs):
+        nonlocal captured_body
+        captured_body = content
+        response = MagicMock()
+        response.is_success = True
+        response.status_code = 200
+        return response
+
+    with patch("app.workers.webhook_dispatch.post_pinned_https", side_effect=fake_post):
+        await dispatch_webhook(ctx, upload_id=upload.upload_id)
+
+    assert captured_body is not None
+    assert json.loads(captured_body)["status"] == "clean"

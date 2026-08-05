@@ -12,8 +12,9 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common.exceptions import ServiceUnavailableError
+from app.core.common.exceptions import ConflictError, ServiceUnavailableError
 from app.core.security.cas import CasReferenceMissingError, decrement_cas_ref
+from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
 from app.models.upload import Upload
 from app.routers.upload.helpers import _QUOTA_KEY_PREFIX, _STATUS_CACHE_PREFIX
 
@@ -44,6 +45,10 @@ def upload_cancel_key(upload_id: str) -> str:
 
 def upload_lifecycle_lock_name(upload_id: str) -> str:
     return f"upload-lifecycle:{upload_id}"
+
+
+def _thumbnail_owned_by_upload(thumbnail_key: str | None, upload_id: str) -> bool:
+    return bool(thumbnail_key and thumbnail_key.endswith(f"/{upload_id}.webp"))
 
 
 def _owned_non_shared_keys(
@@ -141,8 +146,34 @@ async def cancel_upload_lifecycle(
     if row is None and not known_owned:
         return UploadCancellationResult(found=False, upload_id=upload_id, user_id=user_id)
 
+    if row is not None and row.status == "applied":
+        raise ConflictError("This upload has already been applied and can no longer be cancelled")
+
+    if row is not None:
+        claimed_keys = [key for key in (row.quarantine_key, row.final_key) if key]
+        if claimed_keys:
+            active_claim = await db.scalar(
+                select(PRFileClaim.file_key)
+                .join(PullRequest, PullRequest.id == PRFileClaim.pr_id)
+                .where(
+                    PRFileClaim.file_key.in_(claimed_keys),
+                    PullRequest.status == PRStatus.OPEN,
+                    PullRequest.author_id == owner_id,
+                )
+                .limit(1)
+            )
+            if active_claim is not None:
+                raise ConflictError(
+                    "This upload is attached to an open contribution. "
+                    "Cancel or reject the contribution before deleting the upload."
+                )
+
     row_quarantine_key = row.quarantine_key if row is not None else None
     row_final_key = row.final_key if row is not None else None
+    raw_thumbnail_key = getattr(row, "thumbnail_key", None) if row is not None else None
+    row_thumbnail_key = (
+        raw_thumbnail_key if isinstance(raw_thumbnail_key, str) and raw_thumbnail_key else None
+    )
     original_sha256 = row.sha256 if row is not None else None
     content_sha256 = None
     cas_ref_count = 0
@@ -205,6 +236,8 @@ async def cancel_upload_lifecycle(
         row_final_key=row_final_key,
         extra_object_keys=extra_object_keys,
     )
+    if row_thumbnail_key and _thumbnail_owned_by_upload(row_thumbnail_key, upload_id):
+        object_keys.add(row_thumbnail_key)
 
     cleanup_errors: list[BaseException] = []
     for operation in cleanup_operations:
@@ -227,6 +260,17 @@ async def cancel_upload_lifecycle(
         raise ServiceUnavailableError(
             "Upload was cancelled, but storage cleanup is incomplete. Retry cancellation."
         ) from cleanup_errors[0]
+
+    if row is not None and row_thumbnail_key:
+        thumbnail_row = await db.scalar(
+            select(Upload)
+            .where(Upload.upload_id == upload_id, Upload.user_id == owner_id)
+            .with_for_update()
+        )
+        if thumbnail_row is not None:
+            thumbnail_row.thumbnail_key = None
+            thumbnail_row.thumbnail_status = "failed"
+            await db.commit()
 
     try:
         await _release_quota_members(

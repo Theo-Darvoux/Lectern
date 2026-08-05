@@ -73,7 +73,7 @@ async def run_finalize_storage(
 
         thumbnail_key = None
         if input_data.thumbnail_path:
-            thumbnail_key = f"thumbnails/{cas_id}.webp"
+            thumbnail_key = f"thumbnails/{cas_id}/{input_data.upload_id}.webp"
             await asyncio.wait_for(
                 upload_file_multipart(
                     Path(input_data.thumbnail_path),

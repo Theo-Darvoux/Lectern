@@ -17,6 +17,8 @@ Covers:
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -42,6 +44,16 @@ def _make_ctx(redis: Any, session_factory: Any = None) -> WorkerContext:
         job_try=1,
         scanner=scanner_mock,
     )
+
+
+@pytest.fixture(autouse=True)
+def _bypass_retroactive_lifecycle_lock() -> AsyncIterator[None]:
+    @asynccontextmanager
+    async def no_op_lock(*_args: Any, **_kwargs: Any) -> AsyncIterator[None]:
+        yield
+
+    with patch("app.workers.retroactive_quarantine.redis_lock", new=no_op_lock):
+        yield
 
 
 def _make_arq_ctx(redis: Any, session_factory: Any = None) -> dict:
@@ -494,7 +506,7 @@ async def test_retroactive_quarantine_idempotent(
     fake_redis_setup,
     mock_redis: AsyncMock,
 ) -> None:
-    """A terminal upload must not queue a duplicate durable CAS release."""
+    """A retry repairs an interrupted malicious transition without double release."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from app.workers.retroactive_quarantine import retroactive_quarantine
@@ -545,10 +557,14 @@ async def test_retroactive_quarantine_idempotent(
     async with session_factory() as session:
         jobs = list((await session.scalars(select(OutboxJob))).all())
         row = await session.scalar(select(Upload).where(Upload.upload_id == "upload-rq-idem"))
-    assert jobs == []
+    assert len(jobs) == 1
+    assert jobs[0].args[0][0] == {
+        "sha256": sha256,
+        "operation_id": "quarantine:upload:upload-rq-idem:release",
+    }
     assert row is not None
-    assert row.cas_ref_count == 1
-    dispatch_mock.assert_not_awaited()
+    assert row.cas_ref_count == 0
+    dispatch_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio

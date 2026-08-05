@@ -23,9 +23,10 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.core.common.exceptions import ConflictError
 from app.core.database.post_commit import (
     PostCommitKey,
     dispatch_post_commit_actions,
@@ -42,6 +43,7 @@ from app.schemas.material import UploadStatus
 from app.services.notification import notify_user
 from app.services.pr import (
     _cleanup_pr_resources,
+    _lock_and_validate_pr_cas_files,
     _pr_directory_topics,
     apply_pr,
     get_pr_all_file_keys,
@@ -120,11 +122,14 @@ async def _settle_degraded_post_scan(
     upload_id: str,
     cas_s3_key: str,
 ) -> None:
+    settled = False
     async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
         if not await repo.update_processing_status(upload_id, "degraded"):
             return
         if await worker_ctx.redis.exists(upload_cancel_key(upload_id)) == 1:
             return
+        settled = True
+    if settled:
         await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
 
 
@@ -246,7 +251,7 @@ async def process_upload_post_scan(
         thumbnail_key: str | None = None
         if thumbnail_path:
             cas_id = cas_s3_key.split("/", 1)[-1]
-            _candidate_key = f"thumbnails/{cas_id}.webp"
+            _candidate_key = f"thumbnails/{cas_id}/{upload_id}.webp"
             try:
                 await asyncio.wait_for(
                     upload_file_multipart(
@@ -310,7 +315,6 @@ async def process_upload_post_scan(
                         )
 
                 await repo.maybe_dispatch_webhook(upload_id)
-                await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
 
         if not published:
             if thumbnail_key:
@@ -323,6 +327,8 @@ async def process_upload_post_scan(
                         exc,
                     )
             return
+
+        await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
 
         # ── 8. Delete quarantine object ───────────────────────────────────────
         try:
@@ -351,9 +357,11 @@ async def process_upload_post_scan(
         )
 
         if job_try >= _POST_MAX_RETRIES:
+            settled = False
             async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
-                if await _handle_permanent_failure(repo, upload_id, cas_s3_key, exc, job_try):
-                    await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
+                settled = await _handle_permanent_failure(repo, upload_id, cas_s3_key, exc, job_try)
+            if settled:
+                await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
         else:
             # Reset to pending so status reflects "not yet settled" during retry wait.
             await repo.update_processing_status(upload_id, "pending")
@@ -397,19 +405,18 @@ async def _handle_permanent_failure(
 
 
 async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> None:
-    """After this upload settles, check whether any deferred auto-merge PRs can now proceed.
+    """Auto-merge only when every claimed CAS key is authoritatively eligible.
 
-    A PR is auto-merged when its author has auto_approve=True and every cas/ file
-    referenced in the PR payload has reached a settled processing_status
-    (complete or degraded).
+    Upload lifecycle locks are acquired in stable upload-id order before database
+    row locks. This serializes approval with cancellation and retroactive malware
+    quarantine for every upload referenced by the contribution.
     """
     if ctx.db_sessionmaker is None:
         return
 
     try:
-        async with ctx.db_sessionmaker() as db:
-            # Find the open PR with auto_merge_pending that claims this file.
-            pr = await db.scalar(
+        async with ctx.db_sessionmaker() as discovery_db:
+            candidate_pr = await discovery_db.scalar(
                 select(PullRequest)
                 .join(PRFileClaim, PRFileClaim.pr_id == PullRequest.id)
                 .where(
@@ -417,70 +424,93 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
                     PullRequest.auto_merge_pending.is_(True),
                     PullRequest.status == PRStatus.OPEN,
                 )
-                .with_for_update(skip_locked=True)
             )
-            if pr is None:
+            if candidate_pr is None:
                 return
-
-            # Gather every unique cas/ key in this PR's payload.
-            # Deduplicate: two materials may reference the same CAS key (identical
-            # file content deduped by hash), but there is only one Upload row, so
-            # the DB count must be compared against the number of distinct keys.
-            all_cas_keys = list({k for k in get_pr_all_file_keys(pr) if k.startswith("cas/")})
-            if all_cas_keys:
-                settled_count = await db.scalar(
-                    select(func.count())
-                    .select_from(Upload)
-                    .where(
-                        Upload.final_key.in_(all_cas_keys),
-                        Upload.status.in_(("clean", "applied")),
-                        Upload.processing_status.in_(list(_SETTLED_STATUSES)),
+            candidate_pr_id = candidate_pr.id
+            candidate_author_id = candidate_pr.author_id
+            candidate_keys = {
+                key for key in get_pr_all_file_keys(candidate_pr) if key.startswith("cas/")
+            }
+            upload_ids = sorted(
+                set(
+                    await discovery_db.scalars(
+                        select(Upload.upload_id).where(
+                            Upload.final_key.in_(candidate_keys),
+                            Upload.user_id == candidate_author_id,
+                        )
                     )
                 )
-                if settled_count is None or settled_count < len(all_cas_keys):
-                    return  # Other files still processing — wait.
+            )
 
-            # All files settled — execute auto-merge.
-            pr.status = PRStatus.APPROVED
-            pr.reviewed_by = pr.author_id
-            pr.auto_merge_pending = False
+        async with contextlib.AsyncExitStack() as lifecycle_locks:
+            for upload_id in upload_ids:
+                await lifecycle_locks.enter_async_context(
+                    _post_scan_lifecycle_guard(ctx, upload_id)
+                )
 
-            jobs: list[Any] = []
-            db.info[PostCommitKey.JOBS] = jobs
-            db.info.setdefault(PostCommitKey.JOB_KEYS, set())
-
-            await apply_pr(db, pr)
-            await _cleanup_pr_resources(db, pr, redis=ctx.redis)  # type: ignore[arg-type]
-
-            sse_broadcasts = db.info.pop(PostCommitKey.SSE, [])
-            event = {"type": "pr_closed", "id": str(pr.id)}
-            for topic in _pr_directory_topics(list(pr.payload)):
-                sse_broadcasts.append((topic, event))
-            if pr.author_id:
-                sse_broadcasts.append((f"pr_updates:{pr.author_id}", event))
-
-            await persist_post_commit_jobs(db)
-            await db.commit()
-
-            for topic, event in sse_broadcasts:
-                broadcast_to_topic(topic, event)
-
-            # Dispatch jobs from the durable DB outbox. Queue outages leave
-            # rows pending for the minute-level retry worker.
-            await dispatch_post_commit_actions(db)
-
-            if pr.author_id:
-                async with ctx.db_sessionmaker() as notify_db:
-                    await notify_user(
-                        notify_db,
-                        pr.author_id,
-                        "pr_approved",
-                        f'Your contribution "{pr.title}" was published',
-                        link=f"/pull-requests/{pr.id}",
+            async with ctx.db_sessionmaker() as db:
+                pr = await db.scalar(
+                    select(PullRequest)
+                    .where(
+                        PullRequest.id == candidate_pr_id,
+                        PullRequest.auto_merge_pending.is_(True),
+                        PullRequest.status == PRStatus.OPEN,
                     )
-                    await notify_db.commit()
+                    .with_for_update()
+                )
+                if pr is None:
+                    return
 
-            logger.info("Auto-merged PR %s after all uploads settled.", pr.id)
+                expected_keys = {key for key in get_pr_all_file_keys(pr) if key.startswith("cas/")}
+                if not expected_keys or cas_s3_key not in expected_keys:
+                    return
+                try:
+                    await _lock_and_validate_pr_cas_files(
+                        db, pr, settled_statuses=_SETTLED_STATUSES
+                    )
+                except ConflictError:
+                    return
 
-    except Exception as exc:
-        logger.error("Failed to trigger auto-merge for cas_s3_key=%s: %s", cas_s3_key, exc)
+                pr.status = PRStatus.APPROVED
+                pr.reviewed_by = pr.author_id
+                pr.auto_merge_pending = False
+
+                jobs: list[Any] = []
+                db.info[PostCommitKey.JOBS] = jobs
+                db.info.setdefault(PostCommitKey.JOB_KEYS, set())
+
+                await apply_pr(db, pr)
+                await _cleanup_pr_resources(db, pr, redis=ctx.redis)  # type: ignore[arg-type]
+
+                sse_broadcasts = db.info.pop(PostCommitKey.SSE, [])
+                event = {"type": "pr_closed", "id": str(pr.id)}
+                for topic in _pr_directory_topics(list(pr.payload)):
+                    sse_broadcasts.append((topic, event))
+                if pr.author_id:
+                    sse_broadcasts.append((f"pr_updates:{pr.author_id}", event))
+
+                await persist_post_commit_jobs(db)
+                await db.commit()
+
+                for topic, event in sse_broadcasts:
+                    broadcast_to_topic(topic, event)
+
+                await dispatch_post_commit_actions(db)
+
+                if pr.author_id:
+                    async with ctx.db_sessionmaker() as notify_db:
+                        await notify_user(
+                            notify_db,
+                            pr.author_id,
+                            "pr_approved",
+                            f'Your contribution "{pr.title}" was published',
+                            link=f"/pull-requests/{pr.id}",
+                        )
+                        await notify_db.commit()
+
+                logger.info("Auto-merged PR %s after all uploads settled.", pr.id)
+
+    except Exception:
+        logger.exception("Failed to trigger auto-merge for cas_s3_key=%s", cas_s3_key)
+        raise

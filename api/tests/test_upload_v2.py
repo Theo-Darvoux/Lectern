@@ -385,12 +385,18 @@ async def test_concurrent_cancel_upload_releases_staging_cas_reference_once() ->
         async with locks.setdefault(name, asyncio.Lock()):
             yield
 
+    # ``thumbnail_key`` is deliberately absent from the unrestricted MagicMock.
+    # Cancellation must not mistake its synthetic child attribute for an S3 key.
     with (
         patch("app.routers.upload.status.redis_lock", serialized_lock),
         patch(
             "app.routers.upload.status._release_storage_reservation",
             new_callable=AsyncMock,
         ),
+        patch(
+            "app.routers.upload.status.delete_object",
+            new_callable=AsyncMock,
+        ) as delete_object,
     ):
         await asyncio.gather(
             cancel_upload(upload_id, MagicMock(id=user_id), redis, session),
@@ -399,6 +405,7 @@ async def test_concurrent_cancel_upload_releases_staging_cas_reference_once() ->
 
     assert ref_count == 1
     assert len(completed_operations) == 1
+    delete_object.assert_not_awaited()
 
 
 async def test_cancel_upload_requires_auth(client: AsyncClient) -> None:

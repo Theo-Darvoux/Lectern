@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from redis.asyncio import Redis
@@ -112,6 +112,71 @@ async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -
     raise ForbiddenError("File does not belong to you")
 
 
+async def _load_authoritative_upload(
+    file_key: str, user_id: uuid.UUID, db: AsyncSession
+) -> Upload | None:
+    rows = list(
+        (
+            await db.scalars(
+                select(Upload)
+                .where(
+                    Upload.user_id == user_id,
+                    (Upload.final_key == file_key) | (Upload.quarantine_key == file_key),
+                )
+                .order_by(Upload.updated_at.desc())
+            )
+        ).all()
+    )
+    if not rows and "/" in file_key:
+        parts = file_key.split("/")
+        if len(parts) >= 3:
+            row = await db.scalar(
+                select(Upload).where(Upload.upload_id == parts[2], Upload.user_id == user_id)
+            )
+            if row is not None:
+                rows.append(row)
+    if not rows:
+        return None
+    applied = next((row for row in rows if row.status == "applied"), None)
+    if applied is not None:
+        return applied
+    return next(
+        (
+            row
+            for row in rows
+            if row.status == "clean"
+            and (not (row.final_key or "").startswith("cas/") or int(row.cas_ref_count or 0) > 0)
+        ),
+        rows[0],
+    )
+
+
+def _authoritative_terminal_payload(row: Upload, file_key: str) -> dict[str, Any] | None:
+    status = row.status
+    uses_cas = bool(row.final_key and row.final_key.startswith("cas/"))
+    has_active_owner = not uses_cas or int(row.cas_ref_count or 0) > 0
+    if status == "cancelled" or (status == "clean" and not has_active_owner):
+        status = "failed"
+    if status not in ("clean", "failed", "malicious", "applied"):
+        return None
+    has_result = status == "applied" or (status == "clean" and has_active_owner)
+    return {
+        "upload_id": row.upload_id,
+        "file_key": file_key,
+        "status": status,
+        "detail": row.error_detail or ("Success" if has_result else "Upload is no longer active"),
+        "result": {
+            "file_key": row.final_key or file_key,
+            "size": row.size_bytes,
+            "original_size": row.size_bytes,
+            "mime_type": row.mime_type,
+            "file_name": row.filename,
+        }
+        if has_result
+        else None,
+    }
+
+
 @router.get("/status/{file_key:path}", response_model=UploadStatusOut)
 async def upload_status(
     file_key: str,
@@ -119,51 +184,17 @@ async def upload_status(
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadStatusOut:
-    """Non-SSE status poll for upload processing.
-
-    Returns the cached status written by the background worker.
-    Returns PENDING if no status has been written yet.
-    """
+    """Return upload status with the database overriding stale terminal cache state."""
     await _check_file_ownership(file_key, str(user.id), db)
 
+    row = await _load_authoritative_upload(file_key, user.id, db)
+    authoritative = _authoritative_terminal_payload(row, file_key) if row else None
+    if authoritative is not None:
+        return UploadStatusOut(**authoritative)
+
     cached = await redis.get(f"{_STATUS_CACHE_PREFIX}{file_key}")
-
-    # ── Database Fallback (Issue 6) ──
-    if not cached:
-        # Try to find via file_key (final_key) or upload_id extracted from path
-        row = await db.scalar(
-            select(Upload).where(Upload.final_key == file_key, Upload.user_id == user.id)
-        )
-
-        if not row and "/" in file_key:
-            parts = file_key.split("/")
-            if len(parts) >= 3:
-                upload_id = parts[2]
-                row = await db.scalar(
-                    select(Upload).where(Upload.upload_id == upload_id, Upload.user_id == user.id)
-                )
-
-        if row and row.status in ("clean", "failed", "malicious"):
-            res_data = {
-                "upload_id": row.upload_id,
-                "file_key": file_key,
-                "status": row.status,
-                "detail": row.error_detail or ("Success" if row.status == "clean" else "Failed"),
-                "result": {
-                    "file_key": row.final_key or file_key,
-                    "size": row.size_bytes,
-                    "original_size": row.size_bytes,
-                    "mime_type": row.mime_type,
-                    "file_name": row.filename,
-                }
-                if row.status == "clean"
-                else None,
-            }
-            cached = json.dumps(res_data)
-
     if not cached:
         return UploadStatusOut(file_key=file_key, status=UploadStatus.PENDING)
-
     try:
         return UploadStatusOut(**json.loads(cached))
     except Exception:
@@ -190,41 +221,20 @@ async def upload_events(
     user_id = str(user.id)
     await _check_file_ownership(file_key, user_id, db)
 
-    # Pre-compute values needed by the generator before it starts
     cached_status: str | None = await redis.get(f"{_STATUS_CACHE_PREFIX}{file_key}")
-
-    # ── Database Fallback (Issue 6) ──
-    if not cached_status:
-        # Try to find via file_key (final_key) or upload_id extracted from path
-        row = await db.scalar(
-            select(Upload).where(Upload.final_key == file_key, Upload.user_id == user.id)
+    row = await _load_authoritative_upload(file_key, user.id, db)
+    authoritative = _authoritative_terminal_payload(row, file_key) if row else None
+    authoritative_override = False
+    if authoritative is not None:
+        authoritative_json = json.dumps(authoritative)
+        try:
+            cached_data = json.loads(cached_status) if cached_status else None
+        except Exception:
+            cached_data = None
+        authoritative_override = not cached_data or (
+            cached_data.get("status") != authoritative.get("status")
         )
-
-        if not row and "/" in file_key:
-            parts = file_key.split("/")
-            if len(parts) >= 3:
-                upload_id = parts[2]
-                row = await db.scalar(
-                    select(Upload).where(Upload.upload_id == upload_id, Upload.user_id == user.id)
-                )
-
-        if row and row.status in ("clean", "failed", "malicious"):
-            res_data = {
-                "upload_id": row.upload_id,
-                "file_key": file_key,
-                "status": row.status,
-                "detail": row.error_detail or ("Success" if row.status == "clean" else "Failed"),
-                "result": {
-                    "file_key": row.final_key or file_key,
-                    "size": row.size_bytes,
-                    "original_size": row.size_bytes,
-                    "mime_type": row.mime_type,
-                    "file_name": row.filename,
-                }
-                if row.status == "clean"
-                else None,
-            }
-            cached_status = json.dumps(res_data)
+        cached_status = authoritative_json
 
     # Short-circuit if terminal status is cached.
     # Replay the full event log first so the client sees all intermediate stage
@@ -232,9 +242,11 @@ async def upload_events(
     if cached_status:
         try:
             data = json.loads(cached_status)
-            if data.get("status") in ("clean", "malicious", "failed"):
+            if data.get("status") in ("clean", "malicious", "failed", "applied"):
                 event_log_key = f"upload:eventlog:{file_key}"
-                log_entries = await _load_event_log(redis, event_log_key)
+                log_entries = (
+                    [] if authoritative_override else await _load_event_log(redis, event_log_key)
+                )
                 events: list[dict[str, str]] = []
                 for i, entry in enumerate(log_entries):
                     events.append(_upload_sse_event(entry, event_id=i + 1))

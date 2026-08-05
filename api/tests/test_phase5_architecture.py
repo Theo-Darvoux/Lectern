@@ -182,6 +182,7 @@ async def test_webhook_reenqueues_on_transient_failure():
             "upload_id",
             "status",
             "final_key",
+            "cas_ref_count",
             "sha256",
             "mime_type",
             "size_bytes",
@@ -191,6 +192,7 @@ async def test_webhook_reenqueues_on_transient_failure():
     row.upload_id = upload_id
     row.status = "clean"
     row.final_key = "cas/abc"
+    row.cas_ref_count = 1
     row.sha256 = "a" * 64
     row.mime_type = "application/pdf"
     row.size_bytes = 1024
@@ -247,6 +249,7 @@ async def test_webhook_inserts_dlq_after_max_attempts():
             "upload_id",
             "status",
             "final_key",
+            "cas_ref_count",
             "sha256",
             "mime_type",
             "size_bytes",
@@ -255,7 +258,8 @@ async def test_webhook_inserts_dlq_after_max_attempts():
     row.webhook_url = "https://example.com/webhook"
     row.upload_id = upload_id
     row.status = "clean"
-    row.final_key = None
+    row.final_key = "cas/webhook-dlq"
+    row.cas_ref_count = 1
     row.sha256 = None
     row.mime_type = None
     row.size_bytes = None

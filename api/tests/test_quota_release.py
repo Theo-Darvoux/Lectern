@@ -131,6 +131,7 @@ async def test_quota_released_on_pr_rejection(
         filename="test.pdf",
         mime_type="application/pdf",
         status="clean",
+        cas_ref_count=1,
     )
     db_session.add(up)
     await db_session.commit()

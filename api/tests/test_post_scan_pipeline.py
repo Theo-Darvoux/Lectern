@@ -465,7 +465,7 @@ async def test_post_scan_removes_thumbnail_if_upload_was_quarantined() -> None:
         repo.get_auth_config = AsyncMock(return_value={})
         await process_upload_post_scan(ctx, **_post_scan_kwargs())
 
-    delete.assert_awaited_once_with(f"thumbnails/{'c' * 64}.webp")
+    delete.assert_awaited_once_with(f"thumbnails/{'c' * 64}/uid-1.webp")
 
 
 @pytest.mark.asyncio
@@ -788,8 +788,9 @@ async def test_trigger_auto_merge_when_all_files_settled() -> None:
     mock_pr.status = "open"
     mock_pr.payload = [{"op": "create_material", "file_key": cas_s3_key}]
 
-    # DB scalar returns: PR, then settled_count = 1 (all files settled)
-    mock_session.scalar = AsyncMock(side_effect=[mock_pr, 1])
+    # Discovery query, then authoritative locked PR reload.
+    mock_session.scalar = AsyncMock(side_effect=[mock_pr, mock_pr])
+    mock_session.scalars = AsyncMock(return_value=[])
     mock_session.commit = AsyncMock()
     mock_session.info = {}
 
@@ -812,6 +813,10 @@ async def test_trigger_auto_merge_when_all_files_settled() -> None:
             "app.workers.process_upload_post_scan.get_pr_all_file_keys", return_value=[cas_s3_key]
         ),
         patch("app.workers.process_upload_post_scan.notify_user", AsyncMock()),
+        patch(
+            "app.workers.process_upload_post_scan._lock_and_validate_pr_cas_files",
+            AsyncMock(return_value=[]),
+        ),
     ):
         await _trigger_pending_auto_merges(ctx, cas_s3_key)
 
@@ -842,10 +847,12 @@ async def test_trigger_no_auto_merge_when_files_still_pending() -> None:
         {"op": "create_material", "file_key": other_key},
     ]
 
-    # DB scalar: PR found, but only 1 of 2 files settled
-    mock_session.scalar = AsyncMock(side_effect=[mock_pr, 1])
+    mock_session.scalar = AsyncMock(side_effect=[mock_pr, mock_pr])
+    mock_session.scalars = AsyncMock(return_value=[])
 
     ctx = WorkerContext(redis=AsyncMock(), db_sessionmaker=mock_db_factory, job_try=1)
+
+    from app.core.common.exceptions import ConflictError
 
     mock_apply = AsyncMock()
     with (
@@ -853,6 +860,10 @@ async def test_trigger_no_auto_merge_when_files_still_pending() -> None:
         patch(
             "app.workers.process_upload_post_scan.get_pr_all_file_keys",
             return_value=[cas_s3_key, other_key],
+        ),
+        patch(
+            "app.workers.process_upload_post_scan._lock_and_validate_pr_cas_files",
+            AsyncMock(side_effect=ConflictError("file still pending")),
         ),
     ):
         await _trigger_pending_auto_merges(ctx, cas_s3_key)

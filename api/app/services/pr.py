@@ -129,6 +129,71 @@ def get_pr_all_file_keys(pr: PullRequest) -> list[str]:
     return keys
 
 
+async def _lock_and_validate_pr_cas_files(
+    db: AsyncSession,
+    pr: PullRequest,
+    *,
+    settled_statuses: set[str] | frozenset[str] | None = None,
+) -> list[Upload]:
+    """Lock and validate every CAS key claimed by a contribution.
+
+    A key is eligible when it is backed by an author-owned clean upload with an
+    active staging reference, or by a consumed generated-CAS claim. Duplicate
+    upload rows cannot satisfy a different missing key because validation is set
+    based. Callers hold these row locks through approval.
+    """
+    expected_keys = {key for key in get_pr_all_file_keys(pr) if key.startswith("cas/")}
+    if not expected_keys:
+        return []
+
+    claimed_keys = set(
+        await db.scalars(
+            select(PRFileClaim.file_key)
+            .where(PRFileClaim.pr_id == pr.id, PRFileClaim.file_key.in_(expected_keys))
+            .with_for_update()
+        )
+    )
+    if claimed_keys != expected_keys:
+        raise ConflictError("Contribution file claims changed; reload and retry")
+
+    upload_rows = list(
+        (
+            await db.scalars(
+                select(Upload)
+                .where(
+                    Upload.final_key.in_(expected_keys),
+                    Upload.user_id == pr.author_id,
+                )
+                .with_for_update()
+            )
+        ).all()
+    )
+    eligible_keys = {
+        upload.final_key
+        for upload in upload_rows
+        if upload.final_key
+        and upload.status == "clean"
+        and int(upload.cas_ref_count or 0) > 0
+        and (settled_statuses is None or upload.processing_status in settled_statuses)
+    }
+
+    consumed_claim_keys = set(
+        await db.scalars(
+            select(CasStagingClaim.file_key)
+            .where(
+                CasStagingClaim.user_id == pr.author_id,
+                CasStagingClaim.file_key.in_(expected_keys),
+                CasStagingClaim.consumed_at.is_not(None),
+            )
+            .with_for_update()
+        )
+    )
+    eligible_keys.update(consumed_claim_keys)
+    if eligible_keys != expected_keys:
+        raise ConflictError("One or more contribution files are no longer clean, settled, or owned")
+    return upload_rows
+
+
 async def _release_pr_upload_quota(
     db: AsyncSession,
     pr: PullRequest,
@@ -143,10 +208,42 @@ async def _release_pr_upload_quota(
     if not keys:
         return
 
-    # Find uploads by their quarantine or final keys
-    stmt = select(Upload).where((Upload.quarantine_key.in_(keys)) | (Upload.final_key.in_(keys)))
+    # A CAS key may have many duplicate Upload rows. Select one author-owned
+    # staging owner per claimed key deterministically; never mutate another
+    # user's duplicate upload.
+    stmt = (
+        select(Upload)
+        .where(
+            (Upload.quarantine_key.in_(keys)) | (Upload.final_key.in_(keys)),
+            Upload.user_id == pr.author_id,
+        )
+        .order_by(Upload.updated_at.desc(), Upload.created_at.desc())
+        .with_for_update()
+    )
     result = await db.execute(stmt)
-    uploads = list(result.scalars().all())
+    candidate_uploads = list(result.scalars().all())
+    candidates_by_key: dict[str, list[Upload]] = {}
+    for upload in candidate_uploads:
+        matched_key = upload.final_key if upload.final_key in keys else upload.quarantine_key
+        if matched_key:
+            candidates_by_key.setdefault(matched_key, []).append(upload)
+    uploads: list[Upload] = []
+    for claimed_key in keys:
+        candidates = candidates_by_key.get(claimed_key, [])
+        if not candidates:
+            continue
+        selected = candidates[0]
+        if approved:
+            selected = next(
+                (
+                    upload
+                    for upload in candidates
+                    if upload.status == "clean"
+                    and (not claimed_key.startswith("cas/") or int(upload.cas_ref_count or 0) > 0)
+                ),
+                selected,
+            )
+        uploads.append(selected)
 
     if not uploads:
         return
@@ -161,7 +258,7 @@ async def _release_pr_upload_quota(
             keys_to_remove.append(upload.quarantine_key)
         keys_to_remove.append(f"staging:{upload.user_id}:{upload.upload_id}")
 
-        if approved:
+        if approved and upload.status == "clean":
             upload.status = "applied"
 
     if keys_to_remove:
@@ -212,20 +309,43 @@ async def _cleanup_pr_resources(
 
     if cas_payload_refs:
         upload_rows = list(
-            (await db.scalars(select(Upload).where(Upload.final_key.in_(cas_payload_refs)))).all()
+            (
+                await db.scalars(
+                    select(Upload)
+                    .where(
+                        Upload.final_key.in_(cas_payload_refs),
+                        Upload.user_id == pr.author_id,
+                    )
+                    .order_by(Upload.updated_at.desc(), Upload.created_at.desc())
+                    .with_for_update()
+                )
+            ).all()
         )
-        uploads_by_key = {row.final_key: row for row in upload_rows if row.final_key}
+        all_uploads_by_key: dict[str, list[Upload]] = {}
+        uploads_by_key: dict[str, Upload] = {}
+        for upload_row in upload_rows:
+            if upload_row.final_key:
+                all_uploads_by_key.setdefault(upload_row.final_key, []).append(upload_row)
+            if (
+                upload_row.final_key
+                and upload_row.final_key not in uploads_by_key
+                and upload_row.status in ("clean", "applied")
+                and int(upload_row.cas_ref_count or 0) > 0
+            ):
+                uploads_by_key[upload_row.final_key] = upload_row
         refs_to_release: list[str] = []
         for key, payload_sha in cas_payload_refs.items():
             upload = uploads_by_key.get(key)
             if upload is None:
-                refs_to_release.append(payload_sha)
-            elif upload.cas_ref_count > 0:
+                if key not in all_uploads_by_key:
+                    refs_to_release.append(payload_sha)
+                continue
+            if upload.cas_ref_count > 0:
                 reference_sha = upload.content_sha256 or upload.sha256
                 if reference_sha:
                     refs_to_release.append(reference_sha)
                 upload.cas_ref_count = 0
-                if delete_staging:
+                if delete_staging and upload.status == "clean":
                     upload.status = "failed"
         if refs_to_release:
             db.info.setdefault(PostCommitKey.JOBS, []).append(
@@ -479,14 +599,21 @@ def _resolve_mime_type(
 
 
 async def _resolve_thumbnail_info(
-    db: AsyncSession, cas_file_key: str
+    db: AsyncSession,
+    cas_file_key: str,
+    owner_id: uuid.UUID | None,
 ) -> tuple[str | None, str | None]:
-    """Return (thumbnail_key, thumbnail_status) from the uploads table for the given CAS key."""
+    """Resolve only the contribution author's active upload thumbnail."""
     from app.models.upload import Upload as _Upload
 
     row = await db.execute(
         select(_Upload.thumbnail_key, _Upload.thumbnail_status)
-        .where(_Upload.final_key == cas_file_key)
+        .where(
+            _Upload.final_key == cas_file_key,
+            _Upload.user_id == owner_id,
+            _Upload.status == "clean",
+            _Upload.cas_ref_count > 0,
+        )
         .order_by(_Upload.updated_at.desc())
         .limit(1)
     )
@@ -519,7 +646,12 @@ async def _make_version_for_file(
         upload_row = (
             await db.execute(
                 select(Upload.size_bytes, Upload.content_sha256)
-                .where(Upload.final_key == file_key)
+                .where(
+                    Upload.final_key == file_key,
+                    Upload.user_id == author_id,
+                    Upload.status == "clean",
+                    Upload.cas_ref_count > 0,
+                )
                 .order_by(Upload.updated_at.desc())
                 .limit(1)
             )
@@ -528,7 +660,7 @@ async def _make_version_for_file(
         stored_content_sha256 = upload_row[1] if upload_row is not None else None
         real_size = upload_size if upload_size is not None else (payload.get("file_size") or 0)
         mime_type = payload.get("file_mime_type") or "application/octet-stream"
-        thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key)
+        thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key, author_id)
     else:
         info = await get_object_info(file_key)
         real_size = info["size"]
@@ -1256,12 +1388,14 @@ async def create_pull_request_service(
         upload_rows = list(
             (
                 await db.scalars(
-                    select(Upload).where(
+                    select(Upload)
+                    .where(
                         (Upload.final_key.in_(keys_to_check))
                         | (Upload.quarantine_key.in_(keys_to_check)),
                         Upload.status == "clean",
                         Upload.user_id == current_user.id,
                     )
+                    .with_for_update()
                 )
             ).all()
         )
@@ -1272,6 +1406,8 @@ async def create_pull_request_service(
             )
             reference_sha = upload.content_sha256 or upload.sha256
             if authorized_key:
+                if authorized_key.startswith("cas/") and int(upload.cas_ref_count or 0) <= 0:
+                    continue
                 # Empty hash supports pre-migration clean Upload rows while
                 # preserving ownership and scan-state authorization.
                 authorized_hashes[authorized_key] = reference_sha or ""
@@ -1990,12 +2126,14 @@ async def list_prs_for_item_service(
 
 async def approve_pr_service(db: AsyncSession, pr_id: uuid.UUID, reviewer: User) -> PullRequest:
     """Approve and apply a contribution."""
-    pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id))
+    pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id).with_for_update())
     if not pr:
         raise NotFoundError("Pull request not found")
 
     if pr.status != PRStatus.OPEN:
         raise BadRequestError("This contribution is no longer open")
+
+    await _lock_and_validate_pr_cas_files(db, pr)
 
     pr.status = PRStatus.APPROVED
     pr.reviewed_by = reviewer.id
