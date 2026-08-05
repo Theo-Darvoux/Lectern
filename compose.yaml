@@ -467,7 +467,7 @@ services:
     networks:
       - backend
     command: >
-      master -ip=seaweedfs-master -ip.bind=0.0.0.0 -port=9333 -defaultReplication=010 -volumeSizeLimitMB=1024
+      master -ip=seaweedfs-master -ip.bind=0.0.0.0 -port=9333 -mdir=/data -defaultReplication=010 -volumeSizeLimitMB=1024
     volumes:
       - /opt/seaweedfs/master:/data
     healthcheck:

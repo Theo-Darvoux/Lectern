@@ -129,6 +129,21 @@ def get_pr_all_file_keys(pr: PullRequest) -> list[str]:
     return keys
 
 
+async def _lock_open_pr_for_transition(db: AsyncSession, pr_id: uuid.UUID) -> PullRequest:
+    """Lock and refresh an OPEN PR before any terminal transition."""
+    pr = await db.scalar(
+        select(PullRequest)
+        .where(PullRequest.id == pr_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if pr is None:
+        raise NotFoundError("Pull request not found")
+    if pr.status != PRStatus.OPEN:
+        raise BadRequestError("This contribution is no longer open")
+    return pr
+
+
 async def _lock_and_validate_pr_cas_files(
     db: AsyncSession,
     pr: PullRequest,
@@ -2126,12 +2141,7 @@ async def list_prs_for_item_service(
 
 async def approve_pr_service(db: AsyncSession, pr_id: uuid.UUID, reviewer: User) -> PullRequest:
     """Approve and apply a contribution."""
-    pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id).with_for_update())
-    if not pr:
-        raise NotFoundError("Pull request not found")
-
-    if pr.status != PRStatus.OPEN:
-        raise BadRequestError("This contribution is no longer open")
+    pr = await _lock_open_pr_for_transition(db, pr_id)
 
     await _lock_and_validate_pr_cas_files(db, pr)
 
@@ -2163,12 +2173,7 @@ async def reject_pr_service(
     db: AsyncSession, pr_id: uuid.UUID, reason: str, reviewer: User
 ) -> PullRequest:
     """Reject a contribution and clean up its staging files."""
-    pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id))
-    if not pr:
-        raise NotFoundError("Pull request not found")
-
-    if pr.status != PRStatus.OPEN:
-        raise BadRequestError("This contribution is no longer open")
+    pr = await _lock_open_pr_for_transition(db, pr_id)
 
     pr.status = PRStatus.REJECTED
     pr.reviewed_by = reviewer.id
@@ -2196,15 +2201,10 @@ async def reject_pr_service(
 
 async def cancel_pr_service(db: AsyncSession, pr_id: uuid.UUID, current_user: User) -> PullRequest:
     """Author cancels their own open pull request."""
-    pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id))
-    if not pr:
-        raise NotFoundError("Pull request not found")
+    pr = await _lock_open_pr_for_transition(db, pr_id)
 
     if pr.author_id != current_user.id:
         raise ForbiddenError("Only the author can cancel this contribution")
-
-    if pr.status != PRStatus.OPEN:
-        raise BadRequestError("This contribution is no longer open")
 
     pr.status = PRStatus.CANCELLED
     await _cleanup_pr_resources(db, pr, delete_staging=True)

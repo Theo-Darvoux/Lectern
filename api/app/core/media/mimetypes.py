@@ -244,6 +244,11 @@ def guess_mime_from_bytes(data: bytes, default: str = "application/octet-stream"
     if len(data) < 4:
         return default
 
+    # Gzip must be recognized before extension fallback. Gzip is not an allowed
+    # upload MIME, so bytes disguised behind a text extension fail closed.
+    if data.startswith(b"\x1f\x8b"):
+        return "application/gzip"
+
     # PDF
     if data.startswith(b"%PDF-"):
         return "application/pdf"

@@ -1,4 +1,15 @@
 services:
+  release-image-policy:
+    image: alpine:3.20
+    environment:
+      API_IMAGE: ${API_IMAGE:?API_IMAGE must be set to an immutable GHCR digest}
+      WORKER_IMAGE: ${WORKER_IMAGE:?WORKER_IMAGE must be set to an immutable GHCR digest}
+      WEB_IMAGE: ${WEB_IMAGE:?WEB_IMAGE must be set to an immutable GHCR digest}
+    command: >-
+      /bin/sh -ec 'for value in "$$API_IMAGE" "$$WORKER_IMAGE" "$$WEB_IMAGE"; do
+      case "$$value" in *@sha256:*) ;; *) echo "production images must use immutable @sha256 digests" >&2; exit 64 ;; esac;
+      done'
+
   seaweedfs-image-policy:
     profiles: [ seaweedfs-prod ]
     image: alpine:3.20
@@ -16,9 +27,35 @@ services:
         condition: service_completed_successfully
 
   api:
+    image: ${API_IMAGE}
     command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+
+  worker:
+    image: ${WORKER_IMAGE}
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+
+  worker-fast:
+    image: ${WORKER_IMAGE}
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+
+  worker-slow:
+    image: ${WORKER_IMAGE}
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
 
   web:
+    image: ${WEB_IMAGE}
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
     # Use the production nginx static runner target
     build:
       target: runner

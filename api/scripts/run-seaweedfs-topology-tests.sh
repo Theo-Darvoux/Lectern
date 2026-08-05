@@ -16,6 +16,7 @@ VOLUME1="${PREFIX}-volume1"
 VOLUME2="${PREFIX}-volume2"
 FILER="${PREFIX}-filer"
 S3="${PREFIX}-s3"
+MASTER_DATA="${TMPDIR:-/tmp}/${PREFIX}-master-data"
 
 cleanup() {
     status=$?
@@ -28,6 +29,7 @@ cleanup() {
     fi
     docker rm -f "$S3" "$FILER" "$VOLUME2" "$VOLUME1" "$MASTER" >/dev/null 2>&1 || true
     docker network rm "$NETWORK" >/dev/null 2>&1 || true
+    rm -rf "$MASTER_DATA"
     exit "$status"
 }
 trap cleanup EXIT INT TERM
@@ -41,12 +43,15 @@ done
 
 docker rm -f "$S3" "$FILER" "$VOLUME2" "$VOLUME1" "$MASTER" >/dev/null 2>&1 || true
 docker network rm "$NETWORK" >/dev/null 2>&1 || true
+rm -rf "$MASTER_DATA"
+mkdir -p "$MASTER_DATA"
 docker network create "$NETWORK" >/dev/null
 
 docker run -d --name "$MASTER" --network "$NETWORK" \
     -p "127.0.0.1:${MASTER_PORT}:9333" \
+    -v "$MASTER_DATA:/data:Z" \
     "$SEAWEEDFS_IMAGE" \
-    master -ip="$MASTER" -ip.bind=0.0.0.0 -port=9333 \
+    master -ip="$MASTER" -ip.bind=0.0.0.0 -port=9333 -mdir=/data \
     -defaultReplication=010 -volumeSizeLimitMB=1024 >/dev/null
 
 attempt=0
@@ -79,6 +84,34 @@ until curl --silent --fail \
     attempt=$((attempt + 1))
     [ "$attempt" -lt 60 ] || {
         echo "SeaweedFS could not allocate replication=010 across both racks" >&2
+        exit 1
+    }
+    sleep 1
+done
+
+if ! find "$MASTER_DATA" -mindepth 1 -print -quit | grep -q .; then
+    echo "SeaweedFS master did not persist state under -mdir=/data" >&2
+    exit 1
+fi
+
+docker restart "$MASTER" >/dev/null
+attempt=0
+until curl --silent --fail "http://127.0.0.1:${MASTER_PORT}/cluster/healthz" >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 60 ] || {
+        echo "SeaweedFS master did not recover from persistent state" >&2
+        exit 1
+    }
+    sleep 1
+done
+
+attempt=0
+until curl --silent --fail \
+    "http://127.0.0.1:${MASTER_PORT}/dir/assign?replication=010" 2>/dev/null \
+    | grep -q '"fid"'; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 60 ] || {
+        echo "SeaweedFS could not allocate after master recreation" >&2
         exit 1
     }
     sleep 1

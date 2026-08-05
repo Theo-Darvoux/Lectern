@@ -620,7 +620,17 @@ class S3Backend:
                 )
                 body: Any = response["Body"]
                 try:
-                    return cast(bytes, await body.read(byte_count))[:byte_count]
+                    advertised_length = int(response.get("ContentLength") or 0)
+                    target = min(byte_count, advertised_length) if advertised_length else byte_count
+                    chunks: list[bytes] = []
+                    total = 0
+                    while total < target:
+                        chunk = cast(bytes, await body.read(target - total))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        total += len(chunk)
+                    return b"".join(chunks)[:byte_count]
                 finally:
                     await _finish_response_body(body, primary_error=sys.exception())
             except client.exceptions.ClientError as e:

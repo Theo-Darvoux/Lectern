@@ -4,6 +4,7 @@ import difflib
 import gzip
 import mimetypes as _mimetypes
 import uuid
+from io import BytesIO
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Query, Request
@@ -58,6 +59,8 @@ _TEXT_MIME_EXACT = frozenset(
 # (they have their own security-checked upload paths).
 _TEXT_READABLE_EXACT = frozenset({"image/svg+xml"})
 _TEXT_EDIT_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB cap on raw text body
+_TEXT_DECOMPRESS_MAX_BYTES = _TEXT_EDIT_MAX_BYTES
+_GZIP_MAGIC = b"\x1f\x8b"
 
 router = APIRouter(prefix="/api/materials", tags=["materials"])
 
@@ -93,6 +96,38 @@ def _is_text_mime(mime: str) -> bool:
     if any(m.startswith(p) for p in _TEXT_MIME_PREFIXES):
         return True
     return m in _TEXT_MIME_EXACT
+
+
+def _decompress_gzip_text(
+    raw_bytes: bytes,
+    *,
+    max_output_bytes: int = _TEXT_DECOMPRESS_MAX_BYTES,
+) -> bytes:
+    """Decompress legacy gzip-wrapped text with a strict output bound."""
+    if max_output_bytes < 0:
+        raise ValueError("max_output_bytes must be non-negative")
+
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        with gzip.GzipFile(fileobj=BytesIO(raw_bytes), mode="rb") as stream:
+            while True:
+                remaining = max_output_bytes - total
+                chunk = stream.read(min(64 * 1024, remaining + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_output_bytes:
+                    raise BadRequestError(
+                        "Decompressed text exceeds the maximum editable-text size"
+                    )
+                chunks.append(chunk)
+    except BadRequestError:
+        raise
+    except (EOFError, OSError) as exc:
+        raise BadRequestError("Failed to decompress gzip-wrapped text") from exc
+
+    return b"".join(chunks)
 
 
 @router.get("/{material_id}", response_model=MaterialDetail)
@@ -450,14 +485,10 @@ async def get_material_text_content(
 
     raw_bytes = await read_full_object(version["file_key"])
 
-    # Decompress if explicitly wrapped OR if bytes look like GZIP (X12 fix)
-    if is_gzip_wrapped or raw_bytes.startswith(b"\x1f\x8b"):
-        try:
-            raw_bytes = gzip.decompress(raw_bytes)
-        except Exception as exc:
-            # If magic number was a false positive, we just fall through
-            if is_gzip_wrapped:
-                raise BadRequestError(f"Failed to decompress file: {exc}") from exc
+    # Legacy gzip content is accepted only through the bounded decoder. Magic
+    # bytes are authoritative so a disguised gzip stream cannot bypass limits.
+    if is_gzip_wrapped or raw_bytes.startswith(_GZIP_MAGIC):
+        raw_bytes = _decompress_gzip_text(raw_bytes)
 
     # Detect and strip UTF-8 BOM if present
     if raw_bytes.startswith(b"\xef\xbb\xbf"):
@@ -509,8 +540,8 @@ async def save_material_text_content(
     # Compute text diff
     try:
         old_bytes = await read_full_object(version["file_key"])
-        if is_gzip_wrapped:
-            old_bytes = gzip.decompress(old_bytes)
+        if is_gzip_wrapped or old_bytes.startswith(_GZIP_MAGIC):
+            old_bytes = _decompress_gzip_text(old_bytes)
         if old_bytes.startswith(b"\xef\xbb\xbf"):
             old_bytes = old_bytes[3:]
         try:

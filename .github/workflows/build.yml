@@ -187,9 +187,7 @@ jobs:
         with:
           images: ${{ env.API_IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
-            type=ref,event=tag
 
       - name: Metadata (worker)
         id: meta-worker
@@ -197,9 +195,7 @@ jobs:
         with:
           images: ${{ env.WORKER_IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
-            type=ref,event=tag
 
       # Slim web-facing image (no document/media toolchain).
       - name: Build & push api
@@ -231,9 +227,8 @@ jobs:
             type=gha,scope=api
           cache-to: type=gha,scope=worker,mode=max
 
-      # ── Vulnerability scan (report-only; results in the Security tab) ───────
+      # ── Vulnerability scans gate release-alias promotion ───────────────────
       - name: Scan api image (Trivy)
-        continue-on-error: true # advisory: never block a published image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.API_IMAGE }}:sha-${{ github.sha }}
@@ -241,7 +236,9 @@ jobs:
           output: trivy-api.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          exit-code: '1'
       - name: Upload api scan
+        if: ${{ always() }}
         continue-on-error: true # tolerate code scanning being disabled
         uses: github/codeql-action/upload-sarif@v3
         with:
@@ -249,7 +246,7 @@ jobs:
           category: trivy-api
 
       - name: Scan worker image (Trivy)
-        continue-on-error: true # advisory: never block a published image
+        if: ${{ !cancelled() }}
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.WORKER_IMAGE }}:sha-${{ github.sha }}
@@ -257,12 +254,31 @@ jobs:
           output: trivy-worker.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          exit-code: '1'
       - name: Upload worker scan
+        if: ${{ always() }}
         continue-on-error: true # tolerate code scanning being disabled
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-worker.sarif
           category: trivy-worker
+
+      - name: Promote api and worker release aliases
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            alias=latest
+          else
+            alias="$GITHUB_REF_NAME"
+          fi
+          docker buildx imagetools create \\
+            --tag "${API_IMAGE}:${alias}" \\
+            "${API_IMAGE}:sha-${GITHUB_SHA}"
+          docker buildx imagetools create \\
+            --tag "${WORKER_IMAGE}:${alias}" \\
+            "${WORKER_IMAGE}:sha-${GITHUB_SHA}"
 
   # ── Build & push Web image ─────────────────────────────────────────────────
   build-web:
@@ -291,9 +307,7 @@ jobs:
         with:
           images: ${{ env.WEB_IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
-            type=ref,event=tag
 
       - name: Build & push web
         uses: docker/build-push-action@v6
@@ -309,7 +323,6 @@ jobs:
           cache-to: type=gha,scope=web,mode=max
 
       - name: Scan web image (Trivy)
-        continue-on-error: true # advisory: never block a published image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.WEB_IMAGE }}:sha-${{ github.sha }}
@@ -317,9 +330,25 @@ jobs:
           output: trivy-web.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          exit-code: '1'
       - name: Upload web scan
+        if: ${{ always() }}
         continue-on-error: true # tolerate code scanning being disabled
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-web.sarif
           category: trivy-web
+
+      - name: Promote web release alias
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            alias=latest
+          else
+            alias="$GITHUB_REF_NAME"
+          fi
+          docker buildx imagetools create \\
+            --tag "${WEB_IMAGE}:${alias}" \\
+            "${WEB_IMAGE}:sha-${GITHUB_SHA}"
