@@ -1,16 +1,10 @@
-name: Build and Push Images
+name: Release Implementation
 
 on:
-  push:
-    branches: [main]
-    tags: ['alpha-*']
+  workflow_call:
 
-# Cancel superseded runs on the same ref so rapid merges to main don't race to
-# overwrite :latest. Tag builds (releases) are namespaced by their own ref.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+# Concurrency is owned by release.yml; this reusable implementation must not
+# share a concurrency group with (and cancel) its caller.
 env:
   API_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/api-candidate
   API_RELEASE_IMAGE: ghcr.io/theo-darvoux/lectern/api-release
@@ -47,146 +41,24 @@ jobs:
               - 'worker/**'
             policy:
               - '.github/workflows/build.yml'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
+              - '.github/workflows/scan-and-promote.yml'
               - '.env.example'
               - 'compose.yaml'
               - 'compose.prod.yaml'
+              - 'deploy/production-images.env.example'
+              - 'docs/production-release-manifest.md'
+              - 'docs/ci-release-gates.md'
+              - 'scripts/prepare-production-release.sh'
               - 'scripts/promote-release-image.sh'
+              - 'scripts/write-production-release-manifest.py'
               - 'api/scripts/run-seaweedfs-topology-tests.sh'
               - 'api/tests/test_production_hardening_policy.py'
+              - 'api/tests/test_production_release_manifest.py'
+              - 'api/tests/test_release_gate_dependency_compat.py'
               - 'api/tests/test_release_promotion_script.py'
-
-  # ── Test gates (must pass before the matching image is published) ──────────
-  test-api:
-    needs: [changes, test-production-policy, test-revert-postgres]
-    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: api
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: api/uv.lock
-      # --extra dev pulls ruff/pytest/factory-boy from [project.optional-dependencies];
-      # the default [dependency-groups] dev (mypy, aiosqlite, …) is installed too.
-      - run: uv sync --frozen --extra dev
-      - name: Lint (ruff)
-        run: uv run ruff check .
-      - name: Type-check (mypy)
-        run: uv run mypy app/
-      # Hermetic gate: exclude integration tests needing soffice/rsvg/S3 (see
-      # the `integration` marker in pyproject.toml).
-      - name: Tests (pytest, in-memory SQLite)
-        run: uv run pytest -m "not integration"
-
-  test-web:
-    needs: changes
-    if: ${{ needs.changes.outputs.web == 'true' || startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.32.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - name: Lint (eslint)
-        run: pnpm lint
-      - name: Type-check (tsc)
-        run: pnpm tsc --noEmit
-      - name: i18n key check
-        run: pnpm i18n:check
-      - name: Tests (vitest)
-        run: pnpm test
-
-
-
-  test-production-policy:
-    needs: changes
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: api/uv.lock
-      - name: Install API test dependencies
-        working-directory: api
-        run: uv sync --frozen --extra dev
-      - name: Production policy regressions
-        working-directory: api
-        run: uv run pytest tests/test_production_hardening_policy.py tests/test_release_promotion_script.py
-
-  test-delivery:
-    needs: changes
-    if: ${{ needs.changes.outputs.delivery == 'true' || startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: worker
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: worker/package-lock.json
-      - run: npm ci
-      - run: npm test
-      - run: npm run typecheck:node
-
-  test-revert-postgres:
-    needs: changes
-    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: lectern
-          POSTGRES_PASSWORD: lectern
-          POSTGRES_DB: lectern_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U lectern -d lectern_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-    env:
-      DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
-      REVERT_TEST_DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: api/uv.lock
-      - working-directory: api
-        run: uv sync --frozen --extra dev
-      - working-directory: api
-        run: uv run alembic upgrade head
-      - working-directory: api
-        run: uv run pytest -m integration tests/integration/database/test_revert_concurrency.py
+              - 'api/tests/test_storage_release_policy.py'
 
   # ── Live storage gates for publishable API/worker images ───────────────────
   resolve-seaweedfs-image:
@@ -253,9 +125,12 @@ jobs:
 
   # ── Build & push API + Worker images (shared layers) ───────────────────────
   build-api:
-    needs: [changes, test-api, test-seaweedfs, test-seaweedfs-topology]
+    needs: [changes, test-seaweedfs, test-seaweedfs-topology]
     if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
+    outputs:
+      api_digest: ${{ steps.build-api-image.outputs.digest }}
+      worker_digest: ${{ steps.build-worker-image.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -320,57 +195,41 @@ jobs:
             type=gha,scope=api
           cache-to: type=gha,scope=worker,mode=max
 
-      # Candidates remain outside production repositories until their exact
-      # multi-platform manifest digest passes the blocking scan.
-      - name: Scan api candidate (Trivy)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.API_CANDIDATE_IMAGE }}@${{ steps.build-api-image.outputs.digest }}
-          format: sarif
-          output: trivy-api.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Upload api scan
-        if: ${{ always() }}
-        continue-on-error: true # tolerate code scanning being disabled
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-api.sarif
-          category: trivy-api
 
-      - name: Scan worker candidate (Trivy)
-        if: ${{ !cancelled() }}
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.WORKER_CANDIDATE_IMAGE }}@${{ steps.build-worker-image.outputs.digest }}
-          format: sarif
-          output: trivy-worker.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Upload worker scan
-        if: ${{ always() }}
-        continue-on-error: true # tolerate code scanning being disabled
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-worker.sarif
-          category: trivy-worker
+  release-api:
+    needs: build-api
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/scan-and-promote.yml
+    with:
+      component: api
+      candidate_ref: ghcr.io/theo-darvoux/lectern/api-candidate@${{ needs.build-api.outputs.api_digest }}
+      release_repository: ghcr.io/theo-darvoux/lectern/api-release
+      release_tag: sha-${{ github.sha }}
+      alias_name: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
 
-      - name: Promote api and worker release images
-        if: ${{ success() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          alias_name="$GITHUB_REF_NAME"
-          [[ "$GITHUB_REF" == "refs/heads/main" ]] && alias_name=latest
-          ./scripts/promote-release-image.sh "${API_CANDIDATE_IMAGE}@${{ steps.build-api-image.outputs.digest }}" "${API_RELEASE_IMAGE}" "sha-${GITHUB_SHA}" "$alias_name"
-          ./scripts/promote-release-image.sh "${WORKER_CANDIDATE_IMAGE}@${{ steps.build-worker-image.outputs.digest }}" "${WORKER_RELEASE_IMAGE}" "sha-${GITHUB_SHA}" "$alias_name"
+  release-worker:
+    needs: build-api
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/scan-and-promote.yml
+    with:
+      component: worker
+      candidate_ref: ghcr.io/theo-darvoux/lectern/worker-candidate@${{ needs.build-api.outputs.worker_digest }}
+      release_repository: ghcr.io/theo-darvoux/lectern/worker-release
+      release_tag: sha-${{ github.sha }}
+      alias_name: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
 
   build-web:
-    needs: [changes, test-web, test-production-policy]
+    needs: changes
     if: ${{ needs.changes.outputs.web == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build-web-image.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -409,37 +268,28 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
 
-      - name: Scan web candidate (Trivy)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.WEB_CANDIDATE_IMAGE }}@${{ steps.build-web-image.outputs.digest }}
-          format: sarif
-          output: trivy-web.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Upload web scan
-        if: ${{ always() }}
-        continue-on-error: true # tolerate code scanning being disabled
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-web.sarif
-          category: trivy-web
 
-      - name: Promote web release image
-        if: ${{ success() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          alias_name="$GITHUB_REF_NAME"
-          [[ "$GITHUB_REF" == "refs/heads/main" ]] && alias_name=latest
-          ./scripts/promote-release-image.sh "${WEB_CANDIDATE_IMAGE}@${{ steps.build-web-image.outputs.digest }}" "${WEB_RELEASE_IMAGE}" "sha-${GITHUB_SHA}" "$alias_name"
+  release-web:
+    needs: build-web
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/scan-and-promote.yml
+    with:
+      component: web
+      candidate_ref: ghcr.io/theo-darvoux/lectern/web-candidate@${{ needs.build-web.outputs.digest }}
+      release_repository: ghcr.io/theo-darvoux/lectern/web-release
+      release_tag: sha-${{ github.sha }}
+      alias_name: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
 
 
   build-delivery:
-    needs: [changes, test-delivery, test-production-policy]
+    needs: changes
     if: ${{ needs.changes.outputs.delivery == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build-delivery-image.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -461,27 +311,17 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           push: true
           tags: ${{ env.DELIVERY_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
-      - name: Scan delivery candidate (Trivy)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.DELIVERY_CANDIDATE_IMAGE }}@${{ steps.build-delivery-image.outputs.digest }}
-          format: sarif
-          output: trivy-delivery.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
-      - name: Upload delivery scan
-        if: ${{ always() }}
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-delivery.sarif
-          category: trivy-delivery
-      - name: Promote delivery release image
-        if: ${{ success() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          alias_name="$GITHUB_REF_NAME"
-          [[ "$GITHUB_REF" == "refs/heads/main" ]] && alias_name=latest
-          ./scripts/promote-release-image.sh "${DELIVERY_CANDIDATE_IMAGE}@${{ steps.build-delivery-image.outputs.digest }}" "${DELIVERY_RELEASE_IMAGE}" "sha-${GITHUB_SHA}" "$alias_name"
+
+  release-delivery:
+    needs: build-delivery
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/scan-and-promote.yml
+    with:
+      component: selfhost-worker
+      candidate_ref: ghcr.io/theo-darvoux/lectern/selfhost-worker-candidate@${{ needs.build-delivery.outputs.digest }}
+      release_repository: ghcr.io/theo-darvoux/lectern/selfhost-worker-release
+      release_tag: sha-${{ github.sha }}
+      alias_name: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}

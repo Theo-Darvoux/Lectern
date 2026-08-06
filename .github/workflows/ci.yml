@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches-ignore: [main]
+    tags-ignore: ['**']
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - run: uv sync --frozen --extra dev
+      - name: Lint
+        run: uv run ruff check .
+      - name: Type-check
+        run: uv run mypy app/
+      - name: Unit and hermetic tests
+        run: uv run pytest -m "not integration"
+
+  postgres-revert:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lectern
+          POSTGRES_PASSWORD: lectern
+          POSTGRES_DB: lectern_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lectern -d lectern_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
+      REVERT_TEST_DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - working-directory: api
+        run: uv sync --frozen --extra dev
+      - name: Apply every database migration
+        working-directory: api
+        run: uv run alembic upgrade head
+      - name: Exercise the real PostgreSQL revert serialization invariant
+        working-directory: api
+        run: uv run pytest -m integration tests/integration/database/test_revert_concurrency.py
+
+  production-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - working-directory: api
+        run: uv sync --frozen --extra dev
+      - name: Release and deployment policy regressions
+        working-directory: api
+        run: >-
+          uv run pytest
+          tests/test_production_hardening_policy.py
+          tests/test_production_release_manifest.py
+          tests/test_release_gate_dependency_compat.py
+          tests/test_release_promotion_script.py
+          tests/test_storage_release_policy.py
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm tsc --noEmit
+      - run: pnpm i18n:check
+      - run: pnpm test
+
+  delivery:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck:node
+
+  required:
+    if: ${{ always() }}
+    needs: [api, postgres-revert, production-policy, web, delivery]
+    runs-on: ubuntu-latest
+    env:
+      API_RESULT: ${{ needs.api.result }}
+      POSTGRES_RESULT: ${{ needs.postgres-revert.result }}
+      POLICY_RESULT: ${{ needs.production-policy.result }}
+      WEB_RESULT: ${{ needs.web.result }}
+      DELIVERY_RESULT: ${{ needs.delivery.result }}
+    steps:
+      - name: Require every premerge gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result in \
+            "$API_RESULT" \
+            "$POSTGRES_RESULT" \
+            "$POLICY_RESULT" \
+            "$WEB_RESULT" \
+            "$DELIVERY_RESULT"; do
+            [[ "$result" == success ]]
+          done

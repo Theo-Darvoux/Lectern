@@ -7,15 +7,15 @@ _REPO_ROOT = Path(__file__).parents[2]
 
 def test_api_image_publication_depends_on_both_live_seaweedfs_jobs() -> None:
     workflow = (_REPO_ROOT / ".github/workflows/build.yml").read_text()
-    assert "tags: ['alpha-*']" in workflow
+    assert "workflow_call:" in workflow.split("jobs:", 1)[0]
     assert "test-seaweedfs:" in workflow
     assert "test-seaweedfs-topology:" in workflow
-    assert "needs: [changes, test-api, test-seaweedfs, test-seaweedfs-topology]" in workflow
+    assert "needs: [changes, test-seaweedfs, test-seaweedfs-topology]" in workflow
     assert (
         workflow.count("SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}") == 2
     )
-    build_section = workflow.split("  build-api:", 1)[1].split("\n  build-web:", 1)[0]
-    assert "push: true" in build_section
+    build_section = workflow.split("  build-api:", 1)[1].split("\n  release-api:", 1)[0]
+    assert build_section.count("push: true") == 2
 
 
 def test_standalone_seaweedfs_workflow_is_premerge_not_independent_publish_gate() -> None:

@@ -536,7 +536,7 @@ def test_production_seaweedfs_policy_is_rack_aware_and_immutable() -> None:
     assert "-defaultReplicaPlacement=010" in compose
     assert "chrislusf/seaweedfs:latest" not in compose
     assert "@sha256:" in prod
-    assert "SEAWEEDFS_IMAGE must be pinned" in prod
+    assert "SEAWEEDFS_IMAGE is not an approved immutable SeaweedFS digest" in prod
 
 
 def test_live_storage_workflow_covers_multipart_callers_and_deployment() -> None:
