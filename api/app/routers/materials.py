@@ -4,6 +4,7 @@ import difflib
 import gzip
 import mimetypes as _mimetypes
 import uuid
+import zlib
 from io import BytesIO
 from typing import Annotated, Any
 
@@ -124,7 +125,7 @@ def _decompress_gzip_text(
                 chunks.append(chunk)
     except BadRequestError:
         raise
-    except (EOFError, OSError) as exc:
+    except (EOFError, OSError, zlib.error) as exc:
         raise BadRequestError("Failed to decompress gzip-wrapped text") from exc
 
     return b"".join(chunks)

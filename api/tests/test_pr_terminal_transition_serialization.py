@@ -112,9 +112,7 @@ async def test_approval_winner_prevents_stale_close(losing_close: str) -> None:
         approval = asyncio.create_task(
             _commit_service(
                 approval_db,
-                pr_service.approve_pr_service(
-                    cast(AsyncSession, approval_db), shared.id, reviewer
-                ),
+                pr_service.approve_pr_service(cast(AsyncSession, approval_db), shared.id, reviewer),
             )
         )
         await asyncio.wait_for(apply_entered.wait(), timeout=2)
@@ -170,9 +168,7 @@ async def test_close_winner_prevents_stale_approval(
         approval = asyncio.create_task(
             _commit_service(
                 approval_db,
-                pr_service.approve_pr_service(
-                    cast(AsyncSession, approval_db), shared.id, reviewer
-                ),
+                pr_service.approve_pr_service(cast(AsyncSession, approval_db), shared.id, reviewer),
             )
         )
         await asyncio.sleep(0)

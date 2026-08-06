@@ -12,15 +12,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  API_IMAGE: ghcr.io/theo-darvoux/lectern/api
-  WORKER_IMAGE: ghcr.io/theo-darvoux/lectern/worker
-  WEB_IMAGE: ghcr.io/theo-darvoux/lectern/web
+  API_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/api-candidate
+  API_RELEASE_IMAGE: ghcr.io/theo-darvoux/lectern/api-release
+  WORKER_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/worker-candidate
+  WORKER_RELEASE_IMAGE: ghcr.io/theo-darvoux/lectern/worker-release
+  WEB_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/web-candidate
+  WEB_RELEASE_IMAGE: ghcr.io/theo-darvoux/lectern/web-release
+  DELIVERY_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/selfhost-worker-candidate
+  DELIVERY_RELEASE_IMAGE: ghcr.io/theo-darvoux/lectern/selfhost-worker-release
   PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
   # ── Detect which part of the monorepo changed ──────────────────────────────
-  # On a tag push (release) everything rebuilds regardless; on branch pushes we
-  # skip the half that didn't change.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -28,6 +31,8 @@ jobs:
     outputs:
       api: ${{ steps.filter.outputs.api }}
       web: ${{ steps.filter.outputs.web }}
+      delivery: ${{ steps.filter.outputs.delivery }}
+      policy: ${{ steps.filter.outputs.policy }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -38,10 +43,21 @@ jobs:
               - 'api/**'
             web:
               - 'web/**'
+            delivery:
+              - 'worker/**'
+            policy:
+              - '.github/workflows/build.yml'
+              - '.env.example'
+              - 'compose.yaml'
+              - 'compose.prod.yaml'
+              - 'scripts/promote-release-image.sh'
+              - 'api/scripts/run-seaweedfs-topology-tests.sh'
+              - 'api/tests/test_production_hardening_policy.py'
+              - 'api/tests/test_release_promotion_script.py'
 
   # ── Test gates (must pass before the matching image is published) ──────────
   test-api:
-    needs: changes
+    needs: [changes, test-production-policy, test-revert-postgres]
     if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     permissions:
@@ -97,10 +113,85 @@ jobs:
         run: pnpm test
 
 
+
+  test-production-policy:
+    needs: changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - name: Install API test dependencies
+        working-directory: api
+        run: uv sync --frozen --extra dev
+      - name: Production policy regressions
+        working-directory: api
+        run: uv run pytest tests/test_production_hardening_policy.py tests/test_release_promotion_script.py
+
+  test-delivery:
+    needs: changes
+    if: ${{ needs.changes.outputs.delivery == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck:node
+
+  test-revert-postgres:
+    needs: changes
+    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lectern
+          POSTGRES_PASSWORD: lectern
+          POSTGRES_DB: lectern_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lectern -d lectern_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
+      REVERT_TEST_DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - working-directory: api
+        run: uv sync --frozen --extra dev
+      - working-directory: api
+        run: uv run alembic upgrade head
+      - working-directory: api
+        run: uv run pytest -m integration tests/integration/database/test_revert_concurrency.py
+
   # ── Live storage gates for publishable API/worker images ───────────────────
   resolve-seaweedfs-image:
     needs: changes
-    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.policy == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -120,7 +211,7 @@ jobs:
 
   test-seaweedfs:
     needs: [changes, resolve-seaweedfs-image]
-    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.policy == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -141,7 +232,7 @@ jobs:
 
   test-seaweedfs-topology:
     needs: [changes, resolve-seaweedfs-image]
-    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.policy == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -181,24 +272,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Metadata (api)
+      - name: Metadata (api candidate)
         id: meta-api
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.API_IMAGE }}
+          images: ${{ env.API_CANDIDATE_IMAGE }}
           tags: |
             type=sha,format=long
 
-      - name: Metadata (worker)
+      - name: Metadata (worker candidate)
         id: meta-worker
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.WORKER_IMAGE }}
+          images: ${{ env.WORKER_CANDIDATE_IMAGE }}
           tags: |
             type=sha,format=long
 
       # Slim web-facing image (no document/media toolchain).
-      - name: Build & push api
+      - name: Build & push api candidate
+        id: build-api-image
         uses: docker/build-push-action@v6
         with:
           context: ./api
@@ -213,7 +305,8 @@ jobs:
       # Full-capability worker image (ghostscript, ffmpeg, libreoffice, …).
       # Reuses the builder + runtime-base layers from the api build via the gha
       # cache, so this build is mostly the extra apt layer.
-      - name: Build & push worker
+      - name: Build & push worker candidate
+        id: build-worker-image
         uses: docker/build-push-action@v6
         with:
           context: ./api
@@ -227,11 +320,12 @@ jobs:
             type=gha,scope=api
           cache-to: type=gha,scope=worker,mode=max
 
-      # ── Vulnerability scans gate release-alias promotion ───────────────────
-      - name: Scan api image (Trivy)
+      # Candidates remain outside production repositories until their exact
+      # multi-platform manifest digest passes the blocking scan.
+      - name: Scan api candidate (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.API_IMAGE }}:sha-${{ github.sha }}
+          image-ref: ${{ env.API_CANDIDATE_IMAGE }}@${{ steps.build-api-image.outputs.digest }}
           format: sarif
           output: trivy-api.sarif
           severity: CRITICAL,HIGH
@@ -245,11 +339,11 @@ jobs:
           sarif_file: trivy-api.sarif
           category: trivy-api
 
-      - name: Scan worker image (Trivy)
+      - name: Scan worker candidate (Trivy)
         if: ${{ !cancelled() }}
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.WORKER_IMAGE }}:sha-${{ github.sha }}
+          image-ref: ${{ env.WORKER_CANDIDATE_IMAGE }}@${{ steps.build-worker-image.outputs.digest }}
           format: sarif
           output: trivy-worker.sarif
           severity: CRITICAL,HIGH
@@ -263,26 +357,18 @@ jobs:
           sarif_file: trivy-worker.sarif
           category: trivy-worker
 
-      - name: Promote api and worker release aliases
+      - name: Promote api and worker release images
         if: ${{ success() }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-            alias=latest
-          else
-            alias="$GITHUB_REF_NAME"
-          fi
-          docker buildx imagetools create \\
-            --tag "${API_IMAGE}:${alias}" \\
-            "${API_IMAGE}:sha-${GITHUB_SHA}"
-          docker buildx imagetools create \\
-            --tag "${WORKER_IMAGE}:${alias}" \\
-            "${WORKER_IMAGE}:sha-${GITHUB_SHA}"
+          alias_name="$GITHUB_REF_NAME"
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] && alias_name=latest
+          ./scripts/promote-release-image.sh "${API_CANDIDATE_IMAGE}@${{ steps.build-api-image.outputs.digest }}" "${API_RELEASE_IMAGE}" "sha-${GITHUB_SHA}" "$alias_name"
+          ./scripts/promote-release-image.sh "${WORKER_CANDIDATE_IMAGE}@${{ steps.build-worker-image.outputs.digest }}" "${WORKER_RELEASE_IMAGE}" "sha-${GITHUB_SHA}" "$alias_name"
 
-  # ── Build & push Web image ─────────────────────────────────────────────────
   build-web:
-    needs: [changes, test-web]
+    needs: [changes, test-web, test-production-policy]
     if: ${{ needs.changes.outputs.web == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     permissions:
@@ -301,15 +387,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Metadata (web)
+      - name: Metadata (web candidate)
         id: meta-web
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.WEB_IMAGE }}
+          images: ${{ env.WEB_CANDIDATE_IMAGE }}
           tags: |
             type=sha,format=long
 
-      - name: Build & push web
+      - name: Build & push web candidate
+        id: build-web-image
         uses: docker/build-push-action@v6
         with:
           context: ./web
@@ -322,10 +409,10 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
 
-      - name: Scan web image (Trivy)
+      - name: Scan web candidate (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.WEB_IMAGE }}:sha-${{ github.sha }}
+          image-ref: ${{ env.WEB_CANDIDATE_IMAGE }}@${{ steps.build-web-image.outputs.digest }}
           format: sarif
           output: trivy-web.sarif
           severity: CRITICAL,HIGH
@@ -339,16 +426,62 @@ jobs:
           sarif_file: trivy-web.sarif
           category: trivy-web
 
-      - name: Promote web release alias
+      - name: Promote web release image
         if: ${{ success() }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-            alias=latest
-          else
-            alias="$GITHUB_REF_NAME"
-          fi
-          docker buildx imagetools create \\
-            --tag "${WEB_IMAGE}:${alias}" \\
-            "${WEB_IMAGE}:sha-${GITHUB_SHA}"
+          alias_name="$GITHUB_REF_NAME"
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] && alias_name=latest
+          ./scripts/promote-release-image.sh "${WEB_CANDIDATE_IMAGE}@${{ steps.build-web-image.outputs.digest }}" "${WEB_RELEASE_IMAGE}" "sha-${GITHUB_SHA}" "$alias_name"
+
+
+  build-delivery:
+    needs: [changes, test-delivery, test-production-policy]
+    if: ${{ needs.changes.outputs.delivery == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build delivery candidate
+        id: build-delivery-image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./worker
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ env.DELIVERY_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
+      - name: Scan delivery candidate (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.DELIVERY_CANDIDATE_IMAGE }}@${{ steps.build-delivery-image.outputs.digest }}
+          format: sarif
+          output: trivy-delivery.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Upload delivery scan
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-delivery.sarif
+          category: trivy-delivery
+      - name: Promote delivery release image
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          alias_name="$GITHUB_REF_NAME"
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] && alias_name=latest
+          ./scripts/promote-release-image.sh "${DELIVERY_CANDIDATE_IMAGE}@${{ steps.build-delivery-image.outputs.digest }}" "${DELIVERY_RELEASE_IMAGE}" "sha-${GITHUB_SHA}" "$alias_name"

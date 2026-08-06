@@ -554,7 +554,7 @@ services:
     build:
       context: ./worker
       dockerfile: Dockerfile
-    image: ghcr.io/theo-darvoux/lectern/selfhost-worker:latest
+    image: ${SELFHOST_WORKER_IMAGE:-ghcr.io/theo-darvoux/lectern/selfhost-worker:latest}
     networks:
       - backend
       - frontend

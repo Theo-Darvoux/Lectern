@@ -2,13 +2,27 @@ services:
   release-image-policy:
     image: alpine:3.20
     environment:
-      API_IMAGE: ${API_IMAGE:?API_IMAGE must be set to an immutable GHCR digest}
-      WORKER_IMAGE: ${WORKER_IMAGE:?WORKER_IMAGE must be set to an immutable GHCR digest}
-      WEB_IMAGE: ${WEB_IMAGE:?WEB_IMAGE must be set to an immutable GHCR digest}
-    command: >-
-      /bin/sh -ec 'for value in "$$API_IMAGE" "$$WORKER_IMAGE" "$$WEB_IMAGE"; do
-      case "$$value" in *@sha256:*) ;; *) echo "production images must use immutable @sha256 digests" >&2; exit 64 ;; esac;
-      done'
+      API_IMAGE: ${API_IMAGE:?API_IMAGE must be set to an approved release digest}
+      WORKER_IMAGE: ${WORKER_IMAGE:?WORKER_IMAGE must be set to an approved release digest}
+      WEB_IMAGE: ${WEB_IMAGE:?WEB_IMAGE must be set to an approved release digest}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+          printf '%s\n' "$$API_IMAGE" | grep -Eq '^ghcr\.io/theo-darvoux/lectern/api-release@sha256:[0-9a-f]{64}$$' || { echo "API_IMAGE is not an approved api-release digest" >&2; exit 64; }
+          printf '%s\n' "$$WORKER_IMAGE" | grep -Eq '^ghcr\.io/theo-darvoux/lectern/worker-release@sha256:[0-9a-f]{64}$$' || { echo "WORKER_IMAGE is not an approved worker-release digest" >&2; exit 64; }
+          printf '%s\n' "$$WEB_IMAGE" | grep -Eq '^ghcr\.io/theo-darvoux/lectern/web-release@sha256:[0-9a-f]{64}$$' || { echo "WEB_IMAGE is not an approved web-release digest" >&2; exit 64; }
+
+  selfhost-worker-image-policy:
+    profiles: [ selfhost-worker ]
+    image: alpine:3.20
+    environment:
+      SELFHOST_WORKER_IMAGE: ${SELFHOST_WORKER_IMAGE:-}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+          printf '%s\n' "$$SELFHOST_WORKER_IMAGE" | grep -Eq '^ghcr\.io/theo-darvoux/lectern/selfhost-worker-release@sha256:[0-9a-f]{64}$$' || { echo "SELFHOST_WORKER_IMAGE is not an approved selfhost-worker-release digest" >&2; exit 64; }
 
   seaweedfs-image-policy:
     profiles: [ seaweedfs-prod ]
@@ -28,6 +42,7 @@ services:
 
   api:
     image: ${API_IMAGE}
+    build: !reset null
     command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
     depends_on:
       release-image-policy:
@@ -35,39 +50,46 @@ services:
 
   worker:
     image: ${WORKER_IMAGE}
+    build: !reset null
     depends_on:
       release-image-policy:
         condition: service_completed_successfully
 
   worker-fast:
     image: ${WORKER_IMAGE}
+    build: !reset null
     depends_on:
       release-image-policy:
         condition: service_completed_successfully
 
   worker-slow:
     image: ${WORKER_IMAGE}
+    build: !reset null
     depends_on:
       release-image-policy:
         condition: service_completed_successfully
 
   web:
     image: ${WEB_IMAGE}
+    build: !reset null
     depends_on:
       release-image-policy:
         condition: service_completed_successfully
-    # Use the production nginx static runner target
-    build:
-      target: runner
-    # The runner image sets CMD ["nginx", "-g", "daemon off;"] by default, so we just reset the command
-    # property here to null so it stops running the dev Next.js server override from compose.yaml
-    command: []
+    # null restores the nginx runner image's inherited CMD. [] would clear it.
+    command: null
     deploy:
       resources:
         limits:
           memory: 64M
         reservations:
           memory: 32M
+
+  selfhost-worker:
+    image: ${SELFHOST_WORKER_IMAGE:-ghcr.io/theo-darvoux/lectern/selfhost-worker-release:unset}
+    build: !reset null
+    depends_on:
+      selfhost-worker-image-policy:
+        condition: service_completed_successfully
 
   nginx:
     ports:

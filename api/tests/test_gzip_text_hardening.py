@@ -31,6 +31,12 @@ def test_bounded_gzip_decoder_detects_limit_crossing_on_later_read() -> None:
         _decompress_gzip_text(compressed, max_output_bytes=64 * 1024)
 
 
+def test_bounded_gzip_decoder_rejects_invalid_deflate_stream() -> None:
+    malformed = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\x07\x00"
+    with pytest.raises(BadRequestError, match="Failed to decompress"):
+        _decompress_gzip_text(malformed, max_output_bytes=1024)
+
+
 def test_gzip_magic_is_authoritative_and_cannot_fall_back_to_text_extension() -> None:
     magic_mime = guess_mime_from_bytes(gzip.compress(b"disguised"))
     assert magic_mime == "application/gzip"

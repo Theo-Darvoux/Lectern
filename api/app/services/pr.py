@@ -2220,9 +2220,13 @@ async def cancel_pr_service(db: AsyncSession, pr_id: uuid.UUID, current_user: Us
 
 
 async def revert_pr_service(db: AsyncSession, pr_id: uuid.UUID, admin: User) -> PullRequest:
-    """Validate and execute a revert for an approved PR."""
+    """Validate and execute a serialized revert for an approved PR."""
     pr = await db.scalar(
-        select(PullRequest).where(PullRequest.id == pr_id).options(selectinload(PullRequest.author))
+        select(PullRequest)
+        .where(PullRequest.id == pr_id)
+        .options(selectinload(PullRequest.author))
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if not pr:
         raise NotFoundError("Pull request not found")
