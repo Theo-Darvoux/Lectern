@@ -5,9 +5,11 @@ on:
     branches: [main]
     tags: ['alpha-*']
 
+# Do not cancel a release after immutable component copies have started. A newer
+# release queues behind the current one, preventing automated partial aliases.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   ci:

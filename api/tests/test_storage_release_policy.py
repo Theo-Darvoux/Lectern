@@ -10,11 +10,11 @@ def test_api_image_publication_depends_on_both_live_seaweedfs_jobs() -> None:
     assert "workflow_call:" in workflow.split("jobs:", 1)[0]
     assert "test-seaweedfs:" in workflow
     assert "test-seaweedfs-topology:" in workflow
-    assert "needs: [changes, test-seaweedfs, test-seaweedfs-topology]" in workflow
+    assert "needs: [test-seaweedfs, test-seaweedfs-topology]" in workflow
     assert (
         workflow.count("SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}") == 2
     )
-    build_section = workflow.split("  build-api:", 1)[1].split("\n  release-api:", 1)[0]
+    build_section = workflow.split("  build-api:", 1)[1].split("\n  build-web:", 1)[0]
     assert build_section.count("push: true") == 2
 
 

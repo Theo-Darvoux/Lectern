@@ -1,4 +1,4 @@
-name: Scan and Promote Manifest
+name: Scan and Promote Immutable Manifest
 
 on:
   workflow_call:
@@ -15,10 +15,10 @@ on:
       release_tag:
         required: true
         type: string
-      alias_name:
-        required: false
-        type: string
-        default: ''
+    outputs:
+      release_digest:
+        description: Exact digest copied into the release repository
+        value: ${{ jobs.promote.outputs.release_digest }}
 
 permissions:
   contents: read
@@ -36,7 +36,6 @@ jobs:
           CANDIDATE_REF: ${{ inputs.candidate_ref }}
           RELEASE_REPOSITORY: ${{ inputs.release_repository }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          ALIAS_NAME: ${{ inputs.alias_name }}
         run: |
           set -euo pipefail
           case "$COMPONENT" in
@@ -52,9 +51,6 @@ jobs:
           [[ "$RELEASE_REPOSITORY" == "$expected_release" ]]
           [[ "$RELEASE_TAG" =~ ^sha-[0-9a-f]{40}$ ]]
           [[ "$RELEASE_TAG" == "sha-${GITHUB_SHA}" ]]
-          if [[ -n "$ALIAS_NAME" ]]; then
-            [[ "$ALIAS_NAME" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
-          fi
 
   scan:
     needs: validate
@@ -74,13 +70,13 @@ jobs:
     env:
       TRIVY_PLATFORM: ${{ matrix.platform }}
     steps:
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Scan exact ${{ matrix.platform }} child image
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ inputs.candidate_ref }}
           format: sarif
@@ -91,7 +87,7 @@ jobs:
       - name: Upload ${{ matrix.platform }} scan
         if: ${{ always() }}
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
         with:
           sarif_file: trivy-${{ inputs.component }}-${{ matrix.slug }}.sarif
           category: trivy-${{ inputs.component }}-${{ matrix.slug }}
@@ -99,28 +95,31 @@ jobs:
   promote:
     needs: [validate, scan]
     runs-on: ubuntu-latest
+    outputs:
+      release_digest: ${{ steps.promote.outputs.release_digest }}
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Copy the fully scanned manifest into the release repository
+      - name: Copy immutable commit tag
+        id: promote
         shell: bash
         env:
           CANDIDATE_REF: ${{ inputs.candidate_ref }}
           RELEASE_REPOSITORY: ${{ inputs.release_repository }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          ALIAS_NAME: ${{ inputs.alias_name }}
         run: |
           set -euo pipefail
-          ./scripts/promote-release-image.sh \
+          digest=$(./scripts/promote-release-image.sh \
             "$CANDIDATE_REF" \
             "$RELEASE_REPOSITORY" \
-            "$RELEASE_TAG" \
-            "$ALIAS_NAME"
+            "$RELEASE_TAG")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "release_digest=$digest" >> "$GITHUB_OUTPUT"

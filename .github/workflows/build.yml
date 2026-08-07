@@ -3,67 +3,17 @@ name: Release Implementation
 on:
   workflow_call:
 
-# Concurrency is owned by release.yml; this reusable implementation must not
-# share a concurrency group with (and cancel) its caller.
+# release.yml owns concurrency. This reusable implementation always builds a
+# complete four-component release so the final manifest has no stale members.
 env:
   API_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/api-candidate
-  API_RELEASE_IMAGE: ghcr.io/theo-darvoux/lectern/api-release
   WORKER_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/worker-candidate
-  WORKER_RELEASE_IMAGE: ghcr.io/theo-darvoux/lectern/worker-release
   WEB_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/web-candidate
-  WEB_RELEASE_IMAGE: ghcr.io/theo-darvoux/lectern/web-release
   DELIVERY_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/selfhost-worker-candidate
-  DELIVERY_RELEASE_IMAGE: ghcr.io/theo-darvoux/lectern/selfhost-worker-release
   PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
-  # ── Detect which part of the monorepo changed ──────────────────────────────
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      api: ${{ steps.filter.outputs.api }}
-      web: ${{ steps.filter.outputs.web }}
-      delivery: ${{ steps.filter.outputs.delivery }}
-      policy: ${{ steps.filter.outputs.policy }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            api:
-              - 'api/**'
-            web:
-              - 'web/**'
-            delivery:
-              - 'worker/**'
-            policy:
-              - '.github/workflows/build.yml'
-              - '.github/workflows/ci.yml'
-              - '.github/workflows/release.yml'
-              - '.github/workflows/scan-and-promote.yml'
-              - '.env.example'
-              - 'compose.yaml'
-              - 'compose.prod.yaml'
-              - 'deploy/production-images.env.example'
-              - 'docs/production-release-manifest.md'
-              - 'docs/ci-release-gates.md'
-              - 'scripts/prepare-production-release.sh'
-              - 'scripts/promote-release-image.sh'
-              - 'scripts/write-production-release-manifest.py'
-              - 'api/scripts/run-seaweedfs-topology-tests.sh'
-              - 'api/tests/test_production_hardening_policy.py'
-              - 'api/tests/test_production_release_manifest.py'
-              - 'api/tests/test_release_gate_dependency_compat.py'
-              - 'api/tests/test_release_promotion_script.py'
-              - 'api/tests/test_storage_release_policy.py'
-
-  # ── Live storage gates for publishable API/worker images ───────────────────
   resolve-seaweedfs-image:
-    needs: changes
-    if: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.policy == 'true' || startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -75,15 +25,14 @@ jobs:
         env:
           SEAWEEDFS_SOURCE_IMAGE: chrislusf/seaweedfs:4.29
         run: |
+          set -euo pipefail
           docker pull "$SEAWEEDFS_SOURCE_IMAGE"
           resolved=$(docker image inspect --format '{{index .RepoDigests 0}}' "$SEAWEEDFS_SOURCE_IMAGE")
-          test -n "$resolved"
+          [[ "$resolved" =~ ^docker\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}$ ]]
           echo "image=$resolved" >> "$GITHUB_OUTPUT"
-          echo "Testing $resolved"
 
   test-seaweedfs:
-    needs: [changes, resolve-seaweedfs-image]
-    if: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.policy == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    needs: resolve-seaweedfs-image
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -91,8 +40,8 @@ jobs:
     env:
       SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
@@ -103,8 +52,7 @@ jobs:
         run: ./api/scripts/run-seaweedfs-integration-tests.sh
 
   test-seaweedfs-topology:
-    needs: [changes, resolve-seaweedfs-image]
-    if: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.policy == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    needs: resolve-seaweedfs-image
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -112,8 +60,8 @@ jobs:
     env:
       SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
@@ -123,78 +71,103 @@ jobs:
       - name: Run production-topology SeaweedFS integration suite
         run: ./api/scripts/run-seaweedfs-topology-tests.sh
 
-  # ── Build & push API + Worker images (shared layers) ───────────────────────
   build-api:
-    needs: [changes, test-seaweedfs, test-seaweedfs-topology]
-    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    needs: [test-seaweedfs, test-seaweedfs-topology]
     runs-on: ubuntu-latest
     outputs:
-      api_digest: ${{ steps.build-api-image.outputs.digest }}
-      worker_digest: ${{ steps.build-worker-image.outputs.digest }}
+      api_digest: ${{ steps.build-api.outputs.digest }}
+      worker_digest: ${{ steps.build-worker.outputs.digest }}
     permissions:
       contents: read
       packages: write
-      security-events: write
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Metadata (api candidate)
-        id: meta-api
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.API_CANDIDATE_IMAGE }}
-          tags: |
-            type=sha,format=long
-
-      - name: Metadata (worker candidate)
-        id: meta-worker
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.WORKER_CANDIDATE_IMAGE }}
-          tags: |
-            type=sha,format=long
-
-      # Slim web-facing image (no document/media toolchain).
-      - name: Build & push api candidate
-        id: build-api-image
-        uses: docker/build-push-action@v6
+      - name: Build and push API candidate
+        id: build-api
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./api
           target: api
           platforms: ${{ env.PLATFORMS }}
           push: true
-          tags: ${{ steps.meta-api.outputs.tags }}
-          labels: ${{ steps.meta-api.outputs.labels }}
+          tags: ${{ env.API_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,scope=api,mode=max
-
-      # Full-capability worker image (ghostscript, ffmpeg, libreoffice, …).
-      # Reuses the builder + runtime-base layers from the api build via the gha
-      # cache, so this build is mostly the extra apt layer.
-      - name: Build & push worker candidate
-        id: build-worker-image
-        uses: docker/build-push-action@v6
+      - name: Build and push Worker candidate
+        id: build-worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./api
           target: worker
           platforms: ${{ env.PLATFORMS }}
           push: true
-          tags: ${{ steps.meta-worker.outputs.tags }}
-          labels: ${{ steps.meta-worker.outputs.labels }}
+          tags: ${{ env.WORKER_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
           cache-from: |
             type=gha,scope=worker
             type=gha,scope=api
           cache-to: type=gha,scope=worker,mode=max
 
+  build-web:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build-web.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push Web candidate
+        id: build-web
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./web
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          build-args: NEXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
+          tags: ${{ env.WEB_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+  build-delivery:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build-delivery.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push Delivery candidate
+        id: build-delivery
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./worker
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ env.DELIVERY_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=delivery
+          cache-to: type=gha,scope=delivery,mode=max
 
   release-api:
     needs: build-api
@@ -208,7 +181,6 @@ jobs:
       candidate_ref: ghcr.io/theo-darvoux/lectern/api-candidate@${{ needs.build-api.outputs.api_digest }}
       release_repository: ghcr.io/theo-darvoux/lectern/api-release
       release_tag: sha-${{ github.sha }}
-      alias_name: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
 
   release-worker:
     needs: build-api
@@ -222,52 +194,6 @@ jobs:
       candidate_ref: ghcr.io/theo-darvoux/lectern/worker-candidate@${{ needs.build-api.outputs.worker_digest }}
       release_repository: ghcr.io/theo-darvoux/lectern/worker-release
       release_tag: sha-${{ github.sha }}
-      alias_name: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
-
-  build-web:
-    needs: changes
-    if: ${{ needs.changes.outputs.web == 'true' || startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build-web-image.outputs.digest }}
-    permissions:
-      contents: read
-      packages: write
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Metadata (web candidate)
-        id: meta-web
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.WEB_CANDIDATE_IMAGE }}
-          tags: |
-            type=sha,format=long
-
-      - name: Build & push web candidate
-        id: build-web-image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./web
-          platforms: ${{ env.PLATFORMS }}
-          push: true
-          build-args: |
-            NEXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
-          tags: ${{ steps.meta-web.outputs.tags }}
-          labels: ${{ steps.meta-web.outputs.labels }}
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,scope=web,mode=max
-
 
   release-web:
     needs: build-web
@@ -281,36 +207,6 @@ jobs:
       candidate_ref: ghcr.io/theo-darvoux/lectern/web-candidate@${{ needs.build-web.outputs.digest }}
       release_repository: ghcr.io/theo-darvoux/lectern/web-release
       release_tag: sha-${{ github.sha }}
-      alias_name: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
-
-
-  build-delivery:
-    needs: changes
-    if: ${{ needs.changes.outputs.delivery == 'true' || startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build-delivery-image.outputs.digest }}
-    permissions:
-      contents: read
-      packages: write
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build delivery candidate
-        id: build-delivery-image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./worker
-          platforms: ${{ env.PLATFORMS }}
-          push: true
-          tags: ${{ env.DELIVERY_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
 
   release-delivery:
     needs: build-delivery
@@ -324,4 +220,128 @@ jobs:
       candidate_ref: ghcr.io/theo-darvoux/lectern/selfhost-worker-candidate@${{ needs.build-delivery.outputs.digest }}
       release_repository: ghcr.io/theo-darvoux/lectern/selfhost-worker-release
       release_tag: sha-${{ github.sha }}
-      alias_name: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
+
+  finalize-release:
+    needs: [release-api, release-worker, release-web, release-delivery]
+    runs-on: ubuntu-latest
+    environment: production-release
+    outputs:
+      manifest_sha256: ${{ steps.manifest.outputs.manifest_sha256 }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PRODUCTION_POLICY_IMAGE_DIGEST: ${{ vars.PRODUCTION_POLICY_IMAGE_DIGEST }}
+      PRODUCTION_POSTGRES_IMAGE: ${{ vars.PRODUCTION_POSTGRES_IMAGE }}
+      PRODUCTION_REDIS_IMAGE: ${{ vars.PRODUCTION_REDIS_IMAGE }}
+      PRODUCTION_NGINX_IMAGE: ${{ vars.PRODUCTION_NGINX_IMAGE }}
+      PRODUCTION_MEILI_IMAGE: ${{ vars.PRODUCTION_MEILI_IMAGE }}
+      PRODUCTION_EUROOFFICE_IMAGE: ${{ vars.PRODUCTION_EUROOFFICE_IMAGE }}
+      PRODUCTION_SEAWEEDFS_IMAGE: ${{ vars.PRODUCTION_SEAWEEDFS_IMAGE }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build trusted release input
+        shell: bash
+        env:
+          API_DIGEST: ${{ needs.release-api.outputs.release_digest }}
+          WORKER_DIGEST: ${{ needs.release-worker.outputs.release_digest }}
+          WEB_DIGEST: ${{ needs.release-web.outputs.release_digest }}
+          DELIVERY_DIGEST: ${{ needs.release-delivery.outputs.release_digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-manifests
+          cat > "$RUNNER_TEMP/production-images.input.env" <<EOF
+          RELEASE_COMMIT=${GITHUB_SHA}
+          COMPOSE_PROFILES=postgres,seaweedfs-prod,selfhost-worker
+          API_IMAGE=ghcr.io/theo-darvoux/lectern/api-release@${API_DIGEST}
+          WORKER_IMAGE=ghcr.io/theo-darvoux/lectern/worker-release@${WORKER_DIGEST}
+          WEB_IMAGE=ghcr.io/theo-darvoux/lectern/web-release@${WEB_DIGEST}
+          SELFHOST_WORKER_IMAGE=ghcr.io/theo-darvoux/lectern/selfhost-worker-release@${DELIVERY_DIGEST}
+          POLICY_IMAGE_DIGEST=${PRODUCTION_POLICY_IMAGE_DIGEST}
+          POSTGRES_IMAGE=${PRODUCTION_POSTGRES_IMAGE}
+          REDIS_IMAGE=${PRODUCTION_REDIS_IMAGE}
+          NGINX_IMAGE=${PRODUCTION_NGINX_IMAGE}
+          MEILI_IMAGE=${PRODUCTION_MEILI_IMAGE}
+          EUROOFFICE_IMAGE=${PRODUCTION_EUROOFFICE_IMAGE}
+          SEAWEEDFS_IMAGE=${PRODUCTION_SEAWEEDFS_IMAGE}
+          EOF
+          python3 scripts/sanitize-production-images.py \
+            --env-file "$RUNNER_TEMP/production-images.input.env" \
+            --output release-manifests/production-images.env \
+            --commit "$GITHUB_SHA"
+      - name: Verify registry provenance and platforms
+        run: >-
+          python3 scripts/inspect-production-images.py
+          --env-file release-manifests/production-images.env
+          --output release-manifests/registry-inspection.json
+          --commit "$GITHUB_SHA"
+      - name: Write canonical release manifest
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="release-manifests/production-${GITHUB_SHA}.json"
+          python3 scripts/write-production-release-manifest.py \
+            --env-file release-manifests/production-images.env \
+            --inspection-file release-manifests/registry-inspection.json \
+            --output "$manifest" \
+            --commit "$GITHUB_SHA"
+          (
+            cd release-manifests
+            sha256sum \
+              "$(basename "$manifest")" \
+              production-images.env \
+              registry-inspection.json \
+              > SHA256SUMS
+          )
+          digest=$(sha256sum "$manifest" | awk '{print $1}')
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          echo "manifest_sha256=$digest" >> "$GITHUB_OUTPUT"
+      - name: Publish authoritative release-complete artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-release-${{ github.sha }}
+          path: release-manifests/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+  publish-aliases:
+    needs: [release-api, release-worker, release-web, release-delivery, finalize-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      ALIAS_NAME: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
+      MANIFEST_SHA256: ${{ needs.finalize-release.outputs.manifest_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish convenience aliases after release completion
+        shell: bash
+        env:
+          API_DIGEST: ${{ needs.release-api.outputs.release_digest }}
+          WORKER_DIGEST: ${{ needs.release-worker.outputs.release_digest }}
+          WEB_DIGEST: ${{ needs.release-web.outputs.release_digest }}
+          DELIVERY_DIGEST: ${{ needs.release-delivery.outputs.release_digest }}
+        run: |
+          set -euo pipefail
+          [[ "$MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          ./scripts/publish-release-aliases.sh \
+            "$ALIAS_NAME" \
+            "ghcr.io/theo-darvoux/lectern/api-release@${API_DIGEST}" \
+            "ghcr.io/theo-darvoux/lectern/worker-release@${WORKER_DIGEST}" \
+            "ghcr.io/theo-darvoux/lectern/web-release@${WEB_DIGEST}" \
+            "ghcr.io/theo-darvoux/lectern/selfhost-worker-release@${DELIVERY_DIGEST}"

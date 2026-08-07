@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_SCRIPT = _REPO_ROOT / "scripts/write-production-release-manifest.py"
-_DIGEST = "0" * 64
+_WRITE = _REPO_ROOT / "scripts/write-production-release-manifest.py"
+_SANITIZE = _REPO_ROOT / "scripts/sanitize-production-images.py"
+_INSPECT = _REPO_ROOT / "scripts/inspect-production-images.py"
+_DIGEST = "1" * 64
 _COMMIT = "a" * 40
+_PLATFORMS = ["linux/amd64", "linux/arm64"]
 
 
-def _reference(repository: str) -> str:
-    return f"{repository}@sha256:{_DIGEST}"
+def _reference(repository: str, digest: str = _DIGEST) -> str:
+    return f"{repository}@sha256:{digest}"
 
 
 def _base_values() -> dict[str, str]:
@@ -22,7 +26,9 @@ def _base_values() -> dict[str, str]:
         "API_IMAGE": _reference("ghcr.io/theo-darvoux/lectern/api-release"),
         "WORKER_IMAGE": _reference("ghcr.io/theo-darvoux/lectern/worker-release"),
         "WEB_IMAGE": _reference("ghcr.io/theo-darvoux/lectern/web-release"),
-        "SELFHOST_WORKER_IMAGE": _reference("ghcr.io/theo-darvoux/lectern/selfhost-worker-release"),
+        "SELFHOST_WORKER_IMAGE": _reference(
+            "ghcr.io/theo-darvoux/lectern/selfhost-worker-release"
+        ),
         "POLICY_IMAGE_DIGEST": f"sha256:{_DIGEST}",
         "POSTGRES_IMAGE": _reference("docker.io/library/postgres"),
         "REDIS_IMAGE": _reference("docker.io/library/redis"),
@@ -34,21 +40,58 @@ def _base_values() -> dict[str, str]:
 
 
 def _write_env(path: Path, values: dict[str, str]) -> None:
-    path.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+    path.write_text("".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8")
 
 
-def _run(tmp_path: Path, values: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _inspection(values: dict[str, str]) -> dict[str, object]:
+    images: dict[str, object] = {}
+    workload_repositories = {
+        "API_IMAGE": "ghcr.io/theo-darvoux/lectern/api-release",
+        "WORKER_IMAGE": "ghcr.io/theo-darvoux/lectern/worker-release",
+        "WEB_IMAGE": "ghcr.io/theo-darvoux/lectern/web-release",
+        "SELFHOST_WORKER_IMAGE": "ghcr.io/theo-darvoux/lectern/selfhost-worker-release",
+    }
+    for key, value in values.items():
+        if key not in workload_repositories and not key.endswith("_IMAGE") and key != "POLICY_IMAGE_DIGEST":
+            continue
+        reference = (
+            f"docker.io/library/alpine@{value}" if key == "POLICY_IMAGE_DIGEST" else value
+        )
+        digest = reference.rsplit("@", 1)[1] if "@" in reference else f"sha256:{_DIGEST}"
+        repository = workload_repositories.get(key)
+        images[key] = {
+            "reference": reference,
+            "digest": digest,
+            "platforms": _PLATFORMS if repository else ["linux/amd64"],
+            "commit_tag_reference": f"{repository}:sha-{_COMMIT}" if repository else None,
+            "commit_tag_digest": digest if repository else None,
+        }
+    return {
+        "schema_version": 1,
+        "release_commit": _COMMIT,
+        "required_workload_platforms": _PLATFORMS,
+        "images": images,
+    }
+
+
+def _run_writer(tmp_path: Path, values: dict[str, str]) -> subprocess.CompletedProcess[str]:
     env_file = tmp_path / "images.env"
+    inspection_file = tmp_path / "inspection.json"
     output = tmp_path / "manifest.json"
     _write_env(env_file, values)
+    inspection_file.write_text(json.dumps(_inspection(values)), encoding="utf-8")
     return subprocess.run(
         [
             sys.executable,
-            str(_SCRIPT),
+            str(_WRITE),
             "--env-file",
             str(env_file),
+            "--inspection-file",
+            str(inspection_file),
             "--output",
             str(output),
+            "--commit",
+            _COMMIT,
         ],
         check=False,
         capture_output=True,
@@ -56,47 +99,134 @@ def _run(tmp_path: Path, values: dict[str, str]) -> subprocess.CompletedProcess[
     )
 
 
-def test_manifest_records_every_enabled_profile_image(tmp_path: Path) -> None:
+def test_manifest_records_verified_images_platforms_and_compose_hashes(tmp_path: Path) -> None:
     values = _base_values()
-    result = _run(tmp_path, values)
+    result = _run_writer(tmp_path, values)
     assert result.returncode == 0, result.stderr
     payload = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 2
     assert payload["release_commit"] == _COMMIT
-    assert payload["compose_profiles"] == ["postgres", "seaweedfs-prod", "selfhost-worker"]
-    expected_images = {
-        key: value
-        for key, value in sorted(values.items())
-        if key.endswith("_IMAGE") or key == "POLICY_IMAGE_DIGEST"
-    }
-    assert payload["images"] == expected_images
-    assert len(payload["source_env_sha256"]) == 64
+    assert payload["required_workload_platforms"] == _PLATFORMS
+    assert set(payload["compose_files"]) == {"compose.yaml", "compose.prod.yaml"}
+    assert all(len(value) == 64 for value in payload["compose_files"].values())
+    assert payload["registry_inspections"]["API_IMAGE"]["commit_tag_digest"] == f"sha256:{_DIGEST}"
 
 
 def test_manifest_rejects_mutable_infrastructure_tag(tmp_path: Path) -> None:
     values = _base_values()
     values["REDIS_IMAGE"] = "redis:7-alpine"
-    result = _run(tmp_path, values)
+    result = _run_writer(tmp_path, values)
     assert result.returncode != 0
     assert "REDIS_IMAGE" in result.stderr
-    assert not (tmp_path / "manifest.json").exists()
 
 
-def test_profile_only_images_are_not_required_when_profiles_are_disabled(tmp_path: Path) -> None:
+def test_manifest_rejects_registry_inspection_not_bound_to_commit_tag(tmp_path: Path) -> None:
     values = _base_values()
-    values["COMPOSE_PROFILES"] = ""
-    for variable in ("POSTGRES_IMAGE", "SEAWEEDFS_IMAGE", "SELFHOST_WORKER_IMAGE"):
-        values.pop(variable)
-    result = _run(tmp_path, values)
-    assert result.returncode == 0, result.stderr
-    payload = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
-    assert "POSTGRES_IMAGE" not in payload["images"]
-    assert "SEAWEEDFS_IMAGE" not in payload["images"]
-    assert "SELFHOST_WORKER_IMAGE" not in payload["images"]
-
-
-def test_manifest_requires_explicit_production_profiles_override(tmp_path: Path) -> None:
-    values = _base_values()
-    values.pop("COMPOSE_PROFILES")
-    result = _run(tmp_path, values)
+    env_file = tmp_path / "images.env"
+    inspection_file = tmp_path / "inspection.json"
+    output = tmp_path / "manifest.json"
+    _write_env(env_file, values)
+    inspection = _inspection(values)
+    inspection["images"]["API_IMAGE"]["commit_tag_digest"] = "sha256:" + "2" * 64
+    inspection_file.write_text(json.dumps(inspection), encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_WRITE),
+            "--env-file",
+            str(env_file),
+            "--inspection-file",
+            str(inspection_file),
+            "--output",
+            str(output),
+            "--commit",
+            _COMMIT,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
     assert result.returncode != 0
-    assert "COMPOSE_PROFILES" in result.stderr
+    assert "commit tag digest mismatch" in result.stderr
+
+
+def test_sanitizer_rejects_runtime_and_arbitrary_variables(tmp_path: Path) -> None:
+    for variable in ("ENVIRONMENT", "DATABASE_URL", "SECRET_KEY", "MEILI_MASTER_KEY", "ARBITRARY"):
+        values = _base_values()
+        env_file = tmp_path / f"{variable}.env"
+        output = tmp_path / f"{variable}.sanitized"
+        _write_env(env_file, values)
+        with env_file.open("a", encoding="utf-8") as stream:
+            stream.write(f"{variable}=unexpected\n")
+        result = subprocess.run(
+            [sys.executable, str(_SANITIZE), "--env-file", str(env_file), "--output", str(output), "--commit", _COMMIT],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0
+        assert variable in result.stderr
+        assert not output.exists()
+
+
+def test_sanitizer_rejects_duplicate_export_quoted_and_spaced_assignments(tmp_path: Path) -> None:
+    base = _base_values()
+    cases = {
+        "duplicate": "API_IMAGE=" + base["API_IMAGE"] + "\n",
+        "export": "export API_IMAGE=" + base["API_IMAGE"] + "\n",
+        "quoted": 'API_IMAGE="' + base["API_IMAGE"] + '"\n',
+        "spaced": "API_IMAGE =" + base["API_IMAGE"] + "\n",
+    }
+    for name, bad_line in cases.items():
+        env_file = tmp_path / f"{name}.env"
+        if name == "duplicate":
+            _write_env(env_file, base)
+            env_file.write_text(env_file.read_text(encoding="utf-8") + bad_line, encoding="utf-8")
+        else:
+            lines = [f"{key}={value}\n" for key, value in base.items() if key != "API_IMAGE"]
+            env_file.write_text("".join(lines) + bad_line, encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(_SANITIZE), "--env-file", str(env_file), "--output", str(tmp_path / f"{name}.out"), "--commit", _COMMIT],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0, name
+
+
+def _fake_docker(tmp_path: Path, *, wrong_tag: bool = False) -> Path:
+    executable = tmp_path / "docker"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "ref = sys.argv[4]\n"
+        "digest = ref.rsplit('@', 1)[1] if '@' in ref else 'sha256:' + '1' * 64\n"
+        "if os.environ.get('WRONG_TAG') == '1' and ':sha-' in ref:\n"
+        "    digest = 'sha256:' + '2' * 64\n"
+        "print(json.dumps({'digest': digest, 'manifests': [\n"
+        " {'platform': {'os': 'linux', 'architecture': 'amd64'}},\n"
+        " {'platform': {'os': 'linux', 'architecture': 'arm64'}},\n"
+        " {'platform': {'os': 'unknown', 'architecture': 'unknown'}}\n"
+        "]}))\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+def test_registry_inspector_rejects_commit_tag_digest_mismatch(tmp_path: Path) -> None:
+    _fake_docker(tmp_path)
+    env_file = tmp_path / "images.env"
+    output = tmp_path / "inspection.json"
+    _write_env(env_file, _base_values())
+    env = os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}", "WRONG_TAG": "1"}
+    result = subprocess.run(
+        [sys.executable, str(_INSPECT), "--env-file", str(env_file), "--output", str(output), "--commit", _COMMIT],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode != 0
+    assert "resolves to" in result.stderr
+    assert not output.exists()

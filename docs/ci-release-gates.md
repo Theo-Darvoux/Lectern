@@ -1,9 +1,17 @@
 # CI and release gates
 
-`.github/workflows/ci.yml` runs on pull requests and non-main branch pushes. It is also reusable: `.github/workflows/release.yml` invokes the same workflow on `main` and `alpha-*` tags before the release implementation is allowed to build candidates.
+`.github/workflows/ci.yml` runs on pull requests and non-main branch pushes. `release.yml` invokes the same reusable workflow on `main` and `alpha-*` tags before any candidate image can be built.
 
-Configure the repository ruleset for `main` to require the stable **CI / required** check. That aggregation job fails unless the API lint/type/unit suite, real-PostgreSQL migration and revert-concurrency suite, production-policy suite, web suite, and delivery-worker suite all succeed.
+The stable **CI / required** aggregation job fails unless all of the following succeed:
 
-The existing SeaweedFS pull-request workflow remains the live storage gate for its path set. Release publication additionally reruns both live SeaweedFS suites inside `build.yml` before API and worker candidates are built.
+- API Ruff, mypy, and hermetic tests, with Bubblewrap installed for real sandbox tests;
+- every database migration and the real PostgreSQL revert-concurrency invariant;
+- release and deployment policy regressions;
+- web lint, type, i18n, and tests;
+- delivery-worker tests and type checks.
 
-Only `release.yml` has a main/tag push trigger. `build.yml` and `scan-and-promote.yml` are reusable implementation workflows and cannot publish from a direct repository event. Promotion is downstream of both the amd64 and arm64 Trivy matrix entries.
+The release implementation additionally runs both live SeaweedFS suites, builds all four multi-platform components, scans AMD64 and ARM64 separately, copies immutable commit tags, verifies registry provenance, publishes a checksummed canonical release artifact, and only then updates convenience aliases.
+
+Every external action is pinned to a reviewed full commit SHA. `.github/dependabot.yml` proposes controlled updates instead of allowing mutable major-version tags to move underneath privileged workflows.
+
+Administrative controls remain required: configure the `main` ruleset to require **CI / required**, and enable the repository Actions setting that requires full-length action SHA references.

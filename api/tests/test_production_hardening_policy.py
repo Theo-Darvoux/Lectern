@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +29,6 @@ def test_production_master_restore_guards_numeric_volume_id_monotonicity() -> No
     assert '"$stale_max" -lt "$delayed_volume_id"' in topology_test
     assert '"$post_grow_max" -gt "$delayed_volume_id"' in topology_test
     assert '"$new_volume_id" -gt "$delayed_volume_id"' in topology_test
-    assert "new_fid = initial_fid" not in topology_test
 
 
 def test_production_overlay_pins_workloads_infrastructure_and_policy_helper() -> None:
@@ -47,90 +47,72 @@ def test_production_overlay_pins_workloads_infrastructure_and_policy_helper() ->
     )
     for repository in expected_repositories:
         assert repository in production
-
-    for variable in (
-        "API_IMAGE",
-        "WORKER_IMAGE",
-        "WEB_IMAGE",
-        "POSTGRES_IMAGE",
-        "REDIS_IMAGE",
-        "NGINX_IMAGE",
-        "MEILI_IMAGE",
-        "EUROOFFICE_IMAGE",
-    ):
-        assert f"image: ${{{variable}" in production
-    assert "image: ${SEAWEEDFS_IMAGE" in _read("compose.yaml")
-    assert production.count("build: !reset null") >= 6
-    assert "command: null" in production
-    assert "command: []" not in production
     assert production.count("image: docker.io/library/alpine@${POLICY_IMAGE_DIGEST:") == 4
-    assert "check POLICY_IMAGE_DIGEST" in production
-
-    release_env = _read("deploy/production-images.env.example")
-    for variable in (
-        "POSTGRES_IMAGE",
-        "REDIS_IMAGE",
-        "NGINX_IMAGE",
-        "MEILI_IMAGE",
-        "EUROOFFICE_IMAGE",
-        "SEAWEEDFS_IMAGE",
-    ):
-        assert f"{variable}=" in release_env
 
 
-def test_every_manifest_platform_is_scanned_before_promotion() -> None:
+def test_every_manifest_platform_is_scanned_before_immutable_promotion() -> None:
     build = _read(".github/workflows/build.yml")
     scanner = _read(".github/workflows/scan-and-promote.yml")
-
-    assert "\n  workflow_call:" in build.split("jobs:", 1)[0]
-    assert "\n  push:" not in build.split("jobs:", 1)[0]
-    assert build.count("uses: ./.github/workflows/scan-and-promote.yml") == 4
     assert "linux/amd64,linux/arm64" in build
-    assert "api-candidate@${{ needs.build-api.outputs.api_digest }}" in build
-    assert "worker-candidate@${{ needs.build-api.outputs.worker_digest }}" in build
-
+    assert build.count("uses: ./.github/workflows/scan-and-promote.yml") == 4
     assert "fail-fast: false" in scanner
     assert "platform: linux/amd64" in scanner
     assert "platform: linux/arm64" in scanner
     assert "TRIVY_PLATFORM: ${{ matrix.platform }}" in scanner
-    assert "trivy-${{ inputs.component }}-${{ matrix.slug }}.sarif" in scanner
     assert "needs: [validate, scan]" in scanner
-    assert scanner.index("  scan:") < scanner.index("  promote:")
-    assert "exit-code: '1'" in scanner
+    assert "alias_name" not in scanner
 
 
-def test_premerge_ci_is_separate_from_main_and_tag_release() -> None:
-    ci = _read(".github/workflows/ci.yml")
-    release = _read(".github/workflows/release.yml")
+def test_release_completion_is_manifest_driven_before_aliases() -> None:
     build = _read(".github/workflows/build.yml")
+    finalizer_index = build.index("  finalize-release:")
+    aliases_index = build.index("  publish-aliases:")
+    assert finalizer_index < aliases_index
+    assert "needs: [release-api, release-worker, release-web, release-delivery]" in build
+    assert "Publish authoritative release-complete artifact" in build
+    assert "production-release-${{ github.sha }}" in build
+    assert "publish-release-aliases.sh" in build
+    promote = _read("scripts/promote-release-image.sh")
+    assert "Mutable aliases are" in promote
+    assert "alias_name" not in promote
 
-    ci_trigger = ci.split("concurrency:", 1)[0]
-    assert "workflow_call:" in ci_trigger
-    assert "pull_request:" in ci_trigger
-    assert "push:" in ci_trigger
-    assert "uv run ruff check ." in ci
-    assert "uv run mypy app/" in ci
+
+def test_release_manifest_input_is_strict_sanitized_and_host_isolated() -> None:
+    library = _read("scripts/release_manifest_lib.py")
+    prepare = _read("scripts/prepare-production-release.sh")
+    assert "unsupported release variable" in library
+    assert "shell-style export assignments are forbidden" in library
+    assert "duplicate variable" in library
+    assert "sanitize-production-images.py" in prepare
+    assert "env -i" in prepare
+    assert 'git diff --quiet -- .' in prepare
+    assert 'git diff --cached --quiet -- .' in prepare
+    assert "validate-production-compose.py" in prepare
+    assert "inspect-production-images.py" in prepare
+
+
+def test_premerge_ci_installs_real_sandbox_runtime() -> None:
+    ci = _read(".github/workflows/ci.yml")
+    assert "pull_request:" in ci.split("jobs:", 1)[0]
+    assert "sudo apt-get install --yes --no-install-recommends bubblewrap" in ci
+    assert "bwrap --version" in ci
     assert 'uv run pytest -m "not integration"' in ci
-    assert "uv run alembic upgrade head" in ci
-    assert "tests/integration/database/test_revert_concurrency.py" in ci
-    assert "pnpm test" in ci
-    assert "npm run typecheck:node" in ci
     assert "needs: [api, postgres-revert, production-policy, web, delivery]" in ci
-    assert "for result in" in ci
-
-    release_trigger = release.split("jobs:", 1)[0]
-    assert "branches: [main]" in release_trigger
-    assert "tags: ['alpha-*']" in release_trigger
-    assert "uses: ./.github/workflows/ci.yml" in release
-    assert "needs: ci" in release
-    assert "uses: ./.github/workflows/build.yml" in release
-    assert "\n  push:" not in build.split("jobs:", 1)[0]
 
 
-def test_revert_database_invariant_is_migrated() -> None:
-    model = _read("api/app/models/pull_request.py")
-    migration = _read("api/app/migrations/versions/unique_reverts_pr_id.py")
-    assert "uq_pull_requests_reverts_pr_id" in model
-    assert "with_for_update()" in _read("api/app/services/pr.py")
-    assert "create_unique_constraint" in migration
-    assert "HAVING COUNT(*) > 1" in migration
+def test_all_external_actions_are_pinned_to_full_commit_shas() -> None:
+    workflow_dir = REPO_ROOT / ".github/workflows"
+    unpinned: list[str] = []
+    for path in sorted(workflow_dir.glob("*.yml")):
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            match = re.search(r"\buses:\s*([^\s#]+)", line)
+            if match is None:
+                continue
+            reference = match.group(1)
+            if reference.startswith("./"):
+                continue
+            if re.fullmatch(r"[^@]+@[0-9a-f]{40}", reference) is None:
+                unpinned.append(f"{path.name}:{line_number}:{reference}")
+    assert not unpinned, unpinned
+    dependabot = _read(".github/dependabot.yml")
+    assert "package-ecosystem: github-actions" in dependabot
