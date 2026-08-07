@@ -43,6 +43,35 @@ def test_live_storage_jobs_are_inside_stable_required_ci_aggregate() -> None:
     assert '"$SEAWEEDFS_TOPOLOGY_RESULT"' in required
 
 
+def test_topology_backup_restore_is_independent_of_host_uid() -> None:
+    script = (_REPO_ROOT / "api/scripts/run-seaweedfs-topology-tests.sh").read_text()
+
+    # SeaweedFS changes /data ownership inside the container. The regression
+    # must never reintroduce host-side cp/rm/find against those container-owned
+    # files, because GitHub-hosted runners cannot necessarily read UID 1000 data.
+    assert 'MASTER_DATA_VOLUME="${PREFIX}-master-data"' in script
+    assert 'MASTER_BACKUP_VOLUME="${PREFIX}-master-backup"' in script
+    assert 'docker volume create "$MASTER_DATA_VOLUME"' in script
+    assert 'docker volume create "$MASTER_BACKUP_VOLUME"' in script
+    assert 'copy_volume_contents "$MASTER_DATA_VOLUME" "$MASTER_BACKUP_VOLUME"' in script
+    assert 'copy_volume_contents "$MASTER_BACKUP_VOLUME" "$MASTER_DATA_VOLUME"' in script
+    assert "--user 0:0" in script
+    assert "--entrypoint /bin/sh" in script
+    assert '-v "$source_volume:/source:ro"' in script
+    assert '-v "$destination_volume:/destination"' in script
+    assert 'cp -a /source/. /destination/' in script
+    assert 'docker volume rm "$MASTER_BACKUP_VOLUME" "$MASTER_DATA_VOLUME"' in script
+
+    forbidden_host_state_operations = (
+        'cp -a "$MASTER_DATA/."',
+        'cp -a "$MASTER_BACKUP/."',
+        'rm -rf "$MASTER_DATA"',
+        'find "$MASTER_DATA"',
+    )
+    for forbidden in forbidden_host_state_operations:
+        assert forbidden not in script
+
+
 def test_migration_runbook_always_uses_production_override_and_digest() -> None:
     runbook = (_REPO_ROOT / "docs/r2-to-seaweedfs-migration.md").read_text()
     assert "@sha256:<tested-manifest-digest>" in runbook

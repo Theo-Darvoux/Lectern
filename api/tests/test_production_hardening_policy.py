@@ -18,10 +18,10 @@ def test_production_master_restore_guards_numeric_volume_id_monotonicity() -> No
     assert "/opt/seaweedfs/master:/data" in master
 
     topology_test = _read("api/scripts/run-seaweedfs-topology-tests.sh")
-    assert "MASTER_BACKUP=" in topology_test
+    assert "MASTER_BACKUP_VOLUME=" in topology_test
     assert 'docker rm -f "$MASTER"' in topology_test
-    assert 'rm -rf "$MASTER_DATA"' in topology_test
-    assert 'cp -a "$MASTER_BACKUP/." "$MASTER_DATA/"' in topology_test
+    assert "copy_volume_contents" in topology_test
+    assert 'copy_volume_contents "$MASTER_BACKUP_VOLUME" "$MASTER_DATA_VOLUME"' in topology_test
     assert "fid_volume_id()" in topology_test
     assert "master_max_volume_id()" in topology_test
     assert "delayed_volume_id=" in topology_test

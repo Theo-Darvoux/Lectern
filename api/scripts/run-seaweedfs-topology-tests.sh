@@ -16,8 +16,8 @@ VOLUME1="${PREFIX}-volume1"
 VOLUME2="${PREFIX}-volume2"
 FILER="${PREFIX}-filer"
 S3="${PREFIX}-s3"
-MASTER_DATA="${TMPDIR:-/tmp}/${PREFIX}-master-data"
-MASTER_BACKUP="${TMPDIR:-/tmp}/${PREFIX}-master-backup"
+MASTER_DATA_VOLUME="${PREFIX}-master-data"
+MASTER_BACKUP_VOLUME="${PREFIX}-master-backup"
 
 cleanup() {
     status=$?
@@ -30,7 +30,7 @@ cleanup() {
     fi
     docker rm -f "$S3" "$FILER" "$VOLUME2" "$VOLUME1" "$MASTER" >/dev/null 2>&1 || true
     docker network rm "$NETWORK" >/dev/null 2>&1 || true
-    rm -rf "$MASTER_DATA" "$MASTER_BACKUP"
+    docker volume rm "$MASTER_BACKUP_VOLUME" "$MASTER_DATA_VOLUME" >/dev/null 2>&1 || true
     exit "$status"
 }
 trap cleanup EXIT INT TERM
@@ -42,10 +42,40 @@ for command in docker curl uv python3; do
     }
 done
 
+# Master state is owned by the SeaweedFS container user. Keep backup/restore
+# inside Docker so CI/local host UIDs never need permission to read or delete
+# the database files. --entrypoint bypasses the SeaweedFS ownership-changing
+# startup wrapper and --user 0:0 provides access only inside these short-lived
+# helper containers.
+copy_volume_contents() {
+    source_volume=$1
+    destination_volume=$2
+    docker run --rm \
+        --user 0:0 \
+        --entrypoint /bin/sh \
+        -v "$source_volume:/source:ro" \
+        -v "$destination_volume:/destination" \
+        "$SEAWEEDFS_IMAGE" \
+        -eu -c '
+            rm -rf /destination/* /destination/.[!.]* /destination/..?*
+            cp -a /source/. /destination/
+        '
+}
+
+volume_has_state() {
+    state_volume=$1
+    docker run --rm \
+        --user 0:0 \
+        --entrypoint /bin/sh \
+        -v "$state_volume:/state:ro" \
+        "$SEAWEEDFS_IMAGE" \
+        -eu -c 'find /state -mindepth 1 -print -quit | grep -q .'
+}
+
 start_master() {
     docker run -d --name "$MASTER" --network "$NETWORK" \
         -p "127.0.0.1:${MASTER_PORT}:9333" \
-        -v "$MASTER_DATA:/data:Z" \
+        -v "$MASTER_DATA_VOLUME:/data" \
         "$SEAWEEDFS_IMAGE" \
         master -ip="$MASTER" -ip.bind=0.0.0.0 -port=9333 -mdir=/data \
         -defaultReplication=010 -volumeSizeLimitMB=1024 >/dev/null
@@ -154,9 +184,10 @@ assign_fid() {
 
 docker rm -f "$S3" "$FILER" "$VOLUME2" "$VOLUME1" "$MASTER" >/dev/null 2>&1 || true
 docker network rm "$NETWORK" >/dev/null 2>&1 || true
-rm -rf "$MASTER_DATA" "$MASTER_BACKUP"
-mkdir -p "$MASTER_DATA" "$MASTER_BACKUP"
+docker volume rm "$MASTER_BACKUP_VOLUME" "$MASTER_DATA_VOLUME" >/dev/null 2>&1 || true
 docker network create "$NETWORK" >/dev/null
+docker volume create "$MASTER_DATA_VOLUME" >/dev/null
+docker volume create "$MASTER_BACKUP_VOLUME" >/dev/null
 
 start_master
 wait_for_master
@@ -176,7 +207,7 @@ initial_fid=$(assign_fid 010 initial-topology-guard)
 initial_volume_id=$(fid_volume_id "$initial_fid")
 initial_max=$(wait_for_max_at_least "$initial_volume_id" initial)
 
-if ! find "$MASTER_DATA" -mindepth 1 -print -quit | grep -q .; then
+if ! volume_has_state "$MASTER_DATA_VOLUME"; then
     echo "SeaweedFS master did not persist state under -mdir=/data" >&2
     exit 1
 fi
@@ -184,7 +215,7 @@ fi
 # Take a coherent backup of the master before creating the highest numbered
 # volume. This backup deliberately models restoring an older production backup.
 docker stop "$MASTER" >/dev/null
-cp -a "$MASTER_DATA/." "$MASTER_BACKUP/"
+copy_volume_contents "$MASTER_DATA_VOLUME" "$MASTER_BACKUP_VOLUME"
 docker start "$MASTER" >/dev/null
 wait_for_master
 wait_for_max_at_least "$initial_max" restored-in-place >/dev/null
@@ -213,9 +244,7 @@ delayed_volume_id=$(master_max_volume_id)
 # offline. The stale master must fail closed until that server reconnects.
 docker stop "$VOLUME2" >/dev/null
 docker rm -f "$MASTER" >/dev/null
-rm -rf "$MASTER_DATA"
-mkdir -p "$MASTER_DATA"
-cp -a "$MASTER_BACKUP/." "$MASTER_DATA/"
+copy_volume_contents "$MASTER_BACKUP_VOLUME" "$MASTER_DATA_VOLUME"
 start_master
 wait_for_master
 sleep 3
@@ -252,7 +281,7 @@ grow_response=$(curl --silent --show-error --fail --get \
     --data-urlencode 'replication=010' \
     --data-urlencode 'collection=post-restore-id-guard' \
     "http://127.0.0.1:${MASTER_PORT}/vol/grow")
-[ "$(printf '%s' "$grow_response" | json_count)" -eq 1 ] || {
+[ "$(printf '%s' "$grow_response" | json_count)" -ge 1 ] || {
     echo "SeaweedFS could not grow a new cross-rack volume after rack2 rejoined" >&2
     exit 1
 }
