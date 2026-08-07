@@ -3,8 +3,9 @@ name: Release Implementation
 on:
   workflow_call:
 
-# release.yml owns concurrency. This reusable implementation always builds a
-# complete four-component release so the final manifest has no stale members.
+# release.yml owns repository-wide release serialization. This implementation
+# always builds a complete four-component release; only the checksummed
+# production-release-<commit> artifact is a release-complete marker.
 env:
   API_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/api-candidate
   WORKER_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/worker-candidate
@@ -20,15 +21,15 @@ jobs:
     outputs:
       image: ${{ steps.resolve.outputs.image }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Resolve tested SeaweedFS release to an immutable digest
         id: resolve
         env:
           SEAWEEDFS_SOURCE_IMAGE: chrislusf/seaweedfs:4.29
         run: |
           set -euo pipefail
-          docker pull "$SEAWEEDFS_SOURCE_IMAGE"
-          resolved=$(docker image inspect --format '{{index .RepoDigests 0}}' "$SEAWEEDFS_SOURCE_IMAGE")
-          [[ "$resolved" =~ ^docker\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}$ ]]
+          resolved=$(./scripts/resolve-seaweedfs-image.sh "$SEAWEEDFS_SOURCE_IMAGE")
           echo "image=$resolved" >> "$GITHUB_OUTPUT"
 
   test-seaweedfs:
@@ -222,11 +223,16 @@ jobs:
       release_tag: sha-${{ github.sha }}
 
   finalize-release:
-    needs: [release-api, release-worker, release-web, release-delivery]
+    needs:
+      - resolve-seaweedfs-image
+      - release-api
+      - release-worker
+      - release-web
+      - release-delivery
     runs-on: ubuntu-latest
     environment: production-release
     outputs:
-      manifest_sha256: ${{ steps.manifest.outputs.manifest_sha256 }}
+      manifest_sha256: ${{ steps.checksums.outputs.manifest_sha256 }}
     permissions:
       contents: read
       packages: read
@@ -237,7 +243,10 @@ jobs:
       PRODUCTION_NGINX_IMAGE: ${{ vars.PRODUCTION_NGINX_IMAGE }}
       PRODUCTION_MEILI_IMAGE: ${{ vars.PRODUCTION_MEILI_IMAGE }}
       PRODUCTION_EUROOFFICE_IMAGE: ${{ vars.PRODUCTION_EUROOFFICE_IMAGE }}
+      # This is an independently reviewed expectation only. The manifest uses
+      # the digest that the live suites actually exercised and fails on mismatch.
       PRODUCTION_SEAWEEDFS_IMAGE: ${{ vars.PRODUCTION_SEAWEEDFS_IMAGE }}
+      TESTED_SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -256,7 +265,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-manifests
-          cat > "$RUNNER_TEMP/production-images.input.env" <<EOF
+          ./scripts/require-tested-seaweedfs-image.sh \
+            "$TESTED_SEAWEEDFS_IMAGE" \
+            "$PRODUCTION_SEAWEEDFS_IMAGE"
+          cat > "$RUNNER_TEMP/production-images.input.env" <<EOF_INPUT
           RELEASE_COMMIT=${GITHUB_SHA}
           COMPOSE_PROFILES=postgres,seaweedfs-prod,selfhost-worker
           API_IMAGE=ghcr.io/theo-darvoux/lectern/api-release@${API_DIGEST}
@@ -269,8 +281,8 @@ jobs:
           NGINX_IMAGE=${PRODUCTION_NGINX_IMAGE}
           MEILI_IMAGE=${PRODUCTION_MEILI_IMAGE}
           EUROOFFICE_IMAGE=${PRODUCTION_EUROOFFICE_IMAGE}
-          SEAWEEDFS_IMAGE=${PRODUCTION_SEAWEEDFS_IMAGE}
-          EOF
+          SEAWEEDFS_IMAGE=${TESTED_SEAWEEDFS_IMAGE}
+          EOF_INPUT
           python3 scripts/sanitize-production-images.py \
             --env-file "$RUNNER_TEMP/production-images.input.env" \
             --output release-manifests/production-images.env \
@@ -281,26 +293,75 @@ jobs:
           --env-file release-manifests/production-images.env
           --output release-manifests/registry-inspection.json
           --commit "$GITHUB_SHA"
-      - name: Write canonical release manifest
-        id: manifest
+      - name: Write provenance-bound release manifest
         shell: bash
         run: |
           set -euo pipefail
-          manifest="release-manifests/production-${GITHUB_SHA}.json"
           python3 scripts/write-production-release-manifest.py \
             --env-file release-manifests/production-images.env \
             --inspection-file release-manifests/registry-inspection.json \
-            --output "$manifest" \
+            --output "release-manifests/production-${GITHUB_SHA}.json" \
             --commit "$GITHUB_SHA"
+      - name: Validate production Compose resolves exactly the certified images
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_env="$RUNNER_TEMP/runtime-validation.env"
+          cp .env.example "$runtime_env"
+          # compose.yaml references service-level env_file: .env. Use only the
+          # checked-in, non-secret example values for configuration rendering.
+          cp "$runtime_env" .env
+          trap 'rm -f .env' EXIT
+
+          profile_args=()
+          profiles=$(sed -n 's/^COMPOSE_PROFILES=//p' release-manifests/production-images.env)
+          IFS=',' read -r -a profile_values <<< "$profiles"
+          for profile in "${profile_values[@]}"; do
+            [[ -n "$profile" ]] && profile_args+=(--profile "$profile")
+          done
+
+          clean_env=(env -i "PATH=$PATH")
+          [[ -n ${HOME:-} ]] && clean_env+=("HOME=$HOME")
+          [[ -n ${DOCKER_CONFIG:-} ]] && clean_env+=("DOCKER_CONFIG=$DOCKER_CONFIG")
+          [[ -n ${XDG_RUNTIME_DIR:-} ]] && clean_env+=("XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR")
+          [[ -n ${TMPDIR:-} ]] && clean_env+=("TMPDIR=$TMPDIR")
+
+          compose=(
+            docker compose
+            --env-file "$runtime_env"
+            --env-file release-manifests/production-images.env
+            -f compose.yaml
+            -f compose.prod.yaml
+            "${profile_args[@]}"
+          )
+
+          "${clean_env[@]}" "${compose[@]}" config --quiet
+          "${clean_env[@]}" "${compose[@]}" config \
+            > release-manifests/production-compose.config.yml
+          "${clean_env[@]}" "${compose[@]}" config --images \
+            | LC_ALL=C sort -u \
+            > release-manifests/production-compose-images.txt
+
+          python3 scripts/validate-production-compose.py \
+            --manifest "release-manifests/production-${GITHUB_SHA}.json" \
+            --compose-images release-manifests/production-compose-images.txt
+      - name: Checksum authoritative release artifact
+        id: checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="production-${GITHUB_SHA}.json"
           (
             cd release-manifests
             sha256sum \
-              "$(basename "$manifest")" \
+              "$manifest" \
               production-images.env \
               registry-inspection.json \
+              production-compose.config.yml \
+              production-compose-images.txt \
               > SHA256SUMS
           )
-          digest=$(sha256sum "$manifest" | awk '{print $1}')
+          digest=$(sha256sum "release-manifests/$manifest" | awk '{print $1}')
           [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
           echo "manifest_sha256=$digest" >> "$GITHUB_OUTPUT"
       - name: Publish authoritative release-complete artifact
@@ -311,37 +372,3 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
-
-  publish-aliases:
-    needs: [release-api, release-worker, release-web, release-delivery, finalize-release]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    env:
-      ALIAS_NAME: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
-      MANIFEST_SHA256: ${{ needs.finalize-release.outputs.manifest_sha256 }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish convenience aliases after release completion
-        shell: bash
-        env:
-          API_DIGEST: ${{ needs.release-api.outputs.release_digest }}
-          WORKER_DIGEST: ${{ needs.release-worker.outputs.release_digest }}
-          WEB_DIGEST: ${{ needs.release-web.outputs.release_digest }}
-          DELIVERY_DIGEST: ${{ needs.release-delivery.outputs.release_digest }}
-        run: |
-          set -euo pipefail
-          [[ "$MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          ./scripts/publish-release-aliases.sh \
-            "$ALIAS_NAME" \
-            "ghcr.io/theo-darvoux/lectern/api-release@${API_DIGEST}" \
-            "ghcr.io/theo-darvoux/lectern/worker-release@${WORKER_DIGEST}" \
-            "ghcr.io/theo-darvoux/lectern/web-release@${WEB_DIGEST}" \
-            "ghcr.io/theo-darvoux/lectern/selfhost-worker-release@${DELIVERY_DIGEST}"

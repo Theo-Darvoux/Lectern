@@ -9,11 +9,18 @@ from app.core.security.sandbox import sandboxed_run
 
 
 def _reset_bwrap_cache() -> None:
-    """Reset the module-level bwrap path cache between tests."""
+    """Reset both launcher-path caches between tests."""
     import app.core.security.sandbox as mod
 
     mod._bwrap_path = None
     mod._bwrap_checked = False
+    mod._prlimit_path = None
+    mod._prlimit_checked = False
+
+
+def _mock_launcher_path(name: str) -> str:
+    """Return distinct realistic paths for bwrap and prlimit."""
+    return f"/usr/bin/{name}"
 
 
 def _make_mock_popen(stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0) -> MagicMock:
@@ -27,7 +34,7 @@ def _make_mock_popen(stdout: bytes = b"", stderr: bytes = b"", returncode: int =
 
 
 @patch("app.core.security.sandbox.subprocess.Popen")
-@patch("app.core.security.sandbox.shutil.which", return_value="/usr/bin/bwrap")
+@patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
 def test_sandboxed_run_with_bwrap(
     _mock_which: MagicMock,
     mock_popen: MagicMock,
@@ -45,6 +52,8 @@ def test_sandboxed_run_with_bwrap(
 
     # The command should contain the bwrap binary
     assert "/usr/bin/bwrap" in cmd
+    separator_idx = cmd.index("--")
+    assert cmd[separator_idx + 1] == "/usr/bin/prlimit"
     # Must contain --unshare-all for namespace isolation
     assert "--unshare-all" in cmd
     # Must contain --die-with-parent to prevent orphans
@@ -83,7 +92,7 @@ def test_sandboxed_run_raises_without_bwrap(
 
 
 @patch("app.core.security.sandbox.subprocess.Popen")
-@patch("app.core.security.sandbox.shutil.which", return_value="/usr/bin/bwrap")
+@patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
 def test_sandboxed_run_rw_paths(
     _mock_which: MagicMock,
     mock_popen: MagicMock,
@@ -113,7 +122,7 @@ def test_sandboxed_run_rw_paths(
 
 
 @patch("app.core.security.sandbox.subprocess.Popen")
-@patch("app.core.security.sandbox.shutil.which", return_value="/usr/bin/bwrap")
+@patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
 def test_sandboxed_run_ro_paths(
     _mock_which: MagicMock,
     mock_popen: MagicMock,
@@ -142,7 +151,7 @@ def test_sandboxed_run_ro_paths(
 
 
 @patch("app.core.security.sandbox.subprocess.Popen")
-@patch("app.core.security.sandbox.shutil.which", return_value="/usr/bin/bwrap")
+@patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
 def test_sandboxed_run_timeout_propagates(
     _mock_which: MagicMock,
     mock_popen: MagicMock,

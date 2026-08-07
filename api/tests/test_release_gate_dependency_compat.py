@@ -24,6 +24,7 @@ def test_release_requires_reusable_ci_before_publish_implementation() -> None:
     assert "needs: ci" in release_job
     assert "uses: ./.github/workflows/build.yml" in release_job
     assert "packages: write" in release_job
+    assert "group: production-release" in release
     assert "cancel-in-progress: false" in release
 
 
@@ -46,23 +47,34 @@ def test_promotion_is_downstream_of_complete_platform_matrix() -> None:
     assert "alias_name" not in scanner
 
 
-def test_manifest_and_aliases_are_aggregate_release_gates() -> None:
+def test_manifest_is_aggregate_release_gate_and_aliases_are_not_automated() -> None:
     build = _read(".github/workflows/build.yml")
     finalizer = _job(build, "finalize-release")
-    aliases = _job(build, "publish-aliases")
-    all_components = "[release-api, release-worker, release-web, release-delivery]"
-    assert f"needs: {all_components}" in finalizer
+    for dependency in (
+        "resolve-seaweedfs-image",
+        "release-api",
+        "release-worker",
+        "release-web",
+        "release-delivery",
+    ):
+        assert f"- {dependency}" in finalizer
     assert "production-release-${{ github.sha }}" in finalizer
     assert "inspect-production-images.py" in finalizer
-    assert "needs: [release-api, release-worker, release-web, release-delivery, finalize-release]" in aliases
-    assert "publish-release-aliases.sh" in aliases
-    for name in ("release-api", "release-worker", "release-web", "release-delivery"):
-        assert "alias_name:" not in _job(build, name)
+    assert "validate-production-compose.py" in finalizer
+    assert "production-compose-images.txt" in finalizer
+    assert "production-compose.config.yml" in finalizer
+    assert "publish-aliases:" not in build
+    assert "publish-release-aliases.sh" not in build
 
 
-def test_postgres_revert_gate_runs_before_merge_and_release() -> None:
+def test_postgres_and_storage_gates_run_before_merge_and_release() -> None:
     ci = _read(".github/workflows/ci.yml")
     postgres = _job(ci, "postgres-revert")
+    required = _job(ci, "required")
     assert "uv run alembic upgrade head" in postgres
     assert "tests/integration/database/test_revert_concurrency.py" in postgres
     assert "pull_request:" in ci.split("jobs:", 1)[0]
+    assert "- seaweedfs" in required
+    assert "- seaweedfs-production-topology" in required
+    assert "SEAWEEDFS_RESULT" in required
+    assert "SEAWEEDFS_TOPOLOGY_RESULT" in required

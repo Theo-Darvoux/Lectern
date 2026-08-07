@@ -63,18 +63,19 @@ def test_every_manifest_platform_is_scanned_before_immutable_promotion() -> None
     assert "alias_name" not in scanner
 
 
-def test_release_completion_is_manifest_driven_before_aliases() -> None:
+def test_release_completion_is_manifest_driven_without_automated_cross_repo_aliases() -> None:
     build = _read(".github/workflows/build.yml")
-    finalizer_index = build.index("  finalize-release:")
-    aliases_index = build.index("  publish-aliases:")
-    assert finalizer_index < aliases_index
-    assert "needs: [release-api, release-worker, release-web, release-delivery]" in build
+    assert "  finalize-release:" in build
     assert "Publish authoritative release-complete artifact" in build
     assert "production-release-${{ github.sha }}" in build
-    assert "publish-release-aliases.sh" in build
+    assert "validate-production-compose.py" in build
+    assert "production-compose-images.txt" in build
+    assert "production-compose.config.yml" in build
+    assert "  publish-aliases:" not in build
+    assert "publish-release-aliases.sh" not in build
     promote = _read("scripts/promote-release-image.sh")
-    assert "Mutable aliases are" in promote
-    assert "alias_name" not in promote
+    assert "Commit tags are write-once" in promote
+    assert "immutable release tag already exists with a different digest" in promote
 
 
 def test_release_manifest_input_is_strict_sanitized_and_host_isolated() -> None:
@@ -83,21 +84,30 @@ def test_release_manifest_input_is_strict_sanitized_and_host_isolated() -> None:
     assert "unsupported release variable" in library
     assert "shell-style export assignments are forbidden" in library
     assert "duplicate variable" in library
+    assert 'key != "COMPOSE_PROFILES"' in library
+    assert 'if raw == ""' in library
     assert "sanitize-production-images.py" in prepare
     assert "env -i" in prepare
     assert 'git diff --quiet -- .' in prepare
     assert 'git diff --cached --quiet -- .' in prepare
     assert "validate-production-compose.py" in prepare
     assert "inspect-production-images.py" in prepare
+    assert "compose-config.yml" in prepare
 
 
-def test_premerge_ci_installs_real_sandbox_runtime() -> None:
+def test_premerge_ci_installs_real_sandbox_runtime_and_requires_storage() -> None:
     ci = _read(".github/workflows/ci.yml")
     assert "pull_request:" in ci.split("jobs:", 1)[0]
     assert "sudo apt-get install --yes --no-install-recommends bubblewrap" in ci
-    assert "bwrap --version" in ci
+    assert "kernel.apparmor_restrict_unprivileged_userns" in ci
+    assert "kernel.apparmor_restrict_unprivileged_unconfined" in ci
+    assert "Smoke-test real sandbox runtime" in ci
     assert 'uv run pytest -m "not integration"' in ci
-    assert "needs: [api, postgres-revert, production-policy, web, delivery]" in ci
+    assert "  seaweedfs:" in ci
+    assert "  seaweedfs-production-topology:" in ci
+    required = ci.split("  required:", 1)[1]
+    assert "- seaweedfs" in required
+    assert "- seaweedfs-production-topology" in required
 
 
 def test_all_external_actions_are_pinned_to_full_commit_shas() -> None:

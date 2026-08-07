@@ -39,6 +39,22 @@ class SubprocessOutputLimitError(RuntimeError):
     """Raised when subprocess stdout or stderr exceeds the capture limit."""
 
 
+class SandboxInfrastructureError(RuntimeError):
+    """Raised when Bubblewrap/prlimit cannot establish the sandbox."""
+
+
+def _raise_if_sandbox_launcher_failed(returncode: int, stderr: bytes) -> None:
+    """Turn launcher/setup failures into an explicit fail-closed error."""
+    if returncode == 0 or not stderr:
+        return
+    detail = stderr[:4096].decode(errors="replace").strip()
+    first_line = detail.splitlines()[0].lstrip() if detail else ""
+    if first_line.startswith(("bwrap:", "prlimit:")):
+        raise SandboxInfrastructureError(
+            f"sandbox launcher failed before the child command could run: {detail}"
+        )
+
+
 def _resolve_bwrap() -> str:
     """Return the Bubblewrap executable path or fail closed."""
     global _bwrap_path, _bwrap_checked
@@ -293,7 +309,9 @@ def sandboxed_run(
                 proc.stderr.close()
         executor.shutdown(wait=False, cancel_futures=True)
 
-    return subprocess.CompletedProcess(wrapped, proc.returncode or 0, stdout, stderr)
+    returncode = proc.returncode or 0
+    _raise_if_sandbox_launcher_failed(returncode, stderr)
+    return subprocess.CompletedProcess(wrapped, returncode, stdout, stderr)
 
 
 async def _read_bounded_stream(
@@ -466,4 +484,6 @@ async def async_sandboxed_run(
         if process.returncode is not None:
             _close_async_process_transport(process)
 
-    return subprocess.CompletedProcess(wrapped, process.returncode or 0, stdout, stderr)
+    returncode = process.returncode or 0
+    _raise_if_sandbox_launcher_failed(returncode, stderr)
+    return subprocess.CompletedProcess(wrapped, returncode, stdout, stderr)

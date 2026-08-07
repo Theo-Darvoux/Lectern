@@ -5,10 +5,12 @@ on:
     branches: [main]
     tags: ['alpha-*']
 
-# Do not cancel a release after immutable component copies have started. A newer
-# release queues behind the current one, preventing automated partial aliases.
+# Serialize every production release, including main/tag releases that may point
+# at the same commit. This closes the race around immutable sha-<commit> tags.
+# In-progress promotion is never cancelled; incomplete component tags remain
+# non-deployable until the canonical release artifact exists.
 concurrency:
-  group: release-${{ github.ref }}
+  group: production-release
   cancel-in-progress: false
 
 jobs:

@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/seaweedfs-integration.yml"
       - ".github/workflows/build.yml"
+      - ".github/workflows/ci.yml"
       - "api/app/config.py"
       - "api/app/core/events/processing.py"
       - "api/app/core/media/**"
@@ -28,6 +29,7 @@ on:
       - "docs/r2-to-seaweedfs-migration.md"
       - "infra/docker/seaweedfs/**"
       - "infra/docker/redis/redis.conf"
+      - "scripts/resolve-seaweedfs-image.sh"
       - "web/src/lib/upload-client.ts"
   workflow_dispatch:
     inputs:
@@ -51,13 +53,13 @@ jobs:
     env:
       SEAWEEDFS_SOURCE_IMAGE: ${{ inputs.seaweedfs_image || 'chrislusf/seaweedfs:4.29' }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Resolve SeaweedFS to an immutable digest
         id: resolve
         run: |
           set -euo pipefail
-          docker pull "$SEAWEEDFS_SOURCE_IMAGE"
-          resolved=$(docker image inspect --format '{{index .RepoDigests 0}}' "$SEAWEEDFS_SOURCE_IMAGE")
-          [[ "$resolved" =~ ^docker\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}$ ]]
+          resolved=$(./scripts/resolve-seaweedfs-image.sh "$SEAWEEDFS_SOURCE_IMAGE")
           echo "image=$resolved" >> "$GITHUB_OUTPUT"
 
   seaweedfs:

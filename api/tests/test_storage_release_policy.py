@@ -11,23 +11,36 @@ def test_api_image_publication_depends_on_both_live_seaweedfs_jobs() -> None:
     assert "test-seaweedfs:" in workflow
     assert "test-seaweedfs-topology:" in workflow
     assert "needs: [test-seaweedfs, test-seaweedfs-topology]" in workflow
-    assert (
-        workflow.count("SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}") == 2
-    )
+    tested_image_line = "SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}"
+    assert sum(line.strip() == tested_image_line for line in workflow.splitlines()) == 2
     build_section = workflow.split("  build-api:", 1)[1].split("\n  build-web:", 1)[0]
     assert build_section.count("push: true") == 2
 
 
-def test_standalone_seaweedfs_workflow_is_premerge_not_independent_publish_gate() -> None:
+def test_standalone_seaweedfs_workflow_uses_canonical_resolver() -> None:
     workflow = (_REPO_ROOT / ".github/workflows/seaweedfs-integration.yml").read_text()
     trigger_block = workflow.split("permissions:", 1)[0]
     assert "pull_request:" in trigger_block
     assert "workflow_dispatch:" in trigger_block
     assert "  push:" not in trigger_block
     assert "resolve-seaweedfs-image:" in workflow
-    assert (
-        workflow.count("SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}") == 2
-    )
+    assert "./scripts/resolve-seaweedfs-image.sh" in workflow
+    assert "RepoDigests" not in workflow
+    assert "docker image inspect" not in workflow
+    tested_image_line = "SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}"
+    assert sum(line.strip() == tested_image_line for line in workflow.splitlines()) == 2
+
+
+def test_live_storage_jobs_are_inside_stable_required_ci_aggregate() -> None:
+    ci = (_REPO_ROOT / ".github/workflows/ci.yml").read_text()
+    assert "  resolve-seaweedfs-image:" in ci
+    assert "  seaweedfs:" in ci
+    assert "  seaweedfs-production-topology:" in ci
+    required = ci.split("  required:", 1)[1]
+    assert "- seaweedfs" in required
+    assert "- seaweedfs-production-topology" in required
+    assert '"$SEAWEEDFS_RESULT"' in required
+    assert '"$SEAWEEDFS_TOPOLOGY_RESULT"' in required
 
 
 def test_migration_runbook_always_uses_production_override_and_digest() -> None:

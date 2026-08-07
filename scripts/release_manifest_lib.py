@@ -119,9 +119,11 @@ def parse_env_file(path: Path) -> dict[str, str]:
             raise ValueError(f"{path}:{line_number}: unsupported release variable {key}")
         if key in values:
             raise ValueError(f"{path}:{line_number}: duplicate variable {key}")
-        if not value:
+        # Zero optional profiles is a supported production topology. Every
+        # other release value remains mandatory and non-empty.
+        if key != "COMPOSE_PROFILES" and not value:
             raise ValueError(f"{path}:{line_number}: {key} must not be empty")
-        if value[0] in {'"', "'"} or value[-1] in {'"', "'"}:
+        if value and (value[0] in {'"', "'"} or value[-1] in {'"', "'"}):
             raise ValueError(f"{path}:{line_number}: quoted or shell-like values are forbidden")
         if any(character.isspace() for character in value):
             raise ValueError(f"{path}:{line_number}: whitespace in values is forbidden")
@@ -130,8 +132,10 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 def parse_profiles(raw: str) -> list[str]:
+    if raw == "":
+        return []
     parts = raw.split(",")
-    if not raw or any(not item for item in parts):
+    if any(not item for item in parts):
         raise ValueError("COMPOSE_PROFILES contains an empty or malformed profile")
     if len(parts) != len(set(parts)):
         raise ValueError("COMPOSE_PROFILES contains duplicate profiles")

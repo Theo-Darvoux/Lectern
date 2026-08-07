@@ -17,6 +17,7 @@ if [[ $alias_name =~ ^sha-[0-9a-f]{40}$ ]]; then
   exit 64
 fi
 
+echo "warning: cross-repository aliases are best-effort conveniences, not deployable release identity" >&2
 expected_components=(api worker web selfhost-worker)
 refs=("$@")
 for index in "${!refs[@]}"; do

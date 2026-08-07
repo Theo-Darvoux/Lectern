@@ -23,12 +23,14 @@ stem="production-${commit}"
 mkdir -p "$output_dir"
 manifest="$output_dir/${stem}.json"
 images="$output_dir/${stem}.compose-images.txt"
+config="$output_dir/${stem}.compose-config.yml"
 inspection="$output_dir/${stem}.registry-inspection.json"
 checksums="$output_dir/${stem}.sha256"
 
 sanitized=$(mktemp "${TMPDIR:-/tmp}/${stem}.env.XXXXXX")
 temporary_images=$(mktemp "$output_dir/.${stem}.images.XXXXXX")
-trap 'rm -f "$sanitized" "$temporary_images"' EXIT
+temporary_config=$(mktemp "$output_dir/.${stem}.config.XXXXXX")
+trap 'rm -f "$sanitized" "$temporary_images" "$temporary_config"' EXIT
 
 python3 scripts/sanitize-production-images.py \
   --env-file "$env_file" \
@@ -68,22 +70,24 @@ clean_env=(env -i "PATH=$PATH")
 [[ -n ${XDG_RUNTIME_DIR:-} ]] && clean_env+=("XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR")
 [[ -n ${TMPDIR:-} ]] && clean_env+=("TMPDIR=$TMPDIR")
 
-"${clean_env[@]}" docker compose \
-  "${compose_env_args[@]}" \
-  -f compose.yaml -f compose.prod.yaml \
-  "${profile_args[@]}" \
-  config --quiet
+compose=(
+  docker compose
+  "${compose_env_args[@]}"
+  -f compose.yaml
+  -f compose.prod.yaml
+  "${profile_args[@]}"
+)
 
-"${clean_env[@]}" docker compose \
-  "${compose_env_args[@]}" \
-  -f compose.yaml -f compose.prod.yaml \
-  "${profile_args[@]}" \
-  config --images | LC_ALL=C sort -u > "$temporary_images"
+"${clean_env[@]}" "${compose[@]}" config --quiet
+"${clean_env[@]}" "${compose[@]}" config > "$temporary_config"
+"${clean_env[@]}" "${compose[@]}" config --images \
+  | LC_ALL=C sort -u > "$temporary_images"
 
 python3 scripts/validate-production-compose.py \
   --manifest "$manifest" \
   --compose-images "$temporary_images"
 
+mv "$temporary_config" "$config"
 mv "$temporary_images" "$images"
 trap 'rm -f "$sanitized"' EXIT
 (
@@ -91,8 +95,9 @@ trap 'rm -f "$sanitized"' EXIT
   sha256sum \
     "$(basename "$manifest")" \
     "$(basename "$images")" \
+    "$(basename "$config")" \
     "$(basename "$inspection")" \
     > "$(basename "$checksums")"
 )
-printf 'Wrote %s\nWrote %s\nWrote %s\nWrote %s\n' \
-  "$manifest" "$images" "$inspection" "$checksums"
+printf 'Wrote %s\nWrote %s\nWrote %s\nWrote %s\nWrote %s\n' \
+  "$manifest" "$images" "$config" "$inspection" "$checksums"
