@@ -53,6 +53,9 @@ async def test_upload_config_has_recommended_path(client: AsyncClient):
     assert "direct_threshold_mb" in data
     assert isinstance(data["direct_threshold_mb"], int)
     assert data["direct_threshold_mb"] > 0
+    assert data["max_size_mb_by_mime"]["application/pdf"] == 200
+    assert data["max_size_mb_by_mime"]["video/mp4"] == 500
+    assert data["max_size_mb_by_mime"]["image/svg+xml"] == 5
 
 
 # ── 4A: Batch status endpoint ─────────────────────────────────────────────────

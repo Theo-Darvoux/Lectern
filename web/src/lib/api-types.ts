@@ -961,15 +961,7 @@ export interface paths {
         };
         /**
          * Download Directory Zip
-         * @description Stream all files in a directory (recursively) as a single ZIP archive.
-         *
-         *     Accepts auth via ``Authorization: Bearer`` header or ``?token=`` query param
-         *     so that a plain browser link (window.location.href) can trigger the download.
-         *
-         *     When ``WORKER_ZIP_URL`` is configured the heavy work (fetching from R2 and
-         *     assembling the ZIP) is offloaded to a Cloudflare Worker.  The API only does
-         *     auth + DB work and then issues a redirect carrying a short-lived HMAC-signed
-         *     token so the Worker can verify the request without calling back to the API.
+         * @description Stream a directory ZIP for bearer API clients or cookie-authenticated browsers.
          */
         get: operations["download_directory_zip_api_directories__id__download_get"];
         put?: never;
@@ -1202,7 +1194,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Stream Material File */
+        /**
+         * Stream Material File
+         * @description Redirect a read-authenticated client to an immutable presigned object URL.
+         */
         get: operations["stream_material_file_api_materials__material_id__file_get"];
         put?: never;
         post?: never;
@@ -1439,7 +1434,7 @@ export interface paths {
         };
         /**
          * Sse Stream
-         * @description SSE endpoint. Accepts token via query param since EventSource can't send headers.
+         * @description SSE endpoint authenticated through the restricted read credential.
          */
         get: operations["sse_stream_api_notifications_sse_get"];
         put?: never;
@@ -1792,17 +1787,14 @@ export interface paths {
         post?: never;
         /**
          * Tus Delete
-         * @description Terminate a pending upload.  Aborts the S3 multipart upload.
+         * @description Cancel through the shared CAS-aware lifecycle operation.
          */
         delete: operations["tus_delete_api_upload_tus__tus_id__delete"];
         options?: never;
         head?: never;
         /**
          * Tus Patch
-         * @description Append a chunk to the upload at Upload-Offset.
-         *
-         *     On the final chunk, completes the S3 multipart upload and enqueues
-         *     background processing.  Returns X-Lectern-File-Key for the SSE stream.
+         * @description Append a chunk while holding renewable global and per-user leases.
          */
         patch: operations["tus_patch_api_upload_tus__tus_id__patch"];
         trace?: never;
@@ -1933,7 +1925,7 @@ export interface paths {
         put?: never;
         /**
          * Presigned Multipart Complete
-         * @description Finalise a presigned multipart upload.
+         * @description Finalise a presigned multipart upload under the cancellation lock.
          */
         post: operations["presigned_multipart_complete_api_upload_presigned_multipart_complete_post"];
         delete?: never;
@@ -1954,7 +1946,7 @@ export interface paths {
         post?: never;
         /**
          * Presigned Multipart Abort
-         * @description Abort an in-progress multipart upload.
+         * @description Cancel multipart state and CAS ownership through one lifecycle operation.
          */
         delete: operations["presigned_multipart_abort_api_upload_presigned_multipart__upload_id__delete"];
         options?: never;
@@ -1971,10 +1963,7 @@ export interface paths {
         };
         /**
          * Upload Status
-         * @description Non-SSE status poll for upload processing.
-         *
-         *     Returns the cached status written by the background worker.
-         *     Returns PENDING if no status has been written yet.
+         * @description Return upload status with the database overriding stale terminal cache state.
          */
         get: operations["upload_status_api_upload_status__file_key__get"];
         put?: never;
@@ -1997,7 +1986,7 @@ export interface paths {
          * @description SSE stream for upload processing status.
          *
          *     Auth via Authorization: Bearer header (fetch-based SSE, not native EventSource).
-         *     Reconnect-safe: serves the cached terminal event immediately on reconnect.
+         *     Reconnect-safe: replays the bounded durable log at least once on reconnect.
          *
          *     Events:
          *       - type=upload, data=UploadStatusOut JSON  (status updates from worker)
@@ -2047,12 +2036,7 @@ export interface paths {
         post?: never;
         /**
          * Cancel Upload
-         * @description Cancel a pending or in-progress upload.
-         *
-         *     Sets a Redis cancellation flag so the background worker aborts between
-         *     stages, then deletes the quarantine object from S3 and removes it from
-         *     the user's quota sorted set. Idempotent -- returns 204 even if the
-         *     upload_id is not found.
+         * @description Cancel any upload through the shared CAS-aware lifecycle operation.
          */
         delete: operations["cancel_upload_api_upload__upload_id__delete"];
         options?: never;
@@ -3067,6 +3051,7 @@ export interface components {
              * Format: uuid
              */
             target_id: string;
+            target?: components["schemas"]["FlagTarget"] | null;
             /** Reason */
             reason: string;
             /** Description */
@@ -3094,6 +3079,19 @@ export interface components {
             display_name: string | null;
             /** Email */
             email: string;
+        };
+        /**
+         * FlagTarget
+         * @description Resolved context for a flagged item: whether it still exists, a short
+         *     content preview, and a navigable frontend link to its parent container.
+         */
+        FlagTarget: {
+            /** Exists */
+            exists: boolean;
+            /** Preview */
+            preview?: string | null;
+            /** Link */
+            link?: string | null;
         };
         /** FlagUpdateIn */
         FlagUpdateIn: {
@@ -3451,6 +3449,8 @@ export interface components {
         PresignedMultipartPart: {
             /** Part Number */
             part_number: number;
+            /** Size */
+            size: number;
             /** Url */
             url: string;
         };
@@ -3688,6 +3688,10 @@ export interface components {
             allowed_mimetypes: string[];
             /** Max File Size Mb */
             max_file_size_mb: number;
+            /** Max Size Mb By Mime */
+            max_size_mb_by_mime: {
+                [key: string]: number;
+            };
             /** Recommended Path */
             recommended_path: string;
             /** Direct Threshold Mb */
@@ -5723,9 +5727,7 @@ export interface operations {
     };
     download_directory_zip_api_directories__id__download_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 id: string;
@@ -6232,9 +6234,7 @@ export interface operations {
     };
     stream_material_file_api_materials__material_id__file_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 material_id: string;
@@ -6672,9 +6672,7 @@ export interface operations {
     };
     sse_stream_api_notifications_sse_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -6688,15 +6686,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6791,9 +6780,7 @@ export interface operations {
     };
     pull_request_sse_api_pull_requests_sse_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -6807,15 +6794,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

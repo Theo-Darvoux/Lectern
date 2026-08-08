@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { useStagingStore } from "@/lib/staging-store";
 import type { CreateMaterialOp } from "@/lib/staging-store";
 import { MAX_FILE_SIZE_MB, ACCEPTED_FILE_TYPES, guessFileMime, sniffFileType, MIME_TO_EXT } from "@/lib/file-utils";
-import { uploadFile, getUploadConfig, logicalFileSize, trackExistingUpload, uploadBatchZip, type UploadConfig, type TusUploadHandle } from "@/lib/upload-client";
+import { uploadFile, getUploadConfig, logicalFileSize, trackExistingUpload, uploadBatchZip, uploadLimitMbForMime, type UploadConfig, type TusUploadHandle } from "@/lib/upload-client";
 import { ApiError } from "@/lib/api-client";
 import { collectDroppedItems, extractDirPaths, traverseFolder, zipScannedFiles, type ScannedFile } from "@/lib/drop-utils";
 import { compareNatural } from "@/lib/utils";
@@ -108,6 +108,7 @@ export function useUploadEngine({
                 allowed_extensions: ACCEPTED_FILE_TYPES.split(","),
                 allowed_mimetypes: [],
                 max_file_size_mb: MAX_FILE_SIZE_MB,
+                max_size_mb_by_mime: {},
             });
         });
     }, []);
@@ -365,22 +366,27 @@ export function useUploadEngine({
         async (scanned: ScannedFile[]) => {
             if (scanned.length === 0) return;
 
-            const currentMaxSize = (config?.max_file_size_mb || MAX_FILE_SIZE_MB) * 1024 * 1024;
-
-            const oversized = scanned.filter((s) => s.file.size > currentMaxSize);
-            oversized.forEach((s) =>
-                toast.error(t("fileExceedsLimit", { name: s.file.name, limit: config?.max_file_size_mb || MAX_FILE_SIZE_MB })),
-            );
-
-            let valid = scanned.filter((s) => s.file.size <= currentMaxSize);
-
             // Resolve MIME types from extension for files the browser mis-labels as octet-stream
-            valid = valid.map(s => {
+            const normalized = scanned.map(s => {
                 const mime = guessFileMime(s.file);
                 if (mime !== s.file.type) {
                     return { ...s, file: new File([s.file], s.file.name, { type: mime, lastModified: s.file.lastModified }) };
                 }
                 return s;
+            });
+
+            const oversized = normalized.filter((s) => {
+                const limitMb = uploadLimitMbForMime(config, s.file.type, MAX_FILE_SIZE_MB);
+                return s.file.size > limitMb * 1024 * 1024;
+            });
+            oversized.forEach((s) => {
+                const limitMb = uploadLimitMbForMime(config, s.file.type, MAX_FILE_SIZE_MB);
+                toast.error(t("fileExceedsLimit", { name: s.file.name, limit: limitMb }));
+            });
+
+            let valid = normalized.filter((s) => {
+                const limitMb = uploadLimitMbForMime(config, s.file.type, MAX_FILE_SIZE_MB);
+                return s.file.size <= limitMb * 1024 * 1024;
             });
 
             // Mobile pickers and messaging apps often deliver files with a stripped or

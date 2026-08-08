@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.common.exceptions import BadRequestError, ForbiddenError
+from app.core.common.upload_limits import upload_size_limit
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_lock
 from app.core.media.mimetypes import ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES
@@ -45,6 +46,7 @@ class UploadConfigOut(BaseModel):
     allowed_extensions: list[str]
     allowed_mimetypes: list[str]
     max_file_size_mb: int
+    max_size_mb_by_mime: dict[str, int]
     recommended_path: str  # "direct" | "tus"
     direct_threshold_mb: int  # files below this size → use direct path
 
@@ -68,6 +70,9 @@ async def get_upload_config() -> UploadConfigOut:
         allowed_extensions=sorted(allowed_exts),
         allowed_mimetypes=sorted(allowed_mimes),
         max_file_size_mb=settings.max_file_size_mb,
+        max_size_mb_by_mime={
+            mime: upload_size_limit(mime)[0] // (1024 * 1024) for mime in allowed_mimes
+        },
         recommended_path="direct",
         direct_threshold_mb=settings.direct_upload_threshold_mb,
     )

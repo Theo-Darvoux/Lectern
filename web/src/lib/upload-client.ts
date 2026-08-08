@@ -126,6 +126,16 @@ export interface UploadConfig {
     allowed_extensions: string[];
     allowed_mimetypes: string[];
     max_file_size_mb: number;
+    max_size_mb_by_mime: Record<string, number>;
+}
+
+/** Resolve the same MIME-specific upload cap advertised by the API. */
+export function uploadLimitMbForMime(
+    config: UploadConfig | null,
+    mimeType: string,
+    fallbackMb: number,
+): number {
+    return config?.max_size_mb_by_mime[mimeType] ?? config?.max_file_size_mb ?? fallbackMb;
 }
 
 let _configCache: UploadConfig | null = null;

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { uploadFile, logicalFileSize, getUploadConfig } from "./upload-client";
+import { uploadFile, logicalFileSize, getUploadConfig, uploadLimitMbForMime } from "./upload-client";
 import { sha256File } from "./crypto-utils";
 import { compressImageIfNeeded } from "./file-utils";
 import { apiRequest } from "./api-client";
@@ -201,6 +201,7 @@ describe("getUploadConfig", () => {
     allowed_extensions: [".pdf", ".png"],
     allowed_mimetypes: ["application/pdf", "image/png"],
     max_file_size_mb: 50,
+    max_size_mb_by_mime: { "application/pdf": 200, "image/png": 25 },
   };
 
   // Run all three behaviours in a single test so module-level cache state
@@ -234,5 +235,12 @@ describe("getUploadConfig", () => {
     expect(vi.mocked(apiRequest).mock.calls.length).toBe(callsAfterFirst + 1);
 
     vi.useRealTimers();
+  });
+
+  it("uses MIME-specific limits and retains the global fallback", () => {
+    expect(uploadLimitMbForMime(mockConfig, "application/pdf", 100)).toBe(200);
+    expect(uploadLimitMbForMime(mockConfig, "image/png", 100)).toBe(25);
+    expect(uploadLimitMbForMime(mockConfig, "application/octet-stream", 100)).toBe(50);
+    expect(uploadLimitMbForMime(null, "application/pdf", 100)).toBe(100);
   });
 });
