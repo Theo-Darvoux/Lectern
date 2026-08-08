@@ -22,7 +22,11 @@ from app.core.common.exceptions import (
 )
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis
-from app.core.security.security import decode_token
+from app.core.security.security import (
+    BROWSER_READ_COOKIE,
+    create_browser_read_token,
+    decode_token,
+)
 from app.dependencies.auth import CurrentUser
 from app.models.user import User, UserRole
 from app.schemas.auth import (
@@ -74,9 +78,48 @@ def _set_refresh_cookie(response: Response, token: str, expire_days: int | None 
     )
 
 
+def _set_browser_read_cookie(
+    response: Response,
+    user_id: str,
+    expire_days: int | None = None,
+) -> None:
+    """Set the browser-native credential used only by read-only API routes."""
+    days = expire_days if expire_days is not None else settings.jwt_access_token_expire_days
+    response.set_cookie(
+        key=BROWSER_READ_COOKIE,
+        value=create_browser_read_token(user_id, expire_days=days),
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=days * 24 * 3600,
+        path="/api/",
+    )
+
+
+async def _blacklist_browser_read_cookie(
+    redis: Redis,  # type: ignore[type-arg]
+    request: Request,
+) -> None:
+    token = request.cookies.get(BROWSER_READ_COOKIE)
+    if not token:
+        return
+    try:
+        payload = decode_token(token, expected_type="browser_read")
+    except Exception:
+        return
+
+    jti = payload.get("jti")
+    exp = payload.get("exp")
+    if jti and exp:
+        remaining = int(exp - datetime.now(UTC).timestamp())
+        if remaining > 0:
+            await auth_service.blacklist_token(redis, jti, remaining)
+
+
 def _login_response(user: User, response: Response, *, is_new: bool) -> TokenResponse:
     access_token, refresh_token, _ = auth_service.issue_tokens(user)
     _set_refresh_cookie(response, refresh_token)
+    _set_browser_read_cookie(response, str(user.id))
     return TokenResponse(
         access_token=access_token,
         user=UserBrief(
@@ -159,6 +202,7 @@ async def guest_session(
         jwt_refresh_expire_days=GUEST_SESSION_EXPIRE_DAYS,
     )
     _set_refresh_cookie(response, refresh_token, GUEST_SESSION_EXPIRE_DAYS)
+    _set_browser_read_cookie(response, str(guest.id), GUEST_SESSION_EXPIRE_DAYS)
     return TokenResponse(
         access_token=access_token,
         user=UserBrief(
@@ -422,8 +466,20 @@ async def refresh_token(
         if remaining > 0:
             await auth_service.blacklist_token(redis, old_jti, remaining)
 
-    new_access_token, new_refresh_token, _ = auth_service.issue_tokens(user)
-    _set_refresh_cookie(response, new_refresh_token)
+    if user.role == UserRole.GUEST:
+        if not settings.guest_access_enabled:
+            raise UnauthorizedError("Guest access is disabled")
+        new_access_token, new_refresh_token, _ = auth_service.issue_tokens(
+            user,
+            jwt_access_expire_days=GUEST_SESSION_EXPIRE_DAYS,
+            jwt_refresh_expire_days=GUEST_SESSION_EXPIRE_DAYS,
+        )
+        _set_refresh_cookie(response, new_refresh_token, GUEST_SESSION_EXPIRE_DAYS)
+        _set_browser_read_cookie(response, str(user.id), GUEST_SESSION_EXPIRE_DAYS)
+    else:
+        new_access_token, new_refresh_token, _ = auth_service.issue_tokens(user)
+        _set_refresh_cookie(response, new_refresh_token)
+        _set_browser_read_cookie(response, str(user.id))
 
     return RefreshResponse(
         access_token=new_access_token,
@@ -473,9 +529,18 @@ async def logout(
         except Exception:
             pass
 
+    await _blacklist_browser_read_cookie(redis, request)
+
     response.delete_cookie(
         key="refresh_token",
         path="/api/auth/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+    response.delete_cookie(
+        key=BROWSER_READ_COOKIE,
+        path="/api/",
         secure=True,
         httponly=True,
         samesite="strict",

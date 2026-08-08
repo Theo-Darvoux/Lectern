@@ -1,5 +1,4 @@
 import asyncio
-import io
 import logging
 import uuid
 import zipfile
@@ -7,9 +6,8 @@ from collections.abc import AsyncGenerator
 from typing import Annotated, Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -20,7 +18,6 @@ from app.core.common.exceptions import (
     BadRequestError,
     ForbiddenError,
     NotFoundError,
-    UnauthorizedError,
 )
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_client
@@ -33,7 +30,7 @@ from app.core.events.sse import (
     unregister_topic_queue,
 )
 from app.core.storage.facade import stream_object
-from app.dependencies.auth import get_current_user, get_user_from_token, security
+from app.dependencies.auth import ReadUser, get_current_user
 from app.dependencies.rate_limit import rate_limit_downloads
 from app.models.material import Material
 from app.models.user import User
@@ -169,64 +166,84 @@ async def directory_event_stream(request: Request, id: str) -> EventSourceRespon
 
 
 async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes, None]:
-    """Stream a ZIP file for the given (arcname, file_key) pairs.
+    """Stream a ZIP with bounded memory and storage backpressure.
 
-    Each file is fetched from S3 and added to the ZIP sequentially.  New bytes
-    are yielded to the client after each entry so the connection stays alive and
-    the browser can show download progress.
+    The sink is intentionally unseekable, so ``zipfile`` emits data descriptors
+    and never needs the complete archive in memory. The generator retains at
+    most one storage chunk plus compressed output waiting to be yielded.
     """
 
-    class _Buf:
-        """Writable BytesIO wrapper that tracks how many bytes have been flushed."""
-
+    class _StreamingZipSink:
         def __init__(self) -> None:
-            self._b = io.BytesIO()
-            self._flushed = 0
+            self._pending = bytearray()
+            self._position = 0
 
         def write(self, data: bytes) -> int:
-            self._b.write(data)
+            self._pending.extend(data)
+            self._position += len(data)
             return len(data)
 
         def tell(self) -> int:
-            return self._b.tell()
+            return self._position
 
-        def seek(self, pos: int, whence: int = 0) -> int:
-            return self._b.seek(pos, whence)
+        def seek(self, *_args: Any) -> int:
+            raise OSError("streaming ZIP sink is not seekable")
 
         def flush(self) -> None:
             pass
 
         def pop(self) -> bytes:
-            cur = self._b.tell()
-            self._b.seek(self._flushed)
-            chunk = self._b.read()
-            self._flushed = cur
-            return chunk
+            if not self._pending:
+                return b""
+            data = bytes(self._pending)
+            self._pending.clear()
+            return data
 
-    buf = _Buf()
-    zf = zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True)  # type: ignore[call-overload]
+    sink = _StreamingZipSink()
+    zf = zipfile.ZipFile(
+        sink,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        allowZip64=True,
+    )  # type: ignore[call-overload]
     try:
         for arcname, file_key in entries:
+            entry_started = False
             try:
-                data = bytearray()
                 async with stream_object(file_key) as body:
-                    while True:
-                        chunk = await body.read(65536)
-                        if not chunk:
-                            break
-                        data.extend(chunk)
-                zf.writestr(arcname, bytes(data))
+                    # Probe storage before writing the ZIP entry header. If the
+                    # object cannot be opened/read at all, it can still be omitted
+                    # without corrupting bytes already sent for the archive.
+                    chunk = await body.read(65536)
+                    with zf.open(arcname, mode="w", force_zip64=True) as member:
+                        entry_started = True
+                        while chunk:
+                            member.write(chunk)
+                            pending = sink.pop()
+                            if pending:
+                                yield pending
+                            # Backpressure is preserved: the next storage read
+                            # happens only after the consumer resumes the generator.
+                            chunk = await body.read(65536)
+
+                    pending = sink.pop()
+                    if pending:
+                        yield pending
             except Exception as exc:
                 logger.warning(
-                    "Failed to stream ZIP entry for key %s: %s", file_key, exc, exc_info=True
+                    "Failed to stream ZIP entry for key %s: %s",
+                    file_key,
+                    exc,
+                    exc_info=True,
                 )
+                if entry_started:
+                    # Returning a valid ZIP containing a silently truncated file
+                    # would be worse than an interrupted download.
+                    raise
                 continue
-            new_bytes = buf.pop()
-            if new_bytes:
-                yield new_bytes
 
         zf.close()
-        final = buf.pop()
+        final = sink.pop()
         if final:
             yield final
     finally:
@@ -292,39 +309,15 @@ async def download_directory_chunks(
 async def download_directory_zip(
     id: uuid.UUID,
     request: Request,
+    current_user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)] = None,
-    token: Annotated[str | None, Query()] = None,
     redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
 ) -> StreamingResponse:
-    """Stream all files in a directory (recursively) as a single ZIP archive.
-
-    Accepts auth via ``Authorization: Bearer`` header or ``?token=`` query param
-    so that a plain browser link (window.location.href) can trigger the download.
-
-    When ``WORKER_ZIP_URL`` is configured the heavy work (fetching from R2 and
-    assembling the ZIP) is offloaded to a Cloudflare Worker.  The API only does
-    auth + DB work and then issues a redirect carrying a short-lived HMAC-signed
-    token so the Worker can verify the request without calling back to the API.
-    """
+    """Stream a directory ZIP for bearer API clients or cookie-authenticated browsers."""
     if redis is None:
         redis = redis_client
 
-    effective_user: User | None = None
-    if credentials is not None:
-        try:
-            effective_user = await get_user_from_token(db, redis, credentials.credentials)
-        except Exception:
-            pass
-    if not effective_user and token:
-        try:
-            effective_user = await get_user_from_token(db, redis, token)
-        except Exception:
-            pass
-    if not effective_user:
-        raise UnauthorizedError()
-
-    await rate_limit_downloads(request, effective_user, db, redis)
+    await rate_limit_downloads(request, current_user, db, redis)
 
     try:
         dir_name, entries = await directory_service.get_directory_download_entries(db, id)
@@ -334,11 +327,13 @@ async def download_directory_zip(
     if not entries:
         raise BadRequestError("This directory contains no downloadable files.")
 
-    # Zip streaming is now fully handled by the backend directly below.
-
-    safe_name = dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
+    safe_name = (
+        dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
+    )
     encoded_name = quote(dir_name)
-    disposition = f"attachment; filename=\"{safe_name}.zip\"; filename*=UTF-8''{encoded_name}.zip"
+    disposition = (
+        f'attachment; filename="{safe_name}.zip"; filename*=UTF-8\'\'{encoded_name}.zip'
+    )
 
     return StreamingResponse(
         _generate_zip(entries),

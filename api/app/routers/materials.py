@@ -8,13 +8,12 @@ import zlib
 from io import BytesIO
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common.exceptions import AppError, BadRequestError, NotFoundError, UnauthorizedError
+from app.core.common.exceptions import AppError, BadRequestError, NotFoundError
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_client
 from app.core.storage.facade import (
@@ -25,10 +24,9 @@ from app.core.storage.facade import (
 from app.core.storage.facade import (
     upload_file as storage_upload_file,
 )
-from app.dependencies.auth import CurrentUser, get_user_from_token, security
+from app.dependencies.auth import CurrentUser, ReadUser
 from app.dependencies.rate_limit import rate_limit_downloads, rate_limit_views
 from app.models.upload import Upload
-from app.models.user import User
 from app.schemas.material import MaterialDetail, MaterialVersionOut
 from app.services.audit import record_download
 from app.services.material import (
@@ -279,41 +277,22 @@ async def thumbnail_material(
 async def stream_material_file(
     material_id: str,
     request: Request,
+    user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[HTTPAuthorizationCredentials | None, Depends(security)] = None,
-    token: Annotated[str | None, Query()] = None,
     redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
 ) -> Any:
-    # Manual auth: accept either Authorization: Bearer header OR ?token= query param.
-    effective_user: User | None = None
-
+    """Redirect a read-authenticated client to an immutable presigned object URL."""
     if redis is None:
         redis = redis_client
 
-    if user is not None:
-        try:
-            effective_user = await get_user_from_token(db, redis, user.credentials)
-        except Exception:
-            pass
-
-    if not effective_user and token:
-        try:
-            effective_user = await get_user_from_token(db, redis, token)
-        except Exception:
-            pass
-
-    if not effective_user:
-        raise UnauthorizedError()
-
-    await rate_limit_downloads(request, effective_user, db, redis)
+    await rate_limit_downloads(request, user, db, redis)
 
     data = await get_material_with_version(db, material_id)
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
         raise NotFoundError("No file available")
 
-    # Redirect to presigned URL. S3/MinIO handles Range requests (206) perfectly,
-    # which is required for browser media players to seek and parse metadata.
+    # S3/MinIO handles Range requests (206), which native media players require.
     file_mime = version.get("file_mime_type") or ""
     inline_safe = (
         file_mime.startswith("image/")
@@ -331,7 +310,7 @@ async def stream_material_file(
 
     await record_download(
         db,
-        effective_user.id,
+        user.id,
         uuid.UUID(material_id),
         version["version_number"],
         ip_address=request.client.host if request.client else None,

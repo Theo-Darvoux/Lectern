@@ -25,7 +25,6 @@ import {
 import { submitDirectOperations } from "@/lib/pr-client";
 import { useBrowseRefreshStore, useUIStore, useAuthStore } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
-import { getAccessToken } from "@/lib/auth-tokens";
 import { apiFetch } from "@/lib/api-client";
 import {
   Plus,
@@ -244,9 +243,7 @@ export function DirectoryListing({
       if (data.chunks.length === 0) {
         // Worker not configured — fall back to backend streaming endpoint (root has no streaming fallback).
         if (realDirId) {
-          const token = getAccessToken();
-          const params = token ? `?token=${encodeURIComponent(token)}` : "";
-          triggerLink(`/api/directories/${realDirId}/download${params}`);
+          triggerLink(`/api/directories/${realDirId}/download`);
         } else {
           toast.error(t("downloadZipTooLarge"));
         }

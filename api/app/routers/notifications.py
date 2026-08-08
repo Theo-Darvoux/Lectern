@@ -73,7 +73,7 @@ async def read_all(
 
 @router.get("/sse")
 async def sse_stream(user: SSEUser) -> EventSourceResponse:
-    """SSE endpoint. Accepts token via query param since EventSource can't send headers."""
+    """SSE endpoint authenticated through the restricted read credential."""
     queue = register_user_queue(user.id)
     return EventSourceResponse(
         sse_event_stream(

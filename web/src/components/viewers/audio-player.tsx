@@ -21,7 +21,6 @@ import {
 import { cn } from "@/lib/utils";
 import { useTheme } from "next-themes";
 import { API_BASE, fetchMaterialBlob } from "@/lib/api-client";
-import { getAccessToken } from "@/lib/auth-tokens";
 import { ViewerShell } from "./viewer-shell";
 import { useTranslations } from "next-intl";
 
@@ -42,10 +41,7 @@ export function AudioPlayer({ materialId, fileKey }: AudioPlayerProps) {
     const [playbackRate, setPlaybackRate] = useState(1);
     const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
  
-    const token = getAccessToken();
-    const streamUrl = token 
-        ? `${API_BASE}/materials/${materialId}/file?token=${encodeURIComponent(token)}&v=${fileKey}`
-        : `${API_BASE}/materials/${materialId}/file?v=${fileKey}`;
+    const streamUrl = `${API_BASE}/materials/${materialId}/file?v=${fileKey}`;
  
     const audioRef = useRef<HTMLAudioElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);

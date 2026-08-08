@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { getAccessToken } from "@/lib/auth-tokens";
 import { fetchUnreadCount } from "@/lib/notifications";
 import { useAuthStore, useNotificationStore, usePRStore } from "@/lib/stores";
 import { createSSEConnection, SSEConnection } from "@/lib/sse-client";
@@ -96,12 +95,9 @@ export function useSSE() {
 
         function connectSSE() {
             if (fallbackTimeout) clearTimeout(fallbackTimeout);
-            const token = getAccessToken();
-            if (!token) return;
-
             connectionRef.current?.close();
             connectionRef.current = createSSEConnection({
-                url: `/notifications/sse?token=${encodeURIComponent(token)}`,
+                url: "/notifications/sse",
                 listeners: {
                     notification: () => {
                         increment();
@@ -113,7 +109,7 @@ export function useSSE() {
             if (user && !isGuest(user)) {
                 prConnectionRef.current?.close();
                 prConnectionRef.current = createSSEConnection({
-                    url: `/pull-requests/sse?token=${encodeURIComponent(token)}`,
+                    url: "/pull-requests/sse",
                     listeners: {
                         pr_opened: () => {
                             fetchOpenPRCount()

@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { API_BASE } from "@/lib/api-client";
-import { getAccessToken } from "@/lib/auth-tokens";
 import { ViewerShell } from "./viewer-shell";
 import { useTranslations } from "next-intl";
 
@@ -23,10 +22,7 @@ export function VideoPlayer({ materialId, material, fileKey }: VideoPlayerProps)
     const metadata = material.metadata as Record<string, unknown> | null;
     const embedUrl = metadata?.video_url as string | undefined;
 
-    const token = getAccessToken();
-    const streamUrl = token
-        ? `${API_BASE}/materials/${materialId}/file?token=${encodeURIComponent(token)}&v=${fileKey}`
-        : `${API_BASE}/materials/${materialId}/file?v=${fileKey}`;
+    const streamUrl = `${API_BASE}/materials/${materialId}/file?v=${fileKey}`;
 
     // If the browser already has data ready by the time the component mounts
     // (e.g. served from cache or a very fast local server), the loadeddata /

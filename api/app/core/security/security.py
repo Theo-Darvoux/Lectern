@@ -7,6 +7,7 @@ import jwt
 from app.config import settings
 
 ALGORITHM = "HS256"
+BROWSER_READ_COOKIE = "browser_read_token"
 
 
 def _get_secret_key() -> str:
@@ -40,6 +41,20 @@ def create_refresh_token(user_id: str, expire_days: int | None = None) -> str:
         "jti": jti,
         "exp": expire,
         "type": "refresh",
+    }
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+def create_browser_read_token(user_id: str, expire_days: int | None = None) -> str:
+    """Issue a credential accepted only by explicitly read-only browser routes."""
+    jti = str(uuid4())
+    days = expire_days if expire_days is not None else settings.jwt_access_token_expire_days
+    expire = datetime.now(UTC) + timedelta(days=days)
+    payload = {
+        "sub": user_id,
+        "jti": jti,
+        "exp": expire,
+        "type": "browser_read",
     }
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 

@@ -48,7 +48,6 @@ import { toast } from "sonner";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
 import { apiFetch } from "@/lib/api-client";
-import { getAccessToken } from "@/lib/auth-tokens";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { useBrowseRefreshStore, useAuthStore, useUIStore } from "@/lib/stores";
@@ -221,9 +220,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
         document.body.removeChild(a);
       };
       if (data.chunks.length === 0) {
-        const token = getAccessToken();
-        const params = token ? `?token=${encodeURIComponent(token)}` : "";
-        triggerLink(`/api/directories/${item.id}/download${params}`);
+        triggerLink(`/api/directories/${item.id}/download`);
       } else if (data.chunks.length === 1) {
         triggerLink(data.chunks[0].url);
       } else {

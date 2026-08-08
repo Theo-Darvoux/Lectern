@@ -30,7 +30,13 @@ http {
         "~*(facebookexternalhit|facebookcatalog|Facebot|Twitterbot|Slackbot|Slack-ImgProxy|Discordbot|WhatsApp|LinkedInBot|Pinterest|redditbot|TelegramBot|vkShare|SkypeUriPreview|Embedly|Iframely|Mastodon|Bluesky)" 1;
     }
 
-    access_log /var/log/nginx/access.log combined if=$loggable;
+    # Deliberately omit query strings and Referer values. Capability URLs and
+    # authentication callbacks may contain secrets even though access bearer
+    # tokens are forbidden from browser request targets.
+    log_format request_without_args '$remote_addr - $remote_user [$time_local] '
+                                    '"$request_method $uri $server_protocol" '
+                                    '$status $body_bytes_sent "$http_user_agent"';
+    access_log /var/log/nginx/access.log request_without_args if=$loggable;
 
     sendfile on;
     tcp_nopush on;
