@@ -47,13 +47,23 @@ export interface StoredObject {
   /** Value of the stored Content-Encoding metadata (e.g. "gzip"), if any. */
   contentEncoding?: string;
   etag?: string;
+  /** RFC 9110 Content-Range for a partial object response. */
+  contentRange?: string;
   /** Write the object's stored HTTP metadata (at least Content-Type) onto headers. */
   writeHttpMetadata(headers: Headers): void;
 }
 
 /** Where object bytes come from — R2 binding or an S3 client. */
 export interface ObjectSource {
-  get(key: string): Promise<StoredObject | null>;
+  get(key: string, rangeHeader?: string): Promise<StoredObject | null>;
+}
+
+/** Storage rejected a syntactically valid range because it is outside the object. */
+export class RangeNotSatisfiableError extends Error {
+  constructor(readonly totalSize?: number) {
+    super("Requested byte range is not satisfiable");
+    this.name = "RangeNotSatisfiableError";
+  }
 }
 
 /** Minimal structural type for an edge cache (Cloudflare's caches.default). */
@@ -69,6 +79,47 @@ export interface HandlerDeps {
   cache?: EdgeCache | null;
   /** Defer a background task (Cloudflare ctx.waitUntil). Defaults to fire-and-forget. */
   waitUntil?: (promise: Promise<unknown>) => void;
+}
+
+const FILE_CACHE_VERSION = "2";
+
+function asciiFilenameFallback(value: string): string {
+  // Quoted Content-Disposition parameters must not contain an unescaped quote
+  // or backslash. filename* below carries the exact UTF-8 name.
+  return value.replace(/[^\x20-\x7E]|["\\]/g, "_");
+}
+
+function applyFileResponseOverrides(headers: Headers, payload: TokenPayload): void {
+  if (payload.content_type) {
+    headers.set("Content-Type", payload.content_type);
+  }
+
+  if (payload.filename) {
+    const encodedName = encodeURIComponent(payload.filename);
+    const asciiFallback = asciiFilenameFallback(payload.filename);
+    const disposition = payload.force_download ? "attachment" : "inline";
+    headers.set(
+      "Content-Disposition",
+      `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encodedName}`,
+    );
+  } else if (payload.force_download) {
+    headers.set("Content-Disposition", "attachment");
+  } else {
+    headers.set("Content-Disposition", "inline");
+  }
+
+  // Authentication must be re-evaluated by the handler for every request.
+  // Do not turn a short-lived capability URL into a long-lived shared cache hit.
+  headers.set("Cache-Control", "private, no-store");
+  headers.set("Referrer-Policy", "no-referrer");
+  headers.set("X-Content-Type-Options", "nosniff");
+}
+
+function validSingleByteRange(value: string): boolean {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(value);
+  if (!match || (!match[1] && !match[2])) return false;
+  if (match[1] && match[2] && BigInt(match[1]) > BigInt(match[2])) return false;
+  return true;
 }
 
 function b64urlDecode(s: string): ArrayBuffer {
@@ -189,46 +240,79 @@ export async function handleRequest(
   // Single File Secure Caching
   // ==========================================
   if (url.pathname.startsWith("/file/")) {
+    if (!payload.r2_key) {
+      return new Response("Invalid token payload for file", { status: 400 });
+    }
+
+    let requestedKey: string;
+    try {
+      requestedKey = decodeURIComponent(url.pathname.slice("/file/".length));
+    } catch {
+      return new Response("Invalid file path", { status: 400 });
+    }
+    if (requestedKey !== payload.r2_key) {
+      return new Response("File capability does not match request path", { status: 403 });
+    }
+
+    let rangeHeader = request.headers.get("Range") ?? undefined;
+    if (rangeHeader && !validSingleByteRange(rangeHeader)) {
+      return new Response("Only one valid byte range is supported", {
+        status: 416,
+        headers: { "Content-Range": "bytes */*" },
+      });
+    }
+
     const cacheUrl = new URL(request.url);
-    cacheUrl.search = "";
+    // Cache only canonical bytes/metadata. Version the key so a deployment
+    // cannot reuse entries written by the old path-unbound cache.
+    cacheUrl.search = `?wikint-file-cache=${FILE_CACHE_VERSION}`;
     const cacheKey = new Request(cacheUrl.toString(), request);
 
-    let response = cache ? await cache.match(cacheKey) : undefined;
+    // A cached full response cannot satisfy a byte range without buffering it.
+    // Partial objects are fetched from storage and never inserted into this cache.
+    let response = cache && !rangeHeader ? await cache.match(cacheKey) : undefined;
 
     if (!response) {
-      if (!payload.r2_key) {
-        return new Response("Invalid token payload for file", { status: 400 });
+      let object: StoredObject | null;
+      try {
+        object = await source.get(payload.r2_key, rangeHeader);
+      } catch (error) {
+        if (error instanceof RangeNotSatisfiableError) {
+          const total = error.totalSize === undefined ? "*" : String(error.totalSize);
+          return new Response("Requested byte range is not satisfiable", {
+            status: 416,
+            headers: { "Content-Range": `bytes */${total}` },
+          });
+        }
+        throw error;
       }
-      const object = await source.get(payload.r2_key);
 
       if (!object) return new Response("Not found", { status: 404 });
 
-      const isGzip = object.contentEncoding === "gzip";
+      let isGzip = object.contentEncoding === "gzip";
+      if (rangeHeader && isGzip) {
+        // Byte ranges apply to the selected representation. Stored gzip objects
+        // are exposed decompressed, so a compressed-byte range would be corrupt.
+        await object.body.cancel();
+        object = await source.get(payload.r2_key);
+        if (!object) return new Response("Not found", { status: 404 });
+        rangeHeader = undefined;
+        isGzip = object.contentEncoding === "gzip";
+      }
+
+      if (rangeHeader && !object.contentRange) {
+        await object.body.cancel();
+        return new Response("Object storage did not honor the byte range", { status: 502 });
+      }
 
       const headers = new Headers();
       object.writeHttpMetadata(headers);
       if (object.etag) headers.set("etag", object.etag);
+      // Byte ranges are not meaningful for the decompressed representation of
+      // an object stored with Content-Encoding: gzip.
+      headers.set("Accept-Ranges", isGzip ? "none" : "bytes");
       // Force edge caching for 1 month
       headers.set("Cache-Control", "public, max-age=2592000");
-
-      // Handle overrides
-      if (payload.content_type) {
-        headers.set("Content-Type", payload.content_type);
-      }
-
-      if (payload.filename) {
-        const encodedName = encodeURIComponent(payload.filename);
-        const asciiFallback = payload.filename.replace(/[^\x20-\x7E]/g, "_");
-        const disposition = payload.force_download ? "attachment" : "inline";
-        headers.set(
-          "Content-Disposition",
-          `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encodedName}`,
-        );
-      } else if (payload.force_download) {
-        headers.set("Content-Disposition", "attachment");
-      } else {
-        headers.set("Content-Disposition", "inline");
-      }
 
       // Decompress gzip on fresh fetches so the browser receives raw bytes.
       // We check stored metadata directly (not the HTTP header) because an edge
@@ -242,18 +326,24 @@ export async function handleRequest(
       }
 
       headers.set("Access-Control-Allow-Origin", "*");
+      if (rangeHeader && object.contentRange) {
+        headers.set("Content-Range", object.contentRange);
+        if (object.size !== undefined) headers.set("Content-Length", String(object.size));
+      }
 
-      response = new Response(body, { headers });
+      response = new Response(body, { status: rangeHeader ? 206 : 200, headers });
 
       // Cache the already-decompressed response so cache hits are safe.
-      if (cache) {
+      if (cache && !rangeHeader) {
         waitUntil(cache.put(cacheKey, response.clone()));
       }
     }
 
-    // Cache hit: serve directly. The cached response is already decompressed.
+    // Apply token-specific metadata only after the authenticated cache lookup,
+    // so variants for one object cannot poison each other's headers.
     const headers = new Headers(response.headers);
     headers.set("Access-Control-Allow-Origin", "*");
+    applyFileResponseOverrides(headers, payload);
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
@@ -301,8 +391,7 @@ export async function handleRequest(
       payload.part && payload.total && payload.total > 1 && payload.part > 1
         ? ` (${payload.part})`
         : "";
-    const baseName =
-      dirName.replace(/[^\x20-\x7E]/g, "_").replace(/\//g, "_") || "directory";
+    const baseName = asciiFilenameFallback(dirName).replace(/\//g, "_") || "directory";
     const asciiFallback = baseName + suffix;
     const encodedName = encodeURIComponent(dirName + suffix);
     const disposition = `attachment; filename="${asciiFallback}.zip"; filename*=UTF-8''${encodedName}.zip`;
