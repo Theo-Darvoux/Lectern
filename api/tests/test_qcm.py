@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -526,6 +527,25 @@ class TestStageEndpoint:
         )
         assert resp.status_code == 422
 
+    async def test_stage_rejects_oversized_json_before_route_processing(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = _make_user()
+        db_session.add(user)
+        await db_session.flush()
+        qcm = _minimal_qcm()
+        qcm["chapters"][0]["title"] = "x" * (20 * 1024 * 1024)
+
+        with patch("app.routers.qcm.storage_upload_file", new_callable=AsyncMock) as upload:
+            response = await client.post(
+                "/api/qcm/stage",
+                json={"data": qcm},
+                headers=_auth(user),
+            )
+
+        assert response.status_code == 413
+        upload.assert_not_awaited()
+
     async def test_stage_uploads_to_storage(
         self, client: AsyncClient, db_session: AsyncSession, fake_redis_setup
     ):
@@ -640,6 +660,23 @@ class TestParseMoodleEndpoint:
             headers=_auth(user),
         )
         assert resp.status_code == 413
+
+    async def test_parse_moodle_reads_only_one_byte_past_limit(
+        self, db_session: AsyncSession
+    ) -> None:
+        from app.routers.qcm import MOODLE_XML_MAX_BYTES, parse_moodle_xml
+
+        user = _make_user()
+        db_session.add(user)
+        await db_session.flush()
+        upload = AsyncMock()
+        upload.filename = "quiz.xml"
+        upload.read.return_value = b"x" * (MOODLE_XML_MAX_BYTES + 1)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await parse_moodle_xml(user, upload)
+        assert exc_info.value.status_code == 413
+        upload.read.assert_awaited_once_with(MOODLE_XML_MAX_BYTES + 1)
 
     async def test_parse_moodle_invalid_xml_returns_422(
         self, client: AsyncClient, db_session: AsyncSession

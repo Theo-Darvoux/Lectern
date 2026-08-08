@@ -986,6 +986,57 @@ class TestRevertEndpoint:
         await db_session.refresh(child)
         assert child.parent_id == root_id
 
+    async def test_revert_move_directory_rejects_cycle_created_by_later_move(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        student = await _create_user(db_session, UserRole.STUDENT)
+        admin = await _create_user(db_session, UserRole.BUREAU)
+        parent = await _create_directory(db_session, "OriginalParent")
+        child = await _create_directory(db_session, "OriginalChild", parent_id=parent.id)
+        parent_id, child_id = parent.id, child.id
+        await db_session.commit()
+
+        first_pr = await _create_and_approve_pr(
+            client,
+            db_session,
+            student,
+            admin,
+            [
+                {
+                    "op": "move_item",
+                    "target_type": "directory",
+                    "target_id": str(child_id),
+                    "new_parent_id": None,
+                }
+            ],
+        )
+        await _create_and_approve_pr(
+            client,
+            db_session,
+            student,
+            admin,
+            [
+                {
+                    "op": "move_item",
+                    "target_type": "directory",
+                    "target_id": str(parent_id),
+                    "new_parent_id": str(child_id),
+                }
+            ],
+        )
+
+        response = await client.post(
+            f"/api/pull-requests/{first_pr['id']}/revert",
+            headers=_auth_headers(admin),
+        )
+        assert response.status_code == 400
+        assert "own descendants" in response.json()["detail"]
+
+        await db_session.refresh(parent)
+        await db_session.refresh(child)
+        assert parent.parent_id == child_id
+        assert child.parent_id is None
+
     async def test_revert_multi_op_pr(self, client: AsyncClient, db_session: AsyncSession) -> None:
         """Revert a PR with multiple ops: create_dir + create_material + edit_directory."""
         student = await _create_user(db_session, UserRole.STUDENT)

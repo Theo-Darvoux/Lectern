@@ -29,7 +29,7 @@ from app.core.database.database import get_db
 from app.core.database.redis import redis_client
 from app.core.media.mimetypes import QCM_MIME_TYPE
 from app.core.security.cas import hmac_cas_key, increment_cas_ref
-from app.core.storage.facade import _get_s3_settings, get_s3_client
+from app.core.storage.facade import read_full_object
 from app.core.storage.facade import upload_file as storage_upload_file
 from app.dependencies.auth import CurrentUser
 from app.models.cas_staging_claim import CasStagingClaim
@@ -48,6 +48,8 @@ QCM_MAX_ANSWERS_PER_QUESTION: int = int(os.environ.get("QCM_MAX_ANSWERS_PER_QUES
 # Embedded image limits (kept in sync with the web client's qcm-types constants).
 QCM_MAX_IMAGES: int = int(os.environ.get("QCM_MAX_IMAGES", "30"))
 QCM_MAX_IMAGE_CHARS: int = int(os.environ.get("QCM_MAX_IMAGE_CHARS", "500000"))
+QCM_MAX_BYTES = 20 * 1024 * 1024
+MOODLE_XML_MAX_BYTES = 10 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -206,6 +208,8 @@ async def stage_qcm(
     )
     sha256 = hashlib.sha256(data_bytes).hexdigest()
     file_size = len(data_bytes)
+    if file_size > QCM_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="QCM is too large (max 20 MiB)")
 
     # Derive the CAS S3 key from the HMAC
     cas_redis_key = hmac_cas_key(sha256)
@@ -478,14 +482,9 @@ async def export_moodle_xml(
         raise HTTPException(status_code=400, detail="Material is not a QCM")
 
     file_key = version["file_key"]
-    cfg = _get_s3_settings()
-    async with get_s3_client(cfg) as client:
-        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
-        body: Any = response["Body"]
-        try:
-            raw = await body.read()
-        finally:
-            body.close()
+    raw = await read_full_object(file_key)
+    if len(raw) > QCM_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Stored QCM is too large to export")
 
     qcm_data = json.loads(raw)
 
@@ -515,8 +514,8 @@ async def parse_moodle_xml(
     if not (file.filename or "").lower().endswith(".xml"):
         raise HTTPException(status_code=422, detail="File must be a .xml Moodle export")
 
-    content = await file.read()
-    if len(content) > 10 * 1024 * 1024:  # 10 MB hard cap
+    content = await file.read(MOODLE_XML_MAX_BYTES + 1)
+    if len(content) > MOODLE_XML_MAX_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
 
     return _parse_moodle_xml(content)

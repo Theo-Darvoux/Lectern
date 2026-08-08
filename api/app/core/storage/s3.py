@@ -580,9 +580,12 @@ class S3Backend:
         async with self._client(cfg) as client:
             response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)
             body: Any = response["Body"]
-            content_length = int(cast(Any, response.get("ContentLength")) or 0)
+            advertised_length = response.get("ContentLength")
+            content_length = (
+                int(cast(Any, advertised_length)) if advertised_length is not None else None
+            )
             try:
-                if content_length > _READ_FULL_OBJECT_MAX_BYTES:
+                if content_length is not None and content_length > _READ_FULL_OBJECT_MAX_BYTES:
                     raise ValueError(
                         f"Object {file_key!r} ({content_length} bytes) exceeds the "
                         f"{_READ_FULL_OBJECT_MAX_BYTES // 1024 // 1024} MiB limit for "
@@ -591,11 +594,11 @@ class S3Backend:
                 chunks: list[bytes] = []
                 total = 0
                 while True:
-                    if content_length and total >= content_length:
+                    if content_length is not None and total >= content_length:
                         break
                     remaining_budget = _READ_FULL_OBJECT_MAX_BYTES - total
                     read_size = min(64 * 1024, remaining_budget + 1)
-                    if content_length:
+                    if content_length is not None:
                         read_size = min(read_size, content_length - total)
                     chunk = cast(bytes, await body.read(read_size))
                     if not chunk:
@@ -604,6 +607,11 @@ class S3Backend:
                     if total > _READ_FULL_OBJECT_MAX_BYTES:
                         raise ValueError(f"Object {file_key!r} exceeds the read_full_object limit")
                     chunks.append(chunk)
+                if content_length is not None and total != content_length:
+                    raise ValueError(
+                        f"Object {file_key!r} size changed during read "
+                        f"({total} != {content_length})"
+                    )
                 return b"".join(chunks)
             finally:
                 await _finish_response_body(body, primary_error=sys.exception())

@@ -12,6 +12,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.config import settings
 from app.core.common.exceptions import AppError
 from app.core.events.limiter import limiter
+from app.core.http.body_limit import RequestBodyLimitMiddleware
 from app.routers.admin import router as admin_router
 from app.routers.admin_backup import router as admin_backup_router
 from app.routers.admin_storage import router as admin_storage_router
@@ -216,6 +217,17 @@ app.add_middleware(
 app.add_middleware(
     ProxyHeadersMiddleware,
     trusted_hosts=settings.trusted_proxy_hosts_list,
+)
+
+# These endpoints otherwise parse attacker-controlled JSON/multipart bodies in
+# memory before their route-level validators run. Keep the transport ceiling
+# close to the domain limits and enforce it even when nginx is bypassed.
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    path_limits={
+        "/api/qcm/stage": 20 * 1024 * 1024,
+        "/api/qcm/parse-moodle": 11 * 1024 * 1024,
+    },
 )
 
 

@@ -88,13 +88,31 @@ async def test_read_full_object_enforces_limit_across_short_reads(
 
     class Client:
         async def get_object(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"Body": body, "ContentLength": 0}
+            return {"Body": body}
 
     backend = S3Backend()
     monkeypatch.setattr(backend, "_client", lambda _cfg=None: _client_context(Client()))
     monkeypatch.setattr("app.core.storage.s3._READ_FULL_OBJECT_MAX_BYTES", 8)
 
     with pytest.raises(ValueError, match="read_full_object limit"):
+        await backend.read_full_object("key")
+    assert body.closed
+
+
+@pytest.mark.asyncio
+async def test_read_full_object_rejects_eof_before_advertised_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = _ChunkedBody([b"truncated", b""])
+
+    class Client:
+        async def get_object(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"Body": body, "ContentLength": 100}
+
+    backend = S3Backend()
+    monkeypatch.setattr(backend, "_client", lambda _cfg=None: _client_context(Client()))
+
+    with pytest.raises(ValueError, match=r"size changed during read \(9 != 100\)"):
         await backend.read_full_object("key")
     assert body.closed
 

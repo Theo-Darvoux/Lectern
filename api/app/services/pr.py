@@ -8,7 +8,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 
 from redis.asyncio import Redis
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -33,6 +33,12 @@ from app.services.notification import notify_user
 from app.services.tag import get_or_create_tags, prune_orphan_tags
 
 logger = logging.getLogger(__name__)
+
+# All directory-parent mutations take this transaction-level lock on PostgreSQL.
+# Row locks cannot prevent two independent directory rows from being moved below
+# one another concurrently, so the tree invariant needs a shared serialization
+# point.  The value is arbitrary but stable (ASCII "WIKINT").
+_DIRECTORY_TREE_LOCK_KEY = 0x57494B494E54
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,6 +84,41 @@ def _resolve(value: str | None, id_map: dict[str, uuid.UUID]) -> uuid.UUID | Non
         return uuid.UUID(s)
     except ValueError:
         raise BadRequestError(f"Invalid UUID: {s}")
+
+
+async def _acquire_directory_tree_lock(db: AsyncSession) -> None:
+    """Serialize directory-parent validation and mutation on PostgreSQL."""
+    if db.get_bind().dialect.name == "postgresql":
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": _DIRECTORY_TREE_LOCK_KEY},
+        )
+
+
+async def _validate_directory_parent(
+    db: AsyncSession, target_id: uuid.UUID, new_parent_id: uuid.UUID | None
+) -> None:
+    """Require a present parent and preserve an acyclic directory hierarchy."""
+    if new_parent_id == target_id:
+        raise BadRequestError("Cannot move a directory into itself")
+
+    check_id = new_parent_id
+    seen: set[uuid.UUID] = set()
+    while check_id is not None:
+        if check_id == target_id:
+            raise BadRequestError("Cannot move a directory into one of its own descendants")
+        if check_id in seen:
+            raise BadRequestError("Cannot move a directory below an existing circular hierarchy")
+        seen.add(check_id)
+
+        row = (
+            await db.execute(
+                select(Directory.id, Directory.parent_id).where(Directory.id == check_id)
+            )
+        ).one_or_none()
+        if row is None:
+            raise NotFoundError("Parent directory not found")
+        check_id = row.parent_id
 
 
 def _collect_temp_refs(op: dict[str, typing.Any]) -> set[str]:
@@ -1098,31 +1139,18 @@ async def _exec_move_item(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
     target_id = _resolve(str(p["target_id"]), id_map)
+    if target_id is None:
+        raise BadRequestError("Move target is required")
 
     if p["target_type"] == "directory":
+        await _acquire_directory_tree_lock(db)
         dir_obj = await db.scalar(select(Directory).where(Directory.id == target_id))
         if not dir_obj:
             raise NotFoundError("Directory not found")
         new_parent_id = _resolve(
             str(p["new_parent_id"]) if p.get("new_parent_id") else None, id_map
         )
-        # Reject self-move and circular ancestry
-        if new_parent_id == target_id:
-            raise BadRequestError("Cannot move a directory into itself")
-        if new_parent_id is not None:
-            # Walk up from new_parent to ensure target is not an ancestor
-            check_id: uuid.UUID | None = new_parent_id
-            seen: set[uuid.UUID] = set()
-            while check_id:
-                if check_id == target_id:
-                    raise BadRequestError("Cannot move a directory into one of its own descendants")
-                if check_id in seen:
-                    break  # existing circular chain — stop
-                seen.add(check_id)
-                parent = await db.scalar(
-                    select(Directory.parent_id).where(Directory.id == check_id)
-                )
-                check_id = parent
+        await _validate_directory_parent(db, target_id, new_parent_id)
         dir_obj.parent_id = new_parent_id
         await db.flush()
         # Moving a directory changes ancestor_path for the whole subtree.
@@ -1843,13 +1871,17 @@ async def _exec_revert_move_item(
 ) -> uuid.UUID:
     """Move an item back to its pre-PR location."""
     target_id = _resolve(str(p["target_id"]), id_map)
+    if target_id is None:
+        raise BadRequestError("Revert move target is required")
     pre = p.get("pre_state", {})
 
     if pre.get("target_type") == "directory":
+        await _acquire_directory_tree_lock(db)
         d = await db.scalar(select(Directory).where(Directory.id == target_id))
         if not d:
             raise NotFoundError("Directory not found")
         prev_parent = uuid.UUID(pre["prev_parent_id"]) if pre.get("prev_parent_id") else None
+        await _validate_directory_parent(db, target_id, prev_parent)
         d.parent_id = prev_parent
         await db.flush()
         await _enqueue_reindex_directory_recursive(db, d.id)
