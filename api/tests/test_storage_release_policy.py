@@ -85,10 +85,11 @@ def test_topology_backup_restore_is_independent_of_host_uid() -> None:
         assert forbidden not in script
 
 
-def test_migration_runbook_always_uses_production_override_and_digest() -> None:
+def test_migration_runbook_requires_the_canonical_production_release() -> None:
     runbook = (_REPO_ROOT / "docs/r2-to-seaweedfs-migration.md").read_text()
-    assert "@sha256:<tested-manifest-digest>" in runbook
-    assert "-f compose.yaml -f compose.prod.yaml" in runbook
+    assert "production-<commit>.deployment-images.env" in runbook
+    assert "Do not export a hand-written `SEAWEEDFS_IMAGE`" in runbook
+    assert "profile from `compose.yaml` alone" in runbook
     assert "replication=010" in runbook
     assert "replication=001" not in runbook
 

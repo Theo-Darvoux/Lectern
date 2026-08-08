@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -8,6 +11,57 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8")
+
+
+def test_production_compose_is_accepted_by_the_real_compose_cli(tmp_path: Path) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        return
+
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text("ENVIRONMENT=production\n", encoding="utf-8")
+    digest = "a" * 64
+    env = {
+        **os.environ,
+        "RUNTIME_ENV_FILE": str(runtime_env),
+        "EUROOFFICE_JWT_SECRET": "compose-policy-test",
+        "API_IMAGE": f"ghcr.io/theo-darvoux/lectern/api-release@sha256:{digest}",
+        "WORKER_IMAGE": f"ghcr.io/theo-darvoux/lectern/worker-release@sha256:{digest}",
+        "WEB_IMAGE": f"ghcr.io/theo-darvoux/lectern/web-release@sha256:{digest}",
+        "SELFHOST_WORKER_IMAGE": (
+            f"ghcr.io/theo-darvoux/lectern/selfhost-worker-release@sha256:{digest}"
+        ),
+        "REDIS_IMAGE": f"docker.io/library/redis@sha256:{digest}",
+        "NGINX_IMAGE": f"docker.io/library/nginx@sha256:{digest}",
+        "MEILI_IMAGE": f"docker.io/getmeili/meilisearch@sha256:{digest}",
+        "EUROOFFICE_IMAGE": f"ghcr.io/euro-office/documentserver@sha256:{digest}",
+        "POLICY_IMAGE_DIGEST": f"sha256:{digest}",
+        "POSTGRES_IMAGE": f"docker.io/library/postgres@sha256:{digest}",
+        "SEAWEEDFS_IMAGE": f"docker.io/chrislusf/seaweedfs@sha256:{digest}",
+    }
+    subprocess.run(
+        [
+            docker,
+            "compose",
+            "-f",
+            "compose.yaml",
+            "-f",
+            "compose.prod.yaml",
+            "--profile",
+            "postgres",
+            "--profile",
+            "selfhost-worker",
+            "--profile",
+            "seaweedfs-prod",
+            "config",
+            "--quiet",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_production_master_restore_guards_numeric_volume_id_monotonicity() -> None:
@@ -48,6 +102,25 @@ def test_production_overlay_pins_workloads_infrastructure_and_policy_helper() ->
     for repository in expected_repositories:
         assert repository in production
     assert production.count("image: docker.io/library/alpine@${POLICY_IMAGE_DIGEST:") == 4
+
+
+def test_production_overlay_forces_hardened_runtime_and_compose_trusts_its_proxy() -> None:
+    production = _read("compose.prod.yaml")
+    for service, next_service in (
+        ("api", "worker"),
+        ("worker", "worker-fast"),
+        ("worker-fast", "worker-slow"),
+        ("worker-slow", "web"),
+    ):
+        block = production.split(f"  {service}:", 1)[1].split(f"\n  {next_service}:", 1)[0]
+        assert "ENVIRONMENT: production" in block
+
+    compose = _read("compose.yaml")
+    trusted_default = (
+        "TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-"
+        "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+    )
+    assert trusted_default in compose
 
 
 def test_every_manifest_platform_is_scanned_before_immutable_promotion() -> None:
@@ -122,6 +195,28 @@ def test_premerge_ci_installs_real_sandbox_runtime_and_requires_storage() -> Non
     required = ci.split("  required:", 1)[1]
     assert "- seaweedfs" in required
     assert "- seaweedfs-production-topology" not in required
+
+
+def test_authenticated_delivery_never_uses_pre_auth_nginx_cache() -> None:
+    worker_cache = _read("infra/nginx/worker-cache.conf")
+    file_location = worker_cache.split("location /file/ {", 1)[1].split("\n}", 1)[0]
+    assert "proxy_cache off;" in file_location
+    assert "proxy_cache worker_cache;" not in file_location
+    assert 'proxy_cache_key "$uri"' not in file_location
+
+    ci = _read(".github/workflows/ci.yml")
+    delivery = ci.split("  delivery:", 1)[1].split("\n  required:", 1)[0]
+    assert "npm test" in delivery
+    assert "npm run test:node" in delivery
+
+
+def test_self_hosted_delivery_container_drops_root() -> None:
+    dockerfile = _read("worker/Dockerfile")
+    assert "USER node" in dockerfile
+    assert "npm ci --omit=dev" in dockerfile
+    assert "COPY --from=build /app/dist ./dist" in dockerfile
+    assert "./node_modules/.bin/tsx" not in dockerfile.split("FROM node:", 2)[-1]
+    assert dockerfile.index("USER node") < dockerfile.index('CMD ["node", "dist/node/server.js"')
 
 
 def test_all_external_actions_are_pinned_to_full_commit_shas() -> None:

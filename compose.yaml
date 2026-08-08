@@ -33,6 +33,10 @@ x-common-env: &common-env
   MEILI_URL: ${MEILI_URL}
   MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
   SECRET_KEY: ${SECRET_KEY}
+  # The API is reached through the checked-in nginx container on a Docker
+  # bridge network. Trust only loopback/RFC1918 proxy hops by default; direct
+  # public peers remain untrusted by ProxyHeadersMiddleware.
+  TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
   CAS_HKDF_SALT: ${CAS_HKDF_SALT:-lectern-cas-salt-v1}
   CAS_HKDF_INFO: ${CAS_HKDF_INFO:-lectern-cas-v1}
   MALWAREBAZAAR_API_KEY: ${MALWAREBAZAAR_API_KEY}
@@ -66,7 +70,6 @@ x-worker-base: &worker-base
     - SYS_ADMIN
   ulimits:
     core: 0
-  pids_limit: ${WORKER_PIDS_LIMIT:-256}
   healthcheck:
     test: [ "CMD", "python", "-c", "import os,sys; sys.exit(0 if any(b'arq' in open(f'/proc/{p}/cmdline','rb').read() for p in os.listdir('/proc') if p.isdigit()) else 1)" ]
     interval: 30s
@@ -237,6 +240,7 @@ services:
         limits:
           cpus: "1.0"
           memory: 1G
+          pids: ${WORKER_PIDS_LIMIT:-256}
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -260,6 +264,7 @@ services:
         limits:
           cpus: "1.0"
           memory: 1G
+          pids: ${WORKER_PIDS_LIMIT:-256}
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -283,6 +288,7 @@ services:
         limits:
           cpus: "2.0"
           memory: 2G
+          pids: ${WORKER_PIDS_LIMIT:-256}
         reservations:
           cpus: "0.25"
           memory: 256M

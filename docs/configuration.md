@@ -52,14 +52,16 @@ If the browser reaches storage on a different address than the API does
 (common behind a reverse proxy), set `S3_PUBLIC_ENDPOINT` to the browser-facing
 one.
 
-### Faster, edge-cached downloads (optional)
+### Signed delivery worker (optional)
 
-To serve single-file downloads and branding assets through an HMAC-signed,
-edge-cached worker instead of presigned S3 URLs, set `WORKER_ZIP_URL` and
+To serve single-file downloads and branding assets through an HMAC-signed
+worker instead of presigned S3 URLs, set `WORKER_ZIP_URL` and
 `WORKER_ZIP_HMAC_SECRET` (the secret must match the worker's). It works with
 both the Cloudflare Worker and the self-hosted Node worker — same token
-contract, so you only change the URL. Leave `WORKER_ZIP_URL` empty to fall back
-to presigned S3 / server-side streaming.
+contract, so you only change the URL. Authenticated file and ZIP requests are
+verified on every request and must not be cached ahead of the worker; public
+branding may be cached. Leave `WORKER_ZIP_URL` empty to fall back to presigned
+S3 / server-side streaming.
 
 ---
 
@@ -200,9 +202,10 @@ populate the legal-notice and privacy pages.
 
 ## Tuning uploads and file safety
 
-- **Bigger files** — raise `MAX_FILE_SIZE_MB` and the relevant per-category cap
-  (`MAX_VIDEO_SIZE_MB`, `MAX_DOCUMENT_SIZE_MB`, …). The client automatically
-  fetches and displays the correct limit dynamically from the backend configuration.
+- **Bigger files** — raise the relevant per-category cap
+  (`MAX_VIDEO_SIZE_MB`, `MAX_DOCUMENT_SIZE_MB`, …). `MAX_FILE_SIZE_MB` is the
+  fallback for MIME types without a category. The client fetches the per-MIME
+  limits dynamically from the backend configuration.
 - **Restrict file types** — `ALLOWED_EXTENSIONS=.pdf,.docx` and/or
   `ALLOWED_MIME_TYPES`. Empty = allow everything.
 - **Smaller stored files** — lower `PDF_QUALITY`, pick a heavier

@@ -108,9 +108,10 @@ in `api/app/core/storage/backends.py`. Switching backends is env-only.
 ### Signed delivery via the Worker (optional)
 
 When set, single-file downloads and branding assets are served through an
-HMAC-signed, edge-cached worker instead of presigned S3 GETs. Point it at
+HMAC-signed worker instead of presigned S3 GETs. Point it at
 **either** the Cloudflare Worker **or** the self-hosted Node worker — the token
-contract is identical, so switching is URL-only.
+contract is identical, so switching is URL-only. Only public branding is
+cacheable; authenticated file and ZIP requests must reach the token verifier.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -215,7 +216,7 @@ in MiB unless noted.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MAX_FILE_SIZE_MB` | `100` | Global hard cap for any single file. |
+| `MAX_FILE_SIZE_MB` | `100` | Fallback cap for MIME types without a category-specific limit. |
 | `MAX_SVG_SIZE_MB` | `5` | Per-category cap for SVGs. |
 | `MAX_IMAGE_SIZE_MB` | `50` | Per-category cap for images. |
 | `MAX_AUDIO_SIZE_MB` | `200` | Per-category cap for audio. |
@@ -289,8 +290,8 @@ The default in `compose.yaml` is 1 replica for dev; set these to 2+ in productio
 | `WORKER_FAST_MAX_JOBS` | `4` | Concurrent jobs per fast worker (I/O-bound, safe to over-subscribe). |
 | `WORKER_SLOW_REPLICAS` | `1` | Number of `worker-slow` containers (large/video files). Set to 2+ in production. |
 | `WORKER_SLOW_MAX_JOBS` | `2` | Concurrent jobs per slow worker (CPU-heavy, keep low). |
-| `GLOBAL_MAX_SUBPROCESSES` | `0` (auto) | Cap on heavy subprocesses; `0` = `os.cpu_count()`. |
-| `MAX_CONCURRENT_IMAGE_OPS` | `0` (auto) | Cap on concurrent image operations; `0` = `cpu_count // 2`. |
+| `GLOBAL_MAX_SUBPROCESSES` | `4` | Per-process cap on heavy sandboxed subprocesses. |
+| `MAX_CONCURRENT_IMAGE_OPS` | `1` | Per-process cap on native image operations. |
 
 ---
 
@@ -308,6 +309,7 @@ The default in `compose.yaml` is 1 replica for dev; set these to 2+ in productio
 | Variable | Default | Description |
 |---|---|---|
 | `CORS_ALLOWED_HEADERS` | *(a sensible default list)* | Comma-separated, no spaces. Shared between FastAPI and Nginx. |
+| `TRUSTED_PROXY_HOSTS` | loopback + RFC 1918 CIDRs in Compose | Proxy IPs/CIDRs whose forwarded client IP and scheme headers the API may trust. Include every trusted hop, including an external load balancer in front of the checked-in nginx, or client-IP limits will resolve to the first omitted proxy. For a bare-metal API, prefer loopback only; never use `*` on an Internet-reachable port. |
 
 ---
 
@@ -328,7 +330,7 @@ These variables are either baked into the frontend static export at build time (
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `/api` | Browser-facing API path. Dev compose sets `http://localhost/api`. |
 | `NEXT_PUBLIC_EUROOFFICE_URL` | *(unset)* | Browser-facing EuroOffice path. Resolved dynamically from the backend's `EUROOFFICE_PUBLIC_URL` / `NEXT_PUBLIC_EUROOFFICE_URL` at runtime. Falls back to relative `/eurooffice/`. |
-| `NEXT_PUBLIC_MAX_FILE_SIZE_MB` | `100` | Fallback client-side upload-size limit. Resolved dynamically from the backend's `MAX_FILE_SIZE_MB` at runtime. |
+| `NEXT_PUBLIC_MAX_FILE_SIZE_MB` | `100` | Client-side fallback when runtime upload configuration is unavailable. |
 | `NEXT_PUBLIC_COMMIT_SHA` | *(unset)* | Build commit SHA, shown in the About panel. Baked in at build-time. |
 | `NEXT_PUBLIC_TUTORIALS` | `on` | Build-time kill-switch for the interactive tutorials. Set to `off`/`false`/`0` to hard-disable at build. For a runtime toggle prefer the backend `TUTORIALS_ENABLED`; this build-time switch still wins if set. Baked in at build-time. |
 

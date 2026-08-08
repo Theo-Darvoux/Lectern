@@ -69,7 +69,9 @@ def test_production_docker_build_roots_are_digest_pinned() -> None:
     package_json = (REPO_ROOT / "web/package.json").read_text(encoding="utf-8")
     assert "pnpm@10.32.1+sha512." in package_json
     assert "npx" not in worker
-    assert "./node_modules/.bin/tsx" in worker
+    assert "npm ci --omit=dev" in worker
+    assert 'CMD ["node", "dist/node/server.js"]' in worker
+    assert "./node_modules/.bin/tsx" not in worker
     assert "# syntax=docker/dockerfile:1" not in api
     assert f"ARG DEBIAN_SNAPSHOT={DEBIAN_SNAPSHOT}" in api
     assert api.count("snapshot.debian.org/archive/debian/") >= 2

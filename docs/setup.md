@@ -75,31 +75,46 @@ To create your first account, open the app in a browser — you are redirected t
 
 ## Option B : Production deployment
 
-Production uses pre-built images from GHCR. Production deployments merge the base `compose.yaml` with the production overrides in `compose.prod.yaml`:
+Production uses only the immutable image set certified by the canonical
+`production-release-<commit>` CI artifact. Check out that exact commit and
+prepare the deployment from the extracted canonical manifest:
 
 ```bash
-# Minimal production .env additions (on top of the defaults in .env.example):
-ENVIRONMENT=production
-COMPOSE_PROFILES=          # empty = no local storage containers; uses R2 or external S3
-WORKER_FAST_REPLICAS=2
-WORKER_SLOW_REPLICAS=2
+./scripts/prepare-production-release.sh \
+  --canonical-manifest /secure/release/production-<commit>.json \
+  --runtime-env /secure/runtime/production.env
 ```
 
-Then deploy:
+This validates the exact commit, Compose inputs, service-to-image mapping,
+registry manifests, platforms, and runtime interpolation. It writes a
+`production-<commit>.deployment-images.env` containing only certified digests.
+Use that generated file for both pull and startup, from a cleared environment
+so shell variables cannot replace canonical image references:
 
 ```bash
-# Pull the latest production images from GHCR
-docker compose -f compose.yaml -f compose.prod.yaml pull
+commit=$(git rev-parse HEAD)
+images="$PWD/release-manifests/production-${commit}.deployment-images.env"
+runtime=/secure/runtime/production.env
 
-# Start services in production mode
-docker compose -f compose.yaml -f compose.prod.yaml up -d
+env -i PATH="$PATH" HOME="$HOME" RUNTIME_ENV_FILE="$runtime" \
+  docker compose --env-file "$runtime" --env-file "$images" \
+  -f compose.yaml -f compose.prod.yaml pull
+env -i PATH="$PATH" HOME="$HOME" RUNTIME_ENV_FILE="$runtime" \
+  docker compose --env-file "$runtime" --env-file "$images" \
+  -f compose.yaml -f compose.prod.yaml up -d
 ```
+
+For optional `postgres`, `seaweedfs-prod`, or `selfhost-worker` profiles, pass
+the desired certified subset to the preparation command and the same
+`--profile` flags to both Compose commands. See
+[Production release manifest](production-release-manifest.md). Never substitute
+`latest`, a commit tag, or a hand-authored image environment file.
 
 What production mode changes relative to the dev defaults:
-- All services use published images (`ghcr.io/theo-darvoux/lectern/api:latest`, etc.)
+- All services use the digest-pinned images certified together by release CI
 - API runs under **gunicorn** with 4 uvicorn workers (defined in `compose.prod.yaml`)
 - Web is served by **nginx** from the pre-built static export (64 MB container, defined in `compose.prod.yaml`)
-- `ENVIRONMENT=production` activates secret validation, hides OpenAPI docs, changes logging
+- The production overlay forces `ENVIRONMENT=production`, activating secret validation and hiding OpenAPI docs
 - Resource limits are set per service (defined in `compose.prod.yaml`)
 - `worker-fast` and `worker-slow` scale horizontally via `WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS`
 - Nginx exposes port `9080` (defined in `compose.prod.yaml`; put a reverse proxy or load balancer in front)

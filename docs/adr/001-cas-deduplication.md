@@ -12,9 +12,12 @@ A naïve deduplication by filename or path is unreliable. Two identically-named 
 
 ## Decision
 
-Files are stored under a **content-addressed key** derived from their SHA-256 hash: `cas/{HMAC-SHA256(sha256, SECRET_KEY)}`.
+Files are stored under a **content-addressed key** derived from their SHA-256
+hash: `cas/{HMAC-SHA256(sha256, HKDF(SECRET_KEY, CAS_HKDF_*))}`.
 
-The HMAC wrapper over the raw hash serves a specific purpose: it prevents an attacker from probing whether a known file (e.g., a copyrighted document with a public hash) exists in the store by supplying its hash without possessing the file.
+The HMAC wrapper over the raw hash serves a specific purpose: it prevents an
+attacker from probing whether known content exists without possessing it. HKDF
+provides a domain-separated CAS key instead of reusing `SECRET_KEY` directly.
 
 A Redis counter tracks ref counts per CAS key. On first upload the file is physically stored and the user's quota incremented. On duplicate upload the counter is incremented and no additional storage is consumed.
 

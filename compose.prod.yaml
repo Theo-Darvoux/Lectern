@@ -89,6 +89,8 @@ services:
   api:
     image: ${API_IMAGE}
     build: !reset null
+    environment:
+      ENVIRONMENT: production
     command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
     depends_on:
       release-image-policy:
@@ -97,6 +99,8 @@ services:
   worker:
     image: ${WORKER_IMAGE}
     build: !reset null
+    environment:
+      ENVIRONMENT: production
     depends_on:
       release-image-policy:
         condition: service_completed_successfully
@@ -104,6 +108,8 @@ services:
   worker-fast:
     image: ${WORKER_IMAGE}
     build: !reset null
+    environment:
+      ENVIRONMENT: production
     depends_on:
       release-image-policy:
         condition: service_completed_successfully
@@ -111,6 +117,8 @@ services:
   worker-slow:
     image: ${WORKER_IMAGE}
     build: !reset null
+    environment:
+      ENVIRONMENT: production
     depends_on:
       release-image-policy:
         condition: service_completed_successfully
