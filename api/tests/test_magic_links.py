@@ -114,6 +114,28 @@ async def test_magic_link_pending_approval(
     assert response.json()["user"]["role"] == "pending"
 
 
+async def test_new_magic_link_supersedes_previous_link(
+    client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any
+) -> None:
+    email = "superseded@example.com"
+    db_session.add(AllowedDomain(domain="example.com", auto_approve=True))
+    await db_session.flush()
+
+    with patch("app.routers.auth.send_verification_email", new_callable=AsyncMock) as mock_send:
+        first = await client.post("/api/auth/request-code", json={"email": email})
+        assert first.status_code == 200
+        token_a = mock_send.call_args[0][2].split("token=", 1)[1]
+
+        mock_send.reset_mock()
+        second = await client.post("/api/auth/request-code", json={"email": email})
+        assert second.status_code == 200
+        token_b = mock_send.call_args[0][2].split("token=", 1)[1]
+
+    assert token_a != token_b
+    assert (await client.post("/api/auth/verify-magic-link", json={"token": token_a})).status_code == 400
+    assert (await client.post("/api/auth/verify-magic-link", json={"token": token_b})).status_code == 200
+
+
 async def test_magic_link_expired(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup: Any
 ) -> None:

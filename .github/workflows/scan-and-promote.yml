@@ -116,6 +116,15 @@ jobs:
           --health-interval 2s
           --health-timeout 2s
           --health-retries 30
+      redis:
+        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
     permissions:
       contents: read
       packages: read

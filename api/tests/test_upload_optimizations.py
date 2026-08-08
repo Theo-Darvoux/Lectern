@@ -59,10 +59,12 @@ async def test_upload_idempotency(
     with (
         patch("app.routers.upload.direct.get_s3_client") as mock_s3_cm,
         patch("app.dependencies.auth.is_token_blacklisted", new_callable=AsyncMock) as mock_bl,
+        patch("app.dependencies.auth.is_session_revoked", new_callable=AsyncMock) as mock_session,
     ):
         mock_s3 = AsyncMock()
         mock_s3_cm.return_value.__aenter__.return_value = mock_s3
         mock_bl.return_value = False
+        mock_session.return_value = False
 
         # 1. First upload — goes through the full pipeline
         resp1 = await client.post("/api/upload", files=files, headers=headers)

@@ -144,6 +144,22 @@ class FakeRedis:
 
     def register_script(self, script):
         async def run(*, keys, args, client=None):
+            if "auth_store_login_challenge_v2" in script:
+                def _text(value):
+                    return value.decode() if isinstance(value, bytes) else value
+
+                previous = _text(self.data.get(keys[1]))
+                if previous:
+                    self.data.pop(f"auth:magic:{previous}", None)
+
+                code = str(args[0])
+                email = str(args[1])
+                token = str(args[2])
+                self.data[keys[0]] = code.encode()
+                self.data[keys[2]] = email.encode()
+                self.data[keys[1]] = token.encode()
+                return 1
+
             if "auth_verify_code_v1" in script:
                 def _text(value):
                     return value.decode() if isinstance(value, bytes) else value
@@ -159,7 +175,7 @@ class FakeRedis:
                     self.data.pop(keys[1], None)
                 return 1
 
-            if "auth_verify_magic_v1" in script:
+            if "auth_verify_magic_v2" in script:
                 def _text(value):
                     return value.decode() if isinstance(value, bytes) else value
 
@@ -168,11 +184,13 @@ class FakeRedis:
                 token = str(args[1])
                 if not email or email != expected_email:
                     return 0
-                self.data.pop(keys[0], None)
                 current_ref = _text(self.data.get(keys[1]))
-                if current_ref == token:
-                    self.data.pop(keys[1], None)
-                    self.data.pop(keys[2], None)
+                if current_ref != token:
+                    self.data.pop(keys[0], None)
+                    return 0
+                self.data.pop(keys[0], None)
+                self.data.pop(keys[1], None)
+                self.data.pop(keys[2], None)
                 return 1
 
             if "holder_id" in script and "ZREMRANGEBYSCORE" in script:

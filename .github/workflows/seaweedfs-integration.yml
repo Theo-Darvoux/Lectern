@@ -1,39 +1,6 @@
 name: SeaweedFS Integration
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/seaweedfs-integration.yml"
-      - ".github/workflows/build.yml"
-      - ".github/workflows/ci.yml"
-      - "api/app/config.py"
-      - "api/app/core/events/processing.py"
-      - "api/app/core/media/**"
-      - "api/app/core/security/**"
-      - "api/app/core/storage/**"
-      - "api/app/routers/tus.py"
-      - "api/app/routers/upload/**"
-      - "api/app/schemas/material.py"
-      - "api/app/workers/cleanup_uploads.py"
-      - "api/app/workers/reconcile_multipart.py"
-      - "api/app/workers/upload/**"
-      - "api/pyproject.toml"
-      - "api/uv.lock"
-      - "api/scripts/run-seaweedfs-integration-tests.sh"
-      - "api/scripts/run-seaweedfs-topology-tests.sh"
-      - "api/tests/integration/storage/**"
-      - "api/tests/test_storage_release_policy.py"
-      - "api/tests/test_upload_lifecycle_race_hardening.py"
-      - "compose.yaml"
-      - "compose.prod.yaml"
-      - "docs/r2-to-seaweedfs-migration.md"
-      - "deploy/release-toolchain.env"
-      - "infra/docker/seaweedfs/**"
-      - "infra/docker/redis/redis.conf"
-      - "scripts/export-release-toolchain.py"
-      - "scripts/release_manifest_lib.py"
-      - "scripts/resolve-seaweedfs-image.sh"
-      - "web/src/lib/upload-client.ts"
   workflow_dispatch:
     inputs:
       seaweedfs_image:

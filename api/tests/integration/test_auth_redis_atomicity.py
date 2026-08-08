@@ -5,13 +5,15 @@ import os
 import uuid
 from unittest.mock import AsyncMock, patch
 
+import jwt
 import pytest
 from fastapi import Response
 from redis.asyncio import Redis
 from starlette.requests import Request
 
+from app.config import settings
 from app.core.common.exceptions import UnauthorizedError
-from app.core.security.security import create_refresh_token
+from app.core.security.security import ALGORITHM, create_refresh_token
 from app.models.user import User, UserRole
 from app.routers.auth import refresh_token
 from app.services import auth as auth_service
@@ -49,8 +51,8 @@ async def test_verification_code_has_exactly_one_concurrent_redeemer(
 ) -> None:
     email = "atomic-code@example.com"
     code = "A2B3C4D5"
-    await auth_service.store_code(redis, email, code)
-    await auth_service.store_magic_token(redis, email, "paired-magic")
+    token = "paired-magic"
+    await auth_service.store_login_challenge(redis, email, code, token)
 
     winners = await asyncio.gather(
         *(auth_service.verify_code(redis, email, code) for _ in range(32))
@@ -58,7 +60,7 @@ async def test_verification_code_has_exactly_one_concurrent_redeemer(
     assert winners.count(True) == 1
     assert winners.count(False) == 31
     assert await redis.get(f"auth:code:{email}") is None
-    assert await redis.get("auth:magic:paired-magic") is None
+    assert await redis.get(f"auth:magic:{token}") is None
 
 
 async def test_magic_link_has_exactly_one_concurrent_redeemer(
@@ -66,8 +68,7 @@ async def test_magic_link_has_exactly_one_concurrent_redeemer(
 ) -> None:
     email = "atomic-magic@example.com"
     token = "single-use-magic-token"
-    await auth_service.store_code(redis, email, "H2J3K4M5")
-    await auth_service.store_magic_token(redis, email, token)
+    await auth_service.store_login_challenge(redis, email, "H2J3K4M5", token)
 
     results = await asyncio.gather(
         *(auth_service.verify_magic_token(redis, token) for _ in range(32))
@@ -83,14 +84,57 @@ async def test_code_and_magic_link_are_one_shared_single_use_challenge(
     email = "atomic-shared@example.com"
     code = "N2P3Q4R5"
     token = "shared-magic-token"
-    await auth_service.store_code(redis, email, code)
-    await auth_service.store_magic_token(redis, email, token)
+    await auth_service.store_login_challenge(redis, email, code, token)
 
     code_result, magic_result = await asyncio.gather(
         auth_service.verify_code(redis, email, code),
         auth_service.verify_magic_token(redis, token),
     )
     assert int(code_result is True) + int(magic_result == email) == 1
+
+
+async def test_new_challenge_invalidates_previous_magic_link(redis: Redis) -> None:  # type: ignore[type-arg]
+    email = "supersede@example.com"
+    await auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a")
+    await auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b")
+
+    assert await auth_service.verify_magic_token(redis, "magic-a") is None
+    assert await auth_service.verify_magic_token(redis, "magic-b") == email
+
+
+async def test_concurrent_challenge_issuance_leaves_one_coherent_generation(
+    redis: Redis,  # type: ignore[type-arg]
+) -> None:
+    email = "issuance-race@example.com"
+    await asyncio.gather(
+        auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a"),
+        auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b"),
+    )
+
+    current_magic = await redis.get(f"auth:magic_ref:{email}")
+    current_code = await redis.get(f"auth:code:{email}")
+    assert current_magic in {"magic-a", "magic-b"}
+
+    if current_magic == "magic-a":
+        assert current_code == "A2B3C4D5"
+        assert await redis.get("auth:magic:magic-a") == email
+        assert await redis.get("auth:magic:magic-b") is None
+    else:
+        assert current_code == "H2J3K4M5"
+        assert await redis.get("auth:magic:magic-b") == email
+        assert await redis.get("auth:magic:magic-a") is None
+
+
+async def test_redeeming_current_code_invalidates_all_magic_generations(
+    redis: Redis,  # type: ignore[type-arg]
+) -> None:
+    email = "code-supersession@example.com"
+    await auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a")
+    await auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b")
+
+    assert await auth_service.verify_code(redis, email, "H2J3K4M5")
+    assert await auth_service.verify_magic_token(redis, "magic-a") is None
+    assert await auth_service.verify_magic_token(redis, "magic-b") is None
 
 
 async def test_session_family_revocation_round_trip(redis: Redis) -> None:  # type: ignore[type-arg]
@@ -124,6 +168,7 @@ async def test_refresh_route_has_exactly_one_concurrent_winner(redis: Redis) -> 
         role=UserRole.STUDENT,
         onboarded=True,
         gdpr_consent=True,
+        auto_approve=True,
     )
     family = "refresh-family"
     token = create_refresh_token(str(user.id), expire_days=1, session_id=family)
@@ -141,9 +186,30 @@ async def test_refresh_route_has_exactly_one_concurrent_winner(redis: Redis) -> 
 
     successes = [result for result in results if not isinstance(result, BaseException)]
     failures = [result for result in results if isinstance(result, BaseException)]
-    assert len(successes) == 1
-    assert len(failures) == 1
+    assert len(successes) == 1, [repr(result) for result in results]
+    assert len(failures) == 1, [repr(result) for result in results]
     assert isinstance(failures[0], UnauthorizedError)
-    # A detected sibling replay revokes the complete family so neither side can
-    # retain a durable child session. The user must authenticate again.
     assert await auth_service.is_session_revoked(redis, family)
+
+
+async def test_legacy_refresh_without_session_family_requires_reauthentication(
+    redis: Redis,  # type: ignore[type-arg]
+) -> None:
+    token = jwt.encode(
+        {
+            "sub": str(uuid.uuid4()),
+            "jti": str(uuid.uuid4()),
+            "type": "refresh",
+            "exp": 4102444800,
+        },
+        settings.secret_key.get_secret_value(),
+        algorithm=ALGORITHM,
+    )
+
+    with pytest.raises(UnauthorizedError, match="Legacy refresh token requires reauthentication"):
+        await refresh_token(
+            _refresh_request(token),
+            Response(),
+            AsyncMock(),
+            redis,
+        )

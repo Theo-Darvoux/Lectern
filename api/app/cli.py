@@ -571,12 +571,12 @@ def magic_link(
 async def _magic_link(email: str) -> None:
     from app.config import settings
     from app.core.database.redis import redis_client
-    from app.services.auth import generate_magic_token, store_magic_token
+    from app.services.auth import generate_code, generate_magic_token, store_login_challenge
 
     token = generate_magic_token()
-    await store_magic_token(redis_client, email, token)
+    await store_login_challenge(redis_client, email, generate_code(), token)
 
-    link = f"{settings.frontend_url}/login/verify?token={token}"
+    link = f"{settings.frontend_url.rstrip('/')}/login/verify#token={token}"
     typer.echo(f"Magic link for {email}:")
     typer.echo(link)
 

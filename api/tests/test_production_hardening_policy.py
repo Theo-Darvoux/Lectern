@@ -113,10 +113,15 @@ def test_premerge_ci_installs_real_sandbox_runtime_and_requires_storage() -> Non
     assert "Smoke-test real sandbox runtime" in ci
     assert 'uv run pytest -m "not integration"' in ci
     assert "  seaweedfs:" in ci
-    assert "  seaweedfs-production-topology:" in ci
+    assert "  seaweedfs-production-topology:" not in ci
+    seaweed = ci.split("  seaweedfs:", 1)[1].split("\n  web:", 1)[0]
+    assert "suite: storage-semantics" in seaweed
+    assert "suite: production-topology" in seaweed
+    assert "run-seaweedfs-integration-tests.sh" in seaweed
+    assert "run-seaweedfs-topology-tests.sh" in seaweed
     required = ci.split("  required:", 1)[1]
     assert "- seaweedfs" in required
-    assert "- seaweedfs-production-topology" in required
+    assert "- seaweedfs-production-topology" not in required
 
 
 def test_all_external_actions_are_pinned_to_full_commit_shas() -> None:

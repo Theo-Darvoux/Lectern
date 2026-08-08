@@ -162,8 +162,8 @@ class Settings(BaseSettings):
     backup_dir: str = "/var/lib/lectern/backups"
 
     # Observability — Prometheus /metrics endpoint
-    # When set, callers must pass ?token=<value> or Authorization: Bearer <value> to scrape.
-    # Leave empty (default) to allow unauthenticated scraping (safe inside a private network).
+    # When set, callers must pass Authorization: Bearer <value>; URL query secrets are rejected.
+    # Leave empty (default) to allow unauthenticated scraping inside a private network.
     metrics_token: str = ""
 
     # OpenTelemetry Collector endpoint (e.g. "localhost:4317")

@@ -35,7 +35,9 @@ async def _validate_token_payload(
         raise UnauthorizedError("Token has been revoked")
 
     session_id = payload.get("sid")
-    if session_id and await is_session_revoked(redis, str(session_id)):
+    if not isinstance(session_id, str) or not session_id:
+        raise UnauthorizedError("Legacy session requires reauthentication")
+    if await is_session_revoked(redis, session_id):
         raise UnauthorizedError("Session has been revoked")
 
     user_id = payload.get("sub")

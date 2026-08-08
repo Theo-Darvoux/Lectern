@@ -2,6 +2,10 @@ name: CI
 
 on:
   workflow_call:
+    outputs:
+      tested_seaweedfs_image:
+        description: Exact immutable SeaweedFS image exercised by both required storage matrix shards
+        value: ${{ jobs.production-policy.outputs.seaweedfs_image }}
   pull_request:
   push:
     branches-ignore: [main]
@@ -17,6 +21,18 @@ permissions:
 jobs:
   api:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      AUTH_ATOMICITY_REDIS_URL: redis://127.0.0.1:6379/15
     defaults:
       run:
         working-directory: api
@@ -32,9 +48,6 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends bubblewrap
-          # Ubuntu 24.04 restricts unprivileged user namespaces for unconfined
-          # applications. Hosted CI is ephemeral, so enable them for the real
-          # Bubblewrap tests instead of silently accepting launcher failures.
           for key in \
             kernel.apparmor_restrict_unprivileged_userns \
             kernel.apparmor_restrict_unprivileged_unconfined; do
@@ -59,6 +72,8 @@ jobs:
         run: uv run mypy app/
       - name: Unit and hermetic tests
         run: uv run pytest -m "not integration"
+      - name: Real Redis authentication lifecycle invariants
+        run: uv run pytest -m integration tests/integration/test_auth_redis_atomicity.py
 
   postgres-revert:
     runs-on: ubuntu-latest
@@ -94,36 +109,15 @@ jobs:
         working-directory: api
         run: uv run pytest -m integration tests/integration/database/test_revert_concurrency.py
 
-  redis-auth-atomicity:
-    runs-on: ubuntu-latest
-    services:
-      redis:
-        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 2s
-          --health-retries 30
-    env:
-      AUTH_ATOMICITY_REDIS_URL: redis://127.0.0.1:6379/15
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
-        with:
-          enable-cache: true
-          cache-dependency-glob: api/uv.lock
-      - working-directory: api
-        run: uv sync --frozen --extra dev
-      - name: Prove authentication factors are atomically single-use in real Redis
-        working-directory: api
-        run: uv run pytest -m integration tests/integration/test_auth_redis_atomicity.py
-
   production-policy:
     runs-on: ubuntu-latest
+    outputs:
+      seaweedfs_image: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
@@ -143,62 +137,43 @@ jobs:
           tests/test_release_runtime_gate_policy.py
           tests/test_storage_release_policy.py
 
-  resolve-seaweedfs-image:
+  seaweedfs:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: storage-semantics
+            label: Live SeaweedFS S3/storage semantics
+            script: ./api/scripts/run-seaweedfs-integration-tests.sh
+            timeout: 25
+          - suite: production-topology
+            label: Production-topology persistence, replication and failover
+            script: ./api/scripts/run-seaweedfs-topology-tests.sh
+            timeout: 30
+    name: seaweedfs / ${{ matrix.suite }}
     runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.resolve.outputs.image }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Load pinned release toolchain
         id: toolchain
         run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-        with:
-          version: ${{ steps.toolchain.outputs.buildx_version }}
-          driver-opts: |
-            image=${{ steps.toolchain.outputs.buildkit_image }}
-      - name: Resolve SeaweedFS to a canonical immutable digest
-        id: resolve
+      - name: Select exact immutable SeaweedFS test image
+        shell: bash
         env:
-          SEAWEEDFS_SOURCE_IMAGE: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
+          IMAGE: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
         run: |
           set -euo pipefail
-          resolved=$(./scripts/resolve-seaweedfs-image.sh "$SEAWEEDFS_SOURCE_IMAGE")
-          echo "image=$resolved" >> "$GITHUB_OUTPUT"
-
-  seaweedfs:
-    needs: resolve-seaweedfs-image
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+          [[ "$IMAGE" =~ ^docker\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}$ ]]
+          echo "SEAWEEDFS_IMAGE=$IMAGE" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
       - working-directory: api
         run: uv sync --frozen --extra dev
-      - name: Run live SeaweedFS integration suite
-        run: ./api/scripts/run-seaweedfs-integration-tests.sh
-
-  seaweedfs-production-topology:
-    needs: resolve-seaweedfs-image
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
-        with:
-          enable-cache: true
-          cache-dependency-glob: api/uv.lock
-      - working-directory: api
-        run: uv sync --frozen --extra dev
-      - name: Run production-topology SeaweedFS integration suite
-        run: ./api/scripts/run-seaweedfs-topology-tests.sh
+      - name: ${{ matrix.label }}
+        run: ${{ matrix.script }}
 
   web:
     runs-on: ubuntu-latest
@@ -242,20 +217,16 @@ jobs:
     needs:
       - api
       - postgres-revert
-      - redis-auth-atomicity
       - production-policy
       - seaweedfs
-      - seaweedfs-production-topology
       - web
       - delivery
     runs-on: ubuntu-latest
     env:
       API_RESULT: ${{ needs.api.result }}
       POSTGRES_RESULT: ${{ needs.postgres-revert.result }}
-      REDIS_AUTH_RESULT: ${{ needs.redis-auth-atomicity.result }}
       POLICY_RESULT: ${{ needs.production-policy.result }}
       SEAWEEDFS_RESULT: ${{ needs.seaweedfs.result }}
-      SEAWEEDFS_TOPOLOGY_RESULT: ${{ needs.seaweedfs-production-topology.result }}
       WEB_RESULT: ${{ needs.web.result }}
       DELIVERY_RESULT: ${{ needs.delivery.result }}
     steps:
@@ -266,10 +237,8 @@ jobs:
           for result in \
             "$API_RESULT" \
             "$POSTGRES_RESULT" \
-            "$REDIS_AUTH_RESULT" \
             "$POLICY_RESULT" \
             "$SEAWEEDFS_RESULT" \
-            "$SEAWEEDFS_TOPOLOGY_RESULT" \
             "$WEB_RESULT" \
             "$DELIVERY_RESULT"; do
             [[ "$result" == success ]]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from passlib.context import CryptContext
 from redis.asyncio import Redis
@@ -20,10 +21,21 @@ RATE_LIMIT_MAX = 3
 VERIFY_RATE_LIMIT_MAX = 5
 VERIFY_RATE_LIMIT_TTL_SECONDS = 600
 
-# Redis scripts are deliberately small and self-identifying. The compare/delete
-# happens server-side so concurrent redeemers cannot both pass a GET-before-DEL
-# race. The marker comments are also used by the deterministic in-memory test
-# Redis implementation.
+# Redis scripts are deliberately small and self-identifying. Challenge issuance
+# and compare/delete decisions happen server-side so concurrent requests cannot
+# pass a read-before-write race. Marker comments are mirrored by FakeRedis.
+_STORE_LOGIN_CHALLENGE_LUA = r"""
+-- auth_store_login_challenge_v2
+local previous_magic = redis.call("GET", KEYS[2])
+if previous_magic then
+    redis.call("DEL", "auth:magic:" .. previous_magic)
+end
+redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[4])
+redis.call("SET", KEYS[3], ARGV[2], "EX", ARGV[4])
+redis.call("SET", KEYS[2], ARGV[3], "EX", ARGV[4])
+return 1
+"""
+
 _VERIFY_CODE_LUA = r"""
 -- auth_verify_code_v1
 local stored = redis.call("GET", KEYS[1])
@@ -40,17 +52,21 @@ return 1
 """
 
 _VERIFY_MAGIC_LUA = r"""
--- auth_verify_magic_v1
+-- auth_verify_magic_v2
 local email = redis.call("GET", KEYS[1])
 if not email or email ~= ARGV[1] then
     return 0
 end
-redis.call("DEL", KEYS[1])
+
 local current_ref = redis.call("GET", KEYS[2])
-if current_ref and current_ref == ARGV[2] then
-    redis.call("DEL", KEYS[2])
-    redis.call("DEL", KEYS[3])
+if not current_ref or current_ref ~= ARGV[2] then
+    redis.call("DEL", KEYS[1])
+    return 0
 end
+
+redis.call("DEL", KEYS[1])
+redis.call("DEL", KEYS[2])
+redis.call("DEL", KEYS[3])
 return 1
 """
 
@@ -219,11 +235,39 @@ def generate_magic_token() -> str:
     return secrets.token_urlsafe(48)
 
 
+async def store_login_challenge(
+    redis: Redis,  # type: ignore[type-arg]
+    email: str,
+    code: str,
+    magic_token: str,
+) -> None:
+    """Atomically supersede any previous code/magic challenge for *email*."""
+    script = redis.register_script(_STORE_LOGIN_CHALLENGE_LUA)
+    result = await script(
+        keys=[
+            f"auth:code:{email}",
+            f"auth:magic_ref:{email}",
+            f"auth:magic:{magic_token}",
+        ],
+        args=[code, email, magic_token, CODE_TTL_SECONDS],
+        client=redis,
+    )
+    if int(result) != 1:
+        raise RuntimeError("Redis failed to store login challenge atomically")
+
+
+# Low-level compatibility helpers. Production login issuance must use
+# store_login_challenge so code + magic link are one challenge generation.
 async def store_code(redis: Redis, email: str, code: str) -> None:  # type: ignore[type-arg]
     await redis.setex(f"auth:code:{email}", CODE_TTL_SECONDS, code)
 
 
 async def store_magic_token(redis: Redis, email: str, token: str) -> None:  # type: ignore[type-arg]
+    previous = await redis.get(f"auth:magic_ref:{email}")
+    if isinstance(previous, bytes):
+        previous = previous.decode()
+    if previous:
+        await redis.delete(f"auth:magic:{previous}")
     await redis.setex(f"auth:magic:{token}", CODE_TTL_SECONDS, email)
     await redis.setex(f"auth:magic_ref:{email}", CODE_TTL_SECONDS, token)
 
@@ -344,6 +388,7 @@ def issue_tokens(
     *,
     session_id: str | None = None,
 ) -> tuple[str, str, str]:
+    session_id = session_id or str(uuid4())
     access_token, jti = create_access_token(
         user_id=str(user.id),
         role=user.role.value,

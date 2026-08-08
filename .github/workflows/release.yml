@@ -5,10 +5,6 @@ on:
     branches: [main]
     tags: ['alpha-*']
 
-# Serialize every production release, including main/tag releases that may point
-# at the same commit. This closes the race around immutable sha-<commit> tags.
-# In-progress promotion is never cancelled; incomplete component tags remain
-# non-deployable until the canonical release artifact exists.
 concurrency:
   group: production-release
   cancel-in-progress: false
@@ -26,3 +22,5 @@ jobs:
       packages: write
       security-events: write
     uses: ./.github/workflows/build.yml
+    with:
+      tested_seaweedfs_image: ${{ needs.ci.outputs.tested_seaweedfs_image }}

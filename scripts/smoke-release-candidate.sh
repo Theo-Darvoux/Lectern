@@ -7,7 +7,7 @@ if [[ $# -ne 3 ]]; then
 fi
 
 component=$1
-candidate_ref=$2
+candidate_index_ref=$2
 platform=$3
 
 case "$component" in
@@ -15,8 +15,8 @@ case "$component" in
   *) echo "unsupported component: $component" >&2; exit 64 ;;
 esac
 
-[[ "$candidate_ref" =~ @sha256:[0-9a-f]{64}$ ]] || {
-  echo "candidate must be an immutable digest reference: $candidate_ref" >&2
+[[ "$candidate_index_ref" =~ @sha256:[0-9a-f]{64}$ ]] || {
+  echo "candidate must be an immutable digest reference: $candidate_index_ref" >&2
   exit 64
 }
 case "$platform" in
@@ -24,21 +24,38 @@ case "$platform" in
   *) echo "unsupported platform: $platform" >&2; exit 64 ;;
 esac
 
-candidate_repository=${candidate_ref%@sha256:*}
+candidate_repository=${candidate_index_ref%@sha256:*}
 os=${platform%/*}
 arch=${platform#*/}
-manifest_json=$(docker buildx imagetools inspect --raw "$candidate_ref")
+manifest_json=$(docker buildx imagetools inspect --raw "$candidate_index_ref")
 child_digest=$(jq -r --arg os "$os" --arg arch "$arch" '
   [.manifests[] | select(.platform.os == $os and .platform.architecture == $arch) | .digest]
   | if length == 1 then .[0] else empty end
 ' <<<"$manifest_json")
 [[ "$child_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-  echo "could not resolve exactly one $platform child digest from $candidate_ref" >&2
+  echo "could not resolve exactly one $platform child digest from $candidate_index_ref" >&2
   exit 1
 }
 candidate_ref="${candidate_repository}@${child_digest}"
 
 echo "Runtime-smoke testing exact $component child $candidate_ref on $platform"
+
+production_env=(
+  -e ENVIRONMENT=production
+  -e SECRET_KEY=runtime-smoke-secret-key-that-is-long-and-not-a-placeholder
+  -e MEILI_MASTER_KEY=runtime-smoke-meili-master-key
+  -e EUROOFFICE_JWT_SECRET=runtime-smoke-eurooffice-jwt-secret
+  -e EUROOFFICE_FILE_TOKEN_SECRET=runtime-smoke-eurooffice-file-secret
+  -e DATABASE_URL=postgresql+asyncpg://release_smoke:release_smoke@127.0.0.1:5432/release_smoke
+  -e REDIS_URL=redis://127.0.0.1:6379/0
+  -e MEILI_URL=http://127.0.0.1:1
+  -e STORAGE_BACKEND=seaweedfs
+  -e S3_ENDPOINT=127.0.0.1:1
+  -e S3_ACCESS_KEY=runtime-smoke
+  -e S3_SECRET_KEY=runtime-smoke
+  -e S3_BUCKET=runtime-smoke
+  -e S3_USE_SSL=false
+)
 
 case "$component" in
   api)
@@ -49,59 +66,82 @@ case "$component" in
     }
     trap cleanup EXIT
 
-    # Preserve the image ENTRYPOINT and start the real ASGI server. Lifespan is
-    # disabled here because live storage behavior is exercised in the required
-    # SeaweedFS jobs; this gate is specifically proving that the exact packaged
-    # image/architecture can run its launcher, imports and HTTP runtime.
+    # Preserve ENTRYPOINT+CMD and full FastAPI lifespan. /api/health can only
+    # report "ok" after Redis/ARQ startup has completed.
     docker run -d --platform "$platform" --network host --name "$name" \
-      -e DATABASE_URL=postgresql+asyncpg://release_smoke:release_smoke@127.0.0.1:5432/release_smoke \
+      "${production_env[@]}" \
       -e RUN_MIGRATIONS=false \
-      "$candidate_ref" \
-      uvicorn app.main:app --host 127.0.0.1 --port 18080 --lifespan off >/dev/null
+      "$candidate_ref" >/dev/null
 
-    for _ in $(seq 1 45); do
-      if curl --fail --silent http://127.0.0.1:18080/api/health >/dev/null; then
-        break
-      fi
+    healthy=0
+    for _ in $(seq 1 90); do
       if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -qx true; then
-        echo "api candidate exited before becoming healthy" >&2
+        echo "api candidate exited before completing production startup" >&2
         exit 1
+      fi
+
+      body=$(curl --silent --fail http://127.0.0.1:8000/api/health 2>/dev/null || true)
+      if [[ -n "$body" ]] && python3 -c \
+        'import json,sys; p=json.load(sys.stdin); raise SystemExit(0 if p.get("status") == "ok" else 1)' \
+        <<<"$body"; then
+        healthy=1
+        break
       fi
       sleep 1
     done
-    curl --fail --silent http://127.0.0.1:18080/api/health >/dev/null
+    [[ "$healthy" == 1 ]] || {
+      echo "api candidate never reached status=ok with full lifespan enabled" >&2
+      exit 1
+    }
 
-    # Exercise the native scanner import/initialization from the exact running
-    # candidate too; API startup depends on this when lifespan is enabled.
-    docker exec "$name" /venv/bin/python -c '
-from app.core.security.scanner import MalwareScanner
-scanner = MalwareScanner()
-scanner.initialize()
-print("api-candidate-runtime-ok")
-'
+    docker exec "$name" /bin/sh -c \
+      'tr "\000" " " </proc/1/cmdline | grep -q "uvicorn app.main:app"'
+
     trap - EXIT
     docker rm -f "$name" >/dev/null
+    echo "api-candidate-production-startup-ok"
     ;;
 
   worker)
-    # worker-start.sh has no external startup dependency, so overriding CMD while
-    # preserving the image ENTRYPOINT exercises the real packaged launcher.
-    docker run --rm --platform "$platform" \
-      "$candidate_ref" \
-      /venv/bin/python -c '
-import shutil
-import pikepdf
-import yara
-from app.workers.settings import WorkerSettings
+    name="wikint-worker-smoke-${RANDOM}-${RANDOM}"
+    cleanup() {
+      docker logs "$name" 2>/dev/null || true
+      docker rm -f "$name" >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
 
-required = ("bwrap", "ffmpeg", "gs", "soffice", "rsvg-convert", "exiftool")
-missing = [name for name in required if shutil.which(name) is None]
-assert not missing, f"missing worker runtime tools: {missing}"
-assert WorkerSettings
-assert pikepdf.__version__
-assert yara.__version__
-print("worker-candidate-runtime-ok")
-'
+    # Preserve ENTRYPOINT+CMD. The marker is emitted only after
+    # WorkerSettings.startup() has initialized its hard requirements.
+    docker run -d --platform "$platform" --network host --name "$name" \
+      "${production_env[@]}" \
+      "$candidate_ref" >/dev/null
+
+    started=0
+    for _ in $(seq 1 90); do
+      if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -qx true; then
+        echo "worker candidate exited before completing production startup" >&2
+        exit 1
+      fi
+      if docker logs "$name" 2>&1 | grep -q "Worker startup complete"; then
+        started=1
+        break
+      fi
+      sleep 1
+    done
+    [[ "$started" == 1 ]] || {
+      echo "worker candidate never completed WorkerSettings.startup()" >&2
+      exit 1
+    }
+
+    docker exec "$name" /bin/sh -c \
+      'tr "\000" " " </proc/1/cmdline | grep -q "arq.*app.workers.settings.WorkerSettings"'
+
+    sleep 3
+    docker inspect -f '{{.State.Running}}' "$name" | grep -qx true
+
+    trap - EXIT
+    docker rm -f "$name" >/dev/null
+    echo "worker-candidate-production-startup-ok"
     ;;
 
   web)
@@ -112,12 +152,16 @@ print("worker-candidate-runtime-ok")
     }
     trap cleanup EXIT
     docker run -d --platform "$platform" --name "$name" "$candidate_ref" >/dev/null
-    for _ in $(seq 1 30); do
+    for _ in $(seq 1 45); do
       if docker exec "$name" wget --quiet --spider http://127.0.0.1/; then
         trap - EXIT
         docker rm -f "$name" >/dev/null
         echo "web-candidate-runtime-ok"
         exit 0
+      fi
+      if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -qx true; then
+        echo "web candidate exited before becoming healthy" >&2
+        exit 1
       fi
       sleep 1
     done
@@ -136,12 +180,16 @@ print("worker-candidate-runtime-ok")
       -e WORKER_ZIP_HMAC_SECRET=runtime-smoke-only \
       -e S3_ENDPOINT=127.0.0.1:1 \
       "$candidate_ref" >/dev/null
-    for _ in $(seq 1 30); do
+    for _ in $(seq 1 45); do
       if docker exec "$name" wget --quiet --spider http://127.0.0.1:8788/healthz; then
         trap - EXIT
         docker rm -f "$name" >/dev/null
         echo "selfhost-worker-candidate-runtime-ok"
         exit 0
+      fi
+      if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -qx true; then
+        echo "selfhost-worker candidate exited before becoming healthy" >&2
+        exit 1
       fi
       sleep 1
     done

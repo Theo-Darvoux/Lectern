@@ -33,8 +33,7 @@ def create_access_token(
         "exp": expire,
         "type": "access",
     }
-    if session_id is not None:
-        payload["sid"] = session_id
+    payload["sid"] = session_id or str(uuid4())
     token = jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
     return token, jti
 
@@ -53,9 +52,8 @@ def create_refresh_token(
         "jti": jti,
         "exp": expire,
         "type": "refresh",
+        "sid": session_id or str(uuid4()),
     }
-    if session_id is not None:
-        payload["sid"] = session_id
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 
 
@@ -74,9 +72,8 @@ def create_browser_read_token(
         "jti": jti,
         "exp": expire,
         "type": "browser_read",
+        "sid": session_id or str(uuid4()),
     }
-    if session_id is not None:
-        payload["sid"] = session_id
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 
 

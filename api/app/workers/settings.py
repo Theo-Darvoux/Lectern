@@ -86,6 +86,8 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["db_engine"] = engine
     ctx["db_sessionmaker"] = async_sessionmaker(engine, expire_on_commit=False)
 
+    print("Worker startup complete", flush=True)
+
 
 async def shutdown(ctx: dict[str, Any]) -> None:
     from app.core.events.sse import stop_sse_pubsub

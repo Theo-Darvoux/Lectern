@@ -78,16 +78,28 @@ def test_every_buildx_and_qemu_setup_consumes_repository_pins() -> None:
             qemu_count += 1
             assert "image: ${{ steps.toolchain.outputs.binfmt_image }}" in block
             assert "platforms: arm64" in block
-    assert buildx_count == 9
+    assert buildx_count == 7
     assert qemu_count == 4
 
 
 def test_required_ci_and_release_use_only_repo_pinned_seaweedfs_digest() -> None:
-    for relative in (".github/workflows/ci.yml", ".github/workflows/build.yml"):
-        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    ci = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+    release = (REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    for text in (ci, build, release):
         assert "chrislusf/seaweedfs:4.29" not in text
-        assert "seaweedfs_test_image" in text
-        assert "SEAWEEDFS_SOURCE_IMAGE" in text
+
+    assert "steps.toolchain.outputs.seaweedfs_test_image" in ci
+    assert "tested_seaweedfs_image" in ci
+    assert "tested_seaweedfs_image" in release
+    assert "inputs.tested_seaweedfs_image" in build
+    assert "steps.toolchain.outputs.seaweedfs_test_image" in build
+    assert "SEAWEEDFS_SOURCE_IMAGE" not in ci
+    assert "SEAWEEDFS_SOURCE_IMAGE" not in build
+    assert "resolve-seaweedfs-image:" not in ci
+    assert "resolve-seaweedfs-image:" not in build
+
     standalone = (REPO_ROOT / ".github/workflows/seaweedfs-integration.yml").read_text(
         encoding="utf-8"
     )

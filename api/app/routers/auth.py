@@ -283,10 +283,8 @@ async def request_code(
         )
 
     code = auth_service.generate_code()
-    await auth_service.store_code(redis, email, code)
-
     magic_token = auth_service.generate_magic_token()
-    await auth_service.store_magic_token(redis, email, magic_token)
+    await auth_service.store_login_challenge(redis, email, code, magic_token)
 
     base_url = settings.frontend_url.rstrip("/")
     magic_link = f"{base_url}/login/verify#token={magic_token}"
@@ -490,8 +488,10 @@ async def refresh_token(
     if not user_id or not old_jti or not old_exp:
         raise UnauthorizedError("Invalid refresh token")
 
-    session_id = str(payload["sid"]) if payload.get("sid") else None
-    if session_id and await auth_service.is_session_revoked(redis, session_id):
+    session_id = payload.get("sid")
+    if not isinstance(session_id, str) or not session_id:
+        raise UnauthorizedError("Legacy refresh token requires reauthentication")
+    if await auth_service.is_session_revoked(redis, session_id):
         raise UnauthorizedError("Session has been revoked")
 
     user = await get_user_by_id(db, str(user_id))
@@ -508,19 +508,18 @@ async def refresh_token(
     # consume_token_once makes the old JTI a one-winner capability even when
     # requests race on different API replicas.
     if not await auth_service.consume_token_once(redis, str(old_jti), remaining):
-        if session_id:
-            await auth_service.revoke_session(
-                redis,
-                session_id,
-                _session_ttl_seconds(user),
-            )
+        await auth_service.revoke_session(
+            redis,
+            session_id,
+            _session_ttl_seconds(user),
+        )
         raise UnauthorizedError("Refresh token has already been used")
 
     # Rotate the browser-native read credential too, so a copied pre-refresh
     # cookie cannot outlive rotation.
     await _blacklist_browser_read_cookie(redis, request)
 
-    successor_session_id = session_id or str(uuid4())
+    successor_session_id = session_id
     if user.role == UserRole.GUEST:
         new_access_token, new_refresh_token, _ = auth_service.issue_tokens(
             user,

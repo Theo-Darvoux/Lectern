@@ -201,8 +201,8 @@ def test_seaweedfs_approval_must_equal_tested_digest() -> None:
 def test_finalizer_certifies_service_mapping_before_manifest_and_artifact() -> None:
     build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
     finalizer = build.split("  finalize-release:\n", 1)[1]
-    assert "- resolve-seaweedfs-image" in finalizer
-    assert "TESTED_SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}" in finalizer
+    assert "- validate-tested-storage" in finalizer
+    assert "TESTED_SEAWEEDFS_IMAGE: ${{ needs.validate-tested-storage.outputs.image }}" in finalizer
     assert "require-tested-seaweedfs-image.sh" in finalizer
     assert "SEAWEEDFS_IMAGE=${TESTED_SEAWEEDFS_IMAGE}" in finalizer
     compose_index = finalizer.index("Certify production Compose service image mapping")

@@ -28,12 +28,37 @@ def test_release_requires_reusable_ci_before_publish_implementation() -> None:
     assert "cancel-in-progress: false" in release
 
 
-def test_build_api_preserves_both_live_storage_release_gates() -> None:
+def test_release_implementation_has_only_the_ci_gated_caller() -> None:
+    callers = []
+    for path in sorted((_REPO_ROOT / ".github/workflows").glob("*.yml")):
+        source = path.read_text(encoding="utf-8")
+        if "uses: ./.github/workflows/build.yml" in source:
+            callers.append(path.name)
+    assert callers == ["release.yml"]
+
+
+def test_release_reuses_exact_seaweedfs_image_exercised_by_required_ci() -> None:
+    ci = _read(".github/workflows/ci.yml")
+    release = _read(".github/workflows/release.yml")
     build = _read(".github/workflows/build.yml")
-    build_api = _job(build, "build-api")
-    assert "needs: [test-seaweedfs, test-seaweedfs-topology]" in build_api
-    assert "test-seaweedfs:" in build
-    assert "test-seaweedfs-topology:" in build
+
+    seaweed = _job(ci, "seaweedfs")
+    assert "Live SeaweedFS S3/storage semantics" in seaweed
+    assert "Production-topology persistence, replication and failover" in seaweed
+    assert "tested_seaweedfs_image:" in ci
+    assert "value: ${{ jobs.production-policy.outputs.seaweedfs_image }}" in ci
+
+    release_job = _job(release, "release")
+    assert "tested_seaweedfs_image: ${{ needs.ci.outputs.tested_seaweedfs_image }}" in release_job
+
+    validator = _job(build, "validate-tested-storage")
+    assert "inputs.tested_seaweedfs_image" in validator
+    assert "steps.toolchain.outputs.seaweedfs_test_image" in validator
+    assert '[[ "$TESTED_IMAGE" == "$PINNED_IMAGE" ]]' in validator
+
+    assert "test-seaweedfs:" not in build
+    assert "test-seaweedfs-topology:" not in build
+    assert "resolve-seaweedfs-image:" not in build
 
 
 def test_promotion_is_downstream_of_complete_platform_matrix() -> None:
@@ -52,7 +77,7 @@ def test_manifest_is_aggregate_release_gate_and_aliases_are_not_automated() -> N
     build = _read(".github/workflows/build.yml")
     finalizer = _job(build, "finalize-release")
     for dependency in (
-        "resolve-seaweedfs-image",
+        "validate-tested-storage",
         "release-api",
         "release-worker",
         "release-web",
@@ -68,14 +93,18 @@ def test_manifest_is_aggregate_release_gate_and_aliases_are_not_automated() -> N
     assert "publish-release-aliases.sh" not in build
 
 
-def test_postgres_and_storage_gates_run_before_merge_and_release() -> None:
+def test_postgres_and_storage_gates_run_before_merge() -> None:
     ci = _read(".github/workflows/ci.yml")
     postgres = _job(ci, "postgres-revert")
+    seaweed = _job(ci, "seaweedfs")
     required = _job(ci, "required")
+
     assert "uv run alembic upgrade head" in postgres
     assert "tests/integration/database/test_revert_concurrency.py" in postgres
     assert "pull_request:" in ci.split("jobs:", 1)[0]
+
+    assert "run-seaweedfs-integration-tests.sh" in seaweed
+    assert "run-seaweedfs-topology-tests.sh" in seaweed
     assert "- seaweedfs" in required
-    assert "- seaweedfs-production-topology" in required
     assert "SEAWEEDFS_RESULT" in required
-    assert "SEAWEEDFS_TOPOLOGY_RESULT" in required
+    assert "SEAWEEDFS_TOPOLOGY_RESULT" not in required
