@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -9,9 +10,47 @@ from app.core.common.constants import PRIVILEGED_ROLES
 from app.core.common.exceptions import RateLimitError
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis
+from app.core.security.security import BROWSER_READ_COOKIE, decode_token
 from app.dependencies.auth import CurrentUser, get_optional_user
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.services.audit import flag_user_account
+
+logger = logging.getLogger(__name__)
+
+
+def _request_session_id(request: Request) -> str | None:
+    auth_header = request.headers.get("authorization", "")
+    candidates: list[tuple[str, str]] = []
+    if auth_header.startswith("Bearer "):
+        candidates.append((auth_header[7:], "access"))
+    browser_token = request.cookies.get(BROWSER_READ_COOKIE)
+    if browser_token:
+        candidates.append((browser_token, "browser_read"))
+
+    for token, expected_type in candidates:
+        try:
+            payload = decode_token(token, expected_type=expected_type)
+        except Exception:
+            logger.debug("Failed to decode token for session ID extraction", exc_info=True)
+            continue
+        session_id = payload.get("sid")
+        if session_id:
+            return str(session_id)
+    return None
+
+
+def _rate_limit_subject(request: Request, user: User) -> str:
+    if user.role != UserRole.GUEST:
+        return str(user.id)
+
+    session_id = _request_session_id(request)
+    if session_id:
+        return f"guest-session:{session_id}"
+
+    # Backward-compatible fallback for a pre-session-family guest JWT. Avoid
+    # collapsing the entire guest population into the single seeded DB user.
+    host = (request.client.host if request.client else None) or "unknown"
+    return f"guest-ip:{host}"
 
 
 async def rate_limit_downloads(
@@ -24,10 +63,10 @@ async def rate_limit_downloads(
     minute_limit = 100 if settings.is_dev else 10
     daily_limit = 2000 if settings.is_dev else 200
 
-    user_id = str(user.id)
+    subject = _rate_limit_subject(request, user)
 
-    minute_key = f"ratelimit:downloads:min:{user_id}"
-    daily_key = f"ratelimit:downloads:day:{user_id}"
+    minute_key = f"ratelimit:downloads:min:{subject}"
+    daily_key = f"ratelimit:downloads:day:{subject}"
 
     async with redis.pipeline(transaction=True) as pipe:
         await pipe.incrby(minute_key, count)
@@ -47,10 +86,11 @@ async def rate_limit_downloads(
         )
 
     if daily_count > daily_limit:
-        await flag_user_account(
-            db, user.id, f"Exceeded daily download limit ({daily_count}/{daily_limit})"
-        )
-        await db.commit()
+        if user.role != UserRole.GUEST:
+            await flag_user_account(
+                db, user.id, f"Exceeded daily download limit ({daily_count}/{daily_limit})"
+            )
+            await db.commit()
         raise RateLimitError(
             f"Daily download limit reached ({daily_limit} files). Please try again tomorrow."
         )
@@ -72,10 +112,10 @@ async def rate_limit_uploads(
     tier = "privileged" if user.role in PRIVILEGED_ROLES else "default"
     minute_limit, daily_limit = _UPLOAD_LIMITS[tier]
 
-    user_id = str(user.id)
+    subject = _rate_limit_subject(request, user)
 
-    minute_key = f"ratelimit:uploads:min:{user_id}"
-    daily_key = f"ratelimit:uploads:day:{user_id}"
+    minute_key = f"ratelimit:uploads:min:{subject}"
+    daily_key = f"ratelimit:uploads:day:{subject}"
 
     async with redis.pipeline(transaction=True) as pipe:
         await pipe.incr(minute_key)
@@ -93,10 +133,11 @@ async def rate_limit_uploads(
         raise RateLimitError(f"You are uploading too fast. Limit: {minute_limit} files per minute.")
 
     if daily_count > daily_limit:
-        await flag_user_account(
-            db, user.id, f"Exceeded daily upload limit ({daily_count}/{daily_limit})"
-        )
-        await db.commit()
+        if user.role != UserRole.GUEST:
+            await flag_user_account(
+                db, user.id, f"Exceeded daily upload limit ({daily_count}/{daily_limit})"
+            )
+            await db.commit()
         raise RateLimitError(
             f"Daily upload limit reached ({daily_limit} files). Please try again tomorrow."
         )
@@ -119,9 +160,9 @@ async def rate_limit_views(
     minute_limit = 600 if settings.is_dev else 60
     daily_limit = 5000 if settings.is_dev else 1000
 
-    user_id = str(user.id)
-    minute_key = f"ratelimit:views:min:{user_id}"
-    daily_key = f"ratelimit:views:day:{user_id}"
+    subject = _rate_limit_subject(request, user)
+    minute_key = f"ratelimit:views:min:{subject}"
+    daily_key = f"ratelimit:views:day:{subject}"
 
     async with redis.pipeline(transaction=True) as pipe:
         await pipe.incr(minute_key)
@@ -141,7 +182,8 @@ async def rate_limit_search(
 ) -> None:
     """Rate limit for the public search endpoint: 30/min anonymous, 120/min authenticated."""
     if user is not None:
-        key = f"ratelimit:search:user:{user.id}:min"
+        subject = _rate_limit_subject(request, user)
+        key = f"ratelimit:search:user:{subject}:min"
         minute_limit = 300 if settings.is_dev else 120
     else:
         ip = (request.client.host if request.client else None) or "unknown"

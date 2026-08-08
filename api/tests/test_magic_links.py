@@ -29,7 +29,7 @@ async def test_magic_link_flow_success(
         args, kwargs = mock_send.call_args
         sent_email, _, sent_magic_link = args[0], args[1], args[2]
         assert sent_email == email
-        assert "/login/verify?token=" in sent_magic_link
+        assert "/login/verify#token=" in sent_magic_link
 
         magic_token = sent_magic_link.split("token=")[1]
 

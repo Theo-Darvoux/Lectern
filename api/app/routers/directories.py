@@ -30,7 +30,7 @@ from app.core.events.sse import (
     unregister_topic_queue,
 )
 from app.core.storage.facade import stream_object
-from app.dependencies.auth import ReadUser, get_current_user
+from app.dependencies.auth import ReadUser, SSEUser, get_current_user
 from app.dependencies.rate_limit import rate_limit_downloads
 from app.models.material import Material
 from app.models.user import User
@@ -151,7 +151,7 @@ def _normalize_directory_topic(raw_id: str) -> str:
 
 @router.get("/{id}/sse")
 @limiter.limit("20/minute")
-async def directory_event_stream(request: Request, id: str) -> EventSourceResponse:
+async def directory_event_stream(request: Request, id: str, _user: SSEUser) -> EventSourceResponse:
     topic = _normalize_directory_topic(id)
     owner_keys = topic_owner_keys(
         client_host=request.client.host if request.client is not None else None,

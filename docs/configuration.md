@@ -235,8 +235,8 @@ memory-hungry, and the per-service resource limits in the compose file assume th
 ## Observability
 
 - **Metrics** — Prometheus scrapes `GET /metrics`. Inside a private network you
-  can leave it open; otherwise set `METRICS_TOKEN` and scrape with
-  `?token=<value>`.
+  can leave it open; otherwise set `METRICS_TOKEN` and send it as
+  `Authorization: Bearer <value>`. Secrets are not accepted in query strings.
 - **Tracing** — point `OTEL_ENDPOINT` at your OTLP collector (e.g.
   `localhost:4317`) to export OpenTelemetry traces. Empty disables it.
 - **Health** — `GET /api/health` is an unauthenticated liveness check.

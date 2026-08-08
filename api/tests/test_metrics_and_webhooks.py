@@ -81,14 +81,14 @@ async def test_metrics_endpoint_token_accepted_via_header(client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_metrics_endpoint_token_accepted_via_query(client) -> None:
+async def test_metrics_endpoint_token_rejected_via_query(client) -> None:
     from app.config import settings
 
     original = settings.metrics_token
     try:
         settings.metrics_token = "secret-scrape-token"
         resp = await client.get("/metrics?token=secret-scrape-token")
-        assert resp.status_code == 200
+        assert resp.status_code == 403
     finally:
         settings.metrics_token = original
 

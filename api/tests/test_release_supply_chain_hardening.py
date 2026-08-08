@@ -78,8 +78,8 @@ def test_every_buildx_and_qemu_setup_consumes_repository_pins() -> None:
             qemu_count += 1
             assert "image: ${{ steps.toolchain.outputs.binfmt_image }}" in block
             assert "platforms: arm64" in block
-    assert buildx_count == 8
-    assert qemu_count == 3
+    assert buildx_count == 9
+    assert qemu_count == 4
 
 
 def test_required_ci_and_release_use_only_repo_pinned_seaweedfs_digest() -> None:

@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useRef, useState } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,23 +10,48 @@ import { useConfigStore } from "@/lib/stores";
 import { SiteName } from "@/components/site-name";
 
 function MagicLinkVerifier() {
-    const searchParams = useSearchParams();
     const router = useRouter();
     const { verifyMagicLink, isAuthenticated, user } = useAuth();
     const t = useTranslations("Login");
     const [error, setError] = useState<string | null>(null);
     const [isVerifying, setIsVerifying] = useState(false);
-    const token = searchParams.get("token");
+    const [token, setToken] = useState<string | null>(null);
+    const [linkLoaded, setLinkLoaded] = useState(false);
     const attempted = useRef(false);
     const { config } = useConfigStore();
 
+    // URL fragments are never sent in the HTTP request target. Read the
+    // capability once and immediately remove it from browser history before
+    // the user has to click the confirmation button.
     useEffect(() => {
-        if (!token && !isAuthenticated && !attempted.current) {
-            attempted.current = true;
+        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+        const capturedToken = params.get("token");
+        if (capturedToken) {
+            setToken(capturedToken);
+        }
 
+        // Never accept a legacy query token, but scrub one if an old emailed
+        // link is opened after deployment so the secret does not remain in
+        // browser history.
+        const cleanUrl = new URL(window.location.href);
+        const hadLegacyQueryToken = cleanUrl.searchParams.has("token");
+        cleanUrl.searchParams.delete("token");
+        if (window.location.hash || hadLegacyQueryToken) {
+            window.history.replaceState(
+                null,
+                "",
+                `${cleanUrl.pathname}${cleanUrl.search}`,
+            );
+        }
+        setLinkLoaded(true);
+    }, []);
+
+    useEffect(() => {
+        if (linkLoaded && !token && !isAuthenticated && !attempted.current) {
+            attempted.current = true;
             setError(t("invalidMagicLink"));
         }
-    }, [token, isAuthenticated, t]);
+    }, [linkLoaded, token, isAuthenticated, t]);
 
     useEffect(() => {
         if (isAuthenticated && user?.onboarded) {
@@ -101,7 +126,7 @@ function MagicLinkVerifier() {
                         size="lg"
                         className="w-full h-16 text-xl font-bold transition-all hover:scale-[1.02] active:scale-[0.98]"
                         onClick={handleVerify}
-                        disabled={isVerifying || !token}
+                        disabled={isVerifying || !token || !linkLoaded}
                     >
                         {isVerifying ? (
                             <span className="flex items-center gap-2">

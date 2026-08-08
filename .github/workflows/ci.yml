@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: docker.io/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
           POSTGRES_USER: lectern
           POSTGRES_PASSWORD: lectern
@@ -94,6 +94,32 @@ jobs:
         working-directory: api
         run: uv run pytest -m integration tests/integration/database/test_revert_concurrency.py
 
+  redis-auth-atomicity:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      AUTH_ATOMICITY_REDIS_URL: redis://127.0.0.1:6379/15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - working-directory: api
+        run: uv sync --frozen --extra dev
+      - name: Prove authentication factors are atomically single-use in real Redis
+        working-directory: api
+        run: uv run pytest -m integration tests/integration/test_auth_redis_atomicity.py
+
   production-policy:
     runs-on: ubuntu-latest
     steps:
@@ -114,6 +140,7 @@ jobs:
           tests/test_release_hardening_regressions.py
           tests/test_release_promotion_script.py
           tests/test_release_supply_chain_hardening.py
+          tests/test_release_runtime_gate_policy.py
           tests/test_storage_release_policy.py
 
   resolve-seaweedfs-image:
@@ -215,6 +242,7 @@ jobs:
     needs:
       - api
       - postgres-revert
+      - redis-auth-atomicity
       - production-policy
       - seaweedfs
       - seaweedfs-production-topology
@@ -224,6 +252,7 @@ jobs:
     env:
       API_RESULT: ${{ needs.api.result }}
       POSTGRES_RESULT: ${{ needs.postgres-revert.result }}
+      REDIS_AUTH_RESULT: ${{ needs.redis-auth-atomicity.result }}
       POLICY_RESULT: ${{ needs.production-policy.result }}
       SEAWEEDFS_RESULT: ${{ needs.seaweedfs.result }}
       SEAWEEDFS_TOPOLOGY_RESULT: ${{ needs.seaweedfs-production-topology.result }}
@@ -237,6 +266,7 @@ jobs:
           for result in \
             "$API_RESULT" \
             "$POSTGRES_RESULT" \
+            "$REDIS_AUTH_RESULT" \
             "$POLICY_RESULT" \
             "$SEAWEEDFS_RESULT" \
             "$SEAWEEDFS_TOPOLOGY_RESULT" \

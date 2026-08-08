@@ -11,7 +11,7 @@ from app.core.database.database import get_db
 from app.core.database.redis import get_redis
 from app.core.security.security import BROWSER_READ_COOKIE, decode_token
 from app.models.user import User, UserRole
-from app.services.auth import is_token_blacklisted
+from app.services.auth import is_session_revoked, is_token_blacklisted
 from app.services.user import get_user_by_id
 
 security = HTTPBearer(auto_error=False)
@@ -33,6 +33,10 @@ async def _validate_token_payload(
     jti = payload.get("jti")
     if jti and await is_token_blacklisted(redis, jti):
         raise UnauthorizedError("Token has been revoked")
+
+    session_id = payload.get("sid")
+    if session_id and await is_session_revoked(redis, str(session_id)):
+        raise UnauthorizedError("Session has been revoked")
 
     user_id = payload.get("sub")
     if not user_id:

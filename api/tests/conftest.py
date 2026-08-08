@@ -144,6 +144,37 @@ class FakeRedis:
 
     def register_script(self, script):
         async def run(*, keys, args, client=None):
+            if "auth_verify_code_v1" in script:
+                def _text(value):
+                    return value.decode() if isinstance(value, bytes) else value
+
+                stored = _text(self.data.get(keys[0]))
+                expected = str(args[0])
+                if not stored or stored != expected:
+                    return 0
+                magic_token = _text(self.data.get(keys[1]))
+                self.data.pop(keys[0], None)
+                if magic_token:
+                    self.data.pop(f"auth:magic:{magic_token}", None)
+                    self.data.pop(keys[1], None)
+                return 1
+
+            if "auth_verify_magic_v1" in script:
+                def _text(value):
+                    return value.decode() if isinstance(value, bytes) else value
+
+                email = _text(self.data.get(keys[0]))
+                expected_email = str(args[0])
+                token = str(args[1])
+                if not email or email != expected_email:
+                    return 0
+                self.data.pop(keys[0], None)
+                current_ref = _text(self.data.get(keys[1]))
+                if current_ref == token:
+                    self.data.pop(keys[1], None)
+                    self.data.pop(keys[2], None)
+                return 1
+
             if "holder_id" in script and "ZREMRANGEBYSCORE" in script:
                 import time
 

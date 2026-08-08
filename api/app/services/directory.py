@@ -696,6 +696,25 @@ async def toggle_directory_favourite(
     return favourited
 
 
+
+
+def _validate_zip_arcname(arcname: str) -> str:
+    """Reject archive member names that can escape or change roots on extraction."""
+    if not arcname or "\x00" in arcname or "\\" in arcname or arcname.startswith("/"):
+        raise ValueError("Unsafe ZIP member path")
+
+    parts = arcname.split("/")
+    if any(not part for part in parts):
+        raise ValueError("Unsafe ZIP member path")
+
+    normalized_parts = [part.rstrip(" .") for part in parts]
+    if any(part in {"", ".", ".."} for part in normalized_parts):
+        raise ValueError("Unsafe ZIP member path")
+    if re.match(r"^[A-Za-z]:", normalized_parts[0]):
+        raise ValueError("Unsafe ZIP member drive prefix")
+    return arcname
+
+
 _DOWNLOAD_MAX_FILES = 500
 _DOWNLOAD_MAX_BYTES = 500 * 1024 * 1024  # 500 MiB
 
@@ -797,6 +816,7 @@ async def _build_zip_entries(
     seen: set[str] = set()
 
     def _add_entry(arcname: str, file_key: str) -> None:
+        arcname = _validate_zip_arcname(arcname)
         original = arcname
         n = 1
         while arcname in seen:

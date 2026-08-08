@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +83,18 @@ def _set_browser_read_cookie(
     response: Response,
     user_id: str,
     expire_days: int | None = None,
+    *,
+    session_id: str | None = None,
 ) -> None:
     """Set the browser-native credential used only by read-only API routes."""
     days = expire_days if expire_days is not None else settings.jwt_access_token_expire_days
     response.set_cookie(
         key=BROWSER_READ_COOKIE,
-        value=create_browser_read_token(user_id, expire_days=days),
+        value=create_browser_read_token(
+            user_id,
+            expire_days=days,
+            session_id=session_id,
+        ),
         httponly=True,
         secure=True,
         samesite="strict",
@@ -96,30 +103,56 @@ def _set_browser_read_cookie(
     )
 
 
-async def _blacklist_browser_read_cookie(
+async def _blacklist_token_string(
     redis: Redis,  # type: ignore[type-arg]
-    request: Request,
-) -> None:
-    token = request.cookies.get(BROWSER_READ_COOKIE)
+    token: str | None,
+    *,
+    expected_type: str,
+) -> dict[str, Any] | None:
     if not token:
-        return
+        return None
     try:
-        payload = decode_token(token, expected_type="browser_read")
+        payload = decode_token(token, expected_type=expected_type)
     except Exception:
-        return
+        return None
 
     jti = payload.get("jti")
     exp = payload.get("exp")
     if jti and exp:
         remaining = int(exp - datetime.now(UTC).timestamp())
         if remaining > 0:
-            await auth_service.blacklist_token(redis, jti, remaining)
+            await auth_service.blacklist_token(redis, str(jti), remaining)
+    return payload
+
+
+async def _blacklist_browser_read_cookie(
+    redis: Redis,  # type: ignore[type-arg]
+    request: Request,
+) -> dict[str, Any] | None:
+    return await _blacklist_token_string(
+        redis,
+        request.cookies.get(BROWSER_READ_COOKIE),
+        expected_type="browser_read",
+    )
+
+
+def _session_ttl_seconds(user: User) -> int:
+    days = (
+        GUEST_SESSION_EXPIRE_DAYS
+        if user.role == UserRole.GUEST
+        else settings.jwt_refresh_token_expire_days
+    )
+    return max(1, days * 24 * 3600)
 
 
 def _login_response(user: User, response: Response, *, is_new: bool) -> TokenResponse:
-    access_token, refresh_token, _ = auth_service.issue_tokens(user)
+    session_id = str(uuid4())
+    access_token, refresh_token, _ = auth_service.issue_tokens(
+        user,
+        session_id=session_id,
+    )
     _set_refresh_cookie(response, refresh_token)
-    _set_browser_read_cookie(response, str(user.id))
+    _set_browser_read_cookie(response, str(user.id), session_id=session_id)
     return TokenResponse(
         access_token=access_token,
         user=UserBrief(
@@ -196,13 +229,20 @@ async def guest_session(
         raise UnauthorizedError("Guest access is unavailable")
 
     # Guest sessions are deliberately short-lived; there is nothing to persist.
+    session_id = str(uuid4())
     access_token, refresh_token, _ = auth_service.issue_tokens(
         guest,
         jwt_access_expire_days=GUEST_SESSION_EXPIRE_DAYS,
         jwt_refresh_expire_days=GUEST_SESSION_EXPIRE_DAYS,
+        session_id=session_id,
     )
     _set_refresh_cookie(response, refresh_token, GUEST_SESSION_EXPIRE_DAYS)
-    _set_browser_read_cookie(response, str(guest.id), GUEST_SESSION_EXPIRE_DAYS)
+    _set_browser_read_cookie(
+        response,
+        str(guest.id),
+        GUEST_SESSION_EXPIRE_DAYS,
+        session_id=session_id,
+    )
     return TokenResponse(
         access_token=access_token,
         user=UserBrief(
@@ -249,7 +289,7 @@ async def request_code(
     await auth_service.store_magic_token(redis, email, magic_token)
 
     base_url = settings.frontend_url.rstrip("/")
-    magic_link = f"{base_url}/login/verify?token={magic_token}"
+    magic_link = f"{base_url}/login/verify#token={magic_token}"
 
     async def _send_safe(email: str, code: str, magic_link: str) -> None:
         try:
@@ -440,46 +480,72 @@ async def refresh_token(
         raise UnauthorizedError("No refresh token")
 
     try:
-        payload = decode_token(token)
+        payload = decode_token(token, expected_type="refresh")
     except Exception:
         raise UnauthorizedError("Invalid refresh token")
 
-    if payload.get("type") != "refresh":
-        raise UnauthorizedError("Invalid token type")
-
-    jti = payload.get("jti")
-    if jti and await auth_service.is_token_blacklisted(redis, jti):
-        raise UnauthorizedError("Refresh token has been revoked")
-
     user_id = payload.get("sub")
-    if not user_id:
-        raise UnauthorizedError("Invalid token")
-
-    user = await get_user_by_id(db, user_id)
-    if not user:
-        raise UnauthorizedError("User not found")
-
     old_jti = payload.get("jti")
     old_exp = payload.get("exp")
-    if old_jti and old_exp:
-        remaining = int(old_exp - datetime.now(UTC).timestamp())
-        if remaining > 0:
-            await auth_service.blacklist_token(redis, old_jti, remaining)
+    if not user_id or not old_jti or not old_exp:
+        raise UnauthorizedError("Invalid refresh token")
 
+    session_id = str(payload["sid"]) if payload.get("sid") else None
+    if session_id and await auth_service.is_session_revoked(redis, session_id):
+        raise UnauthorizedError("Session has been revoked")
+
+    user = await get_user_by_id(db, str(user_id))
+    if not user:
+        raise UnauthorizedError("User not found")
+    if user.role == UserRole.GUEST and not settings.guest_access_enabled:
+        raise UnauthorizedError("Guest access is disabled")
+
+    remaining = int(float(old_exp) - datetime.now(UTC).timestamp())
+    if remaining <= 0:
+        raise UnauthorizedError("Refresh token has expired")
+
+    # This is the single security decision for refresh replay. SET NX in
+    # consume_token_once makes the old JTI a one-winner capability even when
+    # requests race on different API replicas.
+    if not await auth_service.consume_token_once(redis, str(old_jti), remaining):
+        if session_id:
+            await auth_service.revoke_session(
+                redis,
+                session_id,
+                _session_ttl_seconds(user),
+            )
+        raise UnauthorizedError("Refresh token has already been used")
+
+    # Rotate the browser-native read credential too, so a copied pre-refresh
+    # cookie cannot outlive rotation.
+    await _blacklist_browser_read_cookie(redis, request)
+
+    successor_session_id = session_id or str(uuid4())
     if user.role == UserRole.GUEST:
-        if not settings.guest_access_enabled:
-            raise UnauthorizedError("Guest access is disabled")
         new_access_token, new_refresh_token, _ = auth_service.issue_tokens(
             user,
             jwt_access_expire_days=GUEST_SESSION_EXPIRE_DAYS,
             jwt_refresh_expire_days=GUEST_SESSION_EXPIRE_DAYS,
+            session_id=successor_session_id,
         )
         _set_refresh_cookie(response, new_refresh_token, GUEST_SESSION_EXPIRE_DAYS)
-        _set_browser_read_cookie(response, str(user.id), GUEST_SESSION_EXPIRE_DAYS)
+        _set_browser_read_cookie(
+            response,
+            str(user.id),
+            GUEST_SESSION_EXPIRE_DAYS,
+            session_id=successor_session_id,
+        )
     else:
-        new_access_token, new_refresh_token, _ = auth_service.issue_tokens(user)
+        new_access_token, new_refresh_token, _ = auth_service.issue_tokens(
+            user,
+            session_id=successor_session_id,
+        )
         _set_refresh_cookie(response, new_refresh_token)
-        _set_browser_read_cookie(response, str(user.id))
+        _set_browser_read_cookie(
+            response,
+            str(user.id),
+            session_id=successor_session_id,
+        )
 
     return RefreshResponse(
         access_token=new_access_token,
@@ -502,34 +568,41 @@ async def logout(
     request: Request,
     response: Response,
 ) -> dict[str, str]:
+    payloads: list[dict[str, Any]] = []
+
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        try:
-            payload = decode_token(token)
-            jti = payload.get("jti")
-            exp = payload.get("exp")
-            if jti and exp:
-                remaining = int(exp - datetime.now(UTC).timestamp())
-                if remaining > 0:
-                    await auth_service.blacklist_token(redis, jti, remaining)
-        except Exception:
-            pass
+        payload = await _blacklist_token_string(
+            redis,
+            auth_header[7:],
+            expected_type="access",
+        )
+        if payload:
+            payloads.append(payload)
 
-    refresh_token = request.cookies.get("refresh_token")
-    if refresh_token:
-        try:
-            refresh_payload = decode_token(refresh_token)
-            refresh_jti = refresh_payload.get("jti")
-            refresh_exp = refresh_payload.get("exp")
-            if refresh_jti and refresh_exp:
-                remaining = int(refresh_exp - datetime.now(UTC).timestamp())
-                if remaining > 0:
-                    await auth_service.blacklist_token(redis, refresh_jti, remaining)
-        except Exception:
-            pass
+    refresh_payload = await _blacklist_token_string(
+        redis,
+        request.cookies.get("refresh_token"),
+        expected_type="refresh",
+    )
+    if refresh_payload:
+        payloads.append(refresh_payload)
 
-    await _blacklist_browser_read_cookie(redis, request)
+    browser_payload = await _blacklist_browser_read_cookie(redis, request)
+    if browser_payload:
+        payloads.append(browser_payload)
+
+    session_ids = {
+        str(payload["sid"])
+        for payload in payloads
+        if payload.get("sid")
+    }
+    for session_id in session_ids:
+        await auth_service.revoke_session(
+            redis,
+            session_id,
+            _session_ttl_seconds(user),
+        )
 
     response.delete_cookie(
         key="refresh_token",

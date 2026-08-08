@@ -2,7 +2,7 @@
 # Serves HMAC-signed /file, /branding and /zip from an S3-compatible store
 # (SeaweedFS / Garage / RustFS). Front it with nginx proxy_cache in production
 # to replace Cloudflare's edge cache.
-FROM node:22-alpine
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
 
 WORKDIR /app
 
@@ -20,4 +20,4 @@ EXPOSE 8788
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget --quiet --spider http://127.0.0.1:8788/healthz || exit 1
 
-CMD ["npx", "tsx", "src/node/server.ts"]
+CMD ["./node_modules/.bin/tsx", "src/node/server.ts"]

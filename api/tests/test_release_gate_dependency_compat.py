@@ -39,7 +39,8 @@ def test_build_api_preserves_both_live_storage_release_gates() -> None:
 def test_promotion_is_downstream_of_complete_platform_matrix() -> None:
     scanner = _read(".github/workflows/scan-and-promote.yml")
     promotion = _job(scanner, "promote")
-    assert "needs: [validate, scan]" in promotion
+    assert "needs: [validate, scan, runtime-smoke]" in promotion
+    assert "runtime-smoke:" in scanner
     assert "TRIVY_PLATFORM: ${{ matrix.platform }}" in scanner
     assert "platform: linux/amd64" in scanner
     assert "platform: linux/arm64" in scanner

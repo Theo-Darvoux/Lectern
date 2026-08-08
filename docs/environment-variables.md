@@ -298,7 +298,7 @@ The default in `compose.yaml` is 1 replica for dev; set these to 2+ in productio
 
 | Variable | Default | Description |
 |---|---|---|
-| `METRICS_TOKEN` | *(empty)* | When set, `/metrics` requires `?token=<value>` or a bearer token. Empty = unauthenticated scraping (fine inside a private network). |
+| `METRICS_TOKEN` | *(empty)* | When set, `/metrics` requires `Authorization: Bearer <value>`. Query-string credentials are rejected. Empty = unauthenticated scraping (fine inside a private network). |
 | `OTEL_ENDPOINT` | *(empty)* | OTLP collector endpoint for OpenTelemetry traces, e.g. `localhost:4317`. Empty disables export. |
 
 ---

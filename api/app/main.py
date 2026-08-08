@@ -272,7 +272,7 @@ async def metrics(request: Request) -> Response:
 
         token = request.headers.get("Authorization", "").removeprefix(
             "Bearer "
-        ).strip() or request.query_params.get("token", "")
+        ).strip()
         if not hmac.compare_digest(token, settings.metrics_token):
             return Response(status_code=403, content="Forbidden")
 

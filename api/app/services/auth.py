@@ -20,6 +20,40 @@ RATE_LIMIT_MAX = 3
 VERIFY_RATE_LIMIT_MAX = 5
 VERIFY_RATE_LIMIT_TTL_SECONDS = 600
 
+# Redis scripts are deliberately small and self-identifying. The compare/delete
+# happens server-side so concurrent redeemers cannot both pass a GET-before-DEL
+# race. The marker comments are also used by the deterministic in-memory test
+# Redis implementation.
+_VERIFY_CODE_LUA = r"""
+-- auth_verify_code_v1
+local stored = redis.call("GET", KEYS[1])
+if not stored or stored ~= ARGV[1] then
+    return 0
+end
+local magic_token = redis.call("GET", KEYS[2])
+redis.call("DEL", KEYS[1])
+if magic_token then
+    redis.call("DEL", "auth:magic:" .. magic_token)
+    redis.call("DEL", KEYS[2])
+end
+return 1
+"""
+
+_VERIFY_MAGIC_LUA = r"""
+-- auth_verify_magic_v1
+local email = redis.call("GET", KEYS[1])
+if not email or email ~= ARGV[1] then
+    return 0
+end
+redis.call("DEL", KEYS[1])
+local current_ref = redis.call("GET", KEYS[2])
+if current_ref and current_ref == ARGV[2] then
+    redis.call("DEL", KEYS[2])
+    redis.call("DEL", KEYS[3])
+end
+return 1
+"""
+
 # Fallback used when DB has no AllowedDomain rows and ALLOWED_DOMAINS env is unset.
 # Empty by default — operators configure allowed domains via the admin UI,
 # the ALLOWED_DOMAINS env var, or enable allow_all_domains.
@@ -198,29 +232,42 @@ async def verify_code(redis: Redis, email: str, code: str) -> bool:  # type: ign
     if settings.is_dev and code in {"00000000", "AAAAAAAA"}:
         return True
 
-    stored = await redis.get(f"auth:code:{email}")
-    if stored and stored == code:
-        await redis.delete(f"auth:code:{email}")
-        magic_token = await redis.get(f"auth:magic_ref:{email}")
-        if magic_token:
-            await redis.delete(f"auth:magic:{magic_token}")
-            await redis.delete(f"auth:magic_ref:{email}")
-        return True
-    return False
+    code_key = f"auth:code:{email}"
+    stored = await redis.get(code_key)
+    if isinstance(stored, bytes):
+        stored = stored.decode()
+    if not stored or stored != code:
+        return False
+
+    script = redis.register_script(_VERIFY_CODE_LUA)
+    result = await script(
+        keys=[code_key, f"auth:magic_ref:{email}"],
+        args=[code],
+        client=redis,
+    )
+    return int(result) == 1
 
 
 async def verify_magic_token(redis: Redis, token: str) -> str | None:  # type: ignore[type-arg]
-    email = await redis.get(f"auth:magic:{token}")
+    token_key = f"auth:magic:{token}"
+    email = await redis.get(token_key)
     if not email:
         return None
 
     if isinstance(email, bytes):
         email = email.decode()
 
-    await redis.delete(f"auth:magic:{token}")
-    await redis.delete(f"auth:magic_ref:{email}")
-    await redis.delete(f"auth:code:{email}")
-    return email
+    script = redis.register_script(_VERIFY_MAGIC_LUA)
+    result = await script(
+        keys=[
+            token_key,
+            f"auth:magic_ref:{email}",
+            f"auth:code:{email}",
+        ],
+        args=[email, token],
+        client=redis,
+    )
+    return email if int(result) == 1 else None
 
 
 async def check_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[type-arg]
@@ -294,24 +341,58 @@ def issue_tokens(
     user: User,
     jwt_access_expire_days: int | None = None,
     jwt_refresh_expire_days: int | None = None,
+    *,
+    session_id: str | None = None,
 ) -> tuple[str, str, str]:
     access_token, jti = create_access_token(
         user_id=str(user.id),
         role=user.role.value,
         email=user.email,
         expire_days=jwt_access_expire_days,
+        session_id=session_id,
     )
-    refresh_token = create_refresh_token(user_id=str(user.id), expire_days=jwt_refresh_expire_days)
+    refresh_token = create_refresh_token(
+        user_id=str(user.id),
+        expire_days=jwt_refresh_expire_days,
+        session_id=session_id,
+    )
     return access_token, refresh_token, jti
 
 
 async def blacklist_token(redis: Redis, jti: str, ttl_seconds: int) -> None:  # type: ignore[type-arg]
-    await redis.setex(f"auth:blacklist:{jti}", ttl_seconds, "1")
+    if ttl_seconds > 0:
+        await redis.setex(f"auth:blacklist:{jti}", ttl_seconds, "1")
+
+
+async def consume_token_once(redis: Redis, jti: str, ttl_seconds: int) -> bool:  # type: ignore[type-arg]
+    """Atomically consume a JTI.
+
+    The consumed marker deliberately shares the blacklist namespace so every
+    normal token-validation path immediately observes the token as revoked.
+    """
+    if ttl_seconds <= 0:
+        return False
+    result = await redis.set(
+        f"auth:blacklist:{jti}",
+        "1",
+        ex=ttl_seconds,
+        nx=True,
+    )
+    return bool(result)
 
 
 async def is_token_blacklisted(redis: Redis, jti: str) -> bool:  # type: ignore[type-arg]
     result = await redis.get(f"auth:blacklist:{jti}")
     return result is not None
+
+
+async def revoke_session(redis: Redis, session_id: str, ttl_seconds: int) -> None:  # type: ignore[type-arg]
+    if ttl_seconds > 0:
+        await redis.setex(f"auth:session_revoked:{session_id}", ttl_seconds, "1")
+
+
+async def is_session_revoked(redis: Redis, session_id: str) -> bool:  # type: ignore[type-arg]
+    return await redis.get(f"auth:session_revoked:{session_id}") is not None
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

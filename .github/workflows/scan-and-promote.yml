@@ -92,8 +92,61 @@ jobs:
           sarif_file: trivy-${{ inputs.component }}-${{ matrix.slug }}.sarif
           category: trivy-${{ inputs.component }}-${{ matrix.slug }}
 
-  promote:
+  runtime-smoke:
     needs: [validate, scan]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: docker.io/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: release_smoke
+          POSTGRES_PASSWORD: release_smoke
+          POSTGRES_DB: release_smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U release_smoke -d release_smoke"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: ${{ steps.toolchain.outputs.binfmt_image }}
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: ${{ steps.toolchain.outputs.buildx_version }}
+          driver-opts: |
+            image=${{ steps.toolchain.outputs.buildkit_image }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Execute exact ${{ matrix.platform }} candidate
+        env:
+          COMPONENT: ${{ inputs.component }}
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          PLATFORM: ${{ matrix.platform }}
+        run: ./scripts/smoke-release-candidate.sh "$COMPONENT" "$CANDIDATE_REF" "$PLATFORM"
+
+  promote:
+    needs: [validate, scan, runtime-smoke]
     runs-on: ubuntu-latest
     outputs:
       release_digest: ${{ steps.promote.outputs.release_digest }}

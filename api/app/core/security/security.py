@@ -15,7 +15,12 @@ def _get_secret_key() -> str:
 
 
 def create_access_token(
-    user_id: str, role: str, email: str, expire_days: int | None = None
+    user_id: str,
+    role: str,
+    email: str,
+    expire_days: int | None = None,
+    *,
+    session_id: str | None = None,
 ) -> tuple[str, str]:
     jti = str(uuid4())
     days = expire_days if expire_days is not None else settings.jwt_access_token_expire_days
@@ -28,11 +33,18 @@ def create_access_token(
         "exp": expire,
         "type": "access",
     }
+    if session_id is not None:
+        payload["sid"] = session_id
     token = jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
     return token, jti
 
 
-def create_refresh_token(user_id: str, expire_days: int | None = None) -> str:
+def create_refresh_token(
+    user_id: str,
+    expire_days: int | None = None,
+    *,
+    session_id: str | None = None,
+) -> str:
     jti = str(uuid4())
     days = expire_days if expire_days is not None else settings.jwt_refresh_token_expire_days
     expire = datetime.now(UTC) + timedelta(days=days)
@@ -42,10 +54,17 @@ def create_refresh_token(user_id: str, expire_days: int | None = None) -> str:
         "exp": expire,
         "type": "refresh",
     }
+    if session_id is not None:
+        payload["sid"] = session_id
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 
 
-def create_browser_read_token(user_id: str, expire_days: int | None = None) -> str:
+def create_browser_read_token(
+    user_id: str,
+    expire_days: int | None = None,
+    *,
+    session_id: str | None = None,
+) -> str:
     """Issue a credential accepted only by explicitly read-only browser routes."""
     jti = str(uuid4())
     days = expire_days if expire_days is not None else settings.jwt_access_token_expire_days
@@ -56,6 +75,8 @@ def create_browser_read_token(user_id: str, expire_days: int | None = None) -> s
         "exp": expire,
         "type": "browser_read",
     }
+    if session_id is not None:
+        payload["sid"] = session_id
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 
 

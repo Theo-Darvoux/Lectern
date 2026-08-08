@@ -16,7 +16,7 @@ from app.core.events.sse import (
     topic_owner_keys,
     unregister_topic_queue,
 )
-from app.dependencies.auth import CurrentUser, OnboardedUser
+from app.dependencies.auth import CurrentUser, OnboardedUser, ReadUser, SSEUser
 from app.models.material import Material
 from app.schemas.annotation import (
     AnnotationCreateIn,
@@ -44,6 +44,7 @@ annotations_router = APIRouter(prefix="/api/annotations", tags=["annotations"])
 async def list_annotations(
     request: Request,
     material_id: str,
+    _user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[str | None, Query()] = None,
@@ -142,6 +143,7 @@ async def remove_annotation(
 async def material_event_stream(
     request: Request,
     material_id: str,
+    _user: SSEUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EventSourceResponse:
     try:

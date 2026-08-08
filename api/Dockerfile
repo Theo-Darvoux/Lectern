@@ -1,11 +1,17 @@
-# syntax=docker/dockerfile:1
-
 # ── Stage 1: build the virtualenv ────────────────────────────────────────────
-FROM python:3.12-slim AS builder
+ARG DEBIAN_SNAPSHOT=20260801T000000Z
+FROM python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
+ARG DEBIAN_SNAPSHOT
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.3-python3.13-dhi@sha256:2b56d2665e5591ce8a1e527b1471637fba03e46324236e4a1bc7c591f56a4edf /uv /usr/local/bin/uv
 
 WORKDIR /app
+
+RUN printf '%s\n' \
+    "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ trixie main" \
+    "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ trixie-security main" \
+    > /etc/apt/sources.list.d/debian-snapshot.list && \
+    rm -f /etc/apt/sources.list.d/debian.sources
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -28,9 +34,16 @@ RUN find /venv -name "*.pyi" -delete && \
 # ── Stage 2: common runtime base (shared by api + worker targets) ────────────
 # libyara10: YARA runtime — imported by app.core.security.scanner at API startup, and
 # used by the workers during file scanning. Kept here so both targets have it.
-FROM python:3.12-slim AS runtime-base
+FROM python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime-base
+ARG DEBIAN_SNAPSHOT
 
 WORKDIR /app
+
+RUN printf '%s\n' \
+    "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ trixie main" \
+    "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ trixie-security main" \
+    > /etc/apt/sources.list.d/debian-snapshot.list && \
+    rm -f /etc/apt/sources.list.d/debian.sources
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libyara10 \
