@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -148,6 +147,7 @@ async def test_seaweedfs_content_type_update_reuploads_raw_bytes(
 ) -> None:
     source_key = "files/example.bin"
     payload = b"header-preservation"
+    body = _ChunkedBody([payload, b""])
 
     class Client:
         def __init__(self) -> None:
@@ -160,28 +160,38 @@ async def test_seaweedfs_content_type_update_reuploads_raw_bytes(
                 "Metadata": {"owner": "lectern"},
             }
             self.uploaded = b""
+            self.pending_metadata: dict[str, Any] | None = None
 
         async def head_object(self, **_kwargs: Any) -> dict[str, Any]:
             return dict(self.metadata)
 
-        async def put_object(
-            self,
-            *,
-            Body: Any,  # noqa: N803
-            ContentLength: int,  # noqa: N803
-            ContentType: str,  # noqa: N803
-            **kwargs: Any,
-        ) -> None:
-            self.uploaded = Body.read()
-            assert len(self.uploaded) == ContentLength
-            self.metadata = {
-                "ContentLength": ContentLength,
-                "ContentType": ContentType,
+        async def get_object(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"Body": body}
+
+        async def create_multipart_upload(self, **kwargs: Any) -> dict[str, str]:
+            self.pending_metadata = {
+                "ContentLength": len(payload),
+                "ContentType": kwargs["ContentType"],
                 "ContentEncoding": kwargs.get("ContentEncoding"),
                 "ContentDisposition": kwargs.get("ContentDisposition"),
                 "CacheControl": kwargs.get("CacheControl"),
                 "Metadata": kwargs.get("Metadata", {}),
             }
+            return {"UploadId": "rewrite-upload"}
+
+        async def upload_part(self, **kwargs: Any) -> dict[str, str]:
+            assert kwargs["UploadId"] == "rewrite-upload"
+            assert kwargs["PartNumber"] == 1
+            self.uploaded += bytes(kwargs["Body"])
+            return {"ETag": '"part-1"'}
+
+        async def complete_multipart_upload(self, **kwargs: Any) -> None:
+            assert kwargs["UploadId"] == "rewrite-upload"
+            assert kwargs["MultipartUpload"] == {
+                "Parts": [{"PartNumber": 1, "ETag": '"part-1"'}]
+            }
+            assert self.pending_metadata is not None
+            self.metadata = self.pending_metadata
 
     client = Client()
     backend = SeaweedFSBackend()
@@ -200,21 +210,10 @@ async def test_seaweedfs_content_type_update_reuploads_raw_bytes(
         },
     )
 
-    async def download_raw(
-        key: str,
-        destination: str | Path,
-        *,
-        max_bytes: int | None = None,
-    ) -> None:
-        assert key == source_key
-        assert max_bytes == len(payload)
-        Path(destination).write_bytes(payload)
-
-    monkeypatch.setattr(backend, "download_file_raw", download_raw)
-
     await backend.update_object_content_type(source_key, "application/x-custom")
 
     assert client.uploaded == payload
+    assert body.closed
     assert client.metadata == {
         "ContentLength": len(payload),
         "ContentType": "application/x-custom",

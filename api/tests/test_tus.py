@@ -57,7 +57,7 @@ async def test_tus_options(client: AsyncClient):
     assert response.status_code == 204
     assert response.headers["Tus-Resumable"] == "1.0.0"
     assert response.headers["Tus-Version"] == "1.0.0"
-    assert "Tus-Max-Size" in response.headers
+    assert response.headers["Tus-Max-Size"] == str(settings.tus_max_size_bytes)
     assert response.headers["Tus-Extension"] == "creation,termination,checksum"
 
 
@@ -135,6 +135,40 @@ async def test_tus_create_too_large(client: AsyncClient, db_session: AsyncSessio
     response = await client.post("/api/upload/tus", headers=headers)
     assert response.status_code == 400
     assert "exceeds server maximum" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_tus_create_uses_tus_specific_ceiling(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    fake_redis_setup,
+    mock_storage,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Prove TUS is not accidentally capped by the lower generic upload limit.
+    monkeypatch.setattr(settings, "max_file_size_mb", 10)
+    monkeypatch.setattr(settings, "tus_max_size_bytes", 50 * 1024 * 1024)
+
+    user = await _create_user(db_session)
+    await db_session.commit()
+
+    filename = "test.mp4"
+    filename_b64 = base64.b64encode(filename.encode()).decode()
+    mime_b64 = base64.b64encode(b"video/mp4").decode()
+    headers = _auth_headers(user)
+    headers.update(
+        {
+            "Tus-Resumable": "1.0.0",
+            "Upload-Length": str(20 * 1024 * 1024),
+            "Upload-Metadata": f"filename {filename_b64}, filetype {mime_b64}",
+        }
+    )
+
+    response = await client.post("/api/upload/tus", headers=headers)
+
+    assert response.status_code == 201
+    assert "Location" in response.headers
+    mock_storage["create"].assert_called_once()
 
 
 @pytest.mark.asyncio

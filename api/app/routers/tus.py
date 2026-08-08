@@ -297,7 +297,7 @@ def _decode_upload_metadata(header: str | None) -> dict[str, str]:
 async def tus_options(
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> Response:
-    max_size = settings.max_file_size_mb * 1024 * 1024
+    max_size = settings.tus_max_size_bytes
 
     return Response(
         status_code=204,
@@ -338,7 +338,7 @@ async def tus_create(
     if upload_length <= 0:
         raise BadRequestError("Upload-Length must be > 0", code=UploadErrorCode.FILE_TOO_LARGE)
 
-    max_bytes = settings.max_file_size_mb * 1024 * 1024  # type: ignore[operator]
+    max_bytes = settings.tus_max_size_bytes
     if upload_length > max_bytes:
         raise BadRequestError(
             f"Upload-Length {upload_length // (1024 * 1024)} MiB exceeds server maximum of {max_bytes // (1024 * 1024)} MiB.",
