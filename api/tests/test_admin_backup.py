@@ -708,6 +708,7 @@ async def test_restore_wipes_s3_and_reuploads(db_session: AsyncSession, tmp_path
 
     delete_mock = AsyncMock()
     upload_mock = AsyncMock()
+    copy_mock = AsyncMock()
 
     existing_s3 = [{"Key": "cas/old_file", "Size": 5}]
 
@@ -718,12 +719,15 @@ async def test_restore_wipes_s3_and_reuploads(db_session: AsyncSession, tmp_path
 
     with (
         patch("app.services.backup.list_objects", side_effect=_fake_list),
+        patch("app.services.backup.copy_object", copy_mock),
         patch("app.services.backup.delete_object", delete_mock),
         patch("app.services.backup.upload_file", upload_mock),
     ):
         await restore_from_zip_path(db_session, zip_path)
 
-    delete_mock.assert_called_once_with("cas/old_file")
+    delete_mock.assert_any_call("cas/old_file")
+    assert copy_mock.await_args_list[0].args[0] == "cas/old_file"
+    assert copy_mock.await_args_list[0].args[1].startswith("restore-rollback/")
     upload_mock.assert_called_once()
     call_args = upload_mock.call_args
     assert call_args[0][0] == s3_content

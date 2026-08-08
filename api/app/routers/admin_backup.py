@@ -16,6 +16,7 @@ from app.routers.admin import AdminUser
 from app.services.backup import (
     MAX_LOCAL_BACKUPS,
     backup_filename,
+    backup_restore_max_bytes,
     create_backup_zip,
     enforce_backup_rotation,
     list_local_backups,
@@ -191,17 +192,25 @@ async def restore_uploaded_backup(
     tmp_path = Path(tmp.name)
     try:
         # Stream upload to temp file
+        bytes_written = 0
+        max_bytes = backup_restore_max_bytes()
         while chunk := await file.read(1024 * 1024):
+            bytes_written += len(chunk)
+            if bytes_written > max_bytes:
+                raise BadRequestError("Uploaded backup exceeds the configured storage capacity")
             tmp.write(chunk)
         tmp.close()
 
         manifest = await restore_from_zip_path(db, tmp_path)
     except ValueError as exc:
         raise BadRequestError(str(exc)) from exc
+    except BadRequestError:
+        raise
     except Exception as exc:
         logger.exception("Restore from upload failed")
         raise HTTPException(status_code=500, detail=f"Restore failed: {exc}") from exc
     finally:
+        tmp.close()
         tmp_path.unlink(missing_ok=True)
 
     return {"status": "ok", "manifest": manifest}

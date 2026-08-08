@@ -354,6 +354,7 @@ async def test_branding_objects_wiped_on_restore(db_session: AsyncSession, tmp_p
     """Existing branding/ objects must be deleted before restore."""
     zip_path = _make_zip(tmp_path, s3_metadata={})
     delete_mock = AsyncMock()
+    copy_mock = AsyncMock()
 
     async def _fake_list(prefix: str):
         if prefix == "branding/":
@@ -361,12 +362,14 @@ async def test_branding_objects_wiped_on_restore(db_session: AsyncSession, tmp_p
 
     with (
         patch("app.services.backup.list_objects", side_effect=_fake_list),
+        patch("app.services.backup.copy_object", copy_mock),
         patch("app.services.backup.delete_object", delete_mock),
         patch("app.services.backup.upload_file", new_callable=AsyncMock),
     ):
         await restore_from_zip_path(db_session, zip_path)
 
     delete_mock.assert_any_call("branding/old_logo.png")
+    assert copy_mock.await_args_list[0].args[0] == "branding/old_logo.png"
 
 
 @pytest.mark.asyncio
@@ -402,10 +405,10 @@ async def test_branding_object_reuploaded_on_restore(
 
 
 @pytest.mark.asyncio
-async def test_truncate_failure_skipped_gracefully(
+async def test_truncate_failure_aborts_restore(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
-    """If a DELETE FROM fails for one table, restore continues."""
+    """A partial database wipe must abort before object storage is touched."""
     zip_path = _make_zip(tmp_path, s3_metadata={})
     original_execute = db_session.execute
 
@@ -425,8 +428,8 @@ async def test_truncate_failure_skipped_gracefully(
             patch("app.services.backup.delete_object", new_callable=AsyncMock),
             patch("app.services.backup.upload_file", new_callable=AsyncMock),
         ):
-            result = await restore_from_zip_path(db_session, zip_path)
-        assert result["version"] == BACKUP_VERSION
+            with pytest.raises(Exception, match="table missing"):
+                await restore_from_zip_path(db_session, zip_path)
     finally:
         db_session.execute = original_execute  # type: ignore[method-assign]
 

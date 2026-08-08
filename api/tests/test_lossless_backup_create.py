@@ -286,10 +286,10 @@ def test_parent_tables_precede_children() -> None:
 
 
 @pytest.mark.asyncio
-async def test_table_dump_failure_skipped_gracefully(
+async def test_table_dump_failure_aborts_incomplete_backup(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
-    """If a table doesn't exist yet, backup continues and returns empty list for it."""
+    """A backup must never certify a snapshot that silently omitted a table."""
     dest = tmp_path / "b.zip"
 
     original_dump = None
@@ -308,11 +308,10 @@ async def test_table_dump_failure_skipped_gracefully(
         patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
         patch("app.services.backup._dump_table", side_effect=_flaky_dump),
     ):
-        manifest = await create_backup_zip(db_session, dest)
+        with pytest.raises(Exception, match="table missing"):
+            await create_backup_zip(db_session, dest)
 
-    # Backup still completes
-    assert dest.exists()
-    assert manifest["db_row_counts"]["dead_letter_jobs"] == 0
+    assert not dest.exists()
 
 
 # ── ZIP format ────────────────────────────────────────────────────────────────

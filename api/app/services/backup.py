@@ -18,6 +18,7 @@ Version history:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -31,7 +32,9 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.storage.facade import (
+    copy_object,
     delete_object,
     download_file_raw,
     get_object_headers,
@@ -110,6 +113,164 @@ _ISO_DT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
 # Multipart threshold for restore uploads — objects larger than this are streamed
 # via upload_file_multipart rather than buffered in RAM.
 _RESTORE_MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5 MiB
+_BACKUP_MANIFEST_MAX_BYTES = 1024 * 1024
+_BACKUP_METADATA_MAX_BYTES = 64 * 1024 * 1024
+_BACKUP_TABLE_MAX_BYTES = 128 * 1024 * 1024
+_BACKUP_MAX_ENTRIES = 100_000
+_BACKUP_MAX_COMPRESSION_RATIO = 1_000
+_BACKUP_METADATA_HEADROOM_BYTES = 512 * 1024 * 1024
+
+
+def backup_restore_max_bytes() -> int:
+    """Bound backup input using the deployment's configured storage capacity."""
+    return max(settings.max_storage_gb, 1) * 1024**3 + _BACKUP_METADATA_HEADROOM_BYTES
+
+
+def _read_zip_entry_bounded(zf: zipfile.ZipFile, info: zipfile.ZipInfo, limit: int) -> bytes:
+    if info.file_size > limit:
+        raise ValueError(f"Backup entry {info.filename!r} exceeds its size limit")
+    with zf.open(info) as source:
+        data = source.read(limit + 1)
+    if len(data) > limit or len(data) != info.file_size:
+        raise ValueError(f"Backup entry {info.filename!r} has an invalid expanded size")
+    return data
+
+
+def _validate_backup_archive(
+    zip_path: Path,
+) -> tuple[
+    dict[str, Any], dict[str, list[dict[str, Any]]], list[str], dict[str, dict[str, str | None]]
+]:
+    """Validate and fully read a backup before any destructive restore step."""
+    max_total_bytes = backup_restore_max_bytes()
+    try:
+        archive = zipfile.ZipFile(zip_path, "r")
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError("Uploaded backup is not a valid ZIP archive") from exc
+
+    try:
+        with archive as zf:
+            entries = zf.infolist()
+            if len(entries) > _BACKUP_MAX_ENTRIES:
+                raise ValueError("Backup contains too many ZIP entries")
+
+            by_name: dict[str, zipfile.ZipInfo] = {}
+            total_declared = 0
+            for info in entries:
+                name = info.filename
+                if (
+                    not name
+                    or name in by_name
+                    or "\\" in name
+                    or name.startswith("/")
+                    or any(part in {"", ".", ".."} for part in name.split("/"))
+                ):
+                    raise ValueError(f"Backup contains an unsafe or duplicate entry: {name!r}")
+                if info.is_dir() or info.flag_bits & 0x1:
+                    raise ValueError(f"Backup contains an unsupported ZIP entry: {name!r}")
+                if info.compress_size == 0 and info.file_size > 0:
+                    raise ValueError(f"Backup entry {name!r} has an invalid compressed size")
+                if (
+                    info.file_size >= 1024 * 1024
+                    and info.compress_size
+                    and info.file_size / info.compress_size > _BACKUP_MAX_COMPRESSION_RATIO
+                ):
+                    raise ValueError(f"Backup entry {name!r} has a suspicious compression ratio")
+                total_declared += info.file_size
+                if total_declared > max_total_bytes:
+                    raise ValueError("Backup expands beyond the configured storage capacity")
+                by_name[name] = info
+
+            manifest_info = by_name.get("manifest.json")
+            if manifest_info is None:
+                raise ValueError("Backup is missing manifest.json")
+            manifest = json.loads(
+                _read_zip_entry_bounded(zf, manifest_info, _BACKUP_MANIFEST_MAX_BYTES)
+            )
+            if not isinstance(manifest, dict):
+                raise ValueError("Backup manifest must be a JSON object")
+
+            version = manifest.get("version", "1.0")
+            if version not in ("1.0", "2.0"):
+                raise ValueError(
+                    f"Incompatible backup version {version!r} (supported: '1.0', '2.0')"
+                )
+
+            db_data: dict[str, list[dict[str, Any]]] = {}
+            for table in _TABLE_INSERT_ORDER:
+                name = f"db/{table}.json"
+                table_info = by_name.get(name)
+                rows = (
+                    json.loads(_read_zip_entry_bounded(zf, table_info, _BACKUP_TABLE_MAX_BYTES))
+                    if table_info is not None
+                    else []
+                )
+                if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                    raise ValueError(f"Backup table {table!r} must contain a JSON row array")
+                db_data[table] = rows
+
+            metadata_info = by_name.get("s3_metadata.json")
+            raw_metadata = (
+                json.loads(_read_zip_entry_bounded(zf, metadata_info, _BACKUP_METADATA_MAX_BYTES))
+                if metadata_info is not None
+                else {}
+            )
+            if not isinstance(raw_metadata, dict):
+                raise ValueError("Backup object metadata must be a JSON object")
+            s3_metadata: dict[str, dict[str, str | None]] = {}
+            for key, metadata in raw_metadata.items():
+                if not isinstance(key, str) or not isinstance(metadata, dict):
+                    raise ValueError("Backup object metadata has an invalid shape")
+                if any(value is not None and not isinstance(value, str) for value in metadata.values()):
+                    raise ValueError(f"Backup object metadata for {key!r} is invalid")
+                s3_metadata[key] = metadata
+
+            s3_entries: list[str] = []
+            object_hashes = manifest.get("s3_objects", {})
+            if not isinstance(object_hashes, dict):
+                raise ValueError("Backup object integrity manifest is invalid")
+            for name, info in by_name.items():
+                if not name.startswith("s3/"):
+                    continue
+                key = name[3:]
+                if not key or not key.startswith(BACKUP_PREFIXES):
+                    raise ValueError(f"Backup contains an object outside managed prefixes: {key!r}")
+                digest = hashlib.sha256()
+                actual_size = 0
+                with zf.open(info) as source:
+                    while chunk := source.read(1024 * 1024):
+                        actual_size += len(chunk)
+                        if actual_size > info.file_size:
+                            raise ValueError(f"Backup object {key!r} expanded beyond its declared size")
+                        digest.update(chunk)
+                if actual_size != info.file_size:
+                    raise ValueError(f"Backup object {key!r} was truncated")
+                expected = object_hashes.get(key)
+                if expected is not None and (
+                    not isinstance(expected, dict)
+                    or expected.get("size") != actual_size
+                    or expected.get("sha256") != digest.hexdigest()
+                ):
+                    raise ValueError(f"Backup object {key!r} failed its integrity check")
+                s3_entries.append(name)
+
+            declared_count = manifest.get("s3_object_count")
+            if not isinstance(declared_count, int) or declared_count != len(s3_entries):
+                raise ValueError("Backup object count does not match its manifest")
+
+            allowed_names = {
+                "manifest.json",
+                "s3_metadata.json",
+                *(f"db/{table}.json" for table in _TABLE_INSERT_ORDER),
+                *s3_entries,
+            }
+            unexpected = set(by_name) - allowed_names
+            if unexpected:
+                raise ValueError(f"Backup contains unexpected entries: {sorted(unexpected)[:3]!r}")
+
+            return manifest, db_data, s3_entries, s3_metadata
+    except (json.JSONDecodeError, UnicodeDecodeError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise ValueError("Backup contains corrupt or invalid data") from exc
 
 
 # ── Serialization helpers ─────────────────────────────────────────────────────
@@ -262,26 +423,37 @@ async def create_backup_zip(db: AsyncSession, dest_path: Path) -> dict[str, Any]
     """
     db_data: dict[str, list[dict[str, Any]]] = {}
     for table_name in _TABLE_INSERT_ORDER:
-        try:
-            db_data[table_name] = await _dump_table(db, table_name)
-        except Exception:
-            # Table may not exist yet (e.g. pre-migration instance). Log and skip.
-            logger.warning("Backup: could not dump table %r — skipping", table_name)
-            db_data[table_name] = []
+        # A backup that silently omits a table is not a backup. Production
+        # startup already requires current migrations, so fail closed here.
+        db_data[table_name] = await _dump_table(db, table_name)
 
     s3_keys: list[str] = []
     for prefix in BACKUP_PREFIXES:
         async for obj in list_objects(prefix):
             s3_keys.append(obj["Key"])
+    s3_keys = sorted(set(s3_keys))
 
     # Collect per-object metadata and raw bytes concurrently.
     # We use a semaphore to avoid opening hundreds of S3 connections at once.
     _sem = asyncio.Semaphore(10)
 
-    async def _fetch_one(key: str, local: Path) -> dict[str, str | None]:
+    async def _fetch_one(
+        key: str, local: Path
+    ) -> tuple[dict[str, str | None], dict[str, str | int]]:
         async with _sem:
             await download_file_raw(key, local)
-            return await get_object_headers(key)
+            metadata = await get_object_headers(key)
+
+            def _integrity() -> dict[str, str | int]:
+                digest = hashlib.sha256()
+                size = 0
+                with open(local, "rb") as source:
+                    while chunk := source.read(1024 * 1024):
+                        size += len(chunk)
+                        digest.update(chunk)
+                return {"size": size, "sha256": digest.hexdigest()}
+
+            return metadata, await asyncio.to_thread(_integrity)
 
     manifest: dict[str, Any] = {
         "version": BACKUP_VERSION,
@@ -297,20 +469,24 @@ async def create_backup_zip(db: AsyncSession, dest_path: Path) -> dict[str, Any]
 
         # Download all objects and their metadata.
         s3_local: dict[str, Path] = {}
-        tasks: dict[str, asyncio.Task[dict[str, str | None]]] = {}
-        for key in s3_keys:
-            safe_name = key.replace("/", "__")
-            local = tmp / safe_name
+        tasks: dict[
+            str, asyncio.Task[tuple[dict[str, str | None], dict[str, str | int]]]
+        ] = {}
+        for index, key in enumerate(s3_keys):
+            # Storage keys are not filesystem paths. An ordinal prevents both
+            # traversal and collisions such as ``a/b`` versus ``a__b``.
+            local = tmp / f"object_{index}"
             s3_local[key] = local
             tasks[key] = asyncio.create_task(_fetch_one(key, local))
 
         s3_metadata: dict[str, dict[str, str | None]] = {}
-        for key, task in tasks.items():
-            try:
-                s3_metadata[key] = await task
-            except Exception as exc:
-                logger.warning("Backup: failed to fetch metadata for %r: %s", key, exc)
-                s3_metadata[key] = {}
+        s3_integrity: dict[str, dict[str, str | int]] = {}
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        for key, result in zip(tasks, results, strict=True):
+            if isinstance(result, BaseException):
+                raise RuntimeError(f"Backup could not capture object {key!r}") from result
+            s3_metadata[key], s3_integrity[key] = result
+        manifest["s3_objects"] = s3_integrity
 
         def _write() -> None:
             with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
@@ -338,29 +514,9 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
     the entire object in RAM.
     """
 
-    def _read_metadata() -> tuple[
-        dict[str, Any], dict[str, list[dict[str, Any]]], list[str], dict[str, dict[str, str | None]]
-    ]:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            namelist = zf.namelist()
-            manifest = json.loads(zf.read("manifest.json"))
-
-            db_data: dict[str, list[dict[str, Any]]] = {}
-            for tbl in _TABLE_INSERT_ORDER:
-                entry = f"db/{tbl}.json"
-                db_data[tbl] = json.loads(zf.read(entry)) if entry in namelist else []
-
-            s3_entries = [n for n in namelist if n.startswith("s3/")]
-
-            # v2 backups include per-object metadata; v1 backups do not.
-            if "s3_metadata.json" in namelist:
-                s3_meta: dict[str, dict[str, str | None]] = json.loads(zf.read("s3_metadata.json"))
-            else:
-                s3_meta = {}
-
-        return manifest, db_data, s3_entries, s3_meta
-
-    manifest, db_data, s3_entry_names, s3_metadata = await asyncio.to_thread(_read_metadata)
+    manifest, db_data, s3_entry_names, s3_metadata = await asyncio.to_thread(
+        _validate_backup_archive, zip_path
+    )
 
     version = manifest.get("version", "1.0")
     if version not in ("1.0", "2.0"):
@@ -374,10 +530,10 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
 
     # Wipe existing DB rows (reverse FK order)
     for tbl in _TABLE_DELETE_ORDER:
-        try:
-            await db.execute(text(f'DELETE FROM "{tbl}"'))
-        except Exception:
-            logger.warning("Restore: could not truncate table %r — skipping", tbl)
+        # Never continue from a partial wipe. PostgreSQL also marks the entire
+        # transaction failed after a statement error, so "skip and continue"
+        # cannot provide compatibility and only hides destructive failures.
+        await db.execute(text(f'DELETE FROM "{tbl}"'))
 
     # Restore DB rows (forward FK order)
     for tbl in _TABLE_INSERT_ORDER:
@@ -385,63 +541,120 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
 
     await db.flush()
 
-    # Wipe existing S3 objects in all backup prefixes
+    # Snapshot every managed object before changing storage. S3 has no
+    # multi-object transaction, so these server-side copies are the rollback
+    # journal for upload/delete failures during full replacement.
+    existing_keys: list[str] = []
     for prefix in BACKUP_PREFIXES:
         async for obj in list_objects(prefix):
-            await delete_object(obj["Key"])
+            existing_keys.append(obj["Key"])
+    existing_keys = sorted(set(existing_keys))
+
+    rollback_prefix = f"restore-rollback/{uuid.uuid4()}/"
+    rollback_keys = {
+        key: f"{rollback_prefix}{index}" for index, key in enumerate(existing_keys)
+    }
+    captured_rollback_keys: list[str] = []
+    try:
+        for key, rollback_key in rollback_keys.items():
+            await copy_object(key, rollback_key)
+            captured_rollback_keys.append(rollback_key)
+    except Exception:
+        for rollback_key in captured_rollback_keys:
+            try:
+                await delete_object(rollback_key)
+            except Exception:
+                logger.exception("Restore: failed to clean incomplete rollback object %r", rollback_key)
+        raise
 
     # Restore S3 objects.  Objects ≥ 5 MiB are streamed via a temp file to
     # avoid loading the full object into RAM.
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
+    restored_keys: set[str] = set()
+    attempted_keys: set[str] = set()
+    rollback_complete = False
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
 
-        for entry_name in s3_entry_names:
-            key = entry_name[3:]  # strip leading "s3/"
-            meta = s3_metadata.get(key, {})
+            for index, entry_name in enumerate(s3_entry_names):
+                key = entry_name[3:]  # strip leading "s3/"
+                meta = s3_metadata.get(key, {})
 
-            content_type: str = meta.get("content_type") or "application/octet-stream"
-            content_encoding: str | None = meta.get("content_encoding")
-            content_disposition: str | None = meta.get("content_disposition") or "attachment"
+                content_type: str = meta.get("content_type") or "application/octet-stream"
+                content_encoding: str | None = meta.get("content_encoding")
+                content_disposition: str | None = meta.get("content_disposition") or "attachment"
 
-            def _extract_entry(
-                name: str = entry_name, dest: Path = tmp / key.replace("/", "__")
-            ) -> tuple[Path, int]:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                with zipfile.ZipFile(zip_path, "r") as zf:
-                    info = zf.getinfo(name)
-                    file_size = info.file_size
-                    with zf.open(name) as src, open(dest, "wb") as dst:
-                        while True:
-                            chunk = src.read(64 * 1024)
-                            if not chunk:
-                                break
-                            dst.write(chunk)
-                return dest, file_size
+                def _extract_entry(
+                    name: str = entry_name, dest: Path = tmp / f"object_{index}"
+                ) -> tuple[Path, int]:
+                    with zipfile.ZipFile(zip_path, "r") as zf:
+                        info = zf.getinfo(name)
+                        file_size = info.file_size
+                        with zf.open(name) as src, open(dest, "wb") as dst:
+                            while chunk := src.read(64 * 1024):
+                                dst.write(chunk)
+                    return dest, file_size
 
-            local_path, file_size = await asyncio.to_thread(_extract_entry)
+                local_path, file_size = await asyncio.to_thread(_extract_entry)
 
+                try:
+                    # Record before I/O so a lost-success response for a new key
+                    # is still removed during rollback.
+                    attempted_keys.add(key)
+                    if file_size >= _RESTORE_MULTIPART_THRESHOLD:
+                        await upload_file_multipart(
+                            local_path,
+                            key,
+                            content_type=content_type,
+                            content_encoding=content_encoding,
+                            content_disposition=content_disposition,
+                        )
+                    else:
+                        data = await asyncio.to_thread(local_path.read_bytes)
+                        await upload_file(
+                            data,
+                            key,
+                            content_type=content_type,
+                            content_encoding=content_encoding,
+                            content_disposition=content_disposition,
+                        )
+                    restored_keys.add(key)
+                finally:
+                    local_path.unlink(missing_ok=True)
+
+        for stale_key in set(existing_keys) - restored_keys:
+            await delete_object(stale_key)
+        rollback_complete = True
+    except Exception as restore_error:
+        rollback_errors: list[Exception] = []
+        for key, rollback_key in rollback_keys.items():
             try:
-                if file_size >= _RESTORE_MULTIPART_THRESHOLD:
-                    # Large object — stream via multipart to avoid RAM spike.
-                    await upload_file_multipart(
-                        local_path,
-                        key,
-                        content_type=content_type,
-                        content_encoding=content_encoding,
-                        content_disposition=content_disposition,
-                    )
-                else:
-                    # Small object — single PUT.
-                    data = await asyncio.to_thread(local_path.read_bytes)
-                    await upload_file(
-                        data,
-                        key,
-                        content_type=content_type,
-                        content_encoding=content_encoding,
-                        content_disposition=content_disposition,
-                    )
-            finally:
-                local_path.unlink(missing_ok=True)
+                await copy_object(rollback_key, key)
+            except Exception as exc:
+                rollback_errors.append(exc)
+                logger.exception("Restore: failed to roll back object %r", key)
+        for new_key in attempted_keys - set(existing_keys):
+            try:
+                await delete_object(new_key)
+            except Exception as exc:
+                rollback_errors.append(exc)
+                logger.exception("Restore: failed to remove newly restored object %r", new_key)
+        if rollback_errors:
+            raise RuntimeError(
+                "Object restore failed and storage rollback was incomplete; "
+                f"rollback data remains under {rollback_prefix!r}"
+            ) from restore_error
+        rollback_complete = True
+        raise
+    finally:
+        if rollback_complete:
+            for rollback_key in rollback_keys.values():
+                try:
+                    await delete_object(rollback_key)
+                except Exception:
+                    # Cleanup failure leaks recovery data but never invalidates
+                    # an otherwise completed restore or successful rollback.
+                    logger.exception("Restore: failed to clean rollback object %r", rollback_key)
 
     return manifest
 
