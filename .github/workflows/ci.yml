@@ -113,6 +113,7 @@ jobs:
           tests/test_release_gate_dependency_compat.py
           tests/test_release_hardening_regressions.py
           tests/test_release_promotion_script.py
+          tests/test_release_supply_chain_hardening.py
           tests/test_storage_release_policy.py
 
   resolve-seaweedfs-image:
@@ -121,11 +122,18 @@ jobs:
       image: ${{ steps.resolve.outputs.image }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: ${{ steps.toolchain.outputs.buildx_version }}
+          driver-opts: |
+            image=${{ steps.toolchain.outputs.buildkit_image }}
       - name: Resolve SeaweedFS to a canonical immutable digest
         id: resolve
         env:
-          SEAWEEDFS_SOURCE_IMAGE: chrislusf/seaweedfs:4.29
+          SEAWEEDFS_SOURCE_IMAGE: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
         run: |
           set -euo pipefail
           resolved=$(./scripts/resolve-seaweedfs-image.sh "$SEAWEEDFS_SOURCE_IMAGE")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -11,6 +12,7 @@ _WRITE = _REPO_ROOT / "scripts/write-production-release-manifest.py"
 _SANITIZE = _REPO_ROOT / "scripts/sanitize-production-images.py"
 _INSPECT = _REPO_ROOT / "scripts/inspect-production-images.py"
 _DIGEST = "1" * 64
+_SEAWEED_DIGEST = "d47c7ee99fcb951351d7194915f4e3a5ea604a8e8871183d713907dec4fb9bf5"
 _COMMIT = "a" * 40
 _PLATFORMS = ["linux/amd64", "linux/arm64"]
 
@@ -35,7 +37,7 @@ def _base_values() -> dict[str, str]:
         "NGINX_IMAGE": _reference("docker.io/library/nginx"),
         "MEILI_IMAGE": _reference("docker.io/getmeili/meilisearch"),
         "EUROOFFICE_IMAGE": _reference("ghcr.io/euro-office/documentserver"),
-        "SEAWEEDFS_IMAGE": _reference("docker.io/chrislusf/seaweedfs"),
+        "SEAWEEDFS_IMAGE": _reference("docker.io/chrislusf/seaweedfs", _SEAWEED_DIGEST),
     }
 
 
@@ -74,12 +76,55 @@ def _inspection(values: dict[str, str]) -> dict[str, object]:
     }
 
 
+def _service_images(values: dict[str, str]) -> dict[str, str]:
+    policy = f"docker.io/library/alpine@{values['POLICY_IMAGE_DIGEST']}"
+    return dict(
+        sorted(
+            {
+                "release-image-policy": policy,
+                "postgres-image-policy": policy,
+                "selfhost-worker-image-policy": policy,
+                "seaweedfs-image-policy": policy,
+                "postgres": values["POSTGRES_IMAGE"],
+                "redis": values["REDIS_IMAGE"],
+                "meilisearch": values["MEILI_IMAGE"],
+                "eurooffice": values["EUROOFFICE_IMAGE"],
+                "api": values["API_IMAGE"],
+                "worker": values["WORKER_IMAGE"],
+                "worker-fast": values["WORKER_IMAGE"],
+                "worker-slow": values["WORKER_IMAGE"],
+                "web": values["WEB_IMAGE"],
+                "selfhost-worker": values["SELFHOST_WORKER_IMAGE"],
+                "nginx": values["NGINX_IMAGE"],
+                "seaweedfs-master": values["SEAWEEDFS_IMAGE"],
+                "seaweedfs-volume1": values["SEAWEEDFS_IMAGE"],
+                "seaweedfs-volume2": values["SEAWEEDFS_IMAGE"],
+                "seaweedfs-filer": values["SEAWEEDFS_IMAGE"],
+                "seaweedfs-s3": values["SEAWEEDFS_IMAGE"],
+            }.items()
+        )
+    )
+
+
+def _service_map(env_file: Path, values: dict[str, str]) -> dict[str, object]:
+    digest = hashlib.sha256(env_file.read_bytes()).hexdigest()
+    return {
+        "schema_version": 1,
+        "release_commit": _COMMIT,
+        "compose_profiles": ["postgres", "seaweedfs-prod", "selfhost-worker"],
+        "release_input_sha256": digest,
+        "services": _service_images(values),
+    }
+
+
 def _run_writer(tmp_path: Path, values: dict[str, str]) -> subprocess.CompletedProcess[str]:
     env_file = tmp_path / "images.env"
     inspection_file = tmp_path / "inspection.json"
+    service_map_file = tmp_path / "services.json"
     output = tmp_path / "manifest.json"
     _write_env(env_file, values)
     inspection_file.write_text(json.dumps(_inspection(values)), encoding="utf-8")
+    service_map_file.write_text(json.dumps(_service_map(env_file, values)), encoding="utf-8")
     return subprocess.run(
         [
             sys.executable,
@@ -88,6 +133,8 @@ def _run_writer(tmp_path: Path, values: dict[str, str]) -> subprocess.CompletedP
             str(env_file),
             "--inspection-file",
             str(inspection_file),
+            "--compose-service-map-file",
+            str(service_map_file),
             "--output",
             str(output),
             "--commit",
@@ -99,17 +146,68 @@ def _run_writer(tmp_path: Path, values: dict[str, str]) -> subprocess.CompletedP
     )
 
 
-def test_manifest_records_verified_images_platforms_and_compose_hashes(tmp_path: Path) -> None:
+def test_manifest_records_verified_images_service_mapping_and_toolchain(tmp_path: Path) -> None:
     values = _base_values()
     result = _run_writer(tmp_path, values)
     assert result.returncode == 0, result.stderr
     payload = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["release_commit"] == _COMMIT
     assert payload["required_workload_platforms"] == _PLATFORMS
     assert set(payload["compose_files"]) == {"compose.yaml", "compose.prod.yaml"}
     assert all(len(value) == 64 for value in payload["compose_files"].values())
+    assert payload["compose_service_images"]["api"] == values["API_IMAGE"]
+    assert payload["compose_service_images"]["worker"] == values["WORKER_IMAGE"]
+    assert payload["release_toolchain"]["BUILDX_VERSION"] == "v0.36.1"
+    assert payload["release_toolchain"]["SEAWEEDFS_TEST_IMAGE"] == values["SEAWEEDFS_IMAGE"]
+    assert "created_at" not in payload
     assert payload["registry_inspections"]["API_IMAGE"]["commit_tag_digest"] == f"sha256:{_DIGEST}"
+
+
+def test_manifest_is_byte_reproducible_for_identical_inputs(tmp_path: Path) -> None:
+    values = _base_values()
+    first = _run_writer(tmp_path, values)
+    assert first.returncode == 0, first.stderr
+    first_bytes = (tmp_path / "manifest.json").read_bytes()
+    second = _run_writer(tmp_path, values)
+    assert second.returncode == 0, second.stderr
+    assert (tmp_path / "manifest.json").read_bytes() == first_bytes
+
+
+def test_manifest_rejects_service_to_image_swap(tmp_path: Path) -> None:
+    values = _base_values()
+    env_file = tmp_path / "images.env"
+    inspection_file = tmp_path / "inspection.json"
+    service_map_file = tmp_path / "services.json"
+    output = tmp_path / "manifest.json"
+    _write_env(env_file, values)
+    inspection_file.write_text(json.dumps(_inspection(values)), encoding="utf-8")
+    service_map = _service_map(env_file, values)
+    services = service_map["services"]
+    assert isinstance(services, dict)
+    services["api"], services["worker"] = services["worker"], services["api"]
+    service_map_file.write_text(json.dumps(service_map), encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_WRITE),
+            "--env-file",
+            str(env_file),
+            "--inspection-file",
+            str(inspection_file),
+            "--compose-service-map-file",
+            str(service_map_file),
+            "--output",
+            str(output),
+            "--commit",
+            _COMMIT,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "service-map" in result.stderr
 
 
 def test_manifest_rejects_mutable_infrastructure_tag(tmp_path: Path) -> None:
@@ -124,11 +222,13 @@ def test_manifest_rejects_registry_inspection_not_bound_to_commit_tag(tmp_path: 
     values = _base_values()
     env_file = tmp_path / "images.env"
     inspection_file = tmp_path / "inspection.json"
+    service_map_file = tmp_path / "services.json"
     output = tmp_path / "manifest.json"
     _write_env(env_file, values)
     inspection = _inspection(values)
     inspection["images"]["API_IMAGE"]["commit_tag_digest"] = "sha256:" + "2" * 64
     inspection_file.write_text(json.dumps(inspection), encoding="utf-8")
+    service_map_file.write_text(json.dumps(_service_map(env_file, values)), encoding="utf-8")
     result = subprocess.run(
         [
             sys.executable,
@@ -137,6 +237,8 @@ def test_manifest_rejects_registry_inspection_not_bound_to_commit_tag(tmp_path: 
             str(env_file),
             "--inspection-file",
             str(inspection_file),
+            "--compose-service-map-file",
+            str(service_map_file),
             "--output",
             str(output),
             "--commit",
@@ -194,7 +296,7 @@ def test_sanitizer_rejects_duplicate_export_quoted_and_spaced_assignments(tmp_pa
         assert result.returncode != 0, name
 
 
-def _fake_docker(tmp_path: Path, *, wrong_tag: bool = False) -> Path:
+def _fake_docker(tmp_path: Path) -> Path:
     executable = tmp_path / "docker"
     executable.write_text(
         "#!/usr/bin/env python3\n"

@@ -1,66 +1,79 @@
 # Production release manifest
 
-The canonical `production-release-<commit>` GitHub Actions artifact is the authoritative **release complete** marker. Component tags and convenience aliases do not identify a complete release.
+The canonical `production-release-<commit>` GitHub Actions artifact is the authoritative **release complete** marker. Component tags and convenience aliases are not deployable release identities.
+
+## Repository-pinned control plane
+
+`deploy/release-toolchain.env` contains reviewed, repository-controlled release inputs:
+
+- an exact Docker Buildx version;
+- a digest-pinned BuildKit image;
+- a digest-pinned `tonistiigi/binfmt` image used only for ARM64 emulation;
+- the reviewed SeaweedFS release metadata and exact digest exercised by required CI and release tests.
+
+Updating any of these values is an explicit reviewed source change. GitHub Action source references remain pinned to full commit SHAs as a separate supply-chain control.
 
 ## Automated release sequence
 
 `release.yml` reruns the complete CI workflow, then `build.yml` performs these phases:
 
-1. Resolve `chrislusf/seaweedfs:4.29` directly from registry manifest metadata to a canonical `docker.io/chrislusf/seaweedfs@sha256:...` reference.
-2. Run both live SeaweedFS suites against that exact digest.
-3. Build all four candidate images for `linux/amd64` and `linux/arm64`.
+1. Load and validate the repository-pinned release toolchain.
+2. Run both live SeaweedFS suites against the exact `SEAWEEDFS_TEST_IMAGE` digest committed in `deploy/release-toolchain.env`.
+3. Build all four candidate images for `linux/amd64` and `linux/arm64` using the pinned Buildx, BuildKit, and binfmt inputs.
 4. Scan both child platforms for every candidate.
-5. Copy only write-once `sha-<commit>` tags into the release repositories. A same-digest rerun is idempotent; a different digest for an existing commit tag fails closed.
+5. Copy only write-once `sha-<commit>` tags into release repositories. Same-digest reruns are idempotent; conflicting reuse fails closed.
 6. Wait for API, worker, web, and self-hosted worker promotion to succeed.
-7. Require the protected `PRODUCTION_SEAWEEDFS_IMAGE` expectation to equal the digest exercised by the live suites, and place the tested digest—not the environment value—into the manifest input.
-8. Verify every workload commit tag and every infrastructure digest through the registry.
-9. Render `compose.yaml` plus `compose.prod.yaml` in a host-isolated environment, collect the resolved image set, and require it to exactly equal the manifest image set.
-10. Publish the canonical manifest, sanitized image file, registry inspection, rendered Compose configuration, resolved Compose image list, and `SHA256SUMS` as one authoritative artifact.
+7. Require the independently reviewed SeaweedFS expectation to equal the repository-tested digest and use the tested digest in release input.
+8. Verify every workload commit tag, infrastructure digest, and required platform set through the registry.
+9. Render Compose with only checked-in synthetic runtime values and certify the exact **service→image** mapping. The validator rejects missing, extra, or swapped service images.
+10. Write a deterministic schema-v3 manifest containing Compose hashes, registry evidence, service→image evidence, and exact release-toolchain provenance.
+11. Publish the canonical manifest, sanitized image file, registry inspection, minimized Compose service map, pinned `release-toolchain.env`, and `SHA256SUMS` as one authoritative artifact.
 
 A failed workflow that copied one or more immutable component tags but did not publish the canonical artifact is incomplete and must not be deployed. Releases are serialized repository-wide and an in-progress release is never cancelled by a newer release.
 
-Cross-repository convenience aliases are deliberately not part of automated release completion because four independent registry tags cannot be updated transactionally. If operators choose to run `scripts/publish-release-aliases.sh` manually, those aliases are best-effort navigation aids only and must never be used as production deployment inputs.
+Cross-repository convenience aliases are deliberately not part of automated release completion. `scripts/publish-release-aliases.sh` is a manual, best-effort navigation helper only and must never be used as a production deployment input.
 
-## Protected production-release environment
+## Secret handling
 
-Create a protected GitHub environment named `production-release`, require reviewers, and define these environment variables as immutable references:
+Release artifacts must never contain production runtime secrets. The automated finalizer uses `.env.example` only for structural Compose rendering and persists only the minimized service→image evidence.
 
-- `PRODUCTION_POLICY_IMAGE_DIGEST` — `sha256:<64-hex>` for `docker.io/library/alpine`;
-- `PRODUCTION_POSTGRES_IMAGE` — `docker.io/library/postgres@sha256:<64-hex>`;
-- `PRODUCTION_REDIS_IMAGE` — `docker.io/library/redis@sha256:<64-hex>`;
-- `PRODUCTION_NGINX_IMAGE` — `docker.io/library/nginx@sha256:<64-hex>`;
-- `PRODUCTION_MEILI_IMAGE` — `docker.io/getmeili/meilisearch@sha256:<64-hex>`;
-- `PRODUCTION_EUROOFFICE_IMAGE` — `ghcr.io/euro-office/documentserver@sha256:<64-hex>`;
-- `PRODUCTION_SEAWEEDFS_IMAGE` — the independently reviewed expected SeaweedFS digest, `docker.io/chrislusf/seaweedfs@sha256:<64-hex>`.
+Local preparation requires an explicit runtime environment file, but uses it only for non-outputting `docker compose config --quiet --no-env-resolution` validation. It never persists a Compose model rendered from production secrets.
 
-The finalizer rejects missing, mutable, malformed, or nonexistent values. The SeaweedFS expectation must equal the digest already exercised by both live suites. Workload references come only from the promoted-digest outputs of the platform scan workflows.
+`compose.yaml` service `env_file` references are redirected through `RUNTIME_ENV_FILE`, so release tooling never has to copy a production `.env` into the repository checkout.
 
 ## Local deployment preparation
 
-Copy `deploy/production-images.env.example` to an access-controlled release file and replace every placeholder. The parser accepts only the documented release keys; runtime settings, secrets, `export` assignments, quoting, whitespace tricks, duplicates, and unknown variables are rejected.
-
-`COMPOSE_PROFILES=` is valid and represents the supported production topology using external PostgreSQL and external S3/R2. Profile-only image variables are forbidden unless their corresponding profile is enabled. Any valid combination of `postgres`, `seaweedfs-prod`, and `selfhost-worker` is accepted.
-
-From the exact release commit, after logging Docker into every required private registry, run:
+Local preparation does **not** accept a user-authored image trust file. Start from the exact release commit and extract the canonical manifest from the corresponding `production-release-<commit>` artifact. Then run:
 
 ```bash
-./scripts/prepare-production-release.sh /secure/path/production-images.env
+./scripts/prepare-production-release.sh \
+  --canonical-manifest /secure/release/production-<commit>.json \
+  --runtime-env /secure/runtime/production.env
 ```
+
+To deploy only a certified subset of optional profiles:
+
+```bash
+./scripts/prepare-production-release.sh \
+  --canonical-manifest /secure/release/production-<commit>.json \
+  --runtime-env /secure/runtime/production.env \
+  --profiles seaweedfs-prod,selfhost-worker
+```
+
+The selected profiles must be a subset of those certified by the canonical release. Image references are always derived from the canonical manifest; operators cannot substitute another workload, infrastructure, or SeaweedFS digest.
 
 The command:
 
 - rejects modified or staged tracked files;
-- writes and uses a sanitized image-only environment file;
-- removes host variables before Compose interpolation;
-- remotely verifies every digest;
-- requires workload `sha-<commit>` tags to resolve to the recorded digest;
-- requires exactly `linux/amd64` and `linux/arm64` for workload manifests;
-- records SHA-256 hashes of `compose.yaml` and `compose.prod.yaml` in the manifest;
-- requires the Compose image set to equal the manifest image set;
-- writes the manifest, rendered Compose configuration, resolved Compose images, registry inspection, and checksums.
+- validates the canonical manifest against the checked-out commit, Compose hashes, embedded evidence, and pinned toolchain;
+- derives a sanitized deployment image file from the canonical manifest;
+- re-verifies registry availability, workload commit-tag binding, and platforms;
+- validates real runtime interpolation without writing rendered secret-bearing configuration;
+- renders a synthetic Compose JSON model and verifies the exact service→image mapping;
+- writes only the canonical manifest copy, derived image selection, registry inspection, minimized service map, selection metadata, and checksums.
 
-Operational settings and secrets remain in the normal runtime `.env`; they are never copied into the image manifest file.
+`deploy/production-images.env.example` remains documentation for the generated schema, not a release-authoring template.
 
 ## Repository controls
 
-Configure the `main` ruleset to require pull requests and the stable `CI / required` check, block force pushes and deletions, and tightly restrict bypasses. In Actions settings, enable **Require actions to be pinned to a full-length commit SHA**. Dependabot is configured to propose controlled GitHub Actions updates.
+The `main` ruleset should require pull requests and the stable `required` GitHub Actions check, block force pushes and deletions, and restrict bypasses. Repository Actions settings should require full-length action SHA references. Dependabot proposes controlled GitHub Actions updates.

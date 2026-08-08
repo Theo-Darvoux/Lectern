@@ -1,20 +1,26 @@
 # CI and release gates
 
-`.github/workflows/ci.yml` runs on pull requests and non-main branch pushes. `release.yml` invokes the same reusable workflow on `main` and `alpha-*` tags before any candidate image can be built.
+`.github/workflows/ci.yml` runs on pull requests and non-main branch pushes. `release.yml` invokes the same reusable workflow on `main` and `alpha-*` tags before candidate publication.
 
-The stable **CI / required** aggregation job fails unless all of the following succeed:
+The stable **CI / required** aggregation fails unless all of the following succeed:
 
-- API Ruff, mypy, and hermetic tests, with Bubblewrap installed and a real sandbox smoke test;
-- every database migration and the real PostgreSQL revert-concurrency invariant;
+- API Ruff, mypy, and hermetic tests, including a real Bubblewrap smoke test;
+- every database migration and the PostgreSQL revert-concurrency invariant;
 - release and deployment policy regressions;
-- both live SeaweedFS suites, using a registry-resolved immutable digest;
+- both live SeaweedFS suites using the exact repository-pinned digest in `deploy/release-toolchain.env`;
 - web lint, type, i18n, and tests;
 - delivery-worker tests and type checks.
 
-The release implementation additionally reruns both live SeaweedFS suites before API/worker publication, builds all four multi-platform components, scans AMD64 and ARM64 separately, copies write-once `sha-<commit>` tags, verifies registry provenance, verifies the production Compose image set, and publishes a checksummed canonical release artifact.
+Required CI no longer resolves a mutable SeaweedFS tag. `SEAWEEDFS_VERSION` is human-readable reviewed metadata; `SEAWEEDFS_TEST_IMAGE` is the immutable execution input. A SeaweedFS upgrade therefore requires a reviewed repository change.
 
-Convenience aliases are **not** updated automatically. Cross-repository aliases cannot be transactionally atomic, so the canonical `production-release-<commit>` artifact and digest-pinned Compose references are the only deployable release identity. `scripts/publish-release-aliases.sh` remains available for optional manual, best-effort aliases only.
+The release path additionally uses a repository-pinned Buildx version, digest-pinned BuildKit image, and digest-pinned binfmt image. The exact control-plane inputs are embedded in the canonical release manifest.
 
-Every external action is pinned to a reviewed full commit SHA. `.github/dependabot.yml` proposes controlled updates instead of allowing mutable major-version tags to move underneath privileged workflows.
+Release finalization verifies registry provenance and certifies the exact production Compose **service→image** mapping, not only the image set. Swapped API/worker references, missing services, and unexpected services fail certification.
 
-Administrative controls remain required: configure the `main` ruleset to require **CI / required**, require pull requests, block force pushes and deletions, tightly restrict bypasses, and enable the repository Actions setting that requires full-length action SHA references.
+Release artifacts never include a Compose model rendered from production secrets. Automated certification uses synthetic checked-in runtime values; local runtime secrets are used only by a non-outputting validation command. The persisted Compose evidence is a minimized service→digest map.
+
+Local deployment preparation consumes the canonical release manifest and can only choose a certified optional-profile subset. It cannot author replacement image digests.
+
+Convenience aliases are not updated automatically. The canonical `production-release-<commit>` artifact and digest-pinned Compose references are the only deployable release identity.
+
+Every external action is pinned to a reviewed full commit SHA. `.github/dependabot.yml` proposes controlled updates instead of allowing mutable action tags to move under privileged workflows.

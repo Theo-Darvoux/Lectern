@@ -159,11 +159,16 @@ class UploadPipeline:
                 exc,
             )
 
-    def _check_deadline(self, stage_name: str) -> None:
+    def _remaining_pipeline_seconds(self, stage_name: str) -> float:
         elapsed = self._elapsed()
-        if elapsed > settings.upload_pipeline_max_seconds:
+        remaining = float(settings.upload_pipeline_max_seconds) - elapsed
+        if remaining <= 0:
             msg = f"Pipeline deadline exceeded at stage '{stage_name}' ({elapsed:.0f}s)"
             raise UploadError(UploadStatus.FAILED, msg)
+        return remaining
+
+    def _check_deadline(self, stage_name: str) -> None:
+        self._remaining_pipeline_seconds(stage_name)
 
     async def _cancel_current_upload(self, where: str) -> None:
         logger.info("Upload %s cancelled %s", self.upload_id, where)
@@ -310,7 +315,22 @@ class UploadPipeline:
             content_encoding=None,
             thumbnail_path=None,
         )
-        final_res = await run_finalize_storage(final_input, self.redis, self.tracer)
+        finalize_deadline = asyncio.timeout(
+            self._remaining_pipeline_seconds("finalizing")
+        )
+        try:
+            async with finalize_deadline:
+                final_res = await run_finalize_storage(final_input, self.redis, self.tracer)
+        except TimeoutError as exc:
+            # Only translate cancellation caused by our end-to-end deadline. A
+            # backend TimeoutError remains a backend error rather than being
+            # mislabeled as pipeline exhaustion.
+            if not finalize_deadline.expired():
+                raise
+            raise UploadError(
+                UploadStatus.FAILED,
+                f"Pipeline deadline exceeded at stage 'finalizing' ({self._elapsed():.0f}s)",
+            ) from exc
 
         res_data = {
             "file_key": final_res.final_key,

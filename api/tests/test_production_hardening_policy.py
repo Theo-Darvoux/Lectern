@@ -69,8 +69,11 @@ def test_release_completion_is_manifest_driven_without_automated_cross_repo_alia
     assert "Publish authoritative release-complete artifact" in build
     assert "production-release-${{ github.sha }}" in build
     assert "validate-production-compose.py" in build
-    assert "production-compose-images.txt" in build
-    assert "production-compose.config.yml" in build
+    assert "production-compose-services.json" in build
+    assert "release-toolchain.env" in build
+    assert "--compose-service-map-file" in build
+    assert "production-compose.config.yml" not in build
+    assert "production-compose-images.txt" not in build
     assert "  publish-aliases:" not in build
     assert "publish-release-aliases.sh" not in build
     promote = _read("scripts/promote-release-image.sh")
@@ -78,21 +81,27 @@ def test_release_completion_is_manifest_driven_without_automated_cross_repo_alia
     assert "immutable release tag already exists with a different digest" in promote
 
 
-def test_release_manifest_input_is_strict_sanitized_and_host_isolated() -> None:
+def test_release_manifest_input_is_strict_canonical_and_secret_safe() -> None:
     library = _read("scripts/release_manifest_lib.py")
     prepare = _read("scripts/prepare-production-release.sh")
+    compose = _read("compose.yaml")
     assert "unsupported release variable" in library
     assert "shell-style export assignments are forbidden" in library
     assert "duplicate variable" in library
     assert 'key != "COMPOSE_PROFILES"' in library
     assert 'if raw == ""' in library
-    assert "sanitize-production-images.py" in prepare
-    assert "env -i" in prepare
+    assert "--canonical-manifest" in prepare
+    assert "materialize-production-deployment.py" in prepare
+    assert "--runtime-env" in prepare
+    assert "config --quiet --no-env-resolution" in prepare
+    assert "--format json --no-env-resolution" in prepare
+    assert "production-compose.config.yml" not in prepare
+    assert "production-compose-images.txt" not in prepare
     assert 'git diff --quiet -- .' in prepare
     assert 'git diff --cached --quiet -- .' in prepare
     assert "validate-production-compose.py" in prepare
     assert "inspect-production-images.py" in prepare
-    assert "compose-config.yml" in prepare
+    assert compose.count("env_file: ${RUNTIME_ENV_FILE:-.env}") == 5
 
 
 def test_premerge_ci_installs_real_sandbox_runtime_and_requires_storage() -> None:

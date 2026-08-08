@@ -1,4 +1,3 @@
-import asyncio
 import contextlib
 import logging
 import time
@@ -61,26 +60,20 @@ async def run_finalize_storage(
         final_span.set_attribute("upload.final_key", cas_s3_key)
 
         # Concurrent writes for the same content hash contain identical bytes.
-        await asyncio.wait_for(
-            upload_file_multipart(
-                input_data.pf.path,
-                cas_s3_key,
-                content_type=input_data.final_mime,
-                content_encoding=input_data.content_encoding,
-            ),
-            timeout=60.0,
+        await upload_file_multipart(
+            input_data.pf.path,
+            cas_s3_key,
+            content_type=input_data.final_mime,
+            content_encoding=input_data.content_encoding,
         )
 
         thumbnail_key = None
         if input_data.thumbnail_path:
             thumbnail_key = f"thumbnails/{cas_id}/{input_data.upload_id}.webp"
-            await asyncio.wait_for(
-                upload_file_multipart(
-                    Path(input_data.thumbnail_path),
-                    thumbnail_key,
-                    content_type="image/webp",
-                ),
-                timeout=30.0,
+            await upload_file_multipart(
+                Path(input_data.thumbnail_path),
+                thumbnail_key,
+                content_type="image/webp",
             )
             # Cleanup thumbnail temp file
             with contextlib.suppress(Exception):

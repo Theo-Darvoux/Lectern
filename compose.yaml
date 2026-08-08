@@ -177,7 +177,7 @@ services:
     image: ghcr.io/theo-darvoux/lectern/api:latest
     command: >-
       uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    env_file: .env
+    env_file: ${RUNTIME_ENV_FILE:-.env}
     environment:
       <<: *common-env
       FRONTEND_URL: ${FRONTEND_URL}
@@ -230,7 +230,7 @@ services:
       target: worker
     image: ghcr.io/theo-darvoux/lectern/worker:latest
     command: arq app.workers.settings.WorkerSettings
-    env_file: .env
+    env_file: ${RUNTIME_ENV_FILE:-.env}
     environment: *common-env
     deploy:
       resources:
@@ -250,7 +250,7 @@ services:
       target: worker
     image: ghcr.io/theo-darvoux/lectern/worker:latest
     command: arq app.workers.settings.UploadFastWorkerSettings
-    env_file: .env
+    env_file: ${RUNTIME_ENV_FILE:-.env}
     environment:
       <<: *common-env
       WORKER_FAST_MAX_JOBS: ${WORKER_FAST_MAX_JOBS:-4}
@@ -273,7 +273,7 @@ services:
       target: worker
     image: ghcr.io/theo-darvoux/lectern/worker:latest
     command: arq app.workers.settings.UploadSlowWorkerSettings
-    env_file: .env
+    env_file: ${RUNTIME_ENV_FILE:-.env}
     environment:
       <<: *common-env
       WORKER_SLOW_MAX_JOBS: ${WORKER_SLOW_MAX_JOBS:-2}
@@ -305,7 +305,7 @@ services:
       NEXT_PUBLIC_REPO_URL: ${NEXT_PUBLIC_REPO_URL:-}
       NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=3584}
       WATCHPACK_POLLING: ${WATCHPACK_POLLING:-true}
-    env_file: .env
+    env_file: ${RUNTIME_ENV_FILE:-.env}
     depends_on:
       - api
     # ./web:/app gives the dev server access to source code.

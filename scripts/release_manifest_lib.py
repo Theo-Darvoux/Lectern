@@ -11,8 +11,11 @@ from pathlib import Path
 from typing import Any
 
 DIGEST_PATTERN = r"sha256:[0-9a-f]{64}"
+HEX_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 REQUIRED_WORKLOAD_PLATFORMS = ("linux/amd64", "linux/arm64")
+RELEASE_MANIFEST_SCHEMA_VERSION = 3
+COMPOSE_SERVICE_MAP_SCHEMA_VERSION = 1
 
 IMAGE_PATTERNS: dict[str, str] = {
     "API_IMAGE": rf"ghcr\.io/theo-darvoux/lectern/api-release@{DIGEST_PATTERN}",
@@ -69,6 +72,16 @@ CANONICAL_KEY_ORDER = (
     "SEAWEEDFS_IMAGE",
 )
 
+RELEASE_TOOLCHAIN_KEYS = (
+    "BUILDX_VERSION",
+    "BUILDKIT_VERSION",
+    "BUILDKIT_IMAGE",
+    "BINFMT_VERSION",
+    "BINFMT_IMAGE",
+    "SEAWEEDFS_VERSION",
+    "SEAWEEDFS_TEST_IMAGE",
+)
+
 
 def atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,16 +91,24 @@ def atomic_write_text(path: Path, content: str) -> None:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        Path(temporary).replace(path)
     finally:
         try:
-            os.unlink(temporary)
+            Path(temporary).unlink()
         except FileNotFoundError:
             pass
 
 
+def canonical_json_text(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    atomic_write_text(path, canonical_json_text(payload))
+
+
+def sha256_text(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def sha256_file(path: Path) -> str:
@@ -119,8 +140,6 @@ def parse_env_file(path: Path) -> dict[str, str]:
             raise ValueError(f"{path}:{line_number}: unsupported release variable {key}")
         if key in values:
             raise ValueError(f"{path}:{line_number}: duplicate variable {key}")
-        # Zero optional profiles is a supported production topology. Every
-        # other release value remains mandatory and non-empty.
         if key != "COMPOSE_PROFILES" and not value:
             raise ValueError(f"{path}:{line_number}: {key} must not be empty")
         if value and (value[0] in {'"', "'"} or value[-1] in {'"', "'"}):
@@ -129,6 +148,53 @@ def parse_env_file(path: Path) -> dict[str, str]:
             raise ValueError(f"{path}:{line_number}: whitespace in values is forbidden")
         values[key] = value
     return values
+
+
+def parse_release_toolchain(path: Path) -> dict[str, str]:
+    """Parse the repository-pinned release control-plane inputs."""
+    values: dict[str, str] = {}
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not raw_line or raw_line.startswith("#"):
+            continue
+        if raw_line != raw_line.strip() or "=" not in raw_line:
+            raise ValueError(f"{path}:{line_number}: expected exact KEY=VALUE")
+        key, value = raw_line.split("=", 1)
+        if key not in RELEASE_TOOLCHAIN_KEYS:
+            raise ValueError(f"{path}:{line_number}: unsupported release toolchain key {key}")
+        if key in values:
+            raise ValueError(f"{path}:{line_number}: duplicate release toolchain key {key}")
+        if not value or any(character.isspace() for character in value):
+            raise ValueError(f"{path}:{line_number}: invalid release toolchain value for {key}")
+        values[key] = value
+
+    if set(values) != set(RELEASE_TOOLCHAIN_KEYS):
+        missing = sorted(set(RELEASE_TOOLCHAIN_KEYS) - set(values))
+        extra = sorted(set(values) - set(RELEASE_TOOLCHAIN_KEYS))
+        detail: list[str] = []
+        if missing:
+            detail.append("missing: " + ", ".join(missing))
+        if extra:
+            detail.append("unexpected: " + ", ".join(extra))
+        raise ValueError("release toolchain keys do not match policy (" + "; ".join(detail) + ")")
+
+    if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", values["BUILDX_VERSION"]) is None:
+        raise ValueError("BUILDX_VERSION must be an exact semantic version")
+    if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", values["BUILDKIT_VERSION"]) is None:
+        raise ValueError("BUILDKIT_VERSION must be an exact semantic version")
+    if re.fullmatch(r"qemu-v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+", values["BINFMT_VERSION"]) is None:
+        raise ValueError("BINFMT_VERSION must identify an exact qemu release build")
+    if re.fullmatch(r"[0-9]+\.[0-9]+", values["SEAWEEDFS_VERSION"]) is None:
+        raise ValueError("SEAWEEDFS_VERSION must identify an exact reviewed release")
+
+    immutable_patterns = {
+        "BUILDKIT_IMAGE": rf"docker\.io/moby/buildkit@{DIGEST_PATTERN}",
+        "BINFMT_IMAGE": rf"docker\.io/tonistiigi/binfmt@{DIGEST_PATTERN}",
+        "SEAWEEDFS_TEST_IMAGE": rf"docker\.io/chrislusf/seaweedfs@{DIGEST_PATTERN}",
+    }
+    for key, pattern in immutable_patterns.items():
+        if re.fullmatch(pattern, values[key]) is None:
+            raise ValueError(f"{key} must be an immutable canonical digest reference")
+    return {key: values[key] for key in RELEASE_TOOLCHAIN_KEYS}
 
 
 def parse_profiles(raw: str) -> list[str]:
@@ -207,6 +273,40 @@ def expected_compose_images(images: dict[str, str]) -> set[str]:
     return {reference_for_image(name, value) for name, value in images.items()}
 
 
+def expected_compose_service_images(images: dict[str, str]) -> dict[str, str]:
+    """Return the exact production service→image mapping for an enabled profile set."""
+    policy = reference_for_image("POLICY_IMAGE_DIGEST", images["POLICY_IMAGE_DIGEST"])
+    services = {
+        "release-image-policy": policy,
+        "redis": images["REDIS_IMAGE"],
+        "meilisearch": images["MEILI_IMAGE"],
+        "eurooffice": images["EUROOFFICE_IMAGE"],
+        "api": images["API_IMAGE"],
+        "worker": images["WORKER_IMAGE"],
+        "worker-fast": images["WORKER_IMAGE"],
+        "worker-slow": images["WORKER_IMAGE"],
+        "web": images["WEB_IMAGE"],
+        "nginx": images["NGINX_IMAGE"],
+    }
+    if "POSTGRES_IMAGE" in images:
+        services["postgres-image-policy"] = policy
+        services["postgres"] = images["POSTGRES_IMAGE"]
+    if "SELFHOST_WORKER_IMAGE" in images:
+        services["selfhost-worker-image-policy"] = policy
+        services["selfhost-worker"] = images["SELFHOST_WORKER_IMAGE"]
+    if "SEAWEEDFS_IMAGE" in images:
+        services["seaweedfs-image-policy"] = policy
+        for name in (
+            "seaweedfs-master",
+            "seaweedfs-volume1",
+            "seaweedfs-volume2",
+            "seaweedfs-filer",
+            "seaweedfs-s3",
+        ):
+            services[name] = images["SEAWEEDFS_IMAGE"]
+    return dict(sorted(services.items()))
+
+
 def digest_from_reference(reference: str) -> str:
     try:
         digest = reference.rsplit("@", 1)[1]
@@ -255,3 +355,129 @@ def validate_inspections(
         elif record.get("commit_tag_reference") is not None or record.get("commit_tag_digest") is not None:
             raise ValueError(f"infrastructure inspection unexpectedly contains a commit tag for {name}")
     return payload
+
+
+def validate_compose_service_map(
+    payload: dict[str, Any],
+    *,
+    commit: str,
+    profiles: list[str],
+    images: dict[str, str],
+    release_input_sha256: str,
+) -> dict[str, Any]:
+    if payload.get("schema_version") != COMPOSE_SERVICE_MAP_SCHEMA_VERSION:
+        raise ValueError("unsupported Compose service-map schema")
+    if payload.get("release_commit") != commit:
+        raise ValueError("Compose service-map commit does not match release commit")
+    if payload.get("compose_profiles") != profiles:
+        raise ValueError("Compose service-map profiles do not match release input")
+    if payload.get("release_input_sha256") != release_input_sha256:
+        raise ValueError("Compose service-map is not bound to the release input")
+    services = payload.get("services")
+    if not isinstance(services, dict) or not all(
+        isinstance(name, str) and isinstance(image, str) for name, image in services.items()
+    ):
+        raise ValueError("Compose service-map services must be a string map")
+    expected = expected_compose_service_images(images)
+    actual = dict(sorted(services.items()))
+    if actual != expected:
+        raise ValueError("Compose service-map does not match the release image policy")
+    return payload
+
+
+def validate_canonical_release_manifest(
+    payload: dict[str, Any],
+    *,
+    repo_root: Path,
+    expected_commit: str,
+    toolchain_path: Path | None = None,
+) -> tuple[str, list[str], dict[str, str], dict[str, str]]:
+    """Validate a canonical artifact before deriving any local deployment inputs."""
+    if payload.get("schema_version") != RELEASE_MANIFEST_SCHEMA_VERSION:
+        raise ValueError("unsupported production release manifest schema")
+    if payload.get("release_commit") != expected_commit:
+        raise ValueError("canonical release manifest does not match the checked-out commit")
+
+    raw_profiles = payload.get("compose_profiles")
+    if not isinstance(raw_profiles, list) or not all(isinstance(item, str) for item in raw_profiles):
+        raise ValueError("canonical manifest has an invalid Compose profile list")
+    profiles = parse_profiles(",".join(raw_profiles))
+    if raw_profiles != profiles:
+        raise ValueError("canonical manifest Compose profiles are not canonical")
+
+    raw_images = payload.get("images")
+    if not isinstance(raw_images, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in raw_images.items()
+    ):
+        raise ValueError("canonical manifest has an invalid image map")
+    values = {
+        "RELEASE_COMMIT": expected_commit,
+        "COMPOSE_PROFILES": ",".join(profiles),
+        **raw_images,
+    }
+    _, _, images = validate_release_values(values, expected_commit=expected_commit)
+    if images != raw_images:
+        raise ValueError("canonical manifest image map is not canonical")
+
+    compose_files = payload.get("compose_files")
+    expected_compose_paths = (repo_root / "compose.yaml", repo_root / "compose.prod.yaml")
+    expected_hashes = {
+        str(path.relative_to(repo_root)): sha256_file(path) for path in expected_compose_paths
+    }
+    if compose_files != expected_hashes:
+        raise ValueError("canonical manifest Compose hashes do not match the checked-out release")
+
+    if payload.get("required_workload_platforms") != list(REQUIRED_WORKLOAD_PLATFORMS):
+        raise ValueError("canonical manifest workload platform policy does not match")
+
+    source_env_text = canonical_env_text(expected_commit, profiles, images)
+    source_env_sha256 = sha256_text(source_env_text)
+    if payload.get("source_env_sha256") != source_env_sha256:
+        raise ValueError("canonical manifest release-input checksum is inconsistent")
+
+    inspection_records = payload.get("registry_inspections")
+    inspection_payload = {
+        "schema_version": 1,
+        "release_commit": expected_commit,
+        "required_workload_platforms": list(REQUIRED_WORKLOAD_PLATFORMS),
+        "images": inspection_records,
+    }
+    if not isinstance(inspection_records, dict):
+        raise ValueError("canonical manifest registry inspections are missing")
+    validate_inspections(inspection_payload, commit=expected_commit, images=images)
+    if payload.get("registry_inspection_sha256") != sha256_text(canonical_json_text(inspection_payload)):
+        raise ValueError("canonical manifest registry-inspection checksum is inconsistent")
+
+    toolchain_path = toolchain_path or repo_root / "deploy/release-toolchain.env"
+    toolchain = parse_release_toolchain(toolchain_path)
+    if payload.get("release_toolchain") != toolchain:
+        raise ValueError("canonical manifest release toolchain does not match the checkout")
+    if payload.get("release_toolchain_sha256") != sha256_file(toolchain_path):
+        raise ValueError("canonical manifest release toolchain checksum does not match")
+    if images.get("SEAWEEDFS_IMAGE") and images["SEAWEEDFS_IMAGE"] != toolchain["SEAWEEDFS_TEST_IMAGE"]:
+        raise ValueError("canonical manifest SeaweedFS image differs from the repository-tested digest")
+
+    service_map = payload.get("compose_service_images")
+    if service_map != expected_compose_service_images(images):
+        raise ValueError("canonical manifest service→image mapping does not match its image policy")
+    service_map_payload = {
+        "schema_version": COMPOSE_SERVICE_MAP_SCHEMA_VERSION,
+        "release_commit": expected_commit,
+        "compose_profiles": profiles,
+        "release_input_sha256": source_env_sha256,
+        "services": service_map,
+    }
+    if payload.get("compose_service_map_sha256") != sha256_text(canonical_json_text(service_map_payload)):
+        raise ValueError("canonical manifest Compose service-map checksum is inconsistent")
+
+    for hash_key in (
+        "source_env_sha256",
+        "registry_inspection_sha256",
+        "compose_service_map_sha256",
+        "release_toolchain_sha256",
+    ):
+        value = payload.get(hash_key)
+        if not isinstance(value, str) or HEX_SHA256_RE.fullmatch(value) is None:
+            raise ValueError(f"canonical manifest has an invalid {hash_key}")
+
+    return expected_commit, profiles, images, toolchain

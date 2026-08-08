@@ -61,8 +61,8 @@ def test_manifest_is_aggregate_release_gate_and_aliases_are_not_automated() -> N
     assert "production-release-${{ github.sha }}" in finalizer
     assert "inspect-production-images.py" in finalizer
     assert "validate-production-compose.py" in finalizer
-    assert "production-compose-images.txt" in finalizer
-    assert "production-compose.config.yml" in finalizer
+    assert "production-compose-services.json" in finalizer
+    assert "--compose-service-map-file" in finalizer
     assert "publish-aliases:" not in build
     assert "publish-release-aliases.sh" not in build
 

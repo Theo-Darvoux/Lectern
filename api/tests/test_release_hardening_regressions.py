@@ -51,6 +51,39 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     path.write_text("".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8")
 
 
+def _expected_service_map(values: dict[str, str]) -> dict[str, str]:
+    policy = f"docker.io/library/alpine@{values['POLICY_IMAGE_DIGEST']}"
+    services = {
+        "release-image-policy": policy,
+        "redis": values["REDIS_IMAGE"],
+        "meilisearch": values["MEILI_IMAGE"],
+        "eurooffice": values["EUROOFFICE_IMAGE"],
+        "api": values["API_IMAGE"],
+        "worker": values["WORKER_IMAGE"],
+        "worker-fast": values["WORKER_IMAGE"],
+        "worker-slow": values["WORKER_IMAGE"],
+        "web": values["WEB_IMAGE"],
+        "nginx": values["NGINX_IMAGE"],
+    }
+    if "POSTGRES_IMAGE" in values:
+        services["postgres-image-policy"] = policy
+        services["postgres"] = values["POSTGRES_IMAGE"]
+    if "SELFHOST_WORKER_IMAGE" in values:
+        services["selfhost-worker-image-policy"] = policy
+        services["selfhost-worker"] = values["SELFHOST_WORKER_IMAGE"]
+    if "SEAWEEDFS_IMAGE" in values:
+        services["seaweedfs-image-policy"] = policy
+        for service in (
+            "seaweedfs-master",
+            "seaweedfs-volume1",
+            "seaweedfs-volume2",
+            "seaweedfs-filer",
+            "seaweedfs-s3",
+        ):
+            services[service] = values["SEAWEEDFS_IMAGE"]
+    return services
+
+
 @pytest.mark.parametrize(
     "profiles",
     [
@@ -139,7 +172,7 @@ def test_seaweedfs_resolver_canonicalizes_short_repo_digest_output(tmp_path: Pat
         "DOCKER_LOG": str(log),
     }
     result = subprocess.run(
-        [str(RESOLVE_SEAWEED), "chrislusf/seaweedfs:4.29"],
+        [str(RESOLVE_SEAWEED), f"docker.io/chrislusf/seaweedfs@sha256:{DIGEST}"],
         check=True,
         capture_output=True,
         text=True,
@@ -165,45 +198,57 @@ def test_seaweedfs_approval_must_equal_tested_digest() -> None:
     assert "does not match the digest exercised by the live suites" in result.stderr
 
 
-def test_finalizer_uses_tested_seaweedfs_and_validates_compose_before_artifact() -> None:
+def test_finalizer_certifies_service_mapping_before_manifest_and_artifact() -> None:
     build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
     finalizer = build.split("  finalize-release:\n", 1)[1]
     assert "- resolve-seaweedfs-image" in finalizer
     assert "TESTED_SEAWEEDFS_IMAGE: ${{ needs.resolve-seaweedfs-image.outputs.image }}" in finalizer
     assert "require-tested-seaweedfs-image.sh" in finalizer
     assert "SEAWEEDFS_IMAGE=${TESTED_SEAWEEDFS_IMAGE}" in finalizer
-    compose_index = finalizer.index(
-        "Validate production Compose resolves exactly the certified images"
-    )
+    compose_index = finalizer.index("Certify production Compose service image mapping")
+    manifest_index = finalizer.index("Write provenance-bound release manifest")
     upload_index = finalizer.index("Publish authoritative release-complete artifact")
-    assert compose_index < upload_index
+    assert compose_index < manifest_index < upload_index
     assert "validate-production-compose.py" in finalizer
-    assert "production-compose-images.txt" in finalizer
-    assert "production-compose.config.yml" in finalizer
+    assert "production-compose-services.json" in finalizer
+    assert "--format json --no-env-resolution" in finalizer
+    assert "production-compose.config.yml" not in finalizer
+    assert "production-compose-images.txt" not in finalizer
     assert "env -i" in finalizer
 
 
-def test_compose_validator_rejects_unexpected_image(tmp_path: Path) -> None:
-    manifest = tmp_path / "manifest.json"
-    images = tmp_path / "images.txt"
-    expected = _reference("ghcr.io/theo-darvoux/lectern/api-release")
-    manifest.write_text(json.dumps({"images": {"API_IMAGE": expected}}), encoding="utf-8")
-    images.write_text(expected + "\n" + "docker.io/library/busybox@sha256:" + "2" * 64 + "\n")
+def test_compose_validator_rejects_api_worker_swap(tmp_path: Path) -> None:
+    values = _release_values("")
+    env_file = tmp_path / "images.env"
+    compose_config = tmp_path / "compose.json"
+    output = tmp_path / "services.json"
+    _write_env(env_file, values)
+    services = {name: {"image": image} for name, image in _expected_service_map(values).items()}
+    services["api"]["image"], services["worker"]["image"] = (
+        services["worker"]["image"],
+        services["api"]["image"],
+    )
+    compose_config.write_text(json.dumps({"services": services}), encoding="utf-8")
     result = subprocess.run(
         [
             sys.executable,
             str(VALIDATE_COMPOSE),
-            "--manifest",
-            str(manifest),
-            "--compose-images",
-            str(images),
+            "--env-file",
+            str(env_file),
+            "--compose-config",
+            str(compose_config),
+            "--output",
+            str(output),
+            "--commit",
+            COMMIT,
         ],
         check=False,
         capture_output=True,
         text=True,
     )
     assert result.returncode != 0
-    assert "unexpected:" in result.stderr
+    assert "api:" in result.stderr
+    assert not output.exists()
 
 
 def test_sandbox_launcher_error_is_not_misreported_as_child_exit() -> None:

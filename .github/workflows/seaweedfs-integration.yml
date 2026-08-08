@@ -27,16 +27,19 @@ on:
       - "compose.yaml"
       - "compose.prod.yaml"
       - "docs/r2-to-seaweedfs-migration.md"
+      - "deploy/release-toolchain.env"
       - "infra/docker/seaweedfs/**"
       - "infra/docker/redis/redis.conf"
+      - "scripts/export-release-toolchain.py"
+      - "scripts/release_manifest_lib.py"
       - "scripts/resolve-seaweedfs-image.sh"
       - "web/src/lib/upload-client.ts"
   workflow_dispatch:
     inputs:
       seaweedfs_image:
-        description: SeaweedFS release tag or immutable digest to test
+        description: Optional non-authoritative SeaweedFS candidate tag or digest; blank uses the reviewed repository pin
         required: false
-        default: chrislusf/seaweedfs:4.29
+        default: ''
 
 permissions:
   contents: read
@@ -50,16 +53,26 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.resolve.outputs.image }}
-    env:
-      SEAWEEDFS_SOURCE_IMAGE: ${{ inputs.seaweedfs_image || 'chrislusf/seaweedfs:4.29' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: ${{ steps.toolchain.outputs.buildx_version }}
+          driver-opts: |
+            image=${{ steps.toolchain.outputs.buildkit_image }}
       - name: Resolve SeaweedFS to an immutable digest
         id: resolve
+        env:
+          SEAWEEDFS_CANDIDATE_IMAGE: ${{ inputs.seaweedfs_image }}
+          PINNED_SEAWEEDFS_IMAGE: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
         run: |
           set -euo pipefail
-          resolved=$(./scripts/resolve-seaweedfs-image.sh "$SEAWEEDFS_SOURCE_IMAGE")
+          source_image="$SEAWEEDFS_CANDIDATE_IMAGE"
+          [[ -n "$source_image" ]] || source_image="$PINNED_SEAWEEDFS_IMAGE"
+          resolved=$(./scripts/resolve-seaweedfs-image.sh "$source_image")
           echo "image=$resolved" >> "$GITHUB_OUTPUT"
 
   seaweedfs:
