@@ -410,7 +410,12 @@ async def test_check_storage_limit_rejects_negative_redis_value():
     from app.routers.upload.helpers import _check_storage_limit
 
     fake_redis = AsyncMock()
-    fake_redis.get = AsyncMock(return_value=b"-999999999")
+    fake_redis.mget = AsyncMock(return_value=[b"-999999999", b"0", None])
+
+    def unexpected_lock(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("clean corrupt cache must fail before lock acquisition")
+
+    fake_redis.lock = unexpected_lock
 
     original_client = redis_core.redis_client
     redis_core.redis_client = fake_redis

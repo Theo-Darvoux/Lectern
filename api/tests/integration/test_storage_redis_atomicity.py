@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Any
 
 import pytest
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.core.database.redis as redis_core
 from app.config import settings
 from app.core.security.cas import (
     _STORAGE_USAGE_GENERATION_KEY,
     _STORAGE_USAGE_KEY,
     increment_cas_ref,
 )
-from app.core.storage import capacity
+from app.core.storage import capacity, facade
 
 pytestmark = pytest.mark.integration
 
@@ -33,24 +35,213 @@ async def redis() -> Redis:  # type: ignore[type-arg]
         await client.aclose()
 
 
-async def test_cas_creation_bumps_physical_usage_generation_with_real_redis(
+async def test_cas_metadata_creation_does_not_change_physical_usage(
     redis: Redis,  # type: ignore[type-arg]
 ) -> None:
-    sha256 = "d" * 64
+    await redis.set(_STORAGE_USAGE_KEY, 17)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 3)
+
     await increment_cas_ref(
         redis,
-        sha256,
+        "d" * 64,
         initial_data={
             "final_key": "cas/real-redis-generation",
             "size": 17,
             "mime_type": "text/plain",
             "file_name": "generation.txt",
         },
-        operation_id="integration:cas-generation:create",
+        operation_id="integration:cas-metadata:create",
     )
 
     assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 17
+    assert int(await redis.get(_STORAGE_USAGE_GENERATION_KEY) or 0) == 3
+
+
+async def test_missing_usage_cache_persists_generation_zero_and_scans_once(
+    redis: Redis,  # type: ignore[type-arg]
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scans = 0
+
+    async def physical_usage() -> int:
+        nonlocal scans
+        scans += 1
+        return 23
+
+    monkeypatch.setattr(capacity, "_physical_cas_storage_usage", physical_usage)
+
+    assert await capacity.get_storage_usage(db_session, redis) == 23
+    assert await redis.get(_STORAGE_USAGE_KEY) == "23"
+    assert await redis.get(_STORAGE_USAGE_GENERATION_KEY) == "0"
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
+
+    assert await capacity.get_storage_usage(db_session, redis) == 23
+    assert scans == 1
+
+
+class _BarrierStorage:
+    def __init__(self, *, fail_after_visible: bool = False) -> None:
+        self.objects: dict[str, int] = {}
+        self.visible = asyncio.Event()
+        self.deleted = asyncio.Event()
+        self.allow_completion = asyncio.Event()
+        self.allow_delete_completion = asyncio.Event()
+        self.fail_after_visible = fail_after_visible
+
+    async def object_exists(self, key: str) -> bool:
+        return key in self.objects
+
+    async def get_object_info(self, key: str) -> dict[str, Any]:
+        return {"size": self.objects[key]}
+
+    async def upload_file(
+        self,
+        file_obj: bytes,
+        file_key: str,
+        **_kwargs: Any,
+    ) -> None:
+        self.objects[file_key] = len(file_obj)
+        self.visible.set()
+        if self.fail_after_visible:
+            raise OSError("lost success after physical write")
+        await self.allow_completion.wait()
+
+    async def delete_object(self, file_key: str) -> None:
+        self.objects.pop(file_key, None)
+        self.deleted.set()
+        await self.allow_delete_completion.wait()
+
+
+async def test_existing_physical_cas_metadata_rebuild_does_not_double_charge(
+    redis: Redis,  # type: ignore[type-arg]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = _BarrierStorage()
+    storage.objects["cas/existing"] = 17
+    storage.allow_completion.set()
+    monkeypatch.setattr(facade, "get_storage", lambda: storage)
+    monkeypatch.setattr(redis_core, "redis_client", redis)
+    await redis.set(_STORAGE_USAGE_KEY, 17)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 4)
+
+    await facade.upload_file(b"x" * 17, "cas/existing")
+    await increment_cas_ref(
+        redis,
+        "e" * 64,
+        initial_data={
+            "final_key": "cas/existing",
+            "size": 17,
+            "mime_type": "text/plain",
+            "file_name": "existing.txt",
+        },
+        operation_id="integration:cas-metadata:rebuild-existing",
+    )
+
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 17
+    assert int(await redis.get(_STORAGE_USAGE_GENERATION_KEY) or 0) == 5
+
+
+async def test_physical_cas_write_blocks_reconcile_until_delta_commit(
+    redis: Redis,  # type: ignore[type-arg]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = _BarrierStorage()
+    monkeypatch.setattr(facade, "get_storage", lambda: storage)
+    monkeypatch.setattr(redis_core, "redis_client", redis)
+    await redis.set(_STORAGE_USAGE_KEY, 0)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
+
+    scans = 0
+
+    async def physical_usage() -> int:
+        nonlocal scans
+        scans += 1
+        return sum(storage.objects.values())
+
+    monkeypatch.setattr(capacity, "_physical_cas_storage_usage", physical_usage)
+
+    writer = asyncio.create_task(facade.upload_file(b"x" * 17, "cas/barrier"))
+    await storage.visible.wait()
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
+
+    reconciler = asyncio.create_task(capacity.reconcile_cas_storage_usage(redis))
+    await asyncio.sleep(0.05)
+    assert not reconciler.done()
+    assert scans == 0
+
+    storage.allow_completion.set()
+    await writer
+    assert await reconciler == 17
+
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 17
     assert int(await redis.get(_STORAGE_USAGE_GENERATION_KEY) or 0) == 1
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
+    assert scans == 1
+
+
+async def test_physical_cas_delete_blocks_reconcile_until_delta_commit(
+    redis: Redis,  # type: ignore[type-arg]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = _BarrierStorage()
+    storage.objects["cas/delete-barrier"] = 17
+    monkeypatch.setattr(facade, "get_storage", lambda: storage)
+    monkeypatch.setattr(redis_core, "redis_client", redis)
+    await redis.set(_STORAGE_USAGE_KEY, 17)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 8)
+
+    scans = 0
+
+    async def physical_usage() -> int:
+        nonlocal scans
+        scans += 1
+        return sum(storage.objects.values())
+
+    monkeypatch.setattr(capacity, "_physical_cas_storage_usage", physical_usage)
+
+    deleter = asyncio.create_task(facade.delete_object("cas/delete-barrier"))
+    await storage.deleted.wait()
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
+
+    reconciler = asyncio.create_task(capacity.reconcile_cas_storage_usage(redis))
+    await asyncio.sleep(0.05)
+    assert not reconciler.done()
+    assert scans == 0
+
+    storage.allow_delete_completion.set()
+    await deleter
+    assert await reconciler == 0
+
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 0
+    assert int(await redis.get(_STORAGE_USAGE_GENERATION_KEY) or 0) == 9
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
+    assert scans == 1
+
+
+async def test_lost_success_cas_write_stays_dirty_until_physical_reconcile(
+    redis: Redis,  # type: ignore[type-arg]
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = _BarrierStorage(fail_after_visible=True)
+    monkeypatch.setattr(facade, "get_storage", lambda: storage)
+    monkeypatch.setattr(redis_core, "redis_client", redis)
+    await redis.set(_STORAGE_USAGE_KEY, 0)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
+
+    async def physical_usage() -> int:
+        return sum(storage.objects.values())
+
+    monkeypatch.setattr(capacity, "_physical_cas_storage_usage", physical_usage)
+
+    with pytest.raises(OSError, match="lost success"):
+        await facade.upload_file(b"y" * 11, "cas/lost-success")
+
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
+    assert await capacity.get_storage_usage(db_session, redis) == 11
+    assert await redis.get(_STORAGE_USAGE_KEY) == "11"
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
 
 
 async def test_promoted_legacy_release_fences_stale_snapshot_with_real_redis(

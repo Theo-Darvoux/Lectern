@@ -1,5 +1,4 @@
 local raw = redis.call('GET', KEYS[1])
-local usage_key = KEYS[2]
 local data
 local previous_ttl = -2
 local operation_state = redis.call('GET', KEYS[3])
@@ -18,13 +17,8 @@ if not raw then
   if ARGV[1] then
     data = cjson.decode(ARGV[1])
     data['ref_count'] = 1
-    -- Physical storage increment: only on first creation
-    if data['size'] then
-        redis.call('INCRBY', usage_key, data['size'])
-        if KEYS[4] then
-          redis.call('INCR', KEYS[4])
-        end
-    end
+    -- Physical bytes are accounted by the storage facade at the actual
+    -- object-store mutation boundary, never inferred from Redis metadata.
   else
     return -1
   end

@@ -2,6 +2,8 @@
 
 import logging
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -28,11 +30,18 @@ _STORAGE_RELEASE_PROMOTED_LEGACY_SCRIPT = (
 _STORAGE_RECONCILE_CAS_SCRIPT = (_LUA_DIR / "storage_reconcile_cas_usage.lua").read_text(
     encoding="utf-8"
 )
+_STORAGE_COMMIT_CAS_DELTA_SCRIPT = (_LUA_DIR / "storage_commit_cas_delta.lua").read_text(
+    encoding="utf-8"
+)
 _STORAGE_RESERVATION_EXPIRIES = "storage:upload_reservations:expiries"
 _STORAGE_RESERVATION_SIZES = "storage:upload_reservations:sizes"
 _STORAGE_RESERVATION_TOTAL = "storage:upload_reservations:total"
 _STORAGE_RESERVATION_TTL = 3 * 3600
 _STORAGE_SNAPSHOT_MAX_RETRIES = 8
+_STORAGE_USAGE_DIRTY_KEY = "storage:total_usage_dirty"
+_CAS_STORAGE_MUTATION_LOCK = "storage:cas-physical-usage"
+_CAS_STORAGE_LOCK_TIMEOUT = 120.0
+_CAS_STORAGE_LOCK_EXPIRE = 300.0
 
 LEGACY_STORAGE_USAGE_KEY = "storage:legacy_usage_bytes"
 LEGACY_STORAGE_GENERATION_KEY = "storage:legacy_usage_generation"
@@ -64,8 +73,8 @@ async def _cas_storage_generation(redis: Any) -> int:
         ) from exc
 
 
-async def reconcile_cas_storage_usage(redis: Any) -> int:
-    """Generation-fence an exact object-store scan into the CAS usage cache."""
+async def _reconcile_cas_storage_usage_locked(redis: Any) -> int:
+    """Rebuild physical CAS usage while the mutation lock is held."""
     for _attempt in range(_STORAGE_SNAPSHOT_MAX_RETRIES):
         generation = await _cas_storage_generation(redis)
         try:
@@ -73,7 +82,11 @@ async def reconcile_cas_storage_usage(redis: Any) -> int:
             reconcile = redis.register_script(_STORAGE_RECONCILE_CAS_SCRIPT)
             result = int(
                 await reconcile(
-                    keys=[_STORAGE_USAGE_KEY, _STORAGE_USAGE_GENERATION_KEY],
+                    keys=[
+                        _STORAGE_USAGE_KEY,
+                        _STORAGE_USAGE_GENERATION_KEY,
+                        _STORAGE_USAGE_DIRTY_KEY,
+                    ],
                     args=[generation, physical_usage],
                     client=redis,
                 )
@@ -95,31 +108,123 @@ async def reconcile_cas_storage_usage(redis: Any) -> int:
     )
 
 
-async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ignore[type-arg]
-    """Return physical CAS usage, rebuilding a missing cache from object storage."""
-    del db  # Physical capacity is defined by object-store bytes, not logical DB ownership.
+async def _read_cached_cas_storage_usage(redis: Any) -> int | None:
+    """Read one atomic CAS accounting snapshot without taking the mutation lock."""
     try:
-        usage_raw = await redis.get(_STORAGE_USAGE_KEY)
-        generation_raw = await redis.get(_STORAGE_USAGE_GENERATION_KEY)
+        state = await redis.mget(
+            _STORAGE_USAGE_KEY,
+            _STORAGE_USAGE_GENERATION_KEY,
+            _STORAGE_USAGE_DIRTY_KEY,
+        )
     except Exception as exc:
         logger.error("Storage usage cache unavailable: %s", exc)
         raise BadRequestError(
             "Storage capacity is temporarily unavailable. Please try again later."
         ) from exc
 
-    if usage_raw is not None and generation_raw is not None:
-        try:
-            usage = int(usage_raw)
-            generation = int(generation_raw)
-        except (TypeError, ValueError) as exc:
-            raise BadRequestError("Storage capacity accounting state is invalid") from exc
-        if usage < 0 or generation < 0:
-            raise BadRequestError("Storage capacity accounting state is invalid")
+    if not isinstance(state, (list, tuple)) or len(state) != 3:
+        raise BadRequestError("Storage capacity accounting state is invalid")
+
+    usage_raw, generation_raw, dirty_raw = state
+    if usage_raw is None or generation_raw is None or dirty_raw is not None:
+        return None
+
+    try:
+        usage = int(usage_raw)
+        generation = int(generation_raw)
+    except (TypeError, ValueError) as exc:
+        raise BadRequestError("Storage capacity accounting state is invalid") from exc
+    if usage < 0 or generation < 0:
+        raise BadRequestError("Storage capacity accounting state is invalid")
+    return usage
+
+
+async def _cached_cas_storage_usage_locked(redis: Any) -> int:
+    """Return a valid cache value, rebuilding it when incomplete or dirty."""
+    usage = await _read_cached_cas_storage_usage(redis)
+    if usage is not None:
+        return usage
+    return await _reconcile_cas_storage_usage_locked(redis)
+
+
+@asynccontextmanager
+async def cas_storage_mutation(redis: Any) -> AsyncIterator[None]:
+    """Serialize physical ``cas/`` mutations with cache reconciliation."""
+    async with redis_core.redis_lock(
+        redis,
+        _CAS_STORAGE_MUTATION_LOCK,
+        timeout=_CAS_STORAGE_LOCK_TIMEOUT,
+        expire=_CAS_STORAGE_LOCK_EXPIRE,
+    ):
+        await _cached_cas_storage_usage_locked(redis)
+        yield
+
+
+async def mark_cas_storage_usage_dirty(redis: Any) -> None:
+    """Mark the aggregate cache unusable before physical CAS I/O begins."""
+    await redis.set(_STORAGE_USAGE_DIRTY_KEY, "1")
+
+
+async def commit_cas_storage_delta(redis: Any, delta_bytes: int) -> int:
+    """Publish one completed physical CAS size delta under the mutation lock."""
+    commit = redis.register_script(_STORAGE_COMMIT_CAS_DELTA_SCRIPT)
+    try:
+        result = int(
+            await commit(
+                keys=[
+                    _STORAGE_USAGE_KEY,
+                    _STORAGE_USAGE_GENERATION_KEY,
+                    _STORAGE_USAGE_DIRTY_KEY,
+                ],
+                args=[delta_bytes],
+                client=redis,
+            )
+        )
+    except Exception as exc:
+        logger.error("Cannot commit physical CAS storage delta: %s", exc)
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable. Please try again later."
+        ) from exc
+
+    if result >= 0:
+        return result
+    if result in {-1, -3}:
+        # Cache eviction or an impossible negative delta after I/O: reconstruct
+        # from object storage while the same mutation lock is still held.
+        return await _reconcile_cas_storage_usage_locked(redis)
+    raise BadRequestError("Storage capacity accounting state is invalid")
+
+
+async def reconcile_cas_storage_usage(redis: Any) -> int:
+    """Serialize and generation-fence an exact object-store usage scan."""
+    async with redis_core.redis_lock(
+        redis,
+        _CAS_STORAGE_MUTATION_LOCK,
+        timeout=_CAS_STORAGE_LOCK_TIMEOUT,
+        expire=_CAS_STORAGE_LOCK_EXPIRE,
+    ):
+        return await _reconcile_cas_storage_usage_locked(redis)
+
+
+async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ignore[type-arg]
+    """Return exact physical CAS usage, rebuilding an incomplete/dirty cache."""
+    del db  # Physical capacity is defined by object-store bytes, not logical DB ownership.
+
+    # A complete clean cache can be consumed without the mutation lock. MGET is
+    # one atomic Redis snapshot, so usage/generation/dirty cannot be mixed across
+    # a concurrent physical-delta commit. Missing or dirty state still enters the
+    # serialized reconciliation path.
+    usage = await _read_cached_cas_storage_usage(redis)
+    if usage is not None:
         return usage
 
-    # Either cache component was evicted (or this is an upgrade from the older
-    # unfenced cache format). Reconstruct from physical object-store state.
-    return await reconcile_cas_storage_usage(redis)
+    async with redis_core.redis_lock(
+        redis,
+        _CAS_STORAGE_MUTATION_LOCK,
+        timeout=_CAS_STORAGE_LOCK_TIMEOUT,
+        expire=_CAS_STORAGE_LOCK_EXPIRE,
+    ):
+        return await _cached_cas_storage_usage_locked(redis)
 
 
 async def _legacy_storage_usage_from_database(db: AsyncSession) -> int:

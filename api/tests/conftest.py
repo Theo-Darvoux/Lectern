@@ -84,6 +84,7 @@ def db_lock():
 def mock_redis() -> AsyncMock:
     redis = AsyncMock()
     redis.get = AsyncMock(return_value=None)
+    redis.mget = AsyncMock(return_value=[b"0", b"0", None])
     redis.setex = AsyncMock()
     redis.delete = AsyncMock()
     redis.incr = AsyncMock()
@@ -137,6 +138,7 @@ class FakeRedis:
 
         lock_mock = MagicMock()
         lock_mock.acquire = AsyncMock(return_value=True)
+        lock_mock.extend = AsyncMock(return_value=True)
         lock_mock.release = AsyncMock(return_value=True)
         lock_mock.__aenter__ = AsyncMock(return_value=lock_mock)
         lock_mock.__aexit__ = AsyncMock(return_value=None)
@@ -144,7 +146,7 @@ class FakeRedis:
 
     def register_script(self, script):
         async def run(*, keys, args, client=None):
-            if "storage_reconcile_cas_usage_v1" in script:
+            if "storage_reconcile_cas_usage_v2" in script:
                 expected_generation = int(args[0])
                 physical_usage = int(args[1])
                 raw_generation = self.data.get(keys[1], 0)
@@ -154,7 +156,25 @@ class FakeRedis:
                 if current_generation != expected_generation:
                     return 0
                 self.data[keys[0]] = str(physical_usage).encode()
+                self.data[keys[1]] = str(expected_generation).encode()
+                if len(keys) > 2:
+                    self.data.pop(keys[2], None)
                 return 1
+
+            if "storage_commit_cas_delta_v1" in script:
+                delta = int(args[0])
+                if keys[0] not in self.data or keys[1] not in self.data:
+                    return -3
+                usage = int(self.data[keys[0]])
+                generation = int(self.data[keys[1]])
+                updated = usage + delta
+                if updated < 0:
+                    return -1
+                self.data[keys[0]] = str(updated).encode()
+                self.data[keys[1]] = str(generation + 1).encode()
+                if len(keys) > 2:
+                    self.data.pop(keys[2], None)
+                return updated
 
             if "auth_store_login_challenge_v2" in script:
 
@@ -434,11 +454,8 @@ class FakeRedis:
                     data = json.loads(args[0])
                     data["ref_count"] = 1
                     await self.set(key, json.dumps(data))
-                    if len(keys) > 1 and data.get("size"):
-                        usage = int(self.data.get(keys[1], 0)) + int(data["size"])
-                        await self.set(keys[1], usage)
-                        if len(keys) > 3:
-                            await self.incr(keys[3])
+                    # Physical storage usage is owned by the storage facade,
+                    # not reconstructed from evictable CAS metadata.
                     if marker_key is not None:
                         await self.set(marker_key, "1")
                     return 1

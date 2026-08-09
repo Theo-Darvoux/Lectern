@@ -47,37 +47,64 @@ def _auth_headers(user: User) -> dict[str, str]:
 async def test_capacity_reservation_reads_usage_atomically_after_cache_rebuild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A CAS finalize racing cache initialization must affect admission."""
+    """A physical cache rebuild must feed the following atomic reservation check."""
+    from app.core.storage import capacity as storage_capacity
 
     class RacingRedis:
         def __init__(self) -> None:
-            self.usage = 0
+            self.data: dict[str, str] = {}
 
-        async def get(self, key: str) -> int | None:
-            return self.usage or None
+        async def mget(self, *keys: str) -> list[str | None]:
+            return [self.data.get(key) for key in keys]
 
-        async def set(self, key: str, value: int, **kwargs: object) -> bool:
-            assert kwargs.get("nx") is True
-            # A concurrent CAS finalize wins initialization after the DB read.
-            self.usage = 95
-            return False
+        async def get(self, key: str) -> str | None:
+            return self.data.get(key)
 
-        def register_script(self, _script: str):
+        def register_script(self, script: str):
+            if "storage_reconcile_cas_usage_v2" in script:
+
+                async def reconcile(*, keys, args, client):  # type: ignore[no-untyped-def]
+                    assert client is self
+                    expected_generation = int(args[0])
+                    current_generation = int(self.data.get(keys[1], "0"))
+                    if current_generation != expected_generation:
+                        return 0
+                    self.data[keys[0]] = str(int(args[1]))
+                    self.data[keys[1]] = str(expected_generation)
+                    self.data.pop(keys[2], None)
+                    return 1
+
+                return reconcile
+
             async def reserve(*, keys, args, client):  # type: ignore[no-untyped-def]
                 assert client is self
-                assert keys[-1] == "storage:total_usage_bytes"
                 requested = int(args[1])
                 capacity = int(args[4])
-                return int(self.usage + requested <= capacity)
+                usage = int(self.data.get(keys[3], "0"))
+                return int(usage + requested <= capacity)
 
             return reserve
 
+    @asynccontextmanager
+    async def no_op_lock(*_args: object, **_kwargs: object):
+        yield
+
+    redis = RacingRedis()
     db = AsyncMock()
-    db.scalar.return_value = 80
+    db.scalar.return_value = 0
     monkeypatch.setattr(settings, "max_storage_gb", 100 / (1024**3))
+    monkeypatch.setattr(storage_capacity.redis_core, "redis_lock", no_op_lock)
+    monkeypatch.setattr(
+        storage_capacity,
+        "_physical_cas_storage_usage",
+        AsyncMock(return_value=95),
+    )
 
     with pytest.raises(BadRequestError):
-        await _reserve_storage_limit(10, "upload-1", cast(Any, RacingRedis()), db)
+        await _reserve_storage_limit(10, "upload-1", cast(Any, redis), db)
+
+    assert redis.data["storage:total_usage_bytes"] == "95"
+    assert redis.data["storage:total_usage_generation"] == "0"
 
 
 @pytest.mark.asyncio

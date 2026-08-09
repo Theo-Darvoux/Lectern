@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
@@ -108,6 +108,78 @@ def _get_s3_settings() -> dict[str, Any]:
     return get_storage()._settings()
 
 
+def _is_cas_key(file_key: str) -> bool:
+    return file_key.startswith("cas/")
+
+
+async def _cas_object_size(storage: S3Backend, file_key: str) -> int | None:
+    if not await storage.object_exists(file_key):
+        return None
+    info = await storage.get_object_info(file_key)
+    try:
+        size = int(info["size"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"Invalid object size metadata for {file_key!r}") from exc
+    if size < 0:
+        raise RuntimeError(f"Invalid negative object size for {file_key!r}")
+    return size
+
+
+async def _accounted_cas_write(file_key: str, writer: Callable[[], Awaitable[None]]) -> None:
+    """Serialize one CAS write and publish only its real physical byte delta."""
+    from app.core.database.redis import redis_client
+    from app.core.storage.capacity import (
+        cas_storage_mutation,
+        commit_cas_storage_delta,
+        mark_cas_storage_usage_dirty,
+    )
+
+    storage = get_storage()
+    async with cas_storage_mutation(redis_client):
+        old_size = await _cas_object_size(storage, file_key) or 0
+        await mark_cas_storage_usage_dirty(redis_client)
+        await writer()
+        new_size = await _cas_object_size(storage, file_key)
+        if new_size is None:
+            # Lost-success/visibility ambiguity must leave the cache dirty so the
+            # next capacity read reconstructs physical truth instead of guessing.
+            raise RuntimeError(f"CAS write did not produce visible object {file_key!r}")
+        await commit_cas_storage_delta(redis_client, new_size - old_size)
+
+
+async def _accounted_cas_delete(file_key: str, deleter: Callable[[], Awaitable[None]]) -> None:
+    """Serialize one CAS delete and publish the observed physical byte delta."""
+    from app.core.database.redis import redis_client
+    from app.core.storage.capacity import (
+        cas_storage_mutation,
+        commit_cas_storage_delta,
+        mark_cas_storage_usage_dirty,
+    )
+
+    storage = get_storage()
+    async with cas_storage_mutation(redis_client):
+        old_size = await _cas_object_size(storage, file_key) or 0
+        await mark_cas_storage_usage_dirty(redis_client)
+        await deleter()
+        new_size = await _cas_object_size(storage, file_key) or 0
+        await commit_cas_storage_delta(redis_client, new_size - old_size)
+
+
+async def _accounted_cas_complex_mutation(writer: Callable[[], Awaitable[None]]) -> None:
+    """Serialize a rare CAS move and rebuild usage instead of inferring its delta."""
+    from app.core.database.redis import redis_client
+    from app.core.storage.capacity import (
+        _reconcile_cas_storage_usage_locked,
+        cas_storage_mutation,
+        mark_cas_storage_usage_dirty,
+    )
+
+    async with cas_storage_mutation(redis_client):
+        await mark_cas_storage_usage_dirty(redis_client)
+        await writer()
+        await _reconcile_cas_storage_usage_locked(redis_client)
+
+
 async def upload_file(
     file_obj: bytes | IO[bytes] | Any,
     file_key: str,
@@ -115,13 +187,21 @@ async def upload_file(
     content_encoding: str | None = None,
     content_disposition: str | None = "attachment",
 ) -> None:
-    await get_storage().upload_file(
-        file_obj,
-        file_key,
-        content_type=content_type,
-        content_encoding=content_encoding,
-        content_disposition=content_disposition,
-    )
+    storage = get_storage()
+
+    async def _write() -> None:
+        await storage.upload_file(
+            file_obj,
+            file_key,
+            content_type=content_type,
+            content_encoding=content_encoding,
+            content_disposition=content_disposition,
+        )
+
+    if _is_cas_key(file_key):
+        await _accounted_cas_write(file_key, _write)
+    else:
+        await _write()
 
 
 async def upload_file_multipart(
@@ -132,14 +212,22 @@ async def upload_file_multipart(
     content_disposition: str | None = "attachment",
     chunk_size: int | None = None,
 ) -> None:
-    await get_storage().upload_file_multipart(
-        file_path,
-        file_key,
-        content_type=content_type,
-        content_encoding=content_encoding,
-        content_disposition=content_disposition,
-        chunk_size=chunk_size,
-    )
+    storage = get_storage()
+
+    async def _write() -> None:
+        await storage.upload_file_multipart(
+            file_path,
+            file_key,
+            content_type=content_type,
+            content_encoding=content_encoding,
+            content_disposition=content_disposition,
+            chunk_size=chunk_size,
+        )
+
+    if _is_cas_key(file_key):
+        await _accounted_cas_write(file_key, _write)
+    else:
+        await _write()
 
 
 async def create_multipart_upload(
@@ -168,7 +256,15 @@ async def upload_part(
 async def complete_multipart_upload(
     file_key: str, s3_upload_id: str, parts: list[dict[str, int | str]]
 ) -> None:
-    await get_storage().complete_multipart_upload(file_key, s3_upload_id, parts)
+    storage = get_storage()
+
+    async def _complete() -> None:
+        await storage.complete_multipart_upload(file_key, s3_upload_id, parts)
+
+    if _is_cas_key(file_key):
+        await _accounted_cas_write(file_key, _complete)
+    else:
+        await _complete()
 
 
 async def abort_multipart_upload(file_key: str, s3_upload_id: str) -> None:
@@ -310,15 +406,39 @@ async def update_object_content_type(file_key: str, content_type: str) -> None:
 
 
 async def move_object(source_key: str, dest_key: str) -> None:
-    await get_storage().move_object(source_key, dest_key)
+    storage = get_storage()
+
+    async def _move() -> None:
+        await storage.move_object(source_key, dest_key)
+
+    if _is_cas_key(source_key) or _is_cas_key(dest_key):
+        await _accounted_cas_complex_mutation(_move)
+    else:
+        await _move()
 
 
 async def copy_object(source_key: str, dest_key: str) -> None:
-    await get_storage().copy_object(source_key, dest_key)
+    storage = get_storage()
+
+    async def _copy() -> None:
+        await storage.copy_object(source_key, dest_key)
+
+    if _is_cas_key(dest_key):
+        await _accounted_cas_write(dest_key, _copy)
+    else:
+        await _copy()
 
 
 async def delete_object(file_key: str) -> None:
-    await get_storage().delete_object(file_key)
+    storage = get_storage()
+
+    async def _delete() -> None:
+        await storage.delete_object(file_key)
+
+    if _is_cas_key(file_key):
+        await _accounted_cas_delete(file_key, _delete)
+    else:
+        await _delete()
 
 
 def list_multipart_uploads(prefix: str = "") -> AsyncIterator[dict[str, Any]]:
