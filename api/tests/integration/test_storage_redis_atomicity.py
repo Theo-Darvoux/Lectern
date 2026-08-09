@@ -225,15 +225,16 @@ async def test_physical_cas_delete_blocks_reconcile_until_delta_commit(
     assert scans == 1
 
 
-async def test_lost_success_cas_write_stays_dirty_until_physical_reconcile(
+async def test_lost_success_cas_write_stays_dirty_until_automatic_recovery(
     redis: Redis,  # type: ignore[type-arg]
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ambiguous remote failure must remain fail-closed until explicitly resolved."""
+    """Ambiguous remote failure is fail-closed while fresh, then self-recovers."""
     storage = _BarrierStorage(fail_after_visible=True)
     monkeypatch.setattr(facade, "get_storage", lambda: storage)
     monkeypatch.setattr(redis_core, "redis_client", redis)
+    monkeypatch.setattr(capacity, "_CAS_MUTATION_RECOVERY_STABILITY_SECONDS", 0.01)
     await redis.set(_STORAGE_USAGE_KEY, 0)
     await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
 
@@ -250,16 +251,56 @@ async def test_lost_success_cas_write_stays_dirty_until_physical_reconcile(
     with pytest.raises(BadRequestError, match="physical CAS mutation resolves"):
         await capacity.get_storage_usage(db_session, redis)
 
-    # Once recovery has established the remote result, resolving the exact
-    # journaled operation converges to physical truth and may clear dirty state.
+    # Move the persisted recovery deadline into the past without bypassing the
+    # production recovery function itself. The next independent owner must use
+    # normal autonomous recovery rather than calling the low-level resolver.
     intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
     mutation_id, raw = next(iter(intents.items()))
-    mutation_epoch = int(json.loads(raw)["epoch"])
-    assert (
-        await capacity.resolve_cas_storage_mutation_by_scan(redis, mutation_id, mutation_epoch)
-        == 11
-    )
+    payload = json.loads(raw)
+    payload["started_at_ms"] = 1
+    payload["recover_after_ms"] = 2
+    await redis.hset(capacity._STORAGE_MUTATION_INTENTS_KEY, mutation_id, json.dumps(payload))
+
+    assert await capacity.recover_stale_cas_storage_mutation(redis)
     assert await capacity.get_storage_usage(db_session, redis) == 11
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 0
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
+
+
+async def test_ambiguous_cas_writer_failure_does_not_permanently_block_future_mutations(
+    redis: Redis,  # type: ignore[type-arg]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = _BarrierStorage(fail_after_visible=True)
+    monkeypatch.setattr(facade, "get_storage", lambda: storage)
+    monkeypatch.setattr(redis_core, "redis_client", redis)
+    monkeypatch.setattr(capacity, "_CAS_MUTATION_RECOVERY_STABILITY_SECONDS", 0.01)
+    await redis.set(_STORAGE_USAGE_KEY, 0)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
+
+    async def physical_usage() -> int:
+        return sum(storage.objects.values())
+
+    monkeypatch.setattr(capacity, "_physical_cas_storage_usage", physical_usage)
+
+    with pytest.raises(OSError, match="lost success"):
+        await facade.upload_file(b"a" * 7, "cas/ambiguous-first")
+
+    intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
+    mutation_id, raw = next(iter(intents.items()))
+    payload = json.loads(raw)
+    payload["started_at_ms"] = 1
+    payload["recover_after_ms"] = 2
+    await redis.hset(capacity._STORAGE_MUTATION_INTENTS_KEY, mutation_id, json.dumps(payload))
+
+    storage.fail_after_visible = False
+    storage.allow_completion.set()
+    await facade.upload_file(b"b" * 5, "cas/next-write")
+
+    assert storage.objects["cas/ambiguous-first"] == 7
+    assert storage.objects["cas/next-write"] == 5
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 12
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 0
     assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
 
 

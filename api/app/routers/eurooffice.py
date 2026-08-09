@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from urllib.parse import quote
 
@@ -32,6 +33,43 @@ _EXT_TO_DOCTYPE: dict[str, str] = {
 }
 
 _ALGORITHM = "HS256"
+_FILE_GRANT_ISSUER = "lectern-api"
+_FILE_GRANT_AUDIENCE = "eurooffice-file"
+
+
+def _create_file_grant(material_id: str, version_number: int) -> str:
+    """Mint the API-only half of EuroOffice file authorization."""
+    now = datetime.now(UTC)
+    return jwt.encode(
+        {
+            "sub": material_id,
+            "ver": version_number,
+            "iat": now,
+            "exp": now + timedelta(seconds=settings.eurooffice_file_token_ttl),
+            "iss": _FILE_GRANT_ISSUER,
+            "aud": _FILE_GRANT_AUDIENCE,
+        },
+        settings.eurooffice_file_token_secret,
+        algorithm=_ALGORITHM,
+    )
+
+
+def _decode_file_grant(token: str, expected_material_id: str) -> int | None:
+    try:
+        claims = jwt.decode(
+            token,
+            settings.eurooffice_file_token_secret,
+            algorithms=[_ALGORITHM],
+            audience=_FILE_GRANT_AUDIENCE,
+            issuer=_FILE_GRANT_ISSUER,
+            options={"require": ["sub", "ver", "iat", "exp", "iss", "aud"]},
+        )
+        version_number = int(claims["ver"])
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError):
+        return None
+    if claims.get("sub") != expected_material_id or version_number <= 0:
+        return None
+    return version_number
 
 
 def _verify_document_server_token(token: str, expected_url: str) -> bool:
@@ -72,7 +110,12 @@ async def get_eurooffice_config(
     # so it must not contain a replayable file credential. EuroOffice signs its
     # outgoing GET with Authorization: Bearer <JWT>; the file route validates
     # that server token against this exact URL.
-    file_url = f"{settings.eurooffice_internal_api_base_url}/api/eurooffice/file/{material_id_str}"
+    version_number = int(version["version_number"])
+    file_grant = _create_file_grant(material_id_str, version_number)
+    file_url = (
+        f"{settings.eurooffice_internal_api_base_url}/api/eurooffice/file/{material_id_str}"
+        f"?grant={quote(file_grant, safe='')}"
+    )
 
     # Cache key: version_number invalidates on new uploads.
     doc_key = f"{material_id_str}-v{version['version_number']}"
@@ -148,24 +191,34 @@ async def serve_file_to_eurooffice(
     """
     Serve the raw file bytes to EuroOffice Document Server.
     Called internally by EuroOffice (not the browser).
-    Authenticated by the JWT EuroOffice adds to its outgoing Authorization header.
-
-    EuroOffice probes the URL with HEAD before downloading and retries failed
-    GETs with the same token — both methods must return 2xx.  We rely on the
-    JWT expiry (60 s) rather than single-use JTI enforcement so retries work.
+    Authorization requires two independent factors: the JWT EuroOffice adds
+    to its outgoing Authorization header proves document-server identity, while
+    the URL carries a short-lived material/version grant signed with an API-only
+    secret that the document server cannot mint. HEAD/GET retries may reuse the
+    grant only until its mandatory expiry.
     """
     material_id_str = str(material_id)
+    file_grant = request.query_params.get("grant")
+    if not file_grant:
+        raise UnauthorizedError()
+    granted_version = _decode_file_grant(file_grant, material_id_str)
+    if granted_version is None:
+        raise UnauthorizedError()
+
     scheme, token = get_authorization_scheme_param(request.headers.get("Authorization"))
     if scheme.lower() != "bearer" or not token:
         raise UnauthorizedError()
 
     expected_url = (
         f"{settings.eurooffice_internal_api_base_url}/api/eurooffice/file/{material_id_str}"
+        f"?grant={quote(file_grant, safe='')}"
     )
     if not _verify_document_server_token(token, expected_url):
         raise UnauthorizedError()
 
     version = await get_material_file_info(db, material_id)
+    if version.version_number != granted_version:
+        raise UnauthorizedError()
     if version.file_key is None:
         raise NotFoundError("No file available")
 

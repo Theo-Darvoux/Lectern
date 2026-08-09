@@ -78,6 +78,8 @@ RELEASE_TOOLCHAIN_KEYS = (
     "BUILDKIT_IMAGE",
     "BINFMT_VERSION",
     "BINFMT_IMAGE",
+    "REDIS_VERSION",
+    "REDIS_TEST_IMAGE",
     "SEAWEEDFS_VERSION",
     "SEAWEEDFS_TEST_IMAGE",
 )
@@ -206,12 +208,15 @@ def parse_release_toolchain(path: Path) -> dict[str, str]:
         is None
     ):
         raise ValueError("BINFMT_VERSION must identify an exact qemu release build")
+    if re.fullmatch(r"[0-9]+\.[0-9]+", values["REDIS_VERSION"]) is None:
+        raise ValueError("REDIS_VERSION must identify an exact reviewed release")
     if re.fullmatch(r"[0-9]+\.[0-9]+", values["SEAWEEDFS_VERSION"]) is None:
         raise ValueError("SEAWEEDFS_VERSION must identify an exact reviewed release")
 
     immutable_patterns = {
         "BUILDKIT_IMAGE": rf"docker\.io/moby/buildkit@{DIGEST_PATTERN}",
         "BINFMT_IMAGE": rf"docker\.io/tonistiigi/binfmt@{DIGEST_PATTERN}",
+        "REDIS_TEST_IMAGE": rf"docker\.io/library/redis@{DIGEST_PATTERN}",
         "SEAWEEDFS_TEST_IMAGE": rf"docker\.io/chrislusf/seaweedfs@{DIGEST_PATTERN}",
     }
     for key, pattern in immutable_patterns.items():

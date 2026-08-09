@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -146,17 +146,28 @@ async def _empty_and_delete_bucket(config: SeaweedFSTestConfig) -> None:
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def isolated_storage_redis(monkeypatch: pytest.MonkeyPatch) -> Redis:
-    """Bind CAS accounting Redis to the current test event loop.
+async def isolated_storage_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncGenerator[Redis | None, None]:
+    """Bind CAS-accounting Redis only to suites that exercise CAS semantics.
 
-    The SeaweedFS backend itself is session-scoped, but redis-py asyncio
-    connection pools own loop-bound transports once connected. A fresh
-    client per test prevents cross-loop socket/future reuse.
+    The production-topology shard validates SeaweedFS replication/failover with
+    ordinary ``integration/`` keys. It intentionally has no Redis dependency,
+    so requiring a Redis sidecar there couples two independent release proofs.
+
+    All other live storage-semantics tests still fail closed unless the runner
+    supplies REDIS_URL. A fresh client per test prevents redis-py loop-bound
+    transports from leaking across pytest event loops.
     """
+    if os.environ.get("SEAWEEDFS_TOPOLOGY") == "production":
+        yield None
+        return
+
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
         pytest.fail(
-            "REDIS_URL must be set by the SeaweedFS integration runner before storage tests start"
+            "REDIS_URL must be set by the SeaweedFS storage-semantics runner "
+            "before CAS-aware storage tests start"
         )
 
     client = Redis.from_url(redis_url, decode_responses=True)

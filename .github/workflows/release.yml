@@ -23,4 +23,5 @@ jobs:
       security-events: write
     uses: ./.github/workflows/build.yml
     with:
+      tested_redis_image: ${{ needs.ci.outputs.tested_redis_image }}
       tested_seaweedfs_image: ${{ needs.ci.outputs.tested_seaweedfs_image }}

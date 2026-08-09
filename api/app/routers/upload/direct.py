@@ -1,6 +1,7 @@
 """POST /api/upload -- direct file upload to quarantine."""
 
 import contextlib
+import hashlib
 import logging
 import mimetypes
 from typing import Annotated
@@ -8,7 +9,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request, UploadFile
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -66,6 +67,41 @@ async def _authoritative_upload_result(
         size=existing.size_bytes or 0,
         mime_type=existing.mime_type or "application/octet-stream",
     )
+
+
+def _upload_advisory_lock_key(upload_id: str) -> int:
+    """Map a globally unique Upload.upload_id onto PostgreSQL's signed bigint lock key."""
+    digest = hashlib.blake2b(
+        upload_id.encode(),
+        digest_size=8,
+        person=b"lectern-upload",
+    ).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
+async def _claim_direct_upload_idempotency(
+    db: AsyncSession,
+    user_id: str,
+    upload_id: str,
+) -> UploadPendingOut | None:
+    """Serialize one X-Upload-ID before any shared Redis/S3 side effect.
+
+    The lock is transaction-scoped, so process death, rollback, and successful
+    COMMIT all release ownership automatically. Upload.upload_id is globally
+    unique, therefore the advisory key is global too rather than tenant-scoped.
+    After the lock is acquired we re-read PostgreSQL at READ COMMITTED; a waiter
+    sees the winner's committed row and returns without touching its resources.
+    """
+    bind = db.get_bind()
+    dialect = bind.dialect.name
+    if dialect == "postgresql":
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": _upload_advisory_lock_key(upload_id)},
+        )
+    elif dialect != "sqlite":
+        raise RuntimeError(f"Unsupported database dialect for upload idempotency: {dialect}")
+    return await _authoritative_upload_result(db, user_id, upload_id)
 
 
 async def _validated_idempotency_cache_hit(
@@ -226,6 +262,13 @@ async def upload_file(
                 redis, db, idem_cache_key, user_id, upload_id
             ):
                 return cached_result
+
+        if idem_header:
+            # This is the ownership boundary. No capacity/quota reservation or
+            # object-store mutation may happen before the transaction lock and
+            # authoritative PostgreSQL re-check complete.
+            if authoritative := await _claim_direct_upload_idempotency(db, user_id, upload_id):
+                return authoritative
 
         await _reserve_storage_limit(pf.size, upload_id, redis, db)
         storage_reserved = True

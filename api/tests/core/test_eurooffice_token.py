@@ -1,8 +1,10 @@
 """Security regressions for EuroOffice document-server file authentication."""
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlparse
 
 import jwt
 import pytest
@@ -13,6 +15,8 @@ from app.core.common.exceptions import UnauthorizedError
 from app.routers import eurooffice
 from app.routers.eurooffice import (
     _EXT_TO_DOCTYPE,
+    _create_file_grant,
+    _decode_file_grant,
     _verify_document_server_token,
     get_eurooffice_config,
 )
@@ -84,7 +88,67 @@ async def test_eurooffice_browser_config_contains_no_replayable_file_query_token
 
     assert "?token=" not in file_url
     assert "token=" not in file_url
-    assert file_url.endswith(f"/api/eurooffice/file/{material_id}")
+    parsed = urlparse(file_url)
+    assert parsed.path.endswith(f"/api/eurooffice/file/{material_id}")
+    grants = parse_qs(parsed.query).get("grant", [])
+    assert len(grants) == 1
+    assert _decode_file_grant(grants[0], str(material_id)) == 1
+
+
+def test_document_server_secret_cannot_forge_unissued_material_grant() -> None:
+    material_id = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    forged = jwt.encode(
+        {
+            "sub": material_id,
+            "ver": 1,
+            "iat": now,
+            "exp": now + timedelta(minutes=1),
+            "iss": "lectern-api",
+            "aud": "eurooffice-file",
+        },
+        settings.eurooffice_jwt_secret,
+        algorithm=_ALGORITHM,
+    )
+    assert _decode_file_grant(forged, material_id) is None
+
+
+def test_eurooffice_file_grant_expiry_is_mandatory() -> None:
+    material_id = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    no_expiry = jwt.encode(
+        {
+            "sub": material_id,
+            "ver": 1,
+            "iat": now,
+            "iss": "lectern-api",
+            "aud": "eurooffice-file",
+        },
+        settings.eurooffice_file_token_secret,
+        algorithm=_ALGORITHM,
+    )
+    assert _decode_file_grant(no_expiry, material_id) is None
+
+    expired = jwt.encode(
+        {
+            "sub": material_id,
+            "ver": 1,
+            "iat": now - timedelta(minutes=2),
+            "exp": now - timedelta(minutes=1),
+            "iss": "lectern-api",
+            "aud": "eurooffice-file",
+        },
+        settings.eurooffice_file_token_secret,
+        algorithm=_ALGORITHM,
+    )
+    assert _decode_file_grant(expired, material_id) is None
+
+
+def test_file_grant_is_material_and_version_scoped() -> None:
+    material_id = str(uuid.uuid4())
+    grant = _create_file_grant(material_id, 7)
+    assert _decode_file_grant(grant, material_id) == 7
+    assert _decode_file_grant(grant, str(uuid.uuid4())) is None
 
 
 @pytest.mark.asyncio

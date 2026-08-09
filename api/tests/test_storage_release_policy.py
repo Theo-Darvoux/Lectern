@@ -103,3 +103,85 @@ def test_base_compose_does_not_advertise_profile_only_production_startup() -> No
     header = "\n".join(compose.splitlines()[:30])
     assert "-f compose.yaml -f compose.prod.yaml" in header
     assert "127.0.0.1:${API_HOST_PORT:-8000}:8000" in compose
+
+
+def test_required_ci_redis_identity_is_bound_to_production_release() -> None:
+    toolchain_lines = (_REPO_ROOT / "deploy/release-toolchain.env").read_text().splitlines()
+    toolchain = dict(
+        line.split("=", 1) for line in toolchain_lines if line and not line.startswith("#")
+    )
+    redis_version = toolchain["REDIS_VERSION"]
+    redis_image = toolchain["REDIS_TEST_IMAGE"]
+    assert redis_version == "7.4"
+    assert redis_image.startswith("docker.io/library/redis@sha256:")
+    redis_digest = redis_image.rsplit("@sha256:", 1)[1]
+    redis_ci_ref = f"docker.io/library/redis:{redis_version}-alpine@sha256:{redis_digest}"
+
+    ci = (_REPO_ROOT / ".github/workflows/ci.yml").read_text()
+    release = (_REPO_ROOT / ".github/workflows/release.yml").read_text()
+    build = (_REPO_ROOT / ".github/workflows/build.yml").read_text()
+
+    assert ci.count(f"image: {redis_ci_ref}") == 2
+    assert "tested_redis_image:" in ci.split("jobs:", 1)[0]
+    assert "redis_image: ${{ steps.toolchain.outputs.redis_test_image }}" in ci
+    assert "tested_redis_image: ${{ needs.ci.outputs.tested_redis_image }}" in release
+
+    header = build.split("jobs:", 1)[0]
+    assert "tested_redis_image:" in header
+    validator = build.split("  validate-tested-storage:", 1)[1].split("\n  build-api:", 1)[0]
+    assert "inputs.tested_redis_image" in validator
+    assert "steps.toolchain.outputs.redis_test_image" in validator
+    assert '[[ "$TESTED_REDIS_IMAGE" == "$PINNED_REDIS_IMAGE" ]]' in validator
+
+    finalize = build.split("  finalize-release:", 1)[1]
+    assert "require-tested-redis-image.sh" in finalize
+    assert "REDIS_IMAGE=${TESTED_REDIS_IMAGE}" in finalize
+
+
+def test_tested_redis_guard_rejects_release_digest_drift() -> None:
+    import subprocess
+
+    script = _REPO_ROOT / "scripts/require-tested-redis-image.sh"
+    tested = "docker.io/library/redis@sha256:" + "a" * 64
+    approved = "docker.io/library/redis@sha256:" + "b" * 64
+    result = subprocess.run(
+        [str(script), tested, approved],
+        cwd=_REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 65
+    assert "does not match" in result.stderr
+
+
+def test_production_topology_storage_proof_is_independent_of_redis() -> None:
+    conftest_path = _REPO_ROOT / "api/tests/integration/storage/conftest.py"
+    topology_runner_path = _REPO_ROOT / "api/scripts/run-seaweedfs-topology-tests.sh"
+    topology_test_path = (
+        _REPO_ROOT / "api/tests/integration/storage/test_zz_seaweedfs_topology_failover.py"
+    )
+
+    assert conftest_path.is_file(), conftest_path
+    assert topology_runner_path.is_file(), topology_runner_path
+    assert topology_test_path.is_file(), topology_test_path
+
+    conftest = conftest_path.read_text(encoding="utf-8")
+    topology_runner = topology_runner_path.read_text(encoding="utf-8")
+    topology_test = topology_test_path.read_text(encoding="utf-8")
+
+    # The topology runner identifies itself explicitly but does not provision
+    # Redis. Its proof is SeaweedFS replication/failover, not CAS accounting.
+    assert "SEAWEEDFS_TOPOLOGY=production" in topology_runner
+    assert "REDIS_URL=" not in topology_runner
+
+    # The shared fixture bypasses Redis only for that explicit shard.
+    assert 'os.environ.get("SEAWEEDFS_TOPOLOGY") == "production"' in conftest
+    assert "yield None" in conftest
+    assert "REDIS_URL must be set by the SeaweedFS storage-semantics runner" in conftest
+
+    # Keep the topology proof on ordinary non-CAS keys. If this changes to CAS,
+    # the shard must deliberately gain Redis rather than silently inheriting it.
+    assert 'prefix = f"integration/{uuid.uuid4().hex}"' in conftest
+    assert 'storage_key("cross-rack-failover.bin")' in topology_test
+    assert '"cas/' not in topology_test

@@ -51,6 +51,11 @@ def test_release_toolchain_is_fully_immutable_and_reviewed() -> None:
             "docker.io/tonistiigi/binfmt@sha256:"
             "465d3fdd28d0f2b871ba4b4ec98bd183292e96167f00d9fd40bd249f8632d705"
         ),
+        "REDIS_VERSION": "7.4",
+        "REDIS_TEST_IMAGE": (
+            "docker.io/library/redis@sha256:"
+            "e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
+        ),
         "SEAWEEDFS_VERSION": "4.29",
         "SEAWEEDFS_TEST_IMAGE": EXPECTED_SEAWEED,
     }

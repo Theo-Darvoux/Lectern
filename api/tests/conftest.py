@@ -86,6 +86,8 @@ def mock_redis() -> AsyncMock:
     redis.get = AsyncMock(return_value=None)
     redis.mget = AsyncMock(return_value=[b"0", b"0", None])
     redis.hlen = AsyncMock(return_value=0)
+    redis.hgetall = AsyncMock(return_value={})
+    redis.time = AsyncMock(return_value=(1_700_000_000, 0))
     redis.execute_command = AsyncMock(return_value=[1, 0])
     redis.setex = AsyncMock()
     redis.delete = AsyncMock()
@@ -153,18 +155,23 @@ class FakeRedis:
 
     def register_script(self, script):
         async def run(*, keys, args, client=None):
-            if "storage_begin_cas_mutation_v1" in script:
+            if "storage_begin_cas_mutation_v2" in script:
+                import time
+
                 intents = self.data.setdefault(keys[2], {})
                 if intents:
                     return -1
                 raw_epoch = self.data.get(keys[1], 0)
                 epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
                 next_epoch = epoch + 1
+                started_at_ms = int(time.time() * 1000)
+                recover_after_ms = started_at_ms + int(args[3])
                 self.data[keys[1]] = str(next_epoch).encode()
                 intents[str(args[0])] = {
                     "operation": str(args[1]),
                     "file_key": str(args[2]),
-                    "started_at_ms": str(args[3]),
+                    "started_at_ms": started_at_ms,
+                    "recover_after_ms": recover_after_ms,
                     "epoch": next_epoch,
                 }
                 self.data[keys[0]] = b"1"
@@ -415,6 +422,13 @@ class FakeRedis:
                 return None
 
         return _SingleConnectionContext()
+
+    async def time(self):
+        import time
+
+        now = time.time()
+        seconds = int(now)
+        return seconds, int((now - seconds) * 1_000_000)
 
     async def get(self, name):
         return self.data.get(name)

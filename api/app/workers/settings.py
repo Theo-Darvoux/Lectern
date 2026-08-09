@@ -18,6 +18,7 @@ from app.workers.outbox import dispatch_outbox
 from app.workers.process_upload import process_upload
 from app.workers.process_upload_post_scan import process_upload_post_scan
 from app.workers.reconcile_multipart import reconcile_multipart_uploads
+from app.workers.recover_cas_storage import recover_cas_storage_mutations
 from app.workers.storage_ops import (
     add_cas_references,
     delete_storage_objects,
@@ -87,6 +88,14 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["db_engine"] = engine
     ctx["db_sessionmaker"] = async_sessionmaker(engine, expire_on_commit=False)
 
+    # Crash recovery is best-effort at startup and also runs periodically below.
+    # Fresh intents are never reaped; the recovery helper enforces the persisted
+    # remote-I/O deadline and stability probe under the global CAS lock.
+    try:
+        await recover_cas_storage_mutations(ctx)
+    except Exception as exc:
+        logger.warning("CAS mutation recovery at worker startup failed: %s", exc)
+
     print("Worker startup complete", flush=True)
 
 
@@ -141,6 +150,7 @@ class WorkerSettings:
         cron(gdpr_cleanup, hour=4, minute=0),
         cron(year_rollover, month={9}, day=1, hour=2, minute=0),
         cron(reconcile_multipart_uploads, hour={2, 14}, minute=0),
+        cron(recover_cas_storage_mutations, minute=set(range(0, 60, 5))),
         cron(reset_daily_views, hour=0, minute=0),
         cron(reset_14d_views, day={1, 15}, hour=1, minute=0),
         cron(dispatch_outbox, minute=set(range(60))),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
@@ -126,6 +127,12 @@ async def _cas_object_size(storage: S3Backend, file_key: str) -> int | None:
     return size
 
 
+async def _bounded_cas_io(writer: Callable[[], Awaitable[None]]) -> None:
+    """Bound one live physical CAS request before it can become recoverable."""
+    async with asyncio.timeout(settings.cas_mutation_io_timeout_seconds):
+        await writer()
+
+
 async def _accounted_cas_write(file_key: str, writer: Callable[[], Awaitable[None]]) -> None:
     """Journal one CAS write and publish only its real physical byte delta."""
     from app.core.database.redis import redis_client
@@ -146,7 +153,7 @@ async def _accounted_cas_write(file_key: str, writer: Callable[[], Awaitable[Non
             await abort_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
             raise
 
-        _result, writer_error, caller_cancellation = await settle_awaitable(writer())
+        _result, writer_error, caller_cancellation = await settle_awaitable(_bounded_cas_io(writer))
         if writer_error is not None:
             # The remote result can be ambiguous after transport failure. Keep the
             # durable intent unresolved; no successor may certify a clean snapshot.
@@ -193,7 +200,9 @@ async def _accounted_cas_delete(file_key: str, deleter: Callable[[], Awaitable[N
             await abort_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
             raise
 
-        _result, delete_error, caller_cancellation = await settle_awaitable(deleter())
+        _result, delete_error, caller_cancellation = await settle_awaitable(
+            _bounded_cas_io(deleter)
+        )
         if delete_error is not None:
             raise delete_error
 
@@ -247,7 +256,7 @@ async def _accounted_cas_complex_mutation(
             await abort_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
             raise
 
-        _result, move_error, caller_cancellation = await settle_awaitable(writer())
+        _result, move_error, caller_cancellation = await settle_awaitable(_bounded_cas_io(writer))
         if move_error is not None:
             raise move_error
 

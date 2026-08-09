@@ -3,6 +3,10 @@ name: Release Implementation
 on:
   workflow_call:
     inputs:
+      tested_redis_image:
+        description: Exact immutable Redis image already exercised by required CI
+        required: true
+        type: string
       tested_seaweedfs_image:
         description: Exact immutable SeaweedFS image already exercised by required CI
         required: true
@@ -25,6 +29,7 @@ jobs:
       contents: read
     outputs:
       image: ${{ steps.validate.outputs.image }}
+      redis_image: ${{ steps.validate.outputs.redis_image }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Load pinned release toolchain
@@ -36,6 +41,8 @@ jobs:
         env:
           TESTED_IMAGE: ${{ inputs.tested_seaweedfs_image }}
           PINNED_IMAGE: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
+          TESTED_REDIS_IMAGE: ${{ inputs.tested_redis_image }}
+          PINNED_REDIS_IMAGE: ${{ steps.toolchain.outputs.redis_test_image }}
         run: |
           set -euo pipefail
           [[ "$TESTED_IMAGE" =~ ^docker\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}$ ]]
@@ -44,6 +51,12 @@ jobs:
             exit 1
           }
           echo "image=$TESTED_IMAGE" >> "$GITHUB_OUTPUT"
+          [[ "$TESTED_REDIS_IMAGE" =~ ^docker\.io/library/redis@sha256:[0-9a-f]{64}$ ]]
+          [[ "$TESTED_REDIS_IMAGE" == "$PINNED_REDIS_IMAGE" ]] || {
+            echo "CI-tested Redis image differs from the reviewed toolchain pin" >&2
+            exit 1
+          }
+          echo "redis_image=$TESTED_REDIS_IMAGE" >> "$GITHUB_OUTPUT"
 
   build-api:
     needs: validate-tested-storage
@@ -245,6 +258,7 @@ jobs:
       PRODUCTION_POLICY_IMAGE_DIGEST: ${{ vars.PRODUCTION_POLICY_IMAGE_DIGEST }}
       PRODUCTION_POSTGRES_IMAGE: ${{ vars.PRODUCTION_POSTGRES_IMAGE }}
       PRODUCTION_REDIS_IMAGE: ${{ vars.PRODUCTION_REDIS_IMAGE }}
+      TESTED_REDIS_IMAGE: ${{ needs.validate-tested-storage.outputs.redis_image }}
       PRODUCTION_NGINX_IMAGE: ${{ vars.PRODUCTION_NGINX_IMAGE }}
       PRODUCTION_MEILI_IMAGE: ${{ vars.PRODUCTION_MEILI_IMAGE }}
       PRODUCTION_EUROOFFICE_IMAGE: ${{ vars.PRODUCTION_EUROOFFICE_IMAGE }}
@@ -278,6 +292,9 @@ jobs:
           set -euo pipefail
           mkdir -p release-manifests
           cp deploy/release-toolchain.env release-manifests/release-toolchain.env
+          ./scripts/require-tested-redis-image.sh \
+            "$TESTED_REDIS_IMAGE" \
+            "$PRODUCTION_REDIS_IMAGE"
           ./scripts/require-tested-seaweedfs-image.sh \
             "$TESTED_SEAWEEDFS_IMAGE" \
             "$PRODUCTION_SEAWEEDFS_IMAGE"
@@ -290,7 +307,7 @@ jobs:
           SELFHOST_WORKER_IMAGE=ghcr.io/theo-darvoux/lectern/selfhost-worker-release@${DELIVERY_DIGEST}
           POLICY_IMAGE_DIGEST=${PRODUCTION_POLICY_IMAGE_DIGEST}
           POSTGRES_IMAGE=${PRODUCTION_POSTGRES_IMAGE}
-          REDIS_IMAGE=${PRODUCTION_REDIS_IMAGE}
+          REDIS_IMAGE=${TESTED_REDIS_IMAGE}
           NGINX_IMAGE=${PRODUCTION_NGINX_IMAGE}
           MEILI_IMAGE=${PRODUCTION_MEILI_IMAGE}
           EUROOFFICE_IMAGE=${PRODUCTION_EUROOFFICE_IMAGE}

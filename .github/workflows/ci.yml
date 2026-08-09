@@ -3,6 +3,9 @@ name: CI
 on:
   workflow_call:
     outputs:
+      tested_redis_image:
+        description: Exact immutable Redis image exercised by required Redis/CAS CI
+        value: ${{ jobs.production-policy.outputs.redis_image }}
       tested_seaweedfs_image:
         description: Exact immutable SeaweedFS image exercised by both required storage matrix shards
         value: ${{ jobs.production-policy.outputs.seaweedfs_image }}
@@ -132,13 +135,17 @@ jobs:
       - name: Apply every database migration
         working-directory: api
         run: uv run alembic upgrade head
-      - name: Exercise the real PostgreSQL revert serialization invariant
+      - name: Exercise real PostgreSQL concurrency invariants
         working-directory: api
-        run: uv run pytest -m integration tests/integration/database/test_revert_concurrency.py
+        run: >-
+          uv run pytest -m integration
+          tests/integration/database/test_revert_concurrency.py
+          tests/integration/database/test_upload_idempotency_concurrency.py
 
   production-policy:
     runs-on: ubuntu-latest
     outputs:
+      redis_image: ${{ steps.toolchain.outputs.redis_test_image }}
       seaweedfs_image: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

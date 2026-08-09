@@ -123,6 +123,12 @@ class Settings(BaseSettings):
     # Upload pipeline settings
     upload_pipeline_max_seconds: int = 600  # hard deadline for the entire worker pipeline
 
+    # Physical CAS mutations are journaled before S3 I/O. The live operation has
+    # a hard application deadline; an orphaned journal may be recovered only after
+    # that deadline plus an additional ambiguity grace period has elapsed.
+    cas_mutation_io_timeout_seconds: int = Field(default=900, ge=60, le=3600)
+    cas_mutation_recovery_grace_seconds: int = Field(default=900, ge=30, le=3600)
+
     # tus resumable upload settings
     tus_chunk_min_bytes: int = 5 * 1024 * 1024  # 5 MiB (S3 multipart minimum)
     tus_chunk_max_bytes: int = 100 * 1024 * 1024  # 100 MiB
