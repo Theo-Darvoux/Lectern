@@ -74,7 +74,6 @@ def _validate_file_key(file_key: str | None) -> str | None:
     return file_key
 
 
-
 def _validate_directory_name(name: str | None) -> str | None:
     if name is None:
         return None

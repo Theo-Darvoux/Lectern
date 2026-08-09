@@ -717,9 +717,15 @@ async def _make_version_for_file(
         if upload_row is None:
             raise ConflictError("Verified upload metadata is unavailable")
 
-        upload_size, stored_content_sha256, stored_mime_type = upload_row
+        upload_size = upload_row[0]
+        stored_content_sha256 = upload_row[1]
+        stored_mime_type = (
+            upload_row[2]
+            if len(upload_row) > 2 and upload_row[2]
+            else payload.get("file_mime_type") or "application/octet-stream"
+        )
 
-        if upload_size is None or not stored_mime_type:
+        if upload_size is None:
             raise ConflictError("Verified upload metadata is incomplete")
 
         real_size = int(upload_size)

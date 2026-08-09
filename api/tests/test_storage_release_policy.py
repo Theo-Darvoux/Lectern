@@ -72,7 +72,7 @@ def test_topology_backup_restore_is_independent_of_host_uid() -> None:
     assert "--entrypoint /bin/sh" in script
     assert '-v "$source_volume:/source:ro"' in script
     assert '-v "$destination_volume:/destination"' in script
-    assert 'cp -a /source/. /destination/' in script
+    assert "cp -a /source/. /destination/" in script
     assert 'docker volume rm "$MASTER_BACKUP_VOLUME" "$MASTER_DATA_VOLUME"' in script
 
     forbidden_host_state_operations = (

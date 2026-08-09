@@ -245,7 +245,6 @@ app.add_middleware(
 )
 
 
-
 @app.middleware("http")
 async def log_requests(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -297,9 +296,7 @@ async def metrics(request: Request) -> Response:
     if settings.metrics_token:
         import hmac
 
-        token = request.headers.get("Authorization", "").removeprefix(
-            "Bearer "
-        ).strip()
+        token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         if not hmac.compare_digest(token, settings.metrics_token):
             return Response(status_code=403, content="Forbidden")
 

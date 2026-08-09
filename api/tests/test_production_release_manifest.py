@@ -28,9 +28,7 @@ def _base_values() -> dict[str, str]:
         "API_IMAGE": _reference("ghcr.io/theo-darvoux/lectern/api-release"),
         "WORKER_IMAGE": _reference("ghcr.io/theo-darvoux/lectern/worker-release"),
         "WEB_IMAGE": _reference("ghcr.io/theo-darvoux/lectern/web-release"),
-        "SELFHOST_WORKER_IMAGE": _reference(
-            "ghcr.io/theo-darvoux/lectern/selfhost-worker-release"
-        ),
+        "SELFHOST_WORKER_IMAGE": _reference("ghcr.io/theo-darvoux/lectern/selfhost-worker-release"),
         "POLICY_IMAGE_DIGEST": f"sha256:{_DIGEST}",
         "POSTGRES_IMAGE": _reference("docker.io/library/postgres"),
         "REDIS_IMAGE": _reference("docker.io/library/redis"),
@@ -54,11 +52,13 @@ def _inspection(values: dict[str, str]) -> dict[str, object]:
         "SELFHOST_WORKER_IMAGE": "ghcr.io/theo-darvoux/lectern/selfhost-worker-release",
     }
     for key, value in values.items():
-        if key not in workload_repositories and not key.endswith("_IMAGE") and key != "POLICY_IMAGE_DIGEST":
+        if (
+            key not in workload_repositories
+            and not key.endswith("_IMAGE")
+            and key != "POLICY_IMAGE_DIGEST"
+        ):
             continue
-        reference = (
-            f"docker.io/library/alpine@{value}" if key == "POLICY_IMAGE_DIGEST" else value
-        )
+        reference = f"docker.io/library/alpine@{value}" if key == "POLICY_IMAGE_DIGEST" else value
         digest = reference.rsplit("@", 1)[1] if "@" in reference else f"sha256:{_DIGEST}"
         repository = workload_repositories.get(key)
         images[key] = {
@@ -261,7 +261,16 @@ def test_sanitizer_rejects_runtime_and_arbitrary_variables(tmp_path: Path) -> No
         with env_file.open("a", encoding="utf-8") as stream:
             stream.write(f"{variable}=unexpected\n")
         result = subprocess.run(
-            [sys.executable, str(_SANITIZE), "--env-file", str(env_file), "--output", str(output), "--commit", _COMMIT],
+            [
+                sys.executable,
+                str(_SANITIZE),
+                "--env-file",
+                str(env_file),
+                "--output",
+                str(output),
+                "--commit",
+                _COMMIT,
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -288,7 +297,16 @@ def test_sanitizer_rejects_duplicate_export_quoted_and_spaced_assignments(tmp_pa
             lines = [f"{key}={value}\n" for key, value in base.items() if key != "API_IMAGE"]
             env_file.write_text("".join(lines) + bad_line, encoding="utf-8")
         result = subprocess.run(
-            [sys.executable, str(_SANITIZE), "--env-file", str(env_file), "--output", str(tmp_path / f"{name}.out"), "--commit", _COMMIT],
+            [
+                sys.executable,
+                str(_SANITIZE),
+                "--env-file",
+                str(env_file),
+                "--output",
+                str(tmp_path / f"{name}.out"),
+                "--commit",
+                _COMMIT,
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -323,7 +341,16 @@ def test_registry_inspector_rejects_commit_tag_digest_mismatch(tmp_path: Path) -
     _write_env(env_file, _base_values())
     env = os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}", "WRONG_TAG": "1"}
     result = subprocess.run(
-        [sys.executable, str(_INSPECT), "--env-file", str(env_file), "--output", str(output), "--commit", _COMMIT],
+        [
+            sys.executable,
+            str(_INSPECT),
+            "--env-file",
+            str(env_file),
+            "--output",
+            str(output),
+            "--commit",
+            _COMMIT,
+        ],
         check=False,
         capture_output=True,
         text=True,

@@ -35,9 +35,10 @@ def test_issue_tokens_share_one_family_when_caller_omits_sid() -> None:
         auto_approve=True,
     )
     access, refresh, _ = auth_service.issue_tokens(user)
-    assert decode_token(access, expected_type="access")["sid"] == decode_token(
-        refresh, expected_type="refresh"
-    )["sid"]
+    assert (
+        decode_token(access, expected_type="access")["sid"]
+        == decode_token(refresh, expected_type="refresh")["sid"]
+    )
 
 
 async def test_shared_auth_validator_rejects_sidless_legacy_credentials(

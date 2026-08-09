@@ -140,4 +140,3 @@ async def test_body_limit_pattern_ignores_wrong_method() -> None:
     await middleware(scope, receive, send)
 
     assert app_called
-

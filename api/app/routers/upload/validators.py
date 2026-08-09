@@ -6,7 +6,7 @@ from typing import Any
 
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
-from app.core.common.upload_limits import enforce_upload_size_limit, upload_size_limit
+from app.core.common.upload_limits import enforce_upload_size_limit
 from app.core.media.mimetypes import MimeRegistry
 
 _MAX_FILENAME_LENGTH = 255
@@ -15,7 +15,6 @@ _MAX_FILENAME_LENGTH = 255
 def _check_per_type_size(mime_type: str, size: int, config: dict[str, Any] | None = None) -> None:
     """Raise BadRequestError if ``size`` exceeds the configured MIME-specific limit."""
     enforce_upload_size_limit(mime_type, size, config)
-
 
 
 def _sanitize_filename(raw: str) -> str:

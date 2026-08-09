@@ -232,9 +232,7 @@ async def retry_dead_letter_job(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
-    job = await db.scalar(
-        select(DeadLetterJob).where(DeadLetterJob.id == job_id).with_for_update()
-    )
+    job = await db.scalar(select(DeadLetterJob).where(DeadLetterJob.id == job_id).with_for_update())
     if not job:
         raise NotFoundError("Dead letter job not found")
     if job.resolved_at is not None:
@@ -256,9 +254,7 @@ async def dismiss_dead_letter_job(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
-    job = await db.scalar(
-        select(DeadLetterJob).where(DeadLetterJob.id == job_id).with_for_update()
-    )
+    job = await db.scalar(select(DeadLetterJob).where(DeadLetterJob.id == job_id).with_for_update())
     if not job:
         raise NotFoundError("Dead letter job not found")
     if job.resolved_at is not None:

@@ -184,9 +184,7 @@ async def test_cas_compensation_does_not_decrement_an_unattempted_increment(
         operation_id="existing-owner",
     )
 
-    assert await compensate_cas_increment(
-        redis, sha256, operation_id="failed-before-send"
-    ) == 1
+    assert await compensate_cas_increment(redis, sha256, operation_id="failed-before-send") == 1
     raw = await redis.get(hmac_cas_key(sha256))
     assert raw is not None
     assert '"ref_count":1' in raw
@@ -206,12 +204,8 @@ async def test_cas_compensation_recovers_a_lost_success_exactly_once(
     )
     await increment_cas_ref(redis, sha256, operation_id="ambiguous-increment")
 
-    assert await compensate_cas_increment(
-        redis, sha256, operation_id="ambiguous-increment"
-    ) == 1
-    assert await compensate_cas_increment(
-        redis, sha256, operation_id="ambiguous-increment"
-    ) == 1
+    assert await compensate_cas_increment(redis, sha256, operation_id="ambiguous-increment") == 1
+    assert await compensate_cas_increment(redis, sha256, operation_id="ambiguous-increment") == 1
 
 
 async def test_cas_duplicate_marker_without_record_fails_closed(

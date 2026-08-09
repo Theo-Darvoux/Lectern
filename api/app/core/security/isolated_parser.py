@@ -356,9 +356,7 @@ async def extract_zip_isolated(
         raw_skipped = payload["skipped"]
         if not isinstance(raw_entries, list) or not isinstance(raw_skipped, list):
             raise TypeError
-        if len(raw_entries) > max_members or not all(
-            isinstance(item, str) for item in raw_skipped
-        ):
+        if len(raw_entries) > max_members or not all(isinstance(item, str) for item in raw_skipped):
             raise TypeError
 
         entries: list[IsolatedZipEntry] = []

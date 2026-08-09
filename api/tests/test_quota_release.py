@@ -65,10 +65,12 @@ async def test_quota_released_on_pr_approval(
         final_key="cas/somehash",
         filename="test.pdf",
         mime_type="application/pdf",
+        size_bytes=100,
         status="clean",
         content_sha256="a" * 64,
         cas_ref_count=1,
     )
+
     db_session.add(up)
     await db_session.commit()
 

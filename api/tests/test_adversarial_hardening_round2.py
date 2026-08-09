@@ -257,9 +257,7 @@ def test_magic_link_capability_never_uses_request_query() -> None:
 
 def test_refresh_route_uses_atomic_consume_and_session_family_replay_revoke() -> None:
     source = (REPO_ROOT / "api/app/routers/auth.py").read_text(encoding="utf-8")
-    refresh = source.split('async def refresh_token(', 1)[1].split(
-        '@router.post("/logout"', 1
-    )[0]
+    refresh = source.split("async def refresh_token(", 1)[1].split('@router.post("/logout"', 1)[0]
     assert "consume_token_once" in refresh
     assert "revoke_session" in refresh
     assert "is_token_blacklisted" not in refresh

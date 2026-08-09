@@ -57,7 +57,6 @@ class RequestBodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-
         for name, value in scope.get("headers", []):
             if name.lower() != b"content-length":
                 continue

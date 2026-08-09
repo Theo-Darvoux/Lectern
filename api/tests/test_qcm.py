@@ -435,9 +435,7 @@ class TestStageEndpoint:
         with (
             patch("app.routers.qcm.storage_upload_file", new_callable=AsyncMock),
             patch("app.routers.qcm.increment_cas_ref", new_callable=AsyncMock),
-            patch(
-                "app.routers.qcm.compensate_cas_increment", new_callable=AsyncMock
-            ) as compensate,
+            patch("app.routers.qcm.compensate_cas_increment", new_callable=AsyncMock) as compensate,
         ):
             result = await stage_qcm(QCMStageRequest(data=_minimal_qcm()), user, db_session)
             claim = await db_session.scalar(

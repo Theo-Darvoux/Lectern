@@ -126,9 +126,7 @@ class SeaweedFSBackend(S3Backend):
                             PartNumber=part_number,
                             Body=bytes(chunk),
                         )
-                        parts.append(
-                            {"PartNumber": part_number, "ETag": str(uploaded["ETag"])}
-                        )
+                        parts.append({"PartNumber": part_number, "ETag": str(uploaded["ETag"])})
                         total_read += len(chunk)
                         part_number += 1
 
@@ -176,7 +174,6 @@ class SeaweedFSBackend(S3Backend):
             raise RuntimeError("SeaweedFS content-type update did not persist")
         if int(updated.get("ContentLength") or 0) != content_length:
             raise RuntimeError("SeaweedFS content-type update changed object size")
-
 
 
 class GarageBackend(S3Backend):

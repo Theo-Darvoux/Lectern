@@ -140,10 +140,10 @@ async def test_worker_process_upload_logic():
 
         mock_inspect.return_value = UploadInspection(
             actual_mime="application/pdf",
-                uncompressed_size=None,
-                parser_pid=1234,
-                parser_uid=1000,
-            )
+            uncompressed_size=None,
+            parser_pid=1234,
+            parser_uid=1000,
+        )
 
         mock_sha.return_value = "fake-sha"
 

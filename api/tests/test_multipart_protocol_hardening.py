@@ -542,9 +542,9 @@ def test_production_seaweedfs_policy_is_rack_aware_and_immutable() -> None:
 def test_required_ci_covers_live_storage_semantics_and_production_topology() -> None:
     repo_root = Path(__file__).parents[2]
     ci = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    standalone = (
-        repo_root / ".github" / "workflows" / "seaweedfs-integration.yml"
-    ).read_text(encoding="utf-8")
+    standalone = (repo_root / ".github" / "workflows" / "seaweedfs-integration.yml").read_text(
+        encoding="utf-8"
+    )
 
     # Required CI runs for every PR, so storage-sensitive changes cannot bypass
     # either live suite through path-filter drift.

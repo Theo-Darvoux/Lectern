@@ -1,21 +1,23 @@
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.services.pr as pr_service
 from app.core.common.exceptions import BadRequestError, ConflictError
 from app.core.database.post_commit import PostCommitKey
-import app.services.pr as pr_service
 from app.models.upload import Upload
 
 
 @pytest.mark.asyncio
 async def test_legacy_oversized_object_cannot_be_promoted(
-    db_session: AsyncSession, monkeypatch,
+    db_session: AsyncSession,
+    monkeypatch,
 ) -> None:
     """An oversize legacy uploads/ object must be rejected before copy_object."""
     from app.config import settings
+
     monkeypatch.setattr(settings, "max_text_size_mb", 1)
 
     db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
@@ -52,7 +54,8 @@ async def test_legacy_oversized_object_cannot_be_promoted(
 
 @pytest.mark.asyncio
 async def test_cas_promotion_uses_authoritative_upload_mime_for_size_policy(
-    db_session: AsyncSession, monkeypatch,
+    db_session: AsyncSession,
+    monkeypatch,
 ) -> None:
     """CAS promotion must use stored MIME, not attacker-supplied payload MIME.
 
@@ -65,6 +68,7 @@ async def test_cas_promotion_uses_authoritative_upload_mime_for_size_policy(
     1 MiB text limit and must be rejected.
     """
     from app.config import settings
+
     monkeypatch.setattr(settings, "max_text_size_mb", 1)
     monkeypatch.setattr(settings, "max_video_size_mb", 500)
 

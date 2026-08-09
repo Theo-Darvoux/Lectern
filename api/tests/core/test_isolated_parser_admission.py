@@ -34,7 +34,9 @@ async def test_parser_children_obey_the_process_wide_subprocess_limit(
             "parser_pid": 123,
             "parser_uid": 456,
         }
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload).encode())
+        return subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(payload).encode()
+        )
 
     monkeypatch.setattr(_concurrency, "async_sandboxed_run", fake_sandboxed_run)
     first = tmp_path / "first.txt"

@@ -69,7 +69,7 @@ def test_capture_all_otel_headers_still_redacts_credentials() -> None:
         normalise_request_header_name,
     )
     response_attributes = collect_custom_headers_attributes(
-        {"headers": [(b"set-cookie", b"refresh_token=refresh-secret" )]},
+        {"headers": [(b"set-cookie", b"refresh_token=refresh-secret")]},
         sanitizer,
         [".*"],
         normalise_response_header_name,

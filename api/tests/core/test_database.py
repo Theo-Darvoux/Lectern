@@ -173,4 +173,3 @@ async def test_db_rollback_failure_still_attempts_external_compensation():
             await gen.athrow(ValueError("request failed"))
 
     compensated.assert_awaited_once()
-

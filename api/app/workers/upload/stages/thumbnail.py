@@ -19,6 +19,7 @@ from app.core.security.sandbox import async_sandboxed_run
 
 logger = logging.getLogger(__name__)
 
+
 async def run_thumbnail_stage(
     pf: ProcessingFile,
     mime_type: str,
@@ -112,10 +113,7 @@ async def run_thumbnail_stage(
             # documents (e.g. featured PDFs) end up with no thumbnail at all.
             # SVGs are excluded: vector art often has transparent/white fills
             # that are legitimate and should not be discarded.
-            if (
-                check_blank
-                and rendered_blank is True
-            ):
+            if check_blank and rendered_blank is True:
                 logger.info(
                     "Thumbnail for %s is nearly blank — discarding to allow native fallback",
                     original_filename,
@@ -145,14 +143,12 @@ def _is_blank_thumbnail(
             gray = image.convert("L")
             try:
                 stat = ImageStat.Stat(gray)
-                return (
-                    stat.mean[0] >= brightness_threshold
-                    and stat.stddev[0] <= stddev_threshold
-                )
+                return stat.mean[0] >= brightness_threshold and stat.stddev[0] <= stddev_threshold
             finally:
                 gray.close()
     except Exception:
         return False
+
 
 # OOXML and ODF MIME types both contain one of these substrings.
 _OFFICE_SUBSTRINGS = ("officedocument", "opendocument")

@@ -67,7 +67,7 @@ def test_every_buildx_and_qemu_setup_consumes_repository_pins() -> None:
     qemu_count = 0
     for path in workflows:
         text = path.read_text(encoding="utf-8")
-        assert "export-release-toolchain.py --github-output \"$GITHUB_OUTPUT\"" in text
+        assert 'export-release-toolchain.py --github-output "$GITHUB_OUTPUT"' in text
         for window in _step_window(text, "docker/setup-buildx-action@"):
             block = "\n".join(window)
             buildx_count += 1
@@ -156,9 +156,7 @@ def _inspection(commit: str, values: dict[str, str]) -> dict[str, object]:
     for key, value in values.items():
         if key in {"RELEASE_COMMIT", "COMPOSE_PROFILES"}:
             continue
-        reference = (
-            f"docker.io/library/alpine@{value}" if key == "POLICY_IMAGE_DIGEST" else value
-        )
+        reference = f"docker.io/library/alpine@{value}" if key == "POLICY_IMAGE_DIGEST" else value
         digest = reference.rsplit("@", 1)[1]
         repository = workload_repositories.get(key)
         records[key] = {
@@ -252,7 +250,7 @@ def _make_canonical_manifest(tmp_path: Path, commit: str) -> Path:
 def _write_fake_docker(tmp_path: Path) -> Path:
     docker = tmp_path / "docker"
     docker.write_text(
-        r'''#!/usr/bin/env python3
+        r"""#!/usr/bin/env python3
 import json
 import sys
 from pathlib import Path
@@ -321,7 +319,7 @@ if args and args[0] == "compose" and "config" in args:
 
 print("unsupported fake docker invocation: " + " ".join(args), file=sys.stderr)
 raise SystemExit(64)
-''',
+""",
         encoding="utf-8",
     )
     docker.chmod(0o755)
@@ -374,8 +372,7 @@ def test_local_preparation_never_persists_runtime_secret_sentinels(tmp_path: Pat
     runtime = tmp_path / "runtime.env"
     sentinels = ("SUPER_SECRET_SENTINEL", "SECRET_DB_SENTINEL")
     runtime.write_text(
-        "SECRET_KEY=SUPER_SECRET_SENTINEL\n"
-        "DATABASE_URL=postgresql://SECRET_DB_SENTINEL\n",
+        "SECRET_KEY=SUPER_SECRET_SENTINEL\nDATABASE_URL=postgresql://SECRET_DB_SENTINEL\n",
         encoding="utf-8",
     )
     _write_fake_docker(tmp_path)
@@ -427,9 +424,7 @@ def test_local_materialization_rejects_tampered_seaweedfs_digest(tmp_path: Path)
     ).stdout.strip()
     manifest = _make_canonical_manifest(tmp_path, commit)
     payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload["images"]["SEAWEEDFS_IMAGE"] = (
-        "docker.io/chrislusf/seaweedfs@sha256:" + "2" * 64
-    )
+    payload["images"]["SEAWEEDFS_IMAGE"] = "docker.io/chrislusf/seaweedfs@sha256:" + "2" * 64
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     result = subprocess.run(
         [

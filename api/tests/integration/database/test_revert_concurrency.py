@@ -191,10 +191,11 @@ async def test_concurrent_dead_letter_retries_enqueue_exactly_once() -> None:
 
     async with sessions() as check:
         count = await check.scalar(
-            select(func.count()).select_from(OutboxJob).where(
+            select(func.count())
+            .select_from(OutboxJob)
+            .where(
                 OutboxJob.job_name == "process_upload",
-                OutboxJob.args
-                == [{"__outbox_kwargs__": {"upload_id": retried_upload_id}}],
+                OutboxJob.args == [{"__outbox_kwargs__": {"upload_id": retried_upload_id}}],
             )
         )
         assert count == 1

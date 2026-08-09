@@ -541,7 +541,9 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
                             "compensation was incomplete"
                         ) from compensation_error
                     if rollback_error is not None:
-                        raise RuntimeError("Auto-merge database rollback failed") from rollback_error
+                        raise RuntimeError(
+                            "Auto-merge database rollback failed"
+                        ) from rollback_error
                     if rollback_cancellation is not None:
                         raise rollback_cancellation
                     if compensation_error is not None:

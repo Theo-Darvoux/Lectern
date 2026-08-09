@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import uuid
@@ -479,8 +480,10 @@ def _make_minimal_zip(tmp_path: Path, rows: dict[str, list[dict]] | None = None)
         "tables": _TABLE_INSERT_ORDER,
         "s3_prefixes": ["cas/", "uploads/", "thumbnails/"],
         "s3_object_count": 0,
+        "s3_objects": {},
         "db_row_counts": {t: len(db_data.get(t, [])) for t in _TABLE_INSERT_ORDER},
     }
+
     with zipfile.ZipFile(dest, "w") as zf:
         zf.writestr("manifest.json", json.dumps(manifest))
         for tbl in _TABLE_INSERT_ORDER:
@@ -756,6 +759,7 @@ async def test_restore_wipes_s3_and_reuploads(db_session: AsyncSession, tmp_path
     """Existing S3 objects must be deleted and backup S3 objects re-uploaded."""
     zip_path = tmp_path / "backup.zip"
     s3_content = b"hello s3"
+    digest = hashlib.sha256(s3_content).hexdigest()
     with zipfile.ZipFile(zip_path, "w") as zf:
         manifest = {
             "version": BACKUP_VERSION,
@@ -763,6 +767,9 @@ async def test_restore_wipes_s3_and_reuploads(db_session: AsyncSession, tmp_path
             "tables": _TABLE_INSERT_ORDER,
             "s3_prefixes": ["cas/", "uploads/", "thumbnails/"],
             "s3_object_count": 1,
+            "s3_objects": {
+                "cas/deadbeef": {"size": len(s3_content), "sha256": digest},
+            },
             "db_row_counts": {},
         }
         zf.writestr("manifest.json", json.dumps(manifest))
@@ -1077,6 +1084,7 @@ async def test_restore_local_backup(client: AsyncClient, db_session: AsyncSessio
             "tables": _TABLE_INSERT_ORDER,
             "s3_prefixes": ["cas/", "uploads/", "thumbnails/"],
             "s3_object_count": 0,
+            "s3_objects": {},
             "db_row_counts": {},
         }
         with zipfile.ZipFile(zip_path, "w") as zf:
@@ -1140,8 +1148,10 @@ async def test_restore_upload(client: AsyncClient, db_session: AsyncSession) -> 
         "tables": _TABLE_INSERT_ORDER,
         "s3_prefixes": ["cas/", "uploads/", "thumbnails/"],
         "s3_object_count": 0,
+        "s3_objects": {},
         "db_row_counts": {},
     }
+
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("manifest.json", json.dumps(manifest))

@@ -205,9 +205,7 @@ async def test_seaweedfs_content_type_update_reuploads_raw_bytes(
 
         async def complete_multipart_upload(self, **kwargs: Any) -> None:
             assert kwargs["UploadId"] == "rewrite-upload"
-            assert kwargs["MultipartUpload"] == {
-                "Parts": [{"PartNumber": 1, "ETag": '"part-1"'}]
-            }
+            assert kwargs["MultipartUpload"] == {"Parts": [{"PartNumber": 1, "ETag": '"part-1"'}]}
             assert self.pending_metadata is not None
             self.metadata = self.pending_metadata
 

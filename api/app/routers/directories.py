@@ -327,13 +327,9 @@ async def download_directory_zip(
     if not entries:
         raise BadRequestError("This directory contains no downloadable files.")
 
-    safe_name = (
-        dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
-    )
+    safe_name = dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
     encoded_name = quote(dir_name)
-    disposition = (
-        f'attachment; filename="{safe_name}.zip"; filename*=UTF-8\'\'{encoded_name}.zip'
-    )
+    disposition = f"attachment; filename=\"{safe_name}.zip\"; filename*=UTF-8''{encoded_name}.zip"
 
     return StreamingResponse(
         _generate_zip(entries),

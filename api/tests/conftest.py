@@ -145,6 +145,7 @@ class FakeRedis:
     def register_script(self, script):
         async def run(*, keys, args, client=None):
             if "auth_store_login_challenge_v2" in script:
+
                 def _text(value):
                     return value.decode() if isinstance(value, bytes) else value
 
@@ -161,6 +162,7 @@ class FakeRedis:
                 return 1
 
             if "auth_verify_code_v1" in script:
+
                 def _text(value):
                     return value.decode() if isinstance(value, bytes) else value
 
@@ -176,6 +178,7 @@ class FakeRedis:
                 return 1
 
             if "auth_verify_magic_v2" in script:
+
                 def _text(value):
                     return value.decode() if isinstance(value, bytes) else value
 

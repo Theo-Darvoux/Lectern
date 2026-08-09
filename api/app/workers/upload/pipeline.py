@@ -315,9 +315,7 @@ class UploadPipeline:
             content_encoding=None,
             thumbnail_path=None,
         )
-        finalize_deadline = asyncio.timeout(
-            self._remaining_pipeline_seconds("finalizing")
-        )
+        finalize_deadline = asyncio.timeout(self._remaining_pipeline_seconds("finalizing"))
         try:
             async with finalize_deadline:
                 final_res = await run_finalize_storage(final_input, self.redis, self.tracer)

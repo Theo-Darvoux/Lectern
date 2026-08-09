@@ -58,9 +58,7 @@ async def test_avatar_upload_flow(
         patch("app.services.user.download_file_raw", new_callable=AsyncMock) as mock_download,
         patch("app.services.user.upload_file", new_callable=AsyncMock) as mock_upload,
         patch("app.services.user.delete_object", new_callable=AsyncMock) as mock_delete,
-        patch(
-            "app.services.user.process_avatar_isolated", new_callable=AsyncMock
-        ) as mock_process,
+        patch("app.services.user.process_avatar_isolated", new_callable=AsyncMock) as mock_process,
     ):
         # Create a real dummy file to be "processed"
         import tempfile

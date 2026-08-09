@@ -1,4 +1,3 @@
-import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,7 +9,6 @@ from app.core.database.post_commit import PostCommitKey, rollback_transaction_ca
 from app.models.material import Material, MaterialVersion
 from app.routers.materials import (
     _TEXT_EDIT_MAX_BYTES,
-    _TEXT_DIFF_MAX_BYTES,
     save_material_text_content,
 )
 from tests.test_materials import _auth_headers, _create_directory, _create_user
@@ -92,7 +90,9 @@ async def test_text_edit_transport_limit_plus_one_is_rejected(
 
 @pytest.mark.asyncio
 async def test_text_edit_respects_configured_text_policy(
-    client: AsyncClient, db_session: AsyncSession, monkeypatch,
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
 ) -> None:
     """Even below the 10 MiB editor ceiling, configured max_text_size_mb is enforced."""
     user = await _create_user(db_session)
@@ -117,6 +117,7 @@ async def test_text_edit_respects_configured_text_policy(
     await db_session.commit()
 
     from app.config import settings
+
     monkeypatch.setattr(settings, "max_text_size_mb", 1)
 
     body = b"a" * (2 * 1024 * 1024)
@@ -174,9 +175,7 @@ async def test_text_staging_reserves_pending_quota(
         patch("app.routers.materials._check_pending_cap", check_pending),
         patch("app.routers.materials._reserve_storage_limit", reserve_storage),
     ):
-        await save_material_text_content(
-            str(material.id), user, db_session, "new text", mock_redis
-        )
+        await save_material_text_content(str(material.id), user, db_session, "new text", mock_redis)
 
     check_pending.assert_awaited_once()
     call_kwargs = check_pending.call_args
@@ -223,9 +222,7 @@ async def test_text_staging_reserves_global_capacity(
         patch("app.routers.materials._check_pending_cap", check_pending),
         patch("app.routers.materials._reserve_storage_limit", reserve_storage),
     ):
-        await save_material_text_content(
-            str(material.id), user, db_session, text, mock_redis
-        )
+        await save_material_text_content(str(material.id), user, db_session, text, mock_redis)
 
     reserve_storage.assert_awaited_once()
     # First positional arg is size_bytes
@@ -289,7 +286,8 @@ async def test_text_staging_failure_releases_all_external_state(
 
 @pytest.mark.asyncio
 async def test_text_staging_uses_upload_rate_limit(
-    client: AsyncClient, db_session: AsyncSession,
+    client: AsyncClient,
+    db_session: AsyncSession,
 ) -> None:
     """The text-content save endpoint must enforce rate_limit_uploads."""
     user = await _create_user(db_session)
@@ -320,7 +318,6 @@ async def test_text_staging_uses_upload_rate_limit(
     async def _failing_rate_limit():
         raise RateLimitError("Too many uploads")
 
-
     app.dependency_overrides[rate_limit_uploads] = _failing_rate_limit
     try:
         import json
@@ -331,15 +328,10 @@ async def test_text_staging_uses_upload_rate_limit(
             headers={**_auth_headers(user), "content-type": "application/json"},
         )
 
-
-
     finally:
         app.dependency_overrides.pop(rate_limit_uploads, None)
 
     assert response.status_code == 429, response.json()
-
-
-
 
 
 @pytest.mark.asyncio
@@ -375,7 +367,9 @@ async def test_text_diff_is_truncated_at_bound(
     new_text = "new\n" * 200_000  # ~800 KB of different lines, producing >1 MiB diff
 
     with (
-        patch("app.routers.materials.read_full_object", new=AsyncMock(return_value=old_text.encode())),
+        patch(
+            "app.routers.materials.read_full_object", new=AsyncMock(return_value=old_text.encode())
+        ),
         patch("app.routers.materials.storage_upload_file", new_callable=AsyncMock),
         patch("app.routers.materials._check_pending_cap", new_callable=AsyncMock),
         patch("app.routers.materials._reserve_storage_limit", new_callable=AsyncMock),
@@ -385,4 +379,3 @@ async def test_text_diff_is_truncated_at_bound(
         )
 
     assert "... diff truncated ..." in result["diff"]
-

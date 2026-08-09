@@ -696,8 +696,6 @@ async def toggle_directory_favourite(
     return favourited
 
 
-
-
 def _validate_zip_arcname(arcname: str) -> str:
     """Reject archive member names that can escape or change roots on extraction."""
     if not arcname or "\x00" in arcname or "\\" in arcname or arcname.startswith("/"):

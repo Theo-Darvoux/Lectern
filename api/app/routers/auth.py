@@ -591,11 +591,7 @@ async def logout(
     if browser_payload:
         payloads.append(browser_payload)
 
-    session_ids = {
-        str(payload["sid"])
-        for payload in payloads
-        if payload.get("sid")
-    }
+    session_ids = {str(payload["sid"]) for payload in payloads if payload.get("sid")}
     for session_id in session_ids:
         await auth_service.revoke_session(
             redis,

@@ -534,8 +534,9 @@ async def save_material_text_content(
     is_gzip_wrapped = current_mime == "application/gzip" or current_name.endswith(".gz")
 
     if is_gzip_wrapped:
-        guessed, _ = _mimetypes.guess_type(logical_name)
+        guessed, _encoding = _mimetypes.guess_type(logical_name)
         check_mime = guessed or "text/plain"
+
     else:
         check_mime = current_mime
 
@@ -626,7 +627,6 @@ async def save_material_text_content(
         privileged=user_role in PRIVILEGED_ROLES,
         reserve_key=staging_quota_key,
     )
-
 
     # Upload to object storage. The registered compensation removes this unique
     # key if upload lost-success or the following database transaction fails.

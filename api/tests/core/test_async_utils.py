@@ -119,9 +119,7 @@ async def test_shielded_await_redelivers_cancellation_even_if_child_later_fails(
         await release.wait()
         raise OSError("cleanup failed")
 
-    task = asyncio.create_task(
-        shielded_await(child(), description="test cleanup")
-    )
+    task = asyncio.create_task(shielded_await(child(), description="test cleanup"))
 
     await started.wait()
     task.cancel()

@@ -309,9 +309,7 @@ class Settings(BaseSettings):
         if self.eurooffice_jwt_secret in _known_placeholders:
             raise ValueError("EUROOFFICE_JWT_SECRET must be set to a secure value in production.")
         if len(self.eurooffice_jwt_secret.encode()) < 32:
-            raise ValueError(
-                "EUROOFFICE_JWT_SECRET must contain at least 32 bytes in production."
-            )
+            raise ValueError("EUROOFFICE_JWT_SECRET must contain at least 32 bytes in production.")
 
         _file_token_placeholders = {
             "change-me-eurooffice-file-token-secret",

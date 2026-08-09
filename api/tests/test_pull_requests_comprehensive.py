@@ -311,7 +311,10 @@ class TestOptimisticLocking:
             processing_status="complete",
             cas_ref_count=1,
             filename="ok.txt",
+            mime_type="text/plain",
+            size_bytes=100,
         )
+
         db_session.add(u_row)
         await db_session.commit()
 

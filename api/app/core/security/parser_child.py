@@ -118,7 +118,9 @@ def _render_avatar(arguments: list[str]) -> dict[str, object]:
 
 def _render_thumbnail(arguments: list[str]) -> dict[str, object]:
     if len(arguments) != 6:
-        raise ValueError("thumbnail requires input, output, width, height, quality and flatten flag")
+        raise ValueError(
+            "thumbnail requires input, output, width, height, quality and flatten flag"
+        )
     from PIL import Image, ImageOps, ImageStat
 
     from app.core.security.file_security._image import _validate_image_size

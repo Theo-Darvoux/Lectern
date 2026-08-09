@@ -16,6 +16,7 @@ Covers:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -44,23 +45,33 @@ def _make_zip(
     include_metadata_sidecar: bool = True,
 ) -> Path:
     dest = tmp_path / "backup.zip"
-    s3_entries = s3_entries or {}
+    s3_entries_dict = s3_entries or {}
+    s3_objects = {
+        key: {
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+        for key, data in s3_entries_dict.items()
+    }
     manifest = {
         "version": version,
         "created_at": "2026-06-05T00:00:00+00:00",
         "tables": _TABLE_INSERT_ORDER,
         "s3_prefixes": list(BACKUP_PREFIXES),
-        "s3_object_count": len(s3_entries),
+        "s3_object_count": len(s3_entries_dict),
+        "s3_objects": s3_objects,
         "db_row_counts": {},
     }
+
     with zipfile.ZipFile(dest, "w", allowZip64=True) as zf:
         zf.writestr("manifest.json", json.dumps(manifest))
         if include_metadata_sidecar and s3_metadata is not None:
             zf.writestr("s3_metadata.json", json.dumps(s3_metadata))
         for tbl in _TABLE_INSERT_ORDER:
             zf.writestr(f"db/{tbl}.json", "[]")
-        for key, data in s3_entries.items():
+        for key, data in s3_entries_dict.items():
             zf.writestr(f"s3/{key}", data)
+
     return dest
 
 
@@ -405,9 +416,7 @@ async def test_branding_object_reuploaded_on_restore(
 
 
 @pytest.mark.asyncio
-async def test_truncate_failure_aborts_restore(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
+async def test_truncate_failure_aborts_restore(db_session: AsyncSession, tmp_path: Path) -> None:
     """A partial database wipe must abort before object storage is touched."""
     zip_path = _make_zip(tmp_path, s3_metadata={})
     original_execute = db_session.execute

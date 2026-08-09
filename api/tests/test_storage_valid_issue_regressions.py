@@ -54,7 +54,9 @@ class _FakeSeaweedClient:
         self._head_calls += 1
         return {
             "ContentLength": len(self.payload),
-            "ContentType": "application/x-new" if self._head_calls > 1 else "application/octet-stream",
+            "ContentType": "application/x-new"
+            if self._head_calls > 1
+            else "application/octet-stream",
             "ContentEncoding": "gzip",
             "ContentDisposition": 'inline; filename="old.bin"',
             "CacheControl": "private, max-age=60",
@@ -103,7 +105,9 @@ class _FakeSeaweedBackend(SeaweedFSBackend):
         yield self.client
 
 
-def test_pipeline_remaining_budget_is_not_a_fixed_finalize_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipeline_remaining_budget_is_not_a_fixed_finalize_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pipeline = object.__new__(UploadPipeline)
     pipeline._elapsed = lambda: 125.0  # type: ignore[method-assign]
     monkeypatch.setattr(settings, "upload_pipeline_max_seconds", 600)

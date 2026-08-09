@@ -276,10 +276,7 @@ def test_self_hosted_delivery_uses_hardened_runtime_and_production_storage_endpo
 
     production = _read("compose.prod.yaml")
     production_block = production.split("  selfhost-worker:", 1)[1].split("\n  nginx:", 1)[0]
-    assert (
-        "S3_ENDPOINT: ${SELFHOST_WORKER_S3_ENDPOINT:-seaweedfs-s3:8333}"
-        in production_block
-    )
+    assert "S3_ENDPOINT: ${SELFHOST_WORKER_S3_ENDPOINT:-seaweedfs-s3:8333}" in production_block
     assert "S3_ACCESS_KEY must be set" in production_block
     assert "S3_SECRET_KEY must be set" in production_block
 

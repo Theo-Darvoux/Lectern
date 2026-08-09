@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.config import settings
-
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
 
@@ -72,4 +71,3 @@ def enforce_upload_size_limit(
     else:
         msg = f"File size exceeds the {mb} MiB limit for this file type."
     raise BadRequestError(msg, code=UploadErrorCode.FILE_TOO_LARGE)
-

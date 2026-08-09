@@ -198,7 +198,6 @@ async def _reserve_storage_limit(
         )
 
 
-
 async def _release_storage_reservation(reservation_id: str, redis: Any) -> None:
     """Release a capacity reservation; repeated calls are harmless."""
     if not settings.max_storage_gb:
@@ -316,9 +315,10 @@ async def _check_pending_cap(
         # is in an error state from a previous operation.
         try:
             from datetime import UTC, datetime, timedelta
+
             from app.core.database.database import async_session_factory
 
-            cutoff = datetime.now(UTC) - timedelta(hours=25)
+            db_cutoff = datetime.now(UTC) - timedelta(hours=25)
             async with async_session_factory() as fallback_db:
                 db_count = (
                     await fallback_db.scalar(
@@ -327,7 +327,7 @@ async def _check_pending_cap(
                         .where(
                             Upload.user_id == UUID(user_id),
                             Upload.status.in_(("pending", "clean")),
-                            Upload.updated_at >= cutoff,
+                            Upload.updated_at >= db_cutoff,
                         )
                     )
                     or 0

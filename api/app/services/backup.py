@@ -241,14 +241,20 @@ def _validate_backup_archive(
             for key, metadata in raw_metadata.items():
                 if not isinstance(key, str) or not isinstance(metadata, dict):
                     raise ValueError("Backup object metadata has an invalid shape")
-                if any(value is not None and not isinstance(value, str) for value in metadata.values()):
+                if any(
+                    value is not None and not isinstance(value, str) for value in metadata.values()
+                ):
                     raise ValueError(f"Backup object metadata for {key!r} is invalid")
                 s3_metadata[key] = metadata
 
             s3_entries: list[str] = []
-            object_hashes = manifest.get("s3_objects", {})
-            if not isinstance(object_hashes, dict):
-                raise ValueError("Backup object integrity manifest is invalid")
+            object_hashes = manifest.get("s3_objects")
+            if version == "2.0":
+                if not isinstance(object_hashes, dict):
+                    raise ValueError("Backup object integrity manifest is invalid")
+            else:
+                object_hashes = object_hashes if isinstance(object_hashes, dict) else {}
+
             for name, info in by_name.items():
                 if not name.startswith("s3/"):
                     continue
@@ -261,20 +267,33 @@ def _validate_backup_archive(
                     while chunk := source.read(1024 * 1024):
                         actual_size += len(chunk)
                         if actual_size > info.file_size:
-                            raise ValueError(f"Backup object {key!r} expanded beyond its declared size")
+                            raise ValueError(
+                                f"Backup object {key!r} expanded beyond its declared size"
+                            )
                         digest.update(chunk)
                 if actual_size != info.file_size:
                     raise ValueError(f"Backup object {key!r} was truncated")
                 expected = object_hashes.get(key)
-                if expected is not None and (
-                    not isinstance(expected, dict)
-                    or expected.get("size") != actual_size
-                    or expected.get("sha256") != digest.hexdigest()
-                ):
-                    raise ValueError(f"Backup object {key!r} failed its integrity check")
+                if version == "2.0" and expected is None:
+                    raise ValueError(f"Backup object {key!r} is missing from integrity manifest")
+                if expected is not None:
+                    if (
+                        not isinstance(expected, dict)
+                        or expected.get("size") != actual_size
+                        or expected.get("sha256") != digest.hexdigest()
+                    ):
+                        raise ValueError(f"Backup object {key!r} failed its integrity check")
                 s3_entries.append(name)
                 if len(s3_entries) > _BACKUP_MAX_OBJECTS:
                     raise ValueError("Backup exceeds the storage object-count limit")
+
+            if version == "2.0":
+                archived_keys = {name[3:] for name in s3_entries}
+                manifested_keys = set(object_hashes.keys())
+                if archived_keys != manifested_keys:
+                    raise ValueError(
+                        "Backup object integrity manifest keyset does not match archive contents"
+                    )
 
             declared_count = manifest.get("s3_object_count")
             if not isinstance(declared_count, int) or declared_count != len(s3_entries):
@@ -361,9 +380,7 @@ async def _dump_table_to_path(
             if row_count > _BACKUP_MAX_TABLE_ROWS:
                 raise RuntimeError(f"Backup table {table_name!r} exceeds the row-count limit")
             if encoded_bytes > _BACKUP_TABLE_MAX_BYTES:
-                raise RuntimeError(
-                    f"Backup table {table_name!r} exceeds the serialized size limit"
-                )
+                raise RuntimeError(f"Backup table {table_name!r} exceeds the serialized size limit")
             if row_count > 1:
                 output.write(b",")
             output.write(encoded)
@@ -479,9 +496,7 @@ async def create_backup_zip(db: AsyncSession, dest_path: Path) -> dict[str, Any]
             # A backup that silently omits a table is not a backup. Production
             # startup already requires current migrations, so fail closed here.
             table_path = tmp / f"table_{index}.json"
-            row_count, encoded_bytes = await _dump_table_to_path(
-                db, table_name, table_path
-            )
+            row_count, encoded_bytes = await _dump_table_to_path(db, table_name, table_path)
             table_paths[table_name] = table_path
             table_row_counts[table_name] = row_count
             total_rows += row_count
@@ -619,9 +634,7 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
     existing_keys = sorted(set(existing_keys))
 
     rollback_prefix = f"restore-rollback/{uuid.uuid4()}/"
-    rollback_keys = {
-        key: f"{rollback_prefix}{index}" for index, key in enumerate(existing_keys)
-    }
+    rollback_keys = {key: f"{rollback_prefix}{index}" for index, key in enumerate(existing_keys)}
     restored_keys: set[str] = set()
     attempted_keys: set[str] = set()
     rollback_completed = False
@@ -636,7 +649,9 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
                 cleanup_errors.append(exc)
                 logger.exception("Restore: failed to clean rollback object %r", rollback_key)
         if cleanup_errors:
-            raise RuntimeError("Restore rollback snapshot cleanup was incomplete") from cleanup_errors[0]
+            raise RuntimeError(
+                "Restore rollback snapshot cleanup was incomplete"
+            ) from cleanup_errors[0]
 
     async def _cleanup_rollback_snapshot() -> None:
         nonlocal snapshot_cleaned
@@ -664,8 +679,7 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
                 logger.exception("Restore: failed to remove newly restored object %r", new_key)
         if rollback_errors:
             raise RuntimeError(
-                "Storage rollback was incomplete; "
-                f"rollback data remains under {rollback_prefix!r}"
+                f"Storage rollback was incomplete; rollback data remains under {rollback_prefix!r}"
             ) from rollback_errors[0]
         await _cleanup_rollback_snapshot()
         rollback_completed = True

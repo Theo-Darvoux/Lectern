@@ -2,7 +2,6 @@ import gzip
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,7 +93,6 @@ async def test_save_text_content_removes_object_when_transaction_rolls_back(
     mock_redis.zrem = AsyncMock()
     mock_redis.register_script = MagicMock(return_value=AsyncMock())
 
-
     with (
         patch("app.routers.materials.read_full_object", new=AsyncMock(return_value=b"old")),
         patch("app.routers.materials.storage_upload_file", new_callable=AsyncMock),
@@ -110,8 +108,6 @@ async def test_save_text_content_removes_object_when_transaction_rolls_back(
         await rollback_transaction_callbacks(db_session)
 
     delete_object.assert_awaited_once_with(result["file_key"])
-
-
 
 
 @pytest.mark.asyncio

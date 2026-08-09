@@ -132,8 +132,12 @@ async def test_new_magic_link_supersedes_previous_link(
         token_b = mock_send.call_args[0][2].split("token=", 1)[1]
 
     assert token_a != token_b
-    assert (await client.post("/api/auth/verify-magic-link", json={"token": token_a})).status_code == 400
-    assert (await client.post("/api/auth/verify-magic-link", json={"token": token_b})).status_code == 200
+    assert (
+        await client.post("/api/auth/verify-magic-link", json={"token": token_a})
+    ).status_code == 400
+    assert (
+        await client.post("/api/auth/verify-magic-link", json={"token": token_b})
+    ).status_code == 200
 
 
 async def test_magic_link_expired(

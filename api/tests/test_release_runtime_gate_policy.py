@@ -79,26 +79,24 @@ def test_production_docker_build_roots_are_digest_pinned() -> None:
 
 
 def test_release_promotion_requires_exact_candidate_production_startup() -> None:
-    workflow = (REPO_ROOT / ".github/workflows/scan-and-promote.yml").read_text(
-        encoding="utf-8"
-    )
-    smoke = (REPO_ROOT / "scripts/smoke-release-candidate.sh").read_text(
-        encoding="utf-8"
-    )
+    workflow = (REPO_ROOT / ".github/workflows/scan-and-promote.yml").read_text(encoding="utf-8")
+    smoke = (REPO_ROOT / "scripts/smoke-release-candidate.sh").read_text(encoding="utf-8")
     worker_settings = (REPO_ROOT / "api/app/workers/settings.py").read_text(encoding="utf-8")
 
     assert "runtime-smoke:" in workflow
     assert "linux/amd64" in workflow
     assert "linux/arm64" in workflow
-    assert 'needs: [validate, scan, runtime-smoke]' in workflow
-    assert './scripts/smoke-release-candidate.sh "$COMPONENT" "$CANDIDATE_REF" "$PLATFORM"' in workflow
+    assert "needs: [validate, scan, runtime-smoke]" in workflow
+    assert (
+        './scripts/smoke-release-candidate.sh "$COMPONENT" "$CANDIDATE_REF" "$PLATFORM"' in workflow
+    )
     assert "steps.toolchain.outputs.binfmt_image" in workflow
     assert f"postgres:16-alpine@sha256:{POSTGRES_DIGEST}" in workflow
     assert f"redis:7.4-alpine@sha256:{REDIS_DIGEST}" in workflow
 
-    assert '@sha256:' in smoke
-    assert 'docker buildx imagetools inspect --raw' in smoke
-    assert 'child_digest=' in smoke
+    assert "@sha256:" in smoke
+    assert "docker buildx imagetools inspect --raw" in smoke
+    assert "child_digest=" in smoke
     assert 'candidate_ref="${candidate_repository}@${child_digest}"' in smoke
     assert '--platform "$platform"' in smoke
 
@@ -113,7 +111,7 @@ def test_release_promotion_requires_exact_candidate_production_startup() -> None
     assert "worker-candidate-production-startup-ok" in smoke
     assert 'grep -q "Worker startup complete"' in smoke
     assert 'grep -q "arq.*app.workers.settings.WorkerSettings"' in smoke
-    assert '--entrypoint /venv/bin/python' not in smoke
+    assert "--entrypoint /venv/bin/python" not in smoke
 
     for component in ("api", "worker", "web", "selfhost-worker"):
         assert component in smoke
