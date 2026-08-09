@@ -33,13 +33,17 @@ def main() -> int:
         payload = json.loads(args.manifest.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("canonical manifest must contain a JSON object")
-        commit, canonical_profiles, canonical_images, toolchain = validate_canonical_release_manifest(
-            payload,
-            repo_root=repo_root,
-            expected_commit=args.commit,
+        commit, canonical_profiles, canonical_images, toolchain = (
+            validate_canonical_release_manifest(
+                payload,
+                repo_root=repo_root,
+                expected_commit=args.commit,
+            )
         )
         selected_profiles = (
-            canonical_profiles if args.profiles is None else parse_profiles(args.profiles)
+            canonical_profiles
+            if args.profiles is None
+            else parse_profiles(args.profiles)
         )
         unavailable = sorted(set(selected_profiles) - set(canonical_profiles))
         if unavailable:
@@ -50,9 +54,7 @@ def main() -> int:
 
         selected_keys = set(ALWAYS_REQUIRED)
         selected_keys.update(PROFILE_IMAGES[profile] for profile in selected_profiles)
-        selected_images = {
-            key: canonical_images[key] for key in sorted(selected_keys)
-        }
+        selected_images = {key: canonical_images[key] for key in sorted(selected_keys)}
         env_text = canonical_env_text(commit, selected_profiles, selected_images)
         manifest_sha256 = sha256_file(args.manifest)
     except (OSError, ValueError, json.JSONDecodeError, KeyError) as exc:

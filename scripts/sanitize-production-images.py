@@ -23,7 +23,9 @@ def main() -> int:
 
     try:
         values = parse_env_file(args.env_file)
-        commit, profiles, images = validate_release_values(values, expected_commit=args.commit)
+        commit, profiles, images = validate_release_values(
+            values, expected_commit=args.commit
+        )
         atomic_write_text(args.output, canonical_env_text(commit, profiles, images))
     except (OSError, ValueError) as exc:
         parser.error(str(exc))

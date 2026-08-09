@@ -16,6 +16,7 @@ from app.core.common.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
 from app.core.common.exceptions import BadRequestError, ForbiddenError
 from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.database import get_db
+from app.core.database.post_commit import register_transaction_callbacks
 from app.core.database.redis import get_redis
 from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import guess_mime_from_bytes
@@ -43,6 +44,80 @@ from app.schemas.material import UploadPendingOut, UploadStatus
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _authoritative_upload_result(
+    db: AsyncSession,
+    user_id: str,
+    upload_id: str,
+) -> UploadPendingOut | None:
+    existing = await db.scalar(select(Upload).where(Upload.upload_id == upload_id))
+    if existing is None:
+        return None
+    if str(existing.user_id) != user_id:
+        raise ForbiddenError("X-Upload-ID is already owned by another user")
+    existing_key = existing.final_key or existing.quarantine_key
+    if existing_key is None:
+        raise BadRequestError("Existing upload has no storage key")
+    return UploadPendingOut(
+        upload_id=existing.upload_id,
+        file_key=existing_key,
+        status=UploadStatus(existing.status),
+        size=existing.size_bytes or 0,
+        mime_type=existing.mime_type or "application/octet-stream",
+    )
+
+
+async def _validated_idempotency_cache_hit(
+    redis: Redis,  # type: ignore[type-arg]
+    db: AsyncSession,
+    cache_key: str,
+    user_id: str,
+    expected_upload_id: str,
+) -> UploadPendingOut | None:
+    """Treat Redis as a cache only; PostgreSQL remains authoritative."""
+    cached = await redis.get(cache_key)
+    if not cached:
+        return None
+    try:
+        cached_result = UploadPendingOut.model_validate_json(cached)
+    except Exception:
+        await redis.delete(cache_key)
+        return None
+    if cached_result.upload_id != expected_upload_id:
+        await redis.delete(cache_key)
+        return None
+
+    authoritative = await _authoritative_upload_result(db, user_id, expected_upload_id)
+    if authoritative is None:
+        # A stale result from a failed/ambiguous pre-fix COMMIT must never certify
+        # a new success. Drop the optimization and continue from PostgreSQL truth.
+        await redis.delete(cache_key)
+        return None
+    return authoritative
+
+
+def _cache_idempotency_after_commit(
+    db: AsyncSession,
+    redis: Redis,  # type: ignore[type-arg]
+    cache_key: str,
+    result: UploadPendingOut,
+) -> bool:
+    """Publish Redis idempotency state only after the Upload/outbox COMMIT."""
+    payload = result.model_dump_json()
+
+    async def _on_commit() -> None:
+        await redis.set(cache_key, payload, ex=_IDEM_TTL)
+
+    async def _on_rollback() -> None:
+        # Defensive cleanup for a stale cache entry produced by older releases.
+        await redis.delete(cache_key)
+
+    return register_transaction_callbacks(
+        db,
+        on_rollback=_on_rollback,
+        on_commit=_on_commit,
+    )
 
 
 @router.post("", response_model=UploadPendingOut, status_code=202)
@@ -113,22 +188,12 @@ async def upload_file(
             # Idempotency keys are caller-controlled and must never cross tenant
             # boundaries, even when two users deliberately choose the same UUID.
             idem_cache_key = f"{_IDEM_KEY_PREFIX}{user_id}:{idem_header}"
-            if cached := await redis.get(idem_cache_key):
-                return UploadPendingOut.model_validate_json(cached)
-            existing = await db.scalar(select(Upload).where(Upload.upload_id == upload_id))
-            if existing is not None:
-                if str(existing.user_id) != user_id:
-                    raise ForbiddenError("X-Upload-ID is already owned by another user")
-                existing_key = existing.final_key or existing.quarantine_key
-                if existing_key is None:
-                    raise BadRequestError("Existing upload has no storage key")
-                return UploadPendingOut(
-                    upload_id=existing.upload_id,
-                    file_key=existing_key,
-                    status=UploadStatus(existing.status),
-                    size=existing.size_bytes or 0,
-                    mime_type=existing.mime_type or "application/octet-stream",
-                )
+            if cached_result := await _validated_idempotency_cache_hit(
+                redis, db, idem_cache_key, user_id, upload_id
+            ):
+                return cached_result
+            if authoritative := await _authoritative_upload_result(db, user_id, upload_id):
+                return authoritative
 
         real_mime = guess_mime_from_bytes(head)
 
@@ -157,8 +222,10 @@ async def upload_file(
         if not idem_cache_key:
             # Content-aware idempotency check (runs regardless of X-Upload-ID)
             idem_cache_key = f"{_IDEM_KEY_PREFIX}{user_id}:{upload_id}:{file_sha256}"
-            if cached := await redis.get(idem_cache_key):
-                return UploadPendingOut.model_validate_json(cached)
+            if cached_result := await _validated_idempotency_cache_hit(
+                redis, db, idem_cache_key, user_id, upload_id
+            ):
+                return cached_result
 
         await _reserve_storage_limit(pf.size, upload_id, redis, db)
         storage_reserved = True
@@ -213,8 +280,13 @@ async def upload_file(
             mime_type=mime_type,
         )
 
-        if idem_cache_key:
-            await redis.set(idem_cache_key, result.model_dump_json(), ex=_IDEM_TTL)
+        if idem_cache_key and not _cache_idempotency_after_commit(
+            db, redis, idem_cache_key, result
+        ):
+            logger.warning(
+                "Upload idempotency cache was not registered because the DB session "
+                "is not request-transaction managed"
+            )
 
         return result
 

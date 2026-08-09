@@ -14,7 +14,9 @@ import pytest
 import pytest_asyncio
 from aiobotocore.config import AioConfig
 from botocore.exceptions import ClientError
+from redis.asyncio import Redis
 
+import app.core.database.redis as redis_core
 from app.config import settings
 from app.core.storage import facade
 from app.core.storage.backends import SeaweedFSBackend
@@ -141,6 +143,30 @@ async def _empty_and_delete_bucket(config: SeaweedFSTestConfig) -> None:
                 await asyncio.sleep(0.25)
         if last_error is not None:
             raise last_error
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def isolated_storage_redis(monkeypatch: pytest.MonkeyPatch) -> Redis:
+    """Bind CAS accounting Redis to the current test event loop.
+
+    The SeaweedFS backend itself is session-scoped, but redis-py asyncio
+    connection pools own loop-bound transports once connected. A fresh
+    client per test prevents cross-loop socket/future reuse.
+    """
+    redis_url = os.environ.get("REDIS_URL")
+    if not redis_url:
+        pytest.fail(
+            "REDIS_URL must be set by the SeaweedFS integration runner before storage tests start"
+        )
+
+    client = Redis.from_url(redis_url, decode_responses=True)
+    try:
+        await client.ping()
+        await client.flushdb()
+        monkeypatch.setattr(redis_core, "redis_client", client)
+        yield client
+    finally:
+        await client.aclose()
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)

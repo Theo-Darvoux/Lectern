@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from typing import Any
 
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.database.redis as redis_core
 from app.config import settings
+from app.core.common.exceptions import BadRequestError
 from app.core.security.cas import (
     _STORAGE_USAGE_GENERATION_KEY,
     _STORAGE_USAGE_KEY,
@@ -27,6 +29,10 @@ async def redis() -> Redis:  # type: ignore[type-arg]
     if not _REDIS_URL:
         pytest.skip("AUTH_ATOMICITY_REDIS_URL is required for this integration test")
     client = Redis.from_url(_REDIS_URL, decode_responses=True)
+    # The production Redis configuration uses AOF. WAITAOF is part of the
+    # physical-mutation safety invariant, so the real-Redis test must exercise it.
+    await client.config_set("appendonly", "yes")
+    await client.config_set("appendfsync", "always")
     await client.flushdb()
     try:
         yield client
@@ -224,6 +230,7 @@ async def test_lost_success_cas_write_stays_dirty_until_physical_reconcile(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Ambiguous remote failure must remain fail-closed until explicitly resolved."""
     storage = _BarrierStorage(fail_after_visible=True)
     monkeypatch.setattr(facade, "get_storage", lambda: storage)
     monkeypatch.setattr(redis_core, "redis_client", redis)
@@ -239,8 +246,20 @@ async def test_lost_success_cas_write_stays_dirty_until_physical_reconcile(
         await facade.upload_file(b"y" * 11, "cas/lost-success")
 
     assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 1
+    with pytest.raises(BadRequestError, match="physical CAS mutation resolves"):
+        await capacity.get_storage_usage(db_session, redis)
+
+    # Once recovery has established the remote result, resolving the exact
+    # journaled operation converges to physical truth and may clear dirty state.
+    intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
+    mutation_id, raw = next(iter(intents.items()))
+    mutation_epoch = int(json.loads(raw)["epoch"])
+    assert (
+        await capacity.resolve_cas_storage_mutation_by_scan(redis, mutation_id, mutation_epoch)
+        == 11
+    )
     assert await capacity.get_storage_usage(db_session, redis) == 11
-    assert await redis.get(_STORAGE_USAGE_KEY) == "11"
     assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
 
 
@@ -276,3 +295,94 @@ async def test_promoted_legacy_release_fences_stale_snapshot_with_real_redis(
 
     assert calls >= 2
     assert int(await redis.get(capacity.LEGACY_STORAGE_GENERATION_KEY) or 0) == 1
+
+
+class _LateVisibilityStorage:
+    def __init__(self) -> None:
+        self.objects: dict[str, int] = {}
+        self.dispatched = asyncio.Event()
+        self.make_visible = asyncio.Event()
+
+    async def object_exists(self, key: str) -> bool:
+        return key in self.objects
+
+    async def get_object_info(self, key: str) -> dict[str, Any]:
+        return {"size": self.objects[key]}
+
+    async def upload_file(
+        self,
+        file_obj: bytes,
+        file_key: str,
+        **_kwargs: Any,
+    ) -> None:
+        self.dispatched.set()
+        await self.make_visible.wait()
+        self.objects[file_key] = len(file_obj)
+
+
+async def test_cas_reconcile_cannot_clear_dirty_before_lease_lost_remote_write_resolves(
+    redis: Redis,  # type: ignore[type-arg]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successor cannot certify clean usage while a lease-lost PUT is unresolved."""
+    storage = _LateVisibilityStorage()
+    monkeypatch.setattr(facade, "get_storage", lambda: storage)
+    monkeypatch.setattr(redis_core, "redis_client", redis)
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_EXPIRE", 0.15)
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_TIMEOUT", 1.0)
+
+    await redis.set(_STORAGE_USAGE_KEY, 0)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
+    await redis.set(capacity._STORAGE_MUTATION_EPOCH_KEY, 0)
+
+    writer = asyncio.create_task(facade.upload_file(b"x" * 17, "cas/lease-loss"))
+    await storage.dispatched.wait()
+
+    # The object-store request cannot be dispatched before the durable journal.
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 1
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
+
+    # Force the lease to be lost while the already-dispatched PUT is blocked.
+    await redis.delete(f"lock:{capacity._CAS_STORAGE_MUTATION_LOCK}")
+    await asyncio.sleep(0.1)
+
+    # A successor can acquire the lock but the durable intent prevents a clean
+    # pre-write scan from being published.
+    with pytest.raises(BadRequestError, match="physical CAS mutation resolves"):
+        await capacity.reconcile_cas_storage_usage(redis)
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 0
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
+
+    storage.make_visible.set()
+    with pytest.raises(redis_core.RedisConcurrencyError):
+        await writer
+
+    # The old owner reports its lost lock only after the remote operation has
+    # settled and its epoch-bound intent has been resolved exactly.
+    assert storage.objects["cas/lease-loss"] == 17
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 17
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 0
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
+
+
+async def test_cas_begin_intent_is_aof_durable_before_writer_dispatch(
+    redis: Redis,  # type: ignore[type-arg]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = _LateVisibilityStorage()
+    monkeypatch.setattr(facade, "get_storage", lambda: storage)
+    monkeypatch.setattr(redis_core, "redis_client", redis)
+    await redis.set(_STORAGE_USAGE_KEY, 0)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
+
+    writer = asyncio.create_task(facade.upload_file(b"z", "cas/aof-before-io"))
+    await storage.dispatched.wait()
+
+    # At writer entry the begin script has already run on the same pinned Redis
+    # connection as WAITAOF and the journal is present/dirty.
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 1
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
+
+    storage.make_visible.set()
+    await writer
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 1

@@ -36,14 +36,20 @@ def _inspect(reference: str) -> dict[str, Any]:
         text=True,
     )
     if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "unknown registry error"
+        detail = (
+            result.stderr.strip() or result.stdout.strip() or "unknown registry error"
+        )
         raise ValueError(f"could not inspect {reference}: {detail}")
     try:
         manifest = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"registry returned invalid manifest metadata for {reference}") from exc
+        raise ValueError(
+            f"registry returned invalid manifest metadata for {reference}"
+        ) from exc
     if not isinstance(manifest, dict):
-        raise ValueError(f"registry returned an invalid manifest object for {reference}")
+        raise ValueError(
+            f"registry returned an invalid manifest object for {reference}"
+        )
     return manifest
 
 
@@ -66,8 +72,10 @@ def _platforms(manifest: dict[str, Any]) -> list[str]:
             continue
         variant = platform.get("variant")
         normalized = f"{os_name}/{architecture}"
-        if isinstance(variant, str) and variant and not (
-            architecture == "arm64" and variant == "v8"
+        if (
+            isinstance(variant, str)
+            and variant
+            and not (architecture == "arm64" and variant == "v8")
         ):
             normalized += f"/{variant}"
         result.add(normalized)
@@ -116,7 +124,9 @@ def main() -> int:
                         f"{sorted(REQUIRED_WORKLOAD_PLATFORMS)}"
                     )
                 if platforms != tag_platforms:
-                    raise ValueError(f"digest and commit-tag platform metadata differ for {name}")
+                    raise ValueError(
+                        f"digest and commit-tag platform metadata differ for {name}"
+                    )
             records[name] = {
                 "reference": reference,
                 "digest": digest,

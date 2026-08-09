@@ -9,6 +9,7 @@ from typing import IO, TYPE_CHECKING, Any
 
 from app.config import settings
 from app.core.common.constants import MAGIC_HEADER_SIZE
+from app.core.security.async_utils import settle_awaitable
 
 if TYPE_CHECKING:
     from types_aiobotocore_s3.client import S3Client
@@ -126,58 +127,154 @@ async def _cas_object_size(storage: S3Backend, file_key: str) -> int | None:
 
 
 async def _accounted_cas_write(file_key: str, writer: Callable[[], Awaitable[None]]) -> None:
-    """Serialize one CAS write and publish only its real physical byte delta."""
+    """Journal one CAS write and publish only its real physical byte delta."""
     from app.core.database.redis import redis_client
     from app.core.storage.capacity import (
+        abort_cas_storage_mutation,
         cas_storage_mutation,
         commit_cas_storage_delta,
-        mark_cas_storage_usage_dirty,
+        resolve_cas_storage_mutation_by_scan,
     )
 
     storage = get_storage()
-    async with cas_storage_mutation(redis_client):
-        old_size = await _cas_object_size(storage, file_key) or 0
-        await mark_cas_storage_usage_dirty(redis_client)
-        await writer()
-        new_size = await _cas_object_size(storage, file_key)
+    async with cas_storage_mutation(redis_client, file_key, "write") as mutation:
+        mutation_id, mutation_epoch = mutation
+        try:
+            old_size = await _cas_object_size(storage, file_key) or 0
+        except BaseException:
+            # No object-store mutation has been dispatched yet.
+            await abort_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
+            raise
+
+        _result, writer_error, caller_cancellation = await settle_awaitable(writer())
+        if writer_error is not None:
+            # The remote result can be ambiguous after transport failure. Keep the
+            # durable intent unresolved; no successor may certify a clean snapshot.
+            raise writer_error
+
+        try:
+            new_size = await _cas_object_size(storage, file_key)
+        except BaseException:
+            # The write settled successfully but HEAD failed. An exact scan while
+            # the intent remains unresolved repairs the aggregate without guessing.
+            await resolve_cas_storage_mutation_by_scan(redis_client, mutation_id, mutation_epoch)
+            raise
+
         if new_size is None:
-            # Lost-success/visibility ambiguity must leave the cache dirty so the
-            # next capacity read reconstructs physical truth instead of guessing.
+            # Do not clear the journal on read-after-write ambiguity.
             raise RuntimeError(f"CAS write did not produce visible object {file_key!r}")
-        await commit_cas_storage_delta(redis_client, new_size - old_size)
+
+        await commit_cas_storage_delta(
+            redis_client,
+            new_size - old_size,
+            mutation_id,
+            mutation_epoch,
+        )
+        if caller_cancellation is not None:
+            raise caller_cancellation
 
 
 async def _accounted_cas_delete(file_key: str, deleter: Callable[[], Awaitable[None]]) -> None:
-    """Serialize one CAS delete and publish the observed physical byte delta."""
+    """Journal one CAS delete and publish the observed physical byte delta."""
     from app.core.database.redis import redis_client
     from app.core.storage.capacity import (
+        abort_cas_storage_mutation,
         cas_storage_mutation,
         commit_cas_storage_delta,
-        mark_cas_storage_usage_dirty,
+        resolve_cas_storage_mutation_by_scan,
     )
 
     storage = get_storage()
-    async with cas_storage_mutation(redis_client):
-        old_size = await _cas_object_size(storage, file_key) or 0
-        await mark_cas_storage_usage_dirty(redis_client)
-        await deleter()
-        new_size = await _cas_object_size(storage, file_key) or 0
-        await commit_cas_storage_delta(redis_client, new_size - old_size)
+    async with cas_storage_mutation(redis_client, file_key, "delete") as mutation:
+        mutation_id, mutation_epoch = mutation
+        try:
+            old_size = await _cas_object_size(storage, file_key) or 0
+        except BaseException:
+            await abort_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
+            raise
+
+        _result, delete_error, caller_cancellation = await settle_awaitable(deleter())
+        if delete_error is not None:
+            raise delete_error
+
+        try:
+            new_size_or_none = await _cas_object_size(storage, file_key)
+        except BaseException:
+            await resolve_cas_storage_mutation_by_scan(redis_client, mutation_id, mutation_epoch)
+            raise
+
+        if new_size_or_none is not None:
+            # A successful delete that is not yet observable as absent is still
+            # externally unresolved; do not clear the durable intent.
+            raise RuntimeError(f"CAS delete did not remove visible object {file_key!r}")
+        new_size = 0
+
+        await commit_cas_storage_delta(
+            redis_client,
+            new_size - old_size,
+            mutation_id,
+            mutation_epoch,
+        )
+        if caller_cancellation is not None:
+            raise caller_cancellation
 
 
-async def _accounted_cas_complex_mutation(writer: Callable[[], Awaitable[None]]) -> None:
-    """Serialize a rare CAS move and rebuild usage instead of inferring its delta."""
+async def _accounted_cas_complex_mutation(
+    source_key: str,
+    dest_key: str,
+    writer: Callable[[], Awaitable[None]],
+) -> None:
+    """Journal a move touching CAS and account the exact before/after byte delta."""
     from app.core.database.redis import redis_client
     from app.core.storage.capacity import (
-        _reconcile_cas_storage_usage_locked,
+        abort_cas_storage_mutation,
         cas_storage_mutation,
-        mark_cas_storage_usage_dirty,
+        commit_cas_storage_delta,
+        resolve_cas_storage_mutation_by_scan,
     )
 
-    async with cas_storage_mutation(redis_client):
-        await mark_cas_storage_usage_dirty(redis_client)
-        await writer()
-        await _reconcile_cas_storage_usage_locked(redis_client)
+    storage = get_storage()
+    tracked_keys = tuple(key for key in dict.fromkeys((source_key, dest_key)) if _is_cas_key(key))
+    journal_key = dest_key if _is_cas_key(dest_key) else source_key
+
+    async with cas_storage_mutation(redis_client, journal_key, "move") as mutation:
+        mutation_id, mutation_epoch = mutation
+        try:
+            old_size = 0
+            for key in tracked_keys:
+                old_size += await _cas_object_size(storage, key) or 0
+        except BaseException:
+            await abort_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
+            raise
+
+        _result, move_error, caller_cancellation = await settle_awaitable(writer())
+        if move_error is not None:
+            raise move_error
+
+        try:
+            after_sizes = {key: await _cas_object_size(storage, key) for key in tracked_keys}
+        except BaseException:
+            await resolve_cas_storage_mutation_by_scan(redis_client, mutation_id, mutation_epoch)
+            raise
+
+        if _is_cas_key(dest_key) and after_sizes.get(dest_key) is None:
+            raise RuntimeError(f"CAS move destination is not visible: {dest_key!r}")
+        if (
+            _is_cas_key(source_key)
+            and source_key != dest_key
+            and after_sizes.get(source_key) is not None
+        ):
+            raise RuntimeError(f"CAS move source is still visible: {source_key!r}")
+
+        new_size = sum(size or 0 for size in after_sizes.values())
+        await commit_cas_storage_delta(
+            redis_client,
+            new_size - old_size,
+            mutation_id,
+            mutation_epoch,
+        )
+        if caller_cancellation is not None:
+            raise caller_cancellation
 
 
 async def upload_file(
@@ -412,7 +509,7 @@ async def move_object(source_key: str, dest_key: str) -> None:
         await storage.move_object(source_key, dest_key)
 
     if _is_cas_key(source_key) or _is_cas_key(dest_key):
-        await _accounted_cas_complex_mutation(_move)
+        await _accounted_cas_complex_mutation(source_key, dest_key, _move)
     else:
         await _move()
 

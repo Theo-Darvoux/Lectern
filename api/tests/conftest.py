@@ -85,6 +85,8 @@ def mock_redis() -> AsyncMock:
     redis = AsyncMock()
     redis.get = AsyncMock(return_value=None)
     redis.mget = AsyncMock(return_value=[b"0", b"0", None])
+    redis.hlen = AsyncMock(return_value=0)
+    redis.execute_command = AsyncMock(return_value=[1, 0])
     redis.setex = AsyncMock()
     redis.delete = AsyncMock()
     redis.incr = AsyncMock()
@@ -121,6 +123,11 @@ def mock_redis() -> AsyncMock:
     redis.pipeline = MagicMock(return_value=pipe)
     redis.register_script = MagicMock(return_value=AsyncMock(return_value=1))
 
+    single_client_cm = AsyncMock()
+    single_client_cm.__aenter__ = AsyncMock(return_value=redis)
+    single_client_cm.__aexit__ = AsyncMock(return_value=None)
+    redis.client = MagicMock(return_value=single_client_cm)
+
     lock_mock = AsyncMock()
     lock_mock.__aenter__ = AsyncMock(return_value=lock_mock)
     lock_mock.__aexit__ = AsyncMock(return_value=None)
@@ -146,35 +153,97 @@ class FakeRedis:
 
     def register_script(self, script):
         async def run(*, keys, args, client=None):
-            if "storage_reconcile_cas_usage_v2" in script:
-                expected_generation = int(args[0])
-                physical_usage = int(args[1])
-                raw_generation = self.data.get(keys[1], 0)
-                current_generation = int(
-                    raw_generation.decode() if isinstance(raw_generation, bytes) else raw_generation
-                )
-                if current_generation != expected_generation:
+            if "storage_begin_cas_mutation_v1" in script:
+                intents = self.data.setdefault(keys[2], {})
+                if intents:
+                    return -1
+                raw_epoch = self.data.get(keys[1], 0)
+                epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
+                next_epoch = epoch + 1
+                self.data[keys[1]] = str(next_epoch).encode()
+                intents[str(args[0])] = {
+                    "operation": str(args[1]),
+                    "file_key": str(args[2]),
+                    "started_at_ms": str(args[3]),
+                    "epoch": next_epoch,
+                }
+                self.data[keys[0]] = b"1"
+                return next_epoch
+
+            if "storage_abort_cas_mutation_v1" in script:
+                intents = self.data.setdefault(keys[2], {})
+                raw_epoch = self.data.get(keys[1], 0)
+                epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
+                if epoch != int(args[1]):
                     return 0
-                self.data[keys[0]] = str(physical_usage).encode()
-                self.data[keys[1]] = str(expected_generation).encode()
-                if len(keys) > 2:
-                    self.data.pop(keys[2], None)
+                if str(args[0]) not in intents:
+                    return -1
+                intents.pop(str(args[0]), None)
+                self.data[keys[1]] = str(epoch + 1).encode()
+                if not intents:
+                    self.data.pop(keys[0], None)
                 return 1
 
-            if "storage_commit_cas_delta_v1" in script:
-                delta = int(args[0])
+            if "storage_commit_cas_delta_v2" in script:
+                intents = self.data.setdefault(keys[4], {})
+                raw_epoch = self.data.get(keys[3], 0)
+                epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
+                mutation_id = str(args[1])
+                if epoch != int(args[2]) or mutation_id not in intents:
+                    return -4
                 if keys[0] not in self.data or keys[1] not in self.data:
                     return -3
                 usage = int(self.data[keys[0]])
                 generation = int(self.data[keys[1]])
-                updated = usage + delta
+                updated = usage + int(args[0])
                 if updated < 0:
                     return -1
                 self.data[keys[0]] = str(updated).encode()
                 self.data[keys[1]] = str(generation + 1).encode()
-                if len(keys) > 2:
+                intents.pop(mutation_id, None)
+                self.data[keys[3]] = str(epoch + 1).encode()
+                if not intents:
                     self.data.pop(keys[2], None)
                 return updated
+
+            if "storage_resolve_cas_mutation_v1" in script:
+                intents = self.data.setdefault(keys[4], {})
+                raw_epoch = self.data.get(keys[3], 0)
+                epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
+                mutation_id = str(args[0])
+                if epoch != int(args[1]) or mutation_id not in intents:
+                    return 0
+                generation = int(self.data.get(keys[1], 0))
+                physical_usage = int(args[2])
+                self.data[keys[0]] = str(physical_usage).encode()
+                self.data[keys[1]] = str(generation + 1).encode()
+                intents.pop(mutation_id, None)
+                self.data[keys[3]] = str(epoch + 1).encode()
+                if not intents:
+                    self.data.pop(keys[2], None)
+                return physical_usage
+
+            if "storage_reconcile_cas_usage_v3" in script:
+                intents = self.data.setdefault(keys[4], {})
+                if intents:
+                    return -3
+                expected_generation = int(args[0])
+                expected_epoch = int(args[1])
+                physical_usage = int(args[2])
+                raw_generation = self.data.get(keys[1], 0)
+                current_generation = int(
+                    raw_generation.decode() if isinstance(raw_generation, bytes) else raw_generation
+                )
+                raw_epoch = self.data.get(keys[3], 0)
+                current_epoch = int(
+                    raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch
+                )
+                if current_generation != expected_generation or current_epoch != expected_epoch:
+                    return 0
+                self.data[keys[0]] = str(physical_usage).encode()
+                self.data[keys[1]] = str(expected_generation).encode()
+                self.data.pop(keys[2], None)
+                return 1
 
             if "auth_store_login_challenge_v2" in script:
 
@@ -331,6 +400,22 @@ class FakeRedis:
     async def hget(self, name, key):
         return self.data.get(name, {}).get(key)
 
+    async def hlen(self, name):
+        value = self.data.get(name, {})
+        return len(value) if isinstance(value, dict) else 0
+
+    def client(self):
+        parent = self
+
+        class _SingleConnectionContext:
+            async def __aenter__(self):
+                return parent
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        return _SingleConnectionContext()
+
     async def get(self, name):
         return self.data.get(name)
 
@@ -479,6 +564,8 @@ class FakeRedis:
         return 0
 
     async def execute_command(self, *args):
+        if str(args[0]).upper() == "WAITAOF":
+            return [1, 0]
         if args[0] == "GETDEL":
             val = await self.get(args[1])
             await self.delete(args[1])
@@ -573,6 +660,7 @@ def fake_redis_setup(mock_redis, monkeypatch):
     mock_redis.hset.side_effect = fr.hset
     mock_redis.hgetall.side_effect = fr.hgetall
     mock_redis.hget.side_effect = fr.hget
+    mock_redis.hlen.side_effect = fr.hlen
     mock_redis.get.side_effect = fr.get
     mock_redis.set.side_effect = fr.set
     mock_redis.setex.side_effect = fr.setex

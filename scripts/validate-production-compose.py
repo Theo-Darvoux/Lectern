@@ -27,7 +27,9 @@ def main() -> int:
 
     try:
         values = parse_env_file(args.env_file)
-        commit, profiles, images = validate_release_values(values, expected_commit=args.commit)
+        commit, profiles, images = validate_release_values(
+            values, expected_commit=args.commit
+        )
         payload = json.loads(args.compose_config.read_text(encoding="utf-8"))
         services = payload.get("services")
         if not isinstance(services, dict):
@@ -57,11 +59,11 @@ def main() -> int:
             if missing:
                 details.append("missing services: " + ", ".join(missing))
             if unexpected:
-                details.append("unexpected image-bearing services: " + ", ".join(unexpected))
-            for name in mismatched:
                 details.append(
-                    f"{name}: expected {expected[name]}, got {actual[name]}"
+                    "unexpected image-bearing services: " + ", ".join(unexpected)
                 )
+            for name in mismatched:
+                details.append(f"{name}: expected {expected[name]}, got {actual[name]}")
             raise ValueError(
                 "Compose service→image mapping does not match release policy ("
                 + "; ".join(details)

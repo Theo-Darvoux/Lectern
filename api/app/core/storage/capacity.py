@@ -2,6 +2,7 @@
 
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -33,13 +34,25 @@ _STORAGE_RECONCILE_CAS_SCRIPT = (_LUA_DIR / "storage_reconcile_cas_usage.lua").r
 _STORAGE_COMMIT_CAS_DELTA_SCRIPT = (_LUA_DIR / "storage_commit_cas_delta.lua").read_text(
     encoding="utf-8"
 )
+_STORAGE_BEGIN_CAS_MUTATION_SCRIPT = (_LUA_DIR / "storage_begin_cas_mutation.lua").read_text(
+    encoding="utf-8"
+)
+_STORAGE_ABORT_CAS_MUTATION_SCRIPT = (_LUA_DIR / "storage_abort_cas_mutation.lua").read_text(
+    encoding="utf-8"
+)
+_STORAGE_RESOLVE_CAS_MUTATION_SCRIPT = (_LUA_DIR / "storage_resolve_cas_mutation.lua").read_text(
+    encoding="utf-8"
+)
 _STORAGE_RESERVATION_EXPIRIES = "storage:upload_reservations:expiries"
 _STORAGE_RESERVATION_SIZES = "storage:upload_reservations:sizes"
 _STORAGE_RESERVATION_TOTAL = "storage:upload_reservations:total"
 _STORAGE_RESERVATION_TTL = 3 * 3600
 _STORAGE_SNAPSHOT_MAX_RETRIES = 8
 _STORAGE_USAGE_DIRTY_KEY = "storage:total_usage_dirty"
+_STORAGE_MUTATION_EPOCH_KEY = "storage:cas_mutation_epoch"
+_STORAGE_MUTATION_INTENTS_KEY = "storage:cas_mutation_intents"
 _CAS_STORAGE_MUTATION_LOCK = "storage:cas-physical-usage"
+_CAS_MUTATION_DURABILITY_TIMEOUT_MS = 5_000
 _CAS_STORAGE_LOCK_TIMEOUT = 120.0
 _CAS_STORAGE_LOCK_EXPIRE = 300.0
 
@@ -73,10 +86,108 @@ async def _cas_storage_generation(redis: Any) -> int:
         ) from exc
 
 
+async def _cas_mutation_epoch(redis: Any) -> int:
+    try:
+        raw = await redis.get(_STORAGE_MUTATION_EPOCH_KEY)
+        epoch = int(raw or 0)
+    except (TypeError, ValueError) as exc:
+        raise BadRequestError("Storage capacity accounting state is invalid") from exc
+    except Exception as exc:
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable. Please try again later."
+        ) from exc
+    if epoch < 0:
+        raise BadRequestError("Storage capacity accounting state is invalid")
+    return epoch
+
+
+async def _pending_cas_mutation_count(redis: Any) -> int:
+    try:
+        count = int(await redis.hlen(_STORAGE_MUTATION_INTENTS_KEY))
+    except (TypeError, ValueError) as exc:
+        raise BadRequestError("Storage capacity accounting state is invalid") from exc
+    except Exception as exc:
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable. Please try again later."
+        ) from exc
+    if count < 0:
+        raise BadRequestError("Storage capacity accounting state is invalid")
+    return count
+
+
+async def _wait_for_cas_mutation_durability(redis: Any) -> None:
+    try:
+        result = await redis.execute_command("WAITAOF", 1, 0, _CAS_MUTATION_DURABILITY_TIMEOUT_MS)
+        if not isinstance(result, (list, tuple)) or len(result) != 2:
+            raise ValueError("unexpected WAITAOF response")
+        local_fsyncs = int(result[0])
+    except Exception as exc:
+        raise BadRequestError(
+            "Storage capacity journal is temporarily unavailable. Please try again later."
+        ) from exc
+    if local_fsyncs < 1:
+        raise BadRequestError(
+            "Storage capacity journal could not be persisted. Please try again later."
+        )
+
+
+async def abort_cas_storage_mutation(
+    redis: Any,
+    mutation_id: str,
+    mutation_epoch: int,
+) -> None:
+    abort = redis.register_script(_STORAGE_ABORT_CAS_MUTATION_SCRIPT)
+    result = int(
+        await abort(
+            keys=[
+                _STORAGE_USAGE_DIRTY_KEY,
+                _STORAGE_MUTATION_EPOCH_KEY,
+                _STORAGE_MUTATION_INTENTS_KEY,
+            ],
+            args=[mutation_id, mutation_epoch],
+            client=redis,
+        )
+    )
+    if result != 1:
+        raise BadRequestError("Storage capacity mutation journal changed unexpectedly")
+
+
+async def resolve_cas_storage_mutation_by_scan(
+    redis: Any,
+    mutation_id: str,
+    mutation_epoch: int,
+) -> int:
+    physical_usage = await _physical_cas_storage_usage()
+    resolve = redis.register_script(_STORAGE_RESOLVE_CAS_MUTATION_SCRIPT)
+    result = int(
+        await resolve(
+            keys=[
+                _STORAGE_USAGE_KEY,
+                _STORAGE_USAGE_GENERATION_KEY,
+                _STORAGE_USAGE_DIRTY_KEY,
+                _STORAGE_MUTATION_EPOCH_KEY,
+                _STORAGE_MUTATION_INTENTS_KEY,
+            ],
+            args=[mutation_id, mutation_epoch, physical_usage],
+            client=redis,
+        )
+    )
+    if result >= 0:
+        return result
+    if result in {-1, 0}:
+        raise BadRequestError("Storage capacity mutation journal changed unexpectedly")
+    raise BadRequestError("Storage capacity accounting state is invalid")
+
+
 async def _reconcile_cas_storage_usage_locked(redis: Any) -> int:
-    """Rebuild physical CAS usage while the mutation lock is held."""
+    if await _pending_cas_mutation_count(redis):
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable while a physical CAS mutation resolves."
+        )
+
     for _attempt in range(_STORAGE_SNAPSHOT_MAX_RETRIES):
         generation = await _cas_storage_generation(redis)
+        mutation_epoch = await _cas_mutation_epoch(redis)
         try:
             physical_usage = await _physical_cas_storage_usage()
             reconcile = redis.register_script(_STORAGE_RECONCILE_CAS_SCRIPT)
@@ -86,8 +197,10 @@ async def _reconcile_cas_storage_usage_locked(redis: Any) -> int:
                         _STORAGE_USAGE_KEY,
                         _STORAGE_USAGE_GENERATION_KEY,
                         _STORAGE_USAGE_DIRTY_KEY,
+                        _STORAGE_MUTATION_EPOCH_KEY,
+                        _STORAGE_MUTATION_INTENTS_KEY,
                     ],
-                    args=[generation, physical_usage],
+                    args=[generation, mutation_epoch, physical_usage],
                     client=redis,
                 )
             )
@@ -98,11 +211,17 @@ async def _reconcile_cas_storage_usage_locked(redis: Any) -> int:
             raise BadRequestError(
                 "Storage capacity is temporarily unavailable. Please try again later."
             ) from exc
+
         if result == 1:
             return physical_usage
         if result == 0:
             continue
+        if result == -3:
+            raise BadRequestError(
+                "Storage capacity is temporarily unavailable while a physical CAS mutation resolves."
+            )
         raise BadRequestError("Storage capacity accounting state is invalid")
+
     raise BadRequestError(
         "Storage capacity changed repeatedly while reconciling physical usage. Please retry."
     )
@@ -140,7 +259,10 @@ async def _read_cached_cas_storage_usage(redis: Any) -> int | None:
 
 
 async def _cached_cas_storage_usage_locked(redis: Any) -> int:
-    """Return a valid cache value, rebuilding it when incomplete or dirty."""
+    if await _pending_cas_mutation_count(redis):
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable while a physical CAS mutation resolves."
+        )
     usage = await _read_cached_cas_storage_usage(redis)
     if usage is not None:
         return usage
@@ -148,8 +270,11 @@ async def _cached_cas_storage_usage_locked(redis: Any) -> int:
 
 
 @asynccontextmanager
-async def cas_storage_mutation(redis: Any) -> AsyncIterator[None]:
-    """Serialize physical ``cas/`` mutations with cache reconciliation."""
+async def cas_storage_mutation(
+    redis: Any,
+    file_key: str,
+    operation: str,
+) -> AsyncIterator[tuple[str, int]]:
     async with redis_core.redis_lock(
         redis,
         _CAS_STORAGE_MUTATION_LOCK,
@@ -157,7 +282,38 @@ async def cas_storage_mutation(redis: Any) -> AsyncIterator[None]:
         expire=_CAS_STORAGE_LOCK_EXPIRE,
     ):
         await _cached_cas_storage_usage_locked(redis)
-        yield
+        mutation_id = uuid.uuid4().hex
+        # WAITAOF only covers writes previously issued on the *same Redis
+        # connection*. Pin the begin script and WAITAOF to one redis-py
+        # single-connection client; two pooled commands would not suffice.
+        async with redis.client() as journal_redis:
+            begin = journal_redis.register_script(_STORAGE_BEGIN_CAS_MUTATION_SCRIPT)
+            result = int(
+                await begin(
+                    keys=[
+                        _STORAGE_USAGE_DIRTY_KEY,
+                        _STORAGE_MUTATION_EPOCH_KEY,
+                        _STORAGE_MUTATION_INTENTS_KEY,
+                    ],
+                    args=[mutation_id, operation, file_key, int(time.time() * 1000)],
+                    client=journal_redis,
+                )
+            )
+            if result == -1:
+                raise BadRequestError(
+                    "Storage capacity is temporarily unavailable while a physical CAS mutation resolves."
+                )
+            if result < 0:
+                raise BadRequestError("Storage capacity accounting state is invalid")
+            try:
+                await _wait_for_cas_mutation_durability(journal_redis)
+            except BaseException:
+                try:
+                    await abort_cas_storage_mutation(redis, mutation_id, result)
+                except Exception:
+                    logger.exception("Could not roll back an unpersisted CAS mutation intent")
+                raise
+        yield mutation_id, result
 
 
 async def mark_cas_storage_usage_dirty(redis: Any) -> None:
@@ -165,8 +321,12 @@ async def mark_cas_storage_usage_dirty(redis: Any) -> None:
     await redis.set(_STORAGE_USAGE_DIRTY_KEY, "1")
 
 
-async def commit_cas_storage_delta(redis: Any, delta_bytes: int) -> int:
-    """Publish one completed physical CAS size delta under the mutation lock."""
+async def commit_cas_storage_delta(
+    redis: Any,
+    delta_bytes: int,
+    mutation_id: str,
+    mutation_epoch: int,
+) -> int:
     commit = redis.register_script(_STORAGE_COMMIT_CAS_DELTA_SCRIPT)
     try:
         result = int(
@@ -175,8 +335,10 @@ async def commit_cas_storage_delta(redis: Any, delta_bytes: int) -> int:
                     _STORAGE_USAGE_KEY,
                     _STORAGE_USAGE_GENERATION_KEY,
                     _STORAGE_USAGE_DIRTY_KEY,
+                    _STORAGE_MUTATION_EPOCH_KEY,
+                    _STORAGE_MUTATION_INTENTS_KEY,
                 ],
-                args=[delta_bytes],
+                args=[delta_bytes, mutation_id, mutation_epoch],
                 client=redis,
             )
         )
@@ -185,13 +347,12 @@ async def commit_cas_storage_delta(redis: Any, delta_bytes: int) -> int:
         raise BadRequestError(
             "Storage capacity is temporarily unavailable. Please try again later."
         ) from exc
-
     if result >= 0:
         return result
     if result in {-1, -3}:
-        # Cache eviction or an impossible negative delta after I/O: reconstruct
-        # from object storage while the same mutation lock is still held.
-        return await _reconcile_cas_storage_usage_locked(redis)
+        return await resolve_cas_storage_mutation_by_scan(redis, mutation_id, mutation_epoch)
+    if result == -4:
+        raise BadRequestError("Storage capacity mutation journal changed unexpectedly")
     raise BadRequestError("Storage capacity accounting state is invalid")
 
 
@@ -207,17 +368,10 @@ async def reconcile_cas_storage_usage(redis: Any) -> int:
 
 
 async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ignore[type-arg]
-    """Return exact physical CAS usage, rebuilding an incomplete/dirty cache."""
-    del db  # Physical capacity is defined by object-store bytes, not logical DB ownership.
-
-    # A complete clean cache can be consumed without the mutation lock. MGET is
-    # one atomic Redis snapshot, so usage/generation/dirty cannot be mixed across
-    # a concurrent physical-delta commit. Missing or dirty state still enters the
-    # serialized reconciliation path.
+    del db
     usage = await _read_cached_cas_storage_usage(redis)
     if usage is not None:
         return usage
-
     async with redis_core.redis_lock(
         redis,
         _CAS_STORAGE_MUTATION_LOCK,

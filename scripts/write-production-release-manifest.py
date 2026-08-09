@@ -38,13 +38,21 @@ def main() -> int:
     compose_paths = [repo_root / "compose.yaml", repo_root / "compose.prod.yaml"]
     try:
         values = parse_env_file(args.env_file)
-        commit, profiles, images = validate_release_values(values, expected_commit=args.commit)
-        inspection_payload = json.loads(args.inspection_file.read_text(encoding="utf-8"))
+        commit, profiles, images = validate_release_values(
+            values, expected_commit=args.commit
+        )
+        inspection_payload = json.loads(
+            args.inspection_file.read_text(encoding="utf-8")
+        )
         if not isinstance(inspection_payload, dict):
             raise ValueError("registry inspection file must contain a JSON object")
-        inspections = validate_inspections(inspection_payload, commit=commit, images=images)
+        inspections = validate_inspections(
+            inspection_payload, commit=commit, images=images
+        )
 
-        service_map_payload = json.loads(args.compose_service_map_file.read_text(encoding="utf-8"))
+        service_map_payload = json.loads(
+            args.compose_service_map_file.read_text(encoding="utf-8")
+        )
         if not isinstance(service_map_payload, dict):
             raise ValueError("Compose service-map file must contain a JSON object")
         source_env_sha256 = sha256_file(args.env_file)
@@ -57,13 +65,17 @@ def main() -> int:
         )
 
         toolchain = parse_release_toolchain(args.toolchain_file)
-        if images.get("SEAWEEDFS_IMAGE") and images["SEAWEEDFS_IMAGE"] != toolchain["SEAWEEDFS_TEST_IMAGE"]:
+        if (
+            images.get("SEAWEEDFS_IMAGE")
+            and images["SEAWEEDFS_IMAGE"] != toolchain["SEAWEEDFS_TEST_IMAGE"]
+        ):
             raise ValueError(
                 "release SeaweedFS image differs from the repository-pinned tested digest"
             )
 
         compose_hashes = {
-            str(path.relative_to(repo_root)): sha256_file(path) for path in compose_paths
+            str(path.relative_to(repo_root)): sha256_file(path)
+            for path in compose_paths
         }
         inspection_sha256 = sha256_file(args.inspection_file)
         service_map_sha256 = sha256_file(args.compose_service_map_file)

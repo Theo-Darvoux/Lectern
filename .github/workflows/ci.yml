@@ -165,6 +165,18 @@ jobs:
           tests/test_storage_release_policy.py
 
   seaweedfs:
+    services:
+      redis:
+        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      REDIS_URL: redis://127.0.0.1:6379/14
     strategy:
       fail-fast: false
       matrix:

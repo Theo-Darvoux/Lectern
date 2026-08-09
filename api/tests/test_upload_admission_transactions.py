@@ -60,16 +60,24 @@ async def test_capacity_reservation_reads_usage_atomically_after_cache_rebuild(
         async def get(self, key: str) -> str | None:
             return self.data.get(key)
 
+        async def hlen(self, key: str) -> int:
+            value = self.data.get(key)
+            return len(value) if isinstance(value, dict) else 0
+
         def register_script(self, script: str):
-            if "storage_reconcile_cas_usage_v2" in script:
+            if "storage_reconcile_cas_usage_v3" in script:
 
                 async def reconcile(*, keys, args, client):  # type: ignore[no-untyped-def]
                     assert client is self
                     expected_generation = int(args[0])
+                    expected_epoch = int(args[1])
                     current_generation = int(self.data.get(keys[1], "0"))
-                    if current_generation != expected_generation:
+                    current_epoch = int(self.data.get(keys[3], "0"))
+                    if self.data.get(keys[4]):
+                        return -3
+                    if current_generation != expected_generation or current_epoch != expected_epoch:
                         return 0
-                    self.data[keys[0]] = str(int(args[1]))
+                    self.data[keys[0]] = str(int(args[2]))
                     self.data[keys[1]] = str(expected_generation)
                     self.data.pop(keys[2], None)
                     return 1
