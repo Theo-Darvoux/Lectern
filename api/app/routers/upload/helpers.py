@@ -2,217 +2,31 @@
 
 import logging
 import time
-from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
 from redis.asyncio import Redis
-from sqlalchemy import func, select, union_all
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.database.redis as redis_core
-from app.config import settings
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.post_commit import PostCommitKey, outbox_kwargs
 from app.core.observability.telemetry import inject_trace_context
-from app.core.security.cas import _STORAGE_USAGE_KEY
-from app.models.material import MaterialVersion
+from app.core.storage import capacity as storage_capacity
 from app.models.upload import Upload
 
 logger = logging.getLogger(__name__)
 
-_LUA_DIR = Path(__file__).parents[2] / "core" / "database" / "lua"
-_STORAGE_RESERVE_SCRIPT = (_LUA_DIR / "storage_reserve.lua").read_text(encoding="utf-8")
-_STORAGE_RELEASE_SCRIPT = (_LUA_DIR / "storage_release.lua").read_text(encoding="utf-8")
-_STORAGE_RESERVATION_EXPIRIES = "storage:upload_reservations:expiries"
-_STORAGE_RESERVATION_SIZES = "storage:upload_reservations:sizes"
-_STORAGE_RESERVATION_TOTAL = "storage:upload_reservations:total"
-_STORAGE_RESERVATION_TTL = 3 * 3600
-_LEGACY_STORAGE_USAGE_KEY = "storage:legacy_usage_bytes"
-
-
-async def _get_storage_usage(db: AsyncSession, redis: "Redis") -> int:  # type: ignore[type-arg]
-    """Return physical CAS usage, rebuilding the cache from the database if needed."""
-    material_refs = select(
-        MaterialVersion.cas_sha256.label("sha256"),
-        MaterialVersion.file_size.label("size"),
-    ).where(MaterialVersion.cas_sha256.is_not(None))
-    upload_refs = select(
-        Upload.content_sha256.label("sha256"),
-        Upload.size_bytes.label("size"),
-    ).where(
-        Upload.content_sha256.is_not(None),
-        Upload.final_key.like("cas/%"),
-        Upload.cas_ref_count > 0,
-    )
-    all_refs = union_all(material_refs, upload_refs).subquery()
-    unique_sizes = (
-        select(func.max(all_refs.c.size).label("size")).group_by(all_refs.c.sha256).subquery()
-    )
-
-    async def _from_db() -> int:
-        return int(await db.scalar(select(func.sum(unique_sizes.c.size))) or 0)
-
-    try:
-        usage_raw = await redis.get(_STORAGE_USAGE_KEY)
-    except Exception as exc:
-        logger.warning("Storage usage cache unavailable; using the database: %s", exc)
-        return await _from_db()
-    if usage_raw is not None:
-        return max(0, int(usage_raw))
-
-    usage = await _from_db()
-    try:
-        # Do not overwrite a CAS increment that raced the database rebuild.
-        # SET NX makes initialization atomic with the Lua CAS writers; read the
-        # winning value back when another writer initialized it first.
-        initialized = await redis.set(_STORAGE_USAGE_KEY, usage, nx=True)
-        if not initialized:
-            current = await redis.get(_STORAGE_USAGE_KEY)
-            if current is not None:
-                return max(0, int(current))
-    except Exception as exc:
-        logger.warning("Could not refresh the storage usage cache: %s", exc)
-    return usage
-
-
-async def _get_legacy_storage_usage(db: AsyncSession, redis: "Redis") -> int:  # type: ignore[type-arg]
-    """Return physical legacy non-CAS storage usage from MaterialVersion by distinct file_key."""
-    legacy_objects = (
-        select(
-            MaterialVersion.file_key,
-            func.max(MaterialVersion.file_size).label("size"),
-        )
-        .where(
-            MaterialVersion.file_key.is_not(None),
-            MaterialVersion.file_key.not_like("cas/%"),
-            MaterialVersion.file_size.is_not(None),
-        )
-        .group_by(MaterialVersion.file_key)
-        .subquery()
-    )
-
-    async def _from_db() -> int:
-        return int(await db.scalar(select(func.sum(legacy_objects.c.size))) or 0)
-
-    try:
-        usage_raw = await redis.get(_LEGACY_STORAGE_USAGE_KEY)
-    except Exception as exc:
-        logger.warning("Legacy storage usage cache unavailable; using the database: %s", exc)
-        return await _from_db()
-    if usage_raw is not None:
-        return max(0, int(usage_raw))
-
-    usage = await _from_db()
-    try:
-        await redis.set(_LEGACY_STORAGE_USAGE_KEY, usage)
-    except Exception as exc:
-        logger.warning("Could not refresh the legacy storage usage cache: %s", exc)
-    return usage
-
-
-async def _check_storage_limit(
-    size_bytes: int, db: AsyncSession, config: dict[str, Any] | None = None
-) -> None:
-    """Raise if the global storage limit (max_storage_gb) would be exceeded."""
-    max_gb = (
-        config.get("max_storage_gb")
-        if config and config.get("max_storage_gb") is not None
-        else settings.max_storage_gb
-    )
-    if not max_gb:
-        return
-
-    max_bytes = max_gb * 1024 * 1024 * 1024
-    redis = redis_core.redis_client
-
-    cas_usage = await _get_storage_usage(db, redis)
-    legacy_usage = await _get_legacy_storage_usage(db, redis)
-    usage = cas_usage + legacy_usage
-
-    if usage + size_bytes > max_bytes:
-        logger.warning(
-            "Storage limit reached: %d bytes usage + %d bytes upload > %d bytes limit",
-            usage,
-            size_bytes,
-            max_bytes,
-        )
-        raise BadRequestError(
-            f"Global storage limit reached ({max_gb} GB). Please contact an administrator.",
-            code=UploadErrorCode.STORAGE_FULL,
-        )
-
-
-async def _reserve_storage_limit(
-    size_bytes: int,
-    reservation_id: str,
-    redis: "Redis",  # type: ignore[type-arg]
-    db: AsyncSession,
-    *,
-    ttl_seconds: int = _STORAGE_RESERVATION_TTL,
-) -> None:
-    """Atomically reserve global capacity for an in-flight upload."""
-    if ttl_seconds <= 0:
-        raise ValueError("reservation TTL must be positive")
-    if not settings.max_storage_gb:
-        return
-
-    # Ensure physical-usage keys exist. The reservation Lua script reads them
-    # atomically with reservation totals, so these values must not be passed as
-    # stale arguments from Python.
-    await _get_storage_usage(db, redis)
-    await _get_legacy_storage_usage(db, redis)
-    max_bytes = int(settings.max_storage_gb * 1024 * 1024 * 1024)
-    now = int(time.time())
-    try:
-        reserve = redis.register_script(_STORAGE_RESERVE_SCRIPT)
-        accepted = await reserve(
-            keys=[
-                _STORAGE_RESERVATION_EXPIRIES,
-                _STORAGE_RESERVATION_SIZES,
-                _STORAGE_RESERVATION_TOTAL,
-                _STORAGE_USAGE_KEY,
-                _LEGACY_STORAGE_USAGE_KEY,
-            ],
-            args=[
-                reservation_id,
-                size_bytes,
-                now + ttl_seconds,
-                now,
-                max_bytes,
-            ],
-            client=redis,
-        )
-    except Exception as exc:
-        logger.error("Cannot enforce the global storage reservation: %s", exc)
-        raise BadRequestError(
-            "Storage capacity is temporarily unavailable. Please try again later."
-        ) from exc
-
-    if int(accepted) != 1:
-        raise BadRequestError(
-            f"Global storage limit reached ({settings.max_storage_gb} GB). "
-            "Please contact an administrator.",
-            code=UploadErrorCode.STORAGE_FULL,
-        )
-
-
-async def _release_storage_reservation(reservation_id: str, redis: Any) -> None:
-    """Release a capacity reservation; repeated calls are harmless."""
-    if not settings.max_storage_gb:
-        return
-    release = redis.register_script(_STORAGE_RELEASE_SCRIPT)
-    await release(
-        keys=[
-            _STORAGE_RESERVATION_EXPIRIES,
-            _STORAGE_RESERVATION_SIZES,
-            _STORAGE_RESERVATION_TOTAL,
-        ],
-        args=[reservation_id],
-        client=redis,
-    )
-
+# Backward-compatible router aliases. New non-router callers use the public
+# core storage interface directly.
+_LEGACY_STORAGE_USAGE_KEY = storage_capacity.LEGACY_STORAGE_USAGE_KEY
+_check_storage_limit = storage_capacity.check_storage_limit
+_get_storage_usage = storage_capacity.get_storage_usage
+_refresh_legacy_storage_usage = storage_capacity.refresh_legacy_storage_usage
+_release_storage_reservation = storage_capacity.release_storage_reservation
+_reserve_storage_limit = storage_capacity.reserve_storage_limit
 
 MAX_PENDING_UPLOADS = 50
 LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MiB

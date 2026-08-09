@@ -43,7 +43,11 @@ def _auth_headers(user: User) -> dict[str, str]:
 
 @pytest.mark.asyncio
 async def test_quota_released_on_pr_approval(
-    client: AsyncClient, db_session: AsyncSession, fake_redis_setup, mock_storage
+    client: AsyncClient,
+    db_session: AsyncSession,
+    fake_redis_setup,
+    mock_storage,
+    mock_arq_pool,
 ):
     user = await _create_user(db_session)
     admin = await _create_user(db_session, UserRole.BUREAU)
@@ -103,10 +107,20 @@ async def test_quota_released_on_pr_approval(
     app_resp = await client.post(url, headers=_auth_headers(admin))
     assert app_resp.status_code == 200
 
-    # 5. Verify quota released
+    # 5. Run the durable post-commit cleanup accepted by the queue.
+    from app.workers.storage_ops import release_upload_quota
+
+    cleanup_call = next(
+        call
+        for call in mock_arq_pool.enqueue_job.await_args_list
+        if call.args[0] == "release_upload_quota"
+    )
+    await release_upload_quota({"redis": fake_redis_setup}, *cleanup_call.args[1:])
+
+    # 6. Verify quota released
     assert await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}") == 0
 
-    # 6. Verify Upload status updated to 'applied'
+    # 7. Verify Upload status updated to 'applied'
     await db_session.refresh(up)
     assert up.status == "applied"
     assert up.cas_ref_count == 0
@@ -114,7 +128,11 @@ async def test_quota_released_on_pr_approval(
 
 @pytest.mark.asyncio
 async def test_quota_released_on_pr_rejection(
-    client: AsyncClient, db_session: AsyncSession, fake_redis_setup, mock_storage
+    client: AsyncClient,
+    db_session: AsyncSession,
+    fake_redis_setup,
+    mock_storage,
+    mock_arq_pool,
 ):
     user = await _create_user(db_session)
     admin = await _create_user(db_session, UserRole.BUREAU)
@@ -164,5 +182,14 @@ async def test_quota_released_on_pr_rejection(
     )
     assert rej_resp.status_code == 200
 
-    # Verify quota released
+    from app.workers.storage_ops import release_upload_quota
+
+    cleanup_call = next(
+        call
+        for call in mock_arq_pool.enqueue_job.await_args_list
+        if call.args[0] == "release_upload_quota"
+    )
+    await release_upload_quota({"redis": fake_redis_setup}, *cleanup_call.args[1:])
+
+    # Verify quota released after the durable cleanup runs.
     assert await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}") == 0

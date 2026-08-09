@@ -35,6 +35,7 @@ _ALLOWED_JOB_NAMES = frozenset(
         "process_upload",
         "process_upload_post_scan",
         "release_cas_references",
+        "release_storage_reservations",
         "release_upload_quota",
     }
 )

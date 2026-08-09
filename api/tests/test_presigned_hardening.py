@@ -293,9 +293,9 @@ async def test_presigned_init_rejects_when_atomic_storage_reservation_is_full(
 
     with (
         patch("app.routers.upload.presigned.settings.enable_presigned_multipart", True),
-        patch("app.routers.upload.helpers.settings.max_storage_gb", 1),
+        patch("app.core.storage.capacity.settings.max_storage_gb", 1),
         patch(
-            "app.routers.upload.helpers._get_storage_usage",
+            "app.core.storage.capacity.get_storage_usage",
             new_callable=AsyncMock,
             return_value=0,
         ),

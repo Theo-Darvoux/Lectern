@@ -22,6 +22,7 @@ from app.workers.storage_ops import (
     add_cas_references,
     delete_storage_objects,
     release_cas_references,
+    release_storage_reservations,
     release_upload_quota,
 )
 from app.workers.view_reset import reset_14d_views, reset_daily_views
@@ -126,6 +127,7 @@ class WorkerSettings:
         delete_storage_objects,
         add_cas_references,
         release_cas_references,
+        release_storage_reservations,
         release_upload_quota,
         process_upload,
         process_upload_post_scan,

@@ -257,14 +257,16 @@ async def _release_pr_upload_quota(
     pr: PullRequest,
     redis: Redis,
     approved: bool = False,  # type: ignore[type-arg]
-) -> None:
-    """Find all uploads associated with the PR and remove them from the user's Redis quota.
+) -> list[str]:
+    """Queue quota cleanup and return the selected uploads' reservation IDs.
 
-    If ``approved`` is True, also updates the Upload row status to 'applied'.
+    Approval makes the legacy object durable, so its reservation is released by
+    a separate post-commit job after invalidating usage. Rejection cleanup
+    couples reservation release to successful staging-object deletion.
     """
     keys = get_pr_all_file_keys(pr)
     if not keys:
-        return
+        return []
 
     # A CAS key may have many duplicate Upload rows. Select one author-owned
     # staging owner per claimed key deterministically; never mutate another
@@ -304,26 +306,39 @@ async def _release_pr_upload_quota(
         uploads.append(selected)
 
     if not uploads:
-        return
+        return []
 
-    from app.routers.upload.helpers import _QUOTA_KEY_PREFIX
-
-    quota_key = f"{_QUOTA_KEY_PREFIX}{pr.author_id}"
     keys_to_remove: list[str] = []
+    reservation_ids: list[str] = []
 
     for upload in uploads:
         if upload.quarantine_key:
             keys_to_remove.append(upload.quarantine_key)
         keys_to_remove.append(f"staging:{upload.user_id}:{upload.upload_id}")
+        reservation_ids.append(upload.upload_id)
 
         if approved and upload.status == "clean":
             upload.status = "applied"
 
     if keys_to_remove:
-        try:
-            await redis.zrem(quota_key, *keys_to_remove)
-        except Exception as exc:
-            logger.warning("Failed to release upload quota for PR %s: %s", pr.id, exc)
+        db.info.setdefault(PostCommitKey.JOBS, []).append(
+            ("release_upload_quota", str(pr.author_id), sorted(set(keys_to_remove)))
+        )
+
+    if approved and reservation_ids:
+        db.info.setdefault(PostCommitKey.JOBS, []).append(
+            (
+                "release_storage_reservations",
+                [
+                    {
+                        "reservation_ids": reservation_ids,
+                        "refresh_legacy_usage": approved,
+                        "operation_id": f"pr:{pr.id}:reservations:release",
+                    }
+                ],
+            )
+        )
+    return sorted(set(reservation_ids))
 
 
 async def _cleanup_pr_resources(
@@ -335,15 +350,21 @@ async def _cleanup_pr_resources(
     """Release file claims and optionally schedule deletion of staging files."""
     await db.execute(delete(PRFileClaim).where(PRFileClaim.pr_id == pr.id))
 
-    # Release upload quota slots immediately
+    # Select affected uploads and queue external cleanup in the transaction outbox.
     if redis is None:
         from app.core.database.redis import redis_client
 
         redis = redis_client
 
+    reservation_ids: list[str] = []
     if redis:  # type: ignore[truthy-bool]
         # If delete_staging is False, it's likely an approval
-        await _release_pr_upload_quota(db, pr, redis, approved=not delete_staging)
+        reservation_ids = await _release_pr_upload_quota(
+            db,
+            pr,
+            redis,
+            approved=not delete_staging,
+        )
 
     # CAS staging refs need their original SHA-256; an opaque cas/<hmac> key is
     # intentionally insufficient. Every PR outcome releases its staging owner:
@@ -423,7 +444,7 @@ async def _cleanup_pr_resources(
         uploads_to_delete = get_pr_staging_files(pr)
         if uploads_to_delete:
             db.info.setdefault(PostCommitKey.JOBS, []).append(
-                ("delete_storage_objects", uploads_to_delete)
+                ("delete_storage_objects", uploads_to_delete, reservation_ids)
             )
 
 
@@ -699,7 +720,7 @@ async def _make_version_for_file(
     V1 keys are copied to the materials/ prefix and scheduled for deletion.
     CAS keys get their content-addressed ref incremented.
     """
-    original_sha256: str | None = None
+    stored_content_sha256: str | None = None
     if file_key.startswith("cas/"):
         upload_row = (
             await db.execute(
@@ -714,22 +735,45 @@ async def _make_version_for_file(
                 .limit(1)
             )
         ).one_or_none()
-        if upload_row is None:
-            raise ConflictError("Verified upload metadata is unavailable")
 
-        upload_size = upload_row[0]
-        stored_content_sha256 = upload_row[1]
-        stored_mime_type = (
-            upload_row[2]
-            if len(upload_row) > 2 and upload_row[2]
-            else payload.get("file_mime_type") or "application/octet-stream"
-        )
+        if upload_row is not None:
+            upload_size = upload_row[0]
+            content_sha = upload_row[1] if len(upload_row) > 1 else None
+            stored_mime = (
+                upload_row[2]
+                if len(upload_row) > 2 and upload_row[2]
+                else payload.get("file_mime_type") or "application/octet-stream"
+            )
 
-        if upload_size is None:
-            raise ConflictError("Verified upload metadata is incomplete")
+            if upload_size is None:
+                raise ConflictError("Verified upload metadata is incomplete")
 
-        real_size = int(upload_size)
-        mime_type = stored_mime_type
+            real_size = int(upload_size)
+            mime_type = stored_mime
+            stored_content_sha256 = content_sha or payload.get("content_sha256")
+        else:
+            claim = await db.scalar(
+                select(CasStagingClaim)
+                .where(
+                    CasStagingClaim.user_id == author_id,
+                    CasStagingClaim.file_key == file_key,
+                    CasStagingClaim.consumed_at.is_not(None),
+                )
+                .with_for_update()
+            )
+
+            if claim is None:
+                raise ConflictError("Verified CAS ownership is unavailable")
+
+            info = await get_object_info(file_key)
+
+            real_size = int(info["size"])
+            mime_type = info.get("content_type")
+
+            if not mime_type or mime_type == "application/octet-stream":
+                raise ConflictError("Verified generated-CAS MIME metadata is unavailable")
+
+            stored_content_sha256 = claim.sha256
 
         enforce_upload_size_limit(mime_type, real_size)
 
@@ -754,6 +798,7 @@ async def _make_version_for_file(
             on_rollback=rollback_copy,
             on_commit=finalize_copy,
         )
+
         try:
             await copy_object(file_key, new_key)
         except BaseException:
@@ -763,9 +808,8 @@ async def _make_version_for_file(
                 )
             raise
         db.info.setdefault(PostCommitKey.JOBS, []).append(("delete_storage_objects", [file_key]))
+        thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key, author_id)
         file_key = new_key
-        thumbnail_key = None
-        thumbnail_status = None
 
     mv = MaterialVersion(
         id=uuid.uuid4(),
@@ -775,9 +819,6 @@ async def _make_version_for_file(
         file_name=payload.get("file_name"),
         file_size=real_size,
         file_mime_type=mime_type,
-        # CAS object keys are derived from the original upload hash. The
-        # post-sanitization content hash is useful for integrity, but is not the
-        # reference-count key when the two differ.
         cas_sha256=(stored_content_sha256 if file_key.startswith("cas/") else None)
         or payload.get("content_sha256"),
         author_id=author_id,

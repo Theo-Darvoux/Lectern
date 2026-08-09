@@ -379,3 +379,365 @@ async def test_text_diff_is_truncated_at_bound(
         )
 
     assert "... diff truncated ..." in result["diff"]
+
+
+@pytest.mark.asyncio
+async def test_text_application_mimes_enforce_max_text_size_mb(monkeypatch) -> None:
+    """Application text MIMEs (JSON, XML, JS, etc.) must enforce max_text_size_mb."""
+    from app.config import settings
+    from app.core.common.exceptions import BadRequestError
+    from app.core.common.upload_limits import enforce_upload_size_limit, upload_size_limit
+
+    monkeypatch.setattr(settings, "max_text_size_mb", 1)
+    monkeypatch.setattr(settings, "max_file_size_mb", 100)
+
+    for mime in (
+        "application/json",
+        "application/xml",
+        "application/javascript",
+        "application/typescript",
+        "application/x-yaml",
+        "application/x-sh",
+        "application/sql",
+    ):
+        limit, is_fallback = upload_size_limit(mime)
+        assert limit == 1024 * 1024
+        assert is_fallback is False
+
+        # 2 MiB body exceeds 1 MiB max_text_size_mb limit
+        with pytest.raises(BadRequestError):
+            enforce_upload_size_limit(mime, 2 * 1024 * 1024)
+
+
+@pytest.mark.asyncio
+async def test_legacy_storage_reservation_always_refreshes_from_db(
+    db_session: AsyncSession,
+) -> None:
+    """Legacy storage usage cache in Redis must be overwritten by DB on every reservation."""
+    from app.models.material import Material, MaterialVersion
+    from app.routers.upload.helpers import (
+        _LEGACY_STORAGE_USAGE_KEY,
+        _refresh_legacy_storage_usage,
+    )
+    from tests.test_materials import _create_directory, _create_user
+
+    user = await _create_user(db_session)
+    directory = await _create_directory(db_session, user)
+    material = Material(
+        directory_id=directory.id,
+        title="Legacy Usage Test",
+        slug="legacy-usage-test",
+        type="markdown",
+        author_id=user.id,
+    )
+    db_session.add(material)
+
+    # 2 MaterialVersions referencing the SAME physical key (10 MiB)
+    file_key = "materials/shared/file.md"
+    v1 = MaterialVersion(
+        material=material,
+        version_number=1,
+        file_key=file_key,
+        file_name="file.md",
+        file_size=10 * 1024 * 1024,
+        file_mime_type="text/markdown",
+    )
+    v2 = MaterialVersion(
+        material=material,
+        version_number=2,
+        file_key=file_key,
+        file_name="file.md",
+        file_size=10 * 1024 * 1024,
+        file_mime_type="text/markdown",
+    )
+    db_session.add(v1)
+    db_session.add(v2)
+    await db_session.commit()
+
+    mock_redis = MagicMock()
+    mock_redis.set = AsyncMock()
+
+    # Redis cache initially claims 0 bytes (stale)
+    mock_redis.get = AsyncMock(return_value=b"0")
+
+    # _refresh_legacy_storage_usage must query DB, find 10 MiB (deduplicated), and update Redis
+    usage = await _refresh_legacy_storage_usage(db_session, mock_redis)
+    assert usage == 10 * 1024 * 1024
+    mock_redis.set.assert_awaited_once_with(_LEGACY_STORAGE_USAGE_KEY, 10 * 1024 * 1024)
+
+
+@pytest.mark.asyncio
+async def test_text_staging_lost_success_deletes_object_on_rollback(
+    db_session: AsyncSession,
+) -> None:
+    """When storage_upload_file fails with OSError (acknowledgement lost), rollback compensation deletes object."""
+    user = await _create_user(db_session)
+    directory = await _create_directory(db_session, user)
+    material = Material(
+        directory_id=directory.id,
+        title="Lost Success Test",
+        slug="lost-success-test",
+        type="markdown",
+        author_id=user.id,
+    )
+    db_session.add(material)
+    version = MaterialVersion(
+        material=material,
+        version_number=1,
+        file_key="materials/test/ls.md",
+        file_name="ls.md",
+        file_size=3,
+        file_mime_type="text/markdown",
+    )
+    db_session.add(version)
+    await db_session.commit()
+    db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+
+    mock_redis = AsyncMock()
+    mock_redis.register_script = MagicMock(return_value=AsyncMock())
+
+    uploaded_keys: set[str] = set()
+
+    async def _lost_success_upload(data, file_key, **kwargs):
+        uploaded_keys.add(file_key)
+        raise OSError("upload acknowledgement lost")
+
+    async def _delete_object(file_key):
+        uploaded_keys.discard(file_key)
+
+    async def _fake_read_full_object(*args, **kwargs) -> bytes:
+        return b"old"
+
+    with (
+        patch("app.routers.materials.read_full_object", _fake_read_full_object),
+        patch("app.routers.materials.storage_upload_file", side_effect=_lost_success_upload),
+        patch("app.routers.materials._check_pending_cap", AsyncMock()),
+        patch("app.routers.materials._reserve_storage_limit", AsyncMock()),
+        patch("app.core.storage.facade.delete_object", side_effect=_delete_object) as delete_mock,
+    ):
+        with pytest.raises(OSError, match="upload acknowledgement lost"):
+            await save_material_text_content(
+                str(material.id), user, db_session, "new text", mock_redis
+            )
+
+        # Simulate transaction rollback
+        await db_session.rollback()
+        await rollback_transaction_callbacks(db_session)
+
+    assert len(uploaded_keys) == 0
+    delete_mock.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pr_cleanup_releases_storage_reservations_loop(
+    db_session: AsyncSession,
+    fake_redis_setup,
+    monkeypatch,
+) -> None:
+    """100 stage/cancel cycles release all storage reservations."""
+    import uuid
+
+    from app.config import settings
+    from app.models.pull_request import PRStatus, PullRequest
+    from app.models.upload import Upload
+    from app.routers.upload.helpers import _reserve_storage_limit
+    from app.services.pr import _cleanup_pr_resources
+    from app.workers.storage_ops import delete_storage_objects
+    from tests.test_materials import _create_user
+
+    monkeypatch.setattr(settings, "max_storage_gb", 1)
+    user = await _create_user(db_session)
+
+    for i in range(100):
+        upload_id = str(uuid.uuid4())
+        u = Upload(
+            upload_id=upload_id,
+            user_id=user.id,
+            final_key=f"uploads/{user.id}/{upload_id}/doc.txt",
+            filename="doc.txt",
+            mime_type="text/plain",
+            size_bytes=100,
+            status="clean",
+        )
+        db_session.add(u)
+        pr = PullRequest(
+            author_id=user.id,
+            title=f"PR {i}",
+            status=PRStatus.REJECTED,
+            payload=[{"file_key": u.final_key, "content_sha256": f"sha{i}"}],
+        )
+        db_session.add(pr)
+        await db_session.flush()
+
+        await _reserve_storage_limit(100, upload_id, fake_redis_setup, db_session)
+        await _cleanup_pr_resources(
+            db_session,
+            pr,
+            delete_staging=True,
+            redis=fake_redis_setup,
+        )
+
+    jobs = db_session.info.get(PostCommitKey.JOBS, [])
+    delete_jobs = [j for j in jobs if j[0] == "delete_storage_objects"]
+    assert len(delete_jobs) == 100
+    assert not [j for j in jobs if j[0] == "release_storage_reservations"]
+    assert await fake_redis_setup.get("storage:upload_reservations:total") == 10_000
+
+    with patch("app.workers.storage_ops.delete_object", new_callable=AsyncMock):
+        for _, keys, reservation_ids in delete_jobs:
+            await delete_storage_objects(
+                {"redis": fake_redis_setup},
+                keys,
+                reservation_ids,
+            )
+
+    assert await fake_redis_setup.get("storage:upload_reservations:total") == 0
+
+
+@pytest.mark.asyncio
+async def test_pr_cancellation_rollback_keeps_storage_reserved(
+    db_session: AsyncSession,
+    fake_redis_setup,
+    monkeypatch,
+) -> None:
+    """A rolled-back PR transition must not release its staged object's capacity."""
+    import uuid
+
+    import app.core.database.redis as redis_core
+    from app.config import settings
+    from app.models.pull_request import PRStatus, PullRequest
+    from app.models.upload import Upload
+    from app.routers.upload.helpers import _reserve_storage_limit
+    from app.services.pr import cancel_pr_service
+    from tests.test_materials import _create_user
+
+    monkeypatch.setattr(settings, "max_storage_gb", 1)
+    monkeypatch.setattr(redis_core, "redis_client", fake_redis_setup)
+
+    user = await _create_user(db_session)
+    upload_id = str(uuid.uuid4())
+    file_key = f"uploads/{user.id}/{upload_id}/document.txt"
+    db_session.add(
+        Upload(
+            upload_id=upload_id,
+            user_id=user.id,
+            final_key=file_key,
+            filename="document.txt",
+            mime_type="text/plain",
+            size_bytes=100,
+            status="clean",
+        )
+    )
+    pr = PullRequest(
+        author_id=user.id,
+        title="Cancelled contribution",
+        status=PRStatus.OPEN,
+        payload=[{"op": "create_material", "file_key": file_key}],
+    )
+    db_session.add(pr)
+    await db_session.commit()
+
+    await _reserve_storage_limit(100, upload_id, fake_redis_setup, db_session)
+    quota_key = f"quota:uploads:{user.id}"
+    staging_quota_key = f"staging:{user.id}:{upload_id}"
+    await fake_redis_setup.zadd(quota_key, {staging_quota_key: 1})
+    assert await fake_redis_setup.get("storage:upload_reservations:total") == 100
+    assert await fake_redis_setup.zcard(quota_key) == 1
+
+    await cancel_pr_service(db_session, pr.id, user)
+    await db_session.rollback()
+
+    assert await fake_redis_setup.get("storage:upload_reservations:total") == 100
+    assert await fake_redis_setup.zcard(quota_key) == 1
+
+
+@pytest.mark.asyncio
+async def test_storage_reservation_cleanup_propagates_redis_failures(
+    mock_redis,
+    monkeypatch,
+) -> None:
+    """A cleanup worker failure must remain retryable by escaping the worker."""
+    from app.config import settings
+    from app.workers.storage_ops import release_storage_reservations
+
+    monkeypatch.setattr(settings, "max_storage_gb", 1)
+    release_script = AsyncMock(side_effect=ConnectionError("reservation unavailable"))
+    mock_redis.register_script.return_value = release_script
+
+    with pytest.raises(ExceptionGroup) as raised:
+        await release_storage_reservations(
+            {"redis": mock_redis},
+            {
+                "reservation_ids": ["upload-1"],
+                "refresh_legacy_usage": False,
+            },
+        )
+
+    assert len(raised.value.exceptions) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_usage_invalidation_keeps_reservation_for_retry(
+    db_session: AsyncSession,
+    fake_redis_setup,
+    monkeypatch,
+) -> None:
+    """Do not remove the safety reservation while legacy usage may still be stale."""
+    from app.config import settings
+    from app.core.storage.capacity import reserve_storage_limit
+    from app.workers.storage_ops import release_storage_reservations
+
+    monkeypatch.setattr(settings, "max_storage_gb", 1)
+    await reserve_storage_limit(100, "upload-1", fake_redis_setup, db_session)
+    monkeypatch.setattr(
+        fake_redis_setup,
+        "delete",
+        AsyncMock(side_effect=ConnectionError("cache unavailable")),
+    )
+
+    with pytest.raises(ExceptionGroup):
+        await release_storage_reservations(
+            {"redis": fake_redis_setup},
+            {
+                "reservation_ids": ["upload-1"],
+                "refresh_legacy_usage": True,
+            },
+        )
+
+    assert await fake_redis_setup.get("storage:upload_reservations:total") == 100
+
+
+@pytest.mark.asyncio
+async def test_failed_staging_deletion_keeps_reservation_for_retry(
+    db_session: AsyncSession,
+    fake_redis_setup,
+    monkeypatch,
+) -> None:
+    """A rejected staging object remains accounted for until deletion succeeds."""
+    from app.config import settings
+    from app.core.storage.capacity import reserve_storage_limit
+    from app.workers.storage_ops import delete_storage_objects
+
+    monkeypatch.setattr(settings, "max_storage_gb", 1)
+    await reserve_storage_limit(100, "upload-1", fake_redis_setup, db_session)
+
+    with (
+        patch("app.workers.storage_ops.delete_object", side_effect=OSError("S3 unavailable")),
+        pytest.raises(ExceptionGroup),
+    ):
+        await delete_storage_objects(
+            {"redis": fake_redis_setup},
+            ["uploads/user/upload-1/document.txt"],
+            ["upload-1"],
+        )
+
+    assert await fake_redis_setup.get("storage:upload_reservations:total") == 100
+
+    with patch("app.workers.storage_ops.delete_object", new_callable=AsyncMock):
+        await delete_storage_objects(
+            {"redis": fake_redis_setup},
+            ["uploads/user/upload-1/document.txt"],
+            ["upload-1"],
+        )
+
+    assert await fake_redis_setup.get("storage:upload_reservations:total") == 0

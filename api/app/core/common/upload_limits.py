@@ -19,12 +19,29 @@ def _configured_bytes(
     return int(value if value is not None else fallback_mb) * _MIB
 
 
+_TEXT_APPLICATION_MIMES = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/javascript",
+        "application/typescript",
+        "application/x-yaml",
+        "application/x-sh",
+        "application/sql",
+    }
+)
+
+
 def upload_size_limit(
     mime_type: str,
     config: Mapping[str, Any] | None = None,
 ) -> tuple[int, bool]:
     """Return ``(limit_bytes, is_global_fallback)`` for a MIME type."""
     normalized = mime_type.split(";", 1)[0].strip().lower()
+    text_limit = _configured_bytes("max_text_size_mb", settings.max_text_size_mb, config)
+    if normalized in _TEXT_APPLICATION_MIMES:
+        return text_limit, False
+
     document_limit = _configured_bytes(
         "max_document_size_mb", settings.max_document_size_mb, config
     )
@@ -44,10 +61,11 @@ def upload_size_limit(
         ("image/", _configured_bytes("max_image_size_mb", settings.max_image_size_mb, config)),
         ("audio/", _configured_bytes("max_audio_size_mb", settings.max_audio_size_mb, config)),
         ("video/", _configured_bytes("max_video_size_mb", settings.max_video_size_mb, config)),
-        ("text/", _configured_bytes("max_text_size_mb", settings.max_text_size_mb, config)),
+        ("text/", text_limit),
         ("application/vnd.openxmlformats", office_limit),
         ("application/vnd.ms-", office_limit),
     )
+
     for prefix, limit in prefix_limits:
         if normalized.startswith(prefix):
             return limit, False

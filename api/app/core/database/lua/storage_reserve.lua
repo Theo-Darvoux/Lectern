@@ -37,4 +37,3 @@ redis.call('HSET', sizes, reservation_id, requested_size)
 redis.call('ZADD', expiries, expires_at, reservation_id)
 redis.call('SET', total_key, next_total)
 return 1
-

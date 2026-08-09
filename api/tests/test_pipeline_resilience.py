@@ -210,7 +210,7 @@ async def test_unexpected_pipeline_failure_is_reraised_for_arq_retry() -> None:
             "app.workers.upload.pipeline.run_download_and_validate",
             AsyncMock(side_effect=RuntimeError("transient storage failure")),
         ),
-        patch("app.routers.upload.helpers._release_storage_reservation", AsyncMock()),
+        patch("app.workers.upload.pipeline.release_storage_reservation", AsyncMock()),
         pytest.raises(RuntimeError, match="transient storage failure"),
     ):
         await pipeline.run()

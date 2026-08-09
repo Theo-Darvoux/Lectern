@@ -12,6 +12,7 @@ from app.core.database.post_commit import (
     persist_post_commit_jobs,
 )
 from app.core.security.cas import _STORAGE_USAGE_KEY
+from app.core.storage.capacity import release_storage_reservation
 from app.core.storage.facade import abort_multipart_upload, get_s3_client, list_multipart_uploads
 from app.models.cas_staging_claim import CasStagingClaim
 from app.models.material import MaterialVersion
@@ -76,13 +77,10 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
         await db.commit()
         await dispatch_post_commit_actions(db)
 
-        from app.routers.upload.helpers import (
-            _QUOTA_KEY_PREFIX,
-            _release_storage_reservation,
-        )
+        from app.routers.upload.helpers import _QUOTA_KEY_PREFIX
 
         for upload_id, user_id, quarantine_key in pending_rows:
-            await _release_storage_reservation(upload_id, ctx["redis"])
+            await release_storage_reservation(upload_id, ctx["redis"])
             await ctx["redis"].zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", quarantine_key)
 
     # ── 2. Expire old Pull Requests (7 days) ─────────────────────────────────

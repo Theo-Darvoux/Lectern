@@ -8,6 +8,7 @@ from typing import Any
 from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import MimeRegistry
 from app.core.security.cas import hmac_cas_key, increment_cas_ref
+from app.core.storage.capacity import release_storage_reservation
 from app.core.storage.facade import upload_file_multipart
 from app.workers.upload.constants import _SCAN_CACHE_PREFIX
 
@@ -97,10 +98,8 @@ async def run_finalize_storage(
         operation_id=f"upload-finalize:{input_data.upload_id}",
     )
     # The in-flight object is now represented by authoritative CAS usage.
-    from app.routers.upload.helpers import _release_storage_reservation
-
     try:
-        await _release_storage_reservation(input_data.upload_id, redis_client)
+        await release_storage_reservation(input_data.upload_id, redis_client)
     except Exception as exc:
         # Reservations expire and are reconciled by the next reservation attempt.
         logger.warning(

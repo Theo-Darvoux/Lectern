@@ -53,6 +53,46 @@ async def test_legacy_oversized_object_cannot_be_promoted(
 
 
 @pytest.mark.asyncio
+async def test_unmanaged_legacy_copy_lost_success_is_compensated(
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    """A caller-owned transaction must delete a copy whose acknowledgement was lost."""
+    source_key = "uploads/user/upload/document.txt"
+    destination_key = "materials/user/upload/document.txt"
+    stored_keys: set[str] = set()
+
+    async def lost_success_copy(_source: str, destination: str) -> None:
+        stored_keys.add(destination)
+        raise OSError("copy acknowledgement lost")
+
+    async def delete_stored_object(key: str) -> None:
+        stored_keys.discard(key)
+
+    monkeypatch.setattr(pr_service, "copy_object", lost_success_copy)
+    monkeypatch.setattr(pr_service, "delete_object", delete_stored_object)
+    monkeypatch.setattr(
+        pr_service,
+        "get_object_info",
+        AsyncMock(return_value={"size": 100, "content_type": "text/plain"}),
+    )
+
+    db_session.info.pop(PostCommitKey.MANAGED_TRANSACTION, None)
+    with pytest.raises(OSError, match="acknowledgement lost"):
+        await pr_service._make_version_for_file(
+            db_session,
+            file_key=source_key,
+            payload={"file_name": "document.txt", "file_mime_type": "text/plain"},
+            material_id=uuid.uuid4(),
+            version_number=1,
+            author_id=uuid.uuid4(),
+            pr_id=uuid.uuid4(),
+        )
+
+    assert destination_key not in stored_keys
+
+
+@pytest.mark.asyncio
 async def test_cas_promotion_uses_authoritative_upload_mime_for_size_policy(
     db_session: AsyncSession,
     monkeypatch,
@@ -132,3 +172,77 @@ async def test_cas_promotion_fails_closed_on_missing_upload_row(
             author_id=author_id,
             pr_id=uuid.uuid4(),
         )
+
+
+@pytest.mark.asyncio
+async def test_qcm_cas_promotion_with_staging_claim_succeeds(
+    db_session: AsyncSession, monkeypatch
+) -> None:
+    """Generated CAS (e.g. QCM staging) with a consumed CasStagingClaim promotes successfully."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.cas_staging_claim import CasStagingClaim
+    from app.models.material import Material
+    from app.models.pull_request import PRStatus, PullRequest
+    from tests.test_materials import _create_directory, _create_user
+
+    user = await _create_user(db_session)
+    directory = await _create_directory(db_session, user)
+    material = Material(
+        directory_id=directory.id,
+        title="QCM Material",
+        slug="qcm-material",
+        type="qcm",
+        author_id=user.id,
+    )
+    db_session.add(material)
+
+    pr = PullRequest(
+        author_id=user.id,
+        title="QCM PR",
+        status=PRStatus.OPEN,
+        payload=[],
+    )
+
+    db_session.add(pr)
+    await db_session.flush()
+
+    cas_key = f"cas/{uuid.uuid4().hex}"
+    claim_sha = "abc123def456" * 5
+
+    claim = CasStagingClaim(
+        user_id=user.id,
+        file_key=cas_key,
+        sha256=claim_sha,
+        consumed_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    db_session.add(claim)
+    await db_session.commit()
+
+    db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+
+    monkeypatch.setattr(
+        pr_service,
+        "get_object_info",
+        AsyncMock(
+            return_value={
+                "size": 500,
+                "content_type": "application/json",
+            }
+        ),
+    )
+
+    mv = await pr_service._make_version_for_file(
+        db_session,
+        file_key=cas_key,
+        payload={"file_name": "qcm.json"},
+        material_id=material.id,
+        version_number=1,
+        author_id=user.id,
+        pr_id=pr.id,
+    )
+
+    assert mv.file_size == 500
+    assert mv.file_mime_type == "application/json"
+    assert mv.cas_sha256 == claim_sha

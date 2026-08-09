@@ -22,6 +22,7 @@ from app.core.observability.telemetry import get_tracer
 from app.core.security.cas import decrement_cas_ref
 from app.core.security.processing_paths import make_processing_temp_path
 from app.core.security.scanner import MalwareScanner
+from app.core.storage.capacity import release_storage_reservation
 from app.core.storage.facade import delete_object
 from app.routers.upload.cancellation import upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
@@ -148,9 +149,7 @@ class UploadPipeline:
         status_str = "malicious" if status == UploadStatus.MALICIOUS else "failed"
         await self.repo.update_upload_status(self.upload_id, status_str, error_detail=detail)
         try:
-            from app.routers.upload.helpers import _release_storage_reservation
-
-            await _release_storage_reservation(self.upload_id, self.redis)
+            await release_storage_reservation(self.upload_id, self.redis)
         except Exception as exc:
             # Capacity reservations self-expire and are reconciled by the next reserve.
             logger.warning(
