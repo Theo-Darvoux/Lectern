@@ -296,6 +296,8 @@ class Settings(BaseSettings):
                 "SECRET_KEY must be set to a secure value in production. "
                 'Generate one: python -c "import secrets; print(secrets.token_hex(32))"'
             )
+        if len(self.secret_key.get_secret_value().encode()) < 32:
+            raise ValueError("SECRET_KEY must contain at least 32 bytes in production.")
 
         if self.meili_master_key == "change-me":
             raise ValueError("MEILI_MASTER_KEY must be set to a secure value in production.")
@@ -306,6 +308,10 @@ class Settings(BaseSettings):
         }
         if self.eurooffice_jwt_secret in _known_placeholders:
             raise ValueError("EUROOFFICE_JWT_SECRET must be set to a secure value in production.")
+        if len(self.eurooffice_jwt_secret.encode()) < 32:
+            raise ValueError(
+                "EUROOFFICE_JWT_SECRET must contain at least 32 bytes in production."
+            )
 
         _file_token_placeholders = {
             "change-me-eurooffice-file-token-secret",
@@ -315,9 +321,25 @@ class Settings(BaseSettings):
             raise ValueError(
                 "EUROOFFICE_FILE_TOKEN_SECRET must be set to a secure value in production."
             )
+        if len(self.eurooffice_file_token_secret.encode()) < 32:
+            raise ValueError(
+                "EUROOFFICE_FILE_TOKEN_SECRET must contain at least 32 bytes in production."
+            )
 
         if self.eurooffice_file_token_secret == self.eurooffice_jwt_secret:
             raise ValueError("EUROOFFICE_FILE_TOKEN_SECRET must differ from EUROOFFICE_JWT_SECRET.")
+
+        if self.s3_access_key == "minioadmin" or self.s3_secret_key == "minioadmin":
+            raise ValueError("Default MinIO development credentials are forbidden in production.")
+
+        if self.worker_zip_url and len(self.worker_zip_hmac_secret.encode()) < 32:
+            raise ValueError(
+                "WORKER_ZIP_HMAC_SECRET must contain at least 32 bytes when worker delivery "
+                "is enabled in production."
+            )
+
+        if self.webhook_secret and len(self.webhook_secret.encode()) < 32:
+            raise ValueError("WEBHOOK_SECRET must contain at least 32 bytes in production.")
 
         return self
 

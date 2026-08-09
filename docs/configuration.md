@@ -61,7 +61,9 @@ both the Cloudflare Worker and the self-hosted Node worker — same token
 contract, so you only change the URL. Authenticated file and ZIP requests are
 verified on every request and must not be cached ahead of the worker; public
 branding may be cached. Leave `WORKER_ZIP_URL` empty to fall back to presigned
-S3 / server-side streaming.
+S3 / server-side streaming. When the self-hosted worker uses an external S3
+service, set `SELFHOST_WORKER_S3_ENDPOINT`; the production SeaweedFS profile
+otherwise targets `seaweedfs-s3:8333`.
 
 ---
 

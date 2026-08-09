@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -38,30 +39,57 @@ def test_production_compose_is_accepted_by_the_real_compose_cli(tmp_path: Path) 
         "POLICY_IMAGE_DIGEST": f"sha256:{digest}",
         "POSTGRES_IMAGE": f"docker.io/library/postgres@sha256:{digest}",
         "SEAWEEDFS_IMAGE": f"docker.io/chrislusf/seaweedfs@sha256:{digest}",
+        "WORKER_ZIP_HMAC_SECRET": "compose-hmac-test-secret",
+        "S3_ACCESS_KEY": "compose-access-key",
+        "S3_SECRET_KEY": "compose-secret-key",
     }
+    command = [
+        docker,
+        "compose",
+        "-f",
+        "compose.yaml",
+        "-f",
+        "compose.prod.yaml",
+        "--profile",
+        "postgres",
+        "--profile",
+        "selfhost-worker",
+        "--profile",
+        "seaweedfs-prod",
+        "config",
+    ]
     subprocess.run(
-        [
-            docker,
-            "compose",
-            "-f",
-            "compose.yaml",
-            "-f",
-            "compose.prod.yaml",
-            "--profile",
-            "postgres",
-            "--profile",
-            "selfhost-worker",
-            "--profile",
-            "seaweedfs-prod",
-            "config",
-            "--quiet",
-        ],
+        [*command, "--quiet"],
         cwd=REPO_ROOT,
         env=env,
         check=True,
         capture_output=True,
         text=True,
     )
+    rendered = subprocess.run(
+        [*command, "--format", "json"],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    config = json.loads(rendered.stdout)
+    delivery = config["services"]["selfhost-worker"]
+    assert delivery["environment"]["S3_ENDPOINT"] == "seaweedfs-s3:8333"
+    assert delivery["environment"]["WORKER_ZIP_HMAC_SECRET"] == "compose-hmac-test-secret"
+    assert delivery["read_only"] is True
+    assert delivery["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in delivery["security_opt"]
+    assert delivery["ports"] == [
+        {
+            "mode": "ingress",
+            "target": 8788,
+            "published": "8788",
+            "protocol": "tcp",
+            "host_ip": "127.0.0.1",
+        }
+    ]
 
 
 def test_production_master_restore_guards_numeric_volume_id_monotonicity() -> None:
@@ -170,8 +198,8 @@ def test_release_manifest_input_is_strict_canonical_and_secret_safe() -> None:
     assert "--format json --no-env-resolution" in prepare
     assert "production-compose.config.yml" not in prepare
     assert "production-compose-images.txt" not in prepare
-    assert 'git diff --quiet -- .' in prepare
-    assert 'git diff --cached --quiet -- .' in prepare
+    assert "git diff --quiet -- ." in prepare
+    assert "git diff --cached --quiet -- ." in prepare
     assert "validate-production-compose.py" in prepare
     assert "inspect-production-images.py" in prepare
     assert compose.count("env_file: ${RUNTIME_ENV_FILE:-.env}") == 5
@@ -197,6 +225,23 @@ def test_premerge_ci_installs_real_sandbox_runtime_and_requires_storage() -> Non
     assert "- seaweedfs-production-topology" not in required
 
 
+def test_parser_hosts_drop_default_capabilities_and_forbid_privilege_escalation() -> None:
+    base = _read("compose.yaml")
+    worker_base = base.split("x-worker-base: &worker-base", 1)[1].split("x-worker-watch:", 1)[0]
+    assert "- no-new-privileges:true" in worker_base
+    assert "cap_drop:\n    - ALL" in worker_base
+    assert "- SYS_ADMIN" not in worker_base
+    for capability in ("SETUID", "SETGID", "SETFCAP"):
+        assert f"- {capability}" in worker_base
+
+    api = base.split("  api:", 1)[1].split("\n  worker:", 1)[0]
+    assert "- no-new-privileges:true" in api
+    assert "cap_drop:\n      - ALL" in api
+    assert "- SYS_ADMIN" not in api
+    for capability in ("SETUID", "SETGID", "SETFCAP"):
+        assert f"- {capability}" in api
+
+
 def test_authenticated_delivery_never_uses_pre_auth_nginx_cache() -> None:
     worker_cache = _read("infra/nginx/worker-cache.conf")
     file_location = worker_cache.split("location /file/ {", 1)[1].split("\n}", 1)[0]
@@ -217,6 +262,29 @@ def test_self_hosted_delivery_container_drops_root() -> None:
     assert "COPY --from=build /app/dist ./dist" in dockerfile
     assert "./node_modules/.bin/tsx" not in dockerfile.split("FROM node:", 2)[-1]
     assert dockerfile.index("USER node") < dockerfile.index('CMD ["node", "dist/node/server.js"')
+
+
+def test_self_hosted_delivery_uses_hardened_runtime_and_production_storage_endpoint() -> None:
+    compose = _read("compose.yaml")
+    block = compose.split("  selfhost-worker:", 1)[1].split("\nnetworks:", 1)[0]
+    assert "127.0.0.1:${SELFHOST_WORKER_HOST_PORT:-8788}:8788" in block
+    assert "read_only: true" in block
+    assert "- no-new-privileges:true" in block
+    assert "cap_drop:\n      - ALL" in block
+    assert "pids: 128" in block
+    assert "WORKER_ZIP_HMAC_SECRET must be set" in block
+
+    production = _read("compose.prod.yaml")
+    production_block = production.split("  selfhost-worker:", 1)[1].split("\n  nginx:", 1)[0]
+    assert (
+        "S3_ENDPOINT: ${SELFHOST_WORKER_S3_ENDPOINT:-seaweedfs-s3:8333}"
+        in production_block
+    )
+    assert "S3_ACCESS_KEY must be set" in production_block
+    assert "S3_SECRET_KEY must be set" in production_block
+
+    server = _read("worker/src/node/server.ts")
+    assert 'throw new Error("WORKER_ZIP_HMAC_SECRET must contain at least 32 bytes")' in server
 
 
 def test_all_external_actions_are_pinned_to_full_commit_shas() -> None:

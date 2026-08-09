@@ -314,38 +314,47 @@ async def verify_magic_token(redis: Redis, token: str) -> str | None:  # type: i
     return email if int(result) == 1 else None
 
 
+async def _consume_rate_limit(
+    redis: Redis,  # type: ignore[type-arg]
+    key: str,
+    *,
+    maximum: int,
+    ttl_seconds: int,
+) -> bool:
+    """Atomically consume one fixed-window attempt across all API replicas."""
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.incr(key)
+        pipe.expire(key, ttl_seconds, nx=True)
+        results = await pipe.execute()
+    return int(results[0]) <= maximum
+
+
 async def check_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[type-arg]
     if settings.is_dev:
         return True
-
-    key = f"auth:rate:{email}"
-    count = await redis.get(key)
-    if count and int(count) >= RATE_LIMIT_MAX:
-        return False
-    pipe = redis.pipeline()
-    await pipe.incr(key)
-    await pipe.expire(key, RATE_LIMIT_TTL_SECONDS)
-    await pipe.execute()
-    return True
+    return await _consume_rate_limit(
+        redis,
+        f"auth:rate:{email}",
+        maximum=RATE_LIMIT_MAX,
+        ttl_seconds=RATE_LIMIT_TTL_SECONDS,
+    )
 
 
 async def check_verify_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[type-arg]
     if settings.is_dev:
         return True
 
-    key = f"auth:verify_rate:{email}"
-    count = await redis.get(key)
-    return not (count and int(count) >= VERIFY_RATE_LIMIT_MAX)
+    return await _consume_rate_limit(
+        redis,
+        f"auth:verify_rate:{email}",
+        maximum=VERIFY_RATE_LIMIT_MAX,
+        ttl_seconds=VERIFY_RATE_LIMIT_TTL_SECONDS,
+    )
 
 
 async def increment_verify_rate_limit(redis: Redis, email: str) -> None:  # type: ignore[type-arg]
-    if settings.is_dev:
-        return
-    key = f"auth:verify_rate:{email}"
-    pipe = redis.pipeline()
-    await pipe.incr(key)
-    await pipe.expire(key, VERIFY_RATE_LIMIT_TTL_SECONDS)
-    await pipe.execute()
+    """Compatibility no-op: the attempt is consumed before verification."""
+    return None
 
 
 async def reset_verify_rate_limit(redis: Redis, email: str) -> None:  # type: ignore[type-arg]

@@ -120,7 +120,12 @@ async def _deliver_webhook_once(
 
         resolved_target = await resolve_safe_url_async(row.webhook_url)
         if resolved_target is None:
-            logger.warning("dispatch_webhook: invalid webhook URL %s — skipping", row.webhook_url)
+            # Callback URLs commonly contain provider capabilities in their
+            # query string. Never serialize the configured URL into logs.
+            logger.warning(
+                "dispatch_webhook: invalid webhook URL for upload %s — skipping",
+                upload_id,
+            )
             upload_webhook_total.labels(outcome="skipped").inc()
             return None
 
@@ -152,8 +157,9 @@ async def _deliver_webhook_once(
                 headers=headers,
                 timeout=_TIMEOUT_SECONDS,
             )
-        except PinnedRequestError as exc:
-            return str(exc)
+        except PinnedRequestError:
+            # aiohttp exception strings can include the full request URL.
+            return "pinned HTTPS request failed"
 
         if response.is_success:
             logger.info(

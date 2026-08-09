@@ -13,6 +13,14 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.core.common.exceptions import UnauthorizedError
+from app.core.security.cas import (
+    CasReferenceError,
+    CasReferenceMissingError,
+    _operation_marker_key,
+    compensate_cas_increment,
+    hmac_cas_key,
+    increment_cas_ref,
+)
 from app.core.security.security import ALGORITHM, create_refresh_token
 from app.models.user import User, UserRole
 from app.routers.auth import refresh_token
@@ -44,6 +52,28 @@ async def test_refresh_jti_has_exactly_one_atomic_consumer(redis: Redis) -> None
     assert winners.count(True) == 1
     assert winners.count(False) == 31
     assert await auth_service.is_token_blacklisted(redis, "refresh-jti")
+
+
+@pytest.mark.parametrize(
+    ("consumer", "maximum"),
+    [
+        (auth_service.check_rate_limit, auth_service.RATE_LIMIT_MAX),
+        (auth_service.check_verify_rate_limit, auth_service.VERIFY_RATE_LIMIT_MAX),
+    ],
+)
+async def test_auth_rate_limits_have_exactly_the_configured_concurrent_winners(
+    redis: Redis,  # type: ignore[type-arg]
+    consumer: object,
+    maximum: int,
+) -> None:
+    async def consume() -> bool:
+        return await consumer(redis, "concurrent-limit@example.invalid")  # type: ignore[operator]
+
+    with patch.object(settings, "environment", "production"):
+        winners = await asyncio.gather(*(consume() for _ in range(32)))
+
+    assert winners.count(True) == maximum
+    assert winners.count(False) == 32 - maximum
 
 
 async def test_verification_code_has_exactly_one_concurrent_redeemer(
@@ -141,6 +171,57 @@ async def test_session_family_revocation_round_trip(redis: Redis) -> None:  # ty
     assert not await auth_service.is_session_revoked(redis, "session-1")
     await auth_service.revoke_session(redis, "session-1", 300)
     assert await auth_service.is_session_revoked(redis, "session-1")
+
+
+async def test_cas_compensation_does_not_decrement_an_unattempted_increment(
+    redis: Redis,  # type: ignore[type-arg]
+) -> None:
+    sha256 = "a" * 64
+    await increment_cas_ref(
+        redis,
+        sha256,
+        initial_data={"file_key": "cas/shared", "size": 7},
+        operation_id="existing-owner",
+    )
+
+    assert await compensate_cas_increment(
+        redis, sha256, operation_id="failed-before-send"
+    ) == 1
+    raw = await redis.get(hmac_cas_key(sha256))
+    assert raw is not None
+    assert '"ref_count":1' in raw
+    with pytest.raises(CasReferenceError, match="already compensated"):
+        await increment_cas_ref(redis, sha256, operation_id="failed-before-send")
+
+
+async def test_cas_compensation_recovers_a_lost_success_exactly_once(
+    redis: Redis,  # type: ignore[type-arg]
+) -> None:
+    sha256 = "b" * 64
+    await increment_cas_ref(
+        redis,
+        sha256,
+        initial_data={"file_key": "cas/shared", "size": 7},
+        operation_id="existing-owner",
+    )
+    await increment_cas_ref(redis, sha256, operation_id="ambiguous-increment")
+
+    assert await compensate_cas_increment(
+        redis, sha256, operation_id="ambiguous-increment"
+    ) == 1
+    assert await compensate_cas_increment(
+        redis, sha256, operation_id="ambiguous-increment"
+    ) == 1
+
+
+async def test_cas_duplicate_marker_without_record_fails_closed(
+    redis: Redis,  # type: ignore[type-arg]
+) -> None:
+    operation_id = "evicted-record"
+    await redis.set(_operation_marker_key(operation_id), "incremented")
+
+    with pytest.raises(CasReferenceMissingError):
+        await increment_cas_ref(redis, "c" * 64, operation_id=operation_id)
 
 
 def _refresh_request(token: str) -> Request:

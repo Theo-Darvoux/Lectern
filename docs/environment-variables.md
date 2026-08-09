@@ -117,6 +117,7 @@ cacheable; authenticated file and ZIP requests must reach the token verifier.
 |---|---|---|
 | `WORKER_ZIP_URL` | *(unset)* | Worker base URL. Leave empty to fall back to presigned S3 / server-side streaming. |
 | `WORKER_ZIP_HMAC_SECRET` | *(unset)* | **Secret.** Must match the secret configured on the worker (`wrangler secret put HMAC_SECRET`, or the env var on the Node worker). |
+| `SELFHOST_WORKER_S3_ENDPOINT` | `seaweedfs-s3:8333` in production Compose | Optional storage endpoint override used only by the self-hosted Node worker. |
 
 ---
 

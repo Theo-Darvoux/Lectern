@@ -34,16 +34,13 @@ async def test_verify_code_invalid(client: AsyncClient, mock_redis: AsyncMock) -
     original_env = settings.environment
     settings.environment = "production"
 
-    # Mock redis to return no previous attempts
-    mock_redis.get = AsyncMock(return_value=None)
-
     try:
         response = await client.post(
             "/api/auth/verify-code",
             json={"email": "test@example.com", "code": "WRONGCOD"},
         )
         assert response.status_code == 400
-        # Check that increment was called
+        # The attempt is consumed atomically before the verifier runs.
         mock_redis.pipeline.assert_called()
     finally:
         settings.environment = original_env
@@ -60,8 +57,8 @@ async def test_verify_code_rate_limit(client: AsyncClient, mock_redis: AsyncMock
     settings.environment = "production"
 
     try:
-        # Mock redis to return max rate limit
-        mock_redis.get = AsyncMock(return_value=str(auth_service.VERIFY_RATE_LIMIT_MAX))
+        pipe = mock_redis.pipeline.return_value
+        pipe.execute.return_value = [auth_service.VERIFY_RATE_LIMIT_MAX + 1, True]
 
         response = await client.post(
             "/api/auth/verify-code",

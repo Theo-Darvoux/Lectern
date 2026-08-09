@@ -3,7 +3,7 @@ import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloud
 import { describe, expect, it } from "vitest";
 
 // Must match the HMAC_SECRET binding in vitest.config.ts
-const TEST_SECRET = "test-hmac-secret";
+const TEST_SECRET = "test-hmac-secret-at-least-32-bytes";
 
 /**
  * Produces a signed token in the same format the worker expects:
@@ -112,6 +112,18 @@ describe("/file/", () => {
 
   it("returns 401 for an invalid token signature", async () => {
     const res = await SELF.fetch("http://worker/file/k?token=eyJleHAiOjk5OTk5OTk5OTl9.badsig");
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects tokens when the configured HMAC key is too weak", async () => {
+    const token = await signToken({ r2_key: "some-key" });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request(`http://worker/file/some-key?token=${token}`),
+      { ...(env as any), HMAC_SECRET: "weak" },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
     expect(res.status).toBe(401);
   });
 

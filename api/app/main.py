@@ -13,6 +13,7 @@ from app.config import settings
 from app.core.common.exceptions import AppError
 from app.core.events.limiter import limiter
 from app.core.http.body_limit import RequestBodyLimitMiddleware
+from app.core.observability.telemetry import instrument_fastapi, setup_telemetry
 from app.routers.admin import router as admin_router
 from app.routers.admin_backup import router as admin_backup_router
 from app.routers.admin_storage import router as admin_storage_router
@@ -58,14 +59,14 @@ _S3_CSP_DOMAIN = _s3_csp_domain()
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("API starting up")
 
+    # Gunicorn preloads this module before forking. Exporter threads and Redis
+    # monkeypatching therefore belong in each worker's lifespan, not import time.
+    setup_telemetry()
+
     from app.core.database.redis import close_arq_pool, init_arq_pool
     from app.core.events.meilisearch import setup_meilisearch
-    from app.core.observability.telemetry import setup_telemetry
     from app.core.security.scanner import MalwareScanner
     from app.core.storage.facade import close_s3_client, init_s3_client
-
-    # Initialize OpenTelemetry
-    setup_telemetry(app)
 
     # Soft-fail: degraded but non-critical services
     try:
@@ -129,6 +130,10 @@ app = FastAPI(
     openapi_url="/api/openapi.json" if settings.is_dev else None,
     lifespan=lifespan,
 )
+
+# Instrument before Starlette builds its middleware stack. Calling the
+# instrumentor from inside lifespan startup is too late for the first stack.
+instrument_fastapi(app)
 
 # ── Security Headers (S23) ───────────────────────────────────────────────────
 

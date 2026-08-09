@@ -135,6 +135,7 @@ export async function verifyToken(
   token: string,
   secret: string,
 ): Promise<TokenPayload | null> {
+  if (new TextEncoder().encode(secret).byteLength < 32) return null;
   const dot = token.lastIndexOf(".");
   if (dot === -1) return null;
 

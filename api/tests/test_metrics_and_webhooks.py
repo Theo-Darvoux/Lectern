@@ -322,6 +322,35 @@ async def test_webhook_no_raise_on_network_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_webhook_credentials_never_reach_logs(caplog: pytest.LogCaptureFixture) -> None:
+    from app.core.security.url_validation import PinnedRequestError
+    from app.workers.webhook_dispatch import dispatch_webhook
+
+    url_secret = "callback-query-secret"
+    transport_secret = "transport-error-secret"
+    upload = _make_upload(webhook_url=f"https://example.com/hook?key={url_secret}")
+    ctx = _make_ctx(upload)
+
+    with patch(
+        "app.workers.webhook_dispatch.resolve_safe_url_async",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        await dispatch_webhook(ctx, upload_id=upload.upload_id)
+
+    with patch(
+        "app.workers.webhook_dispatch.post_pinned_https",
+        side_effect=PinnedRequestError(
+            f"request failed for https://example.com/hook?key={transport_secret}"
+        ),
+    ):
+        await dispatch_webhook(ctx, upload_id=upload.upload_id)
+
+    assert url_secret not in caplog.text
+    assert transport_secret not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_webhook_skips_cancelled_upload() -> None:
     from app.workers.webhook_dispatch import dispatch_webhook
 

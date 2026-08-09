@@ -18,7 +18,7 @@ import {
   StoredObject,
 } from "../handler.js";
 
-const SECRET = "node-test-secret";
+const SECRET = "node-test-secret-at-least-32-bytes";
 
 function signToken(payload: Record<string, unknown>, expOffsetSeconds = 3600): string {
   const full = { ...payload, exp: Math.floor(Date.now() / 1000) + expOffsetSeconds };
