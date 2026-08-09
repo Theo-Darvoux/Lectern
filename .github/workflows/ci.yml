@@ -121,9 +121,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      redis:
+        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
     env:
       DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
       REVERT_TEST_DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
+      AUTH_ATOMICITY_REDIS_URL: redis://127.0.0.1:6379/15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
@@ -141,6 +151,7 @@ jobs:
           uv run pytest -m integration
           tests/integration/database/test_revert_concurrency.py
           tests/integration/database/test_upload_idempotency_concurrency.py
+          tests/integration/database/test_cas_storage_process_fence.py
 
   production-policy:
     runs-on: ubuntu-latest

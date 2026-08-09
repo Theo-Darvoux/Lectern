@@ -121,8 +121,12 @@ def test_required_ci_redis_identity_is_bound_to_production_release() -> None:
     release = (_REPO_ROOT / ".github/workflows/release.yml").read_text()
     build = (_REPO_ROOT / ".github/workflows/build.yml").read_text()
 
-    assert ci.count(f"image: {redis_ci_ref}") == 2
+    assert ci.count(f"image: {redis_ci_ref}") == 3
     assert "tested_redis_image:" in ci.split("jobs:", 1)[0]
+    postgres_revert = ci.split("  postgres-revert:", 1)[1].split("\n  production-policy:", 1)[0]
+    assert f"image: {redis_ci_ref}" in postgres_revert
+    assert "AUTH_ATOMICITY_REDIS_URL: redis://127.0.0.1:6379/15" in postgres_revert
+    assert "test_cas_storage_process_fence.py" in postgres_revert
     assert "redis_image: ${{ steps.toolchain.outputs.redis_test_image }}" in ci
     assert "tested_redis_image: ${{ needs.ci.outputs.tested_redis_image }}" in release
 

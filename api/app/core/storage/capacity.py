@@ -12,13 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from redis.asyncio import Redis
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.database.redis as redis_core
 from app.config import settings
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.database.database import engine
 from app.core.security.cas import _STORAGE_USAGE_GENERATION_KEY, _STORAGE_USAGE_KEY
 from app.core.storage.facade import list_objects
 from app.models.material import MaterialVersion
@@ -63,8 +64,101 @@ _CAS_MUTATION_RECOVERY_STABILITY_SECONDS = 2.0
 _CAS_STORAGE_LOCK_TIMEOUT = 120.0
 _CAS_STORAGE_LOCK_EXPIRE = 300.0
 
+# Non-expiring process-liveness fence outside the Redis TTL lock.
+_CAS_STORAGE_PROCESS_FENCE_KEY = -6568672473300939272
+_CAS_STORAGE_PROCESS_FENCE_TIMEOUT = 120.0
+_CAS_STORAGE_PROCESS_FENCE_RETRY = 0.05
+
 LEGACY_STORAGE_USAGE_KEY = "storage:legacy_usage_bytes"
 LEGACY_STORAGE_GENERATION_KEY = "storage:legacy_usage_generation"
+
+
+@asynccontextmanager
+async def _cas_storage_process_fence() -> AsyncIterator[None]:
+    """Hold the non-expiring process-liveness fence for one CAS critical section.
+
+    PostgreSQL session advisory locks have the property the Redis TTL lease
+    lacks here: a suspended process retains ownership, while a dead connection
+    releases it. All physical CAS writers and all recovery/reconciliation
+    owners acquire this fence before the Redis mutation lock.
+
+    SQLite remains available for hermetic/dev tests; production correctness is
+    proven by the required PostgreSQL+Redis integration regression.
+    """
+    if engine.dialect.name != "postgresql":
+        yield
+        return
+
+    async with engine.connect() as connection:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _CAS_STORAGE_PROCESS_FENCE_TIMEOUT
+        acquired = False
+
+        while not acquired:
+            try:
+                acquired = bool(
+                    await connection.scalar(
+                        text("SELECT pg_try_advisory_lock(:key)"),
+                        {"key": _CAS_STORAGE_PROCESS_FENCE_KEY},
+                    )
+                )
+                # Session locks survive COMMIT. End the implicit transaction so
+                # the S3 critical section is never an idle database transaction.
+                await connection.commit()
+            except Exception as exc:
+                raise BadRequestError(
+                    "Storage capacity process fence is temporarily unavailable. "
+                    "Please try again later."
+                ) from exc
+
+            if acquired:
+                break
+
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise BadRequestError(
+                    "Storage capacity is temporarily unavailable while another "
+                    "process owns the physical CAS fence."
+                )
+            await asyncio.sleep(min(_CAS_STORAGE_PROCESS_FENCE_RETRY, remaining))
+
+        try:
+            yield
+        finally:
+            try:
+                unlocked = bool(
+                    await connection.scalar(
+                        text("SELECT pg_advisory_unlock(:key)"),
+                        {"key": _CAS_STORAGE_PROCESS_FENCE_KEY},
+                    )
+                )
+                await connection.commit()
+                if not unlocked:
+                    logger.error(
+                        "PostgreSQL reported the CAS process fence was not owned "
+                        "during release; invalidating the pooled connection"
+                    )
+                    await connection.invalidate()
+            except BaseException as exc:
+                # Never return a possibly fence-owning connection to the pool.
+                logger.warning("CAS process-fence release failed: %s", exc)
+                try:
+                    await asyncio.shield(connection.invalidate())
+                except BaseException:
+                    pass
+
+
+@asynccontextmanager
+async def _cas_storage_serialized(redis: Any) -> AsyncIterator[None]:
+    """Serialize CAS state with a process-liveness fence outside the Redis lease."""
+    async with _cas_storage_process_fence():
+        async with redis_core.redis_lock(
+            redis,
+            _CAS_STORAGE_MUTATION_LOCK,
+            timeout=_CAS_STORAGE_LOCK_TIMEOUT,
+            expire=_CAS_STORAGE_LOCK_EXPIRE,
+        ):
+            yield
 
 
 async def _physical_cas_storage_usage() -> int:
@@ -497,12 +591,7 @@ async def _cached_cas_storage_usage_locked(redis: Any) -> int:
 async def cas_storage_mutation(
     redis: Any, file_key: str, operation: str
 ) -> AsyncIterator[tuple[str, int]]:
-    async with redis_core.redis_lock(
-        redis,
-        _CAS_STORAGE_MUTATION_LOCK,
-        timeout=_CAS_STORAGE_LOCK_TIMEOUT,
-        expire=_CAS_STORAGE_LOCK_EXPIRE,
-    ):
+    async with _cas_storage_serialized(redis):
         await _cached_cas_storage_usage_locked(redis)
         mutation_id = uuid.uuid4().hex
         async with redis.client() as journal_redis:
@@ -579,23 +668,13 @@ async def commit_cas_storage_delta(
 
 async def recover_stale_cas_storage_mutation(redis: Any) -> bool:
     """Autonomously recover an orphaned durable mutation once it is safe."""
-    async with redis_core.redis_lock(
-        redis,
-        _CAS_STORAGE_MUTATION_LOCK,
-        timeout=_CAS_STORAGE_LOCK_TIMEOUT,
-        expire=_CAS_STORAGE_LOCK_EXPIRE,
-    ):
+    async with _cas_storage_serialized(redis):
         return await _recover_stale_cas_mutation_locked(redis)
 
 
 async def reconcile_cas_storage_usage(redis: Any) -> int:
     """Serialize and generation-fence an exact object-store usage scan."""
-    async with redis_core.redis_lock(
-        redis,
-        _CAS_STORAGE_MUTATION_LOCK,
-        timeout=_CAS_STORAGE_LOCK_TIMEOUT,
-        expire=_CAS_STORAGE_LOCK_EXPIRE,
-    ):
+    async with _cas_storage_serialized(redis):
         return await _reconcile_cas_storage_usage_locked(redis)
 
 
@@ -604,12 +683,7 @@ async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ign
     usage = await _read_cached_cas_storage_usage(redis)
     if usage is not None:
         return usage
-    async with redis_core.redis_lock(
-        redis,
-        _CAS_STORAGE_MUTATION_LOCK,
-        timeout=_CAS_STORAGE_LOCK_TIMEOUT,
-        expire=_CAS_STORAGE_LOCK_EXPIRE,
-    ):
+    async with _cas_storage_serialized(redis):
         return await _cached_cas_storage_usage_locked(redis)
 
 
