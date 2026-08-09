@@ -1,9 +1,12 @@
 """ASGI request-body limits enforced before framework body parsing."""
 
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+BodyPatternLimit = tuple[str, re.Pattern[str], int]
 
 
 class _BodyTooLargeError(Exception):
@@ -19,19 +22,41 @@ class RequestBodyLimitMiddleware:
     Content-Length without reading the body.
     """
 
-    def __init__(self, app: ASGIApp, *, path_limits: Mapping[str, int]) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        path_limits: Mapping[str, int],
+        pattern_limits: Sequence[BodyPatternLimit] = (),
+    ) -> None:
         self.app = app
         self.path_limits = dict(path_limits)
+        self.pattern_limits = tuple(pattern_limits)
+
+    def _resolve_limit(self, scope: Scope) -> int | None:
+        path = scope.get("path", "")
+        method = scope.get("method", "").upper()
+
+        exact = self.path_limits.get(path)
+        if exact is not None:
+            return exact
+
+        for expected_method, pattern, limit in self.pattern_limits:
+            if method == expected_method and pattern.fullmatch(path):
+                return limit
+
+        return None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        limit = self.path_limits.get(scope.get("path", ""))
+        limit = self._resolve_limit(scope)
         if limit is None:
             await self.app(scope, receive, send)
             return
+
 
         for name, value in scope.get("headers", []):
             if name.lower() != b"content-length":

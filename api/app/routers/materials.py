@@ -13,7 +13,11 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.core.common.constants import PRIVILEGED_ROLES
 from app.core.common.exceptions import AppError, BadRequestError, NotFoundError
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_limits import enforce_upload_size_limit
 from app.core.database.database import get_db
 from app.core.database.post_commit import register_transaction_callbacks
 from app.core.database.redis import get_redis, redis_client
@@ -26,8 +30,17 @@ from app.core.storage.facade import (
     upload_file as storage_upload_file,
 )
 from app.dependencies.auth import CurrentUser, ReadUser
-from app.dependencies.rate_limit import rate_limit_downloads, rate_limit_views
+from app.dependencies.rate_limit import (
+    rate_limit_downloads,
+    rate_limit_uploads,
+    rate_limit_views,
+)
 from app.models.upload import Upload
+from app.routers.upload.helpers import (
+    _check_pending_cap,
+    _release_storage_reservation,
+    _reserve_storage_limit,
+)
 from app.schemas.material import MaterialDetail, MaterialVersionOut
 from app.services.audit import record_download
 from app.services.material import (
@@ -60,6 +73,11 @@ _TEXT_MIME_EXACT = frozenset(
 _TEXT_READABLE_EXACT = frozenset({"image/svg+xml"})
 _TEXT_EDIT_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB cap on raw text body
 _TEXT_DECOMPRESS_MAX_BYTES = _TEXT_EDIT_MAX_BYTES
+_TEXT_DIFF_MAX_BYTES = 1024 * 1024  # 1 MiB bound on text diff output
+_TEXT_STAGING_RESERVATION_TTL = max(
+    48 * 3600,
+    (settings.pr_expiry_days + 1) * 24 * 3600,
+)
 _GZIP_MAGIC = b"\x1f\x8b"
 
 router = APIRouter(prefix="/api/materials", tags=["materials"])
@@ -489,6 +507,8 @@ async def save_material_text_content(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     body: Annotated[str, Body(media_type="text/plain", max_length=_TEXT_EDIT_MAX_BYTES)],
+    redis: Annotated[Redis | None, Depends(get_redis)] = None,
+    _: Annotated[None, Depends(rate_limit_uploads)] = None,
 ) -> dict[str, Any]:
     """Accept raw UTF-8 text, gzip-compress it server-side, store to object storage.
 
@@ -496,6 +516,10 @@ async def save_material_text_content(
     Returns ``{ file_key, file_name, file_size, file_mime_type }`` ready
     to be included in an ``edit_material`` PR operation.
     """
+    redis_inst = redis if redis is not None else redis_client
+    user_id_str = str(user.id)
+    user_role = user.role
+
     data = await get_material_with_version(db, material_id)
     version = data.get("current_version_info")
     if version is None:
@@ -518,6 +542,17 @@ async def save_material_text_content(
     if not _is_text_mime(check_mime) and not is_gzip_wrapped:
         raise BadRequestError("Cannot save text content for a non-text file")
 
+    raw_bytes = body.encode("utf-8")
+    file_size = len(raw_bytes)
+
+    if file_size > _TEXT_EDIT_MAX_BYTES:
+        raise BadRequestError(
+            "Text content exceeds the 10 MiB editor limit",
+            code=UploadErrorCode.FILE_TOO_LARGE,
+        )
+
+    enforce_upload_size_limit(check_mime, file_size)
+
     # Compute text diff
     try:
         old_bytes = await read_full_object(version["file_key"])
@@ -532,39 +567,66 @@ async def save_material_text_content(
     except Exception:
         old_text = ""
 
-    diff_lines = list(
-        difflib.unified_diff(
-            old_text.splitlines(),
-            body.splitlines(),
-            fromfile=current_name,
-            tofile=logical_name,
-            lineterm="",
-        )
-    )
-    diff_text = "```diff\n" + "\n".join(diff_lines) + "\n```" if diff_lines else ""
+    diff_lines: list[str] = []
+    diff_size = 0
+    for line in difflib.unified_diff(
+        old_text.splitlines(),
+        body.splitlines(),
+        fromfile=current_name,
+        tofile=logical_name,
+        lineterm="",
+    ):
+        encoded_line_len = len(line.encode("utf-8")) + 1
+        if diff_size + encoded_line_len > _TEXT_DIFF_MAX_BYTES:
+            diff_lines.append("... diff truncated ...")
+            break
+        diff_lines.append(line)
+        diff_size += encoded_line_len
 
-    # Encode without compression
-    raw_bytes = body.encode("utf-8")
+    diff_text = "```diff\n" + "\n".join(diff_lines) + "\n```" if diff_lines else ""
 
     # Build deterministic storage key scoped to the user
     upload_id = str(uuid.uuid4())
-    file_key = f"uploads/{user.id}/{upload_id}/{logical_name}"
-    file_size = len(raw_bytes)
+    file_key = f"uploads/{user_id_str}/{upload_id}/{logical_name}"
+    staging_quota_key = f"staging:{user_id_str}:{upload_id}"
 
-    async def rollback_upload() -> None:
+    async def _noop() -> None:
+        return None
+
+    async def rollback_object() -> None:
         from app.core.storage.facade import delete_object
 
         await delete_object(file_key)
 
-    async def finalize_upload() -> None:
-        return None
+    async def rollback_quota() -> None:
+        await redis_inst.zrem(f"quota:uploads:{user_id_str}", staging_quota_key)
 
-    if not register_transaction_callbacks(
+    async def rollback_storage_reservation() -> None:
+        await _release_storage_reservation(upload_id, redis_inst)
+
+    for rollback in (rollback_storage_reservation, rollback_quota, rollback_object):
+        if not register_transaction_callbacks(
+            db,
+            on_rollback=rollback,
+            on_commit=_noop,
+        ):
+            raise RuntimeError("Text-content storage writes require a request-managed transaction")
+
+    await _reserve_storage_limit(
+        file_size,
+        upload_id,
+        redis_inst,
         db,
-        on_rollback=rollback_upload,
-        on_commit=finalize_upload,
-    ):
-        raise RuntimeError("Text-content storage writes require a request-managed transaction")
+        ttl_seconds=_TEXT_STAGING_RESERVATION_TTL,
+    )
+    await _check_pending_cap(
+        user_id_str,
+        redis_inst,
+        db,
+        privileged=user_role in PRIVILEGED_ROLES,
+        reserve_key=staging_quota_key,
+    )
+
 
     # Upload to object storage. The registered compensation removes this unique
     # key if upload lost-success or the following database transaction fails.

@@ -5,6 +5,9 @@ from typing import Any
 
 from app.config import settings
 
+from app.core.common.exceptions import BadRequestError
+from app.core.common.upload_errors import UploadErrorCode
+
 _MIB = 1024 * 1024
 
 
@@ -51,3 +54,22 @@ def upload_size_limit(
             return limit, False
 
     return _configured_bytes("max_file_size_mb", settings.max_file_size_mb, config), True
+
+
+def enforce_upload_size_limit(
+    mime_type: str,
+    size_bytes: int,
+    config: Mapping[str, Any] | None = None,
+) -> None:
+    """Raise BadRequestError if ``size_bytes`` exceeds the configured MIME-specific limit."""
+    limit, is_global = upload_size_limit(mime_type, config)
+    if size_bytes <= limit:
+        return
+
+    mb = limit // _MIB
+    if is_global:
+        msg = f"File size {size_bytes // _MIB} MiB exceeds the global limit of {mb} MiB."
+    else:
+        msg = f"File size exceeds the {mb} MiB limit for this file type."
+    raise BadRequestError(msg, code=UploadErrorCode.FILE_TOO_LARGE)
+

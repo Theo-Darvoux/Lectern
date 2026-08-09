@@ -2,6 +2,7 @@ local expiries = KEYS[1]
 local sizes = KEYS[2]
 local total_key = KEYS[3]
 local usage_key = KEYS[4]
+local legacy_usage_key = KEYS[5]
 
 local reservation_id = ARGV[1]
 local requested_size = tonumber(ARGV[2])
@@ -25,8 +26,9 @@ local next_total = total - previous_size + requested_size
 -- Read physical usage in the same script as the reservation update. Passing a
 -- value read by the caller would allow a concurrent CAS finalize to make the
 -- capacity decision against stale usage.
-local usage = tonumber(redis.call('GET', usage_key)) or 0
-if usage + next_total > capacity then
+local cas_usage = tonumber(redis.call('GET', usage_key)) or 0
+local legacy_usage = tonumber(redis.call('GET', legacy_usage_key)) or 0
+if cas_usage + legacy_usage + next_total > capacity then
     redis.call('SET', total_key, total)
     return 0
 end
@@ -35,3 +37,4 @@ redis.call('HSET', sizes, reservation_id, requested_size)
 redis.call('ZADD', expiries, expires_at, reservation_id)
 redis.call('SET', total_key, next_total)
 return 1
+

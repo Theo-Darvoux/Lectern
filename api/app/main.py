@@ -224,6 +224,8 @@ app.add_middleware(
     trusted_hosts=settings.trusted_proxy_hosts_list,
 )
 
+import re
+
 # These endpoints otherwise parse attacker-controlled JSON/multipart bodies in
 # memory before their route-level validators run. Keep the transport ceiling
 # close to the domain limits and enforce it even when nginx is bypassed.
@@ -233,7 +235,15 @@ app.add_middleware(
         "/api/qcm/stage": 20 * 1024 * 1024,
         "/api/qcm/parse-moodle": 11 * 1024 * 1024,
     },
+    pattern_limits=[
+        (
+            "POST",
+            re.compile(r"/api/materials/[^/]+/text-content"),
+            10 * 1024 * 1024,
+        ),
+    ],
 )
+
 
 
 @app.middleware("http")

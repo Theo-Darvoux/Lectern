@@ -16,6 +16,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
 from app.core.common.exceptions import BadRequestError, ConflictError, ForbiddenError, NotFoundError
+from app.core.common.upload_limits import enforce_upload_size_limit
 from app.core.database.post_commit import PostCommitKey, register_transaction_callbacks
 from app.core.events.coalesce import JobKind
 from app.core.security.async_utils import shielded_await
@@ -702,7 +703,7 @@ async def _make_version_for_file(
     if file_key.startswith("cas/"):
         upload_row = (
             await db.execute(
-                select(Upload.size_bytes, Upload.content_sha256)
+                select(Upload.size_bytes, Upload.content_sha256, Upload.mime_type)
                 .where(
                     Upload.final_key == file_key,
                     Upload.user_id == author_id,
@@ -713,15 +714,27 @@ async def _make_version_for_file(
                 .limit(1)
             )
         ).one_or_none()
-        upload_size = upload_row[0] if upload_row is not None else None
-        stored_content_sha256 = upload_row[1] if upload_row is not None else None
-        real_size = upload_size if upload_size is not None else (payload.get("file_size") or 0)
-        mime_type = payload.get("file_mime_type") or "application/octet-stream"
+        if upload_row is None:
+            raise ConflictError("Verified upload metadata is unavailable")
+
+        upload_size, stored_content_sha256, stored_mime_type = upload_row
+
+        if upload_size is None or not stored_mime_type:
+            raise ConflictError("Verified upload metadata is incomplete")
+
+        real_size = int(upload_size)
+        mime_type = stored_mime_type
+
+        enforce_upload_size_limit(mime_type, real_size)
+
         thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key, author_id)
     else:
         info = await get_object_info(file_key)
-        real_size = info["size"]
+        real_size = int(info["size"])
         mime_type = _resolve_mime_type(file_key, payload, s3_mime=info.get("content_type"))
+
+        enforce_upload_size_limit(mime_type, real_size)
+
         new_key = file_key.replace("uploads/", "materials/", 1)
 
         async def rollback_copy() -> None:

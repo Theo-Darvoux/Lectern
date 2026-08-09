@@ -76,3 +76,68 @@ async def test_body_limit_counts_chunked_request_bytes() -> None:
     await middleware(_scope(), receive, send)
 
     assert sent[0]["status"] == 413
+
+
+@pytest.mark.asyncio
+async def test_body_limit_matches_regex_pattern_with_method() -> None:
+    import re
+
+    app_called = False
+    sent: list[Message] = []
+
+    async def app(_scope: Scope, _receive: Callable[[], Awaitable[Message]], _send) -> None:
+        nonlocal app_called
+        app_called = True
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    pattern = re.compile(r"/api/materials/[^/]+/text-content")
+    middleware = RequestBodyLimitMiddleware(
+        app,
+        path_limits={},
+        pattern_limits=[("POST", pattern, 10)],
+    )
+    scope = _scope([(b"content-length", b"15")])
+    scope["path"] = "/api/materials/abc-123/text-content"
+    scope["method"] = "POST"
+
+    await middleware(scope, receive, send)
+
+    assert not app_called
+    assert sent[0]["status"] == 413
+
+
+@pytest.mark.asyncio
+async def test_body_limit_pattern_ignores_wrong_method() -> None:
+    import re
+
+    app_called = False
+
+    async def app(_scope: Scope, _receive: Callable[[], Awaitable[Message]], _send) -> None:
+        nonlocal app_called
+        app_called = True
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        pass
+
+    pattern = re.compile(r"/api/materials/[^/]+/text-content")
+    middleware = RequestBodyLimitMiddleware(
+        app,
+        path_limits={},
+        pattern_limits=[("POST", pattern, 10)],
+    )
+    scope = _scope([(b"content-length", b"15")])
+    scope["path"] = "/api/materials/abc-123/text-content"
+    scope["method"] = "GET"
+
+    await middleware(scope, receive, send)
+
+    assert app_called
+

@@ -29,6 +29,7 @@ _STORAGE_RESERVATION_EXPIRIES = "storage:upload_reservations:expiries"
 _STORAGE_RESERVATION_SIZES = "storage:upload_reservations:sizes"
 _STORAGE_RESERVATION_TOTAL = "storage:upload_reservations:total"
 _STORAGE_RESERVATION_TTL = 3 * 3600
+_LEGACY_STORAGE_USAGE_KEY = "storage:legacy_usage_bytes"
 
 
 async def _get_storage_usage(db: AsyncSession, redis: "Redis") -> int:  # type: ignore[type-arg]
@@ -76,6 +77,41 @@ async def _get_storage_usage(db: AsyncSession, redis: "Redis") -> int:  # type: 
     return usage
 
 
+async def _get_legacy_storage_usage(db: AsyncSession, redis: "Redis") -> int:  # type: ignore[type-arg]
+    """Return physical legacy non-CAS storage usage from MaterialVersion by distinct file_key."""
+    legacy_objects = (
+        select(
+            MaterialVersion.file_key,
+            func.max(MaterialVersion.file_size).label("size"),
+        )
+        .where(
+            MaterialVersion.file_key.is_not(None),
+            MaterialVersion.file_key.not_like("cas/%"),
+            MaterialVersion.file_size.is_not(None),
+        )
+        .group_by(MaterialVersion.file_key)
+        .subquery()
+    )
+
+    async def _from_db() -> int:
+        return int(await db.scalar(select(func.sum(legacy_objects.c.size))) or 0)
+
+    try:
+        usage_raw = await redis.get(_LEGACY_STORAGE_USAGE_KEY)
+    except Exception as exc:
+        logger.warning("Legacy storage usage cache unavailable; using the database: %s", exc)
+        return await _from_db()
+    if usage_raw is not None:
+        return max(0, int(usage_raw))
+
+    usage = await _from_db()
+    try:
+        await redis.set(_LEGACY_STORAGE_USAGE_KEY, usage)
+    except Exception as exc:
+        logger.warning("Could not refresh the legacy storage usage cache: %s", exc)
+    return usage
+
+
 async def _check_storage_limit(
     size_bytes: int, db: AsyncSession, config: dict[str, Any] | None = None
 ) -> None:
@@ -91,7 +127,9 @@ async def _check_storage_limit(
     max_bytes = max_gb * 1024 * 1024 * 1024
     redis = redis_core.redis_client
 
-    usage = await _get_storage_usage(db, redis)
+    cas_usage = await _get_storage_usage(db, redis)
+    legacy_usage = await _get_legacy_storage_usage(db, redis)
+    usage = cas_usage + legacy_usage
 
     if usage + size_bytes > max_bytes:
         logger.warning(
@@ -111,15 +149,20 @@ async def _reserve_storage_limit(
     reservation_id: str,
     redis: "Redis",  # type: ignore[type-arg]
     db: AsyncSession,
+    *,
+    ttl_seconds: int = _STORAGE_RESERVATION_TTL,
 ) -> None:
     """Atomically reserve global capacity for an in-flight upload."""
+    if ttl_seconds <= 0:
+        raise ValueError("reservation TTL must be positive")
     if not settings.max_storage_gb:
         return
 
-    # Ensure the physical-usage key exists. The reservation Lua script reads it
-    # atomically with reservation totals, so this value must not be passed as a
-    # stale argument from Python.
+    # Ensure physical-usage keys exist. The reservation Lua script reads them
+    # atomically with reservation totals, so these values must not be passed as
+    # stale arguments from Python.
     await _get_storage_usage(db, redis)
+    await _get_legacy_storage_usage(db, redis)
     max_bytes = int(settings.max_storage_gb * 1024 * 1024 * 1024)
     now = int(time.time())
     try:
@@ -130,11 +173,12 @@ async def _reserve_storage_limit(
                 _STORAGE_RESERVATION_SIZES,
                 _STORAGE_RESERVATION_TOTAL,
                 _STORAGE_USAGE_KEY,
+                _LEGACY_STORAGE_USAGE_KEY,
             ],
             args=[
                 reservation_id,
                 size_bytes,
-                now + _STORAGE_RESERVATION_TTL,
+                now + ttl_seconds,
                 now,
                 max_bytes,
             ],
@@ -152,6 +196,7 @@ async def _reserve_storage_limit(
             "Please contact an administrator.",
             code=UploadErrorCode.STORAGE_FULL,
         )
+
 
 
 async def _release_storage_reservation(reservation_id: str, redis: Any) -> None:
@@ -270,17 +315,24 @@ async def _check_pending_cap(
         # Use a fresh session to avoid PendingRollbackError if the request session
         # is in an error state from a previous operation.
         try:
+            from datetime import UTC, datetime, timedelta
             from app.core.database.database import async_session_factory
 
+            cutoff = datetime.now(UTC) - timedelta(hours=25)
             async with async_session_factory() as fallback_db:
                 db_count = (
                     await fallback_db.scalar(
                         select(func.count())
                         .select_from(Upload)
-                        .where(Upload.user_id == UUID(user_id), Upload.status == "pending")
+                        .where(
+                            Upload.user_id == UUID(user_id),
+                            Upload.status.in_(("pending", "clean")),
+                            Upload.updated_at >= cutoff,
+                        )
                     )
                     or 0
                 )
+
             if db_count >= MAX_PENDING_UPLOADS:
                 raise BadRequestError(
                     f"Too many pending uploads ({MAX_PENDING_UPLOADS} max). "

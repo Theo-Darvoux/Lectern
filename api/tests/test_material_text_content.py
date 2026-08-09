@@ -1,6 +1,7 @@
 import gzip
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
 
 import pytest
 from httpx import AsyncClient
@@ -89,18 +90,28 @@ async def test_save_text_content_removes_object_when_transaction_rolls_back(
     await db_session.commit()
     db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
 
+    mock_redis = MagicMock()
+    mock_redis.zrem = AsyncMock()
+    mock_redis.register_script = MagicMock(return_value=AsyncMock())
+
+
     with (
         patch("app.routers.materials.read_full_object", new=AsyncMock(return_value=b"old")),
         patch("app.routers.materials.storage_upload_file", new_callable=AsyncMock),
+        patch("app.routers.materials._check_pending_cap", new_callable=AsyncMock),
+        patch("app.routers.materials._reserve_storage_limit", new_callable=AsyncMock),
+        patch("app.routers.materials._release_storage_reservation", new_callable=AsyncMock),
         patch("app.core.storage.facade.delete_object", new_callable=AsyncMock) as delete_object,
     ):
         result = await save_material_text_content(
-            str(material.id), user, db_session, "new contents"
+            str(material.id), user, db_session, "new contents", redis=mock_redis
         )
         await db_session.rollback()
         await rollback_transaction_callbacks(db_session)
 
     delete_object.assert_awaited_once_with(result["file_key"])
+
+
 
 
 @pytest.mark.asyncio
