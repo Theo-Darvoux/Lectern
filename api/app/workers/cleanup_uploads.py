@@ -149,6 +149,8 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     quarantine_cutoff = datetime.now(UTC) - timedelta(hours=2)
 
     non_cas_to_delete: list[str] = []
+    non_cas_reservation_ids: list[str] = []
+    quota_uploads_to_release: list[Upload] = []
     async with async_session_factory() as db:
         db.info[PostCommitKey.JOBS] = []
         terminal_statuses = ["clean", "failed", "malicious", "applied"]
@@ -180,6 +182,8 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
                     upload.cas_ref_count = 0
             else:
                 non_cas_to_delete.append(key)
+                non_cas_reservation_ids.append(upload.upload_id)
+            quota_uploads_to_release.append(upload)
 
         if release_refs:
             db.info[PostCommitKey.JOBS].append(("release_cas_references", release_refs))
@@ -189,7 +193,7 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
 
     # Also clean up the synthetic staging quota entries
     redis = ctx["redis"]
-    for upload in terminal_uploads:
+    for upload in quota_uploads_to_release:
         staging_key = f"staging:{upload.user_id}:{upload.upload_id}"
         await redis.zrem(f"quota:uploads:{upload.user_id}", staging_key)
 
@@ -208,21 +212,36 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     if non_cas_to_delete:
         from app.workers.storage_ops import delete_storage_objects
 
-        await delete_storage_objects(ctx, non_cas_to_delete)
+        # Terminal uploads have one reservation per object. Quarantine objects
+        # discovered only by S3 scan are appended later and have no reservation.
+        terminal_count = len(non_cas_reservation_ids)
+        if terminal_count:
+            await delete_storage_objects(
+                ctx,
+                non_cas_to_delete[:terminal_count],
+                non_cas_reservation_ids,
+            )
+        if len(non_cas_to_delete) > terminal_count:
+            await delete_storage_objects(ctx, non_cas_to_delete[terminal_count:])
         logger.info("Cleanup triggered for %d staging/quarantine objects", len(non_cas_to_delete))
 
     # ── 6. Clean orphaned cas/ objects ───────────────────────────────────────
     # CAS objects without a Redis ref entry are orphans. The 48h safety margin
     # prevents deleting objects that are mid-upload or mid-finalize.
     async with async_session_factory() as db:
+        revert_cutoff = datetime.now(UTC) - timedelta(days=settings.pr_revert_grace_days)
         legacy_result = await db.execute(
-            select(MaterialVersion.file_key).where(
-                MaterialVersion.file_key.is_not(None), MaterialVersion.file_key.not_like("cas/%")
+            select(MaterialVersion.file_key)
+            .where(
+                MaterialVersion.file_key.is_not(None),
+                MaterialVersion.file_key.not_like("cas/%"),
+                (MaterialVersion.deleted_at.is_(None))
+                | (MaterialVersion.deleted_at >= revert_cutoff),
             )
+            .execution_options(include_deleted=True)
         )
         valid_legacy_keys = {row[0] for row in legacy_result if row[0]}
 
-        revert_cutoff = datetime.now(UTC) - timedelta(days=7)
         material_cas_result = await db.execute(
             select(MaterialVersion.file_key)
             .where(
@@ -271,7 +290,7 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
             async for page in paginator.paginate(Bucket=settings.s3_bucket, Prefix=prefix):
                 for obj in page.get("Contents", []):
                     key = obj["Key"]
-                    if key in valid_legacy_keys:
+                    if key in valid_legacy_keys or key in protected_keys:
                         continue
                     if obj["LastModified"].replace(tzinfo=None) < orphan_cutoff.replace(
                         tzinfo=None

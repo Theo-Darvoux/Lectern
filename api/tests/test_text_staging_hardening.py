@@ -677,23 +677,30 @@ async def test_storage_reservation_cleanup_propagates_redis_failures(
 
 
 @pytest.mark.asyncio
-async def test_failed_usage_invalidation_keeps_reservation_for_retry(
+async def test_failed_promoted_release_keeps_reservation_for_retry(
     db_session: AsyncSession,
     fake_redis_setup,
     monkeypatch,
 ) -> None:
-    """Do not remove the safety reservation while legacy usage may still be stale."""
+    """Do not remove the safety reservation when the atomic promotion handoff fails."""
     from app.config import settings
     from app.core.storage.capacity import reserve_storage_limit
     from app.workers.storage_ops import release_storage_reservations
 
     monkeypatch.setattr(settings, "max_storage_gb", 1)
     await reserve_storage_limit(100, "upload-1", fake_redis_setup, db_session)
-    monkeypatch.setattr(
-        fake_redis_setup,
-        "delete",
-        AsyncMock(side_effect=ConnectionError("cache unavailable")),
-    )
+    original_register_script = fake_redis_setup.register_script
+
+    def failing_promoted_release(script):
+        if "generation_key" in script and "reservation_id" in script and "INCR" in script:
+
+            async def _fail(**kwargs):
+                raise ConnectionError("accounting unavailable")
+
+            return _fail
+        return original_register_script(script)
+
+    monkeypatch.setattr(fake_redis_setup, "register_script", failing_promoted_release)
 
     with pytest.raises(ExceptionGroup):
         await release_storage_reservations(

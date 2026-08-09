@@ -55,6 +55,7 @@ async def delete_storage_objects(
     ctx: dict,  # type: ignore[type-arg]
     keys: list[str],
     reservation_ids: list[str] | None = None,
+    promoted_legacy: bool = False,
 ) -> None:
     """Delete a list of object keys from S3-compatible storage.
 
@@ -75,13 +76,14 @@ async def delete_storage_objects(
     if errors:
         raise ExceptionGroup("One or more storage objects could not be deleted", errors)
     if reservation_ids:
-        # Rejected legacy staging objects are not part of the DB-derived usage
-        # cache. Keep their reservations until every object deletion succeeds.
+        # Keep reservations until every object deletion succeeds. Approved
+        # legacy promotions additionally fence stale DB snapshots atomically
+        # with reservation release.
         await release_storage_reservations(
             ctx,
             {
                 "reservation_ids": reservation_ids,
-                "refresh_legacy_usage": False,
+                "refresh_legacy_usage": promoted_legacy,
             },
         )
 
@@ -101,7 +103,7 @@ async def release_storage_reservations(
     ctx: dict,  # type: ignore[type-arg]
     payload: dict | list[dict],
 ) -> None:
-    """Release global storage capacity reservations and optionally invalidate legacy storage usage."""
+    """Release reservations, fencing stale legacy snapshots for promoted objects."""
     redis = ctx.get("redis")
     if redis is None:
         from app.core.database.redis import redis_client
@@ -109,26 +111,21 @@ async def release_storage_reservations(
         redis = redis_client
 
     from app.core.storage.capacity import (
-        LEGACY_STORAGE_USAGE_KEY,
+        release_promoted_legacy_storage_reservation,
         release_storage_reservation,
     )
 
     items = payload if isinstance(payload, list) else [payload]
     errors: list[Exception] = []
     for item in items:
-        if item.get("refresh_legacy_usage"):
-            try:
-                await redis.delete(LEGACY_STORAGE_USAGE_KEY)
-            except Exception as exc:
-                logger.error("Failed to invalidate legacy storage usage cache: %s", exc)
-                errors.append(exc)
-                # The reservation is the only remaining capacity accounting
-                # until legacy usage is refreshed. Keep it for the retry.
-                continue
+        promoted_legacy = bool(item.get("refresh_legacy_usage"))
         reservation_ids = item.get("reservation_ids") or []
         for reservation_id in reservation_ids:
             try:
-                await release_storage_reservation(reservation_id, redis)
+                if promoted_legacy:
+                    await release_promoted_legacy_storage_reservation(reservation_id, redis)
+                else:
+                    await release_storage_reservation(reservation_id, redis)
             except Exception as exc:
                 logger.error("Failed to release storage reservation %s: %s", reservation_id, exc)
                 errors.append(exc)

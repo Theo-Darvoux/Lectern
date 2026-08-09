@@ -192,6 +192,9 @@ class TestOptimisticLocking:
             processing_status="complete",
             cas_ref_count=1,
             filename="test.txt",
+            mime_type="text/plain",
+            size_bytes=100,
+            content_sha256="a" * 64,
         )
         db_session.add(u_row)
         await db_session.commit()
@@ -242,6 +245,9 @@ class TestOptimisticLocking:
             processing_status="complete",
             cas_ref_count=1,
             filename="test.txt",
+            mime_type="text/plain",
+            size_bytes=100,
+            content_sha256="b" * 64,
         )
         db_session.add(u_row)
         await db_session.commit()
@@ -313,6 +319,7 @@ class TestOptimisticLocking:
             filename="ok.txt",
             mime_type="text/plain",
             size_bytes=100,
+            content_sha256="c" * 64,
         )
 
         db_session.add(u_row)
@@ -360,6 +367,7 @@ class TestFileClaiming:
         user1 = await _create_user(db_session, UserRole.STUDENT)
         user2 = await _create_user(db_session, UserRole.STUDENT)
         file_key = f"cas/{uuid.uuid4().hex}"
+        content_sha256 = "d" * 64
 
         # We need a 'clean' upload row for both
         for u in [user1, user2]:
@@ -370,6 +378,9 @@ class TestFileClaiming:
                 status="clean",
                 cas_ref_count=1,
                 filename="test.pdf",
+                mime_type="application/pdf",
+                size_bytes=100,
+                content_sha256=content_sha256,
             )
             db_session.add(u_row)
         await db_session.commit()

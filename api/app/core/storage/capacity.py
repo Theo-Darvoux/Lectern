@@ -2,6 +2,7 @@
 
 import logging
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,20 +23,30 @@ logger = logging.getLogger(__name__)
 _LUA_DIR = Path(__file__).parents[1] / "database" / "lua"
 _STORAGE_RESERVE_SCRIPT = (_LUA_DIR / "storage_reserve.lua").read_text(encoding="utf-8")
 _STORAGE_RELEASE_SCRIPT = (_LUA_DIR / "storage_release.lua").read_text(encoding="utf-8")
+_STORAGE_RELEASE_PROMOTED_LEGACY_SCRIPT = (
+    _LUA_DIR / "storage_release_promoted_legacy.lua"
+).read_text(encoding="utf-8")
 _STORAGE_RESERVATION_EXPIRIES = "storage:upload_reservations:expiries"
 _STORAGE_RESERVATION_SIZES = "storage:upload_reservations:sizes"
 _STORAGE_RESERVATION_TOTAL = "storage:upload_reservations:total"
 _STORAGE_RESERVATION_TTL = 3 * 3600
+_STORAGE_SNAPSHOT_MAX_RETRIES = 8
 
 LEGACY_STORAGE_USAGE_KEY = "storage:legacy_usage_bytes"
+LEGACY_STORAGE_GENERATION_KEY = "storage:legacy_usage_generation"
 
 
 async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ignore[type-arg]
     """Return physical CAS usage, rebuilding the cache from the database if needed."""
+    revert_cutoff = datetime.now(UTC) - timedelta(days=settings.pr_revert_grace_days)
     material_refs = select(
         MaterialVersion.cas_sha256.label("sha256"),
         MaterialVersion.file_size.label("size"),
-    ).where(MaterialVersion.cas_sha256.is_not(None))
+    ).where(
+        MaterialVersion.cas_sha256.is_not(None),
+        MaterialVersion.file_key.like("cas/%"),
+        (MaterialVersion.deleted_at.is_(None)) | (MaterialVersion.deleted_at >= revert_cutoff),
+    )
     upload_refs = select(
         Upload.content_sha256.label("sha256"),
         Upload.size_bytes.label("size"),
@@ -50,7 +61,8 @@ async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ign
     )
 
     async def from_database() -> int:
-        return int(await db.scalar(select(func.sum(unique_sizes.c.size))) or 0)
+        stmt = select(func.sum(unique_sizes.c.size)).execution_options(include_deleted=True)
+        return int(await db.scalar(stmt) or 0)
 
     try:
         usage_raw = await redis.get(_STORAGE_USAGE_KEY)
@@ -73,11 +85,9 @@ async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ign
     return usage
 
 
-async def refresh_legacy_storage_usage(
-    db: AsyncSession,
-    redis: Redis,  # type: ignore[type-arg]
-) -> int:
-    """Recompute physical legacy non-CAS usage and overwrite its Redis cache."""
+async def _legacy_storage_usage_from_database(db: AsyncSession) -> int:
+    """Return retained legacy usage, including soft-deleted rows in revert grace."""
+    revert_cutoff = datetime.now(UTC) - timedelta(days=settings.pr_revert_grace_days)
     legacy_objects = (
         select(
             MaterialVersion.file_key,
@@ -87,16 +97,41 @@ async def refresh_legacy_storage_usage(
             MaterialVersion.file_key.is_not(None),
             MaterialVersion.file_key.not_like("cas/%"),
             MaterialVersion.file_size.is_not(None),
+            (MaterialVersion.deleted_at.is_(None)) | (MaterialVersion.deleted_at >= revert_cutoff),
         )
         .group_by(MaterialVersion.file_key)
         .subquery()
     )
-    usage = int(await db.scalar(select(func.sum(legacy_objects.c.size))) or 0)
+    stmt = select(func.sum(legacy_objects.c.size)).execution_options(include_deleted=True)
+    return int(await db.scalar(stmt) or 0)
+
+
+async def refresh_legacy_storage_usage(
+    db: AsyncSession,
+    redis: Redis,  # type: ignore[type-arg]
+) -> int:
+    """Recompute retained legacy usage and overwrite its Redis cache."""
+    usage = await _legacy_storage_usage_from_database(db)
     try:
         await redis.set(LEGACY_STORAGE_USAGE_KEY, usage)
     except Exception as exc:
-        logger.warning("Could not refresh the legacy storage usage cache: %s", exc)
+        logger.error("Could not refresh the legacy storage usage cache: %s", exc)
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable. Please try again later."
+        ) from exc
     return usage
+
+
+async def _legacy_storage_generation(redis: Any) -> int:
+    try:
+        raw = await redis.get(LEGACY_STORAGE_GENERATION_KEY)
+        return int(raw or 0)
+    except (TypeError, ValueError) as exc:
+        raise BadRequestError("Storage capacity accounting state is invalid") from exc
+    except Exception as exc:
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable. Please try again later."
+        ) from exc
 
 
 async def check_storage_limit(
@@ -115,7 +150,7 @@ async def check_storage_limit(
 
     max_bytes = max_gb * 1024 * 1024 * 1024
     redis = redis_core.redis_client
-    usage = await get_storage_usage(db, redis) + await refresh_legacy_storage_usage(db, redis)
+    usage = await get_storage_usage(db, redis) + await _legacy_storage_usage_from_database(db)
     if usage + size_bytes > max_bytes:
         logger.warning(
             "Storage limit reached: %d bytes usage + %d bytes upload > %d bytes limit",
@@ -144,35 +179,56 @@ async def reserve_storage_limit(
         return
 
     await get_storage_usage(db, redis)
-    await refresh_legacy_storage_usage(db, redis)
-
     max_bytes = int(settings.max_storage_gb * 1024 * 1024 * 1024)
-    now = int(time.time())
-    try:
-        reserve = redis.register_script(_STORAGE_RESERVE_SCRIPT)
-        accepted = await reserve(
-            keys=[
-                _STORAGE_RESERVATION_EXPIRIES,
-                _STORAGE_RESERVATION_SIZES,
-                _STORAGE_RESERVATION_TOTAL,
-                _STORAGE_USAGE_KEY,
-                LEGACY_STORAGE_USAGE_KEY,
-            ],
-            args=[reservation_id, size_bytes, now + ttl_seconds, now, max_bytes],
-            client=redis,
-        )
-    except Exception as exc:
-        logger.error("Cannot enforce the global storage reservation: %s", exc)
-        raise BadRequestError(
-            "Storage capacity is temporarily unavailable. Please try again later."
-        ) from exc
 
-    if int(accepted) != 1:
-        raise BadRequestError(
-            f"Global storage limit reached ({settings.max_storage_gb} GB). "
-            "Please contact an administrator.",
-            code=UploadErrorCode.STORAGE_FULL,
-        )
+    for _attempt in range(_STORAGE_SNAPSHOT_MAX_RETRIES):
+        generation = await _legacy_storage_generation(redis)
+        legacy_usage = await _legacy_storage_usage_from_database(db)
+        now = int(time.time())
+        try:
+            reserve = redis.register_script(_STORAGE_RESERVE_SCRIPT)
+            accepted = await reserve(
+                keys=[
+                    _STORAGE_RESERVATION_EXPIRIES,
+                    _STORAGE_RESERVATION_SIZES,
+                    _STORAGE_RESERVATION_TOTAL,
+                    _STORAGE_USAGE_KEY,
+                    LEGACY_STORAGE_USAGE_KEY,
+                    LEGACY_STORAGE_GENERATION_KEY,
+                ],
+                args=[
+                    reservation_id,
+                    size_bytes,
+                    now + ttl_seconds,
+                    now,
+                    max_bytes,
+                    generation,
+                    legacy_usage,
+                ],
+                client=redis,
+            )
+        except Exception as exc:
+            logger.error("Cannot enforce the global storage reservation: %s", exc)
+            raise BadRequestError(
+                "Storage capacity is temporarily unavailable. Please try again later."
+            ) from exc
+
+        result = int(accepted)
+        if result == -2:
+            continue
+        if result == 1:
+            return
+        if result == 0:
+            raise BadRequestError(
+                f"Global storage limit reached ({settings.max_storage_gb} GB). "
+                "Please contact an administrator.",
+                code=UploadErrorCode.STORAGE_FULL,
+            )
+        raise BadRequestError("Storage capacity accounting state is invalid")
+
+    raise BadRequestError(
+        "Storage capacity changed repeatedly while reserving space. Please retry."
+    )
 
 
 async def release_storage_reservation(reservation_id: str, redis: Any) -> None:
@@ -189,3 +245,23 @@ async def release_storage_reservation(reservation_id: str, redis: Any) -> None:
         args=[reservation_id],
         client=redis,
     )
+
+
+async def release_promoted_legacy_storage_reservation(reservation_id: str, redis: Any) -> None:
+    """Release a promoted legacy reservation and fence stale DB snapshots atomically."""
+    if not settings.max_storage_gb:
+        return
+    release = redis.register_script(_STORAGE_RELEASE_PROMOTED_LEGACY_SCRIPT)
+    result = await release(
+        keys=[
+            _STORAGE_RESERVATION_EXPIRIES,
+            _STORAGE_RESERVATION_SIZES,
+            _STORAGE_RESERVATION_TOTAL,
+            LEGACY_STORAGE_GENERATION_KEY,
+            LEGACY_STORAGE_USAGE_KEY,
+        ],
+        args=[reservation_id],
+        client=redis,
+    )
+    if int(result) < 0:
+        raise RuntimeError("invalid promoted-legacy reservation state")

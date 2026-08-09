@@ -150,6 +150,8 @@ async def test_quota_released_on_pr_rejection(
         final_key="cas/somehash",
         filename="test.pdf",
         mime_type="application/pdf",
+        size_bytes=100,
+        content_sha256="e" * 64,
         status="clean",
         cas_ref_count=1,
     )

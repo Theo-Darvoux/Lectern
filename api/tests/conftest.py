@@ -223,18 +223,47 @@ class FakeRedis:
                 reservation_id = str(args[0])
                 requested_size = int(args[1])
                 capacity = int(args[4])
+                expected_generation = int(args[5]) if len(args) > 5 else 0
+                legacy_snapshot = int(args[6]) if len(args) > 6 else 0
+                generation_raw = self.data.get(keys[5], 0) if len(keys) > 5 else 0
+                generation = int(
+                    generation_raw.decode() if isinstance(generation_raw, bytes) else generation_raw
+                )
+                if generation != expected_generation:
+                    return -2
+                self.data[keys[4]] = str(legacy_snapshot).encode()
                 usage_raw = self.data.get(keys[3], 0)
                 usage = int(usage_raw.decode() if isinstance(usage_raw, bytes) else usage_raw)
                 sizes = self.data.setdefault(keys[1], {})
                 previous = int(sizes.get(reservation_id, 0))
                 total_raw = self.data.get(keys[2], 0)
                 total = int(total_raw.decode() if isinstance(total_raw, bytes) else total_raw)
-                if usage + total - previous + requested_size > capacity:
+                if usage + legacy_snapshot + total - previous + requested_size > capacity:
                     self.data[keys[2]] = total
                     return 0
                 sizes[reservation_id] = requested_size
                 self.data[keys[2]] = total - previous + requested_size
                 return 1
+
+            if "generation_key" in script and "INCR" in script:
+                reservation_id = str(args[0])
+                generation_raw = self.data.get(keys[3], 0)
+                generation = (
+                    int(
+                        generation_raw.decode()
+                        if isinstance(generation_raw, bytes)
+                        else generation_raw
+                    )
+                    + 1
+                )
+                self.data[keys[3]] = str(generation).encode()
+                self.data.pop(keys[4], None)
+                sizes = self.data.setdefault(keys[1], {})
+                released = int(sizes.pop(reservation_id, 0))
+                total_raw = self.data.get(keys[2], 0)
+                total = int(total_raw.decode() if isinstance(total_raw, bytes) else total_raw)
+                self.data[keys[2]] = max(0, total - released)
+                return released
 
             reservation_id = str(args[0])
             sizes = self.data.setdefault(keys[1], {})

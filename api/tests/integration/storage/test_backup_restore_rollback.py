@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -20,16 +21,33 @@ async def test_failed_restore_recovers_overwritten_seaweedfs_object(tmp_path: Pa
     await facade.upload_file(b"original", existing_key)
 
     backup = tmp_path / "restore.zip"
+    replacement = b"replacement"
+    failing_payload = b"must fail"
     with zipfile.ZipFile(backup, "w") as archive:
         archive.writestr(
             "manifest.json",
-            json.dumps({"version": BACKUP_VERSION, "s3_object_count": 2}),
+            json.dumps(
+                {
+                    "version": BACKUP_VERSION,
+                    "s3_object_count": 2,
+                    "s3_objects": {
+                        existing_key: {
+                            "size": len(replacement),
+                            "sha256": hashlib.sha256(replacement).hexdigest(),
+                        },
+                        failing_key: {
+                            "size": len(failing_payload),
+                            "sha256": hashlib.sha256(failing_payload).hexdigest(),
+                        },
+                    },
+                }
+            ),
         )
         archive.writestr("s3_metadata.json", "{}")
         for table in _TABLE_INSERT_ORDER:
             archive.writestr(f"db/{table}.json", "[]")
-        archive.writestr(f"s3/{existing_key}", b"replacement")
-        archive.writestr(f"s3/{failing_key}", b"must fail")
+        archive.writestr(f"s3/{existing_key}", replacement)
+        archive.writestr(f"s3/{failing_key}", failing_payload)
 
     real_upload = facade.upload_file
 

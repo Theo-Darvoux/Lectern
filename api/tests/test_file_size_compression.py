@@ -114,7 +114,7 @@ async def test_exec_create_material_fetches_db_size():
     # The same result shape supports the tag query and the Upload metadata query.
     result = MagicMock()
     result.scalars.return_value.all.return_value = []
-    result.one_or_none.return_value = (sanitized_size, None)
+    result.one_or_none.return_value = (sanitized_size, "a" * 64, "application/pdf")
     mock_db.execute = AsyncMock(return_value=result)
 
     with (

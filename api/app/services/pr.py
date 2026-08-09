@@ -325,19 +325,6 @@ async def _release_pr_upload_quota(
             ("release_upload_quota", str(pr.author_id), sorted(set(keys_to_remove)))
         )
 
-    if approved and reservation_ids:
-        db.info.setdefault(PostCommitKey.JOBS, []).append(
-            (
-                "release_storage_reservations",
-                [
-                    {
-                        "reservation_ids": reservation_ids,
-                        "refresh_legacy_usage": approved,
-                        "operation_id": f"pr:{pr.id}:reservations:release",
-                    }
-                ],
-            )
-        )
     return sorted(set(reservation_ids))
 
 
@@ -440,12 +427,19 @@ async def _cleanup_pr_resources(
                 )
             )
 
-    if delete_staging:
-        uploads_to_delete = get_pr_staging_files(pr)
-        if uploads_to_delete:
-            db.info.setdefault(PostCommitKey.JOBS, []).append(
-                ("delete_storage_objects", uploads_to_delete, reservation_ids)
-            )
+    uploads_to_delete = get_pr_staging_files(pr)
+    if uploads_to_delete:
+        job: tuple[typing.Any, ...] = (
+            "delete_storage_objects",
+            uploads_to_delete,
+            reservation_ids,
+        )
+        if not delete_staging:
+            # Approval already copied uploads/ bytes to durable materials/.
+            # Release capacity only after the source object is actually gone,
+            # and fence stale legacy-usage snapshots in that same worker step.
+            job = (*job, True)
+        db.info.setdefault(PostCommitKey.JOBS, []).append(job)
 
 
 def _slug_pattern(base: str) -> re.Pattern[str]:
@@ -739,18 +733,19 @@ async def _make_version_for_file(
         if upload_row is not None:
             upload_size = upload_row[0]
             content_sha = upload_row[1] if len(upload_row) > 1 else None
-            stored_mime = (
-                upload_row[2]
-                if len(upload_row) > 2 and upload_row[2]
-                else payload.get("file_mime_type") or "application/octet-stream"
-            )
+            stored_mime = upload_row[2] if len(upload_row) > 2 else None
 
-            if upload_size is None:
+            if (
+                upload_size is None
+                or not stored_mime
+                or stored_mime == "application/octet-stream"
+                or not content_sha
+            ):
                 raise ConflictError("Verified upload metadata is incomplete")
 
             real_size = int(upload_size)
             mime_type = stored_mime
-            stored_content_sha256 = content_sha or payload.get("content_sha256")
+            stored_content_sha256 = content_sha
         else:
             claim = await db.scalar(
                 select(CasStagingClaim)
@@ -807,7 +802,6 @@ async def _make_version_for_file(
                     rollback_copy(), description="legacy material copy compensation"
                 )
             raise
-        db.info.setdefault(PostCommitKey.JOBS, []).append(("delete_storage_objects", [file_key]))
         thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key, author_id)
         file_key = new_key
 
@@ -819,8 +813,7 @@ async def _make_version_for_file(
         file_name=payload.get("file_name"),
         file_size=real_size,
         file_mime_type=mime_type,
-        cas_sha256=(stored_content_sha256 if file_key.startswith("cas/") else None)
-        or payload.get("content_sha256"),
+        cas_sha256=stored_content_sha256 if file_key.startswith("cas/") else None,
         author_id=author_id,
         pr_id=pr_id,
         virus_scan_result=VirusScanResult.CLEAN,
@@ -1527,13 +1520,20 @@ async def create_pull_request_service(
             authorized_key = (
                 upload.final_key if upload.final_key in keys_to_check else upload.quarantine_key
             )
-            reference_sha = upload.content_sha256 or upload.sha256
             if authorized_key:
-                if authorized_key.startswith("cas/") and int(upload.cas_ref_count or 0) <= 0:
-                    continue
-                # Empty hash supports pre-migration clean Upload rows while
-                # preserving ownership and scan-state authorization.
-                authorized_hashes[authorized_key] = reference_sha or ""
+                if authorized_key.startswith("cas/"):
+                    if (
+                        int(upload.cas_ref_count or 0) <= 0
+                        or upload.size_bytes is None
+                        or not upload.mime_type
+                        or upload.mime_type == "application/octet-stream"
+                        or not upload.content_sha256
+                    ):
+                        continue
+                    authorized_hashes[authorized_key] = upload.content_sha256
+                else:
+                    # Legacy uploads are revalidated against S3 during promotion.
+                    authorized_hashes[authorized_key] = upload.content_sha256 or upload.sha256 or ""
 
         now = datetime.now(UTC)
         claims = list(
@@ -1560,10 +1560,11 @@ async def create_pull_request_service(
                 raise BadRequestError(
                     "One or more files do not have a valid security claim for your account."
                 )
+            declared_sha = declared_hashes.get(key)
             if (
-                expected_sha
+                declared_sha is not None
                 and key.startswith(cas_prefix)
-                and declared_hashes.get(key) != expected_sha
+                and declared_sha != expected_sha
             ):
                 raise BadRequestError("A CAS file hash does not match its verified upload claim")
 
