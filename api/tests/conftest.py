@@ -155,7 +155,7 @@ class FakeRedis:
 
     def register_script(self, script):
         async def run(*, keys, args, client=None):
-            if "storage_begin_cas_mutation_v2" in script:
+            if "storage_begin_cas_mutation_v3" in script:
                 import time
 
                 intents = self.data.setdefault(keys[2], {})
@@ -165,38 +165,66 @@ class FakeRedis:
                 epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
                 next_epoch = epoch + 1
                 started_at_ms = int(time.time() * 1000)
-                recover_after_ms = started_at_ms + int(args[3])
                 self.data[keys[1]] = str(next_epoch).encode()
                 intents[str(args[0])] = {
+                    "journal_version": 3,
+                    "phase": "preflight",
                     "operation": str(args[1]),
                     "file_key": str(args[2]),
                     "started_at_ms": started_at_ms,
-                    "recover_after_ms": recover_after_ms,
                     "epoch": next_epoch,
                 }
                 self.data[keys[0]] = b"1"
                 return next_epoch
 
-            if "storage_abort_cas_mutation_v1" in script:
+            if "storage_dispatch_cas_mutation_v1" in script:
+                import time
+
+                raw_epoch = self.data.get(keys[0], 0)
+                epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
+                if epoch != int(args[1]):
+                    return 0
+                intents = self.data.setdefault(keys[1], {})
+                intent = intents.get(str(args[0]))
+                if not isinstance(intent, dict):
+                    return -1
+                if intent.get("phase") != "preflight":
+                    return -3
+                dispatched_at_ms = int(time.time() * 1000)
+                recover_after_ms = dispatched_at_ms + int(args[2])
+                intent["phase"] = "dispatched"
+                intent["dispatched_at_ms"] = dispatched_at_ms
+                intent["recover_after_ms"] = recover_after_ms
+                return recover_after_ms
+
+            if "storage_abort_cas_mutation_v2" in script:
                 intents = self.data.setdefault(keys[2], {})
                 raw_epoch = self.data.get(keys[1], 0)
                 epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
                 if epoch != int(args[1]):
                     return 0
-                if str(args[0]) not in intents:
+                intent = intents.get(str(args[0]))
+                if not isinstance(intent, dict):
                     return -1
+                if intent.get("phase") != str(args[2]):
+                    return -3
                 intents.pop(str(args[0]), None)
                 self.data[keys[1]] = str(epoch + 1).encode()
                 if not intents:
                     self.data.pop(keys[0], None)
                 return 1
 
-            if "storage_commit_cas_delta_v2" in script:
+            if "storage_commit_cas_delta_v3" in script:
                 intents = self.data.setdefault(keys[4], {})
                 raw_epoch = self.data.get(keys[3], 0)
                 epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
                 mutation_id = str(args[1])
-                if epoch != int(args[2]) or mutation_id not in intents:
+                intent = intents.get(mutation_id)
+                if (
+                    epoch != int(args[2])
+                    or not isinstance(intent, dict)
+                    or intent.get("phase") != "dispatched"
+                ):
                     return -4
                 if keys[0] not in self.data or keys[1] not in self.data:
                     return -3
@@ -213,12 +241,17 @@ class FakeRedis:
                     self.data.pop(keys[2], None)
                 return updated
 
-            if "storage_resolve_cas_mutation_v1" in script:
+            if "storage_resolve_cas_mutation_v2" in script:
                 intents = self.data.setdefault(keys[4], {})
                 raw_epoch = self.data.get(keys[3], 0)
                 epoch = int(raw_epoch.decode() if isinstance(raw_epoch, bytes) else raw_epoch)
                 mutation_id = str(args[0])
-                if epoch != int(args[1]) or mutation_id not in intents:
+                intent = intents.get(mutation_id)
+                if (
+                    epoch != int(args[1])
+                    or not isinstance(intent, dict)
+                    or intent.get("phase") != "dispatched"
+                ):
                     return 0
                 generation = int(self.data.get(keys[1], 0))
                 physical_usage = int(args[2])

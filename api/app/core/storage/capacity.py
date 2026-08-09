@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,9 @@ _STORAGE_BEGIN_CAS_MUTATION_SCRIPT = (_LUA_DIR / "storage_begin_cas_mutation.lua
     encoding="utf-8"
 )
 _STORAGE_ABORT_CAS_MUTATION_SCRIPT = (_LUA_DIR / "storage_abort_cas_mutation.lua").read_text(
+    encoding="utf-8"
+)
+_STORAGE_DISPATCH_CAS_MUTATION_SCRIPT = (_LUA_DIR / "storage_dispatch_cas_mutation.lua").read_text(
     encoding="utf-8"
 )
 _STORAGE_RESOLVE_CAS_MUTATION_SCRIPT = (_LUA_DIR / "storage_resolve_cas_mutation.lua").read_text(
@@ -134,11 +138,21 @@ async def _wait_for_cas_mutation_durability(redis: Any) -> None:
         )
 
 
-async def abort_cas_storage_mutation(
-    redis: Any,
-    mutation_id: str,
-    mutation_epoch: int,
-) -> None:
+@dataclass(frozen=True)
+class _CasMutationIntent:
+    operation: str
+    file_key: str
+    started_at_ms: int
+    epoch: int
+    journal_version: int
+    phase: str
+    dispatched_at_ms: int | None
+    recover_after_ms: int | None
+
+
+async def _try_abort_cas_storage_mutation(
+    redis: Any, mutation_id: str, mutation_epoch: int, expected_phase: str
+) -> bool:
     abort = redis.register_script(_STORAGE_ABORT_CAS_MUTATION_SCRIPT)
     result = int(
         await abort(
@@ -147,12 +161,64 @@ async def abort_cas_storage_mutation(
                 _STORAGE_MUTATION_EPOCH_KEY,
                 _STORAGE_MUTATION_INTENTS_KEY,
             ],
-            args=[mutation_id, mutation_epoch],
+            args=[mutation_id, mutation_epoch, expected_phase],
             client=redis,
         )
     )
-    if result != 1:
+    if result == 1:
+        return True
+    if result in {0, -1, -3}:
+        return False
+    raise BadRequestError("Storage capacity accounting state is invalid")
+
+
+async def abort_cas_storage_mutation(
+    redis: Any, mutation_id: str, mutation_epoch: int, *, expected_phase: str
+) -> None:
+    if not await _try_abort_cas_storage_mutation(
+        redis, mutation_id, mutation_epoch, expected_phase
+    ):
         raise BadRequestError("Storage capacity mutation journal changed unexpectedly")
+
+
+async def dispatch_cas_storage_mutation(redis: Any, mutation_id: str, mutation_epoch: int) -> int:
+    """Durably fence the exact preflight intent immediately before physical I/O."""
+    recovery_delay_ms = (
+        int(
+            (
+                settings.cas_mutation_io_timeout_seconds
+                + settings.cas_mutation_recovery_grace_seconds
+            )
+            * 1000
+        )
+        + _CAS_MUTATION_DURABILITY_TIMEOUT_MS
+    )
+    async with redis.client() as journal_redis:
+        dispatch = journal_redis.register_script(_STORAGE_DISPATCH_CAS_MUTATION_SCRIPT)
+        result = int(
+            await dispatch(
+                keys=[_STORAGE_MUTATION_EPOCH_KEY, _STORAGE_MUTATION_INTENTS_KEY],
+                args=[mutation_id, mutation_epoch, recovery_delay_ms],
+                client=journal_redis,
+            )
+        )
+        if result <= 0:
+            if result in {0, -1, -3}:
+                raise BadRequestError("Storage capacity mutation journal changed unexpectedly")
+            raise BadRequestError("Storage capacity accounting state is invalid")
+        try:
+            await _wait_for_cas_mutation_durability(journal_redis)
+        except BaseException:
+            try:
+                await _try_abort_cas_storage_mutation(
+                    journal_redis, mutation_id, mutation_epoch, "dispatched"
+                )
+            except Exception:
+                logger.exception(
+                    "Could not roll back a CAS dispatch transition that failed durability"
+                )
+            raise
+        return result
 
 
 async def _redis_time_ms(redis: Any) -> int:
@@ -172,7 +238,7 @@ async def _redis_time_ms(redis: Any) -> int:
     return seconds * 1000 + microseconds // 1000
 
 
-def _decode_cas_mutation_intent(raw: Any) -> tuple[str, str, int, int, int]:
+def _decode_cas_mutation_intent(raw: Any) -> _CasMutationIntent:
     try:
         if isinstance(raw, bytes):
             raw = raw.decode()
@@ -181,63 +247,79 @@ def _decode_cas_mutation_intent(raw: Any) -> tuple[str, str, int, int, int]:
         file_key = str(payload["file_key"])
         started_at_ms = int(payload["started_at_ms"])
         epoch = int(payload["epoch"])
-        raw_recover_after = payload.get("recover_after_ms")
-        if raw_recover_after is None:
-            # Upgrade compatibility for a v1 intent already present during rollout.
-            raw_recover_after = (
-                started_at_ms
-                + (
-                    settings.cas_mutation_io_timeout_seconds
-                    + settings.cas_mutation_recovery_grace_seconds
-                )
-                * 1000
-            )
-        recover_after_ms = int(raw_recover_after)
+        if payload.get("journal_version") is None:
+            journal_version = 2
+            phase = "legacy"
+            dispatched_at_ms = None
+            raw_recover_after = payload.get("recover_after_ms")
+            recover_after_ms = int(raw_recover_after) if raw_recover_after is not None else None
+        else:
+            journal_version = int(payload["journal_version"])
+            phase = str(payload["phase"])
+            raw_dispatched = payload.get("dispatched_at_ms")
+            raw_recover_after = payload.get("recover_after_ms")
+            dispatched_at_ms = int(raw_dispatched) if raw_dispatched is not None else None
+            recover_after_ms = int(raw_recover_after) if raw_recover_after is not None else None
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise BadRequestError("Storage capacity mutation journal is invalid") from exc
-
-    if operation not in {"write", "delete", "move"}:
+    if operation not in {"write", "delete", "move"} or not file_key.startswith("cas/"):
         raise BadRequestError("Storage capacity mutation journal is invalid")
-    if not file_key.startswith("cas/"):
+    if started_at_ms <= 0 or epoch <= 0:
         raise BadRequestError("Storage capacity mutation journal is invalid")
-    if started_at_ms <= 0 or epoch <= 0 or recover_after_ms <= started_at_ms:
+    if journal_version == 3:
+        if phase == "preflight":
+            if dispatched_at_ms is not None or recover_after_ms is not None:
+                raise BadRequestError("Storage capacity mutation journal is invalid")
+        elif phase == "dispatched":
+            if (
+                dispatched_at_ms is None
+                or recover_after_ms is None
+                or dispatched_at_ms < started_at_ms
+                or recover_after_ms <= dispatched_at_ms
+            ):
+                raise BadRequestError("Storage capacity mutation journal is invalid")
+        else:
+            raise BadRequestError("Storage capacity mutation journal is invalid")
+    elif journal_version == 2 and phase == "legacy":
+        if recover_after_ms is not None and recover_after_ms <= started_at_ms:
+            raise BadRequestError("Storage capacity mutation journal is invalid")
+    else:
         raise BadRequestError("Storage capacity mutation journal is invalid")
-    return operation, file_key, started_at_ms, recover_after_ms, epoch
+    return _CasMutationIntent(
+        operation,
+        file_key,
+        started_at_ms,
+        epoch,
+        journal_version,
+        phase,
+        dispatched_at_ms,
+        recover_after_ms,
+    )
 
 
-async def _read_pending_cas_mutation(
-    redis: Any,
-) -> tuple[str, str, str, int, int, int] | None:
+async def _read_pending_cas_mutation(redis: Any) -> tuple[str, _CasMutationIntent] | None:
     try:
         intents = await redis.hgetall(_STORAGE_MUTATION_INTENTS_KEY)
     except Exception as exc:
         raise BadRequestError(
             "Storage capacity is temporarily unavailable. Please try again later."
         ) from exc
-    if not isinstance(intents, dict):
+    if not isinstance(intents, dict) or len(intents) > 1:
         raise BadRequestError("Storage capacity mutation journal is invalid")
     if not intents:
         return None
-    if len(intents) != 1:
-        raise BadRequestError("Storage capacity mutation journal is invalid")
-
     mutation_id_raw, raw_intent = next(iter(intents.items()))
     mutation_id = (
         mutation_id_raw.decode() if isinstance(mutation_id_raw, bytes) else str(mutation_id_raw)
     )
-    operation, file_key, started_at_ms, recover_after_ms, epoch = _decode_cas_mutation_intent(
-        raw_intent
-    )
-    if await _cas_mutation_epoch(redis) != epoch:
+    intent = _decode_cas_mutation_intent(raw_intent)
+    if await _cas_mutation_epoch(redis) != intent.epoch:
         raise BadRequestError("Storage capacity mutation journal is invalid")
-    return mutation_id, operation, file_key, started_at_ms, recover_after_ms, epoch
+    return mutation_id, intent
 
 
 async def _resolve_cas_storage_mutation(
-    redis: Any,
-    mutation_id: str,
-    mutation_epoch: int,
-    physical_usage: int,
+    redis: Any, mutation_id: str, mutation_epoch: int, physical_usage: int
 ) -> int:
     resolve = redis.register_script(_STORAGE_RESOLVE_CAS_MUTATION_SCRIPT)
     result = int(
@@ -261,50 +343,54 @@ async def _resolve_cas_storage_mutation(
 
 
 async def resolve_cas_storage_mutation_by_scan(
-    redis: Any,
-    mutation_id: str,
-    mutation_epoch: int,
+    redis: Any, mutation_id: str, mutation_epoch: int
 ) -> int:
     physical_usage = await _physical_cas_storage_usage()
     return await _resolve_cas_storage_mutation(redis, mutation_id, mutation_epoch, physical_usage)
 
 
 async def _recover_stale_cas_mutation_locked(redis: Any) -> bool:
-    """Recover one abandoned physical mutation after its remote ambiguity window.
-
-    The caller owns the global physical-CAS lock. New journal entries record a
-    Redis-server-time recovery deadline equal to the live I/O hard timeout plus
-    an extra grace period. We never reap a fresh intent. Once stale, two exact
-    scans separated by a stability probe must agree before the exact intent/epoch
-    may be resolved. This keeps recovery fail-closed while giving dead owners an
-    autonomous convergence path.
-    """
+    """Recover only when an old actor can no longer create an unaccounted mutation."""
     pending = await _read_pending_cas_mutation(redis)
     if pending is None:
         return False
-    mutation_id, _operation, _file_key, _started_at_ms, recover_after_ms, epoch = pending
-    if await _redis_time_ms(redis) < recover_after_ms:
+    mutation_id, intent = pending
+    if intent.phase == "legacy":
+        raise BadRequestError(
+            "Storage capacity contains a legacy unresolved CAS mutation journal; "
+            "operator reconciliation is required before capacity can be certified."
+        )
+    if intent.phase == "preflight":
+        if await _try_abort_cas_storage_mutation(redis, mutation_id, intent.epoch, "preflight"):
+            logger.warning(
+                "Recovered abandoned CAS preflight intent %s without physical scan", mutation_id
+            )
+            return True
+        pending = await _read_pending_cas_mutation(redis)
+        if pending is None:
+            return True
+        next_id, next_intent = pending
+        if next_id != mutation_id or next_intent.epoch != intent.epoch:
+            raise BadRequestError("Storage capacity mutation journal changed unexpectedly")
+        intent = next_intent
+    if intent.phase != "dispatched" or intent.recover_after_ms is None:
+        raise BadRequestError("Storage capacity mutation journal is invalid")
+    if await _redis_time_ms(redis) < intent.recover_after_ms:
         return False
-
     first_usage = await _physical_cas_storage_usage()
     if _CAS_MUTATION_RECOVERY_STABILITY_SECONDS > 0:
         await asyncio.sleep(_CAS_MUTATION_RECOVERY_STABILITY_SECONDS)
-
     pending_after_probe = await _read_pending_cas_mutation(redis)
     if pending_after_probe is None:
-        # The original owner completed while the stability probe was running.
         return True
-    if pending_after_probe[0] != mutation_id or pending_after_probe[5] != epoch:
+    if pending_after_probe[0] != mutation_id or pending_after_probe[1] != intent:
         raise BadRequestError("Storage capacity mutation journal changed unexpectedly")
-
     second_usage = await _physical_cas_storage_usage()
     if second_usage != first_usage:
         raise BadRequestError(
-            "Physical CAS storage is still changing while recovering an abandoned mutation. "
-            "Please retry."
+            "Physical CAS storage is still changing while recovering an abandoned mutation. Please retry."
         )
-
-    await _resolve_cas_storage_mutation(redis, mutation_id, epoch, second_usage)
+    await _resolve_cas_storage_mutation(redis, mutation_id, intent.epoch, second_usage)
     logger.warning(
         "Recovered abandoned CAS mutation %s at exact physical usage %d bytes",
         mutation_id,
@@ -409,9 +495,7 @@ async def _cached_cas_storage_usage_locked(redis: Any) -> int:
 
 @asynccontextmanager
 async def cas_storage_mutation(
-    redis: Any,
-    file_key: str,
-    operation: str,
+    redis: Any, file_key: str, operation: str
 ) -> AsyncIterator[tuple[str, int]]:
     async with redis_core.redis_lock(
         redis,
@@ -421,9 +505,6 @@ async def cas_storage_mutation(
     ):
         await _cached_cas_storage_usage_locked(redis)
         mutation_id = uuid.uuid4().hex
-        # WAITAOF only covers writes previously issued on the *same Redis
-        # connection*. Pin the begin script and WAITAOF to one redis-py
-        # single-connection client; two pooled commands would not suffice.
         async with redis.client() as journal_redis:
             begin = journal_redis.register_script(_STORAGE_BEGIN_CAS_MUTATION_SCRIPT)
             result = int(
@@ -433,16 +514,7 @@ async def cas_storage_mutation(
                         _STORAGE_MUTATION_EPOCH_KEY,
                         _STORAGE_MUTATION_INTENTS_KEY,
                     ],
-                    args=[
-                        mutation_id,
-                        operation,
-                        file_key,
-                        (
-                            settings.cas_mutation_io_timeout_seconds
-                            + settings.cas_mutation_recovery_grace_seconds
-                        )
-                        * 1000,
-                    ],
+                    args=[mutation_id, operation, file_key],
                     client=journal_redis,
                 )
             )
@@ -456,7 +528,9 @@ async def cas_storage_mutation(
                 await _wait_for_cas_mutation_durability(journal_redis)
             except BaseException:
                 try:
-                    await abort_cas_storage_mutation(redis, mutation_id, result)
+                    await _try_abort_cas_storage_mutation(
+                        journal_redis, mutation_id, result, "preflight"
+                    )
                 except Exception:
                     logger.exception("Could not roll back an unpersisted CAS mutation intent")
                 raise

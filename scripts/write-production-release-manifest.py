@@ -17,6 +17,7 @@ from release_manifest_lib import (
     validate_compose_service_map,
     validate_inspections,
     validate_release_values,
+    validate_tested_infrastructure_images,
 )
 
 
@@ -65,13 +66,7 @@ def main() -> int:
         )
 
         toolchain = parse_release_toolchain(args.toolchain_file)
-        if (
-            images.get("SEAWEEDFS_IMAGE")
-            and images["SEAWEEDFS_IMAGE"] != toolchain["SEAWEEDFS_TEST_IMAGE"]
-        ):
-            raise ValueError(
-                "release SeaweedFS image differs from the repository-pinned tested digest"
-            )
+        validate_tested_infrastructure_images(images, toolchain)
 
         compose_hashes = {
             str(path.relative_to(repo_root)): sha256_file(path)

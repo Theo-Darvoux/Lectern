@@ -258,7 +258,8 @@ async def test_lost_success_cas_write_stays_dirty_until_automatic_recovery(
     mutation_id, raw = next(iter(intents.items()))
     payload = json.loads(raw)
     payload["started_at_ms"] = 1
-    payload["recover_after_ms"] = 2
+    payload["dispatched_at_ms"] = 2
+    payload["recover_after_ms"] = 3
     await redis.hset(capacity._STORAGE_MUTATION_INTENTS_KEY, mutation_id, json.dumps(payload))
 
     assert await capacity.recover_stale_cas_storage_mutation(redis)
@@ -290,7 +291,8 @@ async def test_ambiguous_cas_writer_failure_does_not_permanently_block_future_mu
     mutation_id, raw = next(iter(intents.items()))
     payload = json.loads(raw)
     payload["started_at_ms"] = 1
-    payload["recover_after_ms"] = 2
+    payload["dispatched_at_ms"] = 2
+    payload["recover_after_ms"] = 3
     await redis.hset(capacity._STORAGE_MUTATION_INTENTS_KEY, mutation_id, json.dumps(payload))
 
     storage.fail_after_visible = False
@@ -423,7 +425,111 @@ async def test_cas_begin_intent_is_aof_durable_before_writer_dispatch(
     # connection as WAITAOF and the journal is present/dirty.
     assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 1
     assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
+    intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
+    _mutation_id, raw = next(iter(intents.items()))
+    payload = json.loads(raw)
+    assert payload["journal_version"] == 3
+    assert payload["phase"] == "dispatched"
+    assert int(payload["dispatched_at_ms"]) >= int(payload["started_at_ms"])
+    assert int(payload["recover_after_ms"]) > int(payload["dispatched_at_ms"])
 
     storage.make_visible.set()
     await writer
     assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 1
+
+
+class _SlowPreflightLateVisibilityStorage(_LateVisibilityStorage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.preflight_started = asyncio.Event()
+        self.allow_preflight = asyncio.Event()
+        self._preflight_calls = 0
+
+    async def object_exists(self, key: str) -> bool:
+        if self._preflight_calls == 0:
+            self._preflight_calls += 1
+            self.preflight_started.set()
+            await self.allow_preflight.wait()
+            return False
+        return await super().object_exists(key)
+
+
+async def test_abandoned_preflight_intent_is_recovered_without_physical_scan(
+    redis: Redis,  # type: ignore[type-arg]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutation_id = "preflight-owner-disappeared"
+    async with redis.client() as journal_redis:
+        begin = journal_redis.register_script(capacity._STORAGE_BEGIN_CAS_MUTATION_SCRIPT)
+        epoch = int(
+            await begin(
+                keys=[
+                    capacity._STORAGE_USAGE_DIRTY_KEY,
+                    capacity._STORAGE_MUTATION_EPOCH_KEY,
+                    capacity._STORAGE_MUTATION_INTENTS_KEY,
+                ],
+                args=[mutation_id, "write", "cas/preflight-abandoned"],
+                client=journal_redis,
+            )
+        )
+        assert epoch > 0
+        await capacity._wait_for_cas_mutation_durability(journal_redis)
+    scans = 0
+
+    async def physical_usage() -> int:
+        nonlocal scans
+        scans += 1
+        return 0
+
+    monkeypatch.setattr(capacity, "_physical_cas_storage_usage", physical_usage)
+    assert await capacity.recover_stale_cas_storage_mutation(redis)
+    assert scans == 0
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 0
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
+
+
+async def test_slow_preflight_cannot_make_live_dispatched_write_recoverable(
+    redis: Redis,  # type: ignore[type-arg]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = _SlowPreflightLateVisibilityStorage()
+    monkeypatch.setattr(facade, "get_storage", lambda: storage)
+    monkeypatch.setattr(redis_core, "redis_client", redis)
+    monkeypatch.setattr(settings, "cas_mutation_io_timeout_seconds", 1.0)
+    monkeypatch.setattr(settings, "cas_mutation_recovery_grace_seconds", 0.2)
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_EXPIRE", 0.15)
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_TIMEOUT", 1.0)
+    await redis.set(_STORAGE_USAGE_KEY, 0)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
+    await redis.set(capacity._STORAGE_MUTATION_EPOCH_KEY, 0)
+    writer = asyncio.create_task(facade.upload_file(b"x" * 17, "cas/slow-preflight-dispatch"))
+    await storage.preflight_started.wait()
+    intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
+    _mutation_id, raw = next(iter(intents.items()))
+    preflight = json.loads(raw)
+    assert preflight["journal_version"] == 3
+    assert preflight["phase"] == "preflight"
+    assert "recover_after_ms" not in preflight
+    await asyncio.sleep(1.3)  # beyond the vulnerable creation-based 1.2s window
+    storage.allow_preflight.set()
+    await storage.dispatched.wait()
+    intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
+    _mutation_id, raw = next(iter(intents.items()))
+    dispatched = json.loads(raw)
+    assert dispatched["phase"] == "dispatched"
+    assert int(dispatched["dispatched_at_ms"]) > int(preflight["started_at_ms"])
+    redis_time = await redis.time()
+    now_ms = int(redis_time[0]) * 1000 + int(redis_time[1]) // 1000
+    assert int(dispatched["recover_after_ms"]) > now_ms
+    await redis.delete(f"lock:{capacity._CAS_STORAGE_MUTATION_LOCK}")
+    await asyncio.sleep(0.1)
+    with pytest.raises(BadRequestError, match="physical CAS mutation resolves"):
+        await capacity.reconcile_cas_storage_usage(redis)
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 1
+    storage.make_visible.set()
+    with pytest.raises(redis_core.RedisConcurrencyError):
+        await writer
+    assert storage.objects["cas/slow-preflight-dispatch"] == 17
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 17
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 0
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None

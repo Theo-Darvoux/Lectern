@@ -138,7 +138,7 @@ def _release_values(commit: str) -> dict[str, str]:
         ),
         "POLICY_IMAGE_DIGEST": f"sha256:{digest}",
         "POSTGRES_IMAGE": f"docker.io/library/postgres@sha256:{digest}",
-        "REDIS_IMAGE": f"docker.io/library/redis@sha256:{digest}",
+        "REDIS_IMAGE": _parse_env(TOOLCHAIN)["REDIS_TEST_IMAGE"],
         "NGINX_IMAGE": f"docker.io/library/nginx@sha256:{digest}",
         "MEILI_IMAGE": f"docker.io/getmeili/meilisearch@sha256:{digest}",
         "EUROOFFICE_IMAGE": f"ghcr.io/euro-office/documentserver@sha256:{digest}",

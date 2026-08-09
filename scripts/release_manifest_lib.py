@@ -225,6 +225,18 @@ def parse_release_toolchain(path: Path) -> dict[str, str]:
     return {key: values[key] for key in RELEASE_TOOLCHAIN_KEYS}
 
 
+
+def validate_tested_infrastructure_images(images: dict[str, str], toolchain: dict[str, str]) -> None:
+    """Require deployment-critical infrastructure to equal required-CI inputs."""
+    for image_key, toolchain_key, label in (
+        ("REDIS_IMAGE", "REDIS_TEST_IMAGE", "Redis"),
+        ("SEAWEEDFS_IMAGE", "SEAWEEDFS_TEST_IMAGE", "SeaweedFS"),
+    ):
+        image = images.get(image_key)
+        if image is not None and image != toolchain[toolchain_key]:
+            raise ValueError(f"release {label} image differs from the repository-pinned tested digest")
+
+
 def parse_profiles(raw: str) -> list[str]:
     if raw == "":
         return []
@@ -515,13 +527,7 @@ def validate_canonical_release_manifest(
         )
     if payload.get("release_toolchain_sha256") != sha256_file(toolchain_path):
         raise ValueError("canonical manifest release toolchain checksum does not match")
-    if (
-        images.get("SEAWEEDFS_IMAGE")
-        and images["SEAWEEDFS_IMAGE"] != toolchain["SEAWEEDFS_TEST_IMAGE"]
-    ):
-        raise ValueError(
-            "canonical manifest SeaweedFS image differs from the repository-tested digest"
-        )
+    validate_tested_infrastructure_images(images, toolchain)
 
     service_map = payload.get("compose_service_images")
     if service_map != expected_compose_service_images(images):

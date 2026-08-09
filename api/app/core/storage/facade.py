@@ -140,6 +140,7 @@ async def _accounted_cas_write(file_key: str, writer: Callable[[], Awaitable[Non
         abort_cas_storage_mutation,
         cas_storage_mutation,
         commit_cas_storage_delta,
+        dispatch_cas_storage_mutation,
         resolve_cas_storage_mutation_by_scan,
     )
 
@@ -150,9 +151,12 @@ async def _accounted_cas_write(file_key: str, writer: Callable[[], Awaitable[Non
             old_size = await _cas_object_size(storage, file_key) or 0
         except BaseException:
             # No object-store mutation has been dispatched yet.
-            await abort_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
+            await abort_cas_storage_mutation(
+                redis_client, mutation_id, mutation_epoch, expected_phase="preflight"
+            )
             raise
 
+        await dispatch_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
         _result, writer_error, caller_cancellation = await settle_awaitable(_bounded_cas_io(writer))
         if writer_error is not None:
             # The remote result can be ambiguous after transport failure. Keep the
@@ -188,6 +192,7 @@ async def _accounted_cas_delete(file_key: str, deleter: Callable[[], Awaitable[N
         abort_cas_storage_mutation,
         cas_storage_mutation,
         commit_cas_storage_delta,
+        dispatch_cas_storage_mutation,
         resolve_cas_storage_mutation_by_scan,
     )
 
@@ -197,9 +202,12 @@ async def _accounted_cas_delete(file_key: str, deleter: Callable[[], Awaitable[N
         try:
             old_size = await _cas_object_size(storage, file_key) or 0
         except BaseException:
-            await abort_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
+            await abort_cas_storage_mutation(
+                redis_client, mutation_id, mutation_epoch, expected_phase="preflight"
+            )
             raise
 
+        await dispatch_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
         _result, delete_error, caller_cancellation = await settle_awaitable(
             _bounded_cas_io(deleter)
         )
@@ -239,6 +247,7 @@ async def _accounted_cas_complex_mutation(
         abort_cas_storage_mutation,
         cas_storage_mutation,
         commit_cas_storage_delta,
+        dispatch_cas_storage_mutation,
         resolve_cas_storage_mutation_by_scan,
     )
 
@@ -253,9 +262,12 @@ async def _accounted_cas_complex_mutation(
             for key in tracked_keys:
                 old_size += await _cas_object_size(storage, key) or 0
         except BaseException:
-            await abort_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
+            await abort_cas_storage_mutation(
+                redis_client, mutation_id, mutation_epoch, expected_phase="preflight"
+            )
             raise
 
+        await dispatch_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
         _result, move_error, caller_cancellation = await settle_awaitable(_bounded_cas_io(writer))
         if move_error is not None:
             raise move_error
