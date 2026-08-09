@@ -144,6 +144,18 @@ class FakeRedis:
 
     def register_script(self, script):
         async def run(*, keys, args, client=None):
+            if "storage_reconcile_cas_usage_v1" in script:
+                expected_generation = int(args[0])
+                physical_usage = int(args[1])
+                raw_generation = self.data.get(keys[1], 0)
+                current_generation = int(
+                    raw_generation.decode() if isinstance(raw_generation, bytes) else raw_generation
+                )
+                if current_generation != expected_generation:
+                    return 0
+                self.data[keys[0]] = str(physical_usage).encode()
+                return 1
+
             if "auth_store_login_challenge_v2" in script:
 
                 def _text(value):
@@ -425,6 +437,8 @@ class FakeRedis:
                     if len(keys) > 1 and data.get("size"):
                         usage = int(self.data.get(keys[1], 0)) + int(data["size"])
                         await self.set(keys[1], usage)
+                        if len(keys) > 3:
+                            await self.incr(keys[3])
                     if marker_key is not None:
                         await self.set(marker_key, "1")
                     return 1
@@ -510,6 +524,8 @@ class FakeRedis:
 @pytest.fixture
 def fake_redis_setup(mock_redis, monkeypatch):
     fr = FakeRedis()
+    fr.data["storage:total_usage_bytes"] = b"0"
+    fr.data["storage:total_usage_generation"] = b"0"
 
     # Route-level tests use an AsyncMock Redis wrapper for call assertions. Run
     # the real semaphore implementation against the backing FakeRedis so lease
@@ -645,6 +661,13 @@ async def client(
     with (
         patch("app.core.database.redis.arq_pool", mock_arq_pool),
         patch("app.core.database.redis.redis_client", mock_redis),
+        # Route tests are hermetic and do not run an object-storage service.
+        # Model an initialized empty CAS bucket here; dedicated capacity tests
+        # exercise real cache-miss reconciliation separately.
+        patch(
+            "app.core.storage.capacity._physical_cas_storage_usage",
+            new=AsyncMock(return_value=0),
+        ),
     ):
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac

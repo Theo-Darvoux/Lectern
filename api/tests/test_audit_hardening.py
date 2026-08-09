@@ -283,6 +283,7 @@ async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis
         patch("app.workers.cleanup_uploads.list_multipart_uploads", mock_list_multipart),
         patch("app.core.storage.facade.object_exists", AsyncMock(return_value=True)),
         patch("app.workers.storage_ops.delete_storage_objects", AsyncMock()),
+        patch("app.workers.cleanup_uploads.reconcile_cas_storage_usage", new_callable=AsyncMock),
     ):
         await cleanup_uploads({"redis": fake_redis_setup})
 
@@ -370,9 +371,14 @@ async def test_cleanup_expired_cas_staging_claim_releases_once(
         ),
         patch("app.workers.cleanup_uploads.delete", side_effect=sqlite_safe_delete),
         patch("app.workers.storage_ops.delete_storage_objects", new_callable=AsyncMock),
+        patch(
+            "app.workers.cleanup_uploads.reconcile_cas_storage_usage",
+            new_callable=AsyncMock,
+        ) as reconcile_usage,
     ):
         await cleanup_uploads({"redis": mock_redis})
 
+    reconcile_usage.assert_awaited_once_with(mock_redis)
     db_session.expire_all()
     claims = list((await db_session.scalars(select(CasStagingClaim))).all())
     jobs = list((await db_session.scalars(select(OutboxJob))).all())
@@ -388,9 +394,6 @@ async def test_cleanup_expired_cas_staging_claim_releases_once(
             }
         ]
     ]
-    assert any(
-        call.args[:2] == ("storage:total_usage_bytes", 0) for call in mock_redis.set.await_args_list
-    )
 
 
 # ── CSP s3_domain helper ──────────────────────────────────────────────────────

@@ -151,6 +151,30 @@ def _decompress_gzip_text(
     return b"".join(chunks)
 
 
+_SPLITLINE_SEPARATORS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+
+
+def _exceeds_splitline_limit(text: str, max_lines: int) -> bool:
+    """Return True before splitlines() would materialize more than max_lines entries."""
+    if max_lines < 1:
+        return bool(text)
+
+    lines = 1
+    previous_was_cr = False
+    for char in text:
+        if char == "\n" and previous_was_cr:
+            previous_was_cr = False
+            continue
+        previous_was_cr = char == "\r"
+        if char not in _SPLITLINE_SEPARATORS:
+            previous_was_cr = False
+            continue
+        lines += 1
+        if lines > max_lines:
+            return True
+    return False
+
+
 def _build_bounded_text_diff(
     old_text: str,
     new_text: str,
@@ -164,8 +188,8 @@ def _build_bounded_text_diff(
     if (
         old_size_bytes > _TEXT_DIFF_INPUT_MAX_BYTES
         or new_size_bytes > _TEXT_DIFF_INPUT_MAX_BYTES
-        or old_text.count("\n") + 1 > _TEXT_DIFF_MAX_LINES
-        or new_text.count("\n") + 1 > _TEXT_DIFF_MAX_LINES
+        or _exceeds_splitline_limit(old_text, _TEXT_DIFF_MAX_LINES)
+        or _exceeds_splitline_limit(new_text, _TEXT_DIFF_MAX_LINES)
     ):
         return f"```diff\n{_TEXT_DIFF_OMITTED}\n```"
 

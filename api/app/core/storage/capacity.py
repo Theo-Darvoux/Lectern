@@ -2,21 +2,20 @@
 
 import logging
 import time
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from redis.asyncio import Redis
-from sqlalchemy import func, select, union_all
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.database.redis as redis_core
 from app.config import settings
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
-from app.core.security.cas import _STORAGE_USAGE_KEY
+from app.core.security.cas import _STORAGE_USAGE_GENERATION_KEY, _STORAGE_USAGE_KEY
+from app.core.storage.facade import list_objects
 from app.models.material import MaterialVersion
-from app.models.upload import Upload
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +25,9 @@ _STORAGE_RELEASE_SCRIPT = (_LUA_DIR / "storage_release.lua").read_text(encoding=
 _STORAGE_RELEASE_PROMOTED_LEGACY_SCRIPT = (
     _LUA_DIR / "storage_release_promoted_legacy.lua"
 ).read_text(encoding="utf-8")
+_STORAGE_RECONCILE_CAS_SCRIPT = (_LUA_DIR / "storage_reconcile_cas_usage.lua").read_text(
+    encoding="utf-8"
+)
 _STORAGE_RESERVATION_EXPIRIES = "storage:upload_reservations:expiries"
 _STORAGE_RESERVATION_SIZES = "storage:upload_reservations:sizes"
 _STORAGE_RESERVATION_TOTAL = "storage:upload_reservations:total"
@@ -36,53 +38,88 @@ LEGACY_STORAGE_USAGE_KEY = "storage:legacy_usage_bytes"
 LEGACY_STORAGE_GENERATION_KEY = "storage:legacy_usage_generation"
 
 
+async def _physical_cas_storage_usage() -> int:
+    """Return exact physical bytes currently present under the cas/ prefix."""
+    total = 0
+    async for obj in list_objects(prefix="cas/"):
+        try:
+            size = int(obj.get("Size", 0))
+        except (TypeError, ValueError) as exc:
+            raise BadRequestError("Storage capacity accounting state is invalid") from exc
+        if size < 0:
+            raise BadRequestError("Storage capacity accounting state is invalid")
+        total += size
+    return total
+
+
+async def _cas_storage_generation(redis: Any) -> int:
+    try:
+        raw = await redis.get(_STORAGE_USAGE_GENERATION_KEY)
+        return int(raw or 0)
+    except (TypeError, ValueError) as exc:
+        raise BadRequestError("Storage capacity accounting state is invalid") from exc
+    except Exception as exc:
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable. Please try again later."
+        ) from exc
+
+
+async def reconcile_cas_storage_usage(redis: Any) -> int:
+    """Generation-fence an exact object-store scan into the CAS usage cache."""
+    for _attempt in range(_STORAGE_SNAPSHOT_MAX_RETRIES):
+        generation = await _cas_storage_generation(redis)
+        try:
+            physical_usage = await _physical_cas_storage_usage()
+            reconcile = redis.register_script(_STORAGE_RECONCILE_CAS_SCRIPT)
+            result = int(
+                await reconcile(
+                    keys=[_STORAGE_USAGE_KEY, _STORAGE_USAGE_GENERATION_KEY],
+                    args=[generation, physical_usage],
+                    client=redis,
+                )
+            )
+        except BadRequestError:
+            raise
+        except Exception as exc:
+            logger.error("Cannot reconcile physical CAS storage usage: %s", exc)
+            raise BadRequestError(
+                "Storage capacity is temporarily unavailable. Please try again later."
+            ) from exc
+        if result == 1:
+            return physical_usage
+        if result == 0:
+            continue
+        raise BadRequestError("Storage capacity accounting state is invalid")
+    raise BadRequestError(
+        "Storage capacity changed repeatedly while reconciling physical usage. Please retry."
+    )
+
+
 async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ignore[type-arg]
-    """Return physical CAS usage, rebuilding the cache from the database if needed."""
-    revert_cutoff = datetime.now(UTC) - timedelta(days=settings.pr_revert_grace_days)
-    material_refs = select(
-        MaterialVersion.cas_sha256.label("sha256"),
-        MaterialVersion.file_size.label("size"),
-    ).where(
-        MaterialVersion.cas_sha256.is_not(None),
-        MaterialVersion.file_key.like("cas/%"),
-        (MaterialVersion.deleted_at.is_(None)) | (MaterialVersion.deleted_at >= revert_cutoff),
-    )
-    upload_refs = select(
-        Upload.content_sha256.label("sha256"),
-        Upload.size_bytes.label("size"),
-    ).where(
-        Upload.content_sha256.is_not(None),
-        Upload.final_key.like("cas/%"),
-        Upload.cas_ref_count > 0,
-    )
-    all_refs = union_all(material_refs, upload_refs).subquery()
-    unique_sizes = (
-        select(func.max(all_refs.c.size).label("size")).group_by(all_refs.c.sha256).subquery()
-    )
-
-    async def from_database() -> int:
-        stmt = select(func.sum(unique_sizes.c.size)).execution_options(include_deleted=True)
-        return int(await db.scalar(stmt) or 0)
-
+    """Return physical CAS usage, rebuilding a missing cache from object storage."""
+    del db  # Physical capacity is defined by object-store bytes, not logical DB ownership.
     try:
         usage_raw = await redis.get(_STORAGE_USAGE_KEY)
+        generation_raw = await redis.get(_STORAGE_USAGE_GENERATION_KEY)
     except Exception as exc:
-        logger.warning("Storage usage cache unavailable; using the database: %s", exc)
-        return await from_database()
-    if usage_raw is not None:
-        return max(0, int(usage_raw))
+        logger.error("Storage usage cache unavailable: %s", exc)
+        raise BadRequestError(
+            "Storage capacity is temporarily unavailable. Please try again later."
+        ) from exc
 
-    usage = await from_database()
-    try:
-        # Do not overwrite a CAS increment that raced the database rebuild.
-        initialized = await redis.set(_STORAGE_USAGE_KEY, usage, nx=True)
-        if not initialized:
-            current = await redis.get(_STORAGE_USAGE_KEY)
-            if current is not None:
-                return max(0, int(current))
-    except Exception as exc:
-        logger.warning("Could not refresh the storage usage cache: %s", exc)
-    return usage
+    if usage_raw is not None and generation_raw is not None:
+        try:
+            usage = int(usage_raw)
+            generation = int(generation_raw)
+        except (TypeError, ValueError) as exc:
+            raise BadRequestError("Storage capacity accounting state is invalid") from exc
+        if usage < 0 or generation < 0:
+            raise BadRequestError("Storage capacity accounting state is invalid")
+        return usage
+
+    # Either cache component was evicted (or this is an upgrade from the older
+    # unfenced cache format). Reconstruct from physical object-store state.
+    return await reconcile_cas_storage_usage(redis)
 
 
 async def _legacy_storage_usage_from_database(db: AsyncSession) -> int:

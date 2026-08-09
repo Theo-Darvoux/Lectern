@@ -11,8 +11,7 @@ from app.core.database.post_commit import (
     dispatch_post_commit_actions,
     persist_post_commit_jobs,
 )
-from app.core.security.cas import _STORAGE_USAGE_KEY
-from app.core.storage.capacity import release_storage_reservation
+from app.core.storage.capacity import reconcile_cas_storage_usage, release_storage_reservation
 from app.core.storage.facade import abort_multipart_upload, get_s3_client, list_multipart_uploads
 from app.models.cas_staging_claim import CasStagingClaim
 from app.models.material import MaterialVersion
@@ -389,7 +388,6 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     orphans_to_delete: list[str] = []
     legacy_material_candidates: list[str] = []
     seen_legacy_material_keys: set[str] = set()
-    cas_object_sizes: dict[str, int] = {}
 
     async with get_s3_client() as client:
         paginator = client.get_paginator("list_objects_v2")
@@ -402,7 +400,6 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
         async for page in paginator.paginate(Bucket=settings.s3_bucket, Prefix="cas/"):
             for obj in page.get("Contents", []):
                 key = obj["Key"]
-                cas_object_sizes[key] = max(0, int(obj.get("Size", 0)))
                 cas_id = key.split("/")[-1]
                 if cas_id in valid_cas_ids:
                     continue
@@ -452,18 +449,17 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
         # and Redis's cache; do not attempt to re-HMAC their opaque object IDs.
         for key in cas_orphans:
             await delete_object(key)
-            cas_object_sizes.pop(key, None)
         if legacy_orphans:
             await delete_storage_objects(ctx, legacy_orphans)
         logger.info("Cleanup triggered for %d orphaned objects", len(orphans_to_delete))
     else:
         logger.info("No orphaned objects found to clean up")
 
-    # Redis ref records are an evictable coordination cache. Rebuild physical
-    # CAS usage from the object store so capacity accounting cannot drift after
-    # cache eviction, interrupted staging, or orphan collection.
+    # Redis ref records and aggregate usage are evictable coordination caches.
+    # Rebuild the physical CAS total with a generation fence so a concurrent
+    # CAS creation cannot be overwritten by a stale object-store scan.
     try:
-        await redis.set(_STORAGE_USAGE_KEY, sum(cas_object_sizes.values()))
+        await reconcile_cas_storage_usage(redis)
     except Exception as exc:
         logger.warning("Failed to reconcile physical CAS usage: %s", exc)
 

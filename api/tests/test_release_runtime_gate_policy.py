@@ -123,7 +123,9 @@ def test_api_ci_includes_real_redis_auth_lifecycle_without_extra_job() -> None:
     assert f"redis:7.4-alpine@sha256:{REDIS_DIGEST}" in workflow
     assert "AUTH_ATOMICITY_REDIS_URL" in workflow
     assert "tests/integration/test_auth_redis_atomicity.py" in workflow
+    assert "tests/integration/test_storage_redis_atomicity.py" in workflow
     assert "Real Redis authentication lifecycle invariants" in workflow
+    assert "storage fencing" in workflow
     assert "REDIS_AUTH_RESULT" not in workflow
 
 

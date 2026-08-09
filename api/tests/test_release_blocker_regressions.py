@@ -216,6 +216,25 @@ def test_text_diff_preflight_skips_split_and_difflib_for_many_lines() -> None:
     assert materials_router._TEXT_DIFF_OMITTED in diff
 
 
+@pytest.mark.parametrize("separator", ["\r", "\x85", "\u2028", "\u2029"])
+def test_text_diff_preflight_handles_all_splitlines_separators(separator: str) -> None:
+    hostile = _NoSplitStr(f"x{separator}" * (materials_router._TEXT_DIFF_MAX_LINES + 1))
+    with patch.object(
+        materials_router.difflib,
+        "unified_diff",
+        side_effect=AssertionError("difflib must not run"),
+    ):
+        diff = materials_router._build_bounded_text_diff(
+            hostile,
+            "small",
+            old_size_bytes=len(hostile.encode()),
+            new_size_bytes=5,
+            fromfile="old.txt",
+            tofile="new.txt",
+        )
+    assert materials_router._TEXT_DIFF_OMITTED in diff
+
+
 def test_text_diff_preflight_skips_difflib_for_large_bytes() -> None:
     text = _NoSplitStr("x" * (materials_router._TEXT_DIFF_INPUT_MAX_BYTES + 1))
     with patch.object(
@@ -446,3 +465,47 @@ async def test_expired_cas_version_is_not_reaped_when_ref_release_fails(
         .execution_options(include_deleted=True)
     )
     assert remaining is not None
+
+
+@pytest.mark.asyncio
+async def test_cas_usage_cache_miss_rebuilds_from_physical_object_store(
+    db_session: AsyncSession, fake_redis_setup, monkeypatch
+) -> None:
+    await fake_redis_setup.delete(capacity._STORAGE_USAGE_KEY)
+
+    async def physical_objects(prefix: str):
+        assert prefix == "cas/"
+        yield {"Key": "cas/a", "Size": 111}
+        yield {"Key": "cas/b", "Size": 222}
+
+    monkeypatch.setattr(capacity, "list_objects", physical_objects)
+    usage = await capacity.get_storage_usage(db_session, fake_redis_setup)
+
+    assert usage == 333
+    assert int(await fake_redis_setup.get(capacity._STORAGE_USAGE_KEY)) == 333
+
+
+@pytest.mark.asyncio
+async def test_cas_usage_reconcile_retries_when_generation_changes(
+    fake_redis_setup, monkeypatch
+) -> None:
+    await fake_redis_setup.delete(capacity._STORAGE_USAGE_KEY)
+    scans = 0
+
+    async def physical_objects(prefix: str):
+        nonlocal scans
+        assert prefix == "cas/"
+        scans += 1
+        if scans == 1:
+            await fake_redis_setup.incr(capacity._STORAGE_USAGE_GENERATION_KEY)
+            yield {"Key": "cas/first", "Size": 10}
+        else:
+            yield {"Key": "cas/first", "Size": 10}
+            yield {"Key": "cas/second", "Size": 20}
+
+    monkeypatch.setattr(capacity, "list_objects", physical_objects)
+    usage = await capacity.reconcile_cas_storage_usage(fake_redis_setup)
+
+    assert scans == 2
+    assert usage == 30
+    assert int(await fake_redis_setup.get(capacity._STORAGE_USAGE_KEY)) == 30

@@ -10,7 +10,7 @@ Covers (in issue order):
   #7  config.get(x) or default treats 0 as falsy — fixed with is not None
   #8  Admin cannot set a user to PENDING via role-update endpoint
   #9  TestEmailIn rejects malformed / header-injection email
-  #10 Storage usage counter clamped to >= 0 in helpers
+  #10 Corrupt negative storage usage state fails closed
   #11 get_or_create_user accepts explicit auto_approve (no second validate call)
   #12 get_s3_client receives pre-fetched cfg — only one _get_s3_settings call
   #13 TUS OPTIONS reads Redis only, no DB session
@@ -399,19 +399,18 @@ async def test_admin_test_email_rejects_invalid_email(
         assert response.status_code == 422, f"Expected 422 for email: {bad_email!r}"
 
 
-# ── Issue #10: Storage usage clamped to >= 0 ─────────────────────────────────
+# ── Issue #10: Corrupt storage usage fails closed ─────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_check_storage_limit_clamps_negative_redis_value():
-    """A negative Redis counter (post-flush scenario) must not allow unlimited uploads."""
+async def test_check_storage_limit_rejects_negative_redis_value():
+    """A corrupt negative physical-usage counter must fail closed, never undercount."""
     import app.core.database.redis as redis_core
+    from app.core.common.exceptions import BadRequestError
     from app.routers.upload.helpers import _check_storage_limit
 
     fake_redis = AsyncMock()
-    # Simulate a negative counter value after a Redis flush + DECRBY
     fake_redis.get = AsyncMock(return_value=b"-999999999")
-    fake_redis.set = AsyncMock()
 
     original_client = redis_core.redis_client
     redis_core.redis_client = fake_redis
@@ -419,13 +418,12 @@ async def test_check_storage_limit_clamps_negative_redis_value():
     mock_db = AsyncMock()
 
     try:
-        # With 1 GB max and effectively 0 usage (clamped), a small upload should pass
-        await _check_storage_limit(
-            1024,
-            mock_db,
-            config={"max_storage_gb": 1},
-        )
-        # No exception = pass (usage was clamped to 0, not kept as -999999999)
+        with pytest.raises(BadRequestError, match="accounting state is invalid"):
+            await _check_storage_limit(
+                1024,
+                mock_db,
+                config={"max_storage_gb": 1},
+            )
     finally:
         redis_core.redis_client = original_client
 

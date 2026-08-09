@@ -21,6 +21,9 @@ if not raw then
     -- Physical storage increment: only on first creation
     if data['size'] then
         redis.call('INCRBY', usage_key, data['size'])
+        if KEYS[4] then
+          redis.call('INCR', KEYS[4])
+        end
     end
   else
     return -1

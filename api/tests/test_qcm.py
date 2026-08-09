@@ -436,6 +436,8 @@ class TestStageEndpoint:
             patch("app.routers.qcm.storage_upload_file", new_callable=AsyncMock),
             patch("app.routers.qcm.increment_cas_ref", new_callable=AsyncMock),
             patch("app.routers.qcm.compensate_cas_increment", new_callable=AsyncMock) as compensate,
+            patch("app.routers.qcm.reserve_storage_limit", new_callable=AsyncMock),
+            patch("app.routers.qcm.release_storage_reservation", new_callable=AsyncMock),
         ):
             result = await stage_qcm(QCMStageRequest(data=_minimal_qcm()), user, db_session)
             claim = await db_session.scalar(
@@ -461,6 +463,7 @@ class TestStageEndpoint:
         await db_session.flush()
 
         with (
+            patch("app.routers.qcm.redis_client", fake_redis_setup),
             patch("app.routers.qcm.storage_upload_file", new_callable=AsyncMock) as mock_upload,
             patch("app.routers.qcm.increment_cas_ref", new_callable=AsyncMock),
         ):
@@ -505,6 +508,7 @@ class TestStageEndpoint:
 
         qcm = _minimal_qcm()
         with (
+            patch("app.routers.qcm.redis_client", fake_redis_setup),
             patch("app.routers.qcm.storage_upload_file", new_callable=AsyncMock),
             patch("app.routers.qcm.increment_cas_ref", new_callable=AsyncMock),
         ):
@@ -528,6 +532,7 @@ class TestStageEndpoint:
         qcm_b["chapters"][0]["title"] = "Different Chapter Title"
 
         with (
+            patch("app.routers.qcm.redis_client", fake_redis_setup),
             patch("app.routers.qcm.storage_upload_file", new_callable=AsyncMock),
             patch("app.routers.qcm.increment_cas_ref", new_callable=AsyncMock),
         ):
@@ -587,6 +592,7 @@ class TestStageEndpoint:
         await db_session.flush()
 
         with (
+            patch("app.routers.qcm.redis_client", fake_redis_setup),
             patch("app.routers.qcm.storage_upload_file", new_callable=AsyncMock) as mock_upload,
             patch("app.routers.qcm.increment_cas_ref", new_callable=AsyncMock),
         ):
@@ -610,6 +616,7 @@ class TestStageEndpoint:
         await db_session.flush()
 
         with (
+            patch("app.routers.qcm.redis_client", fake_redis_setup),
             patch("app.routers.qcm.storage_upload_file", new_callable=AsyncMock),
             patch("app.routers.qcm.increment_cas_ref", new_callable=AsyncMock) as mock_cas,
         ):
@@ -633,6 +640,64 @@ class TestStageEndpoint:
         )
         assert claim is not None
         assert kwargs["operation_id"] == f"qcm-stage:{claim.id}"
+
+    async def test_stage_reserves_capacity_before_storage_and_releases_after_cas_handoff(
+        self, db_session: AsyncSession
+    ) -> None:
+        user = _make_user()
+        db_session.add(user)
+        await db_session.commit()
+        db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+        events: list[str] = []
+
+        async def reserve(*_args, **_kwargs):
+            events.append("reserve")
+
+        async def upload(*_args, **_kwargs):
+            events.append("upload")
+
+        async def increment(*_args, **_kwargs):
+            events.append("increment")
+            return 1
+
+        async def release(*_args, **_kwargs):
+            events.append("release")
+
+        with (
+            patch("app.routers.qcm.reserve_storage_limit", side_effect=reserve) as reserve_mock,
+            patch("app.routers.qcm.storage_upload_file", side_effect=upload),
+            patch("app.routers.qcm.increment_cas_ref", side_effect=increment),
+            patch("app.routers.qcm.release_storage_reservation", side_effect=release),
+        ):
+            result = await stage_qcm(QCMStageRequest(data=_minimal_qcm()), user, db_session)
+
+        assert events == ["reserve", "upload", "increment", "release"]
+        reserve_args = reserve_mock.await_args
+        assert reserve_args.args[0] == result.file_size
+        assert str(reserve_args.args[1]).startswith("qcm-stage:")
+
+    async def test_stage_capacity_rejection_happens_before_storage_write(
+        self, db_session: AsyncSession
+    ) -> None:
+        from app.core.common.exceptions import BadRequestError
+
+        user = _make_user()
+        db_session.add(user)
+        await db_session.commit()
+        db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+
+        upload = AsyncMock()
+        with (
+            patch(
+                "app.routers.qcm.reserve_storage_limit",
+                new=AsyncMock(side_effect=BadRequestError("storage full")),
+            ),
+            patch("app.routers.qcm.storage_upload_file", new=upload),
+            pytest.raises(BadRequestError, match="storage full"),
+        ):
+            await stage_qcm(QCMStageRequest(data=_minimal_qcm()), user, db_session)
+
+        upload.assert_not_awaited()
 
 
 # ── /api/qcm/parse-moodle endpoint tests ─────────────────────────────────────

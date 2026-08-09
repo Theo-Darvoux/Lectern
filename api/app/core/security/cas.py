@@ -45,6 +45,7 @@ def hmac_cas_key(sha256: str) -> str:
 
 
 _STORAGE_USAGE_KEY = "storage:total_usage_bytes"
+_STORAGE_USAGE_GENERATION_KEY = "storage:total_usage_generation"
 _CAS_OPERATION_PREFIX = "cas:operation:"
 
 
@@ -81,7 +82,12 @@ async def increment_cas_ref(
             raise ValueError("initial_data is required when setting a CAS staging TTL")
         if ttl_seconds is not None:
             args.append(ttl_seconds)
-        keys = [cas_key, _STORAGE_USAGE_KEY, _operation_marker_key(operation_id)]
+        keys = [
+            cas_key,
+            _STORAGE_USAGE_KEY,
+            _operation_marker_key(operation_id),
+            _STORAGE_USAGE_GENERATION_KEY,
+        ]
         count = await redis.eval(_LUA_CAS_INCR, len(keys), *keys, *args)
         result = int(count) if count is not None else -2
         if result == -1:

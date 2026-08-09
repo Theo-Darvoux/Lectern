@@ -25,6 +25,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.database.database import get_db
 from app.core.database.post_commit import register_transaction_callbacks
 from app.core.database.redis import redis_client
@@ -35,7 +36,8 @@ from app.core.security.cas import (
     hmac_cas_key,
     increment_cas_ref,
 )
-from app.core.storage.facade import read_full_object
+from app.core.storage.capacity import release_storage_reservation, reserve_storage_limit
+from app.core.storage.facade import object_exists, read_full_object
 from app.core.storage.facade import upload_file as storage_upload_file
 from app.dependencies.auth import CurrentUser
 from app.models.cas_staging_claim import CasStagingClaim
@@ -56,6 +58,10 @@ QCM_MAX_IMAGES: int = int(os.environ.get("QCM_MAX_IMAGES", "30"))
 QCM_MAX_IMAGE_CHARS: int = int(os.environ.get("QCM_MAX_IMAGE_CHARS", "500000"))
 QCM_MAX_BYTES = 20 * 1024 * 1024
 MOODLE_XML_MAX_BYTES = 10 * 1024 * 1024
+_QCM_STORAGE_RESERVATION_TTL = max(
+    72 * 3600,
+    (settings.pr_expiry_days + 1) * 24 * 3600,
+)
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -224,22 +230,40 @@ async def stage_qcm(
 
     claim_id = uuid.uuid4()
     increment_operation_id = f"qcm-stage:{claim_id}"
+    capacity_reservation_id = f"qcm-stage:{claim_id}:capacity"
     reference_attempted = False
+    capacity_reserved = False
+    capacity_released = False
 
     async def rollback_stage() -> None:
-        if not reference_attempted:
-            return
-        try:
-            await compensate_cas_increment(
-                redis_client,
-                sha256,
-                operation_id=increment_operation_id,
-            )
-        except CasReferenceMissingError:
-            # A failed increment that never reached Redis has nothing to undo.
-            # Physical CAS deletion is deliberately left to safe GC because
-            # the same content key may be referenced by another request.
-            logger.info("QCM rollback found no CAS reference for claim %s", claim_id)
+        nonlocal capacity_released
+        if reference_attempted:
+            try:
+                await compensate_cas_increment(
+                    redis_client,
+                    sha256,
+                    operation_id=increment_operation_id,
+                )
+            except CasReferenceMissingError:
+                # A failed increment that never reached Redis has nothing to undo.
+                # Physical CAS deletion is deliberately left to safe GC because
+                # the same content key may be referenced by another request.
+                logger.info("QCM rollback found no CAS reference for claim %s", claim_id)
+
+        # If the write never reached object storage, release a capacity reservation
+        # that has no physical byte owner. Ambiguous or successful writes stay
+        # reserved until cleanup reconciles physical CAS usage.
+        if capacity_reserved and not capacity_released and not reference_attempted:
+            try:
+                if not await object_exists(file_key):
+                    await release_storage_reservation(capacity_reservation_id, redis_client)
+                    capacity_released = True
+            except Exception as exc:
+                logger.warning(
+                    "Could not safely release failed QCM capacity reservation %s: %s",
+                    capacity_reservation_id,
+                    exc,
+                )
 
     async def finalize_stage() -> None:
         return None
@@ -250,6 +274,15 @@ async def stage_qcm(
         on_commit=finalize_stage,
     ):
         raise RuntimeError("QCM staging requires a request-managed transaction")
+
+    await reserve_storage_limit(
+        file_size,
+        capacity_reservation_id,
+        redis_client,
+        db,
+        ttl_seconds=_QCM_STORAGE_RESERVATION_TTL,
+    )
+    capacity_reserved = True
 
     # Write to object storage (idempotent — same content → same key)
     await storage_upload_file(
@@ -272,6 +305,12 @@ async def stage_qcm(
         },
         operation_id=increment_operation_id,
     )
+
+    # The CAS increment now owns the physical bytes in usage accounting. Only
+    # after that durable handoff may the in-flight reservation be released.
+    await release_storage_reservation(capacity_reservation_id, redis_client)
+    capacity_released = True
+
     db.add(
         CasStagingClaim(
             id=claim_id,

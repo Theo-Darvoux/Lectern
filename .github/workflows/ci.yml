@@ -96,8 +96,11 @@ jobs:
         run: uv run mypy app/
       - name: Unit and hermetic tests
         run: uv run pytest -m "not integration"
-      - name: Real Redis authentication lifecycle invariants
-        run: uv run pytest -m integration tests/integration/test_auth_redis_atomicity.py
+      - name: Real Redis authentication lifecycle invariants and storage fencing
+        run: >-
+          uv run pytest -m integration
+          tests/integration/test_auth_redis_atomicity.py
+          tests/integration/test_storage_redis_atomicity.py
 
   postgres-revert:
     runs-on: ubuntu-latest
