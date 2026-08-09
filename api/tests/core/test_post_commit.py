@@ -220,3 +220,53 @@ def test_post_commit_key_enum_members():
     assert PostCommitKey.JOB_KEYS == "post_commit_job_keys"
     assert PostCommitKey.DEINDEX_KEYS == "post_commit_deindex_keys"
     assert PostCommitKey.USER_SSE == "post_commit_user_sse_broadcasts"
+
+
+@pytest.mark.asyncio
+async def test_rollback_callback_failure_does_not_skip_remaining_callbacks() -> None:
+    later = AsyncMock()
+
+    async def failing_cleanup() -> None:
+        raise OSError("s3 delete failed")
+
+    session = MagicMock()
+    session.info = {
+        # reversed() means failing_cleanup runs first.
+        PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS: [
+            later,
+            failing_cleanup,
+        ],
+        PostCommitKey.TRANSACTION_COMMIT_CALLBACKS: [],
+    }
+
+    with pytest.raises(
+        RuntimeError,
+        match="1 external transaction compensation callback",
+    ):
+        await rollback_transaction_callbacks(session)
+
+    later.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_finalize_callback_failure_does_not_skip_remaining_callbacks(
+    caplog,
+) -> None:
+    later = AsyncMock()
+
+    async def failing_finalizer() -> None:
+        raise OSError("cleanup failed")
+
+    session = MagicMock()
+    session.info = {
+        PostCommitKey.TRANSACTION_COMMIT_CALLBACKS: [
+            failing_finalizer,
+            later,
+        ],
+        PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS: [],
+    }
+
+    await finalize_transaction_callbacks(session)
+
+    later.assert_awaited_once()
+    assert "External transaction finalization failed" in caplog.text

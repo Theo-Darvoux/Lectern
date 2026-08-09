@@ -135,3 +135,42 @@ def test_soft_delete_filter_applies_criteria_on_select():
 
     _soft_delete_filter(mock_state)
     assert mock_stmt.options.called
+
+
+@pytest.mark.asyncio
+async def test_db_rollback_failure_still_attempts_external_compensation():
+    """When session.rollback() itself fails, external compensation must still run.
+
+    This exercises the control-flow ordering in get_db(): settle_awaitable is
+    called on session.rollback(), and even when it errors, the code proceeds to
+    rollback_transaction_callbacks(). Before the settle_awaitable fix, an
+    ordinary exception from rollback() could escape before compensation ran.
+    """
+    compensated = AsyncMock()
+
+    async def noop() -> None:
+        return None
+
+    mock_session = AsyncMock()
+    mock_session.info = {}
+    mock_session.rollback = AsyncMock(side_effect=OSError("postgres rollback failed"))
+
+    session_cm = AsyncMock()
+    session_cm.__aenter__.return_value = mock_session
+    session_cm.__aexit__.return_value = None
+
+    with patch("app.core.database.database.async_session_factory", return_value=session_cm):
+        gen = get_db()
+        session = await gen.__anext__()
+
+        assert register_transaction_callbacks(
+            session,
+            on_rollback=compensated,
+            on_commit=noop,
+        )
+
+        with pytest.raises(RuntimeError, match="Database rollback failed"):
+            await gen.athrow(ValueError("request failed"))
+
+    compensated.assert_awaited_once()
+
