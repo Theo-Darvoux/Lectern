@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import typer
 from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +53,41 @@ def test_production_requires_offline_restore(monkeypatch: pytest.MonkeyPatch) ->
 
     assert raised.value.status_code == 503
     assert "restore-backup-offline" in str(raised.value.detail)
+
+
+def test_production_requires_offline_backup_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import settings
+    from app.routers.admin_backup import _require_offline_backup_creation_in_production
+
+    monkeypatch.setattr(settings, "environment", "production")
+    with pytest.raises(HTTPException) as raised:
+        _require_offline_backup_creation_in_production()
+
+    assert raised.value.status_code == 503
+    assert "create-backup-offline" in str(raised.value.detail)
+
+
+def test_offline_backup_cli_requires_confirmation(tmp_path: Path) -> None:
+    from app.cli import create_backup_offline
+
+    with pytest.raises(typer.Exit) as raised:
+        create_backup_offline(tmp_path / "snapshot.zip", confirm_offline=False)
+
+    assert raised.value.exit_code == 2
+
+
+def test_offline_backup_cli_refuses_to_overwrite(tmp_path: Path) -> None:
+    from app.cli import create_backup_offline
+
+    destination = tmp_path / "snapshot.zip"
+    destination.write_bytes(b"existing")
+    with pytest.raises(typer.Exit) as raised:
+        create_backup_offline(destination, confirm_offline=True)
+
+    assert raised.value.exit_code == 2
+    assert destination.read_bytes() == b"existing"
 
 
 async def _make_admin(db: AsyncSession) -> User:
@@ -782,6 +818,38 @@ async def test_restore_returns_manifest(db_session: AsyncSession, tmp_path: Path
 
 
 # ── API endpoint tests ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/admin/backup/save"),
+        ("GET", "/api/admin/backup/export"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_production_http_backup_creation_is_disabled(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    method: str,
+    path: str,
+) -> None:
+    admin = await _make_admin(db_session)
+    await db_session.commit()
+
+    with (
+        patch("app.routers.admin_backup.settings") as mock_settings,
+        patch(
+            "app.routers.admin_backup.create_backup_zip",
+            new_callable=AsyncMock,
+        ) as create,
+    ):
+        mock_settings.environment = "production"
+        response = await client.request(method, path, headers=_auth(admin))
+
+    assert response.status_code == 503
+    assert "create-backup-offline" in response.json()["detail"]
+    create.assert_not_awaited()
 
 
 @pytest.mark.asyncio

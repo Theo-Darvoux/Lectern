@@ -44,6 +44,17 @@ def _require_offline_restore_in_production() -> None:
         )
 
 
+def _require_offline_backup_creation_in_production() -> None:
+    if settings.environment == "production":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Online backup creation is disabled in production. Stop API/workers and use "
+                "`python -m app.cli create-backup-offline --confirm-offline PATH`."
+            ),
+        )
+
+
 def _backup_dir() -> Path:
     d = Path(settings.backup_dir)
     d.mkdir(parents=True, exist_ok=True)
@@ -77,6 +88,7 @@ async def save_backup(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
     """Create a backup and save it on the server (max 3 kept; oldest rotated out)."""
+    _require_offline_backup_creation_in_production()
     backup_dir = _backup_dir()
     filename = backup_filename()
     dest = backup_dir / f"{filename}.zip"
@@ -115,6 +127,7 @@ async def export_backup(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> FileResponse:
     """Create a backup and stream it directly to the client (no server copy kept)."""
+    _require_offline_backup_creation_in_production()
     filename = backup_filename()
 
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)

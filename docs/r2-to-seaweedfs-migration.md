@@ -36,20 +36,15 @@ backup would be destroyed by the full restore.
 With `STORAGE_BACKEND=r2` still active in production:
 
 ```sh
-# Via the admin panel:
-POST /api/admin/backup/save
-
-# Or via curl (replace TOKEN):
-curl -X POST https://api.example.com/api/admin/backup/save \
-  -H "Authorization: Bearer $TOKEN"
+# Run inside the stopped API image/container with the production runtime env.
+python -m app.cli create-backup-offline \
+  --confirm-offline /var/lib/lectern/backups/r2-migration.zip
 ```
 
-Download the resulting ZIP:
-
-```sh
-curl -O https://api.example.com/api/admin/backup/{id}/download \
-  -H "Authorization: Bearer $TOKEN"
-```
+Copy the resulting ZIP to durable operator-controlled storage. Production HTTP
+backup creation is intentionally disabled: even with a reverse-proxy mutation
+freeze, an in-flight worker could otherwise produce a database/object-store
+snapshot from different points in time.
 
 **Verify the ZIP**: open it and confirm `s3_metadata.json` is present,
 `manifest.json` shows `"version": "2.0"`, and the manifest contains an
@@ -91,13 +86,9 @@ Redeploy the API and worker containers (they now point at SeaweedFS).
 ### Step 5 — Restore the Backup to SeaweedFS
 
 ```sh
-# Via the admin panel → "Upload backup" → select the ZIP from Step 2
-POST /api/admin/backup/restore/upload
-
-# Or via curl:
-curl -X POST https://api.example.com/api/admin/backup/restore/upload \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "file=@backup_YYYYMMDD_HHMMSS.zip"
+# Keep API/workers stopped and run inside the new API image/container.
+python -m app.cli restore-backup-offline \
+  --confirm-offline /var/lib/lectern/backups/r2-migration.zip
 ```
 
 This destructive full replacement:
@@ -110,7 +101,7 @@ This destructive full replacement:
    object replacement succeeds
 
 An object-store failure during replacement restores the server-side snapshot.
-Keep the mutation freeze active until the request has completed and the smoke
+Keep the mutation freeze active until the command has completed and the smoke
 tests pass; database and S3 cannot participate in one distributed transaction.
 
 ### Step 6 — Smoke Test

@@ -6,6 +6,49 @@ import typer
 app = typer.Typer(help="Lectern CLI")
 
 
+@app.command(name="create-backup-offline")
+def create_backup_offline(
+    destination: Path = typer.Argument(..., dir_okay=False),
+    confirm_offline: bool = typer.Option(
+        False,
+        "--confirm-offline",
+        help="Confirm that every API and worker instance is stopped.",
+    ),
+) -> None:
+    """Create a cross-datastore backup while all mutating processes are stopped."""
+    if not confirm_offline:
+        typer.echo("Refusing backup: stop every API/worker and pass --confirm-offline.")
+        raise typer.Exit(code=2)
+    resolved = destination.resolve()
+    if resolved.exists():
+        typer.echo(f"Refusing backup: destination already exists: {resolved}")
+        raise typer.Exit(code=2)
+    if not resolved.parent.is_dir():
+        typer.echo(f"Refusing backup: destination directory does not exist: {resolved.parent}")
+        raise typer.Exit(code=2)
+    asyncio.run(_create_backup_offline(resolved))
+
+
+async def _create_backup_offline(destination: Path) -> None:
+    from app.core.database.database import async_session_factory
+    from app.services.backup import create_backup_zip
+
+    try:
+        async with async_session_factory() as session:
+            try:
+                manifest = await create_backup_zip(session, destination)
+            finally:
+                await session.rollback()
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+    typer.echo(
+        "Offline backup complete "
+        f"(version {manifest.get('version')}, {manifest.get('s3_object_count')} objects): "
+        f"{destination}"
+    )
+
+
 @app.command(name="restore-backup-offline")
 def restore_backup_offline(
     path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
