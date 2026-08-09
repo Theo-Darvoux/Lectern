@@ -353,33 +353,17 @@ async def _cleanup_pr_resources(
             approved=not delete_staging,
         )
 
-    # CAS staging refs need their original SHA-256; an opaque cas/<hmac> key is
-    # intentionally insufficient. Every PR outcome releases its staging owner:
-    # approval first creates the MaterialVersion owner, while rejection does not.
-    cas_payload_refs: dict[str, str] = {}
-    for op in pr.payload:
-        file_key = op.get("file_key")
-        content_sha = op.get("content_sha256")
-        if file_key and str(file_key).startswith("cas/") and content_sha:
-            cas_payload_refs[str(file_key)] = str(content_sha)
-        attachments = op.get("attachments")
-        if not isinstance(attachments, list):
-            continue
-        for attachment in attachments:
-            if not isinstance(attachment, dict):
-                continue
-            attachment_key = attachment.get("file_key")
-            attachment_sha = attachment.get("content_sha256")
-            if attachment_key and str(attachment_key).startswith("cas/") and attachment_sha:
-                cas_payload_refs[str(attachment_key)] = str(attachment_sha)
-
-    if cas_payload_refs:
+    # CAS staging refs need the original SHA-256, but PR payload hashes are
+    # optional/untrusted. Resolve release identities from authoritative Upload
+    # rows or consumed generated-CAS claims instead.
+    cas_keys = {key for key in get_pr_all_file_keys(pr) if key.startswith("cas/")}
+    if cas_keys:
         upload_rows = list(
             (
                 await db.scalars(
                     select(Upload)
                     .where(
-                        Upload.final_key.in_(cas_payload_refs),
+                        Upload.final_key.in_(cas_keys),
                         Upload.user_id == pr.author_id,
                     )
                     .order_by(Upload.updated_at.desc(), Upload.created_at.desc())
@@ -387,6 +371,20 @@ async def _cleanup_pr_resources(
                 )
             ).all()
         )
+        claim_rows = list(
+            (
+                await db.scalars(
+                    select(CasStagingClaim)
+                    .where(
+                        CasStagingClaim.user_id == pr.author_id,
+                        CasStagingClaim.file_key.in_(cas_keys),
+                        CasStagingClaim.consumed_at.is_not(None),
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+
         all_uploads_by_key: dict[str, list[Upload]] = {}
         uploads_by_key: dict[str, Upload] = {}
         for upload_row in upload_rows:
@@ -399,20 +397,40 @@ async def _cleanup_pr_resources(
                 and int(upload_row.cas_ref_count or 0) > 0
             ):
                 uploads_by_key[upload_row.final_key] = upload_row
+        claims_by_key = {claim.file_key: claim for claim in claim_rows}
+
         refs_to_release: list[str] = []
-        for key, payload_sha in cas_payload_refs.items():
+        for key in sorted(cas_keys):
             upload = uploads_by_key.get(key)
-            if upload is None:
-                if key not in all_uploads_by_key:
-                    refs_to_release.append(payload_sha)
-                continue
-            if upload.cas_ref_count > 0:
+            if upload is not None:
                 reference_sha = upload.content_sha256 or upload.sha256
-                if reference_sha:
-                    refs_to_release.append(reference_sha)
+                if not reference_sha:
+                    logger.error(
+                        "Cannot release CAS staging reference for %s: authoritative hash missing",
+                        key,
+                    )
+                    continue
+                refs_to_release.append(reference_sha)
                 upload.cas_ref_count = 0
                 if delete_staging and upload.status == "clean":
                     upload.status = "failed"
+                continue
+
+            # If Upload rows exist but none owns a live CAS ref, do not release a
+            # second owner for the same key. Claim fallback is for generated-CAS
+            # files that genuinely have no Upload owner.
+            if key in all_uploads_by_key:
+                continue
+            claim = claims_by_key.get(key)
+            if claim is not None:
+                refs_to_release.append(claim.sha256)
+            else:
+                logger.warning(
+                    "No authoritative CAS staging owner found while cleaning PR %s key %s",
+                    pr.id,
+                    key,
+                )
+
         if refs_to_release:
             db.info.setdefault(PostCommitKey.JOBS, []).append(
                 (

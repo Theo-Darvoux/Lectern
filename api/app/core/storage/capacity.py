@@ -86,8 +86,13 @@ async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ign
 
 
 async def _legacy_storage_usage_from_database(db: AsyncSession) -> int:
-    """Return retained legacy usage, including soft-deleted rows in revert grace."""
-    revert_cutoff = datetime.now(UTC) - timedelta(days=settings.pr_revert_grace_days)
+    """Return physical legacy usage until cleanup confirms object deletion.
+
+    Expired soft-deleted MaterialVersion rows intentionally remain authoritative
+    capacity owners until the cleanup worker deletes the backing object and then
+    hard-deletes those rows. This makes deletion failure fail closed (overcount),
+    rather than admitting new uploads while bytes still exist in object storage.
+    """
     legacy_objects = (
         select(
             MaterialVersion.file_key,
@@ -97,7 +102,6 @@ async def _legacy_storage_usage_from_database(db: AsyncSession) -> int:
             MaterialVersion.file_key.is_not(None),
             MaterialVersion.file_key.not_like("cas/%"),
             MaterialVersion.file_size.is_not(None),
-            (MaterialVersion.deleted_at.is_(None)) | (MaterialVersion.deleted_at >= revert_cutoff),
         )
         .group_by(MaterialVersion.file_key)
         .subquery()

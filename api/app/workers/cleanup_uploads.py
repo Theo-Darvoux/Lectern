@@ -22,6 +22,109 @@ from app.models.upload import Upload
 logger = logging.getLogger(__name__)
 
 
+async def _release_expired_cas_material_versions(
+    db,
+    redis,
+    revert_cutoff: datetime,
+) -> int:
+    """Release one durable CAS ref per expired soft-deleted version, then reap it."""
+    from app.core.security.cas import CasReferenceMissingError, decrement_cas_ref
+
+    versions = list(
+        (
+            await db.scalars(
+                select(MaterialVersion)
+                .where(
+                    MaterialVersion.file_key.like("cas/%"),
+                    MaterialVersion.deleted_at.is_not(None),
+                    MaterialVersion.deleted_at < revert_cutoff,
+                )
+                .execution_options(include_deleted=True)
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+    )
+    released = 0
+    for version in versions:
+        sha256 = version.cas_sha256
+        if not sha256:
+            logger.error(
+                "Cannot release expired CAS MaterialVersion %s: cas_sha256 is missing",
+                version.id,
+            )
+            continue
+        try:
+            await decrement_cas_ref(
+                redis,
+                sha256,
+                operation_id=f"cleanup:material-version:{version.id}:expire",
+            )
+        except CasReferenceMissingError:
+            # Redis CAS refs are an evictable coordination cache. A missing ref
+            # means there is no live ref to leak; the expired DB owner can go.
+            logger.warning(
+                "CAS reference already absent while reaping expired MaterialVersion %s",
+                version.id,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to release CAS reference for expired MaterialVersion %s: %s",
+                version.id,
+                exc,
+            )
+            continue
+        await db.delete(version)
+        released += 1
+    return released
+
+
+async def _reap_expired_legacy_material_key(
+    db,
+    ctx: dict,  # type: ignore[type-arg]
+    key: str,
+    revert_cutoff: datetime,
+    *,
+    object_seen: bool,
+) -> bool:
+    """Delete an expired legacy object before removing its capacity-owning rows.
+
+    Rows are locked across the object-store delete so a concurrent revert cannot
+    resurrect a MaterialVersion after its bytes have been removed.
+    """
+    versions = list(
+        (
+            await db.scalars(
+                select(MaterialVersion)
+                .where(MaterialVersion.file_key == key)
+                .execution_options(include_deleted=True)
+                .with_for_update()
+            )
+        ).all()
+    )
+    if not versions:
+        return False
+
+    for version in versions:
+        deleted_at = version.deleted_at
+        if deleted_at is None:
+            return True
+        if deleted_at.tzinfo is None:
+            deleted_at = deleted_at.replace(tzinfo=UTC)
+        if deleted_at >= revert_cutoff:
+            return True
+
+    from app.core.storage.facade import object_exists
+    from app.workers.storage_ops import delete_storage_objects
+
+    if object_seen or await object_exists(key):
+        await delete_storage_objects(ctx, [key])
+
+    for version in versions:
+        await db.delete(version)
+    await db.commit()
+    return True
+
+
 async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     logger.info("Running upload cleanup cron job")
 
@@ -127,9 +230,7 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     # ── 4. Collect protected keys ────────────────────────────────────────────
     protected_keys: set[str] = set()
     async with async_session_factory() as db:
-        result = await db.execute(
-            select(PullRequest).where(PullRequest.status.in_([PRStatus.OPEN, PRStatus.APPROVED]))
-        )
+        result = await db.execute(select(PullRequest).where(PullRequest.status == PRStatus.OPEN))
         for pr in result.scalars():
             payload = cast(list[dict], pr.payload)  # type: ignore[type-arg]
             for op in payload:
@@ -228,8 +329,18 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     # ── 6. Clean orphaned cas/ objects ───────────────────────────────────────
     # CAS objects without a Redis ref entry are orphans. The 48h safety margin
     # prevents deleting objects that are mid-upload or mid-finalize.
+    revert_cutoff = datetime.now(UTC) - timedelta(days=settings.pr_revert_grace_days)
     async with async_session_factory() as db:
-        revert_cutoff = datetime.now(UTC) - timedelta(days=settings.pr_revert_grace_days)
+        released_expired_cas = await _release_expired_cas_material_versions(
+            db, ctx["redis"], revert_cutoff
+        )
+        if released_expired_cas:
+            await db.commit()
+            logger.info(
+                "Released and reaped %d expired CAS MaterialVersion(s)",
+                released_expired_cas,
+            )
+
         legacy_result = await db.execute(
             select(MaterialVersion.file_key)
             .where(
@@ -241,6 +352,17 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
             .execution_options(include_deleted=True)
         )
         valid_legacy_keys = {row[0] for row in legacy_result if row[0]}
+
+        expired_legacy_result = await db.execute(
+            select(MaterialVersion.file_key)
+            .where(
+                MaterialVersion.file_key.like("materials/%"),
+                MaterialVersion.deleted_at.is_not(None),
+                MaterialVersion.deleted_at < revert_cutoff,
+            )
+            .execution_options(include_deleted=True)
+        )
+        expired_legacy_keys = {row[0] for row in expired_legacy_result if row[0]}
 
         material_cas_result = await db.execute(
             select(MaterialVersion.file_key)
@@ -265,6 +387,8 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
         valid_cas_keys.update(row[0] for row in upload_cas_result if row[0])
 
     orphans_to_delete: list[str] = []
+    legacy_material_candidates: list[str] = []
+    seen_legacy_material_keys: set[str] = set()
     cas_object_sizes: dict[str, int] = {}
 
     async with get_s3_client() as client:
@@ -285,17 +409,38 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
                 if obj["LastModified"].replace(tzinfo=None) < orphan_cutoff.replace(tzinfo=None):
                     orphans_to_delete.append(key)
 
-        # Legacy: clean remaining materials/ or uploads/ objects that are NOT in valid_legacy_keys
+        # Legacy: clean remaining materials/ or uploads/ objects that are NOT in valid_legacy_keys.
+        # Expired materials/ keys with DB owners are handled separately under row locks
+        # so reverts serialize against physical deletion.
         for prefix in ("materials/", "uploads/"):
             async for page in paginator.paginate(Bucket=settings.s3_bucket, Prefix=prefix):
                 for obj in page.get("Contents", []):
                     key = obj["Key"]
+                    if prefix == "materials/":
+                        seen_legacy_material_keys.add(key)
                     if key in valid_legacy_keys or key in protected_keys:
                         continue
                     if obj["LastModified"].replace(tzinfo=None) < orphan_cutoff.replace(
                         tzinfo=None
                     ):
-                        orphans_to_delete.append(key)
+                        if prefix == "materials/" and key in expired_legacy_keys:
+                            legacy_material_candidates.append(key)
+                        else:
+                            orphans_to_delete.append(key)
+
+    # Reap expired legacy MaterialVersions only after their physical bytes are
+    # confirmed absent/deleted. Capacity continues counting the rows until then.
+    for key in sorted(set(legacy_material_candidates)):
+        async with async_session_factory() as db:
+            handled = await _reap_expired_legacy_material_key(
+                db, ctx, key, revert_cutoff, object_seen=True
+            )
+        if not handled:
+            orphans_to_delete.append(key)
+
+    for key in sorted(expired_legacy_keys - seen_legacy_material_keys - protected_keys):
+        async with async_session_factory() as db:
+            await _reap_expired_legacy_material_key(db, ctx, key, revert_cutoff, object_seen=False)
 
     if orphans_to_delete:
         from app.core.storage.facade import delete_object

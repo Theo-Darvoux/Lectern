@@ -252,6 +252,7 @@ async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis
     db_session.add_all([up1, up2])
     await db_session.commit()
 
+    import app.core.database.database as database
     from app.workers.cleanup_uploads import cleanup_uploads
 
     mock_s3 = AsyncMock()
@@ -274,6 +275,10 @@ async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis
             yield
 
     with (
+        patch(
+            "app.workers.cleanup_uploads.async_session_factory",
+            database.async_session_factory,
+        ),
         patch("app.workers.cleanup_uploads.get_s3_client", return_value=mock_cm),
         patch("app.workers.cleanup_uploads.list_multipart_uploads", mock_list_multipart),
         patch("app.core.storage.facade.object_exists", AsyncMock(return_value=True)),

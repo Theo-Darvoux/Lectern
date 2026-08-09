@@ -362,9 +362,10 @@ async def test_text_diff_is_truncated_at_bound(
     db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
 
     mock_redis = MagicMock()
-    # Create a body that is entirely different from old text to maximize diff size.
-    old_text = "old\n" * 200_000  # ~800 KB of unique lines
-    new_text = "new\n" * 200_000  # ~800 KB of different lines, producing >1 MiB diff
+    # Stay below the detailed-diff input guards while producing >1 MiB of
+    # unified-diff output. This exercises output truncation, not input omission.
+    old_text = "".join(f"old-{i:05d}-" + "a" * 90 + "\n" for i in range(9_000))
+    new_text = "".join(f"new-{i:05d}-" + "b" * 90 + "\n" for i in range(9_000))
 
     with (
         patch(

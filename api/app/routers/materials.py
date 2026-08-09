@@ -74,6 +74,9 @@ _TEXT_READABLE_EXACT = frozenset({"image/svg+xml"})
 _TEXT_EDIT_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB cap on raw text body
 _TEXT_DECOMPRESS_MAX_BYTES = _TEXT_EDIT_MAX_BYTES
 _TEXT_DIFF_MAX_BYTES = 1024 * 1024  # 1 MiB bound on text diff output
+_TEXT_DIFF_INPUT_MAX_BYTES = 1024 * 1024  # Detailed diffs only for <= 1 MiB inputs
+_TEXT_DIFF_MAX_LINES = 10_000  # Bound split-list and SequenceMatcher state
+_TEXT_DIFF_OMITTED = "... diff omitted: input too large ..."
 _TEXT_STAGING_RESERVATION_TTL = max(
     48 * 3600,
     (settings.pr_expiry_days + 1) * 24 * 3600,
@@ -146,6 +149,45 @@ def _decompress_gzip_text(
         raise BadRequestError("Failed to decompress gzip-wrapped text") from exc
 
     return b"".join(chunks)
+
+
+def _build_bounded_text_diff(
+    old_text: str,
+    new_text: str,
+    *,
+    old_size_bytes: int,
+    new_size_bytes: int,
+    fromfile: str,
+    tofile: str,
+) -> str:
+    """Build a bounded unified diff without materializing hostile line lists first."""
+    if (
+        old_size_bytes > _TEXT_DIFF_INPUT_MAX_BYTES
+        or new_size_bytes > _TEXT_DIFF_INPUT_MAX_BYTES
+        or old_text.count("\n") + 1 > _TEXT_DIFF_MAX_LINES
+        or new_text.count("\n") + 1 > _TEXT_DIFF_MAX_LINES
+    ):
+        return f"```diff\n{_TEXT_DIFF_OMITTED}\n```"
+
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    diff_lines: list[str] = []
+    diff_size = 0
+    for line in difflib.unified_diff(
+        old_lines,
+        new_lines,
+        fromfile=fromfile,
+        tofile=tofile,
+        lineterm="",
+    ):
+        encoded_line_len = len(line.encode("utf-8")) + 1
+        if diff_size + encoded_line_len > _TEXT_DIFF_MAX_BYTES:
+            diff_lines.append("... diff truncated ...")
+            break
+        diff_lines.append(line)
+        diff_size += encoded_line_len
+
+    return "```diff\n" + "\n".join(diff_lines) + "\n```" if diff_lines else ""
 
 
 @router.get("/{material_id}", response_model=MaterialDetail)
@@ -554,7 +596,9 @@ async def save_material_text_content(
 
     enforce_upload_size_limit(check_mime, file_size)
 
-    # Compute text diff
+    # Compute text diff. Detailed diffing has a smaller resource budget than
+    # the editor itself; preflight byte/line bounds before splitlines()/difflib.
+    old_bytes = b""
     try:
         old_bytes = await read_full_object(version["file_key"])
         if is_gzip_wrapped or old_bytes.startswith(_GZIP_MAGIC):
@@ -566,25 +610,17 @@ async def save_material_text_content(
         except UnicodeDecodeError:
             old_text = old_bytes.decode("latin-1")
     except Exception:
+        old_bytes = b""
         old_text = ""
 
-    diff_lines: list[str] = []
-    diff_size = 0
-    for line in difflib.unified_diff(
-        old_text.splitlines(),
-        body.splitlines(),
+    diff_text = _build_bounded_text_diff(
+        old_text,
+        body,
+        old_size_bytes=len(old_bytes),
+        new_size_bytes=file_size,
         fromfile=current_name,
         tofile=logical_name,
-        lineterm="",
-    ):
-        encoded_line_len = len(line.encode("utf-8")) + 1
-        if diff_size + encoded_line_len > _TEXT_DIFF_MAX_BYTES:
-            diff_lines.append("... diff truncated ...")
-            break
-        diff_lines.append(line)
-        diff_size += encoded_line_len
-
-    diff_text = "```diff\n" + "\n".join(diff_lines) + "\n```" if diff_lines else ""
+    )
 
     # Build deterministic storage key scoped to the user
     upload_id = str(uuid.uuid4())
