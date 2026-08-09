@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     legal_version: str = "1.0"
 
     database_url: str = "postgresql+asyncpg://lectern:lectern@localhost:5432/lectern"
+    # CAS physical-mutation fencing uses PostgreSQL session advisory locks.
+    # Transaction-pooled proxies cannot preserve that identity across COMMIT.
+    database_pool_mode: Literal["session", "transaction"] = "session"
 
     redis_url: str = "redis://localhost:6379/0"
 
@@ -290,6 +293,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_secrets(self) -> "Settings":
+        if self.database_url.startswith("postgresql") and self.database_pool_mode != "session":
+            raise ValueError(
+                "DATABASE_POOL_MODE=transaction is incompatible with CAS process fencing; "
+                "use a direct PostgreSQL connection or a session-pooled proxy."
+            )
+
         if self.is_dev:
             return self
 

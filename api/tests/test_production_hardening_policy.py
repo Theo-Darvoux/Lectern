@@ -7,6 +7,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from app.config import Settings
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -300,3 +304,16 @@ def test_all_external_actions_are_pinned_to_full_commit_shas() -> None:
     assert not unpinned, unpinned
     dependabot = _read(".github/dependabot.yml")
     assert "package-ecosystem: github-actions" in dependabot
+
+def test_postgresql_transaction_pooling_is_rejected_for_cas_session_fencing() -> None:
+    with pytest.raises(ValueError, match="DATABASE_POOL_MODE=transaction"):
+        Settings(
+            _env_file=None,
+            database_url="postgresql+asyncpg://lectern:lectern@postgres:5432/lectern",
+            database_pool_mode="transaction",
+        )
+
+    env_example = _read(".env.example")
+    assert "DATABASE_POOL_MODE=session" in env_example
+    assert "Transaction pooling is intentionally rejected" in env_example
+

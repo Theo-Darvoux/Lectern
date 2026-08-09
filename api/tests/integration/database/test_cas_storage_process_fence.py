@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 from redis.asyncio import Redis
 from sqlalchemy import text as sql_text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
 import app.core.database.redis as redis_core
@@ -208,3 +208,105 @@ async def test_process_fence_is_released_by_database_connection_death(
 
     async with capacity._cas_storage_process_fence():
         pass
+
+@pytest_asyncio.fixture
+async def pooled_process_fence_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncEngine:
+    """Production-like one-connection pool for session-lock leak regressions."""
+    if not settings.database_url.startswith("postgresql"):
+        pytest.skip("real PostgreSQL DATABASE_URL is required")
+
+    test_engine = create_async_engine(
+        settings.database_url,
+        pool_size=1,
+        max_overflow=0,
+        pool_pre_ping=True,
+    )
+    monkeypatch.setattr(capacity, "engine", test_engine)
+    try:
+        yield test_engine
+    finally:
+        await test_engine.dispose()
+
+
+async def _assert_fence_available_from_independent_session() -> None:
+    """Prove no different PostgreSQL session is blocked by a leaked fence."""
+    verifier = create_async_engine(settings.database_url, poolclass=NullPool)
+    try:
+        async with verifier.connect() as connection:
+            acquired = bool(
+                await connection.scalar(
+                    sql_text("SELECT pg_try_advisory_lock(:key)"),
+                    {"key": capacity._CAS_STORAGE_PROCESS_FENCE_KEY},
+                )
+            )
+            await connection.commit()
+            assert acquired, "CAS process fence leaked into another pooled PostgreSQL session"
+            unlocked = bool(
+                await connection.scalar(
+                    sql_text("SELECT pg_advisory_unlock(:key)"),
+                    {"key": capacity._CAS_STORAGE_PROCESS_FENCE_KEY},
+                )
+            )
+            await connection.commit()
+            assert unlocked
+    finally:
+        await verifier.dispose()
+
+
+async def test_process_fence_acquisition_cancellation_cannot_leak_pooled_session_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    pooled_process_fence_engine: AsyncEngine,
+) -> None:
+    """Ambiguous cancellation after server-side acquisition must kill the DB session."""
+    real_scalar = AsyncConnection.scalar
+    injected = False
+
+    async def cancel_after_server_scalar(
+        self: AsyncConnection,
+        statement: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        nonlocal injected
+        result = await real_scalar(self, statement, *args, **kwargs)
+        if not injected and "pg_try_advisory_lock" in str(statement):
+            injected = True
+            raise asyncio.CancelledError()
+        return result
+
+    monkeypatch.setattr(AsyncConnection, "scalar", cancel_after_server_scalar)
+    with pytest.raises(asyncio.CancelledError):
+        async with capacity._cas_storage_process_fence():
+            pytest.fail("acquisition cancellation must happen before entering the body")
+    assert injected
+
+    monkeypatch.setattr(AsyncConnection, "scalar", real_scalar)
+    await _assert_fence_available_from_independent_session()
+
+
+async def test_process_fence_post_acquisition_commit_failure_cannot_leak_pooled_session_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    pooled_process_fence_engine: AsyncEngine,
+) -> None:
+    """A failure after pg_try_advisory_lock succeeds must also destroy the session."""
+    real_commit = AsyncConnection.commit
+    injected = False
+
+    async def fail_first_commit(self: AsyncConnection) -> None:
+        nonlocal injected
+        if not injected:
+            injected = True
+            raise RuntimeError("synthetic post-acquisition commit failure")
+        await real_commit(self)
+
+    monkeypatch.setattr(AsyncConnection, "commit", fail_first_commit)
+    with pytest.raises(BadRequestError, match="process fence is temporarily unavailable"):
+        async with capacity._cas_storage_process_fence():
+            pytest.fail("commit failure must happen before entering the body")
+    assert injected
+
+    monkeypatch.setattr(AsyncConnection, "commit", real_commit)
+    await _assert_fence_available_from_independent_session()
+

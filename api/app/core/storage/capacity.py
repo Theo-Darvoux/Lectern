@@ -13,13 +13,14 @@ from typing import Any
 
 from redis.asyncio import Redis
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 import app.core.database.redis as redis_core
 from app.config import settings
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.database import engine
+from app.core.security.async_utils import settle_awaitable
 from app.core.security.cas import _STORAGE_USAGE_GENERATION_KEY, _STORAGE_USAGE_KEY
 from app.core.storage.facade import list_objects
 from app.models.material import MaterialVersion
@@ -73,6 +74,26 @@ LEGACY_STORAGE_USAGE_KEY = "storage:legacy_usage_bytes"
 LEGACY_STORAGE_GENERATION_KEY = "storage:legacy_usage_generation"
 
 
+async def _invalidate_cas_process_fence_connection(
+    connection: AsyncConnection,
+    *,
+    reason: str,
+) -> asyncio.CancelledError | None:
+    """Invalidate one PostgreSQL session to destroy any ambiguous session lock.
+
+    ``AsyncConnection.invalidate()`` itself is an awaitable. It must be allowed
+    to settle even if the request is already cancelled, otherwise the logical
+    connection can be returned to SQLAlchemy's pool while its PostgreSQL session
+    still owns the advisory lock.
+    """
+    _result, error, cancellation = await settle_awaitable(connection.invalidate())
+    if error is not None:
+        raise RuntimeError(
+            f"Could not invalidate PostgreSQL CAS process-fence session after {reason}"
+        ) from error
+    return cancellation
+
+
 @asynccontextmanager
 async def _cas_storage_process_fence() -> AsyncIterator[None]:
     """Hold the non-expiring process-liveness fence for one CAS critical section.
@@ -105,7 +126,20 @@ async def _cas_storage_process_fence() -> AsyncIterator[None]:
                 # Session locks survive COMMIT. End the implicit transaction so
                 # the S3 critical section is never an idle database transaction.
                 await connection.commit()
-            except Exception as exc:
+            except BaseException as exc:
+                # The server may have acquired the session advisory lock even if
+                # cancellation/transport failure prevented the client from
+                # receiving a definitive result. Transaction rollback is not a
+                # release mechanism for session locks: destroy this physical
+                # PostgreSQL session before it can return to the pool.
+                cleanup_cancellation = await _invalidate_cas_process_fence_connection(
+                    connection,
+                    reason="ambiguous acquisition",
+                )
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                if cleanup_cancellation is not None:
+                    raise cleanup_cancellation
                 raise BadRequestError(
                     "Storage capacity process fence is temporarily unavailable. "
                     "Please try again later."
@@ -138,14 +172,25 @@ async def _cas_storage_process_fence() -> AsyncIterator[None]:
                         "PostgreSQL reported the CAS process fence was not owned "
                         "during release; invalidating the pooled connection"
                     )
-                    await connection.invalidate()
+                    cleanup_cancellation = await _invalidate_cas_process_fence_connection(
+                        connection,
+                        reason="unlock ownership mismatch",
+                    )
+                    if cleanup_cancellation is not None:
+                        raise cleanup_cancellation
             except BaseException as exc:
-                # Never return a possibly fence-owning connection to the pool.
+                # Unlock/commit is itself ambiguous. Do not let cancellation
+                # interrupt invalidation and return a potentially lock-owning
+                # physical session to SQLAlchemy's production pool.
                 logger.warning("CAS process-fence release failed: %s", exc)
-                try:
-                    await asyncio.shield(connection.invalidate())
-                except BaseException:
-                    pass
+                cleanup_cancellation = await _invalidate_cas_process_fence_connection(
+                    connection,
+                    reason="ambiguous release",
+                )
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                if cleanup_cancellation is not None:
+                    raise cleanup_cancellation
 
 
 @asynccontextmanager
