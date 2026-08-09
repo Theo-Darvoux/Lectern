@@ -1,7 +1,6 @@
 """Resource-admission regression tests for batch ZIP extraction."""
 
 import asyncio
-import threading
 import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -30,28 +29,30 @@ def test_extract_zip_rejects_insufficient_disk_before_writing(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelled_extraction_holds_global_slot_until_thread_stops() -> None:
-    first_started = threading.Event()
-    release_first = threading.Event()
+async def test_cancelled_extraction_holds_global_slot_until_child_cleanup_finishes() -> None:
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
     calls = 0
-    calls_lock = threading.Lock()
 
-    def blocking_extract(*_args: object) -> tuple[list[object], list[str]]:
+    async def blocking_extract(*_args: object, **_kwargs: object) -> tuple[list[object], list[str]]:
         nonlocal calls
-        with calls_lock:
-            calls += 1
-            call_number = calls
+        calls += 1
+        call_number = calls
         if call_number == 1:
             first_started.set()
-            release_first.wait(timeout=2)
+            try:
+                await release_first.wait()
+            except asyncio.CancelledError:
+                await release_first.wait()
+                raise
         return [], []
 
     with (
         patch("app.routers.upload.batch_zip._EXTRACTION_SEMAPHORE", asyncio.Semaphore(1)),
-        patch("app.routers.upload.batch_zip._extract_zip_sync", side_effect=blocking_extract),
+        patch("app.routers.upload.batch_zip.extract_zip_isolated", side_effect=blocking_extract),
     ):
         first = asyncio.create_task(batch_zip._extract_zip_bounded("one", "tmp", 1))
-        assert await asyncio.to_thread(first_started.wait, 1)
+        await asyncio.wait_for(first_started.wait(), timeout=1)
 
         first.cancel()
         second = asyncio.create_task(batch_zip._extract_zip_bounded("two", "tmp", 1))

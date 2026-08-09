@@ -1,6 +1,8 @@
+import asyncio
 import json
 import logging
 import math
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, cast
@@ -11,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.database.redis as redis_db
 from app.core.events.coalesce import coalesce_index_jobs
-from app.core.events.sse import broadcast_to_topic
+from app.core.events.sse import broadcast_to_topic, broadcast_to_user
+from app.core.security.async_utils import settle_awaitable
 from app.models.outbox import OutboxJob
 
 logger = logging.getLogger(__name__)
@@ -24,11 +27,13 @@ _ALLOWED_JOB_NAMES = frozenset(
         "add_cas_references",
         "delete_indexed_item",
         "delete_storage_objects",
+        "dispatch_webhook",
         "index_directories_batch",
         "index_directory",
         "index_material",
         "index_materials_batch",
         "process_upload",
+        "process_upload_post_scan",
         "release_cas_references",
         "release_upload_quota",
     }
@@ -38,8 +43,79 @@ _ALLOWED_JOB_NAMES = frozenset(
 class PostCommitKey(StrEnum):
     JOBS = "post_commit_jobs"
     SSE = "post_commit_sse_broadcasts"
+    USER_SSE = "post_commit_user_sse_broadcasts"
     JOB_KEYS = "post_commit_job_keys"
     DEINDEX_KEYS = "post_commit_deindex_keys"
+    MANAGED_TRANSACTION = "managed_request_transaction"
+    TRANSACTION_COMMIT_CALLBACKS = "transaction_commit_callbacks"
+    TRANSACTION_ROLLBACK_CALLBACKS = "transaction_rollback_callbacks"
+
+
+TransactionCallback = Callable[[], Awaitable[None]]
+
+
+def register_transaction_callbacks(
+    session: AsyncSession,
+    *,
+    on_rollback: TransactionCallback,
+    on_commit: TransactionCallback,
+) -> bool:
+    """Tie external-resource compensation to the request-owned DB transaction.
+
+    Returns ``False`` for caller-owned sessions so services can preserve their
+    existing immediate finalization semantics outside the FastAPI dependency.
+    """
+    if session.info.get(PostCommitKey.MANAGED_TRANSACTION) is not True:
+        return False
+    session.info.setdefault(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, []).append(on_rollback)
+    session.info.setdefault(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, []).append(on_commit)
+    return True
+
+
+async def rollback_transaction_callbacks(session: AsyncSession) -> None:
+    """Compensate external mutations in reverse registration order."""
+    callbacks: list[TransactionCallback] = session.info.pop(
+        PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, []
+    )
+    session.info.pop(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, None)
+    errors: list[BaseException] = []
+    caller_cancellation: asyncio.CancelledError | None = None
+    for callback in reversed(callbacks):
+        _result, error, cancellation = await settle_awaitable(callback())
+        caller_cancellation = caller_cancellation or cancellation
+        if error is not None:
+            errors.append(error)
+            logger.error(
+                "External transaction compensation failed",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+    if errors:
+        raise RuntimeError(
+            f"{len(errors)} external transaction compensation callback(s) failed"
+        ) from errors[0]
+    if caller_cancellation is not None:
+        raise caller_cancellation
+
+
+async def finalize_transaction_callbacks(session: AsyncSession) -> None:
+    """Finalize external mutations after a successful database commit."""
+    callbacks: list[TransactionCallback] = session.info.pop(
+        PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, []
+    )
+    session.info.pop(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, None)
+    caller_cancellation: asyncio.CancelledError | None = None
+    for callback in callbacks:
+        _result, error, cancellation = await settle_awaitable(callback())
+        caller_cancellation = caller_cancellation or cancellation
+        if error is not None:
+            # The database commit is already durable. Finalizers are restricted
+            # to cleanup and must never make a successful mutation look failed.
+            logger.error(
+                "External transaction finalization failed after database commit",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+    if caller_cancellation is not None:
+        raise caller_cancellation
 
 
 def add_post_commit_job(session: AsyncSession, job: tuple[Any, ...]) -> None:
@@ -51,6 +127,15 @@ def add_post_commit_job(session: AsyncSession, job: tuple[Any, ...]) -> None:
 def add_post_commit_sse(session: AsyncSession, topic: str, event: dict[str, Any]) -> None:
     """Safely append an SSE broadcast event to be dispatched post-commit."""
     session.info.setdefault(PostCommitKey.SSE, []).append((topic, event))
+
+
+def add_post_commit_user_sse(
+    session: AsyncSession,
+    user_id: UUID,
+    event: dict[str, Any],
+) -> None:
+    """Queue a user notification broadcast only after transaction commit."""
+    session.info.setdefault(PostCommitKey.USER_SSE, []).append((user_id, event))
 
 
 def outbox_kwargs(**kwargs: object) -> dict[str, dict[str, object]]:
@@ -180,6 +265,14 @@ async def dispatch_post_commit_actions(session: AsyncSession) -> None:
                     logger.error(
                         "Failed to broadcast SSE post-commit event for topic '%s': %s", topic, e
                     )
+        user_broadcasts = session.info.pop(PostCommitKey.USER_SSE, [])
+        for user_id, event in user_broadcasts:
+            try:
+                broadcast_to_user(user_id, event)
+            except Exception as e:
+                logger.error(
+                    "Failed to broadcast SSE post-commit event for user '%s': %s", user_id, e
+                )
         await dispatch_pending_outbox(session)
     except Exception as e:
         logger.error("Unhandled error during post-commit actions dispatching: %s", e, exc_info=True)

@@ -41,7 +41,7 @@ async def _make_user(db: AsyncSession, academic_year: str | None) -> User:
 async def test_year_rollover_1a_to_2a(db_session: AsyncSession) -> None:
     user = await _make_user(db_session, "1A")
 
-    await year_rollover({"db_sessionmaker": c_db.async_session_factory})
+    await year_rollover({"db_sessionmaker": c_db.async_session_factory}, target_year=2030)
 
     await db_session.refresh(user)
     assert user.academic_year == "2A"
@@ -50,7 +50,7 @@ async def test_year_rollover_1a_to_2a(db_session: AsyncSession) -> None:
 async def test_year_rollover_2a_to_3a_plus(db_session: AsyncSession) -> None:
     user = await _make_user(db_session, "2A")
 
-    await year_rollover({"db_sessionmaker": c_db.async_session_factory})
+    await year_rollover({"db_sessionmaker": c_db.async_session_factory}, target_year=2030)
 
     await db_session.refresh(user)
     assert user.academic_year == "3A+"
@@ -59,7 +59,7 @@ async def test_year_rollover_2a_to_3a_plus(db_session: AsyncSession) -> None:
 async def test_year_rollover_3a_plus_stays_capped(db_session: AsyncSession) -> None:
     user = await _make_user(db_session, "3A+")
 
-    await year_rollover({"db_sessionmaker": c_db.async_session_factory})
+    await year_rollover({"db_sessionmaker": c_db.async_session_factory}, target_year=2030)
 
     await db_session.refresh(user)
     assert user.academic_year == "3A+"
@@ -68,14 +68,34 @@ async def test_year_rollover_3a_plus_stays_capped(db_session: AsyncSession) -> N
 async def test_year_rollover_skips_users_without_academic_year(db_session: AsyncSession) -> None:
     user = await _make_user(db_session, None)
 
-    await year_rollover({"db_sessionmaker": c_db.async_session_factory})
+    await year_rollover({"db_sessionmaker": c_db.async_session_factory}, target_year=2030)
 
     await db_session.refresh(user)
     assert user.academic_year is None
 
 
 async def test_year_rollover_noop_on_empty_db(db_session: AsyncSession) -> None:
-    await year_rollover({"db_sessionmaker": c_db.async_session_factory})
+    await year_rollover({"db_sessionmaker": c_db.async_session_factory}, target_year=2030)
+
+
+async def test_year_rollover_duplicate_run_is_idempotent(db_session: AsyncSession) -> None:
+    user = await _make_user(db_session, "1A")
+
+    await year_rollover({"db_sessionmaker": c_db.async_session_factory}, target_year=2030)
+    await year_rollover({"db_sessionmaker": c_db.async_session_factory}, target_year=2030)
+
+    await db_session.refresh(user)
+    assert user.academic_year == "2A"
+
+
+async def test_year_rollover_next_year_advances_again(db_session: AsyncSession) -> None:
+    user = await _make_user(db_session, "1A")
+
+    await year_rollover({"db_sessionmaker": c_db.async_session_factory}, target_year=2030)
+    await year_rollover({"db_sessionmaker": c_db.async_session_factory}, target_year=2031)
+
+    await db_session.refresh(user)
+    assert user.academic_year == "3A+"
 
 
 async def test_year_rollover_rollover_map_completeness() -> None:

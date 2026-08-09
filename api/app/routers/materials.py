@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common.exceptions import AppError, BadRequestError, NotFoundError
 from app.core.database.database import get_db
+from app.core.database.post_commit import register_transaction_callbacks
 from app.core.database.redis import get_redis, redis_client
 from app.core.storage.facade import (
     generate_presigned_get,
@@ -550,7 +551,23 @@ async def save_material_text_content(
     file_key = f"uploads/{user.id}/{upload_id}/{logical_name}"
     file_size = len(raw_bytes)
 
-    # Upload to object storage
+    async def rollback_upload() -> None:
+        from app.core.storage.facade import delete_object
+
+        await delete_object(file_key)
+
+    async def finalize_upload() -> None:
+        return None
+
+    if not register_transaction_callbacks(
+        db,
+        on_rollback=rollback_upload,
+        on_commit=finalize_upload,
+    ):
+        raise RuntimeError("Text-content storage writes require a request-managed transaction")
+
+    # Upload to object storage. The registered compensation removes this unique
+    # key if upload lost-success or the following database transaction fails.
     await storage_upload_file(
         raw_bytes,
         file_key,
@@ -571,7 +588,6 @@ async def save_material_text_content(
         size_bytes=file_size,
     )
     db.add(upload_row)
-    await db.commit()
 
     return {
         "file_key": file_key,

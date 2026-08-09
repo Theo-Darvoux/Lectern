@@ -555,15 +555,27 @@ async def client(
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         import app.core.database.redis as redis_core
-        from app.core.database.post_commit import PostCommitKey
+        from app.core.database.post_commit import (
+            PostCommitKey,
+            finalize_transaction_callbacks,
+            rollback_transaction_callbacks,
+        )
         from app.core.events.coalesce import coalesce_index_jobs
+        from app.core.events.sse import broadcast_to_topic, broadcast_to_user
 
         # Serialize access to the shared connection to prevent SQLite transaction conflicts
         async with db_lock, AsyncSession(db_connection, expire_on_commit=False) as session:
             session.info[PostCommitKey.JOBS] = []
+            session.info[PostCommitKey.MANAGED_TRANSACTION] = True
             try:
                 yield session
                 await session.commit()
+                await finalize_transaction_callbacks(session)
+
+                for topic, event in session.info.pop(PostCommitKey.SSE, []):
+                    broadcast_to_topic(topic, event)
+                for user_id, event in session.info.pop(PostCommitKey.USER_SSE, []):
+                    broadcast_to_user(user_id, event)
 
                 jobs = session.info.get(PostCommitKey.JOBS, [])
                 if jobs:
@@ -579,9 +591,14 @@ async def client(
                                     job_kwargs = encoded
                                     job_args.pop()
                             await redis_core.arq_pool.enqueue_job(job[0], *job_args, **job_kwargs)
-            except Exception:
+            except BaseException:
                 await session.rollback()
+                await rollback_transaction_callbacks(session)
                 raise
+            finally:
+                session.info.pop(PostCommitKey.MANAGED_TRANSACTION, None)
+                session.info.pop(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, None)
+                session.info.pop(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, None)
 
     async def override_get_redis() -> AsyncGenerator[AsyncMock, None]:
         yield mock_redis

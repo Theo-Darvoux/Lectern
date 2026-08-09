@@ -12,7 +12,9 @@ from app.models.material import Material, MaterialVersion
 from app.models.notification import Notification
 from app.models.outbox import OutboxJob
 from app.models.pull_request import PRComment, PRFileClaim, PullRequest
+from app.models.scheduled_job_run import ScheduledJobRun
 from app.models.tag import Tag, directory_tags, material_tags
+from app.models.upload import Upload
 from app.models.user import User
 from app.models.view_history import ViewHistory
 
@@ -34,7 +36,9 @@ __all__ = [
     "PRComment",
     "PRFileClaim",
     "PullRequest",
+    "ScheduledJobRun",
     "Tag",
+    "Upload",
     "User",
     "ViewHistory",
     "directory_tags",

@@ -37,6 +37,7 @@ from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import guess_mime_from_bytes
 from app.core.security.async_utils import shielded_to_thread
 from app.core.security.file_security import SvgSecurityError, check_svg_safety_stream
+from app.core.security.isolated_parser import extract_zip_isolated
 from app.core.security.processing_paths import make_processing_temp_dir
 from app.core.storage.facade import delete_object, get_s3_client
 from app.dependencies.auth import CurrentUser
@@ -308,15 +309,29 @@ async def _extract_zip_bounded(
     tmp_dir: str,
     max_members: int,
 ) -> tuple[list[_ExtractedEntry], list[str]]:
-    """Run extraction under a process-wide slot, including after cancellation."""
+    """Run isolated extraction under a process-wide resource-admission slot."""
     async with _EXTRACTION_SEMAPHORE:
-        return await shielded_to_thread(
-            _extract_zip_sync,
-            zip_path,
-            tmp_dir,
-            max_members,
-            description="batch ZIP extraction",
+        isolated_entries, skipped = await extract_zip_isolated(
+            Path(zip_path),
+            extraction_root=Path(tmp_dir),
+            max_members=max_members,
         )
+        entries: list[_ExtractedEntry] = []
+        for entry in isolated_entries:
+            canonical = _canonical_zip_path(entry.relative_path)
+            if canonical is None or canonical.rstrip("/") != entry.relative_path:
+                raise RuntimeError("Isolated ZIP extractor returned an unsafe relative path")
+            if entry.filename != canonical.rsplit("/", 1)[-1]:
+                raise RuntimeError("Isolated ZIP extractor returned inconsistent metadata")
+            entries.append(
+                _ExtractedEntry(
+                    tmp_path=entry.tmp_path,
+                    filename=entry.filename,
+                    relative_path=entry.relative_path,
+                    size=entry.size,
+                )
+            )
+        return entries, skipped
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -360,6 +375,8 @@ async def upload_batch_zip(
     tmp_dir_path = make_processing_temp_dir(prefix="batch-zip-")
     tmp_dir = str(tmp_dir_path)
     zip_path = str(tmp_dir_path / "upload.zip")
+    extraction_path = tmp_dir_path / "entries"
+    extraction_path.mkdir()
 
     try:
         # ── Stream zip to disk ──────────────────────────────────────────────
@@ -390,7 +407,9 @@ async def upload_batch_zip(
             )
 
         # ── Extract (runs in thread to avoid blocking event loop) ────────────
-        entries, extract_skipped = await _extract_zip_bounded(zip_path, tmp_dir, max_members)
+        entries, extract_skipped = await _extract_zip_bounded(
+            zip_path, str(extraction_path), max_members
+        )
 
         if not entries:
             return BatchZipResponse(

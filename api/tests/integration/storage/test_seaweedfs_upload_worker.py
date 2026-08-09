@@ -4,10 +4,11 @@ import base64
 import hashlib
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
+from app.config import settings
+from app.core.security.processing_paths import make_processing_temp_path
 from app.core.storage import facade
 from app.workers.upload.exceptions import UploadError
 from app.workers.upload.stages.download import run_download_and_validate
@@ -23,11 +24,12 @@ _ONE_PIXEL_PNG = base64.b64decode(
 @pytest.mark.asyncio
 async def test_upload_worker_downloads_validates_and_hashes_real_object(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     storage_key: Any,
 ) -> None:
+    monkeypatch.setattr(settings, "processing_root", str(tmp_path / "processing"))
     key = storage_key("worker/pixel.png")
-    destination = tmp_path / "downloaded.png"
-    destination.touch()
+    destination = make_processing_temp_path(suffix=".png", prefix="seaweed-download-")
     expected_hash = hashlib.sha256(_ONE_PIXEL_PNG).hexdigest()
     await facade.upload_file(_ONE_PIXEL_PNG, key, content_type="image/png")
 
@@ -51,21 +53,16 @@ async def test_upload_worker_downloads_validates_and_hashes_real_object(
 @pytest.mark.asyncio
 async def test_upload_worker_rechecks_limit_after_authoritative_mime_detection(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     storage_key: Any,
 ) -> None:
+    monkeypatch.setattr(settings, "processing_root", str(tmp_path / "processing"))
     key = storage_key("worker/oversized.svg")
     payload = b"<svg xmlns='http://www.w3.org/2000/svg'>" + b"A" * (6 * _MIB) + b"</svg>"
-    destination = tmp_path / "oversized.svg"
-    destination.touch()
+    destination = make_processing_temp_path(suffix=".svg", prefix="seaweed-download-")
     await facade.upload_file(payload, key, content_type="image/png")
 
-    with (
-        patch(
-            "app.workers.upload.stages.download.guess_mime_from_file_path",
-            return_value="image/svg+xml",
-        ),
-        pytest.raises(UploadError, match="detected type image/svg\\+xml"),
-    ):
+    with pytest.raises(UploadError, match="detected type image/svg\\+xml"):
         await run_download_and_validate(
             destination,
             key,
@@ -81,11 +78,12 @@ async def test_upload_worker_rechecks_limit_after_authoritative_mime_detection(
 @pytest.mark.asyncio
 async def test_upload_worker_rejects_storage_hash_mismatch(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     storage_key: Any,
 ) -> None:
+    monkeypatch.setattr(settings, "processing_root", str(tmp_path / "processing"))
     key = storage_key("worker/hash-mismatch.png")
-    destination = tmp_path / "hash-mismatch.png"
-    destination.touch()
+    destination = make_processing_temp_path(suffix=".png", prefix="seaweed-download-")
     await facade.upload_file(_ONE_PIXEL_PNG, key, content_type="image/png")
 
     with pytest.raises(UploadError, match="SHA-256 integrity check failed"):

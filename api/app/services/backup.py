@@ -1,7 +1,7 @@
 """Backup and restore service.
 
 Creates ZIP snapshots of the platform state:
-  - DB tables: all 24 application tables in FK-safe insertion order
+  - DB tables: all application tables in FK-safe insertion order
   - S3 prefixes: cas/, uploads/, thumbnails/, branding/
 
 ZIP layout (v2):
@@ -33,6 +33,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.database.post_commit import register_transaction_callbacks
+from app.core.security.async_utils import shielded_await
 from app.core.storage.facade import (
     copy_object,
     delete_object,
@@ -61,10 +63,13 @@ _TABLE_INSERT_ORDER = [
     "tags",
     "allowed_domains",
     "dead_letter_jobs",
+    "outbox_jobs",
+    "scheduled_job_runs",
     # ── depend only on users / tags ──────────────────────────────────────────
     "directories",  # self-ref: parent_id → topological sort on restore
     "notifications",  # FK: users
     "uploads",  # FK: none (standalone tracking table)
+    "cas_staging_claims",  # FK: users
     # ── depend on directories (and optionally users) ─────────────────────────
     "materials",  # FK: directories, users; self-ref: parent_material_id
     "directory_tags",  # FK: directories, tags
@@ -116,8 +121,12 @@ _RESTORE_MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5 MiB
 _BACKUP_MANIFEST_MAX_BYTES = 1024 * 1024
 _BACKUP_METADATA_MAX_BYTES = 64 * 1024 * 1024
 _BACKUP_TABLE_MAX_BYTES = 128 * 1024 * 1024
+_BACKUP_DATABASE_MAX_BYTES = 256 * 1024 * 1024
 _BACKUP_MAX_ENTRIES = 100_000
 _BACKUP_MAX_COMPRESSION_RATIO = 1_000
+_BACKUP_MAX_OBJECTS = 100_000
+_BACKUP_MAX_TABLE_ROWS = 250_000
+_BACKUP_MAX_TOTAL_ROWS = 1_000_000
 _BACKUP_METADATA_HEADROOM_BYTES = 512 * 1024 * 1024
 
 
@@ -197,9 +206,15 @@ def _validate_backup_archive(
                 )
 
             db_data: dict[str, list[dict[str, Any]]] = {}
+            total_rows = 0
+            total_database_bytes = 0
             for table in _TABLE_INSERT_ORDER:
                 name = f"db/{table}.json"
                 table_info = by_name.get(name)
+                if table_info is not None:
+                    total_database_bytes += table_info.file_size
+                    if total_database_bytes > _BACKUP_DATABASE_MAX_BYTES:
+                        raise ValueError("Backup database snapshot exceeds its size limit")
                 rows = (
                     json.loads(_read_zip_entry_bounded(zf, table_info, _BACKUP_TABLE_MAX_BYTES))
                     if table_info is not None
@@ -207,6 +222,11 @@ def _validate_backup_archive(
                 )
                 if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
                     raise ValueError(f"Backup table {table!r} must contain a JSON row array")
+                if len(rows) > _BACKUP_MAX_TABLE_ROWS:
+                    raise ValueError(f"Backup table {table!r} exceeds the row-count limit")
+                total_rows += len(rows)
+                if total_rows > _BACKUP_MAX_TOTAL_ROWS:
+                    raise ValueError("Backup exceeds the total database row-count limit")
                 db_data[table] = rows
 
             metadata_info = by_name.get("s3_metadata.json")
@@ -253,6 +273,8 @@ def _validate_backup_archive(
                 ):
                     raise ValueError(f"Backup object {key!r} failed its integrity check")
                 s3_entries.append(name)
+                if len(s3_entries) > _BACKUP_MAX_OBJECTS:
+                    raise ValueError("Backup exceeds the storage object-count limit")
 
             declared_count = manifest.get("s3_object_count")
             if not isinstance(declared_count, int) or declared_count != len(s3_entries):
@@ -318,9 +340,35 @@ def _deserialize_row(row: dict[str, Any]) -> dict[str, Any]:
 # ── DB dump ───────────────────────────────────────────────────────────────────
 
 
-async def _dump_table(db: AsyncSession, table_name: str) -> list[dict[str, Any]]:
-    result = await db.execute(text(f'SELECT * FROM "{table_name}"'))  # noqa: S608
-    return [_serialize_row(dict(row._mapping)) for row in result]
+async def _dump_table_to_path(
+    db: AsyncSession,
+    table_name: str,
+    destination: Path,
+) -> tuple[int, int]:
+    """Stream one table to a JSON array without retaining its rows in memory."""
+    result = await db.stream(text(f'SELECT * FROM "{table_name}"'))  # noqa: S608
+    row_count = 0
+    encoded_bytes = 2
+    with destination.open("wb") as output:
+        output.write(b"[")
+        async for row in result:
+            encoded = json.dumps(
+                _serialize_row(dict(row._mapping)),
+                separators=(",", ":"),
+            ).encode()
+            row_count += 1
+            encoded_bytes += len(encoded) + (1 if row_count > 1 else 0)
+            if row_count > _BACKUP_MAX_TABLE_ROWS:
+                raise RuntimeError(f"Backup table {table_name!r} exceeds the row-count limit")
+            if encoded_bytes > _BACKUP_TABLE_MAX_BYTES:
+                raise RuntimeError(
+                    f"Backup table {table_name!r} exceeds the serialized size limit"
+                )
+            if row_count > 1:
+                output.write(b",")
+            output.write(encoded)
+        output.write(b"]")
+    return row_count, encoded_bytes
 
 
 # ── DB restore helpers ────────────────────────────────────────────────────────
@@ -421,79 +469,97 @@ async def create_backup_zip(db: AsyncSession, dest_path: Path) -> dict[str, Any]
     to ``s3_metadata.json`` inside the ZIP so restore can reproduce the exact
     HTTP headers.
     """
-    db_data: dict[str, list[dict[str, Any]]] = {}
-    for table_name in _TABLE_INSERT_ORDER:
-        # A backup that silently omits a table is not a backup. Production
-        # startup already requires current migrations, so fail closed here.
-        db_data[table_name] = await _dump_table(db, table_name)
-
-    s3_keys: list[str] = []
-    for prefix in BACKUP_PREFIXES:
-        async for obj in list_objects(prefix):
-            s3_keys.append(obj["Key"])
-    s3_keys = sorted(set(s3_keys))
-
-    # Collect per-object metadata and raw bytes concurrently.
-    # We use a semaphore to avoid opening hundreds of S3 connections at once.
-    _sem = asyncio.Semaphore(10)
-
-    async def _fetch_one(
-        key: str, local: Path
-    ) -> tuple[dict[str, str | None], dict[str, str | int]]:
-        async with _sem:
-            await download_file_raw(key, local)
-            metadata = await get_object_headers(key)
-
-            def _integrity() -> dict[str, str | int]:
-                digest = hashlib.sha256()
-                size = 0
-                with open(local, "rb") as source:
-                    while chunk := source.read(1024 * 1024):
-                        size += len(chunk)
-                        digest.update(chunk)
-                return {"size": size, "sha256": digest.hexdigest()}
-
-            return metadata, await asyncio.to_thread(_integrity)
-
-    manifest: dict[str, Any] = {
-        "version": BACKUP_VERSION,
-        "created_at": datetime.now(UTC).isoformat(),
-        "tables": _TABLE_INSERT_ORDER,
-        "s3_prefixes": list(BACKUP_PREFIXES),
-        "s3_object_count": len(s3_keys),
-        "db_row_counts": {t: len(rows) for t, rows in db_data.items()},
-    }
-
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
+        table_paths: dict[str, Path] = {}
+        table_row_counts: dict[str, int] = {}
+        total_rows = 0
+        total_database_bytes = 0
+        for index, table_name in enumerate(_TABLE_INSERT_ORDER):
+            # A backup that silently omits a table is not a backup. Production
+            # startup already requires current migrations, so fail closed here.
+            table_path = tmp / f"table_{index}.json"
+            row_count, encoded_bytes = await _dump_table_to_path(
+                db, table_name, table_path
+            )
+            table_paths[table_name] = table_path
+            table_row_counts[table_name] = row_count
+            total_rows += row_count
+            total_database_bytes += encoded_bytes
+            if total_rows > _BACKUP_MAX_TOTAL_ROWS:
+                raise RuntimeError("Backup exceeds the total database row-count limit")
+            if total_database_bytes > _BACKUP_DATABASE_MAX_BYTES:
+                raise RuntimeError("Backup database snapshot exceeds its size limit")
+
+        s3_keys: list[str] = []
+        for prefix in BACKUP_PREFIXES:
+            async for obj in list_objects(prefix):
+                s3_keys.append(obj["Key"])
+                if len(s3_keys) > _BACKUP_MAX_OBJECTS:
+                    raise RuntimeError("Backup exceeds the storage object-count limit")
+        s3_keys = sorted(set(s3_keys))
+
+        # Collect per-object metadata and raw bytes concurrently.
+        _sem = asyncio.Semaphore(10)
+
+        async def _fetch_one(
+            key: str, local: Path
+        ) -> tuple[dict[str, str | None], dict[str, str | int]]:
+            async with _sem:
+                await download_file_raw(key, local)
+                metadata = await get_object_headers(key)
+
+                def _integrity() -> dict[str, str | int]:
+                    digest = hashlib.sha256()
+                    size = 0
+                    with open(local, "rb") as source:
+                        while chunk := source.read(1024 * 1024):
+                            size += len(chunk)
+                            digest.update(chunk)
+                    return {"size": size, "sha256": digest.hexdigest()}
+
+                return metadata, await asyncio.to_thread(_integrity)
+
+        manifest: dict[str, Any] = {
+            "version": BACKUP_VERSION,
+            "created_at": datetime.now(UTC).isoformat(),
+            "tables": _TABLE_INSERT_ORDER,
+            "s3_prefixes": list(BACKUP_PREFIXES),
+            "s3_object_count": len(s3_keys),
+            "db_row_counts": table_row_counts,
+        }
 
         # Download all objects and their metadata.
         s3_local: dict[str, Path] = {}
-        tasks: dict[
-            str, asyncio.Task[tuple[dict[str, str | None], dict[str, str | int]]]
-        ] = {}
         for index, key in enumerate(s3_keys):
             # Storage keys are not filesystem paths. An ordinal prevents both
             # traversal and collisions such as ``a/b`` versus ``a__b``.
             local = tmp / f"object_{index}"
             s3_local[key] = local
-            tasks[key] = asyncio.create_task(_fetch_one(key, local))
 
         s3_metadata: dict[str, dict[str, str | None]] = {}
         s3_integrity: dict[str, dict[str, str | int]] = {}
-        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-        for key, result in zip(tasks, results, strict=True):
-            if isinstance(result, BaseException):
-                raise RuntimeError(f"Backup could not capture object {key!r}") from result
-            s3_metadata[key], s3_integrity[key] = result
+        # Bound both active downloads and task objects. Creating one task per
+        # object defeats the semaphore for buckets with millions of keys.
+        batch_size = 10
+        for offset in range(0, len(s3_keys), batch_size):
+            batch_keys = s3_keys[offset : offset + batch_size]
+            results = await asyncio.gather(
+                *(_fetch_one(key, s3_local[key]) for key in batch_keys),
+                return_exceptions=True,
+            )
+            for key, result in zip(batch_keys, results, strict=True):
+                if isinstance(result, BaseException):
+                    raise RuntimeError(f"Backup could not capture object {key!r}") from result
+                s3_metadata[key], s3_integrity[key] = result
         manifest["s3_objects"] = s3_integrity
 
         def _write() -> None:
             with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
                 zf.writestr("manifest.json", json.dumps(manifest, indent=2))
                 zf.writestr("s3_metadata.json", json.dumps(s3_metadata, indent=2))
-                for tbl, rows in db_data.items():
-                    zf.writestr(f"db/{tbl}.json", json.dumps(rows))
+                for table_name, table_path in table_paths.items():
+                    zf.write(table_path, f"db/{table_name}.json")
                 for key, local in s3_local.items():
                     if local.exists():
                         zf.write(str(local), f"s3/{key}")
@@ -548,30 +614,83 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
     for prefix in BACKUP_PREFIXES:
         async for obj in list_objects(prefix):
             existing_keys.append(obj["Key"])
+            if len(existing_keys) > _BACKUP_MAX_OBJECTS:
+                raise RuntimeError("Restore target exceeds the storage object-count limit")
     existing_keys = sorted(set(existing_keys))
 
     rollback_prefix = f"restore-rollback/{uuid.uuid4()}/"
     rollback_keys = {
         key: f"{rollback_prefix}{index}" for index, key in enumerate(existing_keys)
     }
+    restored_keys: set[str] = set()
+    attempted_keys: set[str] = set()
+    rollback_completed = False
+    snapshot_cleaned = False
+
+    async def _cleanup_rollback_objects(keys: list[str]) -> None:
+        cleanup_errors: list[Exception] = []
+        for rollback_key in keys:
+            try:
+                await delete_object(rollback_key)
+            except Exception as exc:
+                cleanup_errors.append(exc)
+                logger.exception("Restore: failed to clean rollback object %r", rollback_key)
+        if cleanup_errors:
+            raise RuntimeError("Restore rollback snapshot cleanup was incomplete") from cleanup_errors[0]
+
+    async def _cleanup_rollback_snapshot() -> None:
+        nonlocal snapshot_cleaned
+        if snapshot_cleaned:
+            return
+        await _cleanup_rollback_objects(list(rollback_keys.values()))
+        snapshot_cleaned = True
+
+    async def _rollback_storage() -> None:
+        nonlocal rollback_completed
+        if rollback_completed:
+            return
+        rollback_errors: list[Exception] = []
+        for key, rollback_key in rollback_keys.items():
+            try:
+                await copy_object(rollback_key, key)
+            except Exception as exc:
+                rollback_errors.append(exc)
+                logger.exception("Restore: failed to roll back object %r", key)
+        for new_key in attempted_keys - set(existing_keys):
+            try:
+                await delete_object(new_key)
+            except Exception as exc:
+                rollback_errors.append(exc)
+                logger.exception("Restore: failed to remove newly restored object %r", new_key)
+        if rollback_errors:
+            raise RuntimeError(
+                "Storage rollback was incomplete; "
+                f"rollback data remains under {rollback_prefix!r}"
+            ) from rollback_errors[0]
+        await _cleanup_rollback_snapshot()
+        rollback_completed = True
+
     captured_rollback_keys: list[str] = []
     try:
         for key, rollback_key in rollback_keys.items():
             await copy_object(key, rollback_key)
             captured_rollback_keys.append(rollback_key)
-    except Exception:
-        for rollback_key in captured_rollback_keys:
-            try:
-                await delete_object(rollback_key)
-            except Exception:
-                logger.exception("Restore: failed to clean incomplete rollback object %r", rollback_key)
+    except BaseException:
+        await shielded_await(
+            _cleanup_rollback_objects(captured_rollback_keys),
+            description="incomplete restore snapshot cleanup",
+        )
         raise
 
+    managed_transaction = register_transaction_callbacks(
+        db,
+        on_rollback=_rollback_storage,
+        on_commit=_cleanup_rollback_snapshot,
+    )
+
     # Restore S3 objects.  Objects ≥ 5 MiB are streamed via a temp file to
-    # avoid loading the full object into RAM.
-    restored_keys: set[str] = set()
-    attempted_keys: set[str] = set()
-    rollback_complete = False
+    # avoid loading the full object in RAM.
+
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
@@ -624,37 +743,15 @@ async def restore_from_zip_path(db: AsyncSession, zip_path: Path) -> dict[str, A
 
         for stale_key in set(existing_keys) - restored_keys:
             await delete_object(stale_key)
-        rollback_complete = True
-    except Exception as restore_error:
-        rollback_errors: list[Exception] = []
-        for key, rollback_key in rollback_keys.items():
-            try:
-                await copy_object(rollback_key, key)
-            except Exception as exc:
-                rollback_errors.append(exc)
-                logger.exception("Restore: failed to roll back object %r", key)
-        for new_key in attempted_keys - set(existing_keys):
-            try:
-                await delete_object(new_key)
-            except Exception as exc:
-                rollback_errors.append(exc)
-                logger.exception("Restore: failed to remove newly restored object %r", new_key)
-        if rollback_errors:
-            raise RuntimeError(
-                "Object restore failed and storage rollback was incomplete; "
-                f"rollback data remains under {rollback_prefix!r}"
-            ) from restore_error
-        rollback_complete = True
+    except BaseException:
+        await shielded_await(
+            _rollback_storage(),
+            description="restore storage compensation",
+        )
         raise
-    finally:
-        if rollback_complete:
-            for rollback_key in rollback_keys.values():
-                try:
-                    await delete_object(rollback_key)
-                except Exception:
-                    # Cleanup failure leaks recovery data but never invalidates
-                    # an otherwise completed restore or successful rollback.
-                    logger.exception("Restore: failed to clean rollback object %r", rollback_key)
+
+    if not managed_transaction:
+        await _cleanup_rollback_snapshot()
 
     return manifest
 
@@ -691,6 +788,6 @@ def enforce_backup_rotation(backup_dir: Path, max_count: int = MAX_LOCAL_BACKUPS
 
 
 def backup_filename() -> str:
-    """Generate a timestamped backup filename (stem only)."""
+    """Generate a collision-resistant timestamped backup filename (stem only)."""
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    return f"{BACKUP_FILENAME_PREFIX}{ts}"
+    return f"{BACKUP_FILENAME_PREFIX}{ts}_{uuid.uuid4().hex}"

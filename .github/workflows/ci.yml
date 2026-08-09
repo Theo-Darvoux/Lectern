@@ -68,6 +68,28 @@ jobs:
           assert result.returncode == 0, result.stderr.decode(errors="replace")
           assert result.stdout == b"sandbox-ok\n"
           PY
+      - name: Exercise real isolated parser operations
+        run: uv run pytest -m integration tests/integration/test_isolated_parser.py
+      - name: Build and smoke production parser containers
+        working-directory: api
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --target api --tag lectern-api-parser-smoke .
+          docker build --target worker --tag lectern-worker-parser-smoke .
+          for image in lectern-api-parser-smoke lectern-worker-parser-smoke; do
+            docker run --rm \
+              --entrypoint /venv/bin/python \
+              --security-opt no-new-privileges:true \
+              --security-opt seccomp=unconfined \
+              --security-opt apparmor=unconfined \
+              --cap-drop ALL \
+              --cap-add SETUID \
+              --cap-add SETGID \
+              --cap-add SETFCAP \
+              --env PROCESSING_ROOT=/var/lib/lectern/processing \
+              "$image" scripts/smoke_parser_container.py
+          done
       - name: Lint
         run: uv run ruff check .
       - name: Type-check
@@ -172,6 +194,19 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
+      - name: Install sandbox runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          for key in \
+            kernel.apparmor_restrict_unprivileged_userns \
+            kernel.apparmor_restrict_unprivileged_unconfined; do
+            if sysctl -n "$key" >/dev/null 2>&1; then
+              sudo sysctl -w "$key=0"
+            fi
+          done
       - working-directory: api
         run: uv sync --frozen --extra dev
       - name: ${{ matrix.label }}

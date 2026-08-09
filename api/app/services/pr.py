@@ -16,9 +16,10 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
 from app.core.common.exceptions import BadRequestError, ConflictError, ForbiddenError, NotFoundError
-from app.core.database.post_commit import PostCommitKey
+from app.core.database.post_commit import PostCommitKey, register_transaction_callbacks
 from app.core.events.coalesce import JobKind
-from app.core.storage.facade import copy_object, get_object_info, object_exists
+from app.core.security.async_utils import shielded_await
+from app.core.storage.facade import copy_object, delete_object, get_object_info, object_exists
 from app.models.cas_staging_claim import CasStagingClaim
 from app.models.directory import Directory
 from app.models.material import Material, MaterialVersion
@@ -722,7 +723,26 @@ async def _make_version_for_file(
         real_size = info["size"]
         mime_type = _resolve_mime_type(file_key, payload, s3_mime=info.get("content_type"))
         new_key = file_key.replace("uploads/", "materials/", 1)
-        await copy_object(file_key, new_key)
+
+        async def rollback_copy() -> None:
+            await delete_object(new_key)
+
+        async def finalize_copy() -> None:
+            return None
+
+        managed_transaction = register_transaction_callbacks(
+            db,
+            on_rollback=rollback_copy,
+            on_commit=finalize_copy,
+        )
+        try:
+            await copy_object(file_key, new_key)
+        except BaseException:
+            if not managed_transaction:
+                await shielded_await(
+                    rollback_copy(), description="legacy material copy compensation"
+                )
+            raise
         db.info.setdefault(PostCommitKey.JOBS, []).append(("delete_storage_objects", [file_key]))
         file_key = new_key
         thumbnail_key = None

@@ -31,7 +31,12 @@ def auth_headers(user: User) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession, test_user: User):
+async def test_avatar_upload_flow(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    test_user: User,
+    mock_arq_pool: AsyncMock,
+):
     # 1. Simulate a successful upload to quarantine
     quarantine_key = f"quarantine/{test_user.id}/{uuid.uuid4()}/avatar.png"
     final_key = f"cas/{uuid.uuid4().hex}"
@@ -53,7 +58,9 @@ async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession,
         patch("app.services.user.download_file_raw", new_callable=AsyncMock) as mock_download,
         patch("app.services.user.upload_file", new_callable=AsyncMock) as mock_upload,
         patch("app.services.user.delete_object", new_callable=AsyncMock) as mock_delete,
-        patch("app.services.user.process_avatar") as mock_process,
+        patch(
+            "app.services.user.process_avatar_isolated", new_callable=AsyncMock
+        ) as mock_process,
     ):
         # Create a real dummy file to be "processed"
         import tempfile
@@ -88,8 +95,70 @@ async def test_avatar_upload_flow(client: AsyncClient, db_session: AsyncSession,
         max_bytes=20 * 1024 * 1024,
     )
     mock_upload.assert_called_once()
-    # Should delete the quarantine file
-    mock_delete.assert_any_call(quarantine_key)
+    # Cleanup is transactionally queued and only dispatched after the user row commits.
+    mock_delete.assert_not_awaited()
+    assert any(
+        call.args[:2] == ("delete_storage_objects", [quarantine_key])
+        for call in mock_arq_pool.enqueue_job.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_avatar_replacement_removes_new_object_on_transaction_rollback(
+    db_session: AsyncSession,
+    test_user: User,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.database.post_commit import (
+        PostCommitKey,
+        rollback_transaction_callbacks,
+    )
+    from app.services.user import update_user_profile
+
+    quarantine_key = f"quarantine/{test_user.id}/{uuid.uuid4()}/avatar.png"
+    db_session.add(
+        Upload(
+            upload_id=str(uuid.uuid4()),
+            user_id=test_user.id,
+            quarantine_key=quarantine_key,
+            final_key=f"cas/{uuid.uuid4().hex}",
+            filename="avatar.png",
+            status="clean",
+            mime_type="image/png",
+            size_bytes=1024,
+        )
+    )
+    await db_session.flush()
+    db_session.info[PostCommitKey.JOBS] = []
+    db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+
+    async def download(_key: str, path: Path, *, max_bytes: int) -> None:
+        assert max_bytes == 20 * 1024 * 1024
+        path.write_bytes(b"sanitized image")
+
+    delete = AsyncMock()
+    processing_root = tmp_path / "processing"
+    monkeypatch.setattr("app.config.settings.processing_root", str(processing_root))
+
+    async def process(path: Path) -> bytes:
+        assert path.is_relative_to(processing_root)
+        return b"webp"
+
+    with (
+        patch("app.services.user.download_file_raw", side_effect=download),
+        patch("app.services.user.upload_file", new_callable=AsyncMock) as upload,
+        patch("app.services.user.delete_object", delete),
+        patch(
+            "app.services.user.process_avatar_isolated",
+            side_effect=process,
+        ),
+    ):
+        await update_user_profile(db_session, test_user, avatar_url=quarantine_key)
+        new_key = upload.await_args.args[1]
+        await rollback_transaction_callbacks(db_session)
+
+    delete.assert_awaited_once_with(new_key)
 
 
 @pytest.mark.asyncio

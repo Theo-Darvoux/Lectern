@@ -54,6 +54,19 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
+      - name: Install sandbox runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          for key in \
+            kernel.apparmor_restrict_unprivileged_userns \
+            kernel.apparmor_restrict_unprivileged_unconfined; do
+            if sysctl -n "$key" >/dev/null 2>&1; then
+              sudo sysctl -w "$key=0"
+            fi
+          done
       - name: Install API dependencies
         working-directory: api
         run: uv sync --frozen --extra dev

@@ -169,7 +169,6 @@ async def delete_me(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     await hard_delete_user(db, user)
-    await db.commit()
 
 
 @router.get("/{user_id}", response_model=UserProfileOut)

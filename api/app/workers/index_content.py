@@ -235,3 +235,4 @@ async def delete_indexed_item(ctx: dict, index_name: str, item_id: str) -> None:
         logger.info(f"Deleted {item_id} from {index_name}")
     except Exception as e:
         logger.error(f"Failed to delete {item_id} from {index_name}: {e}")
+        raise

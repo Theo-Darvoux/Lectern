@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from app.config import settings
-from app.core.security.sandbox import sandboxed_run
+from app.core.security.sandbox import _sandbox_environment, sandboxed_run
 
 
 def _reset_bwrap_cache() -> None:
@@ -38,12 +38,14 @@ def _make_mock_popen(stdout: bytes = b"", stderr: bytes = b"", returncode: int =
 def test_sandboxed_run_with_bwrap(
     _mock_which: MagicMock,
     mock_popen: MagicMock,
+    monkeypatch,
 ) -> None:
     """When bwrap is available, commands should be wrapped with bwrap."""
     _reset_bwrap_cache()
     proc = _make_mock_popen(stdout=b"hello\n")
     mock_popen.return_value = proc
 
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-cross-sandbox-boundary")
     result = sandboxed_run(["echo", "hello"], timeout=10)
 
     assert result.returncode == 0
@@ -69,6 +71,44 @@ def test_sandboxed_run_with_bwrap(
         "LC_ALL": "C.UTF-8",
         "PATH": "/usr/local/bin:/usr/bin:/bin",
     }
+    assert "AWS_SECRET_ACCESS_KEY" not in mock_popen.call_args.kwargs["env"]
+    _reset_bwrap_cache()
+
+
+@patch("app.core.security.sandbox.subprocess.Popen")
+@patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
+def test_python_runtime_mount_does_not_expose_the_project_root(
+    _mock_which: MagicMock,
+    mock_popen: MagicMock,
+) -> None:
+    _reset_bwrap_cache()
+    mock_popen.return_value = _make_mock_popen()
+
+    sandboxed_run(["python", "-m", "app.core.security.parser_child"], python_runtime=True)
+
+    command = mock_popen.call_args.args[0]
+    project_root = str(Path(__file__).resolve().parents[1])
+    bind_triples = [
+        tuple(command[index : index + 3])
+        for index, value in enumerate(command)
+        if value == "--ro-bind"
+    ]
+    assert ("--ro-bind", project_root, project_root) not in bind_triples
+    assert (
+        "--ro-bind",
+        str(Path(__file__).resolve().parents[1] / "app"),
+        "/opt/lectern-python/app",
+    ) in bind_triples
+    python_environment = _sandbox_environment(python_runtime=True)
+    assert set(python_environment) == {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "PYTHONPATH",
+        "LD_LIBRARY_PATH",
+    }
+    assert python_environment["PYTHONPATH"].split(":")[0] == "/opt/lectern-python"
     _reset_bwrap_cache()
 
 

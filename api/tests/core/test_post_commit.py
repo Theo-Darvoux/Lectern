@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -7,10 +8,13 @@ from app.core.database.post_commit import (
     PostCommitKey,
     add_post_commit_job,
     add_post_commit_sse,
+    add_post_commit_user_sse,
     dispatch_pending_outbox,
     dispatch_post_commit_actions,
+    finalize_transaction_callbacks,
     outbox_kwargs,
     persist_post_commit_jobs,
+    rollback_transaction_callbacks,
 )
 from app.core.events.coalesce import coalesce_index_jobs
 
@@ -48,20 +52,75 @@ def test_add_post_commit_job_and_sse_helpers():
 
     add_post_commit_job(mock_session, ("index_material", "m1"))
     add_post_commit_sse(mock_session, "topic_test", {"action": "update"})
+    add_post_commit_user_sse(mock_session, uuid4(), {"type": "notification"})
 
     assert mock_session.info[PostCommitKey.JOBS] == [("index_material", "m1")]
     assert mock_session.info[PostCommitKey.SSE] == [("topic_test", {"action": "update"})]
+    assert len(mock_session.info[PostCommitKey.USER_SSE]) == 1
+
+
+@pytest.mark.asyncio
+async def test_rollback_callbacks_all_settle_before_cancellation_is_redelivered() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    later = AsyncMock()
+
+    async def slow_cleanup() -> None:
+        started.set()
+        await release.wait()
+
+    session = MagicMock()
+    session.info = {
+        PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS: [later, slow_cleanup],
+        PostCommitKey.TRANSACTION_COMMIT_CALLBACKS: [],
+    }
+    rollback = asyncio.create_task(rollback_transaction_callbacks(session))
+    await started.wait()
+    rollback.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await rollback
+    later.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_finalize_callbacks_all_settle_before_cancellation_is_redelivered() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    later = AsyncMock()
+
+    async def slow_cleanup() -> None:
+        started.set()
+        await release.wait()
+
+    session = MagicMock()
+    session.info = {
+        PostCommitKey.TRANSACTION_COMMIT_CALLBACKS: [slow_cleanup, later],
+        PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS: [],
+    }
+    finalize = asyncio.create_task(finalize_transaction_callbacks(session))
+    await started.wait()
+    finalize.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await finalize
+    later.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_dispatch_post_commit_actions():
+    user_id = uuid4()
     mock_session = MagicMock()
     mock_session.info = {
         PostCommitKey.SSE: [("topic1", {"event": 1})],
+        PostCommitKey.USER_SSE: [(user_id, {"type": "notification"})],
     }
 
     with (
         patch("app.core.database.post_commit.broadcast_to_topic") as mock_broadcast,
+        patch("app.core.database.post_commit.broadcast_to_user") as mock_user_broadcast,
         patch(
             "app.core.database.post_commit.dispatch_pending_outbox", new_callable=AsyncMock
         ) as mock_dispatch,
@@ -69,6 +128,7 @@ async def test_dispatch_post_commit_actions():
         await dispatch_post_commit_actions(mock_session)
 
         mock_broadcast.assert_called_once_with("topic1", {"event": 1})
+        mock_user_broadcast.assert_called_once_with(user_id, {"type": "notification"})
         mock_dispatch.assert_awaited_once_with(mock_session)
 
 
@@ -159,3 +219,4 @@ def test_post_commit_key_enum_members():
     assert PostCommitKey.SSE == "post_commit_sse_broadcasts"
     assert PostCommitKey.JOB_KEYS == "post_commit_job_keys"
     assert PostCommitKey.DEINDEX_KEYS == "post_commit_deindex_keys"
+    assert PostCommitKey.USER_SSE == "post_commit_user_sse_broadcasts"

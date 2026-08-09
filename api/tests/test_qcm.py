@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from io import BytesIO
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -13,13 +13,16 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database.post_commit import PostCommitKey, rollback_transaction_callbacks
 from app.core.security.security import create_access_token
 from app.models.cas_staging_claim import CasStagingClaim
 from app.models.user import User, UserRole
 from app.routers.qcm import (
     QCM_MAX_QUESTIONS,
+    QCMStageRequest,
     _parse_moodle_xml,
     _validate_qcm_structure,
+    stage_qcm,
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -420,6 +423,38 @@ def user() -> User:
 
 @pytest.mark.asyncio
 class TestStageEndpoint:
+    async def test_stage_rolls_back_cas_reference_when_database_transaction_fails(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        user = _make_user()
+        db_session.add(user)
+        await db_session.commit()
+        db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+
+        with (
+            patch("app.routers.qcm.storage_upload_file", new_callable=AsyncMock),
+            patch("app.routers.qcm.increment_cas_ref", new_callable=AsyncMock),
+            patch(
+                "app.routers.qcm.compensate_cas_increment", new_callable=AsyncMock
+            ) as compensate,
+        ):
+            result = await stage_qcm(QCMStageRequest(data=_minimal_qcm()), user, db_session)
+            claim = await db_session.scalar(
+                select(CasStagingClaim).where(CasStagingClaim.sha256 == result.sha256)
+            )
+            assert claim is not None
+            claim_id = claim.id
+
+            await db_session.rollback()
+            await rollback_transaction_callbacks(db_session)
+
+        compensate.assert_awaited_once_with(
+            ANY,
+            result.sha256,
+            operation_id=f"qcm-stage:{claim_id}",
+        )
+
     async def test_stage_valid_qcm(
         self, client: AsyncClient, db_session: AsyncSession, fake_redis_setup
     ):

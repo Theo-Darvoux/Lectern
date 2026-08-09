@@ -9,7 +9,12 @@ from app.core.common.exceptions import BadRequestError
 from app.core.events.processing import ProcessingFile
 from app.core.observability.metrics import upload_scan_duration
 from app.core.security.async_utils import shielded_await, shielded_to_thread
-from app.core.security.file_security import check_pdf_safety, strip_metadata_file
+from app.core.security.file_security import strip_metadata_file
+from app.core.security.isolated_parser import (
+    check_pdf_safety_isolated,
+    requires_isolated_sanitization,
+    sanitize_upload,
+)
 from app.core.security.scanner import MalwareScanner
 from app.schemas.material import UploadStatus
 from app.workers.upload.context import WorkerContext
@@ -63,7 +68,11 @@ async def run_scan_and_strip(
     async def _run_strip() -> Path:
         with tracer.start_as_current_span("upload.strip_metadata"):
             return await asyncio.wait_for(
-                strip_metadata_file(tmp_path, mime_type),
+                (
+                    sanitize_upload(tmp_path, mime_type=mime_type)
+                    if requires_isolated_sanitization(mime_type)
+                    else strip_metadata_file(tmp_path, mime_type)
+                ),
                 timeout=60.0,
             )
 
@@ -114,7 +123,11 @@ async def run_strip_only(
     with tracer.start_as_current_span("upload.strip_metadata"):
         try:
             clean_path = await asyncio.wait_for(
-                strip_metadata_file(tmp_path, mime_type),
+                (
+                    sanitize_upload(tmp_path, mime_type=mime_type)
+                    if requires_isolated_sanitization(mime_type)
+                    else strip_metadata_file(tmp_path, mime_type)
+                ),
                 timeout=60.0,
             )
             if clean_path != tmp_path:
@@ -139,6 +152,6 @@ async def run_post_strip_pdf_check(
         return
 
     try:
-        await shielded_to_thread(check_pdf_safety, pf.path)
+        await check_pdf_safety_isolated(pf.path)
     except ValueError as exc:
         raise MalwareError(str(exc))

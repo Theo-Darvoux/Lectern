@@ -103,6 +103,7 @@ async def run_managed_subprocess(
     *,
     rw_paths: list[Path | str] | None = None,
     ro_paths: list[Path | str] | None = None,
+    python_runtime: bool = False,
 ) -> subprocess.CompletedProcess[Any]:
     """Run a cancellation-safe sandboxed subprocess under the global limit with an end-to-end deadline."""
     start_time = asyncio.get_running_loop().time()
@@ -115,6 +116,7 @@ async def run_managed_subprocess(
                 timeout=int(remaining_timeout),
                 rw_paths=rw_paths,
                 ro_paths=ro_paths,
+                python_runtime=python_runtime,
             )
     if check and result.returncode != 0:
         raise subprocess.CalledProcessError(

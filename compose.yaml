@@ -64,10 +64,15 @@ x-worker-base: &worker-base
   networks:
     - backend
   security_opt:
+    - no-new-privileges:true
     - seccomp:unconfined
     - apparmor:unconfined
+  cap_drop:
+    - ALL
   cap_add:
-    - SYS_ADMIN
+    - SETUID
+    - SETGID
+    - SETFCAP
   ulimits:
     core: 0
   healthcheck:
@@ -197,6 +202,16 @@ services:
       - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
     ulimits:
       core: 0
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:unconfined
+      - apparmor:unconfined
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - SETFCAP
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" ]
       interval: 10s
@@ -550,9 +565,9 @@ services:
   # ── Self-hosted delivery worker ─────────────────────────────────────────────
   # Optional HMAC-signed /file, /branding, /zip delivery (replaces Cloudflare Worker).
   # Activate with COMPOSE_PROFILES=...,selfhost-worker. Also set in .env:
-  #   WORKER_ZIP_URL=http://localhost:8788
+  #   WORKER_ZIP_URL=https://downloads.example.invalid
   #   WORKER_ZIP_HMAC_SECRET=<shared-secret>
-  # In production front with nginx proxy_cache (infra/nginx/worker-cache.conf).
+  # The host port is loopback-only so a TLS reverse proxy remains the public boundary.
 
   selfhost-worker:
     profiles: [ selfhost-worker ]
@@ -566,7 +581,7 @@ services:
       - frontend
     environment:
       PORT: "8788"
-      WORKER_ZIP_HMAC_SECRET: ${WORKER_ZIP_HMAC_SECRET:-}
+      WORKER_ZIP_HMAC_SECRET: ${WORKER_ZIP_HMAC_SECRET:?WORKER_ZIP_HMAC_SECRET must be set}
       S3_ENDPOINT: ${S3_ENDPOINT:-seaweedfs:8333}
       S3_USE_SSL: ${S3_USE_SSL:-false}
       S3_REGION: ${S3_REGION:-us-east-1}
@@ -574,12 +589,30 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
       S3_BUCKET: ${S3_BUCKET:-lectern}
     ports:
-      - "8788:8788"
+      - "127.0.0.1:${SELFHOST_WORKER_HOST_PORT:-8788}:8788"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core: 0
     healthcheck:
       test: [ "CMD-SHELL", "wget -q -O /dev/null http://localhost:8788/healthz || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+          pids: 128
+        reservations:
+          cpus: "0.1"
+          memory: 64M
 
 networks:
   frontend:

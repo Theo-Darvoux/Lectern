@@ -13,9 +13,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.common.exceptions import NotFoundError
 from app.core.security.security import create_access_token
 from app.models.directory import Directory, DirectoryType
 from app.models.material import Material
@@ -38,6 +40,18 @@ from app.services.backup import (
 )
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
+
+def test_production_requires_offline_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import settings
+    from app.routers.admin_backup import _require_offline_restore_in_production
+
+    monkeypatch.setattr(settings, "environment", "production")
+    with pytest.raises(HTTPException) as raised:
+        _require_offline_restore_in_production()
+
+    assert raised.value.status_code == 503
+    assert "restore-backup-offline" in str(raised.value.detail)
 
 
 async def _make_admin(db: AsyncSession) -> User:
@@ -234,15 +248,29 @@ def test_topological_sort_external_parent_ignored() -> None:
 def test_backup_filename_format() -> None:
     name = backup_filename()
     assert name.startswith("backup_")
-    assert len(name) == len("backup_20260425_103045")
+    timestamp, random_suffix = name.removeprefix("backup_").rsplit("_", 1)
+    assert len(timestamp) == len("20260425_103045")
+    assert len(random_suffix) == 32
+    assert all(character in "0123456789abcdef" for character in random_suffix)
 
 
 def test_backup_filename_unique() -> None:
     names = {backup_filename() for _ in range(3)}
-    # All may be identical if called in the same second — that's fine,
-    # the timestamps just need the right format.
+    assert len(names) == 3
     for name in names:
         assert name.startswith("backup_")
+
+
+def test_backup_resolution_rejects_an_existing_absolute_path(tmp_path: Path) -> None:
+    from app.routers.admin_backup import _resolve_backup
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    outside = tmp_path / "backup_20260425_103045.zip"
+    outside.write_bytes(b"sensitive")
+
+    with pytest.raises(NotFoundError):
+        _resolve_backup(str(outside.with_suffix("")), backup_dir)
 
 
 # ── Unit tests: local backup management ──────────────────────────────────────

@@ -19,6 +19,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -91,14 +92,46 @@ _SYSTEM_RO_BINDS: tuple[str, ...] = (
 )
 
 
-def _sandbox_environment() -> dict[str, str]:
+_PYTHON_APP_MOUNT = Path("/opt/lectern-python")
+
+
+def _sandbox_environment(*, python_runtime: bool = False) -> dict[str, str]:
     """Return the minimal non-secret environment exposed to processors."""
-    return {
+    environment = {
         "HOME": "/tmp",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "PATH": "/usr/local/bin:/usr/bin:/bin",
     }
+    if not python_runtime:
+        return environment
+
+    dependency_paths = [
+        str(path)
+        for raw_path in sys.path
+        if raw_path
+        and (path := Path(raw_path)).is_absolute()
+        and path.exists()
+        and path.name in {"site-packages", "dist-packages"}
+    ]
+    environment["PATH"] = f"{Path(sys.prefix) / 'bin'}:{environment['PATH']}"
+    environment["LD_LIBRARY_PATH"] = str(Path(sys.base_prefix) / "lib")
+    # Never expose the project root: it may contain runtime .env files. Mount
+    # only the application package at a neutral path alongside dependencies.
+    environment["PYTHONPATH"] = os.pathsep.join(
+        dict.fromkeys([str(_PYTHON_APP_MOUNT), *dependency_paths])
+    )
+    return environment
+
+
+def _python_runtime_ro_binds() -> tuple[Path, ...]:
+    """Trusted read-only mounts needed by isolated Python parser children."""
+    candidates = (
+        Path(sys.prefix),
+        Path(sys.base_prefix),
+        Path(sys.executable).resolve().parents[1],
+    )
+    return tuple(dict.fromkeys(path.resolve() for path in candidates if path.exists()))
 
 
 def _overlaps(a: Path, b: Path) -> bool:
@@ -144,6 +177,7 @@ def _sandbox_command(
     *,
     rw_paths: Sequence[Path | str] | None = None,
     ro_paths: Sequence[Path | str] | None = None,
+    python_runtime: bool = False,
 ) -> list[str]:
     """Build the resource-limited Bubblewrap command."""
     if not cmd:
@@ -190,6 +224,18 @@ def _sandbox_command(
     for system_path in _SYSTEM_RO_BINDS:
         if Path(system_path).exists():
             bwrap_cmd.extend(["--ro-bind", system_path, system_path])
+    if python_runtime:
+        bwrap_cmd.extend(["--dir", "/opt", "--dir", str(_PYTHON_APP_MOUNT)])
+        application_package = Path(__file__).resolve().parents[2]
+        bwrap_cmd.extend(
+            [
+                "--ro-bind",
+                str(application_package),
+                str(_PYTHON_APP_MOUNT / "app"),
+            ]
+        )
+        for runtime_path in _python_runtime_ro_binds():
+            bwrap_cmd.extend(["--ro-bind", str(runtime_path), str(runtime_path)])
     for path in dict.fromkeys(validated_ro):
         bwrap_cmd.extend(["--ro-bind", str(path), str(path)])
     for path in dict.fromkeys(validated_rw):
@@ -235,9 +281,15 @@ def sandboxed_run(
     ro_paths: Sequence[Path | str] | None = None,
     timeout: int = 60,
     capture_output: bool = True,
+    python_runtime: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run a sandboxed process with one end-to-end deadline."""
-    wrapped = _sandbox_command(cmd, rw_paths=rw_paths, ro_paths=ro_paths)
+    wrapped = _sandbox_command(
+        cmd,
+        rw_paths=rw_paths,
+        ro_paths=ro_paths,
+        python_runtime=python_runtime,
+    )
     deadline = time.monotonic() + timeout
 
     def remaining_timeout() -> float:
@@ -251,7 +303,7 @@ def sandboxed_run(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE if capture_output else subprocess.DEVNULL,
         stderr=subprocess.PIPE if capture_output else subprocess.DEVNULL,
-        env=_sandbox_environment(),
+        env=_sandbox_environment(python_runtime=python_runtime),
         start_new_session=True,
     )
     pgid = proc.pid
@@ -398,9 +450,15 @@ async def async_sandboxed_run(
     rw_paths: Sequence[Path | str] | None = None,
     ro_paths: Sequence[Path | str] | None = None,
     timeout: int = 60,
+    python_runtime: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run and reliably reap a sandboxed process under one deadline."""
-    wrapped = _sandbox_command(cmd, rw_paths=rw_paths, ro_paths=ro_paths)
+    wrapped = _sandbox_command(
+        cmd,
+        rw_paths=rw_paths,
+        ro_paths=ro_paths,
+        python_runtime=python_runtime,
+    )
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     spawn_task = asyncio.create_task(
@@ -409,7 +467,7 @@ async def async_sandboxed_run(
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=_sandbox_environment(),
+            env=_sandbox_environment(python_runtime=python_runtime),
             start_new_session=True,
         )
     )

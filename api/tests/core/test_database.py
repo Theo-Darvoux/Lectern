@@ -5,6 +5,7 @@ from sqlalchemy import Select
 from sqlalchemy.orm import ORMExecuteState
 
 from app.core.database.database import _soft_delete_filter, get_db
+from app.core.database.post_commit import register_transaction_callbacks
 
 
 @pytest.mark.asyncio
@@ -50,6 +51,63 @@ async def test_get_db_rolls_back_on_error():
             await gen.athrow(ValueError("Test failure"))
 
         mock_session.rollback.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_db_preserves_external_resources_when_commit_outcome_is_unknown():
+    mock_session = AsyncMock()
+    mock_session.info = {}
+    mock_session.commit.side_effect = RuntimeError("database commit failed")
+    rollback_resource = AsyncMock()
+    finalize_resource = AsyncMock()
+
+    session_cm = AsyncMock()
+    session_cm.__aenter__.return_value = mock_session
+    session_cm.__aexit__.return_value = None
+
+    with (
+        patch("app.core.database.database.async_session_factory", return_value=session_cm),
+        patch("app.core.database.post_commit.dispatch_post_commit_actions", new_callable=AsyncMock),
+    ):
+        gen = get_db()
+        session = await gen.__anext__()
+        assert register_transaction_callbacks(
+            session,
+            on_rollback=rollback_resource,
+            on_commit=finalize_resource,
+        )
+
+        with pytest.raises(RuntimeError, match="database commit failed"):
+            await gen.__anext__()
+
+    mock_session.rollback.assert_awaited_once()
+    rollback_resource.assert_not_awaited()
+    finalize_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_db_compensates_external_resources_before_commit_is_attempted():
+    mock_session = AsyncMock()
+    mock_session.info = {}
+    rollback_resource = AsyncMock()
+    finalize_resource = AsyncMock()
+    session_cm = AsyncMock()
+    session_cm.__aenter__.return_value = mock_session
+    session_cm.__aexit__.return_value = None
+
+    with patch("app.core.database.database.async_session_factory", return_value=session_cm):
+        dependency = get_db()
+        session = await dependency.__anext__()
+        assert register_transaction_callbacks(
+            session,
+            on_rollback=rollback_resource,
+            on_commit=finalize_resource,
+        )
+        with pytest.raises(ValueError, match="route failed"):
+            await dependency.athrow(ValueError("route failed"))
+
+    rollback_resource.assert_awaited_once()
+    finalize_resource.assert_not_awaited()
 
 
 def test_soft_delete_filter_skips_non_select():

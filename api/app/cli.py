@@ -1,8 +1,77 @@
 import asyncio
+from pathlib import Path
 
 import typer
 
 app = typer.Typer(help="Lectern CLI")
+
+
+@app.command(name="restore-backup-offline")
+def restore_backup_offline(
+    path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+    confirm_offline: bool = typer.Option(
+        False,
+        "--confirm-offline",
+        help="Confirm that every API and worker instance is stopped.",
+    ),
+) -> None:
+    """Restore a full backup while all mutating application processes are stopped."""
+    if not confirm_offline:
+        typer.echo("Refusing restore: stop every API/worker and pass --confirm-offline.")
+        raise typer.Exit(code=2)
+    asyncio.run(_restore_backup_offline(path.resolve()))
+
+
+async def _restore_backup_offline(path: Path) -> None:
+    from app.core.database.database import async_session_factory
+    from app.core.database.post_commit import (
+        PostCommitKey,
+        finalize_transaction_callbacks,
+        rollback_transaction_callbacks,
+    )
+    from app.core.security.async_utils import settle_awaitable
+    from app.services.backup import restore_from_zip_path
+
+    async with async_session_factory() as session:
+        session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+        commit_attempted = False
+        try:
+            manifest = await restore_from_zip_path(session, path)
+            commit_attempted = True
+            await session.commit()
+        except BaseException:
+            _result, rollback_error, rollback_cancellation = await settle_awaitable(
+                session.rollback()
+            )
+            compensation_error: BaseException | None = None
+            if commit_attempted:
+                # Keep both restored storage and the rollback journal. A lost
+                # COMMIT acknowledgement cannot be compensated safely.
+                session.info.pop(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, None)
+                session.info.pop(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, None)
+            else:
+                try:
+                    await rollback_transaction_callbacks(session)
+                except BaseException as exc:
+                    compensation_error = exc
+            if compensation_error is not None and not isinstance(
+                compensation_error, asyncio.CancelledError
+            ):
+                raise RuntimeError(
+                    "Offline restore failed and external-resource compensation was incomplete"
+                ) from compensation_error
+            if rollback_error is not None:
+                raise RuntimeError("Offline restore database rollback failed") from rollback_error
+            if rollback_cancellation is not None:
+                raise rollback_cancellation
+            if compensation_error is not None:
+                raise compensation_error
+            raise
+        else:
+            await finalize_transaction_callbacks(session)
+        finally:
+            session.info.pop(PostCommitKey.MANAGED_TRANSACTION, None)
+    typer.echo(f"Offline restore complete (backup version {manifest.get('version')}).")
 
 
 @app.command()

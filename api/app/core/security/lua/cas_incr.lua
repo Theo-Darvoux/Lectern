@@ -2,7 +2,10 @@ local raw = redis.call('GET', KEYS[1])
 local usage_key = KEYS[2]
 local data
 local previous_ttl = -2
-if redis.call('EXISTS', KEYS[3]) == 1 then
+local operation_state = redis.call('GET', KEYS[3])
+if operation_state then
+  -- A rollback tombstone must win over a delayed or retried increment.
+  if operation_state == 'compensated' then return -3 end
   -- An idempotency marker without its CAS record is not a successful duplicate.
   -- The record is explicitly evictable, and silently returning zero here would
   -- leave ref-count and physical-usage state unreconstructed.
@@ -52,5 +55,5 @@ redis.call('SET', KEYS[1], cjson.encode(data))
 if ARGV[2] and (not raw or previous_ttl >= 0) then
   redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
 end
-redis.call('SET', KEYS[3], '1', 'EX', 2592000)
+redis.call('SET', KEYS[3], 'incremented', 'EX', 2592000)
 return data['ref_count']

@@ -10,34 +10,42 @@ from app.core.security.scanner import MalwareScanner
 # ── YARA tests ──
 
 
-async def test_yara_scan_clean() -> None:
+async def test_yara_scan_clean(tmp_path) -> None:
     scanner = MalwareScanner()
     scanner.rules = MagicMock()
-    scanner.rules.match.return_value = []
-    # Internal method test
-    result = await scanner._scan_yara(b"clean file content", "test.pdf")
+    scanner._compiled_rules_path = tmp_path / "rules.yarac"
+    scanner._compiled_rules_path.touch()
+    with patch(
+        "app.core.security.scanner.scan_yara_isolated",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await scanner._scan_yara(b"clean file content", "test.pdf")
     assert result is None
 
 
-async def test_yara_scan_match() -> None:
+async def test_yara_scan_match(tmp_path) -> None:
     scanner = MalwareScanner()
     scanner.rules = MagicMock()
-    match = MagicMock()
-    match.rule = "EICAR_test_file"
-    scanner.rules.match.return_value = [match]
-    result = await scanner._scan_yara(b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR", "test.txt")
+    scanner._compiled_rules_path = tmp_path / "rules.yarac"
+    scanner._compiled_rules_path.touch()
+    with patch(
+        "app.core.security.scanner.scan_yara_isolated",
+        new=AsyncMock(return_value="EICAR_test_file"),
+    ):
+        result = await scanner._scan_yara(b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR", "test.txt")
     assert result == "EICAR_test_file"
 
 
-async def test_yara_scan_multiple_matches_returns_first() -> None:
+async def test_yara_scan_multiple_matches_returns_first(tmp_path) -> None:
     scanner = MalwareScanner()
     scanner.rules = MagicMock()
-    match1 = MagicMock()
-    match1.rule = "PE_in_non_executable"
-    match2 = MagicMock()
-    match2.rule = "Embedded_Shellcode_Patterns"
-    scanner.rules.match.return_value = [match1, match2]
-    result = await scanner._scan_yara(b"MZ\x90\x00PE\x00\x00", "test.pdf")
+    scanner._compiled_rules_path = tmp_path / "rules.yarac"
+    scanner._compiled_rules_path.touch()
+    with patch(
+        "app.core.security.scanner.scan_yara_isolated",
+        new=AsyncMock(return_value="PE_in_non_executable"),
+    ):
+        result = await scanner._scan_yara(b"MZ\x90\x00PE\x00\x00", "test.pdf")
     assert result == "PE_in_non_executable"
 
 
@@ -231,18 +239,17 @@ async def test_combined_scan_yara_error_fails_closed() -> None:
 async def test_yara_scan_path_match(tmp_path) -> None:
     scanner = MalwareScanner()
     scanner.rules = MagicMock()
-    match = MagicMock()
-    match.rule = "EICAR_test_file"
-    scanner.rules.match.return_value = [match]
+    scanner._compiled_rules_path = tmp_path / "rules.yarac"
+    scanner._compiled_rules_path.touch()
 
     test_file = tmp_path / "test.txt"
     test_file.write_bytes(b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR")
 
-    result = await scanner._scan_yara_path(test_file, "test.txt")
+    isolated_scan = AsyncMock(return_value="EICAR_test_file")
+    with patch("app.core.security.scanner.scan_yara_isolated", new=isolated_scan):
+        result = await scanner._scan_yara_path(test_file, "test.txt")
     assert result == "EICAR_test_file"
-    # verify filepath argument was used
-    scanner.rules.match.assert_called_once()
-    assert scanner.rules.match.call_args[1]["filepath"] == str(test_file)
+    assert isolated_scan.await_args.args[0] == test_file
 
 
 async def test_combined_scan_path_both_clean(tmp_path) -> None:

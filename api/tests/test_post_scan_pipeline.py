@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -86,6 +87,33 @@ def _post_scan_kwargs(**overrides) -> dict:
     }
     base.update(overrides)
     return base
+
+
+@pytest.mark.asyncio
+async def test_post_scan_dead_letter_preserves_every_retry_argument() -> None:
+    import inspect
+
+    from app.workers.process_upload_post_scan import (
+        _handle_permanent_failure,
+        process_upload_post_scan,
+    )
+
+    payload = _post_scan_kwargs()
+    repo = MagicMock()
+    repo.update_processing_status = AsyncMock(return_value=True)
+    repo.insert_dead_letter = AsyncMock()
+
+    assert await _handle_permanent_failure(
+        repo,
+        exc=RuntimeError("failed"),
+        attempts=3,
+        payload=payload,
+    )
+
+    stored_payload = repo.insert_dead_letter.await_args.kwargs["payload"]
+    required = set(inspect.signature(process_upload_post_scan).parameters) - {"ctx"}
+    assert set(stored_payload) == required
+    assert stored_payload == payload
 
 
 # ── Model field smoke-tests ───────────────────────────────────────────────────
@@ -661,6 +689,33 @@ async def test_post_scan_quarantine_missing_marks_degraded() -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_scan_temporary_input_uses_configured_processing_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import settings
+    from app.workers.process_upload_post_scan import process_upload_post_scan
+
+    processing_root = tmp_path / "processing"
+    monkeypatch.setattr(settings, "processing_root", str(processing_root))
+    download = AsyncMock(side_effect=FileNotFoundError("missing"))
+    with (
+        patch("app.workers.process_upload_post_scan.run_download_and_validate", download),
+        patch(
+            "app.workers.process_upload_post_scan._trigger_pending_auto_merges",
+            new_callable=AsyncMock,
+        ),
+        patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
+    ):
+        mock_repo.return_value.update_processing_status = AsyncMock(return_value=True)
+        await process_upload_post_scan(_make_ctx(), **_post_scan_kwargs())
+
+    used_path = download.await_args.args[0]
+    assert used_path.is_relative_to(processing_root)
+    assert not used_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_post_scan_deletes_quarantine_on_success() -> None:
     """Successful completion deletes quarantine bytes and their quota membership."""
     from app.workers.process_upload_post_scan import process_upload_post_scan
@@ -824,6 +879,74 @@ async def test_trigger_auto_merge_when_all_files_settled() -> None:
     mock_cleanup.assert_awaited_once()
     mock_session.commit.assert_awaited()
     assert True  # set via mock
+
+
+@pytest.mark.asyncio
+async def test_auto_merge_preserves_external_data_when_commit_outcome_is_unknown() -> None:
+    """A lost COMMIT acknowledgement must not delete potentially referenced bytes."""
+    from app.core.database.post_commit import register_transaction_callbacks
+    from app.workers.process_upload_post_scan import _trigger_pending_auto_merges
+    from app.workers.upload.context import WorkerContext
+
+    cas_s3_key = "cas/" + "e" * 64
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.info = {}
+    mock_session.scalars = AsyncMock(return_value=[])
+    mock_session.commit = AsyncMock(side_effect=OSError("lost COMMIT acknowledgement"))
+
+    mock_pr = MagicMock()
+    mock_pr.id = uuid.uuid4()
+    mock_pr.title = "Ambiguous commit"
+    mock_pr.author_id = uuid.uuid4()
+    mock_pr.auto_merge_pending = True
+    mock_pr.status = "open"
+    mock_pr.payload = [{"op": "create_material", "file_key": cas_s3_key}]
+    mock_session.scalar = AsyncMock(side_effect=[mock_pr, mock_pr])
+
+    rollback_resource = AsyncMock()
+    finalize_resource = AsyncMock()
+
+    async def apply_with_external_mutation(session: Any, _pr: Any) -> None:
+        assert register_transaction_callbacks(
+            session,
+            on_rollback=rollback_resource,
+            on_commit=finalize_resource,
+        )
+
+    with (
+        patch("app.workers.process_upload_post_scan.apply_pr", apply_with_external_mutation),
+        patch(
+            "app.workers.process_upload_post_scan._cleanup_pr_resources",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.persist_post_commit_jobs",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.get_pr_all_file_keys",
+            return_value=[cas_s3_key],
+        ),
+        patch(
+            "app.workers.process_upload_post_scan._lock_and_validate_pr_cas_files",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        with pytest.raises(OSError, match="lost COMMIT acknowledgement"):
+            await _trigger_pending_auto_merges(
+                WorkerContext(
+                    redis=AsyncMock(),
+                    db_sessionmaker=MagicMock(return_value=mock_session),
+                ),
+                cas_s3_key,
+            )
+
+    mock_session.rollback.assert_awaited_once()
+    rollback_resource.assert_not_awaited()
+    finalize_resource.assert_not_awaited()
 
 
 @pytest.mark.asyncio

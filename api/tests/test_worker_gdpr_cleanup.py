@@ -128,3 +128,22 @@ async def test_hard_delete_user_removes_user_row(db_session: AsyncSession) -> No
         )
     ).scalar_one_or_none()
     assert result is None
+
+
+async def test_hard_delete_defers_owned_avatar_removal_until_database_commit(
+    db_session: AsyncSession,
+) -> None:
+    """A failed user deletion transaction must not destroy the user's avatar."""
+    from app.core.database.post_commit import PostCommitKey
+    from app.services.user import hard_delete_user
+
+    user = await _make_user(db_session)
+    user.avatar_url = f"avatars/{user.id}/profile.webp"
+    db_session.info[PostCommitKey.JOBS] = []
+    delete = AsyncMock()
+
+    with patch("app.services.user.delete_object", delete):
+        await hard_delete_user(db_session, user)
+
+    delete.assert_not_awaited()
+    assert ("delete_storage_objects", [user.avatar_url]) in db_session.info[PostCommitKey.JOBS]

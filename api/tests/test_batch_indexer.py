@@ -358,6 +358,17 @@ async def test_index_directories_batch_empty_list():
         mock_admin.index.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_delete_indexed_item_propagates_failure_for_worker_retry() -> None:
+    from app.workers.index_content import delete_indexed_item
+
+    index = MagicMock()
+    index.delete_document = AsyncMock(side_effect=OSError("search unavailable"))
+    with patch("app.workers.index_content.meili_admin_client.index", return_value=index):
+        with pytest.raises(OSError, match="search unavailable"):
+            await delete_indexed_item({}, "materials", "material-id")
+
+
 # ---------------------------------------------------------------------------
 # Post-commit job coalescing (_coalesce_index_jobs)
 # ---------------------------------------------------------------------------

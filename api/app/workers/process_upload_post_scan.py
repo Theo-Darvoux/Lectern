@@ -20,7 +20,6 @@ import inspect
 import json
 import logging
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any, cast
 
 from sqlalchemy import select
@@ -30,11 +29,15 @@ from app.core.common.exceptions import ConflictError
 from app.core.database.post_commit import (
     PostCommitKey,
     dispatch_post_commit_actions,
+    finalize_transaction_callbacks,
     persist_post_commit_jobs,
+    rollback_transaction_callbacks,
 )
 from app.core.database.redis import redis_lock
 from app.core.events.sse import broadcast_to_topic
 from app.core.observability.telemetry import get_tracer
+from app.core.security.async_utils import settle_awaitable
+from app.core.security.processing_paths import make_processing_temp_path
 from app.core.storage.facade import delete_object, upload_file_multipart
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
 from app.models.upload import Upload
@@ -160,9 +163,7 @@ async def process_upload_post_scan(
     if not await repo.update_processing_status(upload_id, "running"):
         return
 
-    tmp = NamedTemporaryFile(delete=False)
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    tmp_path = make_processing_temp_path(prefix="upload-post-scan-")
 
     pf = None
     thumbnail_path: str | None = None
@@ -359,7 +360,22 @@ async def process_upload_post_scan(
         if job_try >= _POST_MAX_RETRIES:
             settled = False
             async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
-                settled = await _handle_permanent_failure(repo, upload_id, cas_s3_key, exc, job_try)
+                settled = await _handle_permanent_failure(
+                    repo,
+                    exc=exc,
+                    attempts=job_try,
+                    payload={
+                        "upload_id": upload_id,
+                        "user_id": user_id,
+                        "quarantine_key": quarantine_key,
+                        "original_filename": original_filename,
+                        "mime_type": mime_type,
+                        "original_sha256": original_sha256,
+                        "cas_key": cas_key,
+                        "cas_s3_key": cas_s3_key,
+                        "initial_size": initial_size,
+                    },
+                )
             if settled:
                 await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
         else:
@@ -380,18 +396,19 @@ async def process_upload_post_scan(
 
 async def _handle_permanent_failure(
     repo: UploadWorkerRepository,
-    upload_id: str,
-    cas_s3_key: str,
+    *,
     exc: Exception,
     attempts: int,
+    payload: dict[str, str | int],
 ) -> bool:
     """Mark the upload degraded unless authoritative cancellation already won."""
+    upload_id = str(payload["upload_id"])
     if not await repo.update_processing_status(upload_id, "degraded"):
         return False
     await repo.insert_dead_letter(
         upload_id,
         job_name="process_upload_post_scan",
-        payload={"upload_id": upload_id, "cas_s3_key": cas_s3_key},
+        payload=payload,
         error=str(exc),
         attempts=attempts,
     )
@@ -450,6 +467,7 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
                 )
 
             async with ctx.db_sessionmaker() as db:
+                db.info[PostCommitKey.MANAGED_TRANSACTION] = True
                 pr = await db.scalar(
                     select(PullRequest)
                     .where(
@@ -480,18 +498,59 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
                 db.info[PostCommitKey.JOBS] = jobs
                 db.info.setdefault(PostCommitKey.JOB_KEYS, set())
 
-                await apply_pr(db, pr)
-                await _cleanup_pr_resources(db, pr, redis=ctx.redis)  # type: ignore[arg-type]
+                commit_attempted = False
+                try:
+                    await apply_pr(db, pr)
+                    await _cleanup_pr_resources(db, pr, redis=ctx.redis)  # type: ignore[arg-type]
 
-                sse_broadcasts = db.info.pop(PostCommitKey.SSE, [])
-                event = {"type": "pr_closed", "id": str(pr.id)}
-                for topic in _pr_directory_topics(list(pr.payload)):
-                    sse_broadcasts.append((topic, event))
-                if pr.author_id:
-                    sse_broadcasts.append((f"pr_updates:{pr.author_id}", event))
+                    sse_broadcasts = db.info.pop(PostCommitKey.SSE, [])
+                    event = {"type": "pr_closed", "id": str(pr.id)}
+                    for topic in _pr_directory_topics(list(pr.payload)):
+                        sse_broadcasts.append((topic, event))
+                    if pr.author_id:
+                        sse_broadcasts.append((f"pr_updates:{pr.author_id}", event))
 
-                await persist_post_commit_jobs(db)
-                await db.commit()
+                    await persist_post_commit_jobs(db)
+                    commit_attempted = True
+                    await db.commit()
+                except BaseException:
+                    _result, rollback_error, rollback_cancellation = await settle_awaitable(
+                        db.rollback()
+                    )
+                    compensation_error: BaseException | None = None
+                    if commit_attempted:
+                        # COMMIT acknowledgement is ambiguous after a connection
+                        # failure or cancellation. The transaction may be durable,
+                        # so destructive compensation could remove referenced data.
+                        db.info.pop(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, None)
+                        db.info.pop(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, None)
+                        logger.error(
+                            "Auto-merge COMMIT failed with unknown outcome; preserving "
+                            "external mutations"
+                        )
+                    else:
+                        try:
+                            await rollback_transaction_callbacks(db)
+                        except BaseException as exc:
+                            compensation_error = exc
+                    if compensation_error is not None and not isinstance(
+                        compensation_error, asyncio.CancelledError
+                    ):
+                        raise RuntimeError(
+                            "Auto-merge transaction failed and external-resource "
+                            "compensation was incomplete"
+                        ) from compensation_error
+                    if rollback_error is not None:
+                        raise RuntimeError("Auto-merge database rollback failed") from rollback_error
+                    if rollback_cancellation is not None:
+                        raise rollback_cancellation
+                    if compensation_error is not None:
+                        raise compensation_error
+                    raise
+                else:
+                    await finalize_transaction_callbacks(db)
+                finally:
+                    db.info.pop(PostCommitKey.MANAGED_TRANSACTION, None)
 
                 for topic, event in sse_broadcasts:
                     broadcast_to_topic(topic, event)
@@ -507,7 +566,9 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
                             f'Your contribution "{pr.title}" was published',
                             link=f"/pull-requests/{pr.id}",
                         )
+                        await persist_post_commit_jobs(notify_db)
                         await notify_db.commit()
+                        await dispatch_post_commit_actions(notify_db)
 
                 logger.info("Auto-merged PR %s after all uploads settled.", pr.id)
 

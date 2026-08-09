@@ -90,8 +90,16 @@ async def test_scan_file_path_skips_bazaar_when_async_enabled(
 
     test_file = tmp_path / "file.pdf"
     test_file.write_bytes(b"%PDF-1.4 test content")
+    scanner._compiled_rules_path = test_file
 
-    with patch("app.core.security.scanner.settings") as mock_settings:
+    with (
+        patch("app.core.security.scanner.settings") as mock_settings,
+        patch(
+            "app.core.security.scanner.scan_yara_isolated",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
         mock_settings.bazaar_async_enabled = True
         mock_settings.yara_scan_timeout = 10
         bazaar_spy = AsyncMock(return_value=None)

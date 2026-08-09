@@ -10,6 +10,23 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+async def settle_awaitable[T](
+    awaitable: Awaitable[T],
+) -> tuple[T | None, BaseException | None, asyncio.CancelledError | None]:
+    """Settle one awaitable, recording caller cancellation without abandoning it."""
+    task = asyncio.ensure_future(awaitable)
+    caller_cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            caller_cancellation = caller_cancellation or exc
+    try:
+        return task.result(), None, caller_cancellation
+    except BaseException as exc:
+        return None, exc, caller_cancellation
+
+
 async def shielded_await[T](
     awaitable: Awaitable[T],
     *,

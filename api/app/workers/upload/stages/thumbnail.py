@@ -1,5 +1,6 @@
 import logging
 import shutil
+from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -8,15 +9,15 @@ from PIL import Image
 from app.core.events.processing import ProcessingFile
 from app.core.observability.telemetry import get_tracer
 from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
-from app.core.security.file_security._concurrency import _get_concurrency_guard, image_guard
-from app.core.security.file_security._image import _validate_image_size
+from app.core.security.file_security._concurrency import _get_concurrency_guard
+from app.core.security.isolated_parser import (
+    extract_office_thumbnail_isolated,
+    render_thumbnail_isolated,
+)
 from app.core.security.processing_paths import processing_temp_dir
 from app.core.security.sandbox import async_sandboxed_run
 
 logger = logging.getLogger(__name__)
-
-_THUMBNAIL_EMBEDDED_IMAGE_MAX_BYTES = 20 * 1024 * 1024
-
 
 async def run_thumbnail_stage(
     pf: ProcessingFile,
@@ -43,18 +44,24 @@ async def run_thumbnail_stage(
         _qual_cfg = (config or {}).get("thumbnail_quality")
         quality = int(_qual_cfg) if _qual_cfg is not None else 85
         size = (size_px, size_px)
+        generator_coro: Coroutine[Any, Any, bool | None]
 
         # Return None early for unsupported types — no exception, no retry needed.
         if mime_type == "image/svg+xml":
             generator_coro = _thumbnail_svg(pf.path, thumb_path, size, quality)
+            check_blank = False
         elif mime_type.startswith("image/"):
             generator_coro = _thumbnail_image(pf.path, thumb_path, size, quality)
+            check_blank = True
         elif mime_type.startswith("video/"):
             generator_coro = _thumbnail_video(pf.path, thumb_path, size, quality)
+            check_blank = False
         elif mime_type == "application/pdf":
             generator_coro = _thumbnail_pdf(pf.path, thumb_path, size, quality)
+            check_blank = False
         elif _is_office_mime(mime_type):
             generator_coro = _thumbnail_office(pf.path, thumb_path, size, quality)
+            check_blank = False
         elif mime_type in (
             "text/markdown",
             "text/x-markdown",
@@ -62,6 +69,7 @@ async def run_thumbnail_stage(
             generator_coro = _thumbnail_via_soffice(
                 pf.path, thumb_path, size, quality, suffix=".md"
             )
+            check_blank = False
         elif mime_type.startswith("text/") or original_filename.lower().endswith(
             (
                 ".txt",
@@ -83,12 +91,13 @@ async def run_thumbnail_stage(
             generator_coro = _thumbnail_via_soffice(
                 pf.path, thumb_path, size, quality, suffix=".txt"
             )
+            check_blank = False
         else:
             logger.info("Skipping thumbnail for unsupported MIME type: %s", mime_type)
             return None
 
         try:
-            await generator_coro
+            rendered_blank = await generator_coro
 
             if not thumb_path.exists():
                 raise RuntimeError(
@@ -104,9 +113,8 @@ async def run_thumbnail_stage(
             # SVGs are excluded: vector art often has transparent/white fills
             # that are legitimate and should not be discarded.
             if (
-                mime_type.startswith("image/")
-                and mime_type != "image/svg+xml"
-                and _is_blank_thumbnail(thumb_path)
+                check_blank
+                and rendered_blank is True
             ):
                 logger.info(
                     "Thumbnail for %s is nearly blank — discarding to allow native fallback",
@@ -123,37 +131,28 @@ async def run_thumbnail_stage(
             raise
 
 
+# ── Office MIME type helpers ─────────────────────────────────────────────────
+
+
 def _is_blank_thumbnail(
     path: Path, brightness_threshold: float = 252.0, stddev_threshold: float = 4.0
 ) -> bool:
-    """Return True if the thumbnail is nearly all white (blank document page).
-
-    A thumbnail is considered blank when both:
-    - mean grayscale brightness ≥ brightness_threshold (very bright)
-    - pixel stddev ≤ stddev_threshold (very little contrast)
-
-    Thresholds are deliberately strict so only an essentially uniform white image
-    is treated as blank. Using both guards prevents discarding legitimately bright
-    content like snow photos, pale-background slides, or PDF title pages that
-    still have a small amount of visible text.
-    """
+    """Measure generated/test images; production hostile inputs use the child result."""
     try:
         from PIL import ImageStat
 
-        with Image.open(path) as img:
-            gray = img.convert("L")
+        with Image.open(path) as image:
+            gray = image.convert("L")
             try:
                 stat = ImageStat.Stat(gray)
-                mean = stat.mean[0]
-                stddev = stat.stddev[0]
-                return mean >= brightness_threshold and stddev <= stddev_threshold
+                return (
+                    stat.mean[0] >= brightness_threshold
+                    and stat.stddev[0] <= stddev_threshold
+                )
             finally:
                 gray.close()
     except Exception:
         return False
-
-
-# ── Office MIME type helpers ─────────────────────────────────────────────────
 
 # OOXML and ODF MIME types both contain one of these substrings.
 _OFFICE_SUBSTRINGS = ("officedocument", "opendocument")
@@ -177,28 +176,9 @@ def _is_office_mime(mime_type: str) -> bool:
 
 async def _thumbnail_image(
     input_path: Path, output_path: Path, size: tuple[int, int], quality: int
-) -> None:
-    """Resize image to thumbnail using Pillow."""
-
-    def _sync() -> None:
-        with Image.open(input_path) as base_img:
-            _validate_image_size(base_img)
-            if getattr(base_img, "n_frames", 1) != 1 or getattr(base_img, "is_animated", False):
-                raise ValueError("Animated thumbnail sources are not supported")
-            base_img.load()
-
-            from PIL import ImageOps
-
-            oriented = ImageOps.exif_transpose(base_img)
-            try:
-                oriented.thumbnail(size, Image.Resampling.LANCZOS)
-                oriented.save(output_path, "WEBP", quality=quality)
-            finally:
-                if oriented is not base_img:
-                    oriented.close()
-
-    async with image_guard():
-        await _shielded_to_thread(_sync)
+) -> bool:
+    """Resize an image in the disposable parser process."""
+    return await render_thumbnail_isolated(input_path, output_path, size=size, quality=quality)
 
 
 async def _thumbnail_svg(
@@ -240,35 +220,13 @@ async def _thumbnail_svg(
                 f"{process.stderr.decode(errors='replace')[:300]}"
             )
 
-        def _flatten_and_save() -> None:
-            with Image.open(temp_png) as img:
-                _validate_image_size(img)
-                img.thumbnail(size, Image.Resampling.LANCZOS)
-                if img.mode in ("RGBA", "LA", "PA"):
-                    rgba_img = img.convert("RGBA") if img.mode != "RGBA" else img
-                    try:
-                        alpha = rgba_img.getchannel("A")
-                        try:
-                            background = Image.new("RGB", rgba_img.size, "white")
-                            try:
-                                background.paste(rgba_img, mask=alpha)
-                                background.save(output_path, "WEBP", quality=quality)
-                            finally:
-                                background.close()
-                        finally:
-                            alpha.close()
-                    finally:
-                        if rgba_img is not img:
-                            rgba_img.close()
-                else:
-                    rgb = img.convert("RGB")
-                    try:
-                        rgb.save(output_path, "WEBP", quality=quality)
-                    finally:
-                        rgb.close()
-
-        async with image_guard():
-            await _shielded_to_thread(_flatten_and_save)
+        await render_thumbnail_isolated(
+            temp_png,
+            output_path,
+            size=size,
+            quality=quality,
+            flatten_alpha=True,
+        )
 
 
 async def _thumbnail_video(
@@ -355,12 +313,14 @@ async def _thumbnail_pdf(
                 )
                 break
 
-            await _thumbnail_image(temp_png, output_path, size, quality)
+            blank = await render_thumbnail_isolated(
+                temp_png, output_path, size=size, quality=quality
+            )
 
             if not output_path.exists():
                 break
 
-            if page_num == 1 and _is_blank_thumbnail(output_path):
+            if page_num == 1 and blank:
                 logger.info(
                     "Page 1 of %s is blank — trying page 2 for a better thumbnail",
                     input_path.name,
@@ -446,58 +406,15 @@ async def _fallback_extract_largest_image(
     open the raw zip container and extract the largest image.
     """
 
-    def _extract() -> bytes | None:
-        import zipfile
-
-        try:
-            with zipfile.ZipFile(input_path, "r") as z:
-                # Filter for common image extensions
-                image_entries = [
-                    info
-                    for info in z.infolist()
-                    if info.filename.lower().endswith((".png", ".jpg", ".jpeg"))
-                ]
-                if not image_entries:
-                    return None
-
-                # Sort by size descending, grab the largest image
-                image_entries.sort(key=lambda x: x.file_size, reverse=True)
-                largest = image_entries[0]
-                if largest.file_size > _THUMBNAIL_EMBEDDED_IMAGE_MAX_BYTES:
-                    raise ValueError("Embedded thumbnail candidate exceeds byte limit")
-
-                with z.open(largest) as f:
-                    data = f.read(_THUMBNAIL_EMBEDDED_IMAGE_MAX_BYTES + 1)
-                    if len(data) > _THUMBNAIL_EMBEDDED_IMAGE_MAX_BYTES:
-                        raise ValueError("Embedded thumbnail candidate expanded beyond byte limit")
-                    return data
-        except zipfile.BadZipFile:
-            return None
-        except Exception as e:
-            logger.error("Fallback image extraction failed for %s: %s", input_path.name, e)
-            return None
-
-    data = await _shielded_to_thread(_extract)
-    if not data:
-        return
-
-    # Process extracted bytes with Pillow
-    def _sync_process(img_data: bytes) -> None:
-        import io
-
-        try:
-            with io.BytesIO(img_data) as source, Image.open(source) as img:
-                _validate_image_size(img)
-                if getattr(img, "n_frames", 1) != 1 or getattr(img, "is_animated", False):
-                    raise ValueError("Animated embedded thumbnails are not supported")
-                img.load()
-                img.thumbnail(size, Image.Resampling.LANCZOS)
-                img.save(output_path, "WEBP", quality=quality)
-        except Exception as e:
-            logger.error("Fallback image processing failed: %s", e)
-
-    async with image_guard():
-        await _shielded_to_thread(_sync_process, data)
+    try:
+        produced = await extract_office_thumbnail_isolated(
+            input_path, output_path, size=size, quality=quality
+        )
+        if not produced:
+            output_path.unlink(missing_ok=True)
+    except Exception as exc:
+        output_path.unlink(missing_ok=True)
+        logger.error("Fallback image processing failed for %s: %s", input_path.name, exc)
 
 
 async def _thumbnail_via_soffice(

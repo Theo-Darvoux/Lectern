@@ -233,16 +233,21 @@ async def test_all_24_tables_in_zip(db_session: AsyncSession, tmp_path: Path) ->
         assert f"db/{tbl}.json" in names, f"Missing table dump: {tbl}"
 
 
-def test_table_order_has_24_entries() -> None:
-    """_TABLE_INSERT_ORDER must list all 24 application tables."""
+def test_table_order_covers_every_application_table() -> None:
+    """A new ORM table must never silently escape full backup and restore."""
+    from app.models import Base
+
     expected = {
         "users",
         "tags",
         "allowed_domains",
         "dead_letter_jobs",
+        "outbox_jobs",
+        "scheduled_job_runs",
         "directories",
         "notifications",
         "uploads",
+        "cas_staging_claims",
         "materials",
         "directory_tags",
         "directory_likes",
@@ -262,7 +267,8 @@ def test_table_order_has_24_entries() -> None:
         "pr_comments",
     }
     assert set(_TABLE_INSERT_ORDER) == expected
-    assert len(_TABLE_INSERT_ORDER) == 24  # no duplicates
+    assert set(_TABLE_INSERT_ORDER) == set(Base.metadata.tables)
+    assert len(_TABLE_INSERT_ORDER) == 27  # no duplicates
 
 
 def test_table_order_no_duplicates() -> None:
@@ -274,6 +280,7 @@ def test_parent_tables_precede_children() -> None:
     order = {t: i for i, t in enumerate(_TABLE_INSERT_ORDER)}
     assert order["users"] < order["materials"]
     assert order["users"] < order["notifications"]
+    assert order["users"] < order["cas_staging_claims"]
     assert order["directories"] < order["materials"]
     assert order["materials"] < order["material_versions"]
     assert order["pull_requests"] < order["material_versions"]
@@ -295,18 +302,18 @@ async def test_table_dump_failure_aborts_incomplete_backup(
     original_dump = None
     import app.services.backup as svc
 
-    async def _flaky_dump(db, table_name):
+    async def _flaky_dump(db, table_name, destination):
         if table_name == "dead_letter_jobs":
             raise Exception("table missing")
-        return await original_dump(db, table_name)  # type: ignore[misc]
+        return await original_dump(db, table_name, destination)  # type: ignore[misc]
 
-    original_dump = svc._dump_table  # type: ignore[attr-defined]
+    original_dump = svc._dump_table_to_path
 
     with (
         patch("app.services.backup.list_objects", side_effect=lambda p: _empty_gen()),
         patch("app.services.backup.download_file_raw", new_callable=AsyncMock),
         patch("app.services.backup.get_object_headers", new_callable=AsyncMock, return_value={}),
-        patch("app.services.backup._dump_table", side_effect=_flaky_dump),
+        patch("app.services.backup._dump_table_to_path", side_effect=_flaky_dump),
     ):
         with pytest.raises(Exception, match="table missing"):
             await create_backup_zip(db_session, dest)

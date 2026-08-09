@@ -1,10 +1,8 @@
 import asyncio
-import contextlib
 import logging
-from collections.abc import Awaitable, Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, cast
 
 import httpx
 import yara
@@ -12,6 +10,8 @@ from fastapi import Depends, Request
 
 from app.config import settings
 from app.core.common.exceptions import BadRequestError, ServiceUnavailableError
+from app.core.security.isolated_parser import scan_yara_isolated
+from app.core.security.processing_paths import make_processing_temp_path
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +22,7 @@ class MalwareScanner:
     def __init__(self) -> None:
         self.rules: yara.Rules | None = None
         self.client: httpx.AsyncClient | None = None
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yara-scan")
-        self._scan_slot: asyncio.Semaphore | None = None
-        self._active_yara_future: Future[list[Any]] | None = None
-
-    @property
-    def scan_slot(self) -> asyncio.Semaphore:
-        """Lazily initialize the Semaphore on the active event loop."""
-        if self._scan_slot is None:
-            self._scan_slot = asyncio.Semaphore(1)
-        return self._scan_slot
+        self._compiled_rules_path: Path | None = None
 
     @property
     def initialized(self) -> bool:
@@ -56,6 +47,13 @@ class MalwareScanner:
             raise RuntimeError(f"No YARA rule files (*.yar, *.yara) found in {rules_dir}")
 
         self.rules = yara.compile(filepaths=rule_files)
+        compiled_path = make_processing_temp_path(suffix=".yarac", prefix="yara-rules-")
+        try:
+            self.rules.save(str(compiled_path))
+        except BaseException:
+            compiled_path.unlink(missing_ok=True)
+            raise
+        self._compiled_rules_path = compiled_path
         self.client = httpx.AsyncClient(timeout=settings.malwarebazaar_timeout)
         logger.info("Scanner: compiled %d YARA rule file(s) from %s", len(rule_files), rules_dir)
 
@@ -64,12 +62,9 @@ class MalwareScanner:
         if self.client:
             await self.client.aclose()
             self.client = None
-        future = self._active_yara_future
-        if future is not None and future.done():
-            with contextlib.suppress(BaseException):
-                future.result()
-            self._active_yara_future = None
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._compiled_rules_path is not None:
+            self._compiled_rules_path.unlink(missing_ok=True)
+            self._compiled_rules_path = None
 
     async def _run_scan_gate(
         self,
@@ -107,71 +102,29 @@ class MalwareScanner:
         """Run the local YARA gate; the pipeline applies the configured Bazaar policy."""
         await self._run_scan_gate(self._scan_yara_path(file_path, filename), filename)
 
-    def _clear_completed_yara_future(self) -> None:
-        """Consume a completed native scan before another one is submitted."""
-        future = self._active_yara_future
-        if future is None or not future.done():
-            return
-        with contextlib.suppress(BaseException):
-            future.result()
-        self._active_yara_future = None
-
-    async def _run_yara_match(
-        self,
-        match_callable: Callable[[], list[Any]],
-        filename: str,
-    ) -> str | None:
-        """Execute one YARA match without accumulating unkillable native workers."""
-        async with self.scan_slot:
-            self._clear_completed_yara_future()
-            if self._active_yara_future is not None:
-                # ThreadPoolExecutor cannot terminate a native call. Replacing
-                # the executor after a timeout would leak one worker per request.
-                raise RuntimeError("A previous YARA scan is still running after its timeout")
-
-            future = self._executor.submit(match_callable)
-            self._active_yara_future = future
-            wrapped = asyncio.wrap_future(future)
-            try:
-                matches: list[Any] = await asyncio.wait_for(
-                    asyncio.shield(wrapped),
-                    timeout=settings.yara_scan_timeout + 5,
-                )
-            except TimeoutError:
-                logger.error(
-                    "YARA scan timed out for %s; rejecting further scans until the "
-                    "native call exits.",
-                    filename,
-                )
-                raise
-            finally:
-                if future.done() and self._active_yara_future is future:
-                    self._clear_completed_yara_future()
-
-        if matches:
-            rule_names = [m.rule for m in matches]
-            logger.warning("YARA match in %s: %s", filename, ", ".join(rule_names))
-            return cast(str, rule_names[0])
-        return None
-
     async def _scan_yara(self, file_bytes: bytes, filename: str) -> str | None:
-        """Match file bytes against compiled YARA rules. Runs in thread executor."""
-        if self.rules is None:
+        """Match bytes in a disposable isolated parser process."""
+        if self.rules is None or self._compiled_rules_path is None:
             raise RuntimeError("Scanner YARA rules not initialized")
-        rules = self.rules
-        return await self._run_yara_match(
-            lambda: rules.match(data=file_bytes, timeout=settings.yara_scan_timeout),
-            filename,
-        )
+        file_path = make_processing_temp_path(suffix=Path(filename).suffix, prefix="yara-input-")
+        try:
+            await asyncio.to_thread(file_path.write_bytes, file_bytes)
+            return await scan_yara_isolated(
+                file_path,
+                compiled_rules_path=self._compiled_rules_path,
+                timeout=settings.yara_scan_timeout,
+            )
+        finally:
+            file_path.unlink(missing_ok=True)
 
     async def _scan_yara_path(self, file_path: Path, filename: str) -> str | None:
-        """Match file on disk against compiled YARA rules. Runs in thread executor."""
-        if self.rules is None:
+        """Match a file in a disposable isolated parser process."""
+        if self.rules is None or self._compiled_rules_path is None:
             raise RuntimeError("Scanner YARA rules not initialized")
-        rules = self.rules
-        return await self._run_yara_match(
-            lambda: rules.match(filepath=str(file_path), timeout=settings.yara_scan_timeout),
-            filename,
+        return await scan_yara_isolated(
+            file_path,
+            compiled_rules_path=self._compiled_rules_path,
+            timeout=settings.yara_scan_timeout,
         )
 
     async def check_malwarebazaar(

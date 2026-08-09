@@ -26,9 +26,15 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.database import get_db
+from app.core.database.post_commit import register_transaction_callbacks
 from app.core.database.redis import redis_client
 from app.core.media.mimetypes import QCM_MIME_TYPE
-from app.core.security.cas import hmac_cas_key, increment_cas_ref
+from app.core.security.cas import (
+    CasReferenceMissingError,
+    compensate_cas_increment,
+    hmac_cas_key,
+    increment_cas_ref,
+)
 from app.core.storage.facade import read_full_object
 from app.core.storage.facade import upload_file as storage_upload_file
 from app.dependencies.auth import CurrentUser
@@ -216,6 +222,35 @@ async def stage_qcm(
     hmac_digest = cas_redis_key.split(":")[-1]
     file_key = f"cas/{hmac_digest}"
 
+    claim_id = uuid.uuid4()
+    increment_operation_id = f"qcm-stage:{claim_id}"
+    reference_attempted = False
+
+    async def rollback_stage() -> None:
+        if not reference_attempted:
+            return
+        try:
+            await compensate_cas_increment(
+                redis_client,
+                sha256,
+                operation_id=increment_operation_id,
+            )
+        except CasReferenceMissingError:
+            # A failed increment that never reached Redis has nothing to undo.
+            # Physical CAS deletion is deliberately left to safe GC because
+            # the same content key may be referenced by another request.
+            logger.info("QCM rollback found no CAS reference for claim %s", claim_id)
+
+    async def finalize_stage() -> None:
+        return None
+
+    if not register_transaction_callbacks(
+        db,
+        on_rollback=rollback_stage,
+        on_commit=finalize_stage,
+    ):
+        raise RuntimeError("QCM staging requires a request-managed transaction")
+
     # Write to object storage (idempotent — same content → same key)
     await storage_upload_file(
         data_bytes,
@@ -225,7 +260,7 @@ async def stage_qcm(
     )
 
     # Increment CAS ref count so the PR workflow can track the blob
-    claim_id = uuid.uuid4()
+    reference_attempted = True
     await increment_cas_ref(
         redis_client,
         sha256,
@@ -235,7 +270,7 @@ async def stage_qcm(
             "mime_type": QCM_MIME_TYPE,
             "file_name": "qcm.qcm",
         },
-        operation_id=f"qcm-stage:{claim_id}",
+        operation_id=increment_operation_id,
     )
     db.add(
         CasStagingClaim(

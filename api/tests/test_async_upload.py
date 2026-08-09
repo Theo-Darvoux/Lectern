@@ -114,11 +114,17 @@ async def test_worker_process_upload_logic():
         patch(
             "app.workers.upload.stages.download.get_object_info", new_callable=AsyncMock
         ) as mock_info,
-        patch("app.workers.upload.stages.scan_strip.check_pdf_safety"),
+        patch(
+            "app.workers.upload.stages.download.inspect_upload", new_callable=AsyncMock
+        ) as mock_inspect,
+        patch(
+            "app.workers.upload.stages.scan_strip.check_pdf_safety_isolated",
+            new_callable=AsyncMock,
+        ),
         patch("app.workers.upload.pipeline.MalwareScanner") as mock_scanner_cls,
         patch(
-            "app.workers.upload.stages.scan_strip.strip_metadata_file", new_callable=AsyncMock
-        ) as mock_strip,
+            "app.workers.upload.stages.scan_strip.sanitize_upload", new_callable=AsyncMock
+        ) as mock_sanitize,
         patch(
             "app.workers.upload.stages.compress.compress_file_path", new_callable=AsyncMock
         ) as mock_comp,
@@ -130,6 +136,14 @@ async def test_worker_process_upload_logic():
     ):
         mock_dl.return_value = "mocksha256"
         mock_info.return_value = {"size": 100, "content_type": "application/pdf"}
+        from app.core.security.isolated_parser import UploadInspection
+
+        mock_inspect.return_value = UploadInspection(
+            actual_mime="application/pdf",
+                uncompressed_size=None,
+                parser_pid=1234,
+                parser_uid=1000,
+            )
 
         mock_sha.return_value = "fake-sha"
 
@@ -154,7 +168,7 @@ async def test_worker_process_upload_logic():
         t2.close()
         comp_path = Path(t2.name)
 
-        mock_strip.return_value = clean_path
+        mock_sanitize.return_value = clean_path
 
         from app.core.security.file_security import CompressResultPath
 

@@ -6,7 +6,9 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database.post_commit import PostCommitKey, rollback_transaction_callbacks
 from app.models.material import Material, MaterialVersion
+from app.routers.materials import save_material_text_content
 from tests.test_materials import _auth_headers, _create_directory, _create_user
 
 
@@ -59,6 +61,46 @@ async def test_get_material_text_content_implicit_gzip(
         assert response.status_code == 200
         assert response.text == original_text
         assert "text/plain" in response.headers["Content-Type"]
+
+
+@pytest.mark.asyncio
+async def test_save_text_content_removes_object_when_transaction_rolls_back(
+    db_session: AsyncSession,
+) -> None:
+    user = await _create_user(db_session)
+    directory = await _create_directory(db_session, user)
+    material = Material(
+        directory_id=directory.id,
+        title="Rollback Notes",
+        slug="rollback-notes",
+        type="markdown",
+        author_id=user.id,
+    )
+    db_session.add(material)
+    version = MaterialVersion(
+        material=material,
+        version_number=1,
+        file_key="materials/test/rollback.md",
+        file_name="rollback.md",
+        file_size=3,
+        file_mime_type="text/markdown",
+    )
+    db_session.add(version)
+    await db_session.commit()
+    db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+
+    with (
+        patch("app.routers.materials.read_full_object", new=AsyncMock(return_value=b"old")),
+        patch("app.routers.materials.storage_upload_file", new_callable=AsyncMock),
+        patch("app.core.storage.facade.delete_object", new_callable=AsyncMock) as delete_object,
+    ):
+        result = await save_material_text_content(
+            str(material.id), user, db_session, "new contents"
+        )
+        await db_session.rollback()
+        await rollback_transaction_callbacks(db_session)
+
+    delete_object.assert_awaited_once_with(result["file_key"])
 
 
 @pytest.mark.asyncio

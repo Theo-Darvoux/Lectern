@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 from pathlib import Path
 from typing import Annotated, Any
@@ -26,6 +27,22 @@ from app.services.backup import (
 router = APIRouter(prefix="/api/admin/backup", tags=["Admin Backup"])
 logger = logging.getLogger(__name__)
 
+_BACKUP_ID_RE = re.compile(
+    r"^backup_\d{8}_\d{6}(?:_[0-9a-f]{32})?$",
+    re.IGNORECASE,
+)
+
+
+def _require_offline_restore_in_production() -> None:
+    if settings.environment == "production":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Online restore is disabled in production. Stop API/workers and use "
+                "`python -m app.cli restore-backup-offline --confirm-offline PATH`."
+            ),
+        )
+
 
 def _backup_dir() -> Path:
     d = Path(settings.backup_dir)
@@ -34,8 +51,10 @@ def _backup_dir() -> Path:
 
 
 def _resolve_backup(backup_id: str, backup_dir: Path) -> Path:
+    if _BACKUP_ID_RE.fullmatch(backup_id) is None:
+        raise NotFoundError(f"Backup not found: {backup_id!r}")
     path = backup_dir / f"{backup_id}.zip"
-    if ".." in backup_id or not path.exists():
+    if not path.is_file():
         raise NotFoundError(f"Backup not found: {backup_id!r}")
     return path
 
@@ -162,6 +181,7 @@ async def restore_local_backup(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
     """Full-replacement restore from a server-local backup."""
+    _require_offline_restore_in_production()
     path = _resolve_backup(backup_id, _backup_dir())
 
     try:
@@ -185,6 +205,7 @@ async def restore_uploaded_backup(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
     """Full-replacement restore from an uploaded backup ZIP."""
+    _require_offline_restore_in_production()
     if not (file.filename or "").lower().endswith(".zip"):
         raise BadRequestError("Uploaded file must be a .zip backup")
 

@@ -3,7 +3,7 @@ ARG DEBIAN_SNAPSHOT=20260801T000000Z
 FROM python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
 ARG DEBIAN_SNAPSHOT
 
-COPY --from=ghcr.io/astral-sh/uv:0.12.3-python3.13-dhi@sha256:2b56d2665e5591ce8a1e527b1471637fba03e46324236e4a1bc7c591f56a4edf /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.3-python3.13-dhi@sha256:2b56d2665e5591ce8a1e527b1471637fba03e46324236e4a1bc7c591f56a4edf /usr/local/bin/uv /usr/local/bin/uv
 
 WORKDIR /app
 
@@ -21,7 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir /venv
 COPY pyproject.toml uv.lock ./
 ENV UV_PROJECT_ENVIRONMENT=/venv
-RUN uv sync --frozen --no-dev
+ENV UV_PYTHON_DOWNLOADS=never
+RUN uv sync --frozen --no-dev --python /usr/local/bin/python3.12
 
 # Strip stub/test files from the venv. We intentionally do NOT pre-compile
 # bytecode: the runtime sets PYTHONDONTWRITEBYTECODE=1, so shipped .pyc files
@@ -47,6 +48,8 @@ RUN printf '%s\n' \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libyara10 \
+    bubblewrap \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r appuser && useradd -r -g appuser -m appuser && \
@@ -67,9 +70,8 @@ RUN chmod +x scripts/start.sh scripts/worker-start.sh
 EXPOSE 8000
 
 # ── Stage 3a: API (web-facing) ───────────────────────────────────────────────
-# Slim image: serves HTTP only. None of the document/media tooling is reachable
-# from the request path (it lives entirely in app/workers + app/core/file_security),
-# so it is deliberately excluded here to keep the public-facing image small.
+# The API performs batch-archive and avatar parsing through the same short-lived
+# Bubblewrap child boundary as workers. Heavy converters remain worker-only.
 FROM runtime-base AS api
 
 ENTRYPOINT ["./scripts/start.sh"]
@@ -77,7 +79,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # ── Stage 3b: Worker ─────────────────────────────────────────────────────────
 # Adds the document/media processing toolchain used by the upload pipeline:
-#   ghostscript (PDF), ffmpeg (audio/video), bubblewrap (sandbox),
+#   ghostscript (PDF), ffmpeg (audio/video),
 #   exiftool (metadata strip), libreoffice-nogui (Office→PDF thumbnails),
 #   librsvg2-bin (SVG→PNG thumbnails).
 # This is the default build target (last stage), so a plain `docker build`
@@ -88,8 +90,6 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ghostscript \
     ffmpeg \
-    bubblewrap \
-    util-linux \
     libimage-exiftool-perl \
     libreoffice-nogui \
     librsvg2-bin \

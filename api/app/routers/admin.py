@@ -136,7 +136,6 @@ async def admin_delete_user(
     if not target:
         raise NotFoundError("User not found")
     await hard_delete_user(db, target)
-    await db.commit()
     return {"status": "ok"}
 
 
@@ -233,19 +232,18 @@ async def retry_dead_letter_job(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
-    job = await db.scalar(select(DeadLetterJob).where(DeadLetterJob.id == job_id))
+    job = await db.scalar(
+        select(DeadLetterJob).where(DeadLetterJob.id == job_id).with_for_update()
+    )
     if not job:
         raise NotFoundError("Dead letter job not found")
     if job.resolved_at is not None:
         raise BadRequestError("Job has already been resolved")
 
-    import app.core.database.redis as redis_core
-
-    if redis_core.arq_pool is None:
-        raise BadRequestError("Background job queue is unavailable")
+    from app.core.database.post_commit import add_post_commit_job, outbox_kwargs
 
     payload = job.payload or {}
-    await redis_core.arq_pool.enqueue_job(job.job_name, **payload)  # type: ignore[arg-type]
+    add_post_commit_job(db, (job.job_name, outbox_kwargs(**payload)))
 
     job.resolved_at = datetime.now(UTC)
     await db.flush()
@@ -258,7 +256,9 @@ async def dismiss_dead_letter_job(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
-    job = await db.scalar(select(DeadLetterJob).where(DeadLetterJob.id == job_id))
+    job = await db.scalar(
+        select(DeadLetterJob).where(DeadLetterJob.id == job_id).with_for_update()
+    )
     if not job:
         raise NotFoundError("Dead letter job not found")
     if job.resolved_at is not None:

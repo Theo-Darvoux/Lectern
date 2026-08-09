@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import ORMExecuteState, Session, with_loader_criteria
 
 from app.config import settings
+from app.core.security.async_utils import settle_awaitable
 
 _is_sqlite = settings.database_url.startswith("sqlite")
 engine = create_async_engine(
@@ -56,20 +58,61 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     from app.core.database.post_commit import (
         PostCommitKey,
         dispatch_post_commit_actions,
+        finalize_transaction_callbacks,
         persist_post_commit_jobs,
+        rollback_transaction_callbacks,
     )
 
     async with async_session_factory() as session:
         jobs: list[tuple[Any, ...]] = []
         session.info[PostCommitKey.JOBS] = jobs
+        session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+        commit_attempted = False
         try:
             yield session
             await persist_post_commit_jobs(session)
+            commit_attempted = True
             await session.commit()
-            await dispatch_post_commit_actions(session)
-        except Exception:
-            await session.rollback()
+        except BaseException:
+            _result, rollback_error, rollback_cancellation = await settle_awaitable(
+                session.rollback()
+            )
+            compensation_error: BaseException | None = None
+            if commit_attempted:
+                # COMMIT acknowledgement is ambiguous after connection loss or
+                # cancellation. Destructive compensation could delete bytes
+                # referenced by a transaction PostgreSQL actually committed.
+                # Preserve external data and recovery journals for reconciliation.
+                session.info.pop(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, None)
+                session.info.pop(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, None)
+                logger.error(
+                    "Database COMMIT failed with unknown outcome; preserving external mutations"
+                )
+            else:
+                try:
+                    await rollback_transaction_callbacks(session)
+                except BaseException as exc:
+                    compensation_error = exc
+            if compensation_error is not None and not isinstance(
+                compensation_error, asyncio.CancelledError
+            ):
+                raise RuntimeError(
+                    "Database transaction failed and external-resource compensation was incomplete"
+                ) from compensation_error
+            if rollback_error is not None:
+                raise RuntimeError("Database rollback failed") from rollback_error
+            if rollback_cancellation is not None:
+                raise rollback_cancellation
+            if compensation_error is not None:
+                raise compensation_error
             raise
+        else:
+            await finalize_transaction_callbacks(session)
+            await dispatch_post_commit_actions(session)
         finally:
             session.info.pop(PostCommitKey.JOBS, None)
             session.info.pop(PostCommitKey.SSE, None)
+            session.info.pop(PostCommitKey.USER_SSE, None)
+            session.info.pop(PostCommitKey.MANAGED_TRANSACTION, None)
+            session.info.pop(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, None)
+            session.info.pop(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, None)

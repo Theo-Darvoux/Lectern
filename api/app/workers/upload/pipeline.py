@@ -5,7 +5,6 @@ import json
 import logging
 import time
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -21,6 +20,7 @@ from app.core.observability.metrics import (
 )
 from app.core.observability.telemetry import get_tracer
 from app.core.security.cas import decrement_cas_ref
+from app.core.security.processing_paths import make_processing_temp_path
 from app.core.security.scanner import MalwareScanner
 from app.core.storage.facade import delete_object
 from app.routers.upload.cancellation import upload_lifecycle_lock_name
@@ -520,9 +520,7 @@ class UploadPipeline:
             UploadStatus.PROCESSING, detail=stage_label, stage_name_or_label=stage_name
         )
 
-        tmp = NamedTemporaryFile(delete=False)
-        self.tmp_path = Path(tmp.name)
-        tmp.close()
+        self.tmp_path = make_processing_temp_path(prefix="upload-pipeline-")
 
         try:
             download_result = await run_download_and_validate(

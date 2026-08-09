@@ -1,6 +1,5 @@
 import io
 import zipfile
-from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -11,27 +10,20 @@ from app.core.security.scanner import MalwareScanner
 
 
 @pytest.mark.asyncio
-async def test_yara_timeout_does_not_spawn_replacement_workers() -> None:
+async def test_yara_timeout_does_not_poison_the_next_isolated_scan(tmp_path: Path) -> None:
     scanner = MalwareScanner()
-    native_future: Future[list[object]] = Future()
+    scanner.rules = object()  # type: ignore[assignment]
+    scanner._compiled_rules_path = tmp_path / "rules.yarac"
+    scanner._compiled_rules_path.touch()
+    source = tmp_path / "upload.bin"
+    source.write_bytes(b"safe")
+    isolated_scan = AsyncMock(side_effect=[TimeoutError, None])
 
-    with (
-        patch.object(scanner._executor, "submit", return_value=native_future) as submit,
-        patch(
-            "app.core.security.scanner.asyncio.wait_for",
-            new=AsyncMock(side_effect=TimeoutError),
-        ),
-    ):
+    with patch("app.core.security.scanner.scan_yara_isolated", new=isolated_scan):
         with pytest.raises(TimeoutError):
-            await scanner._run_yara_match(lambda: [], "stalled.bin")
-
-        assert scanner._active_yara_future is native_future
-        with pytest.raises(RuntimeError, match="previous YARA scan is still running"):
-            await scanner._run_yara_match(lambda: [], "second.bin")
-        submit.assert_called_once()
-
-    native_future.set_result([])
-    await scanner.close()
+            await scanner._scan_yara_path(source, "stalled.bin")
+        assert await scanner._scan_yara_path(source, "second.bin") is None
+    assert isolated_scan.await_count == 2
 
 
 def test_invalid_eocd_bytes_do_not_make_media_a_polyglot(tmp_path: Path) -> None:
@@ -55,7 +47,7 @@ def test_valid_appended_zip_is_still_rejected(tmp_path: Path) -> None:
 
 def test_cas_duplicate_marker_without_record_fails_closed() -> None:
     script = Path("app/core/security/lua/cas_incr.lua").read_text(encoding="utf-8")
-    duplicate_branch = script.split("if redis.call('EXISTS', KEYS[3]) == 1 then", 1)[1]
+    duplicate_branch = script.split("if operation_state then", 1)[1]
     duplicate_branch = duplicate_branch.split("end\nif not raw then", 1)[0]
 
     assert "if not raw then return -1 end" in duplicate_branch

@@ -202,10 +202,10 @@ async def test_thumbnail_pdf_cleans_temp_png_on_image_error(tmp_path: Path) -> N
             "app.workers.upload.stages.thumbnail.async_sandboxed_run",
             side_effect=fake_gs,
         ),
-        patch(
-            "app.workers.upload.stages.thumbnail._thumbnail_image",
-            AsyncMock(side_effect=OSError("PIL failure")),
-        ),
+            patch(
+                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
+                AsyncMock(side_effect=OSError("PIL failure")),
+            ),
         pytest.raises(OSError),
     ):
         await _thumbnail_pdf(input_pdf, output_webp, (320, 240), 80)
@@ -312,7 +312,6 @@ async def test_reset_daily_views_uses_ctx_session_factory() -> None:
     mock_result = MagicMock(rowcount=3)
     mock_session.execute = AsyncMock(return_value=mock_result)
     mock_session.commit = AsyncMock()
-
     mock_factory = MagicMock(return_value=mock_session)
     ctx = {"db_sessionmaker": mock_factory}
 
@@ -361,6 +360,10 @@ async def test_year_rollover_uses_ctx_session_factory() -> None:
         )
     )
     mock_session.commit = AsyncMock()
+    nested = MagicMock()
+    nested.__aenter__ = AsyncMock(return_value=nested)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=nested)
 
     mock_factory = MagicMock(return_value=mock_session)
     ctx = {"db_sessionmaker": mock_factory}

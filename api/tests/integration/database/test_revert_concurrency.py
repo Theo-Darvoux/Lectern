@@ -11,10 +11,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.common.exceptions import BadRequestError
+from app.core.database.post_commit import PostCommitKey, persist_post_commit_jobs
+from app.models.dead_letter import DeadLetterJob
 from app.models.directory import Directory, DirectoryType
+from app.models.outbox import OutboxJob
 from app.models.pull_request import PRStatus, PullRequest
 from app.models.user import User, UserRole
+from app.routers.admin import retry_dead_letter_job
 from app.services.pr import _exec_move_item, revert_pr_service
+from app.workers.year_rollover import year_rollover
 
 DATABASE_URL = os.environ.get("REVERT_TEST_DATABASE_URL")
 pytestmark = [
@@ -111,6 +116,88 @@ async def test_database_constraint_rejects_duplicate_revert_reference() -> None:
         with pytest.raises(IntegrityError):
             await session.flush()
         await session.rollback()
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_year_rollover_has_one_durable_winner() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    run_year = 3000 + uuid.uuid4().int % 1000
+
+    async with sessions() as seed:
+        user = User(
+            email=f"rollover-race-{uuid.uuid4()}@example.invalid",
+            display_name="Rollover race user",
+            role=UserRole.STUDENT,
+            academic_year="1A",
+        )
+        seed.add(user)
+        await seed.commit()
+        user_id = user.id
+
+    await asyncio.gather(
+        year_rollover({"db_sessionmaker": sessions}, target_year=run_year),
+        year_rollover({"db_sessionmaker": sessions}, target_year=run_year),
+    )
+
+    async with sessions() as check:
+        updated = await check.get(User, user_id)
+        assert updated is not None
+        assert updated.academic_year == "2A"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_dead_letter_retries_enqueue_exactly_once() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    admin = User(id=uuid.uuid4(), email="detached@example.invalid", role=UserRole.BUREAU)
+
+    retried_upload_id = str(uuid.uuid4())
+    async with sessions() as seed:
+        job = DeadLetterJob(
+            job_name="process_upload",
+            upload_id=str(uuid.uuid4()),
+            payload={"upload_id": retried_upload_id},
+            error_detail="failed",
+            attempts=3,
+        )
+        seed.add(job)
+        await seed.commit()
+        job_id = job.id
+
+    async with sessions() as first, sessions() as second:
+        await first.scalar(
+            select(DeadLetterJob).where(DeadLetterJob.id == job_id).with_for_update()
+        )
+        second.info[PostCommitKey.JOBS] = []
+        competing = asyncio.create_task(retry_dead_letter_job(job_id, admin, second))
+        await asyncio.sleep(0.2)
+        assert not competing.done(), "competing retry did not wait for the DLQ row lock"
+
+        first.info[PostCommitKey.JOBS] = []
+        await retry_dead_letter_job(job_id, admin, first)
+        await persist_post_commit_jobs(first)
+        await first.commit()
+
+        with pytest.raises(BadRequestError, match="already been resolved"):
+            await asyncio.wait_for(competing, timeout=5)
+        await second.rollback()
+
+    async with sessions() as check:
+        count = await check.scalar(
+            select(func.count()).select_from(OutboxJob).where(
+                OutboxJob.job_name == "process_upload",
+                OutboxJob.args
+                == [{"__outbox_kwargs__": {"upload_id": retried_upload_id}}],
+            )
+        )
+        assert count == 1
 
     await engine.dispose()
 
