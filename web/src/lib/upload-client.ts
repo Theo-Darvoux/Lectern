@@ -717,7 +717,7 @@ export async function uploadFile(
     }
 
     // ── Phase 3: SSE stream (80–100%) ─────────────────────────────────────────
-    const result = await _waitForUploadCompletion(quarantineKey, {
+    const result = await waitForUploadCompletion(quarantineKey, {
         onProgress: (p) => onProgress?.(80 + Math.round(p * 19)),
         onStatusUpdate: options.onStatusUpdate,
         signal,
@@ -766,7 +766,7 @@ class UploadTerminalError extends Error {
 /** Maximum wall-clock time (ms) to wait for SSE processing before giving up. */
 const SSE_TOTAL_TIMEOUT = 15 * 60 * 1000;
 
-async function _waitForUploadCompletion(
+export async function waitForUploadCompletion(
     fileKey: string,
     options: {
         onProgress?: (p: number) => void;
@@ -974,7 +974,7 @@ export async function trackExistingUpload(
 
     onProgress?.(80);
 
-    const result = await _waitForUploadCompletion(quarantineKey, {
+    const result = await waitForUploadCompletion(quarantineKey, {
         onProgress: (p) => onProgress?.(80 + Math.round(p * 19)),
         onStatusUpdate: options.onStatusUpdate,
         signal,

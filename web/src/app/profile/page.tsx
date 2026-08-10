@@ -4,8 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthGuard } from "@/components/auth-guard";
 import { ProfileView, ProfileSkeleton, type UserProfile } from "@/components/profile/profile-view";
 import { useTranslations } from "next-intl";
-import { API_BASE, apiFetch, getClientId } from "@/lib/api-client";
-import { getAccessToken } from "@/lib/auth-tokens";
+import { apiFetch } from "@/lib/api-client";
+import { uploadAvatarAndAdopt } from "@/lib/avatar-upload";
 import { useAuthStore } from "@/lib/stores";
 import { toast } from "sonner";
 
@@ -38,28 +38,10 @@ function OwnProfileContent() {
         setIsUploading(true);
         const toastId = toast.loading(t("uploadingAvatar"));
         try {
-            const formData = new FormData();
-            formData.append("file", file);
-
-            const res = await fetch(`${API_BASE}/upload`, {
-                method: "POST",
-                body: formData,
-                headers: {
-                    ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-                    "X-Client-ID": getClientId(),
+            const updatedUser = await uploadAvatarAndAdopt<UserProfile>(file, {
+                onProcessing: () => {
+                    toast.loading(t("processingAndCompressing"), { id: toastId });
                 },
-            });
-            if (!res.ok) {
-                const body = await res.json().catch(() => ({ detail: t("uploadFailed") }));
-                throw new Error(body.detail ?? t("uploadFailed"));
-            }
-            const upload = await res.json() as { upload_id: string; file_key: string };
-
-            toast.loading(t("processingAndCompressing"), { id: toastId });
-            
-            const updatedUser = await apiFetch<UserProfile>("/users/me", {
-                method: "PATCH",
-                body: JSON.stringify({ avatar_upload_id: upload.upload_id }),
             });
 
             toast.success(t("avatarUpdated"), { id: toastId });
