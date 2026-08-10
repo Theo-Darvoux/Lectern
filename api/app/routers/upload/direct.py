@@ -182,7 +182,7 @@ async def upload_file(
     idem_cache_key: str | None = None
     if idem_header:
         try:
-            UUID(idem_header)
+            idem_header = str(UUID(idem_header))
         except ValueError:
             raise BadRequestError("X-Upload-ID must be a valid UUID")
         upload_id = idem_header

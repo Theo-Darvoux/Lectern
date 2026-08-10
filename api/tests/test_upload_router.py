@@ -165,6 +165,28 @@ async def test_valid_uuid_upload_id_accepted(
 
 
 @patch("app.routers.upload.direct.get_s3_client")
+async def test_noncanonical_uuid_upload_id_is_canonicalized(
+    mock_s3_cm, client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Valid caller UUIDs are normalized before DB/cache/storage use."""
+    mock_s3 = AsyncMock()
+    mock_s3_cm.return_value.__aenter__.return_value = mock_s3
+
+    user = await _create_user(db_session)
+    await db_session.commit()
+
+    canonical = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    supplied = canonical.upper()
+    headers = {**_auth_headers(user), "X-Upload-ID": supplied}
+    resp = await client.post("/api/upload", files=_pdf_file(), headers=headers)
+
+    assert resp.status_code == 202
+    assert resp.json()["upload_id"] == canonical
+    assert f"/{canonical}/" in resp.json()["file_key"]
+    assert supplied not in resp.json()["file_key"]
+
+
+@patch("app.routers.upload.direct.get_s3_client")
 async def test_mime_mismatch_rejected(
     mock_s3_cm, client: AsyncClient, db_session: AsyncSession
 ) -> None:

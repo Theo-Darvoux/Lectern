@@ -24,6 +24,7 @@ from app.schemas.user import (
     UserProfileOut,
     UserUpdateIn,
 )
+from app.services.avatar import is_owned_avatar_storage_key, is_trusted_external_avatar_url
 from app.services.directory import get_directory_paths
 from app.services.material import get_liked_favourited_sets, material_orm_to_dict
 from app.services.user import (
@@ -193,13 +194,17 @@ async def get_user_avatar(
     if not target or not target.avatar_url:
         raise NotFoundError("Avatar not found")
 
-    if target.avatar_url.startswith("quarantine/"):
-        # Unscanned avatar from a stuck/stale upload.
-        # Refuse to serve to avoid 500 error in generate_presigned_get.
-        raise NotFoundError("Avatar still processing or invalid")
+    if is_owned_avatar_storage_key(target.avatar_url, target.id):
+        url = await generate_presigned_get(target.avatar_url)
+        return RedirectResponse(url)
 
-    url = await generate_presigned_get(target.avatar_url)
-    return RedirectResponse(url)
+    if is_trusted_external_avatar_url(target.avatar_url):
+        return RedirectResponse(target.avatar_url)
+
+    # Fail closed for legacy or corrupted values. In particular, application
+    # storage namespaces (cas/, materials/, quarantine/) must never be presigned
+    # through the public avatar endpoint.
+    raise NotFoundError("Avatar reference is invalid")
 
 
 @router.get("/{user_id}/contributions")

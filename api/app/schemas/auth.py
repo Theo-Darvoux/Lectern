@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator
+
+from app.services.avatar import is_safe_avatar_reference
 
 # OTP codes are 8 alphanumeric uppercase chars (alphabet excludes I, O, 1, 0)
 _OTP_PATTERN = r"^[A-Z2-9]{8}$"
@@ -95,5 +97,9 @@ class UserBrief(BaseModel):
     role: str
     onboarded: bool
     auto_approve: bool
+
+    @field_serializer("avatar_url")
+    def serialize_avatar_url(self, value: str | None) -> str | None:
+        return value if is_safe_avatar_reference(value, self.id) else None
 
     model_config = {"from_attributes": True}

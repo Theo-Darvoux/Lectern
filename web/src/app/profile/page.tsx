@@ -53,13 +53,13 @@ function OwnProfileContent() {
                 const body = await res.json().catch(() => ({ detail: t("uploadFailed") }));
                 throw new Error(body.detail ?? t("uploadFailed"));
             }
-            const upload = await res.json() as { file_key: string };
+            const upload = await res.json() as { upload_id: string; file_key: string };
 
             toast.loading(t("processingAndCompressing"), { id: toastId });
             
             const updatedUser = await apiFetch<UserProfile>("/users/me", {
                 method: "PATCH",
-                body: JSON.stringify({ avatar_url: upload.file_key }),
+                body: JSON.stringify({ avatar_upload_id: upload.upload_id }),
             });
 
             toast.success(t("avatarUpdated"), { id: toastId });

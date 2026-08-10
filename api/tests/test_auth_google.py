@@ -87,7 +87,7 @@ async def test_google_login_success_new_user(
         "email_verified": True,
         "given_name": "New",
         "family_name": "User",
-        "picture": "https://example.com/photo.jpg",
+        "picture": "https://lh3.googleusercontent.com/a/new-user=s96-c",
     }
 
     with _enable_google_oauth():
@@ -101,7 +101,7 @@ async def test_google_login_success_new_user(
     assert data["is_new_user"] is True
     assert data["user"]["email"] == "new.user@example.com"
     assert data["user"]["display_name"] == "New User"
-    assert data["user"]["avatar_url"] == "https://example.com/photo.jpg"
+    assert data["user"]["avatar_url"] == "https://lh3.googleusercontent.com/a/new-user=s96-c"
 
     # Check Set-Cookie headers for refresh_token
     assert "refresh_token" in response.cookies
@@ -124,7 +124,7 @@ async def test_google_login_success_existing_user(
         "email_verified": True,
         "given_name": "Overwritten",
         "family_name": "Name",
-        "picture": "https://example.com/newphoto.jpg",
+        "picture": "https://lh3.googleusercontent.com/a/existing-user=s96-c",
     }
 
     with _enable_google_oauth():
@@ -139,7 +139,7 @@ async def test_google_login_success_existing_user(
     # Should not overwrite existing display_name
     assert data["user"]["display_name"] == "Old Name"
     # Should add avatar_url since it was empty
-    assert data["user"]["avatar_url"] == "https://example.com/newphoto.jpg"
+    assert data["user"]["avatar_url"] == "https://lh3.googleusercontent.com/a/existing-user=s96-c"
 
 
 @pytest.mark.asyncio
@@ -167,3 +167,61 @@ async def test_google_login_domain_restriction(
         )
     assert response.status_code == 400
     assert "not allowed" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_google_login_does_not_persist_untrusted_picture_url(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    mock_google_verify,
+):
+    mock_google_verify.return_value = {
+        "iss": "accounts.google.com",
+        "email": "untrusted-picture@example.com",
+        "email_verified": True,
+        "given_name": "No",
+        "family_name": "Redirect",
+        "picture": "https://attacker.example/profile.png",
+    }
+
+    with _enable_google_oauth():
+        response = await client.post(
+            "/api/auth/google",
+            json={"credential": "valid_token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["user"]["avatar_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_google_login_replaces_unsafe_legacy_avatar_with_trusted_picture(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    mock_google_verify,
+):
+    user = User(
+        email="legacy-avatar@example.com",
+        display_name="Legacy",
+        role=UserRole.STUDENT,
+        avatar_url="cas/victim-staged-object",
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    trusted_picture = "https://lh3.googleusercontent.com/a/healed=s96-c"
+    mock_google_verify.return_value = {
+        "iss": "accounts.google.com",
+        "email": user.email,
+        "email_verified": True,
+        "picture": trusted_picture,
+    }
+
+    with _enable_google_oauth():
+        response = await client.post(
+            "/api/auth/google",
+            json={"credential": "valid_token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["user"]["avatar_url"] == trusted_picture

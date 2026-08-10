@@ -306,33 +306,38 @@ class TestUserUpdateIn:
         m = self._make(academic_year=None)
         assert m.academic_year is None
 
-    def test_valid_https_avatar_url(self):
-        m = self._make(avatar_url="https://lh3.googleusercontent.com/photo.jpg")
-        assert m.avatar_url is not None
-
-    def test_valid_cas_key_avatar_url(self):
-        m = self._make(avatar_url="cas/abc123")
-        assert m.avatar_url is not None
-
-    def test_valid_materials_key_avatar_url(self):
-        m = self._make(avatar_url="materials/abc123")
-        assert m.avatar_url is not None
-
-    def test_rejects_http_avatar_url(self):
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "https://lh3.googleusercontent.com/photo.jpg",
+            "cas/abc123",
+            "materials/abc123",
+            "quarantine/user/upload/avatar.png",
+            "avatars/00000000-0000-0000-0000-000000000000/foreign.webp",
+            "http://evil.com/track.gif",
+            "javascript:alert(1)",
+        ],
+    )
+    def test_rejects_caller_supplied_avatar_reference(self, value):
         with pytest.raises(ValidationError):
-            self._make(avatar_url="http://evil.com/track.gif")
+            self._make(avatar_url=value)
 
-    def test_rejects_javascript_avatar_url(self):
-        with pytest.raises(ValidationError):
-            self._make(avatar_url="javascript:alert(1)")
-
-    def test_rejects_avatar_url_too_long(self):
-        with pytest.raises(ValidationError):
-            self._make(avatar_url="https://example.com/" + "a" * 2048)
-
-    def test_none_avatar_url_ok(self):
+    def test_none_avatar_url_ok_for_clear(self):
         m = self._make(avatar_url=None)
         assert m.avatar_url is None
+
+    def test_avatar_upload_id_accepts_uuid(self):
+        import uuid
+
+        upload_id = uuid.uuid4()
+        m = self._make(avatar_upload_id=upload_id)
+        assert m.avatar_upload_id == upload_id
+
+    def test_rejects_avatar_clear_and_upload_together(self):
+        import uuid
+
+        with pytest.raises(ValidationError):
+            self._make(avatar_url=None, avatar_upload_id=uuid.uuid4())
 
 
 # ===========================================================================

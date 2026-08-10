@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 from app.core.sanitization import SanitizedStr
+from app.services.avatar import is_safe_avatar_reference
 
 ACADEMIC_YEARS = ("1A", "2A", "3A+")
 
@@ -25,9 +26,10 @@ class UserUpdateIn(BaseModel):
     display_name: SanitizedStr | None = Field(None, min_length=1, max_length=64)
     bio: SanitizedStr | None = Field(None, max_length=500)
     academic_year: str | None = None
-    # avatar_url is set server-side after upload — clients may pass None to clear it.
-    # Enforce https to block arbitrary scheme injection and cap length.
-    avatar_url: str | None = Field(None, max_length=2048)
+    # avatar_url is output/server-owned. PATCH may pass only null to clear it.
+    # New avatars are adopted by owner-bound Upload.upload_id, never by storage key.
+    avatar_url: None = None
+    avatar_upload_id: uuid.UUID | None = None
     auto_approve: bool | None = None
 
     @field_validator("academic_year")
@@ -37,19 +39,11 @@ class UserUpdateIn(BaseModel):
             raise ValueError("academic_year must be one of: 1A, 2A, 3A+")
         return v
 
-    @field_validator("avatar_url")
-    @classmethod
-    def validate_avatar_url(cls, v: str | None) -> str | None:
-        if v is not None and not (
-            v.startswith("https://")
-            or v.startswith("cas/")
-            or v.startswith("materials/")
-            or v.startswith("quarantine/")
-        ):
-            raise ValueError(
-                "avatar_url must be an https:// URL or a storage key (cas/, materials/, or quarantine/)"
-            )
-        return v
+    @model_validator(mode="after")
+    def validate_avatar_mutation(self) -> "UserUpdateIn":
+        if "avatar_url" in self.model_fields_set and "avatar_upload_id" in self.model_fields_set:
+            raise ValueError("avatar_url clear and avatar_upload_id cannot be supplied together")
+        return self
 
 
 class UserOut(BaseModel):
@@ -64,6 +58,10 @@ class UserOut(BaseModel):
     auto_approve: bool
     completed_tutorials: list[str] = []
     created_at: datetime
+
+    @field_serializer("avatar_url")
+    def serialize_avatar_url(self, value: str | None) -> str | None:
+        return value if is_safe_avatar_reference(value, self.id) else None
 
     model_config = {"from_attributes": True}
 

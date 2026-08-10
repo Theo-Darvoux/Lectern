@@ -3927,8 +3927,10 @@ export interface components {
             bio?: string | null;
             /** Academic Year */
             academic_year?: string | null;
-            /** Avatar Url */
-            avatar_url?: string | null;
+            /** Avatar Url — null is accepted only to clear the server-owned avatar reference. */
+            avatar_url?: null;
+            /** Avatar Upload Id */
+            avatar_upload_id?: string | null;
             /** Auto Approve */
             auto_approve?: boolean | null;
         };

@@ -43,6 +43,7 @@ from app.schemas.auth import (
 )
 from app.schemas.pull_request import MAX_PR_DESCRIPTION_LENGTH
 from app.services import auth as auth_service
+from app.services.avatar import is_safe_avatar_reference, is_trusted_external_avatar_url
 from app.services.email import send_verification_email
 from app.services.notification import notify_admins_pending_user
 from app.services.user import get_user_by_id
@@ -431,7 +432,12 @@ async def verify_google_oauth(
             user.display_name = " ".join(names)
             updated = True
 
-    if (is_new or not user.avatar_url) and picture:
+    # Google profile pictures are the only external avatar references we persist.
+    # Never allow an arbitrary OIDC URL to become a public redirect target.
+    if user.avatar_url and not is_safe_avatar_reference(user.avatar_url, user.id):
+        user.avatar_url = None
+        updated = True
+    if (is_new or not user.avatar_url) and picture and is_trusted_external_avatar_url(picture):
         user.avatar_url = picture
         updated = True
 

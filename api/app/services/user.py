@@ -24,6 +24,7 @@ from app.models.pull_request import PRComment, PullRequest
 from app.models.upload import Upload
 from app.models.user import User
 from app.models.view_history import ViewHistory
+from app.services.avatar import is_owned_avatar_storage_key
 from app.services.material import get_liked_favourited_sets, material_orm_to_dict
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,7 @@ async def update_user_profile(
     bio: str | None = UNSET,
     academic_year: str | None = UNSET,
     avatar_url: str | None = UNSET,
+    avatar_upload_id: uuid.UUID | str | None = UNSET,
     auto_approve: bool | None = UNSET,
 ) -> User:
     if display_name is not UNSET and display_name is not None:
@@ -234,102 +236,103 @@ async def update_user_profile(
     if auto_approve is not UNSET and auto_approve is not None:
         user.auto_approve = auto_approve
 
-    if avatar_url is not UNSET and avatar_url != user.avatar_url:
-        if avatar_url is None:
-            # Clear avatar
-            if user.avatar_url and user.avatar_url.startswith("avatars/"):
-                add_post_commit_job(db, ("delete_storage_objects", [user.avatar_url]))
-            user.avatar_url = None
-        else:
-            final_url = avatar_url
+    if avatar_url is not UNSET and avatar_upload_id is not UNSET:
+        raise BadRequestError("Choose either avatar clear or avatar upload, not both")
 
-            # Handle new avatar from quarantine
-            if avatar_url.startswith("quarantine/"):
-                # 1. Security check: Verify ownership and existence
-                stmt = select(Upload).where(
-                    Upload.quarantine_key == avatar_url, Upload.user_id == user.id
+    if avatar_url is not UNSET:
+        # avatar_url is a server-owned output field. The only accepted client
+        # mutation is explicit null to clear an existing avatar.
+        if avatar_url is not None:
+            raise BadRequestError("avatar_url is read-only; use avatar_upload_id")
+        if is_owned_avatar_storage_key(user.avatar_url, user.id):
+            add_post_commit_job(db, ("delete_storage_objects", [user.avatar_url]))
+        user.avatar_url = None
+
+    elif avatar_upload_id is not UNSET and avatar_upload_id is not None:
+        upload_rec = await db.scalar(
+            select(Upload)
+            .where(
+                Upload.upload_id == str(avatar_upload_id),
+                Upload.user_id == user.id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if upload_rec is None:
+            raise BadRequestError("Invalid avatar upload or unauthorized")
+
+        quarantine_key = upload_rec.quarantine_key
+        expected_quarantine_prefix = f"quarantine/{user.id}/"
+        if (
+            upload_rec.status != "clean"
+            or not upload_rec.mime_type
+            or not upload_rec.mime_type.startswith("image/")
+            or not upload_rec.final_key
+            or not upload_rec.final_key.startswith("cas/")
+            or int(upload_rec.cas_ref_count or 0) <= 0
+            or not quarantine_key
+            or not quarantine_key.startswith(expected_quarantine_prefix)
+        ):
+            raise BadRequestError("Avatar upload has not passed image security processing")
+
+        # The CAS key is read only from the caller-owned Upload row. It is never
+        # accepted from request data and never persisted as the avatar reference.
+        import uuid as uuid_pkg
+        from pathlib import Path
+
+        with processing_temp_dir(prefix="avatar-") as tmp_dir:
+            local_input = Path(tmp_dir) / "input_avatar"
+            await download_file_raw(
+                upload_rec.final_key,
+                local_input,
+                max_bytes=20 * 1024 * 1024,
+            )
+
+            try:
+                processed_bytes = await process_avatar_isolated(local_input)
+                avatar_uuid = uuid_pkg.uuid4()
+                new_key = f"avatars/{user.id}/{avatar_uuid}.webp"
+
+                async def _remove_uncommitted_avatar() -> None:
+                    await delete_object(new_key)
+
+                async def _avatar_commit_complete() -> None:
+                    return None
+
+                managed_transaction = register_transaction_callbacks(
+                    db,
+                    on_rollback=_remove_uncommitted_avatar,
+                    on_commit=_avatar_commit_complete,
                 )
-                res = await db.execute(stmt)
-                upload_rec = res.scalar_one_or_none()
 
-                if not upload_rec:
-                    raise BadRequestError("Invalid avatar upload key or unauthorized")
-                if (
-                    upload_rec.status != "clean"
-                    or not upload_rec.mime_type
-                    or not upload_rec.mime_type.startswith("image/")
-                    or not upload_rec.final_key
-                    or not upload_rec.final_key.startswith("cas/")
-                ):
-                    raise BadRequestError("Avatar upload has not passed image security processing")
-
-                # 2. Process and Compress (Synchronous-ish)
-                import uuid as uuid_pkg
-                from pathlib import Path
-
-                with processing_temp_dir(prefix="avatar-") as tmp_dir:
-                    local_input = Path(tmp_dir) / "input_avatar"
-                    await download_file_raw(
-                        upload_rec.final_key,
-                        local_input,
-                        max_bytes=20 * 1024 * 1024,
+                try:
+                    await upload_file(
+                        processed_bytes,
+                        new_key,
+                        content_type="image/webp",
+                        content_disposition="inline",
                     )
-
-                    try:
-                        processed_bytes = await process_avatar_isolated(local_input)
-                        # 3. Upload to permanent avatars/ prefix
-                        avatar_uuid = uuid_pkg.uuid4()
-                        new_key = f"avatars/{user.id}/{avatar_uuid}.webp"
-
-                        async def _remove_uncommitted_avatar() -> None:
-                            await delete_object(new_key)
-
-                        async def _avatar_commit_complete() -> None:
-                            return None
-
-                        managed_transaction = register_transaction_callbacks(
-                            db,
-                            on_rollback=_remove_uncommitted_avatar,
-                            on_commit=_avatar_commit_complete,
-                        )
-
+                except Exception:
+                    if not managed_transaction:
                         try:
-                            await upload_file(
-                                processed_bytes,
-                                new_key,
-                                content_type="image/webp",
-                                content_disposition="inline",  # viewable inline
-                            )
+                            await delete_object(new_key)
                         except Exception:
-                            if not managed_transaction:
-                                try:
-                                    await delete_object(new_key)
-                                except Exception:
-                                    logger.exception(
-                                        "Failed to remove avatar after an uncertain upload failure"
-                                    )
-                            raise
-                        final_url = new_key
-                    except Exception as exc:
-                        logger.error("Avatar processing failed: %s", exc)
-                        raise BadRequestError(f"Failed to process avatar: {exc}")
+                            logger.exception(
+                                "Failed to remove avatar after an uncertain upload failure"
+                            )
+                    raise
+            except Exception as exc:
+                logger.error("Avatar processing failed: %s", exc)
+                raise BadRequestError(f"Failed to process avatar: {exc}")
 
-                # 4. Cleanup quarantine
-                add_post_commit_job(db, ("delete_storage_objects", [avatar_url]))
+        add_post_commit_job(db, ("delete_storage_objects", [quarantine_key]))
 
-            # Delete old avatar from permanent storage if it's being replaced
-            if (
-                user.avatar_url
-                and user.avatar_url.startswith("avatars/")
-                and user.avatar_url != final_url
-            ):
-                add_post_commit_job(db, ("delete_storage_objects", [user.avatar_url]))
+        if is_owned_avatar_storage_key(user.avatar_url, user.id) and user.avatar_url != new_key:
+            add_post_commit_job(db, ("delete_storage_objects", [user.avatar_url]))
 
-            if final_url.startswith("quarantine/"):
-                # Safety: never let a quarantine URL into the User model
-                raise BadRequestError("Cannot set avatar to unscanned quarantine key")
-
-            user.avatar_url = final_url
+        if not is_owned_avatar_storage_key(new_key, user.id):
+            raise RuntimeError("Generated avatar key escaped the user avatar namespace")
+        user.avatar_url = new_key
 
     await db.flush()
     return user
