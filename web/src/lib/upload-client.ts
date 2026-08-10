@@ -717,7 +717,7 @@ export async function uploadFile(
     }
 
     // ── Phase 3: SSE stream (80–100%) ─────────────────────────────────────────
-    const result = await waitForUploadCompletion(quarantineKey, {
+    const result = await _waitForUploadCompletion(quarantineKey, {
         onProgress: (p) => onProgress?.(80 + Math.round(p * 19)),
         onStatusUpdate: options.onStatusUpdate,
         signal,
@@ -766,7 +766,7 @@ class UploadTerminalError extends Error {
 /** Maximum wall-clock time (ms) to wait for SSE processing before giving up. */
 const SSE_TOTAL_TIMEOUT = 15 * 60 * 1000;
 
-export async function waitForUploadCompletion(
+async function _waitForUploadCompletion(
     fileKey: string,
     options: {
         onProgress?: (p: number) => void;
@@ -891,6 +891,10 @@ export async function waitForUploadCompletion(
         }
     }
 }
+
+// Public alias for workflows (such as avatar adoption) that need to await the
+// same security-processing terminal state without duplicating SSE/poll logic.
+export { _waitForUploadCompletion as waitForUploadCompletion };
 
 function _handleUploadEvent(
     eventType: string,
