@@ -280,9 +280,15 @@ async def test_refresh_route_has_exactly_one_concurrent_winner(redis: Redis) -> 
         onboarded=True,
         gdpr_consent=True,
         auto_approve=True,
+        auth_generation=0,
     )
     family = "refresh-family"
-    token = create_refresh_token(str(user.id), expire_days=1, session_id=family)
+    token = create_refresh_token(
+        str(user.id),
+        expire_days=1,
+        session_id=family,
+        auth_generation=user.auth_generation,
+    )
 
     async def rotate():
         return await refresh_token(
