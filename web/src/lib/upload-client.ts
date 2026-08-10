@@ -978,8 +978,8 @@ export async function trackExistingUpload(
 
     onProgress?.(80);
 
-    const result = await waitForUploadCompletion(quarantineKey, {
-        onProgress: (p) => onProgress?.(80 + Math.round(p * 19)),
+    const result = await _waitForUploadCompletion(quarantineKey, {
+        onProgress: (p: number) => onProgress?.(80 + Math.round(p * 19)),
         onStatusUpdate: options.onStatusUpdate,
         signal,
         t: options.t,
