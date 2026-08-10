@@ -305,6 +305,7 @@ def test_all_external_actions_are_pinned_to_full_commit_shas() -> None:
     dependabot = _read(".github/dependabot.yml")
     assert "package-ecosystem: github-actions" in dependabot
 
+
 def test_postgresql_transaction_pooling_is_rejected_for_cas_session_fencing() -> None:
     with pytest.raises(ValueError, match="DATABASE_POOL_MODE=transaction"):
         Settings(
@@ -316,4 +317,3 @@ def test_postgresql_transaction_pooling_is_rejected_for_cas_session_fencing() ->
     env_example = _read(".env.example")
     assert "DATABASE_POOL_MODE=session" in env_example
     assert "Transaction pooling is intentionally rejected" in env_example
-

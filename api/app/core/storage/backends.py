@@ -47,6 +47,7 @@ class SeaweedFSBackend(S3Backend):
         object remains authoritative until multipart completion, and any failure
         aborts the replacement upload. Peak application buffering is one S3 part.
         """
+        self._reject_permanent_credential_cas_mutation(file_key)
         cfg = self._cfg()
         async with self._client(cfg) as client:
             existing = await client.head_object(Bucket=cfg["bucket"], Key=file_key)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -86,7 +87,46 @@ async def test_missing_usage_cache_persists_generation_zero_and_scans_once(
     assert scans == 1
 
 
-class _BarrierStorage:
+@dataclass(frozen=True)
+class _FakeMutationCapability:
+    operation: str
+    key: str
+    recovery_fence_ms: int
+
+
+class _CapabilityStorageMixin:
+    recovery_fence_ms_override: int | None = None
+
+    def _recovery_fence_ms(self, ttl: int) -> int:
+        if self.recovery_fence_ms_override is not None:
+            return self.recovery_fence_ms_override
+        return max(0, ttl * 1000)
+
+    async def presign_cas_put_capability(
+        self, file_key: str, *, ttl: int, **_kwargs: Any
+    ) -> _FakeMutationCapability:
+        return _FakeMutationCapability("put", file_key, self._recovery_fence_ms(ttl))
+
+    async def presign_cas_delete_capability(
+        self, file_key: str, *, ttl: int
+    ) -> _FakeMutationCapability:
+        return _FakeMutationCapability("delete", file_key, self._recovery_fence_ms(ttl))
+
+    async def execute_presigned_mutation(
+        self, capability: _FakeMutationCapability, *, body: Any = None
+    ) -> None:
+        operation, key = capability.operation, capability.key
+        if operation == "put":
+            assert isinstance(body, (bytes, bytearray, memoryview))
+            await self.upload_file(bytes(body), key)  # type: ignore[attr-defined]
+            return
+        if operation == "delete":
+            await self.delete_object(key)  # type: ignore[attr-defined]
+            return
+        raise AssertionError(f"unexpected fake mutation capability: {operation}")
+
+
+class _BarrierStorage(_CapabilityStorageMixin):
     def __init__(self, *, fail_after_visible: bool = False) -> None:
         self.objects: dict[str, int] = {}
         self.visible = asyncio.Event()
@@ -340,7 +380,7 @@ async def test_promoted_legacy_release_fences_stale_snapshot_with_real_redis(
     assert int(await redis.get(capacity.LEGACY_STORAGE_GENERATION_KEY) or 0) == 1
 
 
-class _LateVisibilityStorage:
+class _LateVisibilityStorage(_CapabilityStorageMixin):
     def __init__(self) -> None:
         self.objects: dict[str, int] = {}
         self.dispatched = asyncio.Event()
@@ -413,6 +453,12 @@ async def test_cas_begin_intent_is_aof_durable_before_writer_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     storage = _LateVisibilityStorage()
+    # Model a signer clock ahead of the object-store Date clock. The capability
+    # layer already converted that skew into a duration; the journal must use
+    # the complete duration rather than silently falling back to the base TTL.
+    storage.recovery_fence_ms_override = (
+        capacity._CAS_STORAGE_MUTATION_CAPABILITY_TTL_SECONDS * 1000 + 321_000
+    )
     monkeypatch.setattr(facade, "get_storage", lambda: storage)
     monkeypatch.setattr(redis_core, "redis_client", redis)
     await redis.set(_STORAGE_USAGE_KEY, 0)
@@ -431,7 +477,20 @@ async def test_cas_begin_intent_is_aof_durable_before_writer_dispatch(
     assert payload["journal_version"] == 3
     assert payload["phase"] == "dispatched"
     assert int(payload["dispatched_at_ms"]) >= int(payload["started_at_ms"])
-    assert int(payload["recover_after_ms"]) > int(payload["dispatched_at_ms"])
+    recovery_window_ms = int(payload["recover_after_ms"]) - int(payload["dispatched_at_ms"])
+    assert storage.recovery_fence_ms_override is not None
+    minimum_external_fence_window_ms = (
+        storage.recovery_fence_ms_override
+        + int(
+            (
+                settings.cas_mutation_io_timeout_seconds
+                + settings.cas_mutation_recovery_grace_seconds
+            )
+            * 1000
+        )
+        + capacity._CAS_MUTATION_DURABILITY_TIMEOUT_MS
+    )
+    assert recovery_window_ms >= minimum_external_fence_window_ms
 
     storage.make_visible.set()
     await writer

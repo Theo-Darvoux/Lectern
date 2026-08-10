@@ -71,6 +71,49 @@ async def test_settle_awaitable_waits_after_caller_cancellation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_settle_awaitable_survives_repeated_real_task_cancellation() -> None:
+    """Every caller Task.cancel() must be deferred until the protected child settles."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    settled = asyncio.Event()
+
+    async def child() -> str:
+        started.set()
+        await release.wait()
+        settled.set()
+        return "done"
+
+    async def runner():
+        return await settle_awaitable(child())
+
+    task = asyncio.create_task(runner())
+    await started.wait()
+
+    task.cancel("first cancellation")
+    await asyncio.sleep(0)
+    assert not task.done()
+    assert not settled.is_set()
+
+    task.cancel("second cancellation")
+    await asyncio.sleep(0)
+    assert not task.done()
+    assert not settled.is_set()
+
+    task.cancel("third cancellation")
+    await asyncio.sleep(0)
+    assert not task.done()
+    assert not settled.is_set()
+
+    release.set()
+    result, error, cancellation = await task
+
+    assert settled.is_set()
+    assert result == "done"
+    assert error is None
+    assert isinstance(cancellation, asyncio.CancelledError)
+
+
+@pytest.mark.asyncio
 async def test_settle_awaitable_caller_cancel_then_child_self_cancels() -> None:
     """Caller cancellation + child self-cancel: both are correctly classified.
 

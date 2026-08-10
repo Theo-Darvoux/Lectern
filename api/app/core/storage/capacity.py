@@ -61,6 +61,11 @@ _STORAGE_MUTATION_EPOCH_KEY = "storage:cas_mutation_epoch"
 _STORAGE_MUTATION_INTENTS_KEY = "storage:cas_mutation_intents"
 _CAS_STORAGE_MUTATION_LOCK = "storage:cas-physical-usage"
 _CAS_MUTATION_DURABILITY_TIMEOUT_MS = 5_000
+# CAS writers use short-lived SigV4 mutation capabilities created before durable
+# dispatch. Each capability carries a recovery-fence duration measured against
+# the object store's own Date clock, so journal recovery never compares wall
+# clocks belonging to different systems.
+_CAS_STORAGE_MUTATION_CAPABILITY_TTL_SECONDS = 60
 _CAS_MUTATION_RECOVERY_STABILITY_SECONDS = 2.0
 _CAS_STORAGE_LOCK_TIMEOUT = 120.0
 _CAS_STORAGE_LOCK_EXPIRE = 300.0
@@ -320,10 +325,33 @@ async def abort_cas_storage_mutation(
         raise BadRequestError("Storage capacity mutation journal changed unexpectedly")
 
 
-async def dispatch_cas_storage_mutation(redis: Any, mutation_id: str, mutation_epoch: int) -> int:
-    """Durably fence the exact preflight intent immediately before physical I/O."""
+def cas_storage_mutation_capability_ttl_seconds() -> int:
+    """Return the storage-enforced validity window for one CAS mutation capability."""
+    return _CAS_STORAGE_MUTATION_CAPABILITY_TTL_SECONDS
+
+
+async def dispatch_cas_storage_mutation(
+    redis: Any,
+    mutation_id: str,
+    mutation_epoch: int,
+    external_authority_window_ms: int,
+) -> int:
+    """Durably dispatch after an externally expiring mutation capability exists.
+
+    ``external_authority_window_ms`` is measured at capability mint time against
+    the object store's own Date clock and then treated only as a duration. This
+    avoids comparing Redis, application-host, and object-store wall clocks.
+    """
+    if external_authority_window_ms < 0:
+        raise BadRequestError("Storage mutation capability recovery fence is invalid")
+
+    # S3 checks presigned expiry when a request starts. A request admitted at the
+    # last valid instant may finish later, so recovery also waits through the
+    # complete local I/O timeout + ambiguity grace. The journal durability bound
+    # remains additive and the whole duration starts only at durable dispatch.
     recovery_delay_ms = (
-        int(
+        external_authority_window_ms
+        + int(
             (
                 settings.cas_mutation_io_timeout_seconds
                 + settings.cas_mutation_recovery_grace_seconds

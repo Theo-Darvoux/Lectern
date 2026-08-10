@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 from time import monotonic
 from typing import Any
 
@@ -18,6 +19,7 @@ from app.config import settings
 from app.core.common.exceptions import BadRequestError
 from app.core.security.cas import _STORAGE_USAGE_GENERATION_KEY, _STORAGE_USAGE_KEY
 from app.core.storage import capacity, facade
+from app.core.storage.s3 import S3Backend
 
 pytestmark = pytest.mark.integration
 
@@ -58,6 +60,13 @@ async def redis() -> Redis:  # type: ignore[type-arg]
         await client.aclose()
 
 
+@dataclass(frozen=True)
+class _ImmediateCapability:
+    operation: str
+    key: str
+    recovery_fence_ms: int
+
+
 class _ImmediateStorage:
     def __init__(self) -> None:
         self.objects: dict[str, int] = {}
@@ -77,6 +86,79 @@ class _ImmediateStorage:
     ) -> None:
         self.writer_entered.set()
         self.objects[file_key] = len(file_obj)
+
+    async def presign_cas_put_capability(
+        self, file_key: str, *, ttl: int, **_kwargs: Any
+    ) -> _ImmediateCapability:
+        return _ImmediateCapability(
+            operation="put", key=file_key, recovery_fence_ms=max(0, ttl * 1000)
+        )
+
+    async def execute_presigned_mutation(
+        self, capability: _ImmediateCapability, *, body: Any = None
+    ) -> None:
+        operation, key = capability.operation, capability.key
+        assert operation == "put"
+        assert isinstance(body, (bytes, bytearray, memoryview))
+        await self.upload_file(bytes(body), key)
+
+
+@dataclass(frozen=True)
+class _ExpiringPutCapability:
+    key: str
+    expires_at: float
+    recovery_fence_ms: int
+
+
+class _ExternallyFencedStorage(S3Backend):
+    """Minimal S3-shaped backend whose mutation authority expires independently."""
+
+    def __init__(self) -> None:
+        # Deliberately do not initialize aioboto3: this test exercises the CAS
+        # protocol while the live SeaweedFS suite proves real SigV4 expiry.
+        self.objects: dict[str, int] = {}
+        self.capability_minted = asyncio.Event()
+        self.capability_attempted = asyncio.Event()
+        self.physical_mutation_started = asyncio.Event()
+
+    async def object_exists(self, key: str) -> bool:
+        return key in self.objects
+
+    async def get_object_info(self, key: str) -> dict[str, Any]:
+        return {"size": self.objects[key]}
+
+    async def list_objects(self, prefix: str = ""):
+        for key, size in sorted(self.objects.items()):
+            if key.startswith(prefix):
+                yield {"Key": key, "Size": size}
+
+    async def presign_cas_put_capability(
+        self,
+        file_key: str,
+        *,
+        ttl: int,
+        **_kwargs: Any,
+    ) -> _ExpiringPutCapability:
+        capability = _ExpiringPutCapability(
+            key=file_key,
+            expires_at=asyncio.get_running_loop().time() + ttl,
+            recovery_fence_ms=ttl * 1000,
+        )
+        self.capability_minted.set()
+        return capability
+
+    async def execute_presigned_mutation(
+        self,
+        capability: _ExpiringPutCapability,
+        *,
+        body: Any = None,
+    ) -> None:
+        self.capability_attempted.set()
+        if asyncio.get_running_loop().time() >= capability.expires_at:
+            raise RuntimeError("expired external-store mutation capability")
+        self.physical_mutation_started.set()
+        assert isinstance(body, (bytes, bytearray, memoryview))
+        self.objects[capability.key] = len(body)
 
 
 async def _redis_time_ms(redis: Redis) -> int:  # type: ignore[type-arg]
@@ -101,8 +183,11 @@ async def test_suspended_owner_cannot_start_s3_after_successor_recovery(
         redis_client: Any,
         mutation_id: str,
         mutation_epoch: int,
+        external_authority_window_ms: int,
     ) -> int:
-        result = await real_dispatch(redis_client, mutation_id, mutation_epoch)
+        result = await real_dispatch(
+            redis_client, mutation_id, mutation_epoch, external_authority_window_ms
+        )
         dispatch_is_durable.set()
         await allow_dispatch_return.wait()
         return result
@@ -122,6 +207,10 @@ async def test_suspended_owner_cannot_start_s3_after_successor_recovery(
 
     # Short real dispatch window for a deterministic regression.
     monkeypatch.setattr(capacity, "_CAS_MUTATION_DURABILITY_TIMEOUT_MS", 100)
+    # This legacy fake backend intentionally has no external mutation
+    # capability. Keep the original process-fence regression fast while the
+    # dedicated session-death test below covers capability expiry.
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_MUTATION_CAPABILITY_TTL_SECONDS", 0)
     monkeypatch.setattr(settings, "cas_mutation_io_timeout_seconds", 0.2)
     monkeypatch.setattr(settings, "cas_mutation_recovery_grace_seconds", 0.2)
 
@@ -180,6 +269,142 @@ async def test_suspended_owner_cannot_start_s3_after_successor_recovery(
     assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
 
 
+async def test_stale_owner_after_database_session_death_cannot_mutate_cas_after_recovery(
+    redis: Redis,  # type: ignore[type-arg]
+    monkeypatch: pytest.MonkeyPatch,
+    process_fence_engine: AsyncEngine,
+) -> None:
+    """External capability expiry closes the session-death / stale-task race."""
+    storage = _ExternallyFencedStorage()
+    monkeypatch.setattr(facade, "get_storage", lambda: storage)
+    monkeypatch.setattr(redis_core, "redis_client", redis)
+
+    # Keep A alive after its Redis key is removed, exactly like a suspended
+    # process whose renewal coroutine stopped running.
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_EXPIRE", 30.0)
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_TIMEOUT", 1.0)
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_PROCESS_FENCE_TIMEOUT", 0.5)
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_PROCESS_FENCE_RETRY", 0.02)
+
+    # Use a one-second external authority window so the real race can be
+    # exercised quickly. Recovery must remain later than capability expiry +
+    # the maximum in-flight I/O ambiguity window.
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_MUTATION_CAPABILITY_TTL_SECONDS", 1)
+    monkeypatch.setattr(capacity, "_CAS_MUTATION_DURABILITY_TIMEOUT_MS", 100)
+    monkeypatch.setattr(capacity, "_CAS_MUTATION_RECOVERY_STABILITY_SECONDS", 0.0)
+    monkeypatch.setattr(settings, "cas_mutation_io_timeout_seconds", 0.1)
+    monkeypatch.setattr(settings, "cas_mutation_recovery_grace_seconds", 0.1)
+
+    await redis.set(_STORAGE_USAGE_KEY, 0)
+    await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
+    await redis.set(capacity._STORAGE_MUTATION_EPOCH_KEY, 0)
+
+    real_scalar = AsyncConnection.scalar
+    owner_pid: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+
+    async def capture_fence_owner_pid(
+        self: AsyncConnection,
+        statement: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        result = await real_scalar(self, statement, *args, **kwargs)
+        if bool(result) and "pg_try_advisory_lock" in str(statement) and not owner_pid.done():
+            pid = await real_scalar(self, sql_text("SELECT pg_backend_pid()"))
+            owner_pid.set_result(int(pid))
+        return result
+
+    monkeypatch.setattr(AsyncConnection, "scalar", capture_fence_owner_pid)
+
+    real_dispatch = capacity.dispatch_cas_storage_mutation
+    dispatch_is_durable = asyncio.Event()
+    allow_stale_owner_to_resume = asyncio.Event()
+
+    async def suspend_after_durable_dispatch(
+        redis_client: Any,
+        mutation_id: str,
+        mutation_epoch: int,
+        external_authority_window_ms: int,
+    ) -> int:
+        recover_after_ms = await real_dispatch(
+            redis_client, mutation_id, mutation_epoch, external_authority_window_ms
+        )
+        dispatch_is_durable.set()
+        await allow_stale_owner_to_resume.wait()
+        return recover_after_ms
+
+    monkeypatch.setattr(
+        capacity,
+        "dispatch_cas_storage_mutation",
+        suspend_after_durable_dispatch,
+    )
+
+    key = "cas/session-death-stale-owner"
+    owner = asyncio.create_task(facade.upload_file(b"x" * 17, key))
+    await asyncio.wait_for(storage.capability_minted.wait(), timeout=3)
+    await asyncio.wait_for(dispatch_is_durable.wait(), timeout=3)
+    pid = await asyncio.wait_for(owner_pid, timeout=3)
+
+    assert not storage.capability_attempted.is_set()
+    intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
+    assert len(intents) == 1
+    _mutation_id, raw = next(iter(intents.items()))
+    dispatched = json.loads(raw)
+    assert dispatched["phase"] == "dispatched"
+    dispatched_at_ms = int(dispatched["dispatched_at_ms"])
+    recover_after_ms = int(dispatched["recover_after_ms"])
+    assert recover_after_ms - dispatched_at_ms >= 1_300
+
+    # Kill the *actual* PostgreSQL backend session that owns A's session-level
+    # advisory fence. A itself remains suspended in Python and therefore can
+    # later resume as the stale owner from the production failure report.
+    killer = create_async_engine(settings.database_url, poolclass=NullPool)
+    try:
+        async with killer.connect() as connection:
+            terminated = bool(
+                await connection.scalar(
+                    sql_text("SELECT pg_terminate_backend(:pid)"),
+                    {"pid": pid},
+                )
+            )
+            await connection.commit()
+            assert terminated
+    finally:
+        await killer.dispose()
+
+    # Simulate A's Redis lease disappearing while A remains suspended.
+    await redis.delete(f"lock:{capacity._CAS_STORAGE_MUTATION_LOCK}")
+
+    delay = max(0.0, (recover_after_ms - await _redis_time_ms(redis)) / 1000 + 0.05)
+    await asyncio.sleep(delay)
+    assert await _redis_time_ms(redis) >= recover_after_ms
+    assert not storage.capability_attempted.is_set()
+
+    # B obtains a new PostgreSQL session fence, sees no physical object, and is
+    # now entitled to retire A's journal because A's externally enforced
+    # mutation authority has already expired.
+    assert await capacity.reconcile_cas_storage_usage(redis) == 0
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 0
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 0
+
+    allow_stale_owner_to_resume.set()
+    with pytest.raises(
+        (RuntimeError, redis_core.RedisConcurrencyError),
+        match="expired external-store mutation capability|Lost lock ownership",
+    ):
+        await asyncio.wait_for(owner, timeout=3)
+
+    # A did reach the capability executor, proving the stale coroutine resumed,
+    # but external authorization expiry stopped it before physical mutation.
+    assert storage.capability_attempted.is_set()
+    assert not storage.physical_mutation_started.is_set()
+    assert key not in storage.objects
+    assert int(await redis.get(_STORAGE_USAGE_KEY) or 0) == 0
+    assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 0
+    assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) is None
+
+
 async def test_process_fence_is_released_by_database_connection_death(
     monkeypatch: pytest.MonkeyPatch,
     process_fence_engine: AsyncEngine,
@@ -208,6 +433,7 @@ async def test_process_fence_is_released_by_database_connection_death(
 
     async with capacity._cas_storage_process_fence():
         pass
+
 
 @pytest_asyncio.fixture
 async def pooled_process_fence_engine(
@@ -255,35 +481,271 @@ async def _assert_fence_available_from_independent_session() -> None:
         await verifier.dispose()
 
 
-async def test_process_fence_acquisition_cancellation_cannot_leak_pooled_session_lock(
+async def _pooled_backend_pid(engine: AsyncEngine) -> int:
+    """Return the PostgreSQL backend PID currently owned by the one-slot pool."""
+    async with engine.connect() as connection:
+        pid = int(await connection.scalar(sql_text("SELECT pg_backend_pid()")))
+        await connection.commit()
+        return pid
+
+
+def _block_process_fence_invalidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[asyncio.Event, asyncio.Event, asyncio.Event, Any]:
+    """Make invalidation observable and controllable without cancelling its child task."""
+    real_invalidate = AsyncConnection.invalidate
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def blocked_invalidate(
+        self: AsyncConnection,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        entered.set()
+        await release.wait()
+        try:
+            await real_invalidate(self, *args, **kwargs)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(AsyncConnection, "invalidate", blocked_invalidate)
+    return entered, release, finished, real_invalidate
+
+
+async def _cancel_twice_during_blocked_invalidation(
+    task: asyncio.Task[None],
+    *,
+    invalidation_entered: asyncio.Event,
+    release_invalidation: asyncio.Event,
+    invalidation_finished: asyncio.Event,
+) -> None:
+    """Prove repeated real Task.cancel() cannot abandon fence-session invalidation."""
+    task.cancel("first process-fence cancellation")
+    await asyncio.wait_for(invalidation_entered.wait(), timeout=3)
+
+    task.cancel("second process-fence cancellation")
+    await asyncio.sleep(0)
+
+    assert not task.done(), "repeated cancellation abandoned PostgreSQL invalidation"
+    assert not invalidation_finished.is_set()
+
+    release_invalidation.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=3)
+    assert invalidation_finished.is_set()
+
+
+async def _assert_cancelled_fence_session_was_destroyed(
+    engine: AsyncEngine,
+    *,
+    previous_backend_pid: int,
+) -> None:
+    """Verify both lock release and physical pooled-session replacement."""
+    replacement_backend_pid = await _pooled_backend_pid(engine)
+    assert replacement_backend_pid != previous_backend_pid, (
+        "ambiguous process-fence cancellation returned the same PostgreSQL session to the pool"
+    )
+    await _assert_fence_available_from_independent_session()
+
+
+async def test_process_fence_real_task_cancellation_after_server_acquisition_destroys_session(
     monkeypatch: pytest.MonkeyPatch,
     pooled_process_fence_engine: AsyncEngine,
 ) -> None:
-    """Ambiguous cancellation after server-side acquisition must kill the DB session."""
+    """Cancel after PostgreSQL acquired the fence but before scalar() returns to capacity.py."""
+    previous_backend_pid = await _pooled_backend_pid(pooled_process_fence_engine)
     real_scalar = AsyncConnection.scalar
-    injected = False
+    server_acquired = asyncio.Event()
+    never_return_scalar = asyncio.Event()
 
-    async def cancel_after_server_scalar(
+    async def block_after_server_acquisition(
         self: AsyncConnection,
         statement: Any,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        nonlocal injected
         result = await real_scalar(self, statement, *args, **kwargs)
-        if not injected and "pg_try_advisory_lock" in str(statement):
-            injected = True
-            raise asyncio.CancelledError()
+        if "pg_try_advisory_lock" in str(statement):
+            assert result
+            server_acquired.set()
+            await never_return_scalar.wait()
         return result
 
-    monkeypatch.setattr(AsyncConnection, "scalar", cancel_after_server_scalar)
-    with pytest.raises(asyncio.CancelledError):
+    monkeypatch.setattr(AsyncConnection, "scalar", block_after_server_acquisition)
+    invalidation_entered, release_invalidation, invalidation_finished, real_invalidate = (
+        _block_process_fence_invalidation(monkeypatch)
+    )
+
+    async def acquire_fence() -> None:
         async with capacity._cas_storage_process_fence():
-            pytest.fail("acquisition cancellation must happen before entering the body")
-    assert injected
+            pytest.fail("cancellation must happen before entering the fenced body")
+
+    task = asyncio.create_task(acquire_fence())
+    await asyncio.wait_for(server_acquired.wait(), timeout=3)
+    await _cancel_twice_during_blocked_invalidation(
+        task,
+        invalidation_entered=invalidation_entered,
+        release_invalidation=release_invalidation,
+        invalidation_finished=invalidation_finished,
+    )
 
     monkeypatch.setattr(AsyncConnection, "scalar", real_scalar)
-    await _assert_fence_available_from_independent_session()
+    monkeypatch.setattr(AsyncConnection, "invalidate", real_invalidate)
+    await _assert_cancelled_fence_session_was_destroyed(
+        pooled_process_fence_engine,
+        previous_backend_pid=previous_backend_pid,
+    )
+
+
+async def test_process_fence_real_task_cancellation_after_acquisition_commit_destroys_session(
+    monkeypatch: pytest.MonkeyPatch,
+    pooled_process_fence_engine: AsyncEngine,
+) -> None:
+    """Cancel after the acquisition COMMIT reached PostgreSQL but before commit() returns."""
+    previous_backend_pid = await _pooled_backend_pid(pooled_process_fence_engine)
+    real_commit = AsyncConnection.commit
+    server_committed = asyncio.Event()
+    never_return_commit = asyncio.Event()
+    commit_calls = 0
+
+    async def block_after_first_server_commit(self: AsyncConnection) -> None:
+        nonlocal commit_calls
+        await real_commit(self)
+        commit_calls += 1
+        if commit_calls == 1:
+            server_committed.set()
+            await never_return_commit.wait()
+
+    monkeypatch.setattr(AsyncConnection, "commit", block_after_first_server_commit)
+    invalidation_entered, release_invalidation, invalidation_finished, real_invalidate = (
+        _block_process_fence_invalidation(monkeypatch)
+    )
+
+    async def acquire_fence() -> None:
+        async with capacity._cas_storage_process_fence():
+            pytest.fail("cancellation must happen before entering the fenced body")
+
+    task = asyncio.create_task(acquire_fence())
+    await asyncio.wait_for(server_committed.wait(), timeout=3)
+    await _cancel_twice_during_blocked_invalidation(
+        task,
+        invalidation_entered=invalidation_entered,
+        release_invalidation=release_invalidation,
+        invalidation_finished=invalidation_finished,
+    )
+
+    monkeypatch.setattr(AsyncConnection, "commit", real_commit)
+    monkeypatch.setattr(AsyncConnection, "invalidate", real_invalidate)
+    await _assert_cancelled_fence_session_was_destroyed(
+        pooled_process_fence_engine,
+        previous_backend_pid=previous_backend_pid,
+    )
+
+
+async def test_process_fence_real_task_cancellation_after_server_unlock_destroys_session(
+    monkeypatch: pytest.MonkeyPatch,
+    pooled_process_fence_engine: AsyncEngine,
+) -> None:
+    """Cancel after pg_advisory_unlock() executed but before scalar() returns."""
+    previous_backend_pid = await _pooled_backend_pid(pooled_process_fence_engine)
+    real_scalar = AsyncConnection.scalar
+    entered_body = asyncio.Event()
+    leave_body = asyncio.Event()
+    server_unlocked = asyncio.Event()
+    never_return_unlock = asyncio.Event()
+
+    async def block_after_server_unlock(
+        self: AsyncConnection,
+        statement: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        result = await real_scalar(self, statement, *args, **kwargs)
+        if "pg_advisory_unlock" in str(statement):
+            assert result
+            server_unlocked.set()
+            await never_return_unlock.wait()
+        return result
+
+    monkeypatch.setattr(AsyncConnection, "scalar", block_after_server_unlock)
+    invalidation_entered, release_invalidation, invalidation_finished, real_invalidate = (
+        _block_process_fence_invalidation(monkeypatch)
+    )
+
+    async def hold_fence() -> None:
+        async with capacity._cas_storage_process_fence():
+            entered_body.set()
+            await leave_body.wait()
+
+    task = asyncio.create_task(hold_fence())
+    await asyncio.wait_for(entered_body.wait(), timeout=3)
+    leave_body.set()
+    await asyncio.wait_for(server_unlocked.wait(), timeout=3)
+    await _cancel_twice_during_blocked_invalidation(
+        task,
+        invalidation_entered=invalidation_entered,
+        release_invalidation=release_invalidation,
+        invalidation_finished=invalidation_finished,
+    )
+
+    monkeypatch.setattr(AsyncConnection, "scalar", real_scalar)
+    monkeypatch.setattr(AsyncConnection, "invalidate", real_invalidate)
+    await _assert_cancelled_fence_session_was_destroyed(
+        pooled_process_fence_engine,
+        previous_backend_pid=previous_backend_pid,
+    )
+
+
+async def test_process_fence_real_task_cancellation_after_release_commit_destroys_session(
+    monkeypatch: pytest.MonkeyPatch,
+    pooled_process_fence_engine: AsyncEngine,
+) -> None:
+    """Cancel after release COMMIT reached PostgreSQL but before commit() returns."""
+    previous_backend_pid = await _pooled_backend_pid(pooled_process_fence_engine)
+    real_commit = AsyncConnection.commit
+    entered_body = asyncio.Event()
+    leave_body = asyncio.Event()
+    release_committed = asyncio.Event()
+    never_return_release_commit = asyncio.Event()
+    commit_calls = 0
+
+    async def block_after_second_server_commit(self: AsyncConnection) -> None:
+        nonlocal commit_calls
+        await real_commit(self)
+        commit_calls += 1
+        if commit_calls == 2:
+            release_committed.set()
+            await never_return_release_commit.wait()
+
+    monkeypatch.setattr(AsyncConnection, "commit", block_after_second_server_commit)
+    invalidation_entered, release_invalidation, invalidation_finished, real_invalidate = (
+        _block_process_fence_invalidation(monkeypatch)
+    )
+
+    async def hold_fence() -> None:
+        async with capacity._cas_storage_process_fence():
+            entered_body.set()
+            await leave_body.wait()
+
+    task = asyncio.create_task(hold_fence())
+    await asyncio.wait_for(entered_body.wait(), timeout=3)
+    leave_body.set()
+    await asyncio.wait_for(release_committed.wait(), timeout=3)
+    await _cancel_twice_during_blocked_invalidation(
+        task,
+        invalidation_entered=invalidation_entered,
+        release_invalidation=release_invalidation,
+        invalidation_finished=invalidation_finished,
+    )
+
+    monkeypatch.setattr(AsyncConnection, "commit", real_commit)
+    monkeypatch.setattr(AsyncConnection, "invalidate", real_invalidate)
+    await _assert_cancelled_fence_session_was_destroyed(
+        pooled_process_fence_engine,
+        previous_backend_pid=previous_backend_pid,
+    )
 
 
 async def test_process_fence_post_acquisition_commit_failure_cannot_leak_pooled_session_lock(
@@ -309,4 +771,3 @@ async def test_process_fence_post_acquisition_commit_failure_cannot_leak_pooled_
 
     monkeypatch.setattr(AsyncConnection, "commit", real_commit)
     await _assert_fence_available_from_independent_session()
-

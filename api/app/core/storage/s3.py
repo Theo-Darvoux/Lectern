@@ -11,11 +11,15 @@ import logging
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, cast
-from urllib.parse import quote, urlparse, urlunparse
+from typing import IO, TYPE_CHECKING, Any, Literal, cast
+from urllib.parse import parse_qs, quote, urlparse, urlunparse
 
 import aioboto3
+import aiohttp
 from aiobotocore.config import AioConfig
 
 from app.config import settings
@@ -37,6 +41,21 @@ _PRESIGN_CACHE_TTL = 12 * 60  # seconds refresh before the 15-min R2 TTL
 _PRESIGN_CACHE_PREFIX = "presign:"
 
 _READ_FULL_OBJECT_MAX_BYTES = 50 * 1024 * 1024  # 50 MB safety
+
+
+@dataclass(frozen=True)
+class PresignedMutationCapability:
+    """One short-lived, operation-specific S3 mutation authorization.
+
+    The URL is intentionally excluded from repr because its query string is a
+    bearer credential.  A stale application coroutine may retain this object,
+    but the object store rejects it after ``X-Amz-Expires``.
+    """
+
+    method: Literal["PUT", "DELETE"]
+    url: str = field(repr=False)
+    recovery_fence_ms: int
+    headers: tuple[tuple[str, str], ...] = ()
 
 
 def dynamic_part_size(file_size: int) -> int:
@@ -220,6 +239,67 @@ class S3Backend:
 
         return urlunparse(parsed._replace(netloc=public_endpoint, scheme=scheme, path=path))
 
+    @staticmethod
+    def _reject_permanent_credential_cas_mutation(*file_keys: str) -> None:
+        """Forbid canonical mutations that retain process-long S3 authority.
+
+        CAS recovery may retire a dispatched journal after an application loses
+        its PostgreSQL session fence. A stale coroutine must therefore retain
+        only a short-lived, operation-specific capability, never the backend's
+        permanent credentials. Reads from CAS remain unrestricted.
+        """
+        if any(key.startswith("cas/") for key in file_keys):
+            raise RuntimeError(
+                "Canonical cas/ mutations require a pre-dispatch expiring storage capability"
+            )
+
+    async def _presigned_recovery_fence_ms(
+        self,
+        client: Any,
+        *,
+        bucket: str,
+        url: str,
+        requested_ttl: int,
+    ) -> int:
+        """Return a conservative real-time authority budget for one presigned URL.
+
+        Recovery uses Redis TIME, while SigV4 expiry is interpreted by the object
+        store. Comparing those clocks directly would recreate a skew race. Instead
+        we probe the storage service's own Date header, measure any positive lead
+        in the signed X-Amz-Date, and convert the result to a *duration*. Dispatch
+        later adds that whole duration to Redis's own clock, so clock offsets do
+        not cross the journal/object-store boundary.
+        """
+        query = parse_qs(urlparse(url).query)
+        try:
+            signed_raw = query["X-Amz-Date"][0]
+            expires = int(query["X-Amz-Expires"][0])
+            signed_at = datetime.strptime(signed_raw, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "Storage mutation capability has invalid SigV4 expiry fields"
+            ) from exc
+        if expires != requested_ttl or expires < 1:
+            raise RuntimeError("Storage mutation capability expiry differs from requested TTL")
+
+        probe = await client.head_bucket(Bucket=bucket)
+        try:
+            headers = probe["ResponseMetadata"]["HTTPHeaders"]
+            raw_date = headers.get("date") or headers.get("Date")
+            store_now = parsedate_to_datetime(str(raw_date))
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError("Object store did not provide a valid Date clock probe") from exc
+        if store_now.tzinfo is None:
+            store_now = store_now.replace(tzinfo=UTC)
+        else:
+            store_now = store_now.astimezone(UTC)
+
+        positive_signer_lead_ms = max(0, int((signed_at - store_now).total_seconds() * 1000))
+        # HTTP Date has one-second resolution. Two extra seconds cover truncation
+        # plus response transit; all elapsed pre-dispatch time is conservatively
+        # ignored because the full budget is added only when dispatch occurs.
+        return requested_ttl * 1000 + positive_signer_lead_ms + 2_000
+
     # multipart
 
     async def create_multipart_upload(
@@ -230,6 +310,7 @@ class S3Backend:
         content_disposition: str | None = "attachment",
     ) -> str:
         """Initiate an S3 multipart upload. Returns the UploadId."""
+        self._reject_permanent_credential_cas_mutation(file_key)
         cfg = self._cfg()
         params: dict[str, Any] = {
             "Bucket": cfg["bucket"],
@@ -253,6 +334,7 @@ class S3Backend:
         body: bytes | IO[bytes] | Any,
     ) -> str:
         """Upload one part of a multipart upload. Returns the ETag."""
+        self._reject_permanent_credential_cas_mutation(file_key)
         cfg = self._cfg()
         async with self._client(cfg) as client:
             resp = await client.upload_part(
@@ -271,6 +353,7 @@ class S3Backend:
         parts: list[dict[str, int | str]],
     ) -> None:
         """Complete a multipart upload. parts is a list of {PartNumber, ETag} dicts."""
+        self._reject_permanent_credential_cas_mutation(file_key)
         cfg = self._cfg()
         async with self._client(cfg) as client:
             await client.complete_multipart_upload(
@@ -312,6 +395,9 @@ class S3Backend:
         if effective_chunk_size < MULTIPART_THRESHOLD:
             raise ValueError("S3 multipart chunks must be at least 5 MiB")
 
+        # Preserve pure local validation errors before enforcing the CAS authority
+        # boundary. The guard still runs before every storage mutation/client call.
+        self._reject_permanent_credential_cas_mutation(file_key)
         if file_size < MULTIPART_THRESHOLD:
             with open(path, "rb") as fh:
                 await self.upload_file(
@@ -410,6 +496,7 @@ class S3Backend:
         content_length: int | None = None,
     ) -> str:
         """Generate a presigned URL for uploading one part of a multipart upload."""
+        self._reject_permanent_credential_cas_mutation(file_key)
         cfg = self._cfg()
         params: dict[str, Any] = {
             "Bucket": cfg["bucket"],
@@ -440,6 +527,7 @@ class S3Backend:
         content_disposition: str | None = "attachment",
     ) -> None:
         """Upload a file-like object to storage."""
+        self._reject_permanent_credential_cas_mutation(file_key)
         extra_args: dict[str, Any] = {}
         if content_type:
             extra_args["ContentType"] = content_type
@@ -683,6 +771,177 @@ class S3Backend:
 
     # presigned URLs
 
+    async def presign_cas_put_capability(
+        self,
+        file_key: str,
+        *,
+        ttl: int,
+        content_length: int | None = None,
+        content_type: str | None = None,
+        content_encoding: str | None = None,
+        content_disposition: str | None = "attachment",
+    ) -> PresignedMutationCapability:
+        """Mint a short-lived PUT capability for one canonical CAS key."""
+        if not file_key.startswith("cas/"):
+            raise ValueError("CAS mutation capabilities are restricted to cas/ keys")
+        if ttl < 1:
+            raise ValueError("CAS mutation capability TTL must be positive")
+
+        cfg = self._cfg()
+        params: dict[str, Any] = {
+            "Bucket": cfg["bucket"],
+            "Key": file_key,
+            "CacheControl": "public, max-age=86400",
+        }
+        headers: dict[str, str] = {"Cache-Control": "public, max-age=86400"}
+        if content_length is not None:
+            if content_length < 0:
+                raise ValueError("CAS mutation content length cannot be negative")
+            params["ContentLength"] = content_length
+            headers["Content-Length"] = str(content_length)
+        if content_type:
+            params["ContentType"] = content_type
+            headers["Content-Type"] = content_type
+        if content_encoding:
+            params["ContentEncoding"] = content_encoding
+            headers["Content-Encoding"] = content_encoding
+        if content_disposition:
+            params["ContentDisposition"] = content_disposition
+            headers["Content-Disposition"] = content_disposition
+
+        async with self._client(cfg) as client:
+            url: str = await client.generate_presigned_url(
+                "put_object",
+                Params=params,
+                ExpiresIn=ttl,
+            )
+            recovery_fence_ms = await self._presigned_recovery_fence_ms(
+                client, bucket=cfg["bucket"], url=url, requested_ttl=ttl
+            )
+        # Never rewrite mutation capabilities to a public/custom delivery host:
+        # SigV4 signs the exact S3 API authority.
+        return PresignedMutationCapability(
+            method="PUT",
+            url=url,
+            recovery_fence_ms=recovery_fence_ms,
+            headers=tuple(headers.items()),
+        )
+
+    async def presign_storage_copy_capability(
+        self,
+        source_key: str,
+        dest_key: str,
+        *,
+        ttl: int,
+    ) -> PresignedMutationCapability:
+        """Mint a short-lived server-side CopyObject capability for one exact move/copy."""
+        if ttl < 1:
+            raise ValueError("Storage mutation capability TTL must be positive")
+
+        cfg = self._cfg()
+        raw_copy_source = f"{cfg['bucket']}/{source_key}"
+        copy_source_header = quote(raw_copy_source, safe="/")
+        async with self._client(cfg) as client:
+            url: str = await client.generate_presigned_url(
+                "copy_object",
+                Params={
+                    "Bucket": cfg["bucket"],
+                    "Key": dest_key,
+                    # Botocore owns CopySource serialization and percent-encoding.
+                    # Passing our already-encoded header value here would make its
+                    # S3 handler encode '%' again and sign a different header than
+                    # execute_presigned_mutation() actually sends.
+                    "CopySource": {"Bucket": cfg["bucket"], "Key": source_key},
+                },
+                ExpiresIn=ttl,
+            )
+            recovery_fence_ms = await self._presigned_recovery_fence_ms(
+                client, bucket=cfg["bucket"], url=url, requested_ttl=ttl
+            )
+        return PresignedMutationCapability(
+            method="PUT",
+            url=url,
+            recovery_fence_ms=recovery_fence_ms,
+            headers=(("x-amz-copy-source", copy_source_header),),
+        )
+
+    async def presign_cas_copy_capability(
+        self,
+        source_key: str,
+        dest_key: str,
+        *,
+        ttl: int,
+    ) -> PresignedMutationCapability:
+        """Mint a short-lived CopyObject capability whose destination is canonical CAS."""
+        if not dest_key.startswith("cas/"):
+            raise ValueError("CAS copy capabilities require a cas/ destination")
+        return await self.presign_storage_copy_capability(source_key, dest_key, ttl=ttl)
+
+    async def presign_storage_delete_capability(
+        self,
+        file_key: str,
+        *,
+        ttl: int,
+    ) -> PresignedMutationCapability:
+        """Mint a short-lived DELETE capability for one exact storage key."""
+        if ttl < 1:
+            raise ValueError("Storage mutation capability TTL must be positive")
+
+        cfg = self._cfg()
+        async with self._client(cfg) as client:
+            url: str = await client.generate_presigned_url(
+                "delete_object",
+                Params={"Bucket": cfg["bucket"], "Key": file_key},
+                ExpiresIn=ttl,
+            )
+            recovery_fence_ms = await self._presigned_recovery_fence_ms(
+                client, bucket=cfg["bucket"], url=url, requested_ttl=ttl
+            )
+        return PresignedMutationCapability(
+            method="DELETE", url=url, recovery_fence_ms=recovery_fence_ms
+        )
+
+    async def presign_cas_delete_capability(
+        self,
+        file_key: str,
+        *,
+        ttl: int,
+    ) -> PresignedMutationCapability:
+        """Mint a short-lived DELETE capability for one canonical CAS key."""
+        if not file_key.startswith("cas/"):
+            raise ValueError("CAS delete capabilities are restricted to cas/ keys")
+        return await self.presign_storage_delete_capability(file_key, ttl=ttl)
+
+    async def execute_presigned_mutation(
+        self,
+        capability: PresignedMutationCapability,
+        *,
+        body: Any = None,
+    ) -> None:
+        """Execute an already-minted mutation capability without static S3 credentials."""
+        headers = dict(capability.headers)
+        timeout = aiohttp.ClientTimeout(total=None, connect=30)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                async with session.request(
+                    capability.method,
+                    capability.url,
+                    headers=headers,
+                    data=body,
+                    allow_redirects=False,
+                ) as response:
+                    response_body = await response.read()
+                    if 200 <= response.status < 300 and b"<Error" not in response_body:
+                        return
+                    raise RuntimeError(
+                        "Storage mutation capability was rejected by the object store "
+                        f"(HTTP {response.status})"
+                    )
+        except (aiohttp.ClientError, TimeoutError):
+            # Presigned query strings are bearer credentials. Do not let an
+            # aiohttp exception containing the request URL escape into logs.
+            raise RuntimeError("Storage mutation capability request failed") from None
+
     async def generate_presigned_put(
         self,
         file_key: str,
@@ -691,6 +950,7 @@ class S3Backend:
         content_length: int | None = None,
         checksum_sha256: str | None = None,
     ) -> str:
+        self._reject_permanent_credential_cas_mutation(file_key)
         cfg = self._cfg()
         params: dict[str, Any] = {
             "Bucket": cfg["bucket"],
@@ -849,6 +1109,7 @@ class S3Backend:
             }
 
     async def update_object_content_type(self, file_key: str, content_type: str) -> None:
+        self._reject_permanent_credential_cas_mutation(file_key)
         cfg = self._cfg()
         async with self._client(cfg) as client:
             existing = await client.head_object(Bucket=cfg["bucket"], Key=file_key)
@@ -877,6 +1138,7 @@ class S3Backend:
     # copy / move / delete
 
     async def move_object(self, source_key: str, dest_key: str) -> None:
+        self._reject_permanent_credential_cas_mutation(source_key, dest_key)
         cfg = self._cfg()
         async with self._client(cfg) as client:
             await client.copy_object(
@@ -887,6 +1149,7 @@ class S3Backend:
         await self.delete_object(source_key)
 
     async def copy_object(self, source_key: str, dest_key: str) -> None:
+        self._reject_permanent_credential_cas_mutation(dest_key)
         cfg = self._cfg()
         async with self._client(cfg) as client:
             await client.copy_object(
@@ -896,6 +1159,7 @@ class S3Backend:
             )
 
     async def delete_object(self, file_key: str) -> None:
+        self._reject_permanent_credential_cas_mutation(file_key)
         cfg = self._cfg()
         async with self._client(cfg) as client:
             await client.delete_object(Bucket=cfg["bucket"], Key=file_key)

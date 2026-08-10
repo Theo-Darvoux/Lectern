@@ -4,6 +4,7 @@ import asyncio
 import gzip
 import hashlib
 import io
+import uuid
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -407,6 +408,109 @@ async def test_multipart_helper_rejects_small_part_size(
             storage_key("invalid-parts.bin"),
             chunk_size=MULTIPART_THRESHOLD - 1,
         )
+
+
+@pytest.mark.asyncio
+async def test_storage_enforces_expiry_for_cas_mutation_capabilities(
+    seaweedfs_backend: Any,
+    storage_key: Any,
+) -> None:
+    """Expired PUT/COPY/DELETE capabilities must be rejected by SeaweedFS itself."""
+    suffix = uuid.uuid4().hex
+    source_key = storage_key("capability source.bin")
+    source_payload = b"copy-source-payload"
+    await seaweedfs_backend.upload_file(source_payload, source_key)
+
+    fresh_put_key = f"cas/capability-fresh-put-{suffix}"
+    fresh_copy_key = f"cas/capability-fresh-copy-{suffix}"
+    fresh_delete_key = f"cas/capability-fresh-delete-{suffix}"
+
+    fresh_put = await seaweedfs_backend.presign_cas_put_capability(
+        fresh_put_key, ttl=30, content_length=9
+    )
+    fresh_copy = await seaweedfs_backend.presign_cas_copy_capability(
+        source_key, fresh_copy_key, ttl=30
+    )
+    fresh_delete_seed = await seaweedfs_backend.presign_cas_put_capability(
+        fresh_delete_key, ttl=30, content_length=9
+    )
+    fresh_delete = await seaweedfs_backend.presign_cas_delete_capability(fresh_delete_key, ttl=30)
+    assert fresh_put.recovery_fence_ms >= 30_000
+    assert fresh_copy.recovery_fence_ms >= 30_000
+    assert fresh_delete.recovery_fence_ms >= 30_000
+    await seaweedfs_backend.execute_presigned_mutation(fresh_put, body=b"fresh-put")
+    await seaweedfs_backend.execute_presigned_mutation(fresh_delete_seed, body=b"delete-me")
+    await seaweedfs_backend.execute_presigned_mutation(fresh_copy)
+    await seaweedfs_backend.execute_presigned_mutation(fresh_delete)
+
+    assert await seaweedfs_backend.read_full_object(fresh_put_key) == b"fresh-put"
+    assert await seaweedfs_backend.read_full_object(fresh_copy_key) == source_payload
+    assert not await seaweedfs_backend.object_exists(fresh_delete_key)
+
+    expired_put_key = f"cas/capability-expired-put-{suffix}"
+    expired_copy_key = f"cas/capability-expired-copy-{suffix}"
+    expired_delete_key = f"cas/capability-expired-delete-{suffix}"
+    expired_delete_seed = await seaweedfs_backend.presign_cas_put_capability(
+        expired_delete_key, ttl=30, content_length=12
+    )
+    await seaweedfs_backend.execute_presigned_mutation(expired_delete_seed, body=b"must-survive")
+
+    expired_put = await seaweedfs_backend.presign_cas_put_capability(
+        expired_put_key, ttl=1, content_length=11
+    )
+    expired_copy = await seaweedfs_backend.presign_cas_copy_capability(
+        source_key, expired_copy_key, ttl=1
+    )
+    expired_delete = await seaweedfs_backend.presign_cas_delete_capability(
+        expired_delete_key, ttl=1
+    )
+
+    # Cross a full integer-second expiry boundary with margin; the request is
+    # then rejected by the storage service, independently of application locks.
+    await asyncio.sleep(2.1)
+
+    for capability, body in (
+        (expired_put, b"expired-put"),
+        (expired_copy, None),
+        (expired_delete, None),
+    ):
+        with pytest.raises(RuntimeError, match="rejected by the object store"):
+            await seaweedfs_backend.execute_presigned_mutation(capability, body=body)
+
+    assert not await seaweedfs_backend.object_exists(expired_put_key)
+    assert not await seaweedfs_backend.object_exists(expired_copy_key)
+    assert await seaweedfs_backend.read_full_object(expired_delete_key) == b"must-survive"
+
+
+@pytest.mark.asyncio
+async def test_cas_multipart_and_bidirectional_moves_use_capability_path(
+    tmp_path: Path,
+    storage_key: Any,
+) -> None:
+    """Exercise large-file PUT plus both move directions through real SeaweedFS."""
+    suffix = uuid.uuid4().hex
+    payload = _payload(MULTIPART_THRESHOLD + 257_123)
+    source = tmp_path / "capability-large.bin"
+    source.write_bytes(payload)
+    cas_key = f"cas/capability-large-{suffix}"
+
+    await facade.upload_file_multipart(
+        source,
+        cas_key,
+        content_type="application/octet-stream",
+        chunk_size=MULTIPART_THRESHOLD,
+    )
+    assert await facade.read_full_object(cas_key) == payload
+
+    outside_key = storage_key("capability-move-out.bin")
+    await facade.move_object(cas_key, outside_key)
+    assert not await facade.object_exists(cas_key)
+    assert await facade.read_full_object(outside_key) == payload
+
+    returned_cas_key = f"cas/capability-move-back-{suffix}"
+    await facade.move_object(outside_key, returned_cas_key)
+    assert not await facade.object_exists(outside_key)
+    assert await facade.read_full_object(returned_cas_key) == payload
 
 
 @pytest.mark.asyncio

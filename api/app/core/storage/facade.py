@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
 
@@ -114,6 +115,14 @@ def _is_cas_key(file_key: str) -> bool:
     return file_key.startswith("cas/")
 
 
+def _reject_unfenced_cas_mutation(file_key: str, operation: str) -> None:
+    if _is_cas_key(file_key):
+        raise ValueError(
+            f"{operation} cannot target canonical cas/ directly; "
+            "use the CAS facade path that mints a pre-dispatch expiring capability"
+        )
+
+
 async def _cas_object_size(storage: S3Backend, file_key: str) -> int | None:
     if not await storage.object_exists(file_key):
         return None
@@ -133,12 +142,27 @@ async def _bounded_cas_io(writer: Callable[[], Awaitable[None]]) -> None:
         await writer()
 
 
-async def _accounted_cas_write(file_key: str, writer: Callable[[], Awaitable[None]]) -> None:
-    """Journal one CAS write and publish only its real physical byte delta."""
+@dataclass(frozen=True)
+class _PreparedCasMutation:
+    run: Callable[[], Awaitable[None]]
+    external_authority_window_ms: int
+
+
+async def _accounted_cas_write(
+    file_key: str,
+    prepare_writer: Callable[[int], Awaitable[_PreparedCasMutation]],
+) -> None:
+    """Journal one CAS write and publish only its real physical byte delta.
+
+    The storage mutation capability is minted while the journal is still in
+    preflight, then durable dispatch starts a recovery clock that is strictly
+    longer than that capability can remain valid at the object store.
+    """
     from app.core.database.redis import redis_client
     from app.core.storage.capacity import (
         abort_cas_storage_mutation,
         cas_storage_mutation,
+        cas_storage_mutation_capability_ttl_seconds,
         commit_cas_storage_delta,
         dispatch_cas_storage_mutation,
         resolve_cas_storage_mutation_by_scan,
@@ -149,15 +173,20 @@ async def _accounted_cas_write(file_key: str, writer: Callable[[], Awaitable[Non
         mutation_id, mutation_epoch = mutation
         try:
             old_size = await _cas_object_size(storage, file_key) or 0
+            prepared = await prepare_writer(cas_storage_mutation_capability_ttl_seconds())
         except BaseException:
-            # No object-store mutation has been dispatched yet.
+            # No canonical object-store mutation has been dispatched yet.
             await abort_cas_storage_mutation(
                 redis_client, mutation_id, mutation_epoch, expected_phase="preflight"
             )
             raise
 
-        await dispatch_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
-        _result, writer_error, caller_cancellation = await settle_awaitable(_bounded_cas_io(writer))
+        await dispatch_cas_storage_mutation(
+            redis_client, mutation_id, mutation_epoch, prepared.external_authority_window_ms
+        )
+        _result, writer_error, caller_cancellation = await settle_awaitable(
+            _bounded_cas_io(prepared.run)
+        )
         if writer_error is not None:
             # The remote result can be ambiguous after transport failure. Keep the
             # durable intent unresolved; no successor may certify a clean snapshot.
@@ -185,12 +214,16 @@ async def _accounted_cas_write(file_key: str, writer: Callable[[], Awaitable[Non
             raise caller_cancellation
 
 
-async def _accounted_cas_delete(file_key: str, deleter: Callable[[], Awaitable[None]]) -> None:
+async def _accounted_cas_delete(
+    file_key: str,
+    prepare_deleter: Callable[[int], Awaitable[_PreparedCasMutation]],
+) -> None:
     """Journal one CAS delete and publish the observed physical byte delta."""
     from app.core.database.redis import redis_client
     from app.core.storage.capacity import (
         abort_cas_storage_mutation,
         cas_storage_mutation,
+        cas_storage_mutation_capability_ttl_seconds,
         commit_cas_storage_delta,
         dispatch_cas_storage_mutation,
         resolve_cas_storage_mutation_by_scan,
@@ -201,15 +234,18 @@ async def _accounted_cas_delete(file_key: str, deleter: Callable[[], Awaitable[N
         mutation_id, mutation_epoch = mutation
         try:
             old_size = await _cas_object_size(storage, file_key) or 0
+            prepared = await prepare_deleter(cas_storage_mutation_capability_ttl_seconds())
         except BaseException:
             await abort_cas_storage_mutation(
                 redis_client, mutation_id, mutation_epoch, expected_phase="preflight"
             )
             raise
 
-        await dispatch_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
+        await dispatch_cas_storage_mutation(
+            redis_client, mutation_id, mutation_epoch, prepared.external_authority_window_ms
+        )
         _result, delete_error, caller_cancellation = await settle_awaitable(
-            _bounded_cas_io(deleter)
+            _bounded_cas_io(prepared.run)
         )
         if delete_error is not None:
             raise delete_error
@@ -239,13 +275,14 @@ async def _accounted_cas_delete(file_key: str, deleter: Callable[[], Awaitable[N
 async def _accounted_cas_complex_mutation(
     source_key: str,
     dest_key: str,
-    writer: Callable[[], Awaitable[None]],
+    prepare_writer: Callable[[int], Awaitable[_PreparedCasMutation]],
 ) -> None:
     """Journal a move touching CAS and account the exact before/after byte delta."""
     from app.core.database.redis import redis_client
     from app.core.storage.capacity import (
         abort_cas_storage_mutation,
         cas_storage_mutation,
+        cas_storage_mutation_capability_ttl_seconds,
         commit_cas_storage_delta,
         dispatch_cas_storage_mutation,
         resolve_cas_storage_mutation_by_scan,
@@ -261,14 +298,19 @@ async def _accounted_cas_complex_mutation(
             old_size = 0
             for key in tracked_keys:
                 old_size += await _cas_object_size(storage, key) or 0
+            prepared = await prepare_writer(cas_storage_mutation_capability_ttl_seconds())
         except BaseException:
             await abort_cas_storage_mutation(
                 redis_client, mutation_id, mutation_epoch, expected_phase="preflight"
             )
             raise
 
-        await dispatch_cas_storage_mutation(redis_client, mutation_id, mutation_epoch)
-        _result, move_error, caller_cancellation = await settle_awaitable(_bounded_cas_io(writer))
+        await dispatch_cas_storage_mutation(
+            redis_client, mutation_id, mutation_epoch, prepared.external_authority_window_ms
+        )
+        _result, move_error, caller_cancellation = await settle_awaitable(
+            _bounded_cas_io(prepared.run)
+        )
         if move_error is not None:
             raise move_error
 
@@ -316,8 +358,37 @@ async def upload_file(
             content_disposition=content_disposition,
         )
 
+    async def _prepare(ttl: int) -> _PreparedCasMutation:
+        content_length: int | None = None
+        if isinstance(file_obj, (bytes, bytearray, memoryview)):
+            content_length = len(file_obj)
+        elif hasattr(file_obj, "tell") and hasattr(file_obj, "seek"):
+            try:
+                current = file_obj.tell()
+                file_obj.seek(0, 2)
+                content_length = int(file_obj.tell()) - int(current)
+                file_obj.seek(current)
+            except (OSError, TypeError, ValueError):
+                content_length = None
+        capability = await storage.presign_cas_put_capability(
+            file_key,
+            ttl=ttl,
+            content_length=content_length,
+            content_type=content_type,
+            content_encoding=content_encoding,
+            content_disposition=content_disposition,
+        )
+
+        async def _capability_write() -> None:
+            await storage.execute_presigned_mutation(capability, body=file_obj)
+
+        return _PreparedCasMutation(
+            run=_capability_write,
+            external_authority_window_ms=capability.recovery_fence_ms,
+        )
+
     if _is_cas_key(file_key):
-        await _accounted_cas_write(file_key, _write)
+        await _accounted_cas_write(file_key, _prepare)
     else:
         await _write()
 
@@ -342,8 +413,31 @@ async def upload_file_multipart(
             chunk_size=chunk_size,
         )
 
+    async def _prepare(ttl: int) -> _PreparedCasMutation:
+        path = Path(file_path)
+        content_length = path.stat().st_size
+        capability = await storage.presign_cas_put_capability(
+            file_key,
+            ttl=ttl,
+            content_length=content_length,
+            content_type=content_type,
+            content_encoding=content_encoding,
+            content_disposition=content_disposition,
+        )
+
+        async def _capability_write() -> None:
+            with path.open("rb") as handle:
+                await storage.execute_presigned_mutation(capability, body=handle)
+
+        return _PreparedCasMutation(
+            run=_capability_write,
+            external_authority_window_ms=capability.recovery_fence_ms,
+        )
+
     if _is_cas_key(file_key):
-        await _accounted_cas_write(file_key, _write)
+        # Canonical publication is a single externally expiring PUT rather than
+        # a credentialed multipart completion that a stale task could start later.
+        await _accounted_cas_write(file_key, _prepare)
     else:
         await _write()
 
@@ -354,6 +448,7 @@ async def create_multipart_upload(
     content_encoding: str | None = None,
     content_disposition: str | None = "attachment",
 ) -> str:
+    _reject_unfenced_cas_mutation(file_key, "Multipart creation")
     return await get_storage().create_multipart_upload(
         file_key,
         content_type=content_type,
@@ -368,21 +463,19 @@ async def upload_part(
     part_number: int,
     body: bytes | IO[bytes] | Any,
 ) -> str:
+    _reject_unfenced_cas_mutation(file_key, "Multipart part upload")
     return await get_storage().upload_part(file_key, s3_upload_id, part_number, body)
 
 
 async def complete_multipart_upload(
     file_key: str, s3_upload_id: str, parts: list[dict[str, int | str]]
 ) -> None:
-    storage = get_storage()
-
-    async def _complete() -> None:
-        await storage.complete_multipart_upload(file_key, s3_upload_id, parts)
-
-    if _is_cas_key(file_key):
-        await _accounted_cas_write(file_key, _complete)
-    else:
-        await _complete()
+    # Multipart completion is itself the canonical object mutation. It cannot
+    # safely be delayed behind a session fence because an old UploadId retains
+    # long-lived authority. Canonical large files therefore publish via the
+    # single-request, pre-dispatch capability path in upload_file_multipart().
+    _reject_unfenced_cas_mutation(file_key, "Multipart completion")
+    await get_storage().complete_multipart_upload(file_key, s3_upload_id, parts)
 
 
 async def abort_multipart_upload(file_key: str, s3_upload_id: str) -> None:
@@ -396,6 +489,7 @@ async def generate_presigned_upload_part(
     ttl: int = 3600,
     content_length: int | None = None,
 ) -> str:
+    _reject_unfenced_cas_mutation(file_key, "Presigned multipart part upload")
     return await get_storage().generate_presigned_upload_part(
         file_key,
         s3_upload_id,
@@ -460,6 +554,7 @@ async def generate_presigned_put(
     content_length: int | None = None,
     checksum_sha256: str | None = None,
 ) -> str:
+    _reject_unfenced_cas_mutation(file_key, "Generic presigned PUT")
     return await get_storage().generate_presigned_put(
         file_key,
         content_type,
@@ -520,6 +615,7 @@ async def get_object_info(file_key: str) -> dict[str, Any]:
 
 
 async def update_object_content_type(file_key: str, content_type: str) -> None:
+    _reject_unfenced_cas_mutation(file_key, "In-place metadata rewrite")
     await get_storage().update_object_content_type(file_key, content_type)
 
 
@@ -529,8 +625,30 @@ async def move_object(source_key: str, dest_key: str) -> None:
     async def _move() -> None:
         await storage.move_object(source_key, dest_key)
 
+    async def _prepare(ttl: int) -> _PreparedCasMutation:
+        # A move is two physical mutations.  If either endpoint participates in
+        # canonical CAS accounting, fence *both* requests with capabilities
+        # minted before dispatch; otherwise a stale owner could perform only the
+        # non-CAS half after a successor has recovered the journal.
+        copy_capability = await storage.presign_storage_copy_capability(
+            source_key, dest_key, ttl=ttl
+        )
+        delete_capability = await storage.presign_storage_delete_capability(source_key, ttl=ttl)
+
+        async def _capability_move() -> None:
+            await storage.execute_presigned_mutation(copy_capability)
+            await storage.execute_presigned_mutation(delete_capability)
+
+        return _PreparedCasMutation(
+            run=_capability_move,
+            external_authority_window_ms=max(
+                copy_capability.recovery_fence_ms,
+                delete_capability.recovery_fence_ms,
+            ),
+        )
+
     if _is_cas_key(source_key) or _is_cas_key(dest_key):
-        await _accounted_cas_complex_mutation(source_key, dest_key, _move)
+        await _accounted_cas_complex_mutation(source_key, dest_key, _prepare)
     else:
         await _move()
 
@@ -541,8 +659,19 @@ async def copy_object(source_key: str, dest_key: str) -> None:
     async def _copy() -> None:
         await storage.copy_object(source_key, dest_key)
 
+    async def _prepare(ttl: int) -> _PreparedCasMutation:
+        capability = await storage.presign_cas_copy_capability(source_key, dest_key, ttl=ttl)
+
+        async def _capability_copy() -> None:
+            await storage.execute_presigned_mutation(capability)
+
+        return _PreparedCasMutation(
+            run=_capability_copy,
+            external_authority_window_ms=capability.recovery_fence_ms,
+        )
+
     if _is_cas_key(dest_key):
-        await _accounted_cas_write(dest_key, _copy)
+        await _accounted_cas_write(dest_key, _prepare)
     else:
         await _copy()
 
@@ -553,8 +682,19 @@ async def delete_object(file_key: str) -> None:
     async def _delete() -> None:
         await storage.delete_object(file_key)
 
+    async def _prepare(ttl: int) -> _PreparedCasMutation:
+        capability = await storage.presign_cas_delete_capability(file_key, ttl=ttl)
+
+        async def _capability_delete() -> None:
+            await storage.execute_presigned_mutation(capability)
+
+        return _PreparedCasMutation(
+            run=_capability_delete,
+            external_authority_window_ms=capability.recovery_fence_ms,
+        )
+
     if _is_cas_key(file_key):
-        await _accounted_cas_delete(file_key, _delete)
+        await _accounted_cas_delete(file_key, _prepare)
     else:
         await _delete()
 
