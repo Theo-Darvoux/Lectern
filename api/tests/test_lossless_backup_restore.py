@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.installation import InstallationState
 from app.services.backup import (
     _RESTORE_MULTIPART_THRESHOLD,
     _TABLE_INSERT_ORDER,
@@ -43,6 +44,7 @@ def _make_zip(
     s3_entries: dict[str, bytes] | None = None,
     s3_metadata: dict | None = None,
     include_metadata_sidecar: bool = True,
+    omit_tables: set[str] | None = None,
 ) -> Path:
     dest = tmp_path / "backup.zip"
     s3_entries_dict = s3_entries or {}
@@ -68,7 +70,8 @@ def _make_zip(
         if include_metadata_sidecar and s3_metadata is not None:
             zf.writestr("s3_metadata.json", json.dumps(s3_metadata))
         for tbl in _TABLE_INSERT_ORDER:
-            zf.writestr(f"db/{tbl}.json", "[]")
+            if tbl not in (omit_tables or set()):
+                zf.writestr(f"db/{tbl}.json", "[]")
         for key, data in s3_entries_dict.items():
             zf.writestr(f"s3/{key}", data)
 
@@ -78,6 +81,28 @@ def _make_zip(
 async def _empty_gen(*_a, **_kw):
     if False:
         yield
+
+
+@pytest.mark.asyncio
+async def test_legacy_backup_restore_consumes_http_bootstrap(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """A pre-marker backup must never restore into remotely claimable setup state."""
+    zip_path = _make_zip(
+        tmp_path,
+        s3_metadata={},
+        omit_tables={"installation_state"},
+    )
+
+    with (
+        patch("app.services.backup.list_objects", side_effect=lambda p: _empty_gen()),
+        patch("app.services.backup.delete_object", new_callable=AsyncMock),
+        patch("app.services.backup.upload_file", new_callable=AsyncMock),
+    ):
+        await restore_from_zip_path(db_session, zip_path)
+
+    marker = await db_session.get(InstallationState, 1)
+    assert marker is not None
 
 
 # ── Metadata applied on upload ────────────────────────────────────────────────

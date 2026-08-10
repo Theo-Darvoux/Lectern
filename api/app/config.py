@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
@@ -19,6 +20,11 @@ class Settings(BaseSettings):
     # keep the values it was created with.
     cas_hkdf_salt: str = "lectern-cas-salt-v1"
     cas_hkdf_info: str = "lectern-cas-v1"
+
+    # One-time operator capability used only by the production first-run HTTP bootstrap.
+    # Existing initialized installations may leave this unset. Fresh production installs
+    # must configure a strong value before POST /api/auth/setup can succeed.
+    bootstrap_token: SecretStr | None = None
 
     # Auth toggles
     totp_enabled: bool = True
@@ -299,6 +305,13 @@ class Settings(BaseSettings):
                 "use a direct PostgreSQL connection or a session-pooled proxy."
             )
 
+        if self.bootstrap_token is not None:
+            bootstrap_value = self.bootstrap_token.get_secret_value()
+            if re.fullmatch(r"[0-9A-Fa-f]{64}", bootstrap_value) is None:
+                raise ValueError(
+                    "BOOTSTRAP_TOKEN must be exactly 64 hexadecimal characters (32 random bytes)."
+                )
+
         if self.is_dev:
             return self
 
@@ -306,6 +319,7 @@ class Settings(BaseSettings):
         _jwt_placeholders = {
             "change-this-to-a-secure-random-string-with-at-least-32-bytes",
         }
+
         if self.secret_key.get_secret_value() in _jwt_placeholders:
             raise ValueError(
                 "SECRET_KEY must be set to a secure value in production. "

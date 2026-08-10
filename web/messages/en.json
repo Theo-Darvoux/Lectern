@@ -46,6 +46,9 @@
   "Setup": {
     "title": "Welcome to {siteName}",
     "description": "Create the first administrator account to finish setting up this instance.",
+    "bootstrapTokenLabel": "Bootstrap token",
+    "bootstrapTokenPlaceholder": "Paste the one-time bootstrap token",
+    "bootstrapTokenHint": "Use the BOOTSTRAP_TOKEN configured by the deployment operator. It is never stored by the browser.",
     "emailLabel": "Email",
     "emailPlaceholder": "admin@example.com",
     "emailHint": "This becomes your sign-in identity and can't be changed later from the app.",

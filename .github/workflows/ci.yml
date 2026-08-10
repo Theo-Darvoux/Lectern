@@ -152,6 +152,7 @@ jobs:
           tests/integration/database/test_revert_concurrency.py
           tests/integration/database/test_upload_idempotency_concurrency.py
           tests/integration/database/test_cas_storage_process_fence.py
+          tests/integration/database/test_bootstrap_admin_invariants.py
 
   production-policy:
     runs-on: ubuntu-latest

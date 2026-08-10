@@ -285,7 +285,7 @@ class FakeRedis:
                 self.data.pop(keys[2], None)
                 return 1
 
-            if "auth_store_login_challenge_v2" in script:
+            if "auth_store_login_challenge_v3" in script:
 
                 def _text(value):
                     return value.decode() if isinstance(value, bytes) else value
@@ -297,12 +297,14 @@ class FakeRedis:
                 code = str(args[0])
                 email = str(args[1])
                 token = str(args[2])
+                generation = str(args[3])
                 self.data[keys[0]] = code.encode()
                 self.data[keys[2]] = email.encode()
                 self.data[keys[1]] = token.encode()
+                self.data[keys[3]] = generation.encode()
                 return 1
 
-            if "auth_verify_code_v1" in script:
+            if "auth_verify_code_v2" in script:
 
                 def _text(value):
                     return value.decode() if isinstance(value, bytes) else value
@@ -310,15 +312,17 @@ class FakeRedis:
                 stored = _text(self.data.get(keys[0]))
                 expected = str(args[0])
                 if not stored or stored != expected:
-                    return 0
+                    return [0]
+                generation = _text(self.data.get(keys[2])) or "0"
                 magic_token = _text(self.data.get(keys[1]))
                 self.data.pop(keys[0], None)
+                self.data.pop(keys[2], None)
                 if magic_token:
                     self.data.pop(f"auth:magic:{magic_token}", None)
                     self.data.pop(keys[1], None)
-                return 1
+                return [1, generation]
 
-            if "auth_verify_magic_v2" in script:
+            if "auth_verify_magic_v3" in script:
 
                 def _text(value):
                     return value.decode() if isinstance(value, bytes) else value
@@ -327,15 +331,17 @@ class FakeRedis:
                 expected_email = str(args[0])
                 token = str(args[1])
                 if not email or email != expected_email:
-                    return 0
+                    return [0]
                 current_ref = _text(self.data.get(keys[1]))
                 if current_ref != token:
                     self.data.pop(keys[0], None)
-                    return 0
+                    return [0]
+                generation = _text(self.data.get(keys[3])) or "0"
                 self.data.pop(keys[0], None)
                 self.data.pop(keys[1], None)
                 self.data.pop(keys[2], None)
-                return 1
+                self.data.pop(keys[3], None)
+                return [1, generation]
 
             if "holder_id" in script and "ZREMRANGEBYSCORE" in script:
                 import time

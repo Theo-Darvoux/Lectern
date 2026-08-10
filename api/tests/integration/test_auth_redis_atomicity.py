@@ -82,7 +82,8 @@ async def test_verification_code_has_exactly_one_concurrent_redeemer(
     email = "atomic-code@example.com"
     code = "A2B3C4D5"
     token = "paired-magic"
-    await auth_service.store_login_challenge(redis, email, code, token)
+    await auth_service.store_login_challenge(redis, email, code, token, auth_generation=7)
+    assert await redis.get(f"auth:challenge_gen:{email}") == "7"
 
     winners = await asyncio.gather(
         *(auth_service.verify_code(redis, email, code) for _ in range(32))
@@ -91,6 +92,7 @@ async def test_verification_code_has_exactly_one_concurrent_redeemer(
     assert winners.count(False) == 31
     assert await redis.get(f"auth:code:{email}") is None
     assert await redis.get(f"auth:magic:{token}") is None
+    assert await redis.get(f"auth:challenge_gen:{email}") is None
 
 
 async def test_magic_link_has_exactly_one_concurrent_redeemer(
@@ -98,7 +100,8 @@ async def test_magic_link_has_exactly_one_concurrent_redeemer(
 ) -> None:
     email = "atomic-magic@example.com"
     token = "single-use-magic-token"
-    await auth_service.store_login_challenge(redis, email, "H2J3K4M5", token)
+    await auth_service.store_login_challenge(redis, email, "H2J3K4M5", token, auth_generation=11)
+    assert await redis.get(f"auth:challenge_gen:{email}") == "11"
 
     results = await asyncio.gather(
         *(auth_service.verify_magic_token(redis, token) for _ in range(32))
@@ -106,6 +109,36 @@ async def test_magic_link_has_exactly_one_concurrent_redeemer(
     assert results.count(email) == 1
     assert results.count(None) == 31
     assert await redis.get(f"auth:magic:{token}") is None
+    assert await redis.get(f"auth:challenge_gen:{email}") is None
+
+
+async def test_login_challenge_consumers_return_the_issuance_generation(
+    redis: Redis,  # type: ignore[type-arg]
+) -> None:
+    code_email = "generation-code@example.com"
+    await auth_service.store_login_challenge(
+        redis, code_email, "A2B3C4D5", "generation-code-magic", auth_generation=23
+    )
+    assert await auth_service.consume_verification_code(redis, code_email, "A2B3C4D5") == 23
+
+    magic_email = "generation-magic@example.com"
+    magic_token = "generation-magic-token"
+    await auth_service.store_login_challenge(
+        redis, magic_email, "H2J3K4M5", magic_token, auth_generation=29
+    )
+    assert await auth_service.consume_magic_token(redis, magic_token) == (magic_email, 29)
+
+
+async def test_legacy_login_challenge_without_generation_decodes_as_zero(
+    redis: Redis,  # type: ignore[type-arg]
+) -> None:
+    email = "legacy-generation@example.com"
+    token = "legacy-generation-magic"
+    await redis.setex(f"auth:code:{email}", auth_service.CODE_TTL_SECONDS, "N2P3Q4R5")
+    await redis.setex(f"auth:magic:{token}", auth_service.CODE_TTL_SECONDS, email)
+    await redis.setex(f"auth:magic_ref:{email}", auth_service.CODE_TTL_SECONDS, token)
+
+    assert await auth_service.consume_magic_token(redis, token) == (email, 0)
 
 
 async def test_code_and_magic_link_are_one_shared_single_use_challenge(
@@ -114,7 +147,7 @@ async def test_code_and_magic_link_are_one_shared_single_use_challenge(
     email = "atomic-shared@example.com"
     code = "N2P3Q4R5"
     token = "shared-magic-token"
-    await auth_service.store_login_challenge(redis, email, code, token)
+    await auth_service.store_login_challenge(redis, email, code, token, auth_generation=0)
 
     code_result, magic_result = await asyncio.gather(
         auth_service.verify_code(redis, email, code),
@@ -125,8 +158,8 @@ async def test_code_and_magic_link_are_one_shared_single_use_challenge(
 
 async def test_new_challenge_invalidates_previous_magic_link(redis: Redis) -> None:  # type: ignore[type-arg]
     email = "supersede@example.com"
-    await auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a")
-    await auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b")
+    await auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a", auth_generation=0)
+    await auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b", auth_generation=0)
 
     assert await auth_service.verify_magic_token(redis, "magic-a") is None
     assert await auth_service.verify_magic_token(redis, "magic-b") == email
@@ -137,20 +170,23 @@ async def test_concurrent_challenge_issuance_leaves_one_coherent_generation(
 ) -> None:
     email = "issuance-race@example.com"
     await asyncio.gather(
-        auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a"),
-        auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b"),
+        auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a", auth_generation=3),
+        auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b", auth_generation=4),
     )
 
     current_magic = await redis.get(f"auth:magic_ref:{email}")
     current_code = await redis.get(f"auth:code:{email}")
+    current_generation = await redis.get(f"auth:challenge_gen:{email}")
     assert current_magic in {"magic-a", "magic-b"}
 
     if current_magic == "magic-a":
         assert current_code == "A2B3C4D5"
+        assert current_generation == "3"
         assert await redis.get("auth:magic:magic-a") == email
         assert await redis.get("auth:magic:magic-b") is None
     else:
         assert current_code == "H2J3K4M5"
+        assert current_generation == "4"
         assert await redis.get("auth:magic:magic-b") == email
         assert await redis.get("auth:magic:magic-a") is None
 
@@ -159,8 +195,8 @@ async def test_redeeming_current_code_invalidates_all_magic_generations(
     redis: Redis,  # type: ignore[type-arg]
 ) -> None:
     email = "code-supersession@example.com"
-    await auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a")
-    await auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b")
+    await auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a", auth_generation=0)
+    await auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b", auth_generation=0)
 
     assert await auth_service.verify_code(redis, email, "H2J3K4M5")
     assert await auth_service.verify_magic_token(redis, "magic-a") is None

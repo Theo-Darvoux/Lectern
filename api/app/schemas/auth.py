@@ -58,6 +58,9 @@ class SetupIn(BaseModel):
     email: str = Field(..., max_length=254)
     password: str = Field(..., min_length=8, max_length=128)
     display_name: str | None = Field(default=None, max_length=100)
+    bootstrap_token: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9A-Fa-f]{64}$"
+    )
 
     @field_validator("email")
     @classmethod

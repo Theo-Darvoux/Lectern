@@ -21,6 +21,7 @@ def create_access_token(
     expire_days: int | None = None,
     *,
     session_id: str | None = None,
+    auth_generation: int = 0,
 ) -> tuple[str, str]:
     jti = str(uuid4())
     days = expire_days if expire_days is not None else settings.jwt_access_token_expire_days
@@ -32,6 +33,7 @@ def create_access_token(
         "jti": jti,
         "exp": expire,
         "type": "access",
+        "gen": auth_generation,
     }
     payload["sid"] = session_id or str(uuid4())
     token = jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
@@ -43,6 +45,7 @@ def create_refresh_token(
     expire_days: int | None = None,
     *,
     session_id: str | None = None,
+    auth_generation: int = 0,
 ) -> str:
     jti = str(uuid4())
     days = expire_days if expire_days is not None else settings.jwt_refresh_token_expire_days
@@ -53,6 +56,7 @@ def create_refresh_token(
         "exp": expire,
         "type": "refresh",
         "sid": session_id or str(uuid4()),
+        "gen": auth_generation,
     }
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 
@@ -62,6 +66,7 @@ def create_browser_read_token(
     expire_days: int | None = None,
     *,
     session_id: str | None = None,
+    auth_generation: int = 0,
 ) -> str:
     """Issue a credential accepted only by explicitly read-only browser routes."""
     jti = str(uuid4())
@@ -73,6 +78,7 @@ def create_browser_read_token(
         "exp": expire,
         "type": "browser_read",
         "sid": session_id or str(uuid4()),
+        "gen": auth_generation,
     }
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 

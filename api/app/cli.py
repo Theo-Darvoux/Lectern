@@ -121,7 +121,20 @@ async def _restore_backup_offline(path: Path) -> None:
 def seed(
     email: str = typer.Option(..., help="Email for the first Bureau account"),
     role: str = typer.Option("bureau", help="Role to assign"),
+    confirm_offline: bool = typer.Option(
+        False,
+        "--confirm-offline",
+        help="Confirm that every API and worker instance is stopped (required in production).",
+    ),
 ) -> None:
+    from app.config import settings
+
+    if settings.environment == "production" and not confirm_offline:
+        typer.echo(
+            "Refusing production seed while services may be live; stop API/workers "
+            "and pass --confirm-offline."
+        )
+        raise typer.Exit(code=2)
     asyncio.run(_seed(email, role))
 
 
@@ -132,11 +145,25 @@ async def _seed(email: str, role: str) -> None:
     from app.models.user import User, UserRole
 
     async with async_session_factory() as session:
-        user_res = await session.execute(select(User).where(User.email == email))
-        user = user_res.scalar_one_or_none()
-
         role_enum = UserRole(role)
+        from app.services.auth import (
+            acquire_setup_lock,
+            ensure_admin_removal_safe,
+            mark_installation_bootstrapped,
+        )
+
+        # Seed is an offline/admin tool, but serialize it with the same authority
+        # boundary so it cannot violate the application's role invariant when used.
+        await acquire_setup_lock(session)
+        user = await session.scalar(
+            select(User)
+            .where(User.email == email)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if user is not None:
+            if user.is_admin and role_enum not in (UserRole.BUREAU, UserRole.VIEUX):
+                await ensure_admin_removal_safe(session, user.id)
             user.role = role_enum
             typer.echo(f"Updated {email} to role '{role}'")
         else:
@@ -144,8 +171,58 @@ async def _seed(email: str, role: str) -> None:
             session.add(user)
             typer.echo(f"Created user {email} with role '{role}'")
 
+        if role_enum in (UserRole.BUREAU, UserRole.VIEUX):
+            await mark_installation_bootstrapped(session)
+
         await session.commit()
         typer.echo("Seed complete.")
+
+
+@app.command(name="recover-admin-offline")
+def recover_admin_offline(
+    email: str = typer.Option(..., help="Email of the administrator to create or recover"),
+    password: str = typer.Option(
+        ...,
+        prompt=True,
+        hide_input=True,
+        confirmation_prompt=True,
+        help="Recovery password (at least 8 characters)",
+    ),
+    confirm_offline: bool = typer.Option(
+        False,
+        "--confirm-offline",
+        help="Confirm that every API and worker instance is stopped.",
+    ),
+) -> None:
+    """Recover administrative authority without reopening HTTP bootstrap."""
+    if not confirm_offline:
+        typer.echo("Refusing admin recovery: stop every API/worker and pass --confirm-offline.")
+        raise typer.Exit(code=2)
+    if len(password) < 8 or len(password) > 128:
+        typer.echo("Recovery password must contain between 8 and 128 characters.")
+        raise typer.Exit(code=2)
+    asyncio.run(_recover_admin_offline(email, password))
+
+
+async def _recover_admin_offline(email: str, password: str) -> None:
+    from app.core.database.database import async_session_factory
+    from app.services.auth import recover_admin_account
+
+    normalized = email.strip().lower()
+    if "@" not in normalized or "+" in normalized or len(normalized) > 254:
+        typer.echo("Invalid recovery email address.")
+        raise typer.Exit(code=2)
+
+    async with async_session_factory() as session:
+        user, created = await recover_admin_account(session, normalized, password)
+        await session.commit()
+        action = "Created" if created else "Recovered"
+        typer.echo(f"{action} recovery administrator {normalized}")
+        typer.echo(
+            "Admin recovery complete. HTTP bootstrap remains permanently consumed and "
+            "all credentials issued before recovery for this account are invalid. "
+            "If classic authentication is disabled, use an enabled login method for this account."
+        )
 
 
 @app.command()
@@ -682,14 +759,30 @@ def magic_link(
 
 async def _magic_link(email: str) -> None:
     from app.config import settings
+    from app.core.database.database import async_session_factory
     from app.core.database.redis import redis_client
-    from app.services.auth import generate_code, generate_magic_token, store_login_challenge
+    from app.services.auth import (
+        generate_code,
+        generate_magic_token,
+        login_challenge_auth_generation,
+        store_login_challenge,
+    )
+
+    normalized_email = email.strip().lower()
+    async with async_session_factory() as session:
+        auth_generation = await login_challenge_auth_generation(session, normalized_email)
 
     token = generate_magic_token()
-    await store_login_challenge(redis_client, email, generate_code(), token)
+    await store_login_challenge(
+        redis_client,
+        normalized_email,
+        generate_code(),
+        token,
+        auth_generation=auth_generation,
+    )
 
     link = f"{settings.frontend_url.rstrip('/')}/login/verify#token={token}"
-    typer.echo(f"Magic link for {email}:")
+    typer.echo(f"Magic link for {normalized_email}:")
     typer.echo(link)
 
 

@@ -11,7 +11,11 @@ from app.core.database.database import get_db
 from app.core.database.redis import get_redis
 from app.core.security.security import BROWSER_READ_COOKIE, decode_token
 from app.models.user import User, UserRole
-from app.services.auth import is_session_revoked, is_token_blacklisted
+from app.services.auth import (
+    is_session_revoked,
+    is_token_blacklisted,
+    token_matches_auth_generation,
+)
 from app.services.user import get_user_by_id
 
 security = HTTPBearer(auto_error=False)
@@ -47,6 +51,8 @@ async def _validate_token_payload(
     user = await get_user_by_id(db, user_id)
     if not user:
         raise UnauthorizedError("User not found")
+    if not token_matches_auth_generation(payload, user):
+        raise UnauthorizedError("Credentials require reauthentication")
     if user.role == UserRole.PENDING:
         raise ForbiddenError("Account pending admin approval", code="USER_PENDING")
     return user

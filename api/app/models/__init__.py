@@ -8,6 +8,7 @@ from app.models.directory import Directory
 from app.models.download_audit import DownloadAudit
 from app.models.featured import FeaturedItem
 from app.models.flag import Flag
+from app.models.installation import InstallationState
 from app.models.material import Material, MaterialVersion
 from app.models.notification import Notification
 from app.models.outbox import OutboxJob
@@ -29,6 +30,7 @@ __all__ = [
     "DownloadAudit",
     "FeaturedItem",
     "Flag",
+    "InstallationState",
     "Material",
     "MaterialVersion",
     "Notification",

@@ -5,7 +5,7 @@ Covers:
   - download_file_raw called (not download_file) so gzip bytes are preserved
   - get_object_headers called once per S3 key
   - branding/ prefix included in listing
-  - All 24 DB tables present in ZIP
+  - All application DB tables present in ZIP
   - Table dump failure is skipped gracefully (no crash)
   - Concurrent download semaphore doesn't starve
   - ZIP is valid and allowZip64=True
@@ -216,7 +216,7 @@ async def test_all_four_prefixes_are_listed(db_session: AsyncSession, tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_all_24_tables_in_zip(db_session: AsyncSession, tmp_path: Path) -> None:
+async def test_all_application_tables_in_zip(db_session: AsyncSession, tmp_path: Path) -> None:
     """ZIP must contain a db/{table}.json entry for every table in _TABLE_INSERT_ORDER."""
     dest = tmp_path / "b.zip"
     with (
@@ -238,6 +238,7 @@ def test_table_order_covers_every_application_table() -> None:
     from app.models import Base
 
     expected = {
+        "installation_state",
         "users",
         "tags",
         "allowed_domains",
@@ -268,7 +269,7 @@ def test_table_order_covers_every_application_table() -> None:
     }
     assert set(_TABLE_INSERT_ORDER) == expected
     assert set(_TABLE_INSERT_ORDER) == set(Base.metadata.tables)
-    assert len(_TABLE_INSERT_ORDER) == 27  # no duplicates
+    assert len(_TABLE_INSERT_ORDER) == 28  # no duplicates
 
 
 def test_table_order_no_duplicates() -> None:

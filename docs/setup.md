@@ -120,7 +120,16 @@ What production mode changes relative to the dev defaults:
 - Nginx exposes port `9080` (defined in `compose.prod.yaml`; put a reverse proxy or load balancer in front)
 - No local storage container; `STORAGE_BACKEND` points at Cloudflare R2 or a self-hosted S3 backend
 
-After first deploy, there are no commands to run. The `api` container applies database migrations automatically on startup (see [Database migrations](#database-migrations) below), and your first account is created through the **first-run setup screen**: open the site in a browser and it will prompt you to create the initial administrator account. That screen disappears once an admin exists.
+After first deploy, the `api` container applies database migrations automatically on startup (see [Database migrations](#database-migrations) below). Before exposing a fresh production instance, generate a one-time operator bootstrap capability and place it in the runtime environment:
+
+```bash
+openssl rand -hex 32
+# store the 64-character hexadecimal result as BOOTSTRAP_TOKEN in /secure/runtime/production.env
+```
+
+Open the site in a browser, enter that same capability in the **first-run setup screen**, and create the initial administrator account. The capability is checked server-side and the database records a one-way installation marker in the same transaction as the administrator creation. After setup commits, HTTP bootstrap never reopens even if administrators are later changed, and `BOOTSTRAP_TOKEN` may be removed from the runtime environment.
+
+If administrative authority ever needs offline recovery, stop every API/worker instance and run `python -m app.cli recover-admin-offline --confirm-offline --email you@example.com`; this restores an administrator without clearing the one-way bootstrap marker.
 
 ### Database migrations
 

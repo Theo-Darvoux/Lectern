@@ -85,6 +85,7 @@ def _set_browser_read_cookie(
     expire_days: int | None = None,
     *,
     session_id: str | None = None,
+    auth_generation: int = 0,
 ) -> None:
     """Set the browser-native credential used only by read-only API routes."""
     days = expire_days if expire_days is not None else settings.jwt_access_token_expire_days
@@ -94,6 +95,7 @@ def _set_browser_read_cookie(
             user_id,
             expire_days=days,
             session_id=session_id,
+            auth_generation=auth_generation,
         ),
         httponly=True,
         secure=True,
@@ -152,7 +154,12 @@ def _login_response(user: User, response: Response, *, is_new: bool) -> TokenRes
         session_id=session_id,
     )
     _set_refresh_cookie(response, refresh_token)
-    _set_browser_read_cookie(response, str(user.id), session_id=session_id)
+    _set_browser_read_cookie(
+        response,
+        str(user.id),
+        session_id=session_id,
+        auth_generation=user.auth_generation,
+    )
     return TokenResponse(
         access_token=access_token,
         user=UserBrief(
@@ -168,19 +175,14 @@ def _login_response(user: User, response: Response, *, is_new: bool) -> TokenRes
     )
 
 
-_NEEDS_SETUP_CACHE: bool | None = None
-
-
 @router.get("/methods")
 async def get_auth_methods(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
-    global _NEEDS_SETUP_CACHE
-    if _NEEDS_SETUP_CACHE is None or _NEEDS_SETUP_CACHE is True:
-        _NEEDS_SETUP_CACHE = not await auth_service.admin_exists(db)
-
+    bootstrapped = await auth_service.installation_bootstrapped(db)
     return {
-        "needs_setup": _NEEDS_SETUP_CACHE,
+        "needs_setup": not bootstrapped,
+        "bootstrap_token_required": (not bootstrapped and auth_service.bootstrap_token_required()),
         "totp_enabled": settings.totp_enabled,
         "google_enabled": settings.google_oauth_enabled,
         "google_client_id": settings.google_client_id,
@@ -242,6 +244,7 @@ async def guest_session(
         str(guest.id),
         GUEST_SESSION_EXPIRE_DAYS,
         session_id=session_id,
+        auth_generation=guest.auth_generation,
     )
     return TokenResponse(
         access_token=access_token,
@@ -284,7 +287,14 @@ async def request_code(
 
     code = auth_service.generate_code()
     magic_token = auth_service.generate_magic_token()
-    await auth_service.store_login_challenge(redis, email, code, magic_token)
+    auth_generation = await auth_service.login_challenge_auth_generation(db, email)
+    await auth_service.store_login_challenge(
+        redis,
+        email,
+        code,
+        magic_token,
+        auth_generation=auth_generation,
+    )
 
     base_url = settings.frontend_url.rstrip("/")
     magic_link = f"{base_url}/login/verify#token={magic_token}"
@@ -314,7 +324,14 @@ async def verify_code(
             "Too many verification attempts. Please wait 10 minutes before trying again."
         )
 
-    if not await auth_service.verify_code(redis, email, data.code):
+    current_generation = await auth_service.login_challenge_auth_generation(db, email)
+    challenge_generation = await auth_service.consume_verification_code(
+        redis,
+        email,
+        data.code,
+        dev_auth_generation=current_generation,
+    )
+    if challenge_generation is None:
         await auth_service.increment_verify_rate_limit(redis, email)
         raise BadRequestError("Invalid or expired verification code")
 
@@ -326,6 +343,8 @@ async def verify_code(
     except ValueError:
         auto_approve = False
     user, is_new = await auth_service.get_or_create_user(db, email, auto_approve=auto_approve)
+    if user.auth_generation != challenge_generation:
+        raise BadRequestError("Invalid or expired verification code")
     if is_new and user.role == UserRole.PENDING:
         await notify_admins_pending_user(db, user)
     return _login_response(user, response, is_new=is_new)
@@ -340,9 +359,10 @@ async def verify_magic_link(
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     response: Response,
 ) -> TokenResponse:
-    email = await auth_service.verify_magic_token(redis, data.token)
-    if not email:
+    consumed = await auth_service.consume_magic_token(redis, data.token)
+    if consumed is None:
         raise BadRequestError("Invalid or expired magic link")
+    email, challenge_generation = consumed
 
     await auth_service.reset_verify_rate_limit(redis, email)
     try:
@@ -350,6 +370,8 @@ async def verify_magic_link(
     except ValueError:
         auto_approve = False
     user, is_new = await auth_service.get_or_create_user(db, email, auto_approve=auto_approve)
+    if user.auth_generation != challenge_generation:
+        raise BadRequestError("Invalid or expired magic link")
     if is_new and user.role == UserRole.PENDING:
         await notify_admins_pending_user(db, user)
     return _login_response(user, response, is_new=is_new)
@@ -451,18 +473,19 @@ async def setup_first_admin(
 ) -> TokenResponse:
     """First-run bootstrap: create the initial admin account.
 
-    Only works while no admin exists — once one does, this is permanently a 409.
-    This replaces the `app.cli seed` command for fresh deployments.
+    Only works before the durable installation bootstrap marker is consumed.
+    Production additionally requires the out-of-band BOOTSTRAP_TOKEN capability.
     """
-    # Serialize concurrent bootstrap attempts so only one admin can ever be created.
+    # Serialize the irreversible bootstrap transition with every final-admin mutation.
     await auth_service.acquire_setup_lock(db)
-    if await auth_service.admin_exists(db):
+    if await auth_service.installation_bootstrapped(db):
         raise ConflictError("Setup has already been completed")
 
+    auth_service.verify_bootstrap_token(data.bootstrap_token)
     user = await auth_service.create_first_admin(db, data.email, data.password, data.display_name)
-    await db.flush()
+    await auth_service.mark_installation_bootstrapped(db)
 
-    logger.info("First admin account created via setup flow: %s", user.email)
+    logger.info("First admin account created via authenticated setup flow: %s", user.email)
     return _login_response(user, response, is_new=True)
 
 
@@ -497,6 +520,8 @@ async def refresh_token(
     user = await get_user_by_id(db, str(user_id))
     if not user:
         raise UnauthorizedError("User not found")
+    if not auth_service.token_matches_auth_generation(payload, user):
+        raise UnauthorizedError("Credentials require reauthentication")
     if user.role == UserRole.GUEST and not settings.guest_access_enabled:
         raise UnauthorizedError("Guest access is disabled")
 
@@ -533,6 +558,7 @@ async def refresh_token(
             str(user.id),
             GUEST_SESSION_EXPIRE_DAYS,
             session_id=successor_session_id,
+            auth_generation=user.auth_generation,
         )
     else:
         new_access_token, new_refresh_token, _ = auth_service.issue_tokens(
@@ -544,6 +570,7 @@ async def refresh_token(
             response,
             str(user.id),
             session_id=successor_session_id,
+            auth_generation=user.auth_generation,
         )
 
     return RefreshResponse(

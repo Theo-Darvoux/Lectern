@@ -37,6 +37,16 @@ def _production_settings(**overrides: object) -> Settings:
         ("s3_access_key", "minioadmin", "development credentials are forbidden"),
         ("s3_secret_key", "minioadmin", "development credentials are forbidden"),
         ("webhook_secret", "short", "WEBHOOK_SECRET must contain at least 32 bytes"),
+        (
+            "bootstrap_token",
+            "short",
+            "BOOTSTRAP_TOKEN must be exactly 64 hexadecimal characters",
+        ),
+        (
+            "bootstrap_token",
+            "z" * 64,
+            "BOOTSTRAP_TOKEN must be exactly 64 hexadecimal characters",
+        ),
     ],
 )
 def test_production_rejects_weak_or_development_secrets(
@@ -46,6 +56,11 @@ def test_production_rejects_weak_or_development_secrets(
 ) -> None:
     with pytest.raises(ValidationError, match=message):
         _production_settings(**{field: value})
+
+
+def test_bootstrap_token_format_is_enforced_outside_production() -> None:
+    with pytest.raises(ValidationError, match="exactly 64 hexadecimal characters"):
+        Settings(_env_file=None, environment="development", bootstrap_token="z" * 64)
 
 
 def test_production_worker_delivery_requires_strong_hmac_secret() -> None:

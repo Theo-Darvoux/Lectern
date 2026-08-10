@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def test_health(client: AsyncClient) -> None:
@@ -71,7 +72,7 @@ async def test_verify_code_rate_limit(client: AsyncClient, mock_redis: AsyncMock
 
 
 async def test_setup_creates_first_admin(client: AsyncClient) -> None:
-    # Fresh instance: no admin exists yet, so setup is allowed.
+    # Fresh non-production instance: durable installation marker is absent, so setup is allowed.
     methods = await client.get("/api/auth/methods")
     assert methods.status_code == 200
     assert methods.json()["needs_setup"] is True
@@ -90,7 +91,7 @@ async def test_setup_creates_first_admin(client: AsyncClient) -> None:
     assert data["user"]["onboarded"] is True
     assert data["access_token"]
 
-    # Once an admin exists, the instance no longer advertises setup.
+    # Once the installation marker is committed, setup is permanently consumed.
     methods = await client.get("/api/auth/methods")
     assert methods.json()["needs_setup"] is False
 
@@ -116,3 +117,86 @@ async def test_setup_rejects_short_password(client: AsyncClient) -> None:
         json={"email": "admin@example.com", "password": "short"},
     )
     assert response.status_code == 422
+
+
+async def test_production_setup_requires_configured_operator_token(client: AsyncClient) -> None:
+    from app.config import settings
+
+    original_env = settings.environment
+    original_token = settings.bootstrap_token
+    settings.environment = "production"
+    settings.bootstrap_token = None
+    try:
+        methods = await client.get("/api/auth/methods")
+        assert methods.status_code == 200
+        assert methods.json()["needs_setup"] is True
+        assert methods.json()["bootstrap_token_required"] is True
+
+        response = await client.post(
+            "/api/auth/setup",
+            json={
+                "email": "admin@example.com",
+                "password": "supersecret123",
+                "bootstrap_token": "a" * 64,
+            },
+        )
+        assert response.status_code == 503
+        assert response.json()["error_code"] == "BOOTSTRAP_TOKEN_NOT_CONFIGURED"
+    finally:
+        settings.environment = original_env
+        settings.bootstrap_token = original_token
+
+
+async def test_production_setup_token_is_one_time_and_not_reopened_by_admin_loss(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from pydantic import SecretStr
+    from sqlalchemy import delete
+
+    from app.config import settings
+    from app.models.user import User
+
+    original_env = settings.environment
+    original_token = settings.bootstrap_token
+    settings.environment = "production"
+    settings.bootstrap_token = SecretStr("b" * 64)
+    try:
+        wrong = await client.post(
+            "/api/auth/setup",
+            json={
+                "email": "admin@example.com",
+                "password": "supersecret123",
+                "bootstrap_token": "a" * 64,
+            },
+        )
+        assert wrong.status_code == 401
+
+        created = await client.post(
+            "/api/auth/setup",
+            json={
+                "email": "admin@example.com",
+                "password": "supersecret123",
+                "bootstrap_token": "b" * 64,
+            },
+        )
+        assert created.status_code == 200
+
+        # Simulate catastrophic/operator-level removal outside normal protected APIs.
+        # The irreversible installation marker must still prevent HTTP re-bootstrap.
+        await db_session.execute(delete(User))
+        await db_session.commit()
+
+        methods = await client.get("/api/auth/methods")
+        assert methods.json()["needs_setup"] is False
+        replay = await client.post(
+            "/api/auth/setup",
+            json={
+                "email": "intruder@example.com",
+                "password": "supersecret123",
+                "bootstrap_token": "b" * 64,
+            },
+        )
+        assert replay.status_code == 409
+    finally:
+        settings.environment = original_env
+        settings.bootstrap_token = original_token

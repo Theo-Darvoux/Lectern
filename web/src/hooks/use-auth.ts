@@ -180,14 +180,24 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
-    const setup = useCallback(async (email: string, password: string, displayName?: string) => {
+    const setup = useCallback(async (
+        email: string,
+        password: string,
+        displayName?: string,
+        bootstrapToken?: string,
+    ) => {
         const data = await apiFetch<{
             access_token: string;
             user: UserBrief;
             is_new_user: boolean;
         }>("/auth/setup", {
             method: "POST",
-            body: JSON.stringify({ email, password, display_name: displayName || null }),
+            body: JSON.stringify({
+                email,
+                password,
+                display_name: displayName || null,
+                bootstrap_token: bootstrapToken || null,
+            }),
             skipAuth: true,
         });
 

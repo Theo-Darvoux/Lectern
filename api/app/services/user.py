@@ -434,6 +434,13 @@ async def export_user_data(db: AsyncSession, user: User) -> dict[str, typing.Any
 async def hard_delete_user(db: AsyncSession, user: User) -> None:
     from sqlalchemy import delete
 
+    # Always enter the authority boundary before deleting. The caller may hold a
+    # stale ORM object whose role changed after it was loaded; the service re-reads
+    # authoritative role/deletion state under the shared lock and a row lock.
+    from app.services.auth import ensure_admin_removal_safe
+
+    await ensure_admin_removal_safe(db, user.id)
+
     # Durably release storage/CAS/quota resources only after the user deletion
     # commits. OAuth avatar URLs are external and never object-store keys.
     uploads = list((await db.scalars(select(Upload).where(Upload.user_id == user.id))).all())

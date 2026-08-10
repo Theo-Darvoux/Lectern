@@ -46,6 +46,9 @@
   "Setup": {
     "title": "Bienvenue sur {siteName}",
     "description": "Créez le premier compte administrateur pour terminer la configuration de cette instance.",
+    "bootstrapTokenLabel": "Jeton de configuration",
+    "bootstrapTokenPlaceholder": "Collez le jeton de configuration à usage unique",
+    "bootstrapTokenHint": "Utilisez le BOOTSTRAP_TOKEN configuré par l’opérateur du déploiement. Il n’est jamais stocké par le navigateur.",
     "emailLabel": "E-mail",
     "emailPlaceholder": "admin@exemple.com",
     "emailHint": "Cette adresse devient votre identifiant de connexion et ne pourra pas être modifiée depuis l'application.",

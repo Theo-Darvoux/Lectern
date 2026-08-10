@@ -255,8 +255,10 @@ export interface PublicConfig {
     /** Disable the in-app guided tours platform-wide (TUTORIALS_ENABLED). */
     tutorials_enabled: boolean;
     max_contribution_note_length: number;
-    /** True on a fresh instance with no admin account — drives the first-run setup flow. */
+    /** True only until the durable one-way installation bootstrap marker is committed. */
     needs_setup: boolean;
+    /** Whether the setup form must collect the out-of-band operator capability. */
+    bootstrap_token_required: boolean;
 }
 
 interface ConfigState {

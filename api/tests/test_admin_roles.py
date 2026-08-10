@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User, UserRole
@@ -227,3 +228,95 @@ async def test_old_admin_directories_gone(client: AsyncClient, db_session: Async
     admin = await _make_user(db_session, UserRole.BUREAU)
     r = await client.get("/api/admin/directories", headers=_auth(admin))
     assert r.status_code == 404
+
+
+async def test_admin_cannot_demote_final_administrator(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    admin = User(
+        email="last-admin@example.com",
+        display_name="Last Admin",
+        role=UserRole.BUREAU,
+        onboarded=True,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/api/admin/users/{admin.id}/role?role=student",
+        headers=_auth(admin),
+    )
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "LAST_ADMIN_REQUIRED"
+
+    await db_session.refresh(admin)
+    assert admin.role == UserRole.BUREAU
+
+
+@pytest.mark.parametrize("operation", ["promote", "delete", "approve", "reject"])
+async def test_admin_user_mutations_revalidate_stale_actor(
+    db_session: AsyncSession, operation: str
+) -> None:
+    """A dependency-authorized admin must be revalidated inside the authority lock."""
+    from app.core.common.exceptions import ForbiddenError
+    from app.routers.admin import (
+        admin_approve_user,
+        admin_delete_user,
+        admin_reject_user,
+        admin_update_role,
+    )
+
+    actor = await _make_user(db_session, UserRole.BUREAU)
+    target_role = UserRole.PENDING if operation in {"approve", "reject"} else UserRole.STUDENT
+    target = await _make_user(db_session, target_role)
+
+    # Emulate another transaction revoking the actor after the FastAPI dependency
+    # admitted the request, while keeping this session's ORM actor intentionally stale.
+    await db_session.execute(
+        update(User).where(User.id == actor.id).values(role=UserRole.STUDENT),
+        execution_options={"synchronize_session": False},
+    )
+    assert actor.role == UserRole.BUREAU
+
+    with pytest.raises(ForbiddenError, match="authority was revoked"):
+        if operation == "promote":
+            await admin_update_role(
+                user_id=target.id,
+                _user=actor,
+                db=db_session,
+                role=UserRole.BUREAU.value,
+            )
+        elif operation == "delete":
+            await admin_delete_user(user_id=target.id, _user=actor, db=db_session)
+        elif operation == "approve":
+            await admin_approve_user(user_id=target.id, _user=actor, db=db_session)
+        else:
+            await admin_reject_user(user_id=target.id, _user=actor, db=db_session, reason=None)
+
+    current_target = await db_session.get(User, target.id)
+    assert current_target is not None
+    assert current_target.role == target_role
+
+
+async def test_admin_reject_rechecks_pending_state_after_authority_lock(
+    db_session: AsyncSession,
+) -> None:
+    """A stale PENDING ORM object cannot delete an account approved in the meantime."""
+    from app.core.common.exceptions import BadRequestError
+    from app.routers.admin import admin_reject_user
+
+    actor = await _make_user(db_session, UserRole.BUREAU)
+    target = await _make_user(db_session, UserRole.PENDING)
+
+    await db_session.execute(
+        update(User).where(User.id == target.id).values(role=UserRole.STUDENT),
+        execution_options={"synchronize_session": False},
+    )
+    assert target.role == UserRole.PENDING
+
+    with pytest.raises(BadRequestError, match="not pending approval"):
+        await admin_reject_user(user_id=target.id, _user=actor, db=db_session, reason=None)
+
+    current_target = await db_session.get(User, target.id)
+    assert current_target is not None
+    assert current_target.role == UserRole.STUDENT

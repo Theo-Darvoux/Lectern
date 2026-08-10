@@ -59,6 +59,7 @@ BACKUP_FILENAME_PREFIX = "backup_"
 #   • junction/audit tables that depend on two parents come last among those parents
 _TABLE_INSERT_ORDER = [
     # ── no FK dependencies ───────────────────────────────────────────────────
+    "installation_state",
     "users",
     "tags",
     "allowed_domains",
@@ -215,11 +216,22 @@ def _validate_backup_archive(
                     total_database_bytes += table_info.file_size
                     if total_database_bytes > _BACKUP_DATABASE_MAX_BYTES:
                         raise ValueError("Backup database snapshot exceeds its size limit")
-                rows = (
-                    json.loads(_read_zip_entry_bounded(zf, table_info, _BACKUP_TABLE_MAX_BYTES))
-                    if table_info is not None
-                    else []
-                )
+                if table_info is not None:
+                    rows = json.loads(
+                        _read_zip_entry_bounded(zf, table_info, _BACKUP_TABLE_MAX_BYTES)
+                    )
+                elif table == "installation_state":
+                    # Legacy backups predate the irreversible bootstrap marker.
+                    # Fail closed on restore: never turn an operator-controlled
+                    # restore into a remotely claimable fresh installation.
+                    rows = [
+                        {
+                            "id": 1,
+                            "bootstrapped_at": datetime.now(UTC).isoformat(),
+                        }
+                    ]
+                else:
+                    rows = []
                 if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
                     raise ValueError(f"Backup table {table!r} must contain a JSON row array")
                 if len(rows) > _BACKUP_MAX_TABLE_ROWS:

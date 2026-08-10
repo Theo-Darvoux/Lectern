@@ -21,7 +21,11 @@ from app.models.auth_config import AllowedDomain
 from app.models.dead_letter import DeadLetterJob
 from app.models.user import User, UserRole
 from app.schemas.common import DetailedHealthResponse, ServiceStatus
-from app.services.auth import get_full_auth_config
+from app.services.auth import (
+    ensure_admin_removal_safe,
+    get_full_auth_config,
+    lock_admin_authority_change,
+)
 from app.services.notification import notify_user
 from app.services.user import hard_delete_user
 
@@ -110,9 +114,6 @@ async def admin_update_role(
     db: Annotated[AsyncSession, Depends(get_db)],
     role: str = Query(...),
 ) -> dict:  # type: ignore[type-arg]
-    target = await db.scalar(select(User).where(User.id == user_id))
-    if not target:
-        raise NotFoundError("User not found")
     try:
         new_role = UserRole(role)
     except ValueError:
@@ -121,6 +122,20 @@ async def admin_update_role(
         raise BadRequestError(
             "Cannot manually assign PENDING role; use the approve/reject endpoints"
         )
+
+    # Dependency authorization can become stale while this request waits for the
+    # shared authority lock. Revalidate the actor *inside* that boundary, then
+    # authoritatively load the target before applying any role transition.
+    _, target = await lock_admin_authority_change(
+        db,
+        _user.id,
+        user_id,
+        expected_auth_generation=_user.auth_generation,
+    )
+    if not target:
+        raise NotFoundError("User not found")
+    if target.is_admin and new_role not in ADMIN_ROLES:
+        await ensure_admin_removal_safe(db, target.id)
     target.role = new_role
     await db.flush()
     return {"status": "ok", "role": new_role.value}
@@ -132,7 +147,12 @@ async def admin_delete_user(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
-    target = await db.scalar(select(User).where(User.id == user_id))
+    _, target = await lock_admin_authority_change(
+        db,
+        _user.id,
+        user_id,
+        expected_auth_generation=_user.auth_generation,
+    )
     if not target:
         raise NotFoundError("User not found")
     await hard_delete_user(db, target)
@@ -146,7 +166,12 @@ async def admin_approve_user(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
     """Approve a PENDING user — sets their role to STUDENT and notifies them."""
-    target = await db.scalar(select(User).where(User.id == user_id))
+    _, target = await lock_admin_authority_change(
+        db,
+        _user.id,
+        user_id,
+        expected_auth_generation=_user.auth_generation,
+    )
     if not target:
         raise NotFoundError("User not found")
     if target.role != UserRole.PENDING:
@@ -174,7 +199,15 @@ async def admin_reject_user(
     reason: Annotated[str | None, Query(max_length=500)] = None,
 ) -> dict:  # type: ignore[type-arg]
     """Reject and hard-delete a PENDING user."""
-    target = await db.scalar(select(User).where(User.id == user_id))
+    # Rejection is a PENDING-only state transition. Read that state only after
+    # entering the authority boundary so a concurrent approval/promotion cannot
+    # turn this into deletion of a no-longer-pending account.
+    _, target = await lock_admin_authority_change(
+        db,
+        _user.id,
+        user_id,
+        expected_auth_generation=_user.auth_generation,
+    )
     if not target:
         raise NotFoundError("User not found")
     if target.role != UserRole.PENDING:
