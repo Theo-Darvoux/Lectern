@@ -30,8 +30,7 @@ function PRRowSkeleton() {
 
 function PRRow({ pr }: { pr: PullRequestOut }) {
     const t = useTranslations("Home");
-    const authorLabel =
-        pr.author?.display_name ?? pr.author?.email ?? t("unknownAuthor");
+    const authorLabel = pr.author?.display_name ?? t("unknownAuthor");
 
     const timeAgo = formatDistanceToNow(new Date(pr.created_at), {
         addSuffix: true,

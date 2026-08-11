@@ -15,17 +15,33 @@ function OwnProfileContent() {
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [isUploading, setIsUploading] = useState(false);
 
+    const syncAuthUserFromProfile = useCallback((nextProfile: UserProfile) => {
+        const currentUser = useAuthStore.getState().user;
+        if (!currentUser) return;
+
+        // Profile DTOs intentionally omit account workflow state. Preserve the
+        // authenticated UserBrief fields while refreshing shared profile data.
+        setUser({
+            ...currentUser,
+            id: nextProfile.id,
+            email: nextProfile.email ?? currentUser.email,
+            display_name: nextProfile.display_name,
+            avatar_url: nextProfile.avatar_url,
+            role: nextProfile.role,
+        });
+    }, [setUser]);
+
     const fetchProfile = useCallback(async () => {
         try {
             const data = await apiFetch<UserProfile>(`/users/me?t=${Date.now()}`);
             setProfile(data);
-            setUser(data);
+            syncAuthUserFromProfile(data);
         } catch {
             queueMicrotask(() => {
                 toast.error(t("loadProfileError"));
             });
         }
-    }, [setUser, t]);
+    }, [syncAuthUserFromProfile, t]);
 
     useEffect(() => {
         setTimeout(fetchProfile, 0);
@@ -48,7 +64,7 @@ function OwnProfileContent() {
             
             // Immediately update state with returned user data while keeping old stats if necessary
             setProfile(prev => prev ? { ...prev, ...updatedUser } : updatedUser);
-            setUser(updatedUser);
+            syncAuthUserFromProfile(updatedUser);
             
             // Still fetch full profile to ensure stats are perfectly synced if they changed (unlikely for avatar)
             fetchProfile();
@@ -61,8 +77,8 @@ function OwnProfileContent() {
 
     const handleProfileUpdated = useCallback((updated: UserProfile) => {
         setProfile(prev => prev ? { ...prev, ...updated } : updated);
-        setUser(updated);
-    }, [setUser]);
+        syncAuthUserFromProfile(updated);
+    }, [syncAuthUserFromProfile]);
 
     if (!profile) return <ProfileSkeleton />;
 
