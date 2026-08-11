@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.common.exceptions import NotFoundError
+from app.core.common.exceptions import BadRequestError, NotFoundError
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis
 from app.core.events.limiter import limiter
@@ -228,6 +228,17 @@ async def create_pull_request_comment(
     if not pr:
         raise NotFoundError("Pull request not found")
 
+    parent: PRComment | None = None
+    if data.parent_id is not None:
+        parent = await db.scalar(
+            select(PRComment).where(
+                PRComment.id == data.parent_id,
+                PRComment.pr_id == id,
+            )
+        )
+        if parent is None:
+            raise BadRequestError("Parent comment must belong to this pull request")
+
     c = PRComment(
         id=uuid.uuid4(),
         pr_id=id,
@@ -239,15 +250,13 @@ async def create_pull_request_comment(
     await db.flush()
     await db.refresh(c, ["author"])
 
-    if data.parent_id:
-        parent = await db.scalar(select(PRComment).where(PRComment.id == data.parent_id))
-        if parent and parent.author_id and parent.author_id != current_user.id:
-            await notify_user(
-                db,
-                parent.author_id,
-                "pr_comment_reply",
-                f'Someone replied to your comment on "{pr.title}"',
-                link=f"/pull-requests/{pr.id}",
-            )
+    if parent and parent.author_id and parent.author_id != current_user.id:
+        await notify_user(
+            db,
+            parent.author_id,
+            "pr_comment_reply",
+            f'Someone replied to your comment on "{pr.title}"',
+            link=f"/pull-requests/{pr.id}",
+        )
 
     return PRCommentOut.model_validate(c)

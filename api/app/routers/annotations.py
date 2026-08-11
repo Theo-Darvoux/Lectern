@@ -8,9 +8,9 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.core.common.exceptions import NotFoundError
 from app.core.database.database import get_db
+from app.core.database.post_commit import add_post_commit_sse
 from app.core.events.limiter import limiter
 from app.core.events.sse import (
-    broadcast_to_topic,
     register_topic_queue,
     sse_event_stream,
     topic_owner_keys,
@@ -92,7 +92,8 @@ async def add_annotation(
         data.reply_to_id,
     )
     out = AnnotationOut.model_validate(annotation)
-    broadcast_to_topic(
+    add_post_commit_sse(
+        db,
         material_id,
         {
             "type": "annotation_created",
@@ -111,7 +112,8 @@ async def edit_annotation(
 ) -> AnnotationOut:
     annotation = await update_annotation(db, annotation_id, user, data.body)
     out = AnnotationOut.model_validate(annotation)
-    broadcast_to_topic(
+    add_post_commit_sse(
+        db,
         str(annotation.material_id),
         {
             "type": "annotation_updated",
@@ -128,7 +130,8 @@ async def remove_annotation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     material_id, deleted_id, thread_id = await delete_annotation(db, annotation_id, user)
-    broadcast_to_topic(
+    add_post_commit_sse(
+        db,
         str(material_id),
         {
             "type": "annotation_deleted",

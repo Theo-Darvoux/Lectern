@@ -11,6 +11,7 @@ from app.core.common.exceptions import NotFoundError
 from app.core.common.natural_sorting import natural_sort_key
 from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
 from app.models.view_history import ViewHistory
+from app.services.reaction_lock import acquire_reaction_toggle_lock
 
 
 def _ensure_uuid(value: str | uuid.UUID) -> uuid.UUID:
@@ -404,37 +405,42 @@ async def record_view(db: AsyncSession, user_id: str, material_id: str) -> None:
 
 
 async def toggle_like(db: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID) -> bool:
-    """Toggle a like for a material. Returns True if liked, False if unliked."""
-    # Check if exists
-    result = await db.execute(
+    """Toggle a like atomically for one user/material pair."""
+    await acquire_reaction_toggle_lock(
+        db,
+        kind="material-like",
+        user_id=user_id,
+        target_id=material_id,
+    )
+
+    if await db.scalar(select(Material.id).where(Material.id == material_id)) is None:
+        raise NotFoundError("Material not found")
+
+    like = await db.scalar(
         select(MaterialLike).where(
-            MaterialLike.user_id == user_id, MaterialLike.material_id == material_id
+            MaterialLike.user_id == user_id,
+            MaterialLike.material_id == material_id,
         )
     )
-    like = result.scalar_one_or_none()
 
-    if like:
-        # Unlike
+    if like is not None:
         await db.delete(like)
+        await db.flush()
         await db.execute(
             update(Material)
-            .where(Material.id == material_id)
+            .where(Material.id == material_id, Material.like_count > 0)
             .values(like_count=Material.like_count - 1)
         )
-        liked = False
-    else:
-        # Like
-        new_like = MaterialLike(id=uuid.uuid4(), user_id=user_id, material_id=material_id)
-        db.add(new_like)
-        await db.execute(
-            update(Material)
-            .where(Material.id == material_id)
-            .values(like_count=Material.like_count + 1)
-        )
-        liked = True
+        return False
 
+    db.add(MaterialLike(id=uuid.uuid4(), user_id=user_id, material_id=material_id))
     await db.flush()
-    return liked
+    await db.execute(
+        update(Material)
+        .where(Material.id == material_id)
+        .values(like_count=Material.like_count + 1)
+    )
+    return True
 
 
 async def toggle_favourite(db: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID) -> bool:

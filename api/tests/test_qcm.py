@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Any
 from unittest.mock import ANY, AsyncMock, patch
@@ -13,15 +14,20 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.common.exceptions import BadRequestError, ServiceUnavailableError
+from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.post_commit import PostCommitKey, rollback_transaction_callbacks
 from app.core.security.security import create_access_token
+from app.dependencies.rate_limit import rate_limit_uploads
 from app.models.cas_staging_claim import CasStagingClaim
 from app.models.user import User, UserRole
 from app.routers.qcm import (
     QCM_MAX_QUESTIONS,
     QCMStageRequest,
+    _check_qcm_staging_quota,
     _parse_moodle_xml,
     _validate_qcm_structure,
+    router,
     stage_qcm,
 )
 
@@ -485,6 +491,30 @@ class TestStageEndpoint:
         resp = await client.post("/api/qcm/stage", json={"data": _minimal_qcm()})
         assert resp.status_code == 401
 
+    async def test_stage_consumes_shared_upload_rate_budget(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = _make_user()
+        db_session.add(user)
+        await db_session.flush()
+
+        upload = AsyncMock()
+        with (
+            patch(
+                "app.dependencies.rate_limit._UPLOAD_LIMITS",
+                {"default": (0, 0), "privileged": (0, 0)},
+            ),
+            patch("app.routers.qcm.storage_upload_file", new=upload),
+        ):
+            response = await client.post(
+                "/api/qcm/stage",
+                json={"data": _minimal_qcm()},
+                headers=_auth(user),
+            )
+
+        assert response.status_code == 429
+        upload.assert_not_awaited()
+
     async def test_stage_invalid_version_returns_422(
         self, client: AsyncClient, db_session: AsyncSession
     ):
@@ -639,6 +669,7 @@ class TestStageEndpoint:
             select(CasStagingClaim).where(CasStagingClaim.sha256 == resp.json()["sha256"])
         )
         assert claim is not None
+        assert claim.size_bytes == resp.json()["file_size"]
         assert kwargs["operation_id"] == f"qcm-stage:{claim.id}"
 
     async def test_stage_reserves_capacity_before_storage_and_releases_after_cas_handoff(
@@ -698,6 +729,102 @@ class TestStageEndpoint:
             await stage_qcm(QCMStageRequest(data=_minimal_qcm()), user, db_session)
 
         upload.assert_not_awaited()
+
+    async def test_stage_quota_rejection_happens_before_storage_write(
+        self, db_session: AsyncSession
+    ) -> None:
+        user = _make_user()
+        db_session.add(user)
+        await db_session.commit()
+        db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+        db_session.add(
+            CasStagingClaim(
+                user_id=user.id,
+                file_key=f"cas/{'a' * 64}",
+                sha256="a" * 64,
+                size_bytes=1,
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+        await db_session.commit()
+        db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+
+        upload = AsyncMock()
+        with (
+            patch("app.routers.qcm.QCM_MAX_OUTSTANDING_CLAIMS", 1),
+            patch("app.routers.qcm.storage_upload_file", new=upload),
+            pytest.raises(BadRequestError) as exc_info,
+        ):
+            await stage_qcm(QCMStageRequest(data=_minimal_qcm()), user, db_session)
+
+        assert exc_info.value.code == UploadErrorCode.QUOTA_EXCEEDED
+        upload.assert_not_awaited()
+
+    async def test_staging_quota_reclaims_consumed_and_expired_claims(
+        self, db_session: AsyncSession
+    ) -> None:
+        user = _make_user()
+        db_session.add(user)
+        await db_session.commit()
+        now = datetime.now(UTC)
+        db_session.add_all(
+            [
+                CasStagingClaim(
+                    user_id=user.id,
+                    file_key=f"cas/{'b' * 64}",
+                    sha256="b" * 64,
+                    size_bytes=10_000,
+                    expires_at=now + timedelta(hours=1),
+                    consumed_at=now,
+                ),
+                CasStagingClaim(
+                    user_id=user.id,
+                    file_key=f"cas/{'c' * 64}",
+                    sha256="c" * 64,
+                    size_bytes=10_000,
+                    expires_at=now - timedelta(seconds=1),
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        with (
+            patch("app.routers.qcm.QCM_MAX_OUTSTANDING_CLAIMS", 1),
+            patch("app.routers.qcm.QCM_MAX_OUTSTANDING_BYTES", 1),
+        ):
+            await _check_qcm_staging_quota(db_session, user.id, 1, now=now)
+        await db_session.rollback()
+
+    async def test_staging_quota_fails_closed_for_live_legacy_unknown_size(
+        self, db_session: AsyncSession
+    ) -> None:
+        user = _make_user()
+        db_session.add(user)
+        await db_session.commit()
+        now = datetime.now(UTC)
+        db_session.add(
+            CasStagingClaim(
+                user_id=user.id,
+                file_key=f"cas/{'d' * 64}",
+                sha256="d" * 64,
+                size_bytes=None,
+                expires_at=now + timedelta(hours=1),
+            )
+        )
+        await db_session.commit()
+
+        with pytest.raises(ServiceUnavailableError, match="legacy staging claims"):
+            await _check_qcm_staging_quota(db_session, user.id, 1, now=now)
+        await db_session.rollback()
+
+    async def test_stage_uses_the_shared_upload_rate_limit_dependency(self) -> None:
+        stage_route = next(
+            route for route in router.routes if getattr(route, "path", None) == "/api/qcm/stage"
+        )
+        assert any(
+            dependency.call is rate_limit_uploads
+            for dependency in stage_route.dependant.dependencies
+        )
 
 
 # ── /api/qcm/parse-moodle endpoint tests ─────────────────────────────────────

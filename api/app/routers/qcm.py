@@ -23,9 +23,12 @@ from defusedxml import ElementTree
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.common.exceptions import BadRequestError, ServiceUnavailableError
+from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.database import get_db
 from app.core.database.post_commit import register_transaction_callbacks
 from app.core.database.redis import redis_client
@@ -40,7 +43,9 @@ from app.core.storage.capacity import release_storage_reservation, reserve_stora
 from app.core.storage.facade import object_exists, read_full_object
 from app.core.storage.facade import upload_file as storage_upload_file
 from app.dependencies.auth import CurrentUser
+from app.dependencies.rate_limit import rate_limit_uploads
 from app.models.cas_staging_claim import CasStagingClaim
+from app.models.user import User
 from app.services.material import get_material_with_version
 
 logger = logging.getLogger(__name__)
@@ -58,6 +63,13 @@ QCM_MAX_IMAGES: int = int(os.environ.get("QCM_MAX_IMAGES", "30"))
 QCM_MAX_IMAGE_CHARS: int = int(os.environ.get("QCM_MAX_IMAGE_CHARS", "500000"))
 QCM_MAX_BYTES = 20 * 1024 * 1024
 MOODLE_XML_MAX_BYTES = 10 * 1024 * 1024
+# Outstanding generated-CAS staging is deliberately much smaller than global
+# storage capacity. Values are deployment-tunable without weakening per-request
+# QCM_MAX_BYTES validation.
+QCM_MAX_OUTSTANDING_CLAIMS: int = int(os.environ.get("QCM_MAX_OUTSTANDING_CLAIMS", "50"))
+QCM_MAX_OUTSTANDING_BYTES: int = int(
+    os.environ.get("QCM_MAX_OUTSTANDING_BYTES", str(5 * QCM_MAX_BYTES))
+)
 _QCM_STORAGE_RESERVATION_TTL = max(
     72 * 3600,
     (settings.pr_expiry_days + 1) * 24 * 3600,
@@ -173,6 +185,70 @@ def _validate_qcm_structure(data: dict[str, Any]) -> None:
         )
 
 
+async def _check_qcm_staging_quota(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    new_size_bytes: int,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Serialize and enforce per-user outstanding QCM staging capacity.
+
+    Every production claim admission takes the owning ``users`` row lock before
+    reading aggregate claim usage and keeps it until the request transaction
+    commits. That turns the otherwise racy COUNT/SUM -> INSERT sequence into a
+    per-user serial admission boundary without a global lock.
+
+    Legacy live claims whose byte size predates the size column fail closed.
+    Alembic cannot derive an authoritative S3 object size from PostgreSQL, so
+    treating those rows as zero would recreate the quota bypass during rollout.
+    """
+    if new_size_bytes < 0:
+        raise ValueError("new_size_bytes must be non-negative")
+    if QCM_MAX_OUTSTANDING_CLAIMS < 1 or QCM_MAX_OUTSTANDING_BYTES < 1:
+        raise RuntimeError("QCM outstanding staging limits must be positive")
+
+    locked_user_id = await db.scalar(
+        select(User.id).where(User.id == user_id).with_for_update()
+    )
+    if locked_user_id is None:
+        raise ServiceUnavailableError("QCM staging account state is unavailable")
+
+    effective_now = now or datetime.now(UTC)
+    active_count, sized_count, active_bytes = (
+        await db.execute(
+            select(
+                func.count(CasStagingClaim.id),
+                func.count(CasStagingClaim.size_bytes),
+                func.coalesce(func.sum(CasStagingClaim.size_bytes), 0),
+            ).where(
+                CasStagingClaim.user_id == user_id,
+                CasStagingClaim.consumed_at.is_(None),
+                CasStagingClaim.expires_at > effective_now,
+            )
+        )
+    ).one()
+
+    if int(active_count) != int(sized_count):
+        raise ServiceUnavailableError(
+            "QCM staging quota is temporarily unavailable while legacy staging claims expire"
+        )
+
+    if int(active_count) >= QCM_MAX_OUTSTANDING_CLAIMS:
+        raise BadRequestError(
+            f"Too many outstanding staged QCM files ({QCM_MAX_OUTSTANDING_CLAIMS} max). "
+            "Submit a pull request or wait for existing staging claims to expire.",
+            code=UploadErrorCode.QUOTA_EXCEEDED,
+        )
+
+    if int(active_bytes) + new_size_bytes > QCM_MAX_OUTSTANDING_BYTES:
+        raise BadRequestError(
+            "Outstanding staged QCM data would exceed the per-user staging byte limit. "
+            "Submit a pull request or wait for existing staging claims to expire.",
+            code=UploadErrorCode.QUOTA_EXCEEDED,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
@@ -206,6 +282,7 @@ async def stage_qcm(
     body: QCMStageRequest,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[None, Depends(rate_limit_uploads)] = None,
 ) -> QCMStageResponse:
     """Validate a QCM JSON structure, write it to the CAS, and return the file key.
 
@@ -222,6 +299,11 @@ async def stage_qcm(
     file_size = len(data_bytes)
     if file_size > QCM_MAX_BYTES:
         raise HTTPException(status_code=413, detail="QCM is too large (max 20 MiB)")
+
+    # This row lock is the per-user serialization boundary for the aggregate
+    # outstanding claim count/byte check and the claim INSERT below. Keep it for
+    # the whole request transaction so concurrent requests cannot oversubscribe.
+    await _check_qcm_staging_quota(db, user.id, file_size)
 
     # Derive the CAS S3 key from the HMAC
     cas_redis_key = hmac_cas_key(sha256)
@@ -317,6 +399,7 @@ async def stage_qcm(
             user_id=user.id,
             file_key=file_key,
             sha256=sha256,
+            size_bytes=file_size,
             expires_at=datetime.now(UTC) + timedelta(hours=48),
         )
     )

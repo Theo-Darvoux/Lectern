@@ -154,6 +154,8 @@ jobs:
           tests/integration/database/test_cas_storage_process_fence.py
           tests/integration/database/test_bootstrap_admin_invariants.py
           tests/integration/database/test_search_deindex_outbox.py
+          tests/integration/database/test_qcm_staging_quota_concurrency.py
+          tests/integration/database/test_like_toggle_concurrency.py
 
   production-policy:
     runs-on: ubuntu-latest

@@ -1,12 +1,6 @@
 # In-App Tutorials — Implementation Plan
 
-Status: **proposed** · Author: assistant · Date: 2026-06-08
-
-Interactive, role-aware, step-by-step product tutorials (spotlight coachmarks +
-guided tooltips) that teach users how to use Lectern. Built with a custom
-lightweight engine (no new dependency), launched **auto on first visit** and
-replayable from a **Help / Learn center**, with completion tracked **server-side**
-on the user profile.
+Status: **proposed**
 
 ---
 

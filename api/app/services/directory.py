@@ -11,6 +11,7 @@ from app.core.common.exceptions import NotFoundError
 from app.core.common.natural_sorting import natural_sort_key
 from app.models.directory import Directory, DirectoryFavourite, DirectoryLike
 from app.models.material import Material, MaterialVersion
+from app.services.reaction_lock import acquire_reaction_toggle_lock
 
 
 def slugify(text: str) -> str:
@@ -641,34 +642,42 @@ async def resolve_browse_path(
 async def toggle_directory_like(
     db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID
 ) -> bool:
-    """Toggle a like for a directory. Returns True if liked, False if unliked."""
-    result = await db.execute(
+    """Toggle a like atomically for one user/directory pair."""
+    await acquire_reaction_toggle_lock(
+        db,
+        kind="directory-like",
+        user_id=user_id,
+        target_id=directory_id,
+    )
+
+    if await db.scalar(select(Directory.id).where(Directory.id == directory_id)) is None:
+        raise NotFoundError("Directory not found")
+
+    like = await db.scalar(
         select(DirectoryLike).where(
-            DirectoryLike.user_id == user_id, DirectoryLike.directory_id == directory_id
+            DirectoryLike.user_id == user_id,
+            DirectoryLike.directory_id == directory_id,
         )
     )
-    like = result.scalar_one_or_none()
 
-    if like:
+    if like is not None:
         await db.delete(like)
+        await db.flush()
         await db.execute(
             update(Directory)
-            .where(Directory.id == directory_id)
+            .where(Directory.id == directory_id, Directory.like_count > 0)
             .values(like_count=Directory.like_count - 1)
         )
-        liked = False
-    else:
-        new_like = DirectoryLike(id=uuid.uuid4(), user_id=user_id, directory_id=directory_id)
-        db.add(new_like)
-        await db.execute(
-            update(Directory)
-            .where(Directory.id == directory_id)
-            .values(like_count=Directory.like_count + 1)
-        )
-        liked = True
+        return False
 
+    db.add(DirectoryLike(id=uuid.uuid4(), user_id=user_id, directory_id=directory_id))
     await db.flush()
-    return liked
+    await db.execute(
+        update(Directory)
+        .where(Directory.id == directory_id)
+        .values(like_count=Directory.like_count + 1)
+    )
+    return True
 
 
 async def toggle_directory_favourite(

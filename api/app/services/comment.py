@@ -50,6 +50,7 @@ async def get_comments(
     limit: int,
     offset: int,
 ) -> tuple[list[Comment], int]:
+    await validate_target(db, target_type, target_id)
     uid = _to_uuid(target_id)
     base = select(Comment).where(
         Comment.target_type == target_type,
