@@ -27,6 +27,11 @@ class OutboxJob(UUIDMixin, Base):
     delivered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # Completion-tracked jobs (currently search deindex) are only terminal once
+    # their external side effect has succeeded, not merely when ARQ accepted them.
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     next_attempt_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )

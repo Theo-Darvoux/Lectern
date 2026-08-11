@@ -7,6 +7,7 @@ from meilisearch_python_sdk.models.client import KeyCreate
 from meilisearch_python_sdk.models.settings import (
     MeilisearchSettings,
     MinWordSizeForTypos,
+    Pagination,
     TypoTolerance,
 )
 
@@ -15,6 +16,11 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _SEARCH_KEY_NAME = "lectern-search-key"
+
+# Keep the API authoritative-scan horizon and Meilisearch pagination ceiling in
+# one place. The default is 1,000; making it explicit prevents configuration
+# drift from silently turning a bounded authoritative count into a partial one.
+SEARCH_MAX_TOTAL_HITS = 1_000
 
 meili_admin_client = AsyncClient(settings.meili_url, settings.meili_master_key)
 meili_search_client: AsyncClient | None = None
@@ -93,6 +99,41 @@ async def _apply_settings_if_changed(index_uid: str, desired: MeilisearchSetting
         logger.debug("'%s' settings up-to-date — skipping update_settings", index_uid)
 
 
+async def _apply_pagination_if_changed(index_uid: str) -> None:
+    """Pin the search enumeration horizon used by authoritative pagination.
+
+    Search performs PostgreSQL liveness validation over every candidate before
+    returning ``total``. That promise is only valid if the application and
+    Meilisearch agree on the maximum enumerable result set. Wait for the settings
+    task so API startup cannot race an old, larger/smaller pagination ceiling.
+    """
+    index = meili_admin_client.index(index_uid)
+    desired = Pagination(max_total_hits=SEARCH_MAX_TOTAL_HITS)
+    try:
+        current = await index.get_pagination()
+    except Exception as exc:
+        logger.warning(
+            "Could not fetch pagination settings for '%s': %s — applying explicitly",
+            index_uid,
+            exc,
+        )
+    else:
+        if current.max_total_hits == SEARCH_MAX_TOTAL_HITS:
+            return
+
+    task = await index.update_pagination(desired)
+    task_uid = getattr(task, "task_uid", None)
+    if not isinstance(task_uid, int):
+        raise RuntimeError(
+            f"Pagination update for {index_uid!r} did not return a valid Meilisearch task id"
+        )
+    await meili_admin_client.wait_for_task(
+        task_uid,
+        timeout_in_ms=30_000,
+        raise_for_status=True,
+    )
+
+
 async def _ensure_search_key() -> str:
     """Return a valid search-only API key, auto-provisioning one if needed."""
     if settings.meili_search_key:
@@ -166,6 +207,7 @@ async def setup_meilisearch() -> None:
         typo_tolerance=typo_config,
     )
     await _apply_settings_if_changed("materials", materials_settings)
+    await _apply_pagination_if_changed("materials")
 
     # 2. Directories index
     if "directories" not in existing_uids:
@@ -194,6 +236,7 @@ async def setup_meilisearch() -> None:
         typo_tolerance=typo_config,
     )
     await _apply_settings_if_changed("directories", directories_settings)
+    await _apply_pagination_if_changed("directories")
 
     global meili_search_client
     search_key = await _ensure_search_key()

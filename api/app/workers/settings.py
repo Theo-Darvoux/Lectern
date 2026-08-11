@@ -13,6 +13,7 @@ from app.workers.index_content import (
     index_directory,
     index_material,
     index_materials_batch,
+    reconcile_search_documents,
 )
 from app.workers.outbox import dispatch_outbox
 from app.workers.process_upload import process_upload
@@ -154,6 +155,7 @@ class WorkerSettings:
         cron(reset_daily_views, hour=0, minute=0),
         cron(reset_14d_views, day={1, 15}, hour=1, minute=0),
         cron(dispatch_outbox, minute=set(range(60))),
+        cron(reconcile_search_documents, hour=5, minute=30),
     ]
     on_startup = startup
     on_shutdown = shutdown

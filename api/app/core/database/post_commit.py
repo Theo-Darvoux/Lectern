@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.database.redis as redis_db
@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 _OUTBOX_MAX_ATTEMPTS = 10
 _OUTBOX_MAX_BACKOFF_SECONDS = 3600
 _OUTBOX_KWARGS_KEY = "__outbox_kwargs__"
+_COMPLETION_TRACKED_JOB_NAMES = frozenset({"delete_indexed_item"})
+_DEINDEX_ACK_LEASE_SECONDS = 300
 _ALLOWED_JOB_NAMES = frozenset(
     {
         "add_cas_references",
@@ -193,20 +195,80 @@ async def persist_post_commit_jobs(session: AsyncSession) -> int:
     return len(coalesced)
 
 
+async def record_outbox_execution_failure(
+    session_factory: Any,
+    outbox_id: str,
+    exc: BaseException,
+) -> bool:
+    """Persist a completion-tracked worker failure without masking the worker retry."""
+    try:
+        row_id = UUID(outbox_id)
+    except (TypeError, ValueError):
+        logger.error("Invalid outbox id reported by worker: %r", outbox_id)
+        return False
+
+    async with session_factory() as session:
+        row = await session.get(OutboxJob, row_id, with_for_update=True)
+        if row is None:
+            logger.warning("Completion-tracked outbox row %s no longer exists", outbox_id)
+            return False
+        if row.completed_at is not None:
+            return True
+        row.last_error = str(exc)[:2000]
+        # ARQ performs its own retry first. The durable dispatcher becomes the
+        # fallback if every queue-level retry is exhausted or the worker dies.
+        row.next_attempt_at = datetime.now(UTC) + timedelta(seconds=30)
+        await session.commit()
+        return True
+
+
+async def acknowledge_outbox_completion(session_factory: Any, outbox_id: str) -> bool:
+    """Mark a completion-tracked outbox row terminal after its external effect succeeds."""
+    try:
+        row_id = UUID(outbox_id)
+    except (TypeError, ValueError):
+        logger.error("Invalid outbox id reported by worker: %r", outbox_id)
+        return False
+
+    async with session_factory() as session:
+        row = await session.get(OutboxJob, row_id, with_for_update=True)
+        if row is None:
+            logger.warning("Completion-tracked outbox row %s no longer exists", outbox_id)
+            return False
+        if row.completed_at is None:
+            row.completed_at = datetime.now(UTC)
+            row.last_error = None
+        await session.commit()
+        return True
+
+
 async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> int:
-    """Attempt delivery of committed outbox rows, leaving failures retryable."""
+    """Attempt delivery of committed outbox rows, leaving failures retryable.
+
+    Most jobs retain the historical enqueue-acknowledged semantics. Search deindex
+    jobs are different: stale search metadata is externally visible, so they remain
+    durable until the worker confirms the Meilisearch task itself succeeded.
+    """
     if redis_db.arq_pool is None:
         logger.error("ARQ pool unavailable; durable outbox jobs remain pending")
         return 0
 
     now = datetime.now(UTC)
+    completion_tracked_pending = and_(
+        OutboxJob.job_name.in_(_COMPLETION_TRACKED_JOB_NAMES),
+        OutboxJob.completed_at.is_(None),
+    )
+    enqueue_tracked_pending = and_(
+        OutboxJob.job_name.not_in(_COMPLETION_TRACKED_JOB_NAMES),
+        OutboxJob.delivered_at.is_(None),
+        OutboxJob.abandoned_at.is_(None),
+    )
     rows = list(
         (
             await session.scalars(
                 select(OutboxJob)
                 .where(
-                    OutboxJob.delivered_at.is_(None),
-                    OutboxJob.abandoned_at.is_(None),
+                    or_(completion_tracked_pending, enqueue_tracked_pending),
                     OutboxJob.next_attempt_at <= now,
                 )
                 .order_by(OutboxJob.next_attempt_at, OutboxJob.created_at, OutboxJob.id)
@@ -217,6 +279,13 @@ async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> in
     )
     delivered = 0
     for row in rows:
+        completion_tracked = row.job_name in _COMPLETION_TRACKED_JOB_NAMES
+        if completion_tracked:
+            # Legacy backups may restore a pre-fix abandoned deindex row after
+            # this migration has already run. Completion-tracked work ignores
+            # that obsolete terminal marker and clears it before re-delivery.
+            row.abandoned_at = None
+        attempt = (row.attempts or 0) + 1
         try:
             args = list(row.args)
             kwargs: dict[str, object] = {}
@@ -225,12 +294,30 @@ async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> in
                 if isinstance(encoded_kwargs, dict):
                     kwargs = dict(encoded_kwargs)
                     args.pop()
+            if completion_tracked:
+                # The worker uses this durable row as its acknowledgement target.
+                kwargs["outbox_id"] = str(row.id)
             enqueue_job = cast(Any, redis_db.arq_pool.enqueue_job)
-            await enqueue_job(row.job_name, *args, **kwargs, _job_id=f"outbox:{row.id}")
+            job_id = (
+                f"outbox:{row.id}:attempt:{attempt}"
+                if completion_tracked
+                else f"outbox:{row.id}"
+            )
+            await enqueue_job(row.job_name, *args, **kwargs, _job_id=job_id)
         except Exception as exc:
-            row.attempts = (row.attempts or 0) + 1
+            row.attempts = attempt
             row.last_error = str(exc)[:2000]
-            if row.attempts >= _OUTBOX_MAX_ATTEMPTS:
+            delay = min(
+                _OUTBOX_MAX_BACKOFF_SECONDS,
+                30 * (2 ** min(max(0, row.attempts - 1), 7)),
+            )
+            row.next_attempt_at = now + timedelta(seconds=delay)
+            if completion_tracked:
+                # A failed search deletion must never become terminal solely
+                # because the queue was unavailable many times. Keep retrying.
+                row.abandoned_at = None
+                logger.error("Failed to enqueue durable deindex job %s: %s", row.id, exc)
+            elif row.attempts >= _OUTBOX_MAX_ATTEMPTS:
                 row.abandoned_at = now
                 logger.error(
                     "Abandoning durable outbox job %s after %d attempts: %s",
@@ -239,16 +326,16 @@ async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> in
                     exc,
                 )
             else:
-                delay = min(
-                    _OUTBOX_MAX_BACKOFF_SECONDS,
-                    30 * (2 ** max(0, row.attempts - 1)),
-                )
-                row.next_attempt_at = now + timedelta(seconds=delay)
                 logger.error("Failed to enqueue durable outbox job %s: %s", row.id, exc)
         else:
             row.delivered_at = now
-            row.attempts = (row.attempts or 0) + 1
+            row.attempts = attempt
             row.last_error = None
+            if completion_tracked:
+                # Lease the row while ARQ executes it. If the worker crashes,
+                # exhausts retries, or succeeds remotely but dies before DB ack,
+                # the minute cron will enqueue a new idempotent attempt later.
+                row.next_attempt_at = now + timedelta(seconds=_DEINDEX_ACK_LEASE_SECONDS)
             delivered += 1
     await session.commit()
     return delivered
