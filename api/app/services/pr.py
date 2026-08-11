@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.config import settings
 from app.core.common.exceptions import BadRequestError, ConflictError, ForbiddenError, NotFoundError
@@ -557,7 +558,7 @@ async def _assert_directory_restore_paths_available(
 
     slugs = {slug for _parent_id, slug in restoring_keys}
     parent_ids = {parent_id for parent_id, _slug in restoring_keys if parent_id is not None}
-    parent_scope = Directory.parent_id.in_(parent_ids)
+    parent_scope: ColumnElement[bool] = Directory.parent_id.in_(parent_ids)
     if any(parent_id is None for parent_id, _slug in restoring_keys):
         parent_scope = parent_scope | Directory.parent_id.is_(None)
 
