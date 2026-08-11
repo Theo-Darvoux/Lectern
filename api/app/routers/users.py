@@ -19,6 +19,8 @@ from app.schemas.material import MaterialDetail
 from app.schemas.pull_request import PullRequestOut
 from app.schemas.user import (
     OnboardIn,
+    PublicUserOut,
+    PublicUserProfileOut,
     TutorialCompleteIn,
     UserOut,
     UserProfileOut,
@@ -172,17 +174,17 @@ async def delete_me(
     await hard_delete_user(db, user)
 
 
-@router.get("/{user_id}", response_model=UserProfileOut)
+@router.get("/{user_id}", response_model=PublicUserProfileOut)
 async def get_user_profile(
     user_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> UserProfileOut:
+) -> PublicUserProfileOut:
     target = await get_user_by_id(db, user_id)
     if not target:
         raise NotFoundError("User not found")
     stats = await get_user_stats(db, user_id)
-    user_data = UserOut.model_validate(target).model_dump()
-    return UserProfileOut.model_validate({**user_data, **stats})
+    user_data = PublicUserOut.model_validate(target).model_dump()
+    return PublicUserProfileOut.model_validate({**user_data, **stats})
 
 
 @router.get("/{user_id}/avatar")

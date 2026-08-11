@@ -45,14 +45,12 @@ import { useTranslations, useLocale } from "next-intl";
 
 export interface UserProfile {
   id: string;
-  email: string;
+  email?: string;
   display_name: string | null;
   avatar_url: string | null;
   role: string;
   bio: string | null;
   academic_year: string | null;
-  onboarded: boolean;
-  auto_approve: boolean;
   created_at: string;
   prs_approved: number;
   prs_total: number;
@@ -591,7 +589,7 @@ export function ProfileView({
                 }`}
                 style={getShimmerStyle(profile.role)}
               >
-                {profile.display_name ?? profile.email}
+                {profile.display_name ?? profile.email ?? "?"}
                 {RoleIcon && (
                   <RoleIcon
                     className={roleIconClass}
@@ -638,7 +636,7 @@ export function ProfileView({
 
             {/* Meta info */}
             <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground font-medium">
-              {isOwn && (
+              {isOwn && profile.email && (
                 <span className="flex items-center gap-1">{profile.email}</span>
               )}
               {profile.academic_year && (

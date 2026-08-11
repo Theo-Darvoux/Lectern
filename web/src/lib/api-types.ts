@@ -3379,7 +3379,7 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
-            author: components["schemas"]["UserOut"] | null;
+            author: components["schemas"]["PublicUserBrief"] | null;
         };
         /** PaginatedResponse[Any] */
         PaginatedResponse_Any_: {
@@ -3468,6 +3468,66 @@ export interface components {
             /** Expires In */
             expires_in: number;
         };
+        /** PublicUserBrief */
+        PublicUserBrief: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string | null;
+            /** Avatar Url */
+            avatar_url: string | null;
+        };
+        /** PublicUserProfileOut */
+        PublicUserProfileOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string | null;
+            /** Avatar Url */
+            avatar_url: string | null;
+            /** Role */
+            role: string;
+            /** Bio */
+            bio: string | null;
+            /** Academic Year */
+            academic_year: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Prs Approved
+             * @default 0
+             */
+            prs_approved: number;
+            /**
+             * Prs Total
+             * @default 0
+             */
+            prs_total: number;
+            /**
+             * Annotations Count
+             * @default 0
+             */
+            annotations_count: number;
+            /**
+             * Comments Count
+             * @default 0
+             */
+            comments_count: number;
+            /**
+             * Reputation
+             * @default 0
+             */
+            reputation: number;
+        };
         /** PullRequestCreate */
         PullRequestCreate: {
             /** Title */
@@ -3509,7 +3569,7 @@ export interface components {
             virus_scan_result: components["schemas"]["VirusScanResult"];
             /** Rejection Reason */
             rejection_reason?: string | null;
-            author: components["schemas"]["UserOut"] | null;
+            author: components["schemas"]["PublicUserBrief"] | null;
             /**
              * Created At
              * Format: date-time
@@ -8315,7 +8375,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserProfileOut"];
+                    "application/json": components["schemas"]["PublicUserProfileOut"];
                 };
             };
             /** @description Validation Error */

@@ -46,18 +46,10 @@ class UserUpdateIn(BaseModel):
         return self
 
 
-class UserOut(BaseModel):
+class PublicUserBrief(BaseModel):
     id: uuid.UUID
-    email: str
     display_name: str | None
     avatar_url: str | None
-    role: str
-    bio: str | None
-    academic_year: str | None
-    onboarded: bool
-    auto_approve: bool
-    completed_tutorials: list[str] = []
-    created_at: datetime
 
     @field_serializer("avatar_url")
     def serialize_avatar_url(self, value: str | None) -> str | None:
@@ -66,8 +58,30 @@ class UserOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PublicUserOut(PublicUserBrief):
+    role: str
+    bio: str | None
+    academic_year: str | None
+    created_at: datetime
+
+
+class UserOut(PublicUserOut):
+    email: str
+    onboarded: bool
+    auto_approve: bool
+    completed_tutorials: list[str] = []
+
+
 class TutorialCompleteIn(BaseModel):
     tutorial_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$")
+
+
+class PublicUserProfileOut(PublicUserOut):
+    prs_approved: int = 0
+    prs_total: int = 0
+    annotations_count: int = 0
+    comments_count: int = 0
+    reputation: int = 0
 
 
 class UserProfileOut(UserOut):

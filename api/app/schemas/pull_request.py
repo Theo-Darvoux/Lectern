@@ -8,7 +8,7 @@ from pydantic import BaseModel, BeforeValidator, Discriminator, Field, Tag, fiel
 from app.core.sanitization import NameStr, SanitizedStr, strip_null_chars
 from app.models.directory import DirectoryType
 from app.models.security import VirusScanResult
-from app.schemas.user import UserOut
+from app.schemas.user import PublicUserBrief
 
 # ---------------------------------------------------------------------------
 # Shared validation constants
@@ -392,7 +392,7 @@ class PullRequestOut(BaseModel):
     reviewed_by: uuid.UUID | None
     virus_scan_result: VirusScanResult
     rejection_reason: str | None = None
-    author: UserOut | None
+    author: PublicUserBrief | None
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None = None
@@ -431,6 +431,6 @@ class PRCommentOut(BaseModel):
     parent_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
-    author: UserOut | None
+    author: PublicUserBrief | None
 
     model_config = {"from_attributes": True}

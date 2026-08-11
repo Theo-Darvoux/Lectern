@@ -225,8 +225,9 @@ def parse_release_toolchain(path: Path) -> dict[str, str]:
     return {key: values[key] for key in RELEASE_TOOLCHAIN_KEYS}
 
 
-
-def validate_tested_infrastructure_images(images: dict[str, str], toolchain: dict[str, str]) -> None:
+def validate_tested_infrastructure_images(
+    images: dict[str, str], toolchain: dict[str, str]
+) -> None:
     """Require deployment-critical infrastructure to equal required-CI inputs."""
     for image_key, toolchain_key, label in (
         ("REDIS_IMAGE", "REDIS_TEST_IMAGE", "Redis"),
@@ -234,7 +235,9 @@ def validate_tested_infrastructure_images(images: dict[str, str], toolchain: dic
     ):
         image = images.get(image_key)
         if image is not None and image != toolchain[toolchain_key]:
-            raise ValueError(f"release {label} image differs from the repository-pinned tested digest")
+            raise ValueError(
+                f"release {label} image differs from the repository-pinned tested digest"
+            )
 
 
 def parse_profiles(raw: str) -> list[str]:
