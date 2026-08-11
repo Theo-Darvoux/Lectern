@@ -426,9 +426,13 @@ async def _collect_orphan_search_ids(
         parsed: list[tuple[str, uuid.UUID | None]] = []
         valid_ids: set[uuid.UUID] = set()
         for document in documents:
-            raw_id = document.get("id") if isinstance(document, dict) else getattr(document, "id", None)
+            raw_id = (
+                document.get("id") if isinstance(document, dict) else getattr(document, "id", None)
+            )
             if raw_id is None:
-                logger.warning("Search document in %s has no primary-key id; cannot reconcile it", index_name)
+                logger.warning(
+                    "Search document in %s has no primary-key id; cannot reconcile it", index_name
+                )
                 continue
             raw = str(raw_id)
             try:

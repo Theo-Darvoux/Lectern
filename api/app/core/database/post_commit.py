@@ -299,9 +299,7 @@ async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> in
                 kwargs["outbox_id"] = str(row.id)
             enqueue_job = cast(Any, redis_db.arq_pool.enqueue_job)
             job_id = (
-                f"outbox:{row.id}:attempt:{attempt}"
-                if completion_tracked
-                else f"outbox:{row.id}"
+                f"outbox:{row.id}:attempt:{attempt}" if completion_tracked else f"outbox:{row.id}"
             )
             await enqueue_job(row.job_name, *args, **kwargs, _job_id=job_id)
         except Exception as exc:

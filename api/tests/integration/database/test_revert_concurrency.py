@@ -10,7 +10,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.common.exceptions import BadRequestError
+from app.core.common.exceptions import BadRequestError, ConflictError
 from app.core.database.post_commit import PostCommitKey, persist_post_commit_jobs
 from app.models.dead_letter import DeadLetterJob
 from app.models.directory import Directory, DirectoryType
@@ -18,7 +18,12 @@ from app.models.outbox import OutboxJob
 from app.models.pull_request import PRStatus, PullRequest
 from app.models.user import User, UserRole
 from app.routers.admin import retry_dead_letter_job
-from app.services.pr import _exec_move_item, revert_pr_service
+from app.services.pr import (
+    _exec_create_directory,
+    _exec_delete_directory,
+    _exec_move_item,
+    revert_pr_service,
+)
 from app.workers.year_rollover import year_rollover
 
 DATABASE_URL = os.environ.get("REVERT_TEST_DATABASE_URL")
@@ -270,5 +275,139 @@ async def test_concurrent_directory_moves_cannot_create_a_cycle() -> None:
         assert first_row is not None and second_row is not None
         assert first_row.parent_id == second_id
         assert second_row.parent_id is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_database_root_directory_slug_unique_during_concurrent_insert() -> None:
+    """The DB constraint itself closes the NULL-parent uniqueness hole."""
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    slug = f"raw-root-race-{uuid.uuid4().hex[:12]}"
+
+    async with sessions() as first, sessions() as second:
+        first.add(Directory(name="First root", slug=slug, type=DirectoryType.FOLDER))
+        second.add(Directory(name="Second root", slug=slug, type=DirectoryType.FOLDER))
+
+        await first.flush()
+        competing_flush = asyncio.create_task(second.flush())
+        await asyncio.sleep(0.2)
+        assert not competing_flush.done(), "duplicate insert did not wait on the unique index"
+
+        await first.commit()
+        with pytest.raises(IntegrityError):
+            await asyncio.wait_for(competing_flush, timeout=5)
+        await second.rollback()
+
+    async with sessions() as check:
+        count = await check.scalar(
+            select(func.count())
+            .select_from(Directory)
+            .where(Directory.parent_id.is_(None), Directory.slug == slug)
+        )
+        assert count == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_root_directory_creates_allocate_distinct_slugs() -> None:
+    """Application allocation serializes even when the requested slug has no row yet."""
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    original_id, _ = await _seed_original(sessions)
+    name = f"root-race-{uuid.uuid4().hex[:12]}"
+
+    async with sessions() as first, sessions() as second:
+        first_pr = await first.get(PullRequest, original_id)
+        second_pr = await second.get(PullRequest, original_id)
+        assert first_pr is not None and second_pr is not None
+
+        first_id = await _exec_create_directory(first, {"name": name}, first_pr, {})
+        competing_create = asyncio.create_task(
+            _exec_create_directory(second, {"name": name}, second_pr, {})
+        )
+        await asyncio.sleep(0.2)
+        assert not competing_create.done(), "competing create did not wait for the namespace lock"
+
+        await first.commit()
+        second_id = await asyncio.wait_for(competing_create, timeout=5)
+        await second.commit()
+
+    async with sessions() as check:
+        rows = list(
+            (
+                await check.scalars(
+                    select(Directory).where(Directory.id.in_([first_id, second_id]))
+                )
+            ).all()
+        )
+        assert len(rows) == 2
+        assert all(row.parent_id is None for row in rows)
+        assert {row.slug for row in rows} == {name, f"{name}-2"}
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_root_directory_revert_rejects_reused_slug_without_partial_restore() -> None:
+    """delete A -> create B with A's slug -> revert A is conflict-safe."""
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    original_id, admin_id = await _seed_original(sessions)
+    actor = User(id=admin_id, email="detached@example.invalid", role=UserRole.BUREAU)
+    name = f"restore-root-{uuid.uuid4().hex[:12]}"
+
+    async with sessions() as seed:
+        original = Directory(name=name, slug=name, type=DirectoryType.FOLDER)
+        seed.add(original)
+        await seed.commit()
+        original_dir_id = original.id
+
+    async with sessions() as delete_session:
+        pr = await delete_session.get(PullRequest, original_id)
+        assert pr is not None
+        await _exec_delete_directory(delete_session, {"directory_id": str(original_dir_id)}, pr, {})
+        # Make this approved PR accurately describe the deletion so the public
+        # revert service builds an undelete_directory reverse operation.
+        pr.payload = [{"op": "delete_directory", "directory_id": str(original_dir_id)}]
+        pr.applied_result = [{"op": "delete_directory", "result_id": str(original_dir_id)}]
+        pr.summary_types = ["delete_directory"]
+        await delete_session.commit()
+
+    async with sessions() as create_session:
+        pr = await create_session.get(PullRequest, original_id)
+        assert pr is not None
+        replacement_id = await _exec_create_directory(create_session, {"name": name}, pr, {})
+        await create_session.commit()
+
+    async with sessions() as restore_session:
+        with pytest.raises(ConflictError, match="already in use"):
+            await revert_pr_service(restore_session, original_id, actor)
+        await restore_session.rollback()
+
+    async with sessions() as check:
+        original_row = await check.scalar(
+            select(Directory)
+            .where(Directory.id == original_dir_id)
+            .execution_options(include_deleted=True)
+        )
+        replacement = await check.get(Directory, replacement_id)
+        original_pr = await check.get(PullRequest, original_id)
+        revert_count = await check.scalar(
+            select(func.count())
+            .select_from(PullRequest)
+            .where(PullRequest.reverts_pr_id == original_id)
+        )
+        assert original_row is not None and original_row.deleted_at is not None
+        assert replacement is not None and replacement.deleted_at is None
+        assert replacement.parent_id is None
+        assert replacement.slug == name
+        assert original_pr is not None and original_pr.reverted_by_pr_id is None
+        assert revert_count == 0
 
     await engine.dispose()

@@ -54,11 +54,7 @@ async def _live_hits_for_batch(
     model: type[Material] | type[Directory],
     hits: list[dict[str, Any]],
 ) -> list[tuple[dict[str, Any], uuid.UUID]]:
-    parsed = [
-        (hit, parsed_id)
-        for hit in hits
-        if (parsed_id := _parse_hit_id(hit)) is not None
-    ]
+    parsed = [(hit, parsed_id) for hit in hits if (parsed_id := _parse_hit_id(hit)) is not None]
     live_ids = await _authoritative_live_ids(db, model, {parsed_id for _, parsed_id in parsed})
     return [(hit, parsed_id) for hit, parsed_id in parsed if parsed_id in live_ids]
 
@@ -134,10 +130,7 @@ async def _authoritative_search_hits(
         live_materials.extend(await _live_hits_for_batch(db, Material, material_hits))
         live_directories.extend(await _live_hits_for_batch(db, Directory, directory_hits))
 
-        if (
-            len(material_hits) < _SEARCH_SCAN_BATCH
-            and len(directory_hits) < _SEARCH_SCAN_BATCH
-        ):
+        if len(material_hits) < _SEARCH_SCAN_BATCH and len(directory_hits) < _SEARCH_SCAN_BATCH:
             break
         scan_offset += _SEARCH_SCAN_BATCH
     else:
@@ -184,18 +177,14 @@ async def perform_search(
     # Preserve the existing materials-first ordering, but apply pagination only
     # after stale/malformed/deleted hits have been removed.
     all_live_pairs: list[tuple[str, dict[str, Any], uuid.UUID]] = [
-        *(('material', hit, parsed_id) for hit, parsed_id in live_material_pairs),
-        *(('directory', hit, parsed_id) for hit, parsed_id in live_directory_pairs),
+        *(("material", hit, parsed_id) for hit, parsed_id in live_material_pairs),
+        *(("directory", hit, parsed_id) for hit, parsed_id in live_directory_pairs),
     ]
     total = len(all_live_pairs)
     page_pairs = all_live_pairs[offset : offset + limit]
 
-    page_material_ids = {
-        parsed_id for kind, _, parsed_id in page_pairs if kind == "material"
-    }
-    page_directory_ids = {
-        parsed_id for kind, _, parsed_id in page_pairs if kind == "directory"
-    }
+    page_material_ids = {parsed_id for kind, _, parsed_id in page_pairs if kind == "material"}
+    page_directory_ids = {parsed_id for kind, _, parsed_id in page_pairs if kind == "directory"}
 
     liked_material_ids: set[uuid.UUID] = set()
     liked_directory_ids: set[uuid.UUID] = set()

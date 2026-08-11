@@ -156,9 +156,7 @@ async def test_avatar_replacement_removes_new_object_on_transaction_rollback(
             side_effect=process,
         ),
     ):
-        await update_user_profile(
-            db_session, test_user, avatar_upload_id=upload_record.upload_id
-        )
+        await update_user_profile(db_session, test_user, avatar_upload_id=upload_record.upload_id)
         new_key = mock_upload.await_args.args[1]
         await rollback_transaction_callbacks(db_session)
 
@@ -387,9 +385,7 @@ async def test_avatar_endpoint_fails_closed_for_unsafe_legacy_reference(
     test_user.avatar_url = unsafe_ref
     await db_session.commit()
 
-    with patch(
-        "app.routers.users.generate_presigned_get", new_callable=AsyncMock
-    ) as presign:
+    with patch("app.routers.users.generate_presigned_get", new_callable=AsyncMock) as presign:
         response = await client.get(f"/api/users/{test_user.id}/avatar")
 
     assert response.status_code == 404
@@ -411,9 +407,7 @@ async def test_avatar_endpoint_presigns_only_own_avatar_namespace(
         new_callable=AsyncMock,
         return_value="https://storage.example/signed",
     ) as presign:
-        response = await client.get(
-            f"/api/users/{test_user.id}/avatar", follow_redirects=False
-        )
+        response = await client.get(f"/api/users/{test_user.id}/avatar", follow_redirects=False)
 
     assert response.status_code in (302, 307)
     assert response.headers["location"] == "https://storage.example/signed"
@@ -430,12 +424,8 @@ async def test_avatar_endpoint_redirects_only_trusted_google_avatar(
     test_user.avatar_url = google_avatar
     await db_session.commit()
 
-    with patch(
-        "app.routers.users.generate_presigned_get", new_callable=AsyncMock
-    ) as presign:
-        response = await client.get(
-            f"/api/users/{test_user.id}/avatar", follow_redirects=False
-        )
+    with patch("app.routers.users.generate_presigned_get", new_callable=AsyncMock) as presign:
+        response = await client.get(f"/api/users/{test_user.id}/avatar", follow_redirects=False)
 
     assert response.status_code in (302, 307)
     assert response.headers["location"] == google_avatar

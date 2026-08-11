@@ -268,9 +268,7 @@ async def test_reconciler_candidate_restored_material_is_not_deleted() -> None:
         ),
         patch("app.workers.index_content.meili_admin_client.index", return_value=index),
     ):
-        reconcile = asyncio.create_task(
-            _reconcile_search_index(sessions, "materials", Material)
-        )
+        reconcile = asyncio.create_task(_reconcile_search_index(sessions, "materials", Material))
         await asyncio.wait_for(candidate_ready.wait(), timeout=5)
 
         async with sessions() as restore:
@@ -356,9 +354,7 @@ async def test_reconciler_candidate_restored_directory_subtree_is_not_deleted() 
         ),
         patch("app.workers.index_content.meili_admin_client.index", return_value=index),
     ):
-        reconcile = asyncio.create_task(
-            _reconcile_search_index(sessions, "directories", Directory)
-        )
+        reconcile = asyncio.create_task(_reconcile_search_index(sessions, "directories", Directory))
         await asyncio.wait_for(candidate_ready.wait(), timeout=5)
 
         async with sessions() as restore:

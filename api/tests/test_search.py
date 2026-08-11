@@ -295,10 +295,7 @@ async def test_search_pagination_happens_after_authoritative_scan(
     """Meili is scanned from zero; client page slicing happens after PG validation."""
     user = await _create_user(db_session)
     await db_session.commit()
-    hits = [
-        {"id": str(uuid.uuid4()), "title": f"Material {i}"}
-        for i in range(20)
-    ]
+    hits = [{"id": str(uuid.uuid4()), "title": f"Material {i}"} for i in range(20)]
     mock_meili_client.multi_search = AsyncMock(
         return_value=_meili_response(mat_hits=hits, mat_total=20)
     )
@@ -311,9 +308,7 @@ async def test_search_pagination_happens_after_authoritative_scan(
     assert data["page"] == 3
     assert data["limit"] == 7
     assert data["total"] == 20
-    assert [item["title"] for item in data["items"]] == [
-        f"Material {i}" for i in range(14, 20)
-    ]
+    assert [item["title"] for item in data["items"]] == [f"Material {i}" for i in range(14, 20)]
 
     params = mock_meili_client.multi_search.call_args[0][0]
     assert params[0].offset == 0

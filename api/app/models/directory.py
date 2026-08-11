@@ -43,6 +43,13 @@ class Directory(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),
         ),
+        Index(
+            "uq_directory_root_slug",
+            "slug",
+            unique=True,
+            postgresql_where=text("parent_id IS NULL AND deleted_at IS NULL"),
+            sqlite_where=text("parent_id IS NULL AND deleted_at IS NULL"),
+        ),
         Index("ix_directories_parent_id", "parent_id"),
     )
 

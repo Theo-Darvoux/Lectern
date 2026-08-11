@@ -211,7 +211,6 @@ async def test_obsolete_directory_deindex_cannot_delete_restored_live_subtree(
     assert child_job.completed_at is not None
 
 
-
 @pytest.mark.asyncio
 async def test_deindex_worker_failure_stays_durable(db_session: AsyncSession) -> None:
     row = OutboxJob(job_name="delete_indexed_item", args=["materials", "material-id"])

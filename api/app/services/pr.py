@@ -89,7 +89,7 @@ def _resolve(value: str | None, id_map: dict[str, uuid.UUID]) -> uuid.UUID | Non
 
 
 async def _acquire_directory_tree_lock(db: AsyncSession) -> None:
-    """Serialize directory-parent validation and mutation on PostgreSQL."""
+    """Serialize directory hierarchy and live namespace mutation on PostgreSQL."""
     if db.get_bind().dialect.name == "postgresql":
         await db.execute(
             text("SELECT pg_advisory_xact_lock(:key)"),
@@ -507,6 +507,77 @@ async def _unique_material_slug(
     return f"{base}-{uuid.uuid4().hex[:8]}"
 
 
+async def _assert_directory_slug_available(
+    db: AsyncSession,
+    parent_id: uuid.UUID | None,
+    slug: str,
+    *,
+    exclude_id: uuid.UUID | None = None,
+) -> None:
+    """Reject a live sibling/root slug collision under the namespace lock.
+
+    PostgreSQL's partial unique indexes remain the final authority.  The shared
+    transaction-level lock makes application create/move/restore schedules
+    deterministic even when there is no existing row available to lock.
+    """
+    await _acquire_directory_tree_lock(db)
+
+    stmt = select(Directory.id).where(Directory.slug == slug, Directory.deleted_at.is_(None))
+    if parent_id is None:
+        stmt = stmt.where(Directory.parent_id.is_(None))
+    else:
+        stmt = stmt.where(Directory.parent_id == parent_id)
+    if exclude_id is not None:
+        stmt = stmt.where(Directory.id != exclude_id)
+
+    if await db.scalar(stmt.limit(1)) is not None:
+        raise ConflictError(
+            f'Directory path "{slug}" is already in use at this location; reload and retry'
+        )
+
+
+async def _assert_directory_restore_paths_available(
+    db: AsyncSession, restore_rows: list[Directory]
+) -> None:
+    """Preflight an entire undelete subtree against the current live namespace."""
+    await _acquire_directory_tree_lock(db)
+
+    restoring_ids = {directory.id for directory in restore_rows}
+    restoring_keys: set[tuple[uuid.UUID | None, str]] = set()
+    for directory in restore_rows:
+        key = (directory.parent_id, directory.slug)
+        if key in restoring_keys:
+            raise ConflictError(
+                "Cannot restore directory subtree because it contains duplicate paths"
+            )
+        restoring_keys.add(key)
+
+    if not restoring_keys:
+        return
+
+    slugs = {slug for _parent_id, slug in restoring_keys}
+    parent_ids = {parent_id for parent_id, _slug in restoring_keys if parent_id is not None}
+    parent_scope = Directory.parent_id.in_(parent_ids)
+    if any(parent_id is None for parent_id, _slug in restoring_keys):
+        parent_scope = parent_scope | Directory.parent_id.is_(None)
+
+    live_rows = await db.execute(
+        select(Directory.parent_id, Directory.slug).where(
+            Directory.deleted_at.is_(None),
+            Directory.id.not_in(restoring_ids),
+            Directory.slug.in_(slugs),
+            parent_scope,
+        )
+    )
+    live_keys = {(row.parent_id, row.slug) for row in live_rows}
+    conflicts = restoring_keys & live_keys
+    if conflicts:
+        _parent_id, slug = sorted(conflicts, key=lambda item: (str(item[0]), item[1]))[0]
+        raise ConflictError(
+            f'Directory path "{slug}" is already in use at this location; reload and retry'
+        )
+
+
 async def _unique_directory_slug(
     db: AsyncSession,
     parent_id: uuid.UUID | None,
@@ -515,9 +586,12 @@ async def _unique_directory_slug(
 ) -> str:
     """Generate a slug unique among sibling directories.
 
-    Uses SELECT ... FOR UPDATE to prevent race conditions. Same prefix-collision
-    fix as _unique_material_slug.
+    The transaction-level directory namespace lock closes the empty-result race
+    that SELECT ... FOR UPDATE alone cannot serialize. Same prefix-collision fix
+    as _unique_material_slug.
     """
+    await _acquire_directory_tree_lock(db)
+
     base = slugify(name) or "untitled"
     pattern = _slug_pattern(base)
 
@@ -1129,6 +1203,9 @@ async def _exec_create_directory(
 async def _exec_edit_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
+    if p.get("name") is not None:
+        await _acquire_directory_tree_lock(db)
+
     dir_id = _resolve(str(p["directory_id"]), id_map)
     dir_obj = await db.scalar(
         select(Directory).where(Directory.id == dir_id).options(selectinload(Directory.tags))
@@ -1242,6 +1319,9 @@ async def _exec_move_item(
             str(p["new_parent_id"]) if p.get("new_parent_id") else None, id_map
         )
         await _validate_directory_parent(db, target_id, new_parent_id)
+        await _assert_directory_slug_available(
+            db, new_parent_id, dir_obj.slug, exclude_id=dir_obj.id
+        )
         dir_obj.parent_id = new_parent_id
         await db.flush()
         # Moving a directory changes ancestor_path for the whole subtree.
@@ -1808,8 +1888,15 @@ async def _exec_undelete_material(
 async def _exec_undelete_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
-    """Restore a soft-deleted directory and its entire subtree."""
+    """Restore a soft-deleted directory subtree without stealing a live path."""
     dir_id = _resolve(str(p["directory_id"]), id_map)
+    if dir_id is None:
+        raise BadRequestError("Directory ID is required")
+
+    # Serialize against every application path that can allocate/change a
+    # directory slug or parent.  The DB unique indexes remain authoritative,
+    # while this lock lets us reject obsolete reverts before mutating the tree.
+    await _acquire_directory_tree_lock(db)
 
     dir_cte = (
         select(Directory.id)
@@ -1823,16 +1910,31 @@ async def _exec_undelete_directory(
         .where(dir_alias.parent_id == dir_cte.c.id)
         .execution_options(include_deleted=True)
     )
-    all_dir_ids = (
-        await db.scalars(select(dir_cte.c.id).execution_options(include_deleted=True))
-    ).all()
+    all_dir_ids = list(
+        (await db.scalars(select(dir_cte.c.id).execution_options(include_deleted=True))).all()
+    )
+    if not all_dir_ids:
+        raise NotFoundError("Directory not found (even among deleted)")
 
-    for did in all_dir_ids:
-        d = await db.scalar(
-            select(Directory).where(Directory.id == did).execution_options(include_deleted=True)
-        )
-        if d:
-            d.deleted_at = None
+    restore_rows = list(
+        (
+            await db.scalars(
+                select(Directory)
+                .where(Directory.id.in_(all_dir_ids))
+                .order_by(Directory.id)
+                .with_for_update()
+                .execution_options(include_deleted=True)
+            )
+        ).all()
+    )
+
+    # Check every path before clearing any deleted_at value.  This covers both
+    # the root NULL-parent hole and a child slug that was legitimately reused
+    # under a surviving parent after the subtree was deleted.
+    await _assert_directory_restore_paths_available(db, restore_rows)
+
+    for directory in restore_rows:
+        directory.deleted_at = None
 
     mat_rows = (
         await db.scalars(
@@ -1851,8 +1953,6 @@ async def _exec_undelete_directory(
         for v in vs:
             v.deleted_at = None
 
-    if dir_id is None:
-        raise BadRequestError("Directory ID is required")
     await _enqueue_reindex_directory_recursive(db, dir_id)
     return dir_id
 
@@ -1925,6 +2025,8 @@ async def _exec_revert_edit_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
     """Revert a directory to its pre-PR state."""
+    await _acquire_directory_tree_lock(db)
+
     dir_id = _resolve(str(p["directory_id"]), id_map)
     pre = p.get("pre_state", {})
     d = await db.scalar(
@@ -1934,6 +2036,7 @@ async def _exec_revert_edit_directory(
         raise NotFoundError("Directory not found")
 
     name_changed = d.name != pre["name"]
+    await _assert_directory_slug_available(db, d.parent_id, pre["slug"], exclude_id=d.id)
     d.name = pre["name"]
     d.slug = pre["slug"]
     d.type = pre["type"]
@@ -1981,6 +2084,7 @@ async def _exec_revert_move_item(
             raise NotFoundError("Directory not found")
         prev_parent = uuid.UUID(pre["prev_parent_id"]) if pre.get("prev_parent_id") else None
         await _validate_directory_parent(db, target_id, prev_parent)
+        await _assert_directory_slug_available(db, prev_parent, d.slug, exclude_id=d.id)
         d.parent_id = prev_parent
         await db.flush()
         await _enqueue_reindex_directory_recursive(db, d.id)
