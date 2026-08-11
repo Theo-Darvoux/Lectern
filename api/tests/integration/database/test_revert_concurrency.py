@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -199,6 +199,16 @@ async def test_concurrent_dead_letter_retries_enqueue_exactly_once() -> None:
             )
         )
         assert count == 1
+        # This integration module shares one real PostgreSQL database with the
+        # other concurrency tests in the CI job. Do not leave a due outbox row
+        # behind for a later test of the global dispatcher to claim.
+        await check.execute(
+            delete(OutboxJob).where(
+                OutboxJob.job_name == "process_upload",
+                OutboxJob.args == [{"__outbox_kwargs__": {"upload_id": retried_upload_id}}],
+            )
+        )
+        await check.commit()
 
     await engine.dispose()
 

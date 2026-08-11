@@ -27,6 +27,14 @@ async def test_concurrent_deindex_dispatch_has_one_lease_and_requires_ack() -> N
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     marker = f"deindex-pg-{uuid.uuid4()}"
 
+    # dispatch_pending_outbox() is intentionally global. This test is about two
+    # dispatchers racing for one specific row, so establish that one-row
+    # precondition explicitly instead of depending on which integration test ran
+    # before it in the shared PostgreSQL service.
+    async with sessions() as isolate:
+        await isolate.execute(delete(OutboxJob))
+        await isolate.commit()
+
     async with sessions() as seed:
         row = OutboxJob(
             job_name="delete_indexed_item",
