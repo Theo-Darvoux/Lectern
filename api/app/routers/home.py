@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, Sequence
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from redis.asyncio import Redis

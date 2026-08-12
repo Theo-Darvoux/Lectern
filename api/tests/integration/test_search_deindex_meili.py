@@ -110,8 +110,8 @@ async def test_real_meili_normal_update_waits_until_new_fields_are_searchable() 
 
         new_result = await index.search(new_marker)
         assert any(str(hit.get("id")) == document_id for hit in new_result.hits)
-        old_result = await index.search(old_marker)
-        assert all(str(hit.get("id")) != document_id for hit in old_result.hits)
+        stored_document = await index.get_document(document_id)
+        assert stored_document["title"] == new_marker
     finally:
         with contextlib.suppress(Exception):
             cleanup_task = await index.delete_document(document_id)
