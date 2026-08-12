@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -200,3 +200,63 @@ async def test_production_setup_token_is_one_time_and_not_reopened_by_admin_loss
     finally:
         settings.environment = original_env
         settings.bootstrap_token = original_token
+
+
+async def test_classic_login_uses_distributed_source_and_account_budget(
+    client: AsyncClient, mock_redis: AsyncMock
+) -> None:
+    from app.config import settings
+    from app.services import auth as auth_service
+
+    pipe = mock_redis.pipeline.return_value
+    pipe.execute.return_value = [auth_service.CLASSIC_LOGIN_SOURCE_MAX + 1, True, 1, True]
+    with (
+        patch.object(settings, "environment", "production"),
+        patch.object(settings, "classic_auth_enabled", True),
+        patch("app.services.auth.authenticate_user", new_callable=AsyncMock) as authenticate,
+    ):
+        response = await client.post(
+            "/api/auth/login",
+            json={"email": "user@example.com", "password": "not-the-password"},
+        )
+
+    assert response.status_code == 429
+    authenticate.assert_not_awaited()
+
+
+async def test_unknown_classic_account_runs_dummy_password_work() -> None:
+    from app.services import auth as auth_service
+
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=result)
+
+    with patch(
+        "app.services.auth._verify_password_bounded",
+        new_callable=AsyncMock,
+        return_value=False,
+    ) as verify:
+        user = await auth_service.authenticate_user(db, "missing@example.com", "guess")
+
+    assert user is None
+    verify.assert_awaited_once_with("guess", auth_service._DUMMY_PASSWORD_HASH)
+
+
+async def test_password_verification_is_offloaded_from_event_loop() -> None:
+    from app.services import auth as auth_service
+
+    with patch(
+        "app.services.auth.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=False,
+    ) as offload:
+        result = await auth_service._verify_password_bounded(
+            "guess", auth_service._DUMMY_PASSWORD_HASH
+        )
+
+    assert result is False
+
+    offload.assert_awaited_once_with(
+        auth_service.verify_password, "guess", auth_service._DUMMY_PASSWORD_HASH
+    )

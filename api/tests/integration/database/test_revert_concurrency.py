@@ -441,9 +441,7 @@ async def test_directory_delete_serializes_against_child_creation() -> None:
         create_pr = await creating.get(PullRequest, original_id)
         assert delete_pr is not None and create_pr is not None
 
-        await _exec_delete_directory(
-            deleting, {"directory_id": str(parent_id)}, delete_pr, {}
-        )
+        await _exec_delete_directory(deleting, {"directory_id": str(parent_id)}, delete_pr, {})
         competing = asyncio.create_task(
             _exec_create_directory(
                 creating,
@@ -493,9 +491,7 @@ async def test_material_delete_serializes_against_attachment_creation() -> None:
         create_pr = await creating.get(PullRequest, original_id)
         assert delete_pr is not None and create_pr is not None
 
-        await _exec_delete_material(
-            deleting, {"material_id": str(parent_id)}, delete_pr, {}
-        )
+        await _exec_delete_material(deleting, {"material_id": str(parent_id)}, delete_pr, {})
         competing = asyncio.create_task(
             _exec_create_material(
                 creating,
@@ -693,9 +689,7 @@ async def test_concurrent_moves_capture_authoritative_pre_state_for_revert() -> 
         await asyncio.wait_for(second_apply, timeout=5)
 
         assert pr_two.applied_result is not None
-        assert pr_two.applied_result[0]["pre_state"]["prev_directory_id"] == str(
-            directory_b_id
-        )
+        assert pr_two.applied_result[0]["pre_state"]["prev_directory_id"] == str(directory_b_id)
         await second.commit()
 
     async with sessions() as check:
@@ -796,7 +790,10 @@ async def test_mixed_pr_takes_hierarchy_lock_before_early_row_lock(
     original_capture = pr_service._capture_pre_state
 
     async def capture_and_pause(
-        db, op_type: str, op: dict, id_map: dict  # type: ignore[no-untyped-def]
+        db,
+        op_type: str,
+        op: dict,
+        id_map: dict,  # type: ignore[no-untyped-def]
     ):
         pre_state = await original_capture(db, op_type, op, id_map)
         if op_type == "edit_directory" and op.get("description") == "after":

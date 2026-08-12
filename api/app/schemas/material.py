@@ -25,6 +25,25 @@ class MaterialVersionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PublicMaterialVersionOut(BaseModel):
+    version_number: int
+    file_name: str | None
+    file_size: int | None
+    file_mime_type: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+MaterialVersionResponse = MaterialVersionOut | PublicMaterialVersionOut
+
+
+def project_material_version(value: object, *, public: bool) -> MaterialVersionResponse:
+    """Project one material version through the member or public boundary."""
+    schema = PublicMaterialVersionOut if public else MaterialVersionOut
+    return schema.model_validate(value)
+
+
 class MaterialOut(BaseModel):
     id: uuid.UUID
     directory_id: uuid.UUID | None
@@ -62,6 +81,19 @@ class MaterialOut(BaseModel):
 
 class MaterialDetail(MaterialOut):
     current_version_info: MaterialVersionOut | None = None
+
+
+class PublicMaterialDetail(MaterialOut):
+    current_version_info: PublicMaterialVersionOut | None = None
+
+
+MaterialDetailResponse = MaterialDetail | PublicMaterialDetail
+
+
+def project_material_detail(value: object, *, public: bool) -> MaterialDetailResponse:
+    """Project one material through the member or public version boundary."""
+    schema = PublicMaterialDetail if public else MaterialDetail
+    return schema.model_validate(value)
 
 
 class UploadStatus(StrEnum):

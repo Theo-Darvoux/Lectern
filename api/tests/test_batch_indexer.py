@@ -183,7 +183,10 @@ async def test_index_materials_batch_single_add_documents_call(db_session: Async
     c_db.async_session_factory = test_factory
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_admin.index = MagicMock(return_value=mock_index)
             from app.workers.index_content import index_materials_batch
 
@@ -218,7 +221,10 @@ async def test_index_materials_batch_ancestor_path_correct(db_session: AsyncSess
     captured_docs = []
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_idx = AsyncMock()
             mock_idx.add_documents = AsyncMock(side_effect=lambda docs: captured_docs.extend(docs))
             mock_admin.index = MagicMock(return_value=mock_idx)
@@ -270,7 +276,10 @@ async def test_index_directories_batch_single_add_documents_call(db_session: Asy
     mock_idx.add_documents = AsyncMock()
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_admin.index = MagicMock(return_value=mock_idx)
             from app.workers.index_content import index_directories_batch
 
@@ -301,7 +310,10 @@ async def test_index_directories_batch_ancestor_path_uses_parent(db_session: Asy
     captured = []
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_idx = AsyncMock()
             mock_idx.add_documents = AsyncMock(side_effect=lambda docs: captured.extend(docs))
             mock_admin.index = MagicMock(return_value=mock_idx)
@@ -335,7 +347,10 @@ async def test_index_directories_batch_root_has_empty_ancestor_path(db_session: 
     captured = []
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_idx = AsyncMock()
             mock_idx.add_documents = AsyncMock(side_effect=lambda docs: captured.extend(docs))
             mock_admin.index = MagicMock(return_value=mock_idx)

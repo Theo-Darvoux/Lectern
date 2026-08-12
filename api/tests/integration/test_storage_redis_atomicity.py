@@ -32,8 +32,7 @@ async def _bounded_redis_call(label: str, awaitable: Any) -> Any:
         return await asyncio.wait_for(awaitable, timeout=_REDIS_COMMAND_TIMEOUT_SECONDS)
     except TimeoutError:
         message = (
-            f"Redis integration timed out after {_REDIS_COMMAND_TIMEOUT_SECONDS:.0f}s "
-            f"while {label}"
+            f"Redis integration timed out after {_REDIS_COMMAND_TIMEOUT_SECONDS:.0f}s while {label}"
         )
         pytest.fail(message, pytrace=False)
 
@@ -66,9 +65,7 @@ async def redis() -> Redis:  # type: ignore[type-arg]
             "reading appendonly", client.config_get("appendonly")
         )
         if appendonly.get("appendonly") != "yes":
-            await _bounded_redis_call(
-                "enabling AOF", client.config_set("appendonly", "yes")
-            )
+            await _bounded_redis_call("enabling AOF", client.config_set("appendonly", "yes"))
 
         await _bounded_redis_call("flushing the test database", client.flushdb())
     except BaseException:

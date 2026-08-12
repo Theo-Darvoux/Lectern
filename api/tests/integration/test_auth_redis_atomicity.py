@@ -76,6 +76,30 @@ async def test_auth_rate_limits_have_exactly_the_configured_concurrent_winners(
     assert winners.count(False) == 32 - maximum
 
 
+async def test_guest_session_mint_budget_is_distributed(redis: Redis) -> None:  # type: ignore[type-arg]
+    async def consume() -> bool:
+        return await auth_service.consume_guest_session_mint_budget(redis, "203.0.113.10")
+
+    with patch.object(settings, "environment", "production"):
+        winners = await asyncio.gather(*(consume() for _ in range(16)))
+
+    assert winners.count(True) == auth_service.GUEST_SESSION_MINT_MAX
+    assert winners.count(False) == 16 - auth_service.GUEST_SESSION_MINT_MAX
+
+
+async def test_classic_login_account_budget_is_distributed(redis: Redis) -> None:  # type: ignore[type-arg]
+    async def consume() -> bool:
+        return await auth_service.consume_classic_login_budget(
+            redis, "203.0.113.20", "Victim@Example.com"
+        )
+
+    with patch.object(settings, "environment", "production"):
+        winners = await asyncio.gather(*(consume() for _ in range(24)))
+
+    assert winners.count(True) == auth_service.CLASSIC_LOGIN_ACCOUNT_MAX
+    assert winners.count(False) == 24 - auth_service.CLASSIC_LOGIN_ACCOUNT_MAX
+
+
 async def test_verification_code_has_exactly_one_concurrent_redeemer(
     redis: Redis,  # type: ignore[type-arg]
 ) -> None:

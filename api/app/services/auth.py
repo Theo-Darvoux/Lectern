@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import secrets
 from datetime import UTC, datetime
 from typing import Any
@@ -27,6 +29,11 @@ RATE_LIMIT_TTL_SECONDS = 900
 RATE_LIMIT_MAX = 3
 VERIFY_RATE_LIMIT_MAX = 5
 VERIFY_RATE_LIMIT_TTL_SECONDS = 600
+GUEST_SESSION_MINT_MAX = 5
+GUEST_SESSION_MINT_TTL_SECONDS = 15 * 60
+CLASSIC_LOGIN_SOURCE_MAX = 20
+CLASSIC_LOGIN_ACCOUNT_MAX = 8
+CLASSIC_LOGIN_TTL_SECONDS = 15 * 60
 
 # Redis scripts are deliberately small and self-identifying. Challenge issuance
 # and compare/delete decisions happen server-side so concurrent requests cannot
@@ -393,6 +400,49 @@ async def _consume_rate_limit(
     return int(results[0]) <= maximum
 
 
+def _normalized_account_rate_key(email: str) -> str:
+    normalized = email.strip().lower().encode("utf-8")
+    return hashlib.sha256(normalized).hexdigest()
+
+
+async def consume_guest_session_mint_budget(
+    redis: Redis,  # type: ignore[type-arg]
+    source: str,
+) -> bool:
+    """Consume one distributed guest-session mint attempt for a trusted source."""
+    if settings.is_dev:
+        return True
+    return await _consume_rate_limit(
+        redis,
+        f"auth:guest_mint:source:{source}",
+        maximum=GUEST_SESSION_MINT_MAX,
+        ttl_seconds=GUEST_SESSION_MINT_TTL_SECONDS,
+    )
+
+
+async def consume_classic_login_budget(
+    redis: Redis,  # type: ignore[type-arg]
+    source: str,
+    email: str,
+) -> bool:
+    """Atomically consume source and account budgets across every API replica."""
+    if settings.is_dev:
+        return True
+
+    source_key = f"auth:classic:source:{source}"
+    account_key = f"auth:classic:account:{_normalized_account_rate_key(email)}"
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.incr(source_key)
+        pipe.expire(source_key, CLASSIC_LOGIN_TTL_SECONDS, nx=True)
+        pipe.incr(account_key)
+        pipe.expire(account_key, CLASSIC_LOGIN_TTL_SECONDS, nx=True)
+        results = await pipe.execute()
+
+    return (
+        int(results[0]) <= CLASSIC_LOGIN_SOURCE_MAX and int(results[2]) <= CLASSIC_LOGIN_ACCOUNT_MAX
+    )
+
+
 async def check_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[type-arg]
     if settings.is_dev:
         return True
@@ -523,12 +573,26 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)  # type: ignore[no-any-return]
 
 
+# A real bcrypt hash keeps unknown-account and passwordless-account work on the
+# same cost path as a normal failed password. It deliberately never corresponds
+# to a credential accepted by the application.
+_DUMMY_PASSWORD_HASH = "$2b$12$rER4UeHeDk7MCgpHhPapJOyVNzWjdgsPvwRpsDD7kC0DPJgHxOTni"
+_PASSWORD_VERIFY_SEMAPHORE = asyncio.Semaphore(settings.classic_auth_max_concurrent_hashes)
+
+
+async def _verify_password_bounded(plain_password: str, hashed_password: str) -> bool:
+    async with _PASSWORD_VERIFY_SEMAPHORE:
+        return await asyncio.to_thread(verify_password, plain_password, hashed_password)
+
+
 async def authenticate_user(db: AsyncSession, email: str, password: str) -> User | None:
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
-    if not user or not user.password_hash:
-        return None
-    if not verify_password(password, user.password_hash):
+    password_hash = (
+        user.password_hash if user is not None and user.password_hash else _DUMMY_PASSWORD_HASH
+    )
+    is_valid = await _verify_password_bounded(password, password_hash)
+    if user is None or not user.password_hash or not is_valid:
         return None
     return user
 

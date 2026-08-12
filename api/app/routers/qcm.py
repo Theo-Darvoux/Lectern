@@ -208,9 +208,7 @@ async def _check_qcm_staging_quota(
     if QCM_MAX_OUTSTANDING_CLAIMS < 1 or QCM_MAX_OUTSTANDING_BYTES < 1:
         raise RuntimeError("QCM outstanding staging limits must be positive")
 
-    locked_user_id = await db.scalar(
-        select(User.id).where(User.id == user_id).with_for_update()
-    )
+    locked_user_id = await db.scalar(select(User.id).where(User.id == user_id).with_for_update())
     if locked_user_id is None:
         raise ServiceUnavailableError("QCM staging account state is unavailable")
 

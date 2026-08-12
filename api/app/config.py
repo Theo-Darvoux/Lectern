@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     google_oauth_enabled: bool = False
     google_client_id: str | None = None
     classic_auth_enabled: bool = False
+    classic_auth_max_concurrent_hashes: int = Field(default=4, ge=1, le=32)
     allow_all_domains: bool = False
     auto_approve_all_domains: bool = False
     guest_access_enabled: bool = False

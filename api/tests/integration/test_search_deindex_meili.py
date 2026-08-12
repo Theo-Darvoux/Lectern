@@ -89,3 +89,35 @@ async def test_real_meili_pagination_horizon_matches_authoritative_scan() -> Non
                 raise_for_status=True,
             )
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_real_meili_normal_update_waits_until_new_fields_are_searchable() -> None:
+    """Exercise the exact normal-update helper used by index workers against real Meili."""
+    from app.workers.index_content import _submit_index_documents
+
+    assert MEILI_URL is not None
+    client = AsyncClient(MEILI_URL, MEILI_MASTER_KEY)
+    index = client.index("materials")
+    document_id = str(uuid.uuid4())
+    old_marker = f"normal-update-old-{uuid.uuid4().hex}"
+    new_marker = f"normal-update-new-{uuid.uuid4().hex}"
+
+    try:
+        with patch("app.workers.index_content.meili_admin_client", client):
+            await _submit_index_documents("materials", [{"id": document_id, "title": old_marker}])
+            await _submit_index_documents("materials", [{"id": document_id, "title": new_marker}])
+
+        new_result = await index.search(new_marker)
+        assert any(str(hit.get("id")) == document_id for hit in new_result.hits)
+        old_result = await index.search(old_marker)
+        assert all(str(hit.get("id")) != document_id for hit in old_result.hits)
+    finally:
+        with contextlib.suppress(Exception):
+            cleanup_task = await index.delete_document(document_id)
+            await client.wait_for_task(
+                cleanup_task.task_uid,
+                timeout_in_ms=30_000,
+                raise_for_status=True,
+            )
+        await client.aclose()

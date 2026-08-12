@@ -22,8 +22,18 @@ logger = logging.getLogger(__name__)
 _OUTBOX_MAX_ATTEMPTS = 10
 _OUTBOX_MAX_BACKOFF_SECONDS = 3600
 _OUTBOX_KWARGS_KEY = "__outbox_kwargs__"
-_COMPLETION_TRACKED_JOB_NAMES = frozenset({"delete_indexed_item"})
-_DEINDEX_ACK_LEASE_SECONDS = 300
+COMPLETION_TRACKED_JOB_NAMES = frozenset(
+    {
+        "delete_indexed_item",
+        "index_material",
+        "index_materials_batch",
+        "index_directory",
+        "index_directories_batch",
+        "delete_storage_objects",
+        "release_cas_references",
+    }
+)
+_COMPLETION_ACK_LEASE_SECONDS = 300
 _ALLOWED_JOB_NAMES = frozenset(
     {
         "add_cas_references",
@@ -245,9 +255,9 @@ async def acknowledge_outbox_completion(session_factory: Any, outbox_id: str) ->
 async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> int:
     """Attempt delivery of committed outbox rows, leaving failures retryable.
 
-    Most jobs retain the historical enqueue-acknowledged semantics. Search deindex
-    jobs are different: stale search metadata is externally visible, so they remain
-    durable until the worker confirms the Meilisearch task itself succeeded.
+    Jobs whose correctness depends on an external side effect remain durable until
+    the worker confirms that effect itself completed. Other jobs retain the historical
+    enqueue-acknowledged semantics.
     """
     if redis_db.arq_pool is None:
         logger.error("ARQ pool unavailable; durable outbox jobs remain pending")
@@ -255,11 +265,11 @@ async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> in
 
     now = datetime.now(UTC)
     completion_tracked_pending = and_(
-        OutboxJob.job_name.in_(_COMPLETION_TRACKED_JOB_NAMES),
+        OutboxJob.job_name.in_(COMPLETION_TRACKED_JOB_NAMES),
         OutboxJob.completed_at.is_(None),
     )
     enqueue_tracked_pending = and_(
-        OutboxJob.job_name.not_in(_COMPLETION_TRACKED_JOB_NAMES),
+        OutboxJob.job_name.not_in(COMPLETION_TRACKED_JOB_NAMES),
         OutboxJob.delivered_at.is_(None),
         OutboxJob.abandoned_at.is_(None),
     )
@@ -279,11 +289,11 @@ async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> in
     )
     delivered = 0
     for row in rows:
-        completion_tracked = row.job_name in _COMPLETION_TRACKED_JOB_NAMES
+        completion_tracked = row.job_name in COMPLETION_TRACKED_JOB_NAMES
         if completion_tracked:
-            # Legacy backups may restore a pre-fix abandoned deindex row after
-            # this migration has already run. Completion-tracked work ignores
-            # that obsolete terminal marker and clears it before re-delivery.
+            # Completion-tracked work is never terminal merely because an older
+            # dispatcher marked it abandoned. Clear that obsolete marker before
+            # re-delivery.
             row.abandoned_at = None
         attempt = (row.attempts or 0) + 1
         try:
@@ -311,10 +321,10 @@ async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> in
             )
             row.next_attempt_at = now + timedelta(seconds=delay)
             if completion_tracked:
-                # A failed search deletion must never become terminal solely
-                # because the queue was unavailable many times. Keep retrying.
+                # External-effect work must never become terminal solely because
+                # the queue was unavailable many times. Keep retrying.
                 row.abandoned_at = None
-                logger.error("Failed to enqueue durable deindex job %s: %s", row.id, exc)
+                logger.error("Failed to enqueue completion-tracked job %s: %s", row.id, exc)
             elif row.attempts >= _OUTBOX_MAX_ATTEMPTS:
                 row.abandoned_at = now
                 logger.error(
@@ -333,7 +343,7 @@ async def dispatch_pending_outbox(session: AsyncSession, limit: int = 100) -> in
                 # Lease the row while ARQ executes it. If the worker crashes,
                 # exhausts retries, or succeeds remotely but dies before DB ack,
                 # the minute cron will enqueue a new idempotent attempt later.
-                row.next_attempt_at = now + timedelta(seconds=_DEINDEX_ACK_LEASE_SECONDS)
+                row.next_attempt_at = now + timedelta(seconds=_COMPLETION_ACK_LEASE_SECONDS)
             delivered += 1
     await session.commit()
     return delivered

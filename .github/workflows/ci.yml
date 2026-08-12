@@ -158,6 +158,44 @@ jobs:
           tests/integration/database/test_qcm_staging_quota_concurrency.py
           tests/integration/database/test_like_toggle_concurrency.py
 
+  meilisearch:
+    runs-on: ubuntu-latest
+    services:
+      meilisearch:
+        image: docker.io/getmeili/meilisearch@sha256:c9fac23131cca4db95173d41cc50fd5639121ee381795528fdd7522d7978a7b8
+        env:
+          MEILI_MASTER_KEY: ci-meili-master-key-0123456789
+          MEILI_NO_ANALYTICS: "true"
+        ports:
+          - 7700:7700
+    env:
+      SEARCH_DEINDEX_MEILI_URL: http://127.0.0.1:7700
+      SEARCH_DEINDEX_MEILI_MASTER_KEY: ci-meili-master-key-0123456789
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - run: uv sync --frozen --extra dev
+      - name: Wait for live Meilisearch
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:7700/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Meilisearch did not become healthy" >&2
+          exit 1
+      - name: Exercise real Meilisearch mutation semantics
+        run: uv run pytest -m integration tests/integration/test_search_deindex_meili.py
+
   production-policy:
     runs-on: ubuntu-latest
     outputs:
@@ -297,6 +335,7 @@ jobs:
     needs:
       - api
       - postgres-revert
+      - meilisearch
       - production-policy
       - seaweedfs
       - web
@@ -305,6 +344,7 @@ jobs:
     env:
       API_RESULT: ${{ needs.api.result }}
       POSTGRES_RESULT: ${{ needs.postgres-revert.result }}
+      MEILI_RESULT: ${{ needs.meilisearch.result }}
       POLICY_RESULT: ${{ needs.production-policy.result }}
       SEAWEEDFS_RESULT: ${{ needs.seaweedfs.result }}
       WEB_RESULT: ${{ needs.web.result }}
@@ -317,6 +357,7 @@ jobs:
           for result in \
             "$API_RESULT" \
             "$POSTGRES_RESULT" \
+            "$MEILI_RESULT" \
             "$POLICY_RESULT" \
             "$SEAWEEDFS_RESULT" \
             "$WEB_RESULT" \

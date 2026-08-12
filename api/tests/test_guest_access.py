@@ -2,7 +2,7 @@
 
 import uuid
 from contextlib import contextmanager
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -80,6 +80,26 @@ async def test_guest_session_issued_when_enabled(client: AsyncClient, db_session
     assert body["user"]["display_name"] == "Guest"
     assert body["access_token"]
     assert body["is_new_user"] is False
+
+
+async def test_guest_session_mint_is_source_limited_in_production(
+    client: AsyncClient, db_session: AsyncSession, mock_redis: AsyncMock
+) -> None:
+    from app.config import settings
+    from app.services import auth as auth_service
+
+    await _create_guest_user(db_session)
+    pipe = mock_redis.pipeline.return_value
+    pipe.execute.return_value = [auth_service.GUEST_SESSION_MINT_MAX + 1, True]
+
+    with (
+        _enable_guest_access(),
+        patch.object(settings, "environment", "production"),
+    ):
+        response = await client.post("/api/auth/guest")
+
+    assert response.status_code == 429
+    assert "Too many guest sessions" in response.json()["detail"]
 
 
 async def test_guest_session_unavailable_without_seeded_guest(

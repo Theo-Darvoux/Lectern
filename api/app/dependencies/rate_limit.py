@@ -39,6 +39,11 @@ def _request_session_id(request: Request) -> str | None:
     return None
 
 
+def _guest_source_subject(request: Request) -> str:
+    host = (request.client.host if request.client else None) or "unknown"
+    return f"guest-ip:{host}"
+
+
 def _rate_limit_subject(request: Request, user: User) -> str:
     if user.role != UserRole.GUEST:
         return str(user.id)
@@ -47,10 +52,21 @@ def _rate_limit_subject(request: Request, user: User) -> str:
     if session_id:
         return f"guest-session:{session_id}"
 
-    # Backward-compatible fallback for a pre-session-family guest JWT. Avoid
-    # collapsing the entire guest population into the single seeded DB user.
-    host = (request.client.host if request.client else None) or "unknown"
-    return f"guest-ip:{host}"
+    # Backward-compatible fallback for a pre-session-family guest JWT.
+    return _guest_source_subject(request)
+
+
+def _rate_limit_subjects(request: Request, user: User) -> list[str]:
+    """Return the per-session subject plus a stable aggregate guest budget.
+
+    A guest can mint a new session ID, so a session-only counter is not an abuse
+    boundary. Authenticated users retain their per-account budget; guests consume
+    both the session budget and the trusted client-source budget.
+    """
+    primary = _rate_limit_subject(request, user)
+    if user.role != UserRole.GUEST:
+        return [primary]
+    return list(dict.fromkeys((primary, _guest_source_subject(request))))
 
 
 async def rate_limit_downloads(
@@ -63,22 +79,22 @@ async def rate_limit_downloads(
     minute_limit = 100 if settings.is_dev else 10
     daily_limit = 2000 if settings.is_dev else 200
 
-    subject = _rate_limit_subject(request, user)
-
-    minute_key = f"ratelimit:downloads:min:{subject}"
-    daily_key = f"ratelimit:downloads:day:{subject}"
+    subjects = _rate_limit_subjects(request, user)
 
     async with redis.pipeline(transaction=True) as pipe:
-        await pipe.incrby(minute_key, count)
-        await pipe.expire(minute_key, 60, nx=True)
-
-        await pipe.incrby(daily_key, count)
-        await pipe.expire(daily_key, 86400, nx=True)
-
+        for subject in subjects:
+            minute_key = f"ratelimit:downloads:min:{subject}"
+            daily_key = f"ratelimit:downloads:day:{subject}"
+            await pipe.incrby(minute_key, count)
+            await pipe.expire(minute_key, 60, nx=True)
+            await pipe.incrby(daily_key, count)
+            await pipe.expire(daily_key, 86400, nx=True)
         results = await pipe.execute()
 
-    minute_count = results[0]
-    daily_count = results[2]
+    minute_counts = [int(results[offset]) for offset in range(0, len(results), 4)]
+    daily_counts = [int(results[offset + 2]) for offset in range(0, len(results), 4)]
+    minute_count = max(minute_counts, default=0)
+    daily_count = max(daily_counts, default=0)
 
     if minute_count > minute_limit:
         raise RateLimitError(
@@ -112,22 +128,20 @@ async def rate_limit_uploads(
     tier = "privileged" if user.role in PRIVILEGED_ROLES else "default"
     minute_limit, daily_limit = _UPLOAD_LIMITS[tier]
 
-    subject = _rate_limit_subject(request, user)
-
-    minute_key = f"ratelimit:uploads:min:{subject}"
-    daily_key = f"ratelimit:uploads:day:{subject}"
+    subjects = _rate_limit_subjects(request, user)
 
     async with redis.pipeline(transaction=True) as pipe:
-        await pipe.incr(minute_key)
-        await pipe.expire(minute_key, 60, nx=True)
-
-        await pipe.incr(daily_key)
-        await pipe.expire(daily_key, 86400, nx=True)
-
+        for subject in subjects:
+            minute_key = f"ratelimit:uploads:min:{subject}"
+            daily_key = f"ratelimit:uploads:day:{subject}"
+            await pipe.incr(minute_key)
+            await pipe.expire(minute_key, 60, nx=True)
+            await pipe.incr(daily_key)
+            await pipe.expire(daily_key, 86400, nx=True)
         results = await pipe.execute()
 
-    minute_count = results[0]
-    daily_count = results[2]
+    minute_count = max(int(results[offset]) for offset in range(0, len(results), 4))
+    daily_count = max(int(results[offset + 2]) for offset in range(0, len(results), 4))
 
     if minute_count > minute_limit:
         raise RateLimitError(f"You are uploading too fast. Limit: {minute_limit} files per minute.")
@@ -160,18 +174,21 @@ async def rate_limit_views(
     minute_limit = 600 if settings.is_dev else 60
     daily_limit = 5000 if settings.is_dev else 1000
 
-    subject = _rate_limit_subject(request, user)
-    minute_key = f"ratelimit:views:min:{subject}"
-    daily_key = f"ratelimit:views:day:{subject}"
+    subjects = _rate_limit_subjects(request, user)
 
     async with redis.pipeline(transaction=True) as pipe:
-        await pipe.incr(minute_key)
-        await pipe.expire(minute_key, 60, nx=True)
-        await pipe.incr(daily_key)
-        await pipe.expire(daily_key, 86400, nx=True)
+        for subject in subjects:
+            minute_key = f"ratelimit:views:min:{subject}"
+            daily_key = f"ratelimit:views:day:{subject}"
+            await pipe.incr(minute_key)
+            await pipe.expire(minute_key, 60, nx=True)
+            await pipe.incr(daily_key)
+            await pipe.expire(daily_key, 86400, nx=True)
         results = await pipe.execute()
 
-    if results[0] > minute_limit or results[2] > daily_limit:
+    minute_count = max(int(results[offset]) for offset in range(0, len(results), 4))
+    daily_count = max(int(results[offset + 2]) for offset in range(0, len(results), 4))
+    if minute_count > minute_limit or daily_count > daily_limit:
         raise RateLimitError("Too many view events. Please slow down.")
 
 
@@ -182,18 +199,20 @@ async def rate_limit_search(
 ) -> None:
     """Rate limit for the public search endpoint: 30/min anonymous, 120/min authenticated."""
     if user is not None:
-        subject = _rate_limit_subject(request, user)
-        key = f"ratelimit:search:user:{subject}:min"
+        subjects = _rate_limit_subjects(request, user)
+        keys = [f"ratelimit:search:user:{subject}:min" for subject in subjects]
         minute_limit = 300 if settings.is_dev else 120
     else:
         ip = (request.client.host if request.client else None) or "unknown"
-        key = f"ratelimit:search:ip:{ip}:min"
+        keys = [f"ratelimit:search:ip:{ip}:min"]
         minute_limit = 300 if settings.is_dev else 30
 
     async with redis.pipeline(transaction=True) as pipe:
-        await pipe.incr(key)
-        await pipe.expire(key, 60, nx=True)
+        for key in keys:
+            await pipe.incr(key)
+            await pipe.expire(key, 60, nx=True)
         results = await pipe.execute()
 
-    if results[0] > minute_limit:
+    counts = [int(results[offset]) for offset in range(0, len(results), 2)]
+    if max(counts, default=0) > minute_limit:
         raise RateLimitError("Too many search requests. Please slow down.")

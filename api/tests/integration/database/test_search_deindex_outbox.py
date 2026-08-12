@@ -378,3 +378,78 @@ async def test_reconciler_candidate_restored_directory_subtree_is_not_deleted() 
         await cleanup.execute(delete(Directory).where(Directory.id.in_(directory_ids)))
         await cleanup.commit()
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_material_index_order_lock_prevents_older_snapshot_overwriting_newer_batch() -> None:
+    """An older single worker cannot resume after a newer overlapping batch write."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from sqlalchemy import update
+
+    import app.core.database.database as worker_db_core
+    from app.models.material import Material
+    from app.workers.index_content import index_material, index_materials_batch
+
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    marker = uuid.uuid4().hex
+
+    async with sessions() as seed:
+        material = Material(
+            title="Ordering B",
+            slug=f"index-order-{marker}",
+            type="file",
+        )
+        seed.add(material)
+        await seed.commit()
+        material_id = material.id
+
+    first_remote_started = asyncio.Event()
+    release_first_remote = asyncio.Event()
+    submitted_titles: list[str] = []
+    index = MagicMock()
+
+    async def add_documents(docs: list[dict[str, object]]):
+        submitted_titles.append(str(docs[0]["title"]))
+        if len(submitted_titles) == 1:
+            first_remote_started.set()
+            await release_first_remote.wait()
+        return SimpleNamespace(task_uid=90 + len(submitted_titles))
+
+    index.add_documents = AsyncMock(side_effect=add_documents)
+    wait_for_task = AsyncMock(return_value=SimpleNamespace(status="succeeded"))
+
+    with (
+        patch.object(worker_db_core, "async_session_factory", sessions),
+        patch("app.workers.index_content.meili_admin_client.index", return_value=index),
+        patch("app.workers.index_content.meili_admin_client.wait_for_task", wait_for_task),
+    ):
+        older = asyncio.create_task(index_material({}, material_id))
+        await asyncio.wait_for(first_remote_started.wait(), timeout=5)
+
+        # Application writes do not take the worker-only advisory lock. Commit a
+        # newer authoritative snapshot while the older Meili submission is paused.
+        async with sessions() as mutate:
+            await mutate.execute(
+                update(Material).where(Material.id == material_id).values(title="Ordering C")
+            )
+            await mutate.commit()
+
+        newer = asyncio.create_task(index_materials_batch({}, [material_id]))
+        await asyncio.sleep(0.1)
+        assert submitted_titles == ["Ordering B"], (
+            "newer worker must wait on the per-document ordering lock before its DB read"
+        )
+
+        release_first_remote.set()
+        await asyncio.wait_for(asyncio.gather(older, newer), timeout=5)
+
+    assert submitted_titles == ["Ordering B", "Ordering C"]
+
+    async with sessions() as cleanup:
+        await cleanup.execute(delete(Material).where(Material.id == material_id))
+        await cleanup.commit()
+    await engine.dispose()

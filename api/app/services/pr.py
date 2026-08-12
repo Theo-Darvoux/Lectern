@@ -1046,9 +1046,7 @@ async def _exec_create_material(
     directory_id = _resolve(str(p.get("directory_id")) if p.get("directory_id") else None, id_map)
     if directory_id is not None:
         parent_dir = await db.scalar(
-            select(Directory.id).where(
-                Directory.id == directory_id, Directory.deleted_at.is_(None)
-            )
+            select(Directory.id).where(Directory.id == directory_id, Directory.deleted_at.is_(None))
         )
         if parent_dir is None:
             raise NotFoundError("Parent directory not found")
@@ -1131,9 +1129,7 @@ async def _exec_create_material(
     await _acquire_directory_tree_lock(db)
     if directory_id is not None:
         parent_dir = await db.scalar(
-            select(Directory.id).where(
-                Directory.id == directory_id, Directory.deleted_at.is_(None)
-            )
+            select(Directory.id).where(Directory.id == directory_id, Directory.deleted_at.is_(None))
         )
         if parent_dir is None:
             raise NotFoundError("Parent directory not found")
@@ -1303,9 +1299,7 @@ async def _exec_create_directory(
     parent_id = _resolve(str(p["parent_id"]) if p.get("parent_id") else None, id_map)
     if parent_id is not None:
         parent_dir = await db.scalar(
-            select(Directory.id).where(
-                Directory.id == parent_id, Directory.deleted_at.is_(None)
-            )
+            select(Directory.id).where(Directory.id == parent_id, Directory.deleted_at.is_(None))
         )
         if parent_dir is None:
             raise NotFoundError("Parent directory not found")
@@ -1557,9 +1551,7 @@ async def _build_browse_path(db: AsyncSession, op_type: str, result_id: uuid.UUI
 # ---------------------------------------------------------------------------
 
 
-def _operation_uses_directory_tree_lock(
-    op_type: str, op: dict[str, typing.Any]
-) -> bool:
+def _operation_uses_directory_tree_lock(op_type: str, op: dict[str, typing.Any]) -> bool:
     """Return whether an operation mutates the shared hierarchy/slug namespace.
 
     Reverse edit operations carry only ``pre_state`` rather than the forward
@@ -2348,9 +2340,7 @@ async def _exec_revert_move_item(
         prev_dir = uuid.UUID(pre["prev_directory_id"]) if pre.get("prev_directory_id") else None
         if prev_dir is not None:
             live_parent = await db.scalar(
-                select(Directory.id).where(
-                    Directory.id == prev_dir, Directory.deleted_at.is_(None)
-                )
+                select(Directory.id).where(Directory.id == prev_dir, Directory.deleted_at.is_(None))
             )
             if live_parent is None:
                 raise NotFoundError("Parent directory not found")
@@ -2480,10 +2470,7 @@ async def revert_pr(
     # hierarchy/namespace mutation.  Acquire the advisory lock before the first
     # reverse executor whenever any reverse operation needs it, preserving the
     # same advisory-lock -> row-lock ordering as normal PR application.
-    if any(
-        _operation_uses_directory_tree_lock(str(op.get("op") or ""), op)
-        for op in reverse_ops
-    ):
+    if any(_operation_uses_directory_tree_lock(str(op.get("op") or ""), op) for op in reverse_ops):
         await _acquire_directory_tree_lock(db)
 
     for op in reverse_ops:

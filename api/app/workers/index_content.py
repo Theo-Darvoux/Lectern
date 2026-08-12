@@ -1,9 +1,10 @@
+import hashlib
 import logging
 import re
 import uuid
 from collections.abc import Awaitable, Callable
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -95,143 +96,271 @@ def _build_directory_doc(
     }
 
 
-async def index_material(ctx: dict, material_id: uuid.UUID) -> None:  # type: ignore[type-arg]
-    """Index or update a single material in Meilisearch."""
-    async with db_core.async_session_factory() as db:
-        result = await db.execute(
-            select(Material)
-            .options(
-                selectinload(Material.tags),
-                selectinload(Material.author),
-                selectinload(Material.versions),
-            )
-            .where(Material.id == material_id, Material.deleted_at.is_(None))
-        )
-        material = result.scalar_one_or_none()
-        if not material:
-            logger.warning(f"Material {material_id} not found for indexing.")
-            return
-
-        from app.services.directory import get_directory_path
-
-        ancestor_path = ""
-        browse_path = "/browse"
-        if material.directory_id:
-            path_parts = await get_directory_path(db, material.directory_id)
-            if path_parts:
-                ancestor_path = " ".join(p["name"] for p in path_parts)
-                browse_path += "/" + "/".join(p["slug"] for p in path_parts)
-        browse_path += f"/{material.slug}"
-
-        doc = _build_material_doc(material, ancestor_path, browse_path)
-        await meili_admin_client.index("materials").add_documents([doc])
-        logger.info(f"Indexed material {material_id}")
+_INDEX_ORDER_LOCK_PERSON = b"WikINTIndexV1"
 
 
-async def index_materials_batch(ctx: dict, material_ids: list[uuid.UUID]) -> None:  # type: ignore[type-arg]
-    """Index multiple materials in a single Meilisearch add_documents call."""
-    if not material_ids:
+def _index_order_lock_key(index_name: str, item_id: uuid.UUID) -> int:
+    """Return a stable signed 64-bit advisory-lock key for one search document."""
+    digest = hashlib.blake2b(
+        f"{index_name}:{item_id}".encode(),
+        digest_size=8,
+        person=_INDEX_ORDER_LOCK_PERSON,
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+async def _acquire_index_order_locks(
+    db: AsyncSession, index_name: str, item_ids: list[uuid.UUID] | set[uuid.UUID]
+) -> None:
+    """Serialize all writers for the same Meilisearch document before DB snapshotting.
+
+    PostgreSQL transaction-scoped advisory locks are deliberately worker-only: they
+    do not block application writes, but every single and batch index worker uses
+    the same key and deterministic ordering.  Therefore an older worker cannot
+    resume after a newer worker and overwrite the newer authoritative snapshot.
+    The lock is acquired before the PostgreSQL read and held through Meilisearch
+    task completion by the worker session transaction.
+    """
+    if db.get_bind().dialect.name != "postgresql":
         return
-    async with db_core.async_session_factory() as db:
-        result = await db.execute(
-            select(Material)
-            .options(
-                selectinload(Material.tags),
-                selectinload(Material.author),
-                selectinload(Material.versions),
-            )
-            .where(Material.id.in_(material_ids))
+    for item_id in sorted(set(item_ids), key=lambda value: value.int):
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": _index_order_lock_key(index_name, item_id)},
         )
-        materials = result.scalars().all()
-        if not materials:
-            return
-
-        from app.services.directory import get_ancestor_map
-
-        dir_ids = {m.directory_id for m in materials if m.directory_id}
-        ancestor_map = await get_ancestor_map(db, dir_ids) if dir_ids else {}
-
-        docs = []
-        for material in materials:
-            ancestor_path = ""
-            browse_path = "/browse"
-            if material.directory_id:
-                paths = ancestor_map.get(material.directory_id)
-                if paths:
-                    ancestor_path, slug_path = paths
-                    browse_path += "/" + slug_path
-            browse_path += f"/{material.slug}"
-            docs.append(_build_material_doc(material, ancestor_path, browse_path))
-
-        if docs:
-            await meili_admin_client.index("materials").add_documents(docs)
-            logger.info(f"Batch-indexed {len(docs)} materials")
 
 
-async def index_directory(ctx: dict, directory_id: uuid.UUID) -> None:  # type: ignore[type-arg]
-    """Index or update a single directory in Meilisearch."""
-    async with db_core.async_session_factory() as db:
-        result = await db.execute(
-            select(Directory)
-            .options(selectinload(Directory.tags))
-            .where(Directory.id == directory_id, Directory.deleted_at.is_(None))
-        )
-        directory = result.scalar_one_or_none()
-        if not directory:
-            logger.warning(f"Directory {directory_id} not found for indexing.")
-            return
-
-        from app.services.directory import get_directory_path
-
-        ancestor_path = ""
-        browse_path = "/browse"
-        if directory.parent_id:
-            path_parts = await get_directory_path(db, directory.parent_id)
-            if path_parts:
-                ancestor_path = " ".join(p["name"] for p in path_parts)
-                browse_path += "/" + "/".join(p["slug"] for p in path_parts)
-        browse_path += f"/{directory.slug}"
-
-        doc = _build_directory_doc(directory, ancestor_path, browse_path)
-        await meili_admin_client.index("directories").add_documents([doc])
-        logger.info(f"Indexed directory {directory_id}")
-
-
-async def index_directories_batch(ctx: dict, directory_ids: list[uuid.UUID]) -> None:  # type: ignore[type-arg]
-    """Index multiple directories in a single Meilisearch add_documents call."""
-    if not directory_ids:
+async def _submit_index_documents(index_name: str, docs: list[dict]) -> None:  # type: ignore[type-arg]
+    """Submit a normal index update and return only after Meilisearch commits it."""
+    if not docs:
         return
-    async with db_core.async_session_factory() as db:
-        result = await db.execute(
-            select(Directory)
-            .options(selectinload(Directory.tags))
-            .where(Directory.id.in_(directory_ids))
-        )
-        directories = result.scalars().all()
-        if not directories:
-            return
+    task = await meili_admin_client.index(index_name).add_documents(docs)
+    await _wait_for_meili_task(task)
 
-        from app.services.directory import get_ancestor_map
 
-        # For directories, ancestor_path is derived from each directory's PARENT.
-        parent_ids = {d.parent_id for d in directories if d.parent_id}
-        ancestor_map = await get_ancestor_map(db, parent_ids) if parent_ids else {}
+def _completion_session_factory(ctx: dict, outbox_id: str | None):  # type: ignore[type-arg]
+    if outbox_id is None:
+        return None
+    session_factory = ctx.get("db_sessionmaker")
+    if session_factory is None:
+        raise RuntimeError("Completion-tracked index job has no DB session factory")
+    return session_factory
 
-        docs = []
-        for directory in directories:
-            ancestor_path = ""
-            browse_path = "/browse"
-            if directory.parent_id:
-                paths = ancestor_map.get(directory.parent_id)
-                if paths:
-                    ancestor_path, slug_path = paths
-                    browse_path += "/" + slug_path
-            browse_path += f"/{directory.slug}"
-            docs.append(_build_directory_doc(directory, ancestor_path, browse_path))
 
-        if docs:
-            await meili_admin_client.index("directories").add_documents(docs)
-            logger.info(f"Batch-indexed {len(docs)} directories")
+async def _acknowledge_index_completion(session_factory: object, outbox_id: str) -> None:
+    acknowledged = await acknowledge_outbox_completion(session_factory, outbox_id)
+    if not acknowledged:
+        raise RuntimeError(f"Unable to acknowledge index outbox row {outbox_id}")
+
+
+async def _record_index_failure(
+    session_factory: object, outbox_id: str, exc: BaseException
+) -> None:
+    try:
+        await record_outbox_execution_failure(session_factory, outbox_id, exc)
+    except Exception:
+        logger.exception("Failed to persist index worker failure for outbox %s", outbox_id)
+
+
+async def index_material(
+    ctx: dict,  # type: ignore[type-arg]
+    material_id: uuid.UUID | str,
+    *,
+    outbox_id: str | None = None,
+) -> None:
+    """Index or update a single material and durably acknowledge Meili completion."""
+    session_factory = _completion_session_factory(ctx, outbox_id)
+    try:
+        normalized_id = uuid.UUID(str(material_id))
+        async with db_core.async_session_factory() as db:
+            await _acquire_index_order_locks(db, "materials", [normalized_id])
+            result = await db.execute(
+                select(Material)
+                .options(
+                    selectinload(Material.tags),
+                    selectinload(Material.author),
+                    selectinload(Material.versions),
+                )
+                .where(Material.id == normalized_id, Material.deleted_at.is_(None))
+            )
+            material = result.scalar_one_or_none()
+            if not material:
+                logger.warning("Material %s not found for indexing.", material_id)
+            else:
+                from app.services.directory import get_directory_path
+
+                ancestor_path = ""
+                browse_path = "/browse"
+                if material.directory_id:
+                    path_parts = await get_directory_path(db, material.directory_id)
+                    if path_parts:
+                        ancestor_path = " ".join(p["name"] for p in path_parts)
+                        browse_path += "/" + "/".join(p["slug"] for p in path_parts)
+                browse_path += f"/{material.slug}"
+
+                doc = _build_material_doc(material, ancestor_path, browse_path)
+                await _submit_index_documents("materials", [doc])
+                logger.info("Indexed material %s", material_id)
+
+        if outbox_id is not None:
+            assert session_factory is not None
+            await _acknowledge_index_completion(session_factory, outbox_id)
+    except Exception as exc:
+        if outbox_id is not None and session_factory is not None:
+            await _record_index_failure(session_factory, outbox_id, exc)
+        raise
+
+
+async def index_materials_batch(
+    ctx: dict,  # type: ignore[type-arg]
+    material_ids: list[uuid.UUID | str],
+    *,
+    outbox_id: str | None = None,
+) -> None:
+    """Index multiple materials and acknowledge only after the Meili task succeeds."""
+    session_factory = _completion_session_factory(ctx, outbox_id)
+    try:
+        normalized_ids = [uuid.UUID(str(material_id)) for material_id in material_ids]
+        if normalized_ids:
+            async with db_core.async_session_factory() as db:
+                await _acquire_index_order_locks(db, "materials", normalized_ids)
+                result = await db.execute(
+                    select(Material)
+                    .options(
+                        selectinload(Material.tags),
+                        selectinload(Material.author),
+                        selectinload(Material.versions),
+                    )
+                    .where(Material.id.in_(normalized_ids), Material.deleted_at.is_(None))
+                )
+                materials = result.scalars().all()
+
+                if materials:
+                    from app.services.directory import get_ancestor_map
+
+                    dir_ids = {m.directory_id for m in materials if m.directory_id}
+                    ancestor_map = await get_ancestor_map(db, dir_ids) if dir_ids else {}
+
+                    docs = []
+                    for material in materials:
+                        ancestor_path = ""
+                        browse_path = "/browse"
+                        if material.directory_id:
+                            paths = ancestor_map.get(material.directory_id)
+                            if paths:
+                                ancestor_path, slug_path = paths
+                                browse_path += "/" + slug_path
+                        browse_path += f"/{material.slug}"
+                        docs.append(_build_material_doc(material, ancestor_path, browse_path))
+
+                    await _submit_index_documents("materials", docs)
+                    logger.info("Batch-indexed %d materials", len(docs))
+
+        if outbox_id is not None:
+            assert session_factory is not None
+            await _acknowledge_index_completion(session_factory, outbox_id)
+    except Exception as exc:
+        if outbox_id is not None and session_factory is not None:
+            await _record_index_failure(session_factory, outbox_id, exc)
+        raise
+
+
+async def index_directory(
+    ctx: dict,  # type: ignore[type-arg]
+    directory_id: uuid.UUID | str,
+    *,
+    outbox_id: str | None = None,
+) -> None:
+    """Index or update one directory and durably acknowledge Meili completion."""
+    session_factory = _completion_session_factory(ctx, outbox_id)
+    try:
+        normalized_id = uuid.UUID(str(directory_id))
+        async with db_core.async_session_factory() as db:
+            await _acquire_index_order_locks(db, "directories", [normalized_id])
+            result = await db.execute(
+                select(Directory)
+                .options(selectinload(Directory.tags))
+                .where(
+                    Directory.id == normalized_id,
+                    Directory.deleted_at.is_(None),
+                )
+            )
+            directory = result.scalar_one_or_none()
+            if not directory:
+                logger.warning("Directory %s not found for indexing.", directory_id)
+            else:
+                from app.services.directory import get_directory_path
+
+                ancestor_path = ""
+                browse_path = "/browse"
+                if directory.parent_id:
+                    path_parts = await get_directory_path(db, directory.parent_id)
+                    if path_parts:
+                        ancestor_path = " ".join(p["name"] for p in path_parts)
+                        browse_path += "/" + "/".join(p["slug"] for p in path_parts)
+                browse_path += f"/{directory.slug}"
+
+                doc = _build_directory_doc(directory, ancestor_path, browse_path)
+                await _submit_index_documents("directories", [doc])
+                logger.info("Indexed directory %s", directory_id)
+
+        if outbox_id is not None:
+            assert session_factory is not None
+            await _acknowledge_index_completion(session_factory, outbox_id)
+    except Exception as exc:
+        if outbox_id is not None and session_factory is not None:
+            await _record_index_failure(session_factory, outbox_id, exc)
+        raise
+
+
+async def index_directories_batch(
+    ctx: dict,  # type: ignore[type-arg]
+    directory_ids: list[uuid.UUID | str],
+    *,
+    outbox_id: str | None = None,
+) -> None:
+    """Index multiple directories and acknowledge only after Meili completion."""
+    session_factory = _completion_session_factory(ctx, outbox_id)
+    try:
+        normalized_ids = [uuid.UUID(str(directory_id)) for directory_id in directory_ids]
+        if normalized_ids:
+            async with db_core.async_session_factory() as db:
+                await _acquire_index_order_locks(db, "directories", normalized_ids)
+                result = await db.execute(
+                    select(Directory)
+                    .options(selectinload(Directory.tags))
+                    .where(Directory.id.in_(normalized_ids), Directory.deleted_at.is_(None))
+                )
+                directories = result.scalars().all()
+
+                if directories:
+                    from app.services.directory import get_ancestor_map
+
+                    parent_ids = {d.parent_id for d in directories if d.parent_id}
+                    ancestor_map = await get_ancestor_map(db, parent_ids) if parent_ids else {}
+
+                    docs = []
+                    for directory in directories:
+                        ancestor_path = ""
+                        browse_path = "/browse"
+                        if directory.parent_id:
+                            paths = ancestor_map.get(directory.parent_id)
+                            if paths:
+                                ancestor_path, slug_path = paths
+                                browse_path += "/" + slug_path
+                        browse_path += f"/{directory.slug}"
+                        docs.append(_build_directory_doc(directory, ancestor_path, browse_path))
+
+                    await _submit_index_documents("directories", docs)
+                    logger.info("Batch-indexed %d directories", len(docs))
+
+        if outbox_id is not None:
+            assert session_factory is not None
+            await _acknowledge_index_completion(session_factory, outbox_id)
+    except Exception as exc:
+        if outbox_id is not None and session_factory is not None:
+            await _record_index_failure(session_factory, outbox_id, exc)
+        raise
 
 
 async def _wait_for_meili_task(task: object) -> None:

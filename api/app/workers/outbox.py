@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy import and_, delete, or_
 
-from app.core.database.post_commit import dispatch_pending_outbox
+from app.core.database.post_commit import COMPLETION_TRACKED_JOB_NAMES, dispatch_pending_outbox
 from app.models.outbox import OutboxJob
 
 
@@ -19,15 +19,15 @@ async def dispatch_outbox(ctx: dict[str, Any]) -> None:
             delete(OutboxJob).where(
                 or_(
                     and_(
-                        OutboxJob.job_name != "delete_indexed_item",
+                        OutboxJob.job_name.not_in(COMPLETION_TRACKED_JOB_NAMES),
                         OutboxJob.delivered_at < now - timedelta(days=7),
                     ),
                     and_(
-                        OutboxJob.job_name == "delete_indexed_item",
+                        OutboxJob.job_name.in_(COMPLETION_TRACKED_JOB_NAMES),
                         OutboxJob.completed_at < now - timedelta(days=7),
                     ),
                     and_(
-                        OutboxJob.job_name != "delete_indexed_item",
+                        OutboxJob.job_name.not_in(COMPLETION_TRACKED_JOB_NAMES),
                         OutboxJob.abandoned_at < now - timedelta(days=30),
                     ),
                 )

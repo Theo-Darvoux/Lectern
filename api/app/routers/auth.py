@@ -220,12 +220,16 @@ async def get_auth_methods(
 
 @router.post("/guest", response_model=TokenResponse)
 async def guest_session(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     response: Response,
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> TokenResponse:
     """Start a read-only guest session when an admin has enabled guest access."""
     if not settings.guest_access_enabled:
         raise UnauthorizedError("Guest access is disabled")
+    if not await auth_service.consume_guest_session_mint_budget(redis, get_client_id(request)):
+        raise RateLimitError("Too many guest sessions requested. Please try again later.")
 
     guest = await auth_service.get_guest_user(db)
     if guest is None:
@@ -452,12 +456,18 @@ async def verify_google_oauth(
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
+    request: Request,
     data: LoginIn,
     db: Annotated[AsyncSession, Depends(get_db)],
     response: Response,
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> TokenResponse:
     if not settings.classic_auth_enabled:
         raise UnauthorizedError("Classic authentication (email + password) is disabled")
+    if not await auth_service.consume_classic_login_budget(
+        redis, get_client_id(request), data.email
+    ):
+        raise RateLimitError("Too many login attempts. Please try again later.")
 
     user = await auth_service.authenticate_user(db, data.email, data.password)
     if not user:

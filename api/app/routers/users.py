@@ -12,9 +12,9 @@ from app.core.storage.facade import generate_presigned_get
 from app.dependencies.auth import CurrentUser, get_optional_user
 from app.dependencies.pagination import PaginationParams
 from app.models.material import Material, MaterialFavourite, MaterialVersion
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.common import PaginatedResponse
-from app.schemas.material import MaterialDetail
+from app.schemas.material import MaterialDetailResponse, project_material_detail
 from app.schemas.user import (
     OnboardIn,
     PublicAnnotationContribution,
@@ -101,27 +101,31 @@ async def reset_my_tutorials(
     return UserOut.model_validate(updated)
 
 
-@router.get("/me/recently-viewed", response_model=list[MaterialDetail])
+@router.get("/me/recently-viewed", response_model=list[MaterialDetailResponse])
 async def recently_viewed(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[MaterialDetail]:
+) -> list[MaterialDetailResponse]:
     materials = await get_recently_viewed(db, str(user.id))
 
     dir_ids = {m["directory_id"] for m in materials}
     paths = await get_directory_paths(db, dir_ids)
 
+    public = user.role == UserRole.GUEST
     return [
-        MaterialDetail.model_validate({**m, "directory_path": paths.get(m["directory_id"])})
+        project_material_detail(
+            {**m, "directory_path": paths.get(m["directory_id"])},
+            public=public,
+        )
         for m in materials
     ]
 
 
-@router.get("/me/favourites", response_model=list[MaterialDetail])
+@router.get("/me/favourites", response_model=list[MaterialDetailResponse])
 async def get_my_favourites(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[MaterialDetail]:
+) -> list[MaterialDetailResponse]:
     stmt = (
         select(Material, MaterialVersion)
         .join(MaterialFavourite, MaterialFavourite.material_id == Material.id)
@@ -152,8 +156,12 @@ async def get_my_favourites(
     dir_ids = {m["directory_id"] for m in materials_out if m.get("directory_id") is not None}
     paths = await get_directory_paths(db, dir_ids)
 
+    public = user.role == UserRole.GUEST
     return [
-        MaterialDetail.model_validate({**m, "directory_path": paths.get(m["directory_id"])})
+        project_material_detail(
+            {**m, "directory_path": paths.get(m["directory_id"])},
+            public=public,
+        )
         for m in materials_out
     ]
 

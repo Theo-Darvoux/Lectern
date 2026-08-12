@@ -133,6 +133,155 @@ async def test_deindex_worker_acks_only_after_meili_task_succeeds(db_session: As
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("job_name", "args"),
+    [
+        ("index_material", [str(uuid.uuid4())]),
+        ("index_materials_batch", [[str(uuid.uuid4())]]),
+        ("index_directory", [str(uuid.uuid4())]),
+        ("index_directories_batch", [[str(uuid.uuid4())]]),
+        ("delete_storage_objects", [["avatars/user/avatar.webp"]]),
+        (
+            "release_cas_references",
+            [[{"sha256": "a" * 64, "operation_id": "release-once"}]],
+        ),
+    ],
+)
+async def test_external_effect_jobs_dispatch_with_completion_ack_target(
+    db_session: AsyncSession, job_name: str, args: list[object]
+) -> None:
+    row = OutboxJob(
+        job_name=job_name,
+        args=args,
+        next_attempt_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    db_session.add(row)
+    await db_session.commit()
+
+    pool = AsyncMock()
+    with patch("app.core.database.redis.arq_pool", pool):
+        assert await dispatch_pending_outbox(db_session) == 1
+
+    await db_session.refresh(row)
+    assert row.delivered_at is not None
+    assert row.completed_at is None
+    assert pool.enqueue_job.await_args.kwargs["outbox_id"] == str(row.id)
+    assert pool.enqueue_job.await_args.kwargs["_job_id"] == f"outbox:{row.id}:attempt:1"
+
+
+@pytest.mark.asyncio
+async def test_index_update_outbox_survives_meili_task_failure_until_retry(
+    db_session: AsyncSession,
+) -> None:
+    from app.workers.index_content import index_material
+
+    material = Material(
+        title="Durable index update",
+        slug=f"durable-index-{uuid.uuid4().hex}",
+        type="document",
+    )
+    outbox = OutboxJob(job_name="index_material", args=[str(material.id)])
+    db_session.add_all([material, outbox])
+    await db_session.commit()
+
+    index = MagicMock()
+    index.add_documents = AsyncMock(return_value=SimpleNamespace(task_uid=73))
+    wait_for_task = AsyncMock(side_effect=RuntimeError("meili update failed"))
+    with (
+        patch("app.workers.index_content.meili_admin_client.index", return_value=index),
+        patch("app.workers.index_content.meili_admin_client.wait_for_task", wait_for_task),
+    ):
+        with pytest.raises(RuntimeError, match="meili update failed"):
+            await index_material(
+                {"db_sessionmaker": db_core.async_session_factory},
+                material.id,
+                outbox_id=str(outbox.id),
+            )
+
+    await db_session.refresh(outbox)
+    assert outbox.completed_at is None
+    assert outbox.last_error == "meili update failed"
+
+    wait_for_task.side_effect = None
+    wait_for_task.return_value = SimpleNamespace(status="succeeded")
+    with (
+        patch("app.workers.index_content.meili_admin_client.index", return_value=index),
+        patch("app.workers.index_content.meili_admin_client.wait_for_task", wait_for_task),
+    ):
+        await index_material(
+            {"db_sessionmaker": db_core.async_session_factory},
+            material.id,
+            outbox_id=str(outbox.id),
+        )
+
+    await db_session.refresh(outbox)
+    assert outbox.completed_at is not None
+    assert outbox.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_storage_delete_outbox_survives_worker_failure_until_retry(
+    db_session: AsyncSession,
+) -> None:
+    from app.workers.storage_ops import delete_storage_objects
+
+    outbox = OutboxJob(
+        job_name="delete_storage_objects",
+        args=[["avatars/deleted-user/avatar.webp"]],
+    )
+    db_session.add(outbox)
+    await db_session.commit()
+
+    with patch(
+        "app.workers.storage_ops.delete_object",
+        new=AsyncMock(side_effect=OSError("storage unavailable")),
+    ):
+        with pytest.raises(ExceptionGroup):
+            await delete_storage_objects(
+                {"db_sessionmaker": db_core.async_session_factory},
+                ["avatars/deleted-user/avatar.webp"],
+                outbox_id=str(outbox.id),
+            )
+
+    await db_session.refresh(outbox)
+    assert outbox.completed_at is None
+    assert "could not be deleted" in (outbox.last_error or "")
+
+    with patch("app.workers.storage_ops.delete_object", new=AsyncMock()):
+        await delete_storage_objects(
+            {"db_sessionmaker": db_core.async_session_factory},
+            ["avatars/deleted-user/avatar.webp"],
+            outbox_id=str(outbox.id),
+        )
+
+    await db_session.refresh(outbox)
+    assert outbox.completed_at is not None
+    assert outbox.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_cas_release_acknowledges_only_after_release_succeeds(
+    db_session: AsyncSession,
+) -> None:
+    from app.workers.storage_ops import release_cas_references
+
+    references = [{"sha256": "b" * 64, "operation_id": "hard-delete-release"}]
+    outbox = OutboxJob(job_name="release_cas_references", args=[references])
+    db_session.add(outbox)
+    await db_session.commit()
+
+    with patch("app.core.security.cas.decrement_cas_ref", new=AsyncMock()):
+        await release_cas_references(
+            {"db_sessionmaker": db_core.async_session_factory, "redis": AsyncMock()},
+            references,
+            outbox_id=str(outbox.id),
+        )
+
+    await db_session.refresh(outbox)
+    assert outbox.completed_at is not None
+
+
+@pytest.mark.asyncio
 async def test_obsolete_material_deindex_cannot_delete_restored_live_document(
     db_session: AsyncSession,
 ) -> None:
@@ -258,17 +407,28 @@ async def test_outbox_cleanup_keeps_unacknowledged_deindex(db_session: AsyncSess
         abandoned_at=old,
         next_attempt_at=old,
     )
-    ordinary = OutboxJob(job_name="index_material", args=["ordinary"], delivered_at=old)
-    db_session.add_all([unacked, acked, legacy_abandoned, ordinary])
+    unacked_index = OutboxJob(job_name="index_material", args=[str(uuid.uuid4())], delivered_at=old)
+    unacked_storage = OutboxJob(
+        job_name="delete_storage_objects", args=[["avatars/pending.webp"]], delivered_at=old
+    )
+    ordinary = OutboxJob(job_name="dispatch_webhook", args=[], delivered_at=old)
+    db_session.add_all([unacked, acked, legacy_abandoned, unacked_index, unacked_storage, ordinary])
     await db_session.commit()
     unacked_id = unacked.id
     legacy_abandoned_id = legacy_abandoned.id
+    unacked_index_id = unacked_index.id
+    unacked_storage_id = unacked_storage.id
 
     with patch("app.workers.outbox.dispatch_pending_outbox", AsyncMock(return_value=0)):
         await dispatch_outbox({"db_sessionmaker": db_core.async_session_factory})
 
     remaining = set(await db_session.scalars(select(OutboxJob.id)))
-    assert remaining == {unacked_id, legacy_abandoned_id}
+    assert remaining == {
+        unacked_id,
+        legacy_abandoned_id,
+        unacked_index_id,
+        unacked_storage_id,
+    }
 
 
 @pytest.mark.asyncio

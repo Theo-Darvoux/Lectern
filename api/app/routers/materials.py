@@ -36,12 +36,18 @@ from app.dependencies.rate_limit import (
     rate_limit_views,
 )
 from app.models.upload import Upload
+from app.models.user import UserRole
 from app.routers.upload.helpers import (
     _check_pending_cap,
     _release_storage_reservation,
     _reserve_storage_limit,
 )
-from app.schemas.material import MaterialDetail, MaterialVersionOut
+from app.schemas.material import (
+    MaterialDetailResponse,
+    MaterialVersionResponse,
+    project_material_detail,
+    project_material_version,
+)
 from app.services.audit import record_download
 from app.services.material import (
     get_material_attachments,
@@ -214,14 +220,14 @@ def _build_bounded_text_diff(
     return "```diff\n" + "\n".join(diff_lines) + "\n```" if diff_lines else ""
 
 
-@router.get("/{material_id}", response_model=MaterialDetail)
+@router.get("/{material_id}", response_model=MaterialDetailResponse)
 async def get_material(
     material_id: str,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> MaterialDetail:
+) -> MaterialDetailResponse:
     data = await get_material_with_version(db, material_id, current_user_id=user.id)
-    return MaterialDetail.model_validate(data)
+    return project_material_detail(data, public=user.role == UserRole.GUEST)
 
 
 @router.get("/{material_id}/download-url")
@@ -406,25 +412,29 @@ async def stream_material_file(
     return RedirectResponse(url=url, status_code=302)
 
 
-@router.get("/{material_id}/versions", response_model=list[MaterialVersionOut])
+@router.get("/{material_id}/versions", response_model=list[MaterialVersionResponse])
 async def list_versions(
     material_id: str,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[MaterialVersionOut]:
+) -> list[MaterialVersionResponse]:
     versions = await get_material_versions(db, material_id)
-    return [MaterialVersionOut.model_validate(v) for v in versions]
+    public = user.role == UserRole.GUEST
+    return [project_material_version(version, public=public) for version in versions]
 
 
-@router.get("/{material_id}/versions/{version_number}", response_model=MaterialVersionOut)
+@router.get(
+    "/{material_id}/versions/{version_number}",
+    response_model=MaterialVersionResponse,
+)
 async def get_version(
     material_id: str,
     version_number: int,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> MaterialVersionOut:
+) -> MaterialVersionResponse:
     version = await get_material_version(db, material_id, version_number)
-    return MaterialVersionOut.model_validate(version)
+    return project_material_version(version, public=user.role == UserRole.GUEST)
 
 
 @router.get("/{material_id}/versions/{version_number}/download-url")
@@ -467,14 +477,15 @@ async def get_version_download_url(
     return {"url": url, "filename": version.file_name}
 
 
-@router.get("/{material_id}/attachments", response_model=list[MaterialDetail])
+@router.get("/{material_id}/attachments", response_model=list[MaterialDetailResponse])
 async def list_attachments(
     material_id: str,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[MaterialDetail]:
+) -> list[MaterialDetailResponse]:
     attachments = await get_material_attachments(db, material_id, current_user_id=user.id)
-    return [MaterialDetail.model_validate(a) for a in attachments]
+    public = user.role == UserRole.GUEST
+    return [project_material_detail(a, public=public) for a in attachments]
 
 
 @router.post("/{material_id}/view")

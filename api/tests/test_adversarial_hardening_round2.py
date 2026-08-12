@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -11,13 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from app.config import settings
+from app.core.common.exceptions import RateLimitError
 from app.core.security.security import (
     BROWSER_READ_COOKIE,
     create_access_token,
     create_browser_read_token,
     decode_token,
 )
-from app.dependencies.rate_limit import _rate_limit_subject
+from app.dependencies.rate_limit import _rate_limit_subject, _rate_limit_subjects
 from app.models.directory import Directory
 from app.models.material import Material, MaterialVersion
 from app.models.user import User, UserRole
@@ -200,7 +201,7 @@ def _request_with_bearer(token: str, client_ip: str = "203.0.113.10") -> Request
     )
 
 
-def test_guest_rate_limits_are_per_session_not_shared_user() -> None:
+def test_guest_rate_limits_keep_per_session_and_stable_source_budget() -> None:
     guest = User(
         id=uuid.uuid4(),
         email="guest@lectern.local",
@@ -218,6 +219,41 @@ def test_guest_rate_limits_are_per_session_not_shared_user() -> None:
     assert subject_a == "guest-session:guest-a"
     assert subject_b == "guest-session:guest-b"
     assert subject_a != subject_b
+
+    subjects_a = _rate_limit_subjects(_request_with_bearer(token_a), guest)
+    subjects_b = _rate_limit_subjects(_request_with_bearer(token_b), guest)
+    assert subjects_a == ["guest-session:guest-a", "guest-ip:203.0.113.10"]
+    assert subjects_b == ["guest-session:guest-b", "guest-ip:203.0.113.10"]
+
+
+@pytest.mark.asyncio
+async def test_guest_download_budget_cannot_reset_with_new_session() -> None:
+    from app.dependencies.rate_limit import rate_limit_downloads
+
+    guest = User(
+        id=uuid.uuid4(),
+        email="guest@lectern.local",
+        role=UserRole.GUEST,
+        onboarded=True,
+    )
+    token, _ = create_access_token(
+        str(guest.id), guest.role.value, guest.email, session_id="fresh-session"
+    )
+    request = _request_with_bearer(token)
+
+    redis = AsyncMock()
+    pipe = AsyncMock()
+    pipe.incrby = AsyncMock(return_value=pipe)
+    pipe.expire = AsyncMock(return_value=pipe)
+    # Per-session counters are fresh, but the stable source minute counter is exhausted.
+    pipe.execute = AsyncMock(return_value=[1, True, 1, True, 11, True, 1, True])
+    pipe.__aenter__ = AsyncMock(return_value=pipe)
+    pipe.__aexit__ = AsyncMock(return_value=None)
+    redis.pipeline = MagicMock(return_value=pipe)
+
+    with patch.object(settings, "environment", "production"):
+        with pytest.raises(RateLimitError, match="downloading too fast"):
+            await rate_limit_downloads(request, guest, AsyncMock(), redis)
 
 
 def test_session_family_is_shared_across_token_types() -> None:

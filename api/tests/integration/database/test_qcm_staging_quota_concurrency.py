@@ -75,9 +75,7 @@ async def test_concurrent_qcm_staging_admission_cannot_oversubscribe_user_quota(
             first.add(_claim(user_id, first_size))
             await first.flush()
 
-            competing = asyncio.create_task(
-                _check_qcm_staging_quota(second, user_id, second_size)
-            )
+            competing = asyncio.create_task(_check_qcm_staging_quota(second, user_id, second_size))
             await asyncio.sleep(0.2)
             assert not competing.done(), "second admission crossed the per-user row lock"
 
