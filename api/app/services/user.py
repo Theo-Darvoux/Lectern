@@ -200,7 +200,11 @@ async def get_user_contributions(
         ]
         return materials_out, total
     elif contribution_type == "annotations":
-        ann_base = select(Annotation).where(Annotation.author_id == uid)
+        ann_base = (
+            select(Annotation)
+            .join(Material, Annotation.material_id == Material.id)
+            .where(Annotation.author_id == uid, Material.deleted_at.is_(None))
+        )
         count_result = await db.execute(select(func.count()).select_from(ann_base.subquery()))
         total = count_result.scalar_one()
         result = await db.execute(

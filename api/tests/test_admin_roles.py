@@ -320,3 +320,38 @@ async def test_admin_reject_rechecks_pending_state_after_authority_lock(
     current_target = await db_session.get(User, target.id)
     assert current_target is not None
     assert current_target.role == UserRole.STUDENT
+
+
+async def test_role_promotion_rotates_target_auth_generation(db_session: AsyncSession) -> None:
+    from app.routers.admin import admin_update_role
+    from app.services.auth import token_matches_auth_generation
+
+    actor = await _make_user(db_session, UserRole.BUREAU)
+    target = await _make_user(db_session, UserRole.STUDENT)
+    stale_payload = {"gen": target.auth_generation}
+
+    await admin_update_role(
+        user_id=target.id,
+        _user=actor,
+        db=db_session,
+        role=UserRole.MODERATOR.value,
+    )
+
+    assert target.role == UserRole.MODERATOR
+    assert target.auth_generation == 1
+    assert token_matches_auth_generation(stale_payload, target) is False
+
+
+async def test_pending_approval_rotates_target_auth_generation(db_session: AsyncSession) -> None:
+    from app.routers.admin import admin_approve_user
+    from app.services.auth import token_matches_auth_generation
+
+    actor = await _make_user(db_session, UserRole.BUREAU)
+    target = await _make_user(db_session, UserRole.PENDING)
+    stale_payload = {"gen": target.auth_generation}
+
+    await admin_approve_user(user_id=target.id, _user=actor, db=db_session)
+
+    assert target.role == UserRole.STUDENT
+    assert target.auth_generation == 1
+    assert token_matches_auth_generation(stale_payload, target) is False

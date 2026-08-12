@@ -91,3 +91,47 @@ class UserProfileOut(UserOut):
     comments_count: int = 0
     open_pr_count: int = 0
     reputation: int = 0
+
+
+class PublicPRContribution(BaseModel):
+    id: uuid.UUID
+    type: str
+    status: str
+    title: str
+    description: str | None
+    summary_types: list[str] = Field(default_factory=list)
+    author: PublicUserBrief | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PublicAnnotationContribution(BaseModel):
+    id: uuid.UUID
+    material_id: uuid.UUID
+    body: str
+    author: PublicUserBrief | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PublicMaterialContribution(BaseModel):
+    id: uuid.UUID
+    directory_id: uuid.UUID | None
+    directory_path: str | None = None
+    title: str
+    slug: str
+    description: str | None
+    type: str
+    download_count: int
+    total_views: int
+    like_count: int
+    is_liked: bool = False
+    is_favourited: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}

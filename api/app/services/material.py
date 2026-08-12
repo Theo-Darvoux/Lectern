@@ -45,7 +45,9 @@ def material_orm_to_dict(
     """
     path = directory_path
     if not path and "directory" in m.__dict__:
-        path = m.directory.slug
+        directory = m.directory
+        if directory is not None:
+            path = directory.slug
 
     # Determine if current user liked/favourited this. Prefer explicitly
     # provided (batched) values; otherwise derive from loaded relationships.
@@ -444,8 +446,17 @@ async def toggle_like(db: AsyncSession, user_id: uuid.UUID, material_id: uuid.UU
 
 
 async def toggle_favourite(db: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID) -> bool:
-    """Toggle a favourite for a material. Returns True if favourited, False if removed."""
-    # Check if exists
+    """Toggle a favourite atomically for one user/material pair."""
+    await acquire_reaction_toggle_lock(
+        db,
+        kind="material-favourite",
+        user_id=user_id,
+        target_id=material_id,
+    )
+
+    if await db.scalar(select(Material.id).where(Material.id == material_id)) is None:
+        raise NotFoundError("Material not found")
+
     result = await db.execute(
         select(MaterialFavourite).where(
             MaterialFavourite.user_id == user_id, MaterialFavourite.material_id == material_id

@@ -683,7 +683,17 @@ async def toggle_directory_like(
 async def toggle_directory_favourite(
     db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID
 ) -> bool:
-    """Toggle a favourite for a directory. Returns True if favourited, False if removed."""
+    """Toggle a favourite atomically for one user/directory pair."""
+    await acquire_reaction_toggle_lock(
+        db,
+        kind="directory-favourite",
+        user_id=user_id,
+        target_id=directory_id,
+    )
+
+    if await db.scalar(select(Directory.id).where(Directory.id == directory_id)) is None:
+        raise NotFoundError("Directory not found")
+
     result = await db.execute(
         select(DirectoryFavourite).where(
             DirectoryFavourite.user_id == user_id, DirectoryFavourite.directory_id == directory_id

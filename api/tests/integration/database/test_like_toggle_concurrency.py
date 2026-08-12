@@ -8,11 +8,11 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.models.directory import Directory, DirectoryLike, DirectoryType
-from app.models.material import Material, MaterialLike
+from app.models.directory import Directory, DirectoryFavourite, DirectoryLike, DirectoryType
+from app.models.material import Material, MaterialFavourite, MaterialLike
 from app.models.user import User, UserRole
-from app.services.directory import toggle_directory_like
-from app.services.material import toggle_like
+from app.services.directory import toggle_directory_favourite, toggle_directory_like
+from app.services.material import toggle_favourite, toggle_like
 
 DATABASE_URL = os.environ.get("REVERT_TEST_DATABASE_URL")
 pytestmark = [
@@ -121,5 +121,87 @@ async def test_concurrent_directory_toggles_keep_membership_and_counter_consiste
         assert directory is not None
         assert directory.like_count == 0
         assert membership_count == 0
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_material_favourite_toggles_are_linearizable() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    user_id = await _seed_user(sessions)
+
+    async with sessions() as seed:
+        material = Material(
+            title="Material favourite race",
+            slug=f"material-favourite-race-{uuid.uuid4().hex[:12]}",
+            type="document",
+        )
+        seed.add(material)
+        await seed.commit()
+        material_id = material.id
+
+    async with sessions() as first, sessions() as second:
+        assert await toggle_favourite(first, user_id, material_id) is True
+        competing = asyncio.create_task(toggle_favourite(second, user_id, material_id))
+        await asyncio.sleep(0.2)
+        assert not competing.done(), "competing material favourite did not wait for the pair lock"
+        await first.commit()
+        assert await asyncio.wait_for(competing, timeout=5) is False
+        await second.commit()
+
+    async with sessions() as check:
+        membership_count = await check.scalar(
+            select(func.count())
+            .select_from(MaterialFavourite)
+            .where(
+                MaterialFavourite.user_id == user_id,
+                MaterialFavourite.material_id == material_id,
+            )
+        )
+        assert membership_count == 0
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_directory_favourite_toggles_are_linearizable() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    user_id = await _seed_user(sessions)
+
+    async with sessions() as seed:
+        directory = Directory(
+            name="Directory favourite race",
+            slug=f"directory-favourite-race-{uuid.uuid4().hex[:12]}",
+            type=DirectoryType.FOLDER,
+        )
+        seed.add(directory)
+        await seed.flush()
+        seed.add(DirectoryFavourite(user_id=user_id, directory_id=directory.id))
+        await seed.commit()
+        directory_id = directory.id
+
+    async with sessions() as first, sessions() as second:
+        assert await toggle_directory_favourite(first, user_id, directory_id) is False
+        competing = asyncio.create_task(toggle_directory_favourite(second, user_id, directory_id))
+        await asyncio.sleep(0.2)
+        assert not competing.done(), "competing directory favourite did not wait for the pair lock"
+        await first.commit()
+        assert await asyncio.wait_for(competing, timeout=5) is True
+        await second.commit()
+
+    async with sessions() as check:
+        membership_count = await check.scalar(
+            select(func.count())
+            .select_from(DirectoryFavourite)
+            .where(
+                DirectoryFavourite.user_id == user_id,
+                DirectoryFavourite.directory_id == directory_id,
+            )
+        )
+        assert membership_count == 1
 
     await engine.dispose()

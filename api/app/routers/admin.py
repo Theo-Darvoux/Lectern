@@ -136,7 +136,9 @@ async def admin_update_role(
         raise NotFoundError("User not found")
     if target.is_admin and new_role not in ADMIN_ROLES:
         await ensure_admin_removal_safe(db, target.id)
-    target.role = new_role
+    if target.role != new_role:
+        target.role = new_role
+        target.auth_generation += 1
     await db.flush()
     return {"status": "ok", "role": new_role.value}
 
@@ -178,6 +180,7 @@ async def admin_approve_user(
         raise BadRequestError("User is not pending approval")
 
     target.role = UserRole.STUDENT
+    target.auth_generation += 1
     await db.flush()
 
     await notify_user(

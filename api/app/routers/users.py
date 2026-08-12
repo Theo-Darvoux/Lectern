@@ -6,19 +6,20 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common.exceptions import NotFoundError
+from app.core.common.exceptions import NotFoundError, UnauthorizedError
 from app.core.database.database import get_db
 from app.core.storage.facade import generate_presigned_get
 from app.dependencies.auth import CurrentUser, get_optional_user
 from app.dependencies.pagination import PaginationParams
 from app.models.material import Material, MaterialFavourite, MaterialVersion
 from app.models.user import User
-from app.schemas.annotation import AnnotationOut
 from app.schemas.common import PaginatedResponse
 from app.schemas.material import MaterialDetail
-from app.schemas.pull_request import PullRequestOut
 from app.schemas.user import (
     OnboardIn,
+    PublicAnnotationContribution,
+    PublicMaterialContribution,
+    PublicPRContribution,
     PublicUserOut,
     PublicUserProfileOut,
     TutorialCompleteIn,
@@ -209,7 +210,12 @@ async def get_user_avatar(
     raise NotFoundError("Avatar reference is invalid")
 
 
-@router.get("/{user_id}/contributions")
+@router.get(
+    "/{user_id}/contributions",
+    response_model=PaginatedResponse[
+        PublicPRContribution | PublicMaterialContribution | PublicAnnotationContribution
+    ],
+)
 async def get_contributions(
     user_id: str,
     pagination: Annotated[PaginationParams, Depends()],
@@ -220,6 +226,10 @@ async def get_contributions(
     target = await get_user_by_id(db, user_id)
     if not target:
         raise NotFoundError("User not found")
+    if type == "annotations" and user is None:
+        # The canonical annotation reader requires an authenticated read principal.
+        # A public profile must not become an alternate anonymous path to bodies.
+        raise UnauthorizedError("Authentication required to read annotation contributions")
     items, total = await get_user_contributions(
         db,
         user_id,
@@ -235,19 +245,21 @@ async def get_contributions(
         dir_ids = {m["directory_id"] for m in materials_list if m.get("directory_id") is not None}
         directory_paths = await get_directory_paths(db, dir_ids)
 
-    serialized_items: list[PullRequestOut | MaterialDetail | AnnotationOut] = []
+    serialized_items: list[
+        PublicPRContribution | PublicMaterialContribution | PublicAnnotationContribution
+    ] = []
     for item in items:
         if type == "prs":
-            serialized_items.append(PullRequestOut.model_validate(item))
+            serialized_items.append(PublicPRContribution.model_validate(item))
         elif type == "materials":
             m_item = cast(dict[str, typing.Any], item)
             serialized_items.append(
-                MaterialDetail.model_validate(
+                PublicMaterialContribution.model_validate(
                     {**m_item, "directory_path": directory_paths.get(m_item["directory_id"])}
                 )
             )
         elif type == "annotations":
-            serialized_items.append(AnnotationOut.model_validate(item))
+            serialized_items.append(PublicAnnotationContribution.model_validate(item))
 
     return PaginatedResponse(
         items=serialized_items,

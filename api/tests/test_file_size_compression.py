@@ -1,5 +1,6 @@
 import json
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -98,6 +99,9 @@ async def test_exec_create_material_fetches_db_size():
 
     mock_db = AsyncMock()
     mock_db.info = {}
+    # AsyncSession.get_bind() is synchronous. Model that contract explicitly so
+    # hierarchy-lock code can inspect the test dialect without awaiting a mock.
+    mock_db.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="sqlite")))
 
     directory_id = uuid.uuid4()
     payload = {
@@ -130,3 +134,57 @@ async def test_exec_create_material_fetches_db_size():
         # Verify MaterialVersion was created with the authoritative upload size.
         _, kwargs = mock_ver.call_args
         assert kwargs["file_size"] == sanitized_size
+
+
+@pytest.mark.asyncio
+async def test_apply_pr_prepares_files_before_hierarchy_lock():
+    """External file preparation must precede the transaction-scoped tree lock."""
+    from app.services import pr as pr_service
+
+    events: list[str] = []
+    result_id = uuid.uuid4()
+    author_id = uuid.uuid4()
+
+    async def fake_prepare(
+        db: Any, operations: list[dict[str, Any]], prepared_author_id: uuid.UUID | None
+    ) -> None:
+        assert operations
+        assert prepared_author_id == author_id
+        events.append("prepare")
+        db.info[pr_service._PR_PREPARED_VERSION_FILES_KEY] = {}
+        db.info[pr_service._PR_PREPARED_VERSION_FILES_ACTIVE_KEY] = True
+
+    async def fake_lock(_db: Any) -> None:
+        events.append("lock")
+
+    async def fake_executor(
+        _db: Any, _payload: dict[str, Any], _pr: Any, _id_map: dict[str, uuid.UUID]
+    ) -> uuid.UUID:
+        events.append("execute")
+        return result_id
+
+    db = AsyncMock()
+    db.info = {}
+    contribution = MagicMock(
+        applied_result=None,
+        payload=[
+            {
+                "op": "create_material",
+                "title": "Prepared before lock",
+                "type": "document",
+                "file_key": "cas/example",
+            }
+        ],
+        author_id=author_id,
+    )
+
+    with (
+        patch.object(pr_service, "_prepare_pr_version_files", fake_prepare),
+        patch.object(pr_service, "_acquire_directory_tree_lock", fake_lock),
+        patch.dict(pr_service._EXECUTORS, {"create_material": fake_executor}),
+        patch.object(pr_service, "_build_browse_path", AsyncMock(return_value=None)),
+        patch.object(pr_service, "flag_modified"),
+    ):
+        await pr_service.apply_pr(db, contribution)
+
+    assert events == ["prepare", "lock", "execute"]

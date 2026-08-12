@@ -33,6 +33,7 @@ from app.models.user import User
 from app.schemas.pull_request import PullRequestCreate
 from app.services.directory import slugify
 from app.services.notification import notify_user
+from app.services.reaction_lock import acquire_reaction_toggle_lock
 from app.services.tag import get_or_create_tags, prune_orphan_tags
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,9 @@ async def _validate_directory_parent(
 
         row = (
             await db.execute(
-                select(Directory.id, Directory.parent_id).where(Directory.id == check_id)
+                select(Directory.id, Directory.parent_id).where(
+                    Directory.id == check_id, Directory.deleted_at.is_(None)
+                )
             )
         ).one_or_none()
         if row is None:
@@ -789,24 +792,27 @@ async def _resolve_thumbnail_info(
     return result[0], result[1]
 
 
-async def _make_version_for_file(
+_PR_PREPARED_VERSION_FILES_KEY = "pr_prepared_version_files"
+_PR_PREPARED_VERSION_FILES_ACTIVE_KEY = "pr_prepared_version_files_active"
+
+
+class _PreparedVersionFile(typing.TypedDict):
+    file_key: str
+    file_size: int
+    file_mime_type: str
+    cas_sha256: str | None
+    thumbnail_key: str | None
+    thumbnail_status: str | None
+
+
+async def _prepare_version_file(
     db: AsyncSession,
     *,
     file_key: str,
     payload: dict[str, typing.Any],
-    material_id: uuid.UUID,
-    version_number: int,
     author_id: uuid.UUID | None,
-    pr_id: uuid.UUID,
-    diff_summary: str | None = None,
-    version_lock: int = 0,
-) -> MaterialVersion:
-    """Resolve file metadata and create+flush a MaterialVersion.
-
-    Handles CAS V2 (cas/ prefix) and legacy V1 (uploads/ prefix) keys.
-    V1 keys are copied to the materials/ prefix and scheduled for deletion.
-    CAS keys get their content-addressed ref incremented.
-    """
+) -> _PreparedVersionFile:
+    """Resolve/copy external file state before any hierarchy transaction lock is taken."""
     stored_content_sha256: str | None = None
     if file_key.startswith("cas/"):
         upload_row = (
@@ -864,8 +870,8 @@ async def _make_version_for_file(
             stored_content_sha256 = claim.sha256
 
         enforce_upload_size_limit(mime_type, real_size)
-
         thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key, author_id)
+        final_key = file_key
     else:
         info = await get_object_info(file_key)
         real_size = int(info["size"])
@@ -873,10 +879,10 @@ async def _make_version_for_file(
 
         enforce_upload_size_limit(mime_type, real_size)
 
-        new_key = file_key.replace("uploads/", "materials/", 1)
+        final_key = file_key.replace("uploads/", "materials/", 1)
 
         async def rollback_copy() -> None:
-            await delete_object(new_key)
+            await delete_object(final_key)
 
         async def finalize_copy() -> None:
             return None
@@ -888,7 +894,7 @@ async def _make_version_for_file(
         )
 
         try:
-            await copy_object(file_key, new_key)
+            await copy_object(file_key, final_key)
         except BaseException:
             if not managed_transaction:
                 await shielded_await(
@@ -896,7 +902,87 @@ async def _make_version_for_file(
                 )
             raise
         thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key, author_id)
-        file_key = new_key
+
+    return {
+        "file_key": final_key,
+        "file_size": real_size,
+        "file_mime_type": mime_type,
+        "cas_sha256": stored_content_sha256 if final_key.startswith("cas/") else None,
+        "thumbnail_key": thumbnail_key,
+        "thumbnail_status": thumbnail_status,
+    }
+
+
+async def _prepare_pr_version_files(
+    db: AsyncSession,
+    operations: list[dict[str, typing.Any]],
+    author_id: uuid.UUID | None,
+) -> None:
+    """Perform every external file read/copy before PR hierarchy locking begins."""
+    prepared: dict[int, _PreparedVersionFile] = {}
+    for op in operations:
+        op_type = str(op.get("op") or op.get("pr_type") or "")
+        payloads: list[dict[str, typing.Any]] = []
+        if op_type == "create_material":
+            payloads.append(op)
+            payloads.extend(typing.cast(list[dict[str, typing.Any]], op.get("attachments") or []))
+        elif op_type == "edit_material":
+            payloads.append(op)
+
+        for payload in payloads:
+            raw_key = payload.get("file_key")
+            if not raw_key:
+                continue
+            prepared[id(payload)] = await _prepare_version_file(
+                db,
+                file_key=str(raw_key),
+                payload=payload,
+                author_id=author_id,
+            )
+
+    db.info[_PR_PREPARED_VERSION_FILES_KEY] = prepared
+    db.info[_PR_PREPARED_VERSION_FILES_ACTIVE_KEY] = True
+
+
+async def _make_version_for_file(
+    db: AsyncSession,
+    *,
+    file_key: str,
+    payload: dict[str, typing.Any],
+    material_id: uuid.UUID,
+    version_number: int,
+    author_id: uuid.UUID | None,
+    pr_id: uuid.UUID,
+    diff_summary: str | None = None,
+    version_lock: int = 0,
+) -> MaterialVersion:
+    """Resolve file metadata and create+flush a MaterialVersion.
+
+    Handles CAS V2 (cas/ prefix) and legacy V1 (uploads/ prefix) keys.
+    V1 keys are copied to the materials/ prefix and scheduled for deletion.
+    CAS keys get their content-addressed ref incremented.
+    """
+    prepared_files = typing.cast(
+        dict[int, _PreparedVersionFile],
+        db.info.get(_PR_PREPARED_VERSION_FILES_KEY, {}),
+    )
+    prepared = prepared_files.pop(id(payload), None)
+    if prepared is None:
+        if db.info.get(_PR_PREPARED_VERSION_FILES_ACTIVE_KEY) is True:
+            raise RuntimeError("PR file was not prepared before hierarchy mutation")
+        prepared = await _prepare_version_file(
+            db,
+            file_key=file_key,
+            payload=payload,
+            author_id=author_id,
+        )
+
+    file_key = prepared["file_key"]
+    real_size = prepared["file_size"]
+    mime_type = prepared["file_mime_type"]
+    stored_content_sha256 = prepared["cas_sha256"]
+    thumbnail_key = prepared["thumbnail_key"]
+    thumbnail_status = prepared["thumbnail_status"]
 
     mv = MaterialVersion(
         id=uuid.uuid4(),
@@ -958,6 +1044,26 @@ async def _exec_create_material(
 
     mat_id = uuid.uuid4()
     directory_id = _resolve(str(p.get("directory_id")) if p.get("directory_id") else None, id_map)
+    if directory_id is not None:
+        parent_dir = await db.scalar(
+            select(Directory.id).where(
+                Directory.id == directory_id, Directory.deleted_at.is_(None)
+            )
+        )
+        if parent_dir is None:
+            raise NotFoundError("Parent directory not found")
+
+    parent_material_id = _resolve(
+        str(p["parent_material_id"]) if p.get("parent_material_id") else None, id_map
+    )
+    if parent_material_id is not None:
+        parent_mat = await db.scalar(
+            select(Material.id).where(
+                Material.id == parent_material_id, Material.deleted_at.is_(None)
+            )
+        )
+        if parent_mat is None:
+            raise NotFoundError("Parent material not found")
 
     slug = await _unique_material_slug(db, directory_id, p["title"])
     m = Material(
@@ -967,10 +1073,7 @@ async def _exec_create_material(
         slug=slug,
         description=p.get("description"),
         type=p["type"],
-        parent_material_id=_resolve(
-            str(p["parent_material_id"]) if p.get("parent_material_id") else None,
-            id_map,
-        ),
+        parent_material_id=parent_material_id,
         author_id=pr.author_id,
         metadata_=p.get("metadata", {}),
         tags=tag_objs,
@@ -1021,6 +1124,27 @@ async def _exec_create_material(
                 author_id=pr.author_id,
                 pr_id=pr.id,
             )
+
+    # External object metadata/copies are complete before entering the global
+    # hierarchy critical section. Re-read the authoritative parents under the
+    # transaction lock so a concurrent soft-delete cannot leave a live child.
+    await _acquire_directory_tree_lock(db)
+    if directory_id is not None:
+        parent_dir = await db.scalar(
+            select(Directory.id).where(
+                Directory.id == directory_id, Directory.deleted_at.is_(None)
+            )
+        )
+        if parent_dir is None:
+            raise NotFoundError("Parent directory not found")
+    if parent_material_id is not None:
+        parent_mat = await db.scalar(
+            select(Material.id).where(
+                Material.id == parent_material_id, Material.deleted_at.is_(None)
+            )
+        )
+        if parent_mat is None:
+            raise NotFoundError("Parent material not found")
 
     seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_material", str(mat_id))
@@ -1147,8 +1271,11 @@ async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
 async def _exec_delete_material(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
+    await _acquire_directory_tree_lock(db)
     mat_id = _resolve(str(p["material_id"]), id_map)
-    mat = await db.scalar(select(Material).where(Material.id == mat_id))
+    mat = await db.scalar(
+        select(Material).where(Material.id == mat_id, Material.deleted_at.is_(None))
+    )
     if not mat:
         raise NotFoundError("Material not found")
 
@@ -1163,6 +1290,7 @@ async def _exec_delete_material(
 async def _exec_create_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
+    await _acquire_directory_tree_lock(db)
     tags = p.get("tags", [])
     tag_objs = []
     if tags:
@@ -1173,6 +1301,14 @@ async def _exec_create_directory(
 
     dir_id = uuid.uuid4()
     parent_id = _resolve(str(p["parent_id"]) if p.get("parent_id") else None, id_map)
+    if parent_id is not None:
+        parent_dir = await db.scalar(
+            select(Directory.id).where(
+                Directory.id == parent_id, Directory.deleted_at.is_(None)
+            )
+        )
+        if parent_dir is None:
+            raise NotFoundError("Parent directory not found")
     dir_slug = await _unique_directory_slug(db, parent_id, p["name"])
     d = Directory(
         id=dir_id,
@@ -1285,8 +1421,11 @@ async def _soft_delete_directory_tree(db: AsyncSession, directory_id: uuid.UUID)
 async def _exec_delete_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
+    await _acquire_directory_tree_lock(db)
     dir_id = _resolve(str(p["directory_id"]), id_map)
-    dir_obj = await db.scalar(select(Directory).where(Directory.id == dir_id))
+    dir_obj = await db.scalar(
+        select(Directory).where(Directory.id == dir_id, Directory.deleted_at.is_(None))
+    )
     if not dir_obj:
         raise NotFoundError("Directory not found")
 
@@ -1329,10 +1468,21 @@ async def _exec_move_item(
         await _enqueue_reindex_directory_recursive(db, dir_obj.id)
         return dir_obj.id
     else:
-        mat = await db.scalar(select(Material).where(Material.id == target_id))
+        await _acquire_directory_tree_lock(db)
+        mat = await db.scalar(
+            select(Material).where(Material.id == target_id, Material.deleted_at.is_(None))
+        )
         if not mat:
             raise NotFoundError("Material not found")
         new_parent = _resolve(str(p["new_parent_id"]) if p.get("new_parent_id") else None, id_map)
+        if new_parent is not None:
+            parent_dir = await db.scalar(
+                select(Directory.id).where(
+                    Directory.id == new_parent, Directory.deleted_at.is_(None)
+                )
+            )
+            if parent_dir is None:
+                raise NotFoundError("Parent directory not found")
         mat.directory_id = new_parent
         # Re-slug to ensure uniqueness in new location
         mat.slug = await _unique_material_slug(db, new_parent, mat.title, exclude_id=mat.id)
@@ -1407,6 +1557,33 @@ async def _build_browse_path(db: AsyncSession, op_type: str, result_id: uuid.UUI
 # ---------------------------------------------------------------------------
 
 
+def _operation_uses_directory_tree_lock(
+    op_type: str, op: dict[str, typing.Any]
+) -> bool:
+    """Return whether an operation mutates the shared hierarchy/slug namespace.
+
+    Reverse edit operations carry only ``pre_state`` rather than the forward
+    ``name``/``title`` field.  Treat those as namespace mutations too: the
+    revert executor restores the captured slug even when it happens to be
+    unchanged.
+    """
+    if op_type in {
+        "create_material",
+        "create_directory",
+        "delete_material",
+        "delete_directory",
+        "undelete_material",
+        "undelete_directory",
+        "move_item",
+    }:
+        return True
+    if op_type == "edit_directory":
+        return op.get("name") is not None or "pre_state" in op
+    if op_type == "edit_material":
+        return op.get("title") is not None or "pre_state" in op
+    return False
+
+
 async def _capture_pre_state(
     db: AsyncSession,
     op_type: str,
@@ -1419,7 +1596,10 @@ async def _capture_pre_state(
     if op_type == "edit_material":
         mat_id = _resolve(str(op["material_id"]), id_map)
         mat = await db.scalar(
-            select(Material).where(Material.id == mat_id).options(selectinload(Material.tags))
+            select(Material)
+            .where(Material.id == mat_id)
+            .options(selectinload(Material.tags))
+            .with_for_update()
         )
         if not mat:
             return None
@@ -1450,7 +1630,10 @@ async def _capture_pre_state(
     if op_type == "edit_directory":
         dir_id = _resolve(str(op["directory_id"]), id_map)
         d = await db.scalar(
-            select(Directory).where(Directory.id == dir_id).options(selectinload(Directory.tags))
+            select(Directory)
+            .where(Directory.id == dir_id)
+            .options(selectinload(Directory.tags))
+            .with_for_update()
         )
         if not d:
             return None
@@ -1467,14 +1650,18 @@ async def _capture_pre_state(
     if op_type == "move_item":
         target_id = _resolve(str(op["target_id"]), id_map)
         if op["target_type"] == "directory":
-            d = await db.scalar(select(Directory).where(Directory.id == target_id))
+            d = await db.scalar(
+                select(Directory).where(Directory.id == target_id).with_for_update()
+            )
             if d:
                 return {
                     "target_type": "directory",
                     "prev_parent_id": str(d.parent_id) if d.parent_id else None,
                 }
         else:
-            mat = await db.scalar(select(Material).where(Material.id == target_id))
+            mat = await db.scalar(
+                select(Material).where(Material.id == target_id).with_for_update()
+            )
             if mat:
                 return {
                     "target_type": "material",
@@ -1513,8 +1700,16 @@ async def create_pull_request_service(
                 f"You can include at most {settings.pr_max_ops_staff} changes per contribution"
             )
 
-    # Open PR limit for non-staff users
+    # Serialize count+insert for one non-staff author. A cardinality limit cannot
+    # be expressed as a uniqueness constraint, so the admission decision needs a
+    # transaction-scoped per-user serialization point.
     if not current_user.is_staff:
+        await acquire_reaction_toggle_lock(
+            db,
+            kind="user-pr-create",
+            user_id=current_user.id,
+            target_id=current_user.id,
+        )
         open_count = await db.scalar(
             select(func.count())
             .select_from(PullRequest)
@@ -1777,57 +1972,81 @@ async def apply_pr(db: AsyncSession, pr: PullRequest) -> None:
     id_map: dict[str, uuid.UUID] = {}
     result_ops: list[dict[str, typing.Any]] = []
 
-    for op in sorted_ops:
-        op_type = str(op.get("op") or op.get("pr_type") or "")  # pr_type for legacy rows
-        if not op_type:
-            raise BadRequestError(f"Operation missing 'op' field: {op}")
+    # Storage calls can block on S3/SeaweedFS. Finish all of them before any
+    # transaction-scoped global hierarchy lock can be acquired.
+    await _prepare_pr_version_files(db, sorted_ops, pr.author_id)
 
-        executor = _EXECUTORS.get(op_type)
-        if not executor:
-            raise BadRequestError(f"Unknown operation type: {op_type}")
+    # Enforce one transaction-wide lock order for mixed-operation PRs:
+    # hierarchy advisory lock -> any target-row FOR UPDATE -> mutation.  Taking
+    # this once before the loop prevents an early ordinary edit from holding a
+    # row lock and later attempting the advisory lock while a competing move
+    # holds the advisory lock and waits on that row.
+    if any(
+        _operation_uses_directory_tree_lock(
+            str(op.get("op") or op.get("pr_type") or ""),
+            op,
+        )
+        for op in sorted_ops
+    ):
+        await _acquire_directory_tree_lock(db)
 
-        is_delete = "delete" in op_type
+    try:
+        for op in sorted_ops:
+            op_type = str(op.get("op") or op.get("pr_type") or "")  # pr_type for legacy rows
+            if not op_type:
+                raise BadRequestError(f"Operation missing 'op' field: {op}")
 
-        # Capture pre-state before mutation (for revertable edits/moves)
-        pre_state: dict[str, typing.Any] | None = None
-        if op_type in ("edit_material", "edit_directory", "move_item"):
-            pre_state = await _capture_pre_state(db, op_type, op, id_map)
+            executor = _EXECUTORS.get(op_type)
+            if not executor:
+                raise BadRequestError(f"Unknown operation type: {op_type}")
 
-        # For deletes, capture the browse path BEFORE the item is removed
-        pre_delete_browse_path: str | None = None
-        if is_delete:
-            try:
-                id_field = "directory_id" if "directory" in op_type else "material_id"
-                raw_id = str(op.get(id_field, ""))
-                target_uuid = _resolve(raw_id, id_map) if raw_id else None
-                if target_uuid:
-                    pre_delete_browse_path = await _build_browse_path(db, op_type, target_uuid)
-            except Exception:
-                pass
+            is_delete = "delete" in op_type
 
-        result_id = await executor(db, op, pr, id_map)
+            # Capture pre-state after the PR-wide hierarchy lock (when needed),
+            # so the authoritative snapshot and mutation share one lock order.
+            pre_state: dict[str, typing.Any] | None = None
+            if op_type in ("edit_material", "edit_directory", "move_item"):
+                pre_state = await _capture_pre_state(db, op_type, op, id_map)
 
-        # Register temp_id -> real UUID for downstream inter-op references
-        temp_id = str(op.get("temp_id")) if op.get("temp_id") else None
-        if temp_id:
-            id_map[temp_id] = result_id
+            # For deletes, capture the browse path BEFORE the item is removed
+            pre_delete_browse_path: str | None = None
+            if is_delete:
+                try:
+                    id_field = "directory_id" if "directory" in op_type else "material_id"
+                    raw_id = str(op.get(id_field, ""))
+                    target_uuid = _resolve(raw_id, id_map) if raw_id else None
+                    if target_uuid:
+                        pre_delete_browse_path = await _build_browse_path(db, op_type, target_uuid)
+                except Exception:
+                    pass
 
-        # Build the enriched operation record for applied_result
-        enriched: dict[str, typing.Any] = dict(op)
-        enriched["result_id"] = str(result_id)
-        if pre_state is not None:
-            enriched["pre_state"] = pre_state
-        if is_delete and pre_delete_browse_path:
-            enriched["result_browse_path"] = pre_delete_browse_path
-        elif not is_delete:
-            try:
-                browse_path = await _build_browse_path(db, op_type, result_id)
-                if browse_path:
-                    enriched["result_browse_path"] = browse_path
-            except Exception:
-                pass
+            result_id = await executor(db, op, pr, id_map)
 
-        result_ops.append(enriched)
+            # Register temp_id -> real UUID for downstream inter-op references
+            temp_id = str(op.get("temp_id")) if op.get("temp_id") else None
+            if temp_id:
+                id_map[temp_id] = result_id
+
+            # Build the enriched operation record for applied_result
+            enriched: dict[str, typing.Any] = dict(op)
+            enriched["result_id"] = str(result_id)
+            if pre_state is not None:
+                enriched["pre_state"] = pre_state
+            if is_delete and pre_delete_browse_path:
+                enriched["result_browse_path"] = pre_delete_browse_path
+            elif not is_delete:
+                try:
+                    browse_path = await _build_browse_path(db, op_type, result_id)
+                    if browse_path:
+                        enriched["result_browse_path"] = browse_path
+                except Exception:
+                    pass
+
+            result_ops.append(enriched)
+
+    finally:
+        db.info.pop(_PR_PREPARED_VERSION_FILES_KEY, None)
+        db.info.pop(_PR_PREPARED_VERSION_FILES_ACTIVE_KEY, None)
 
     pr.applied_result = result_ops
     flag_modified(pr, "applied_result")
@@ -1843,12 +2062,30 @@ async def _exec_undelete_material(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
     """Restore a soft-deleted material and all its attachments."""
+    await _acquire_directory_tree_lock(db)
     mat_id = _resolve(str(p["material_id"]), id_map)
     mat = await db.scalar(
         select(Material).where(Material.id == mat_id).execution_options(include_deleted=True)
     )
     if not mat:
         raise NotFoundError("Material not found (even among deleted)")
+
+    if mat.directory_id is not None:
+        parent_dir = await db.scalar(
+            select(Directory.id).where(
+                Directory.id == mat.directory_id, Directory.deleted_at.is_(None)
+            )
+        )
+        if parent_dir is None:
+            raise NotFoundError("Parent directory not found")
+    if mat.parent_material_id is not None:
+        parent_mat = await db.scalar(
+            select(Material.id).where(
+                Material.id == mat.parent_material_id, Material.deleted_at.is_(None)
+            )
+        )
+        if parent_mat is None:
+            raise NotFoundError("Parent material not found")
 
     mat.deleted_at = None
 
@@ -1928,6 +2165,17 @@ async def _exec_undelete_directory(
             )
         ).all()
     )
+    root_row = next((row for row in restore_rows if row.id == dir_id), None)
+    if root_row is None:
+        raise NotFoundError("Directory not found (even among deleted)")
+    if root_row.parent_id is not None:
+        live_parent = await db.scalar(
+            select(Directory.id).where(
+                Directory.id == root_row.parent_id, Directory.deleted_at.is_(None)
+            )
+        )
+        if live_parent is None:
+            raise NotFoundError("Parent directory not found")
 
     # Check every path before clearing any deleted_at value.  This covers both
     # the root NULL-parent hole and a child slug that was legitimately reused
@@ -2091,10 +2339,21 @@ async def _exec_revert_move_item(
         await _enqueue_reindex_directory_recursive(db, d.id)
         return d.id
     else:
-        mat = await db.scalar(select(Material).where(Material.id == target_id))
+        await _acquire_directory_tree_lock(db)
+        mat = await db.scalar(
+            select(Material).where(Material.id == target_id, Material.deleted_at.is_(None))
+        )
         if not mat:
             raise NotFoundError("Material not found")
         prev_dir = uuid.UUID(pre["prev_directory_id"]) if pre.get("prev_directory_id") else None
+        if prev_dir is not None:
+            live_parent = await db.scalar(
+                select(Directory.id).where(
+                    Directory.id == prev_dir, Directory.deleted_at.is_(None)
+                )
+            )
+            if live_parent is None:
+                raise NotFoundError("Parent directory not found")
         mat.directory_id = prev_dir
         mat.slug = pre.get("prev_slug") or await _unique_material_slug(
             db, prev_dir, mat.title, exclude_id=mat.id
@@ -2216,6 +2475,16 @@ async def revert_pr(
 
     id_map: dict[str, uuid.UUID] = {}
     result_ops: list[dict[str, typing.Any]] = []
+
+    # Reverts can also contain a non-hierarchy row-locking edit followed by a
+    # hierarchy/namespace mutation.  Acquire the advisory lock before the first
+    # reverse executor whenever any reverse operation needs it, preserving the
+    # same advisory-lock -> row-lock ordering as normal PR application.
+    if any(
+        _operation_uses_directory_tree_lock(str(op.get("op") or ""), op)
+        for op in reverse_ops
+    ):
+        await _acquire_directory_tree_lock(db)
 
     for op in reverse_ops:
         op_type = str(op["op"])
