@@ -100,8 +100,9 @@ jobs:
       - name: Unit and hermetic tests
         run: uv run pytest -m "not integration"
       - name: Real Redis authentication lifecycle invariants and storage fencing
+        timeout-minutes: 3
         run: >-
-          uv run pytest -m integration
+          uv run pytest -vv -m integration
           tests/integration/test_auth_redis_atomicity.py
           tests/integration/test_storage_redis_atomicity.py
 

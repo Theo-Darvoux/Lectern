@@ -23,23 +23,67 @@ from app.core.storage import capacity, facade
 pytestmark = pytest.mark.integration
 
 _REDIS_URL = os.environ.get("AUTH_ATOMICITY_REDIS_URL")
+_REDIS_COMMAND_TIMEOUT_SECONDS = 15.0
+
+
+async def _bounded_redis_call(label: str, awaitable: Any) -> Any:
+    """Fail the integration test instead of hanging forever on a wedged Redis command."""
+    try:
+        return await asyncio.wait_for(awaitable, timeout=_REDIS_COMMAND_TIMEOUT_SECONDS)
+    except TimeoutError:
+        message = (
+            f"Redis integration timed out after {_REDIS_COMMAND_TIMEOUT_SECONDS:.0f}s "
+            f"while {label}"
+        )
+        pytest.fail(message, pytrace=False)
 
 
 @pytest.fixture
 async def redis() -> Redis:  # type: ignore[type-arg]
     if not _REDIS_URL:
         pytest.skip("AUTH_ATOMICITY_REDIS_URL is required for this integration test")
-    client = Redis.from_url(_REDIS_URL, decode_responses=True)
-    # The production Redis configuration uses AOF. WAITAOF is part of the
-    # physical-mutation safety invariant, so the real-Redis test must exercise it.
-    await client.config_set("appendonly", "yes")
-    await client.config_set("appendfsync", "always")
-    await client.flushdb()
+    client = Redis.from_url(
+        _REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=5,
+        socket_timeout=_REDIS_COMMAND_TIMEOUT_SECONDS,
+        retry_on_timeout=False,
+    )
+    try:
+        # The production Redis configuration uses AOF. WAITAOF is part of the
+        # physical-mutation safety invariant, so the real-Redis test must exercise it.
+        # Redis CONFIG state is server-global, so do not repeatedly re-apply these
+        # settings for every function-scoped fixture when they are already active.
+        appendfsync = await _bounded_redis_call(
+            "reading appendfsync", client.config_get("appendfsync")
+        )
+        if appendfsync.get("appendfsync") != "always":
+            await _bounded_redis_call(
+                "setting appendfsync=always", client.config_set("appendfsync", "always")
+            )
+
+        appendonly = await _bounded_redis_call(
+            "reading appendonly", client.config_get("appendonly")
+        )
+        if appendonly.get("appendonly") != "yes":
+            await _bounded_redis_call(
+                "enabling AOF", client.config_set("appendonly", "yes")
+            )
+
+        await _bounded_redis_call("flushing the test database", client.flushdb())
+    except BaseException:
+        await client.aclose()
+        raise
+
     try:
         yield client
     finally:
-        await client.flushdb()
-        await client.aclose()
+        try:
+            await _bounded_redis_call(
+                "flushing the test database during teardown", client.flushdb()
+            )
+        finally:
+            await client.aclose()
 
 
 async def test_cas_metadata_creation_does_not_change_physical_usage(
