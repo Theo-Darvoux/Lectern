@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -8,12 +9,20 @@ from typing import Any
 from sqlalchemy import select, update
 
 import app.core.database.redis as redis_core
+from app.core.database.post_commit import dispatch_pending_outbox, outbox_kwargs
 from app.models.dead_letter import DeadLetterJob
+from app.models.outbox import OutboxJob
 from app.models.upload import Upload
 from app.services.auth import get_full_auth_config
 from app.workers.upload.context import WorkerContext
 
 logger = logging.getLogger(__name__)
+
+_POST_SCAN_OUTBOX_NAMESPACE = uuid.UUID("a8adf5d8-6559-5cc8-a13b-6aa8f97af50c")
+
+
+def _post_scan_outbox_id(upload_id: str) -> uuid.UUID:
+    return uuid.uuid5(_POST_SCAN_OUTBOX_NAMESPACE, upload_id)
 
 
 async def _retry_db[T](
@@ -116,6 +125,7 @@ class UploadWorkerRepository:
         final_key: str,
         cas_key: str,
         cas_ref_count: int | None,
+        post_scan_kwargs: dict[str, object] | None = None,
     ) -> bool:
         """Publish CLEAN unless an authoritative cancellation already won."""
         session_factory = self._session_factory()
@@ -138,10 +148,30 @@ class UploadWorkerRepository:
                         processing_status="pending",
                     )
                 )
+                published = bool(result.rowcount)
+                if published and post_scan_kwargs is not None:
+                    outbox_id = _post_scan_outbox_id(upload_id)
+                    if await session.get(OutboxJob, outbox_id) is None:
+                        session.add(
+                            OutboxJob(
+                                id=outbox_id,
+                                job_name="process_upload_post_scan",
+                                args=[outbox_kwargs(**post_scan_kwargs)],
+                            )
+                        )
                 await session.commit()
-                return bool(result.rowcount)
+                return published
 
         return await _retry_db(_do_update, context=f"publish_clean_upload for {upload_id}")
+
+    async def dispatch_durable_jobs(self) -> None:
+        """Best-effort dispatch of DB-persisted intent until ARQ accepts enqueue."""
+        session_factory = self._session_factory()
+        if session_factory is None:
+            return
+
+        async with session_factory() as session:
+            await dispatch_pending_outbox(session)
 
     async def update_processing_status(self, upload_id: str, processing_status: str) -> bool:
         """Best-effort processing transition that never revives a cancelled upload."""

@@ -28,10 +28,14 @@ class RequestBodyLimitMiddleware:
         *,
         path_limits: Mapping[str, int],
         pattern_limits: Sequence[BodyPatternLimit] = (),
+        default_limit: int | None = None,
+        default_methods: Sequence[str] = ("POST", "PUT", "PATCH"),
     ) -> None:
         self.app = app
         self.path_limits = dict(path_limits)
         self.pattern_limits = tuple(pattern_limits)
+        self.default_limit = default_limit
+        self.default_methods = frozenset(method.upper() for method in default_methods)
 
     def _resolve_limit(self, scope: Scope) -> int | None:
         path = scope.get("path", "")
@@ -45,6 +49,8 @@ class RequestBodyLimitMiddleware:
             if method == expected_method and pattern.fullmatch(path):
                 return limit
 
+        if self.default_limit is not None and method in self.default_methods:
+            return self.default_limit
         return None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:

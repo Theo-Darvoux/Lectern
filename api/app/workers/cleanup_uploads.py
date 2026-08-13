@@ -13,6 +13,10 @@ from app.core.database.post_commit import (
 )
 from app.core.storage.capacity import reconcile_cas_storage_usage, release_storage_reservation
 from app.core.storage.facade import abort_multipart_upload, get_s3_client, list_multipart_uploads
+from app.core.storage.liveness import (
+    acquire_storage_lifecycle_xact_lock,
+    storage_key_is_live,
+)
 from app.models.cas_staging_claim import CasStagingClaim
 from app.models.material import MaterialVersion
 from app.models.pull_request import PRStatus, PullRequest
@@ -445,10 +449,18 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
 
         cas_orphans = [key for key in orphans_to_delete if key.startswith("cas/")]
         legacy_orphans = [key for key in orphans_to_delete if not key.startswith("cas/")]
-        # These CAS objects are proven absent from both authoritative DB refs
-        # and Redis's cache; do not attempt to re-HMAC their opaque object IDs.
+        # Candidate discovery is intentionally not deletion authority: the CAS key
+        # can be re-adopted after the earlier DB/S3 snapshots. Serialize deletion
+        # against new ownership admission and re-read liveness under that lock.
         for key in cas_orphans:
-            await delete_object(key)
+            async with async_session_factory() as db:
+                await acquire_storage_lifecycle_xact_lock(db, key)
+                if await storage_key_is_live(db, key, redis=redis):
+                    logger.info("Skipping orphan CAS deletion because key became live: %s", key)
+                    await db.commit()
+                    continue
+                await delete_object(key)
+                await db.commit()
         if legacy_orphans:
             await delete_storage_objects(ctx, legacy_orphans)
         logger.info("Cleanup triggered for %d orphaned objects", len(orphans_to_delete))

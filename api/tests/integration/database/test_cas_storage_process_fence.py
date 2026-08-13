@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
+import uuid
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any
@@ -10,8 +12,14 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from redis.asyncio import Redis
+from sqlalchemy import delete
 from sqlalchemy import text as sql_text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
 import app.core.database.redis as redis_core
@@ -19,7 +27,13 @@ from app.config import settings
 from app.core.common.exceptions import BadRequestError
 from app.core.security.cas import _STORAGE_USAGE_GENERATION_KEY, _STORAGE_USAGE_KEY
 from app.core.storage import capacity, facade
+from app.core.storage.liveness import (
+    acquire_storage_lifecycle_xact_lock,
+    storage_key_is_live,
+    storage_lifecycle_lock,
+)
 from app.core.storage.s3 import S3Backend
+from app.models.upload import Upload
 
 pytestmark = pytest.mark.integration
 
@@ -771,3 +785,193 @@ async def test_process_fence_post_acquisition_commit_failure_cannot_leak_pooled_
 
     monkeypatch.setattr(AsyncConnection, "commit", real_commit)
     await _assert_fence_available_from_independent_session()
+
+
+async def _delete_lifecycle_test_upload(
+    sessions: async_sessionmaker,
+    upload_id: str,
+) -> None:
+    async with sessions() as cleanup:
+        await cleanup.execute(delete(Upload).where(Upload.upload_id == upload_id))
+        await cleanup.commit()
+
+
+async def test_gc_candidate_waits_for_cas_publisher_then_rechecks_liveness(
+    process_fence_engine: AsyncEngine,
+) -> None:
+    """Reproduce orphan discovery -> concurrent admission -> stale GC deletion attempt."""
+    sessions = async_sessionmaker(process_fence_engine, expire_on_commit=False)
+    key = f"cas/lifecycle-{uuid.uuid4().hex}"
+    upload_id = f"lifecycle-publish-{uuid.uuid4().hex}"
+    object_store: dict[str, bytes] = {key: b"old-orphan"}
+
+    # T1: GC legitimately discovers an orphan before either side owns the
+    # lifecycle lock. This is only a candidate decision.
+    async with sessions() as discovery:
+        assert not await storage_key_is_live(discovery, key)
+
+    publisher_committed = asyncio.Event()
+    release_publisher = asyncio.Event()
+    gc_attempt_started = asyncio.Event()
+    gc_acquired = asyncio.Event()
+
+    async def publish_same_cas() -> None:
+        # T2/T3: upload owns the session-level lock across physical write and
+        # authoritative Upload publication.
+        async with storage_lifecycle_lock(sessions, key):
+            object_store[key] = b"newly-published"
+            async with sessions() as publication:
+                publication.add(
+                    Upload(
+                        upload_id=upload_id,
+                        final_key=key,
+                        status="clean",
+                        filename="same.pdf",
+                        cas_ref_count=1,
+                    )
+                )
+                await publication.commit()
+            publisher_committed.set()
+            await release_publisher.wait()
+
+    async def stale_gc_attempt() -> bool:
+        # T4: GC reaches the previously recorded candidate. It must block on
+        # the same key until publication is completely visible, then re-check.
+        async with sessions() as gc:
+            gc_attempt_started.set()
+            await acquire_storage_lifecycle_xact_lock(gc, key)
+            gc_acquired.set()
+            live = await storage_key_is_live(gc, key)
+            if not live:
+                object_store.pop(key, None)
+            await gc.commit()
+            return live
+
+    publisher = asyncio.create_task(publish_same_cas())
+    gc: asyncio.Task[bool] | None = None
+    try:
+        await asyncio.wait_for(publisher_committed.wait(), timeout=5)
+        gc = asyncio.create_task(stale_gc_attempt())
+        await asyncio.wait_for(gc_attempt_started.wait(), timeout=5)
+        await asyncio.sleep(0.2)
+        assert not gc_acquired.is_set(), "GC crossed the publisher lifecycle lock early"
+
+        release_publisher.set()
+        await asyncio.wait_for(publisher, timeout=5)
+        assert gc is not None
+        assert await asyncio.wait_for(gc, timeout=5) is True
+        assert object_store[key] == b"newly-published"
+    finally:
+        release_publisher.set()
+        if not publisher.done():
+            await publisher
+        if gc is not None and not gc.done():
+            gc.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await gc
+        await _delete_lifecycle_test_upload(sessions, upload_id)
+
+
+async def test_gc_lock_forces_later_cas_publisher_to_rewrite_after_delete(
+    process_fence_engine: AsyncEngine,
+) -> None:
+    """Reproduce GC lock first -> uploader blocks -> delete -> uploader rewrites/publishes."""
+    sessions = async_sessionmaker(process_fence_engine, expire_on_commit=False)
+    key = f"cas/lifecycle-{uuid.uuid4().hex}"
+    upload_id = f"lifecycle-rewrite-{uuid.uuid4().hex}"
+    object_store: dict[str, bytes] = {key: b"old-orphan"}
+    uploader_attempt_started = asyncio.Event()
+    uploader_acquired = asyncio.Event()
+
+    async def publish_same_cas() -> None:
+        uploader_attempt_started.set()
+        async with storage_lifecycle_lock(sessions, key):
+            uploader_acquired.set()
+            object_store[key] = b"replacement"
+            async with sessions() as publication:
+                publication.add(
+                    Upload(
+                        upload_id=upload_id,
+                        final_key=key,
+                        status="clean",
+                        filename="same.pdf",
+                        cas_ref_count=1,
+                    )
+                )
+                await publication.commit()
+
+    uploader: asyncio.Task[None] | None = None
+    try:
+        async with sessions() as gc:
+            # T1/T2: GC owns the transaction lock and has freshly established
+            # that the candidate is still an orphan.
+            await acquire_storage_lifecycle_xact_lock(gc, key)
+            assert not await storage_key_is_live(gc, key)
+
+            uploader = asyncio.create_task(publish_same_cas())
+            await asyncio.wait_for(uploader_attempt_started.wait(), timeout=5)
+            await asyncio.sleep(0.2)
+            assert not uploader_acquired.is_set(), "publisher crossed the GC lifecycle lock early"
+
+            # T3: destructive I/O occurs while admission is excluded.
+            object_store.pop(key, None)
+            await gc.commit()
+
+        # T4/T5: only after deletion commits may the uploader acquire the lock;
+        # it rewrites identical content and publishes ownership before releasing.
+        assert uploader is not None
+        await asyncio.wait_for(uploader, timeout=5)
+        assert object_store[key] == b"replacement"
+        async with sessions() as verify:
+            assert await storage_key_is_live(verify, key)
+    finally:
+        if uploader is not None and not uploader.done():
+            uploader.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await uploader
+        await _delete_lifecycle_test_upload(sessions, upload_id)
+
+
+async def test_thumbnail_lifecycle_lock_conflicts_with_prune_transaction(
+    process_fence_engine: AsyncEngine,
+) -> None:
+    """Thumbnail publication uses the same session-vs-transaction fence as CAS."""
+    sessions = async_sessionmaker(process_fence_engine, expire_on_commit=False)
+    key = f"thumbnails/{uuid.uuid4().hex}/upload.webp"
+    holder_acquired = asyncio.Event()
+    release_holder = asyncio.Event()
+    prune_attempt_started = asyncio.Event()
+    prune_acquired = asyncio.Event()
+
+    async def hold_thumbnail_publication() -> None:
+        async with storage_lifecycle_lock(sessions, key):
+            holder_acquired.set()
+            await release_holder.wait()
+
+    async def acquire_prune_lock() -> None:
+        async with sessions() as prune:
+            prune_attempt_started.set()
+            await acquire_storage_lifecycle_xact_lock(prune, key)
+            prune_acquired.set()
+            await prune.rollback()
+
+    holder = asyncio.create_task(hold_thumbnail_publication())
+    prune: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(holder_acquired.wait(), timeout=5)
+        prune = asyncio.create_task(acquire_prune_lock())
+        await asyncio.wait_for(prune_attempt_started.wait(), timeout=5)
+        await asyncio.sleep(0.2)
+        assert not prune_acquired.is_set(), "thumbnail prune lock failed to serialize"
+        release_holder.set()
+        await asyncio.wait_for(holder, timeout=5)
+        await asyncio.wait_for(prune, timeout=5)
+        assert prune_acquired.is_set()
+    finally:
+        release_holder.set()
+        if not holder.done():
+            await holder
+        if prune is not None and not prune.done():
+            prune.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await prune

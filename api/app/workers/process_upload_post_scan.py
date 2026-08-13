@@ -39,6 +39,7 @@ from app.core.observability.telemetry import get_tracer
 from app.core.security.async_utils import settle_awaitable
 from app.core.security.processing_paths import make_processing_temp_path
 from app.core.storage.facade import delete_object, upload_file_multipart
+from app.core.storage.liveness import storage_lifecycle_lock
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
 from app.models.upload import Upload
 from app.routers.upload.cancellation import upload_cancel_key, upload_lifecycle_lock_name
@@ -248,74 +249,85 @@ async def process_upload_post_scan(
 
         # CAS objects are immutable and already contain the sanitized bytes.
         # Background processing adds a thumbnail but never rewrites the CAS key.
-        # ── 6. Upload thumbnail ───────────────────────────────────────────────
+        # Hold the deterministic thumbnail lifecycle lock from physical write through
+        # authoritative Upload.thumbnail_key publication. A stale admin prune must
+        # therefore either delete first (and this retry rewrites) or observe the newly
+        # published thumbnail and skip deletion.
         thumbnail_key: str | None = None
+        thumbnail_candidate_key: str | None = None
         if thumbnail_path:
             cas_id = cas_s3_key.split("/", 1)[-1]
-            _candidate_key = f"thumbnails/{cas_id}/{upload_id}.webp"
-            try:
-                await asyncio.wait_for(
-                    upload_file_multipart(
-                        Path(thumbnail_path),
-                        _candidate_key,
-                        content_type="image/webp",
-                    ),
-                    timeout=30.0,
-                )
-                thumbnail_key = _candidate_key
-            except Exception as exc:
-                logger.warning(
-                    "Thumbnail upload failed for upload %s: %s — skipping thumbnail.",
-                    upload_id,
-                    exc,
-                )
-                thumbnail_status = "failed"
-            finally:
-                with contextlib.suppress(Exception):
-                    Path(thumbnail_path).unlink(missing_ok=True)
-                thumbnail_path = None  # already cleaned up
-
-        # ── 7. Persist results ────────────────────────────────────────────────
-        update_kwargs: dict[str, Any] = {
-            "processing_status": "complete",
-            "thumbnail_status": thumbnail_status,
-        }
-        if thumbnail_key:
-            update_kwargs["thumbnail_key"] = thumbnail_key
+            thumbnail_candidate_key = f"thumbnails/{cas_id}/{upload_id}.webp"
 
         published = False
-        async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
-            published = await _publish_postprocessed_upload(
-                worker_ctx,
-                upload_id=upload_id,
-                update_values=update_kwargs,
-            )
-            if published:
-                # Read and publish the derived CLEAN payload while cancellation is
-                # excluded by the same upload lifecycle lock.
-                cache = UploadCacheRepository(worker_ctx.redis)
-                status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
-                event_channel = f"upload:events:{quarantine_key}"
-                event_log_key = f"upload:eventlog:{quarantine_key}"
+        async with contextlib.AsyncExitStack() as storage_guard:
+            if thumbnail_candidate_key is not None:
+                assert thumbnail_path is not None
+                await storage_guard.enter_async_context(
+                    storage_lifecycle_lock(worker_ctx.db_sessionmaker, thumbnail_candidate_key)
+                )
+                try:
+                    await asyncio.wait_for(
+                        upload_file_multipart(
+                            Path(thumbnail_path),
+                            thumbnail_candidate_key,
+                            content_type="image/webp",
+                        ),
+                        timeout=30.0,
+                    )
+                    thumbnail_key = thumbnail_candidate_key
+                except Exception as exc:
+                    logger.warning(
+                        "Thumbnail upload failed for upload %s: %s — skipping thumbnail.",
+                        upload_id,
+                        exc,
+                    )
+                    thumbnail_status = "failed"
+                finally:
+                    with contextlib.suppress(Exception):
+                        Path(thumbnail_path).unlink(missing_ok=True)
+                    thumbnail_path = None  # already cleaned up
 
-                cached_json = await worker_ctx.redis.get(status_key)
-                if isinstance(cached_json, (str, bytes, bytearray)) and cached_json:
-                    payload = json.loads(cached_json)
-                    if payload.get("result"):
-                        payload["result"]["processing_status"] = "complete"
-                        payload["status"] = UploadStatus.CLEAN
-                        payload["detail"] = "Processing complete"
-                        payload["stage_index"] = 4
-                        payload["stage_percent"] = 1.0
-                        payload["overall_percent"] = 100
-                        await cache.emit_event(
-                            status_key,
-                            event_channel,
-                            event_log_key,
-                            json.dumps(payload),
-                        )
+            # ── 7. Persist results ────────────────────────────────────────────
+            update_kwargs: dict[str, Any] = {
+                "processing_status": "complete",
+                "thumbnail_status": thumbnail_status,
+            }
+            if thumbnail_key:
+                update_kwargs["thumbnail_key"] = thumbnail_key
 
-                await repo.maybe_dispatch_webhook(upload_id)
+            async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
+                published = await _publish_postprocessed_upload(
+                    worker_ctx,
+                    upload_id=upload_id,
+                    update_values=update_kwargs,
+                )
+                if published:
+                    # Read and publish the derived CLEAN payload while cancellation is
+                    # excluded by the same upload lifecycle lock.
+                    cache = UploadCacheRepository(worker_ctx.redis)
+                    status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
+                    event_channel = f"upload:events:{quarantine_key}"
+                    event_log_key = f"upload:eventlog:{quarantine_key}"
+
+                    cached_json = await worker_ctx.redis.get(status_key)
+                    if isinstance(cached_json, (str, bytes, bytearray)) and cached_json:
+                        payload = json.loads(cached_json)
+                        if payload.get("result"):
+                            payload["result"]["processing_status"] = "complete"
+                            payload["status"] = UploadStatus.CLEAN
+                            payload["detail"] = "Processing complete"
+                            payload["stage_index"] = 4
+                            payload["stage_percent"] = 1.0
+                            payload["overall_percent"] = 100
+                            await cache.emit_event(
+                                status_key,
+                                event_channel,
+                                event_log_key,
+                                json.dumps(payload),
+                            )
+
+                    await repo.maybe_dispatch_webhook(upload_id)
 
         if not published:
             if thumbnail_key:

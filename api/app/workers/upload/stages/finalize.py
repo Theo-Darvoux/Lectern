@@ -27,6 +27,7 @@ class FinalizeInput:
     final_mime: str
     content_encoding: str | None = None
     thumbnail_path: str | None = None
+    content_sha256: str | None = None
 
 
 @dataclass
@@ -52,7 +53,7 @@ async def run_finalize_storage(
             stem = Path(input_data.original_filename).stem
             safe_name = f"{stem}{ext}"
 
-        content_sha256 = await input_data.pf.sha256()
+        content_sha256 = input_data.content_sha256 or await input_data.pf.sha256()
         # CAS identity is the exact sanitized byte sequence that is stored.
         content_cas_key = hmac_cas_key(content_sha256)
         cas_id = content_cas_key.split(":")[-1]

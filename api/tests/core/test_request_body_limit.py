@@ -140,3 +140,58 @@ async def test_body_limit_pattern_ignores_wrong_method() -> None:
     await middleware(scope, receive, send)
 
     assert app_called
+
+
+@pytest.mark.asyncio
+async def test_body_limit_applies_default_to_unlisted_mutation_route() -> None:
+    app_called = False
+    sent: list[Message] = []
+
+    async def app(_scope: Scope, _receive: Callable[[], Awaitable[Message]], _send) -> None:
+        nonlocal app_called
+        app_called = True
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    middleware = RequestBodyLimitMiddleware(app, path_limits={}, default_limit=1024)
+    scope = _scope([(b"content-length", b"2048")])
+    scope["path"] = "/api/auth/login"
+
+    await middleware(scope, receive, send)
+
+    assert not app_called
+    assert sent[0]["status"] == 413
+
+
+@pytest.mark.asyncio
+async def test_explicit_pattern_overrides_default_body_limit() -> None:
+    import re
+
+    app_called = False
+
+    async def app(_scope: Scope, _receive: Callable[[], Awaitable[Message]], _send) -> None:
+        nonlocal app_called
+        app_called = True
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message: Message) -> None:
+        pass
+
+    middleware = RequestBodyLimitMiddleware(
+        app,
+        path_limits={},
+        pattern_limits=[("POST", re.compile(r"/api/upload/?"), 4096)],
+        default_limit=1024,
+    )
+    scope = _scope([(b"content-length", b"2048")])
+    scope["path"] = "/api/upload"
+
+    await middleware(scope, receive, send)
+
+    assert app_called

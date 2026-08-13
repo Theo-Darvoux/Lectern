@@ -42,6 +42,7 @@ from app.core.security.cas import (
 from app.core.storage.capacity import release_storage_reservation, reserve_storage_limit
 from app.core.storage.facade import object_exists, read_full_object
 from app.core.storage.facade import upload_file as storage_upload_file
+from app.core.storage.liveness import acquire_storage_lifecycle_xact_lock
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
 from app.models.cas_staging_claim import CasStagingClaim
@@ -363,6 +364,11 @@ async def stage_qcm(
         ttl_seconds=_QCM_STORAGE_RESERVATION_TTL,
     )
     capacity_reserved = True
+
+    # CAS ownership admission and garbage collection share a PostgreSQL advisory
+    # lock. The request transaction holds it until the claim commits, so GC cannot
+    # delete the object between the storage write and authoritative DB admission.
+    await acquire_storage_lifecycle_xact_lock(db, file_key)
 
     # Write to object storage (idempotent — same content → same key)
     await storage_upload_file(

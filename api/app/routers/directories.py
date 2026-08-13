@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import uuid
 import zipfile
@@ -8,7 +7,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +42,7 @@ router = APIRouter(prefix="/api/directories", tags=["directories"])
 
 
 _CHUNK_SIZE = 50
+_MAX_RESOLVE_PATH_IDS = 250
 
 
 class DownloadChunk(BaseModel):
@@ -56,8 +56,16 @@ class DownloadChunksResponse(BaseModel):
 
 
 class ResolvePathsRequest(BaseModel):
-    directory_ids: list[uuid.UUID] = []
-    material_ids: list[uuid.UUID] = []
+    directory_ids: list[uuid.UUID] = Field(default_factory=list, max_length=_MAX_RESOLVE_PATH_IDS)
+    material_ids: list[uuid.UUID] = Field(default_factory=list, max_length=_MAX_RESOLVE_PATH_IDS)
+
+    @model_validator(mode="after")
+    def validate_combined_cardinality(self) -> "ResolvePathsRequest":
+        # This is a work budget, not merely a uniqueness budget. A material can
+        # resolve to a directory ID different from every explicit directory ID.
+        if len(self.directory_ids) + len(self.material_ids) > _MAX_RESOLVE_PATH_IDS:
+            raise ValueError(f"At most {_MAX_RESOLVE_PATH_IDS} IDs may be resolved at once")
+        return self
 
 
 class MaterialResolveOut(BaseModel):
@@ -71,7 +79,9 @@ class ResolvePathsResponse(BaseModel):
 
 
 @router.post("/resolve-paths", response_model=ResolvePathsResponse)
+@limiter.limit("60/minute")
 async def resolve_paths(
+    request: Request,
     req: ResolvePathsRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -94,19 +104,17 @@ async def resolve_paths(
         req.directory_ids.extend(dir_ids_from_mat)
 
     if req.directory_ids:
-
-        async def fetch_dir_path(did: uuid.UUID) -> tuple[uuid.UUID, list[DirectoryBreadcrumb]]:
-            try:
-                p = await directory_service.get_directory_path(db, did)
-                return did, [DirectoryBreadcrumb.model_validate(x) for x in p]
-            except Exception:
-                return did, []
-
         unique_dir_ids = set(req.directory_ids)
-        dir_paths = await asyncio.gather(*(fetch_dir_path(did) for did in unique_dir_ids))
-        for did, p in dir_paths:
-            if p:
-                resp.directories[did] = p
+        # Defense in depth: cap the actual recursive-CTE roots after materials have
+        # been translated to directories, not just the incoming JSON cardinality.
+        if len(unique_dir_ids) > _MAX_RESOLVE_PATH_IDS:
+            raise BadRequestError(
+                f"At most {_MAX_RESOLVE_PATH_IDS} directory paths may be resolved"
+            )
+        dir_paths = await directory_service.get_directory_breadcrumb_paths(db, unique_dir_ids)
+        for did, path in dir_paths.items():
+            if path:
+                resp.directories[did] = [DirectoryBreadcrumb.model_validate(x) for x in path]
 
     return resp
 

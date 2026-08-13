@@ -586,3 +586,48 @@ async def test_validate_email_listed_domain_checked_before_allow_all(
     with patch.object(settings, "allow_all_domains", True):
         result = await validate_email_for_auth("user@example.com", db_session)
     assert result is True
+
+
+@pytest.mark.asyncio
+async def test_prune_rechecks_and_skips_cas_key_that_is_now_live(
+    client: AsyncClient,
+    db_session: AsyncSession,
+):
+    from app.models.upload import Upload
+
+    admin = User(email="admin-live-prune@example.com", role=UserRole.VIEUX)
+    db_session.add(admin)
+    await db_session.flush()
+    db_session.add(
+        Upload(
+            upload_id="live-prune-upload",
+            user_id=admin.id,
+            final_key="cas/live123",
+            status="clean",
+            filename="live.pdf",
+            cas_ref_count=1,
+        )
+    )
+    await db_session.commit()
+
+    from app.core.security.security import create_access_token
+
+    token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
+    fake_rc = AsyncMock()
+    fake_rc.delete = AsyncMock()
+    fake_rc.exists = AsyncMock(return_value=0)
+
+    with (
+        patch("app.routers.admin_storage.delete_object", new_callable=AsyncMock) as delete_object,
+        patch("app.routers.admin_storage.redis_client", fake_rc),
+    ):
+        response = await client.post(
+            "/api/admin/storage/prune",
+            json=["cas/live123"],
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["deleted_count"] == 0
+    assert response.json()["skipped_live_count"] == 1
+    delete_object.assert_not_awaited()

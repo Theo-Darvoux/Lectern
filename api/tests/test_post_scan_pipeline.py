@@ -29,6 +29,7 @@ Model/migration smoke-tests:
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -461,6 +462,72 @@ async def test_post_scan_happy_path_marks_complete() -> None:
     uploaded_key = mock_upload_thumbnail.await_args.args[1]
     assert uploaded_key.startswith("thumbnails/")
     assert uploaded_key != _post_scan_kwargs()["cas_s3_key"]
+
+
+@pytest.mark.asyncio
+async def test_post_scan_holds_thumbnail_lifecycle_lock_through_publication() -> None:
+    """The thumbnail fence spans object write through authoritative DB publication."""
+    from app.workers.process_upload_post_scan import process_upload_post_scan
+
+    ctx = _make_ctx()
+    expected_key = f"thumbnails/{'c' * 64}/uid-1.webp"
+    lock_held = False
+
+    @asynccontextmanager
+    async def lifecycle_guard(_session_factory, key: str):
+        nonlocal lock_held
+        assert key == expected_key
+        assert not lock_held
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    async def upload_thumbnail(_path, key: str, **_kwargs) -> None:
+        assert key == expected_key
+        assert lock_held, "thumbnail write escaped the storage lifecycle fence"
+
+    async def publish_thumbnail(_worker_ctx, *, upload_id: str, update_values: dict) -> bool:
+        assert upload_id == "uid-1"
+        assert update_values["thumbnail_key"] == expected_key
+        assert lock_held, "thumbnail publication escaped the storage lifecycle fence"
+        return True
+
+    with (
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=_make_download_result()),
+        ),
+        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
+        patch(
+            "app.workers.process_upload_post_scan.run_thumbnail_stage",
+            AsyncMock(return_value="/tmp/thumb.webp"),
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.storage_lifecycle_lock",
+            new=lifecycle_guard,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan.upload_file_multipart",
+            new=upload_thumbnail,
+        ),
+        patch(
+            "app.workers.process_upload_post_scan._publish_postprocessed_upload",
+            new=publish_thumbnail,
+        ),
+        patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
+        patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
+        patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
+        patch("pathlib.Path.unlink", MagicMock()),
+    ):
+        repo = mock_repo.return_value
+        repo.update_processing_status = AsyncMock(return_value=True)
+        repo.get_auth_config = AsyncMock(return_value={})
+        repo.maybe_dispatch_webhook = AsyncMock()
+        await process_upload_post_scan(ctx, **_post_scan_kwargs())
+
+    assert not lock_held
 
 
 @pytest.mark.asyncio

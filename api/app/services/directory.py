@@ -530,6 +530,58 @@ async def get_directory_path(
     return [{"id": str(row.id), "name": row.name, "slug": row.slug} for row in result.all()]
 
 
+async def get_directory_breadcrumb_paths(
+    db: AsyncSession, directory_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, list[dict[str, typing.Any]]]:
+    """Resolve many root-to-directory breadcrumb paths with one recursive CTE."""
+    if not directory_ids:
+        return {}
+
+    base_case = (
+        select(
+            Directory.id,
+            Directory.name,
+            Directory.slug,
+            Directory.parent_id,
+            Directory.id.label("requested_id"),
+            literal(0).label("depth"),
+        )
+        .where(Directory.id.in_(directory_ids))
+        .cte(name="dir_paths_cte", recursive=True)
+    )
+
+    path_alias = aliased(base_case, name="p")
+    dir_alias = aliased(Directory, name="d")
+    recursive_case = select(
+        dir_alias.id,
+        dir_alias.name,
+        dir_alias.slug,
+        dir_alias.parent_id,
+        path_alias.c.requested_id,
+        (path_alias.c.depth + 1).label("depth"),
+    ).join(path_alias, dir_alias.id == path_alias.c.parent_id)
+
+    cte = base_case.union_all(recursive_case)
+    rows = (
+        await db.execute(
+            select(
+                cte.c.requested_id,
+                cte.c.id,
+                cte.c.name,
+                cte.c.slug,
+                cte.c.depth,
+            ).order_by(cte.c.requested_id, cte.c.depth.desc())
+        )
+    ).all()
+
+    paths: dict[uuid.UUID, list[dict[str, typing.Any]]] = {}
+    for row in rows:
+        paths.setdefault(row.requested_id, []).append(
+            {"id": str(row.id), "name": row.name, "slug": row.slug}
+        )
+    return paths
+
+
 async def resolve_browse_path(
     db: AsyncSession, path: str, current_user_id: uuid.UUID | None = None
 ) -> dict[str, typing.Any]:

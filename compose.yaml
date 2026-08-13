@@ -33,9 +33,6 @@ x-common-env: &common-env
   MEILI_URL: ${MEILI_URL}
   MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
   SECRET_KEY: ${SECRET_KEY}
-  # The API is reached through the checked-in nginx container on a Docker
-  # bridge network. Trust only loopback/RFC1918 proxy hops by default; direct
-  # public peers remain untrusted by ProxyHeadersMiddleware.
   TRUSTED_PROXY_HOSTS: ${TRUSTED_PROXY_HOSTS:-127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
   CAS_HKDF_SALT: ${CAS_HKDF_SALT:-lectern-cas-salt-v1}
   CAS_HKDF_INFO: ${CAS_HKDF_INFO:-lectern-cas-v1}
@@ -95,8 +92,6 @@ x-worker-watch: &worker-watch
         path: api/pyproject.toml
 
 services:
-  # ── Infrastructure ──────────────────────────────────────────────────────────
-
   postgres:
     profiles: [ postgres ]
     restart: unless-stopped
@@ -174,8 +169,6 @@ services:
           cpus: "0.25"
           memory: 256M
 
-  # ── Application ─────────────────────────────────────────────────────────────
-
   api:
     restart: unless-stopped
     build:
@@ -198,7 +191,6 @@ services:
     volumes:
       - lectern_backups:/var/lib/lectern
     ports:
-      # Loopback-only: public traffic must pass through nginx/proxy policy.
       - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
     ulimits:
       core: 0
@@ -313,13 +305,11 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
-      # Dev: deps (node+pnpm, no source — source comes from the ./web bind mount).
       target: deps
     image: ghcr.io/theo-darvoux/lectern/web:dev
     command: >-
       sh -c "CI=true pnpm install && node_modules/.bin/next dev --turbopack"
     environment:
-      # Route browser API calls through nginx so SSE works correctly in dev.
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
       API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
       NEXT_PUBLIC_EUROOFFICE_URL: ${NEXT_PUBLIC_EUROOFFICE_URL:-http://localhost/eurooffice}
@@ -329,8 +319,6 @@ services:
     env_file: ${RUNTIME_ENV_FILE:-.env}
     depends_on:
       - api
-    # ./web:/app gives the dev server access to source code.
-    # In prod (nginx runner), /app is unused — nginx serves from /usr/share/nginx/html.
     volumes:
       - ./web:/app
       - /app/node_modules
@@ -396,8 +384,6 @@ services:
   nginx:
     restart: unless-stopped
     image: nginx:alpine
-    # Bypass nginx's default entrypoint so envsubst can write to /tmp (always
-    # writable) even on read-only overlay filesystems in some container runtimes.
     entrypoint: []
     command: >
       /bin/sh -c "envsubst '$$CORS_ALLOWED_HEADERS' < /etc/nginx/templates/nginx.conf.template > /tmp/nginx.conf && exec nginx -c /tmp/nginx.conf -g 'daemon off;'"
@@ -407,7 +393,6 @@ services:
       - "80:80"
     volumes:
       - ./infra/nginx/nginx.dev.conf.template:/etc/nginx/templates/nginx.conf.template:ro
-      # Always present so the prod template's `include` directive resolves in both envs.
       - ./infra/nginx/nginx.eurooffice.snippet:/etc/nginx/nginx.eurooffice.snippet:ro
       - ./infra/nginx/error-expired.html:/etc/nginx/html/error-expired.html:ro
     depends_on:
@@ -429,9 +414,6 @@ services:
         reservations:
           cpus: "0.1"
           memory: 64M
-
-  # ── SeaweedFS — dev (single-node all-in-one) ────────────────────────────────
-  # Activate with COMPOSE_PROFILES=seaweedfs-dev in .env (the default in .env.example).
 
   seaweedfs:
     profiles: [ seaweedfs-dev ]
@@ -476,10 +458,6 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
       S3_BUCKET: ${S3_BUCKET:-lectern}
       S3_REGION: ${S3_REGION:-us-east-1}
-
-  # ── SeaweedFS — production cluster ─────────────────────────────────────────
-  # Activate with COMPOSE_PROFILES=seaweedfs-prod and merge compose.prod.yaml.
-  # Before first run: envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
 
   seaweedfs-master:
     profiles: [ seaweedfs-prod ]
@@ -561,13 +539,6 @@ services:
       resources:
         limits:
           memory: 512M
-
-  # ── Self-hosted delivery worker ─────────────────────────────────────────────
-  # Optional HMAC-signed /file, /branding, /zip delivery (replaces Cloudflare Worker).
-  # Activate with COMPOSE_PROFILES=...,selfhost-worker. Also set in .env:
-  #   WORKER_ZIP_URL=https://downloads.example.invalid
-  #   WORKER_ZIP_HMAC_SECRET=<shared-secret>
-  # The host port is loopback-only so a TLS reverse proxy remains the public boundary.
 
   selfhost-worker:
     profiles: [ selfhost-worker ]

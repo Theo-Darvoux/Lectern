@@ -19,11 +19,12 @@ from app.core.observability.metrics import (
     upload_pipeline_total,
 )
 from app.core.observability.telemetry import get_tracer
-from app.core.security.cas import decrement_cas_ref
+from app.core.security.cas import decrement_cas_ref, hmac_cas_key
 from app.core.security.processing_paths import make_processing_temp_path
 from app.core.security.scanner import MalwareScanner
 from app.core.storage.capacity import release_storage_reservation
 from app.core.storage.facade import delete_object
+from app.core.storage.liveness import storage_lifecycle_lock
 from app.routers.upload.cancellation import upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
 from app.workers.upload.cache_repo import UploadCacheRepository
@@ -302,6 +303,15 @@ class UploadPipeline:
         if has_authoritative_db:
             await self._check_cancellation("immediately before final publication")
 
+        session_factory = self.ctx.db_sessionmaker if has_authoritative_db else None
+        lifecycle_fence_available = isinstance(
+            session_factory, async_sessionmaker
+        ) or inspect.isfunction(session_factory)
+        # Production workers and the real PostgreSQL integration fixture can hold the
+        # cross-process lifecycle fence. Hermetic tests deliberately use minimal/mocked
+        # ProcessingFile objects and session factories; do not add a new sha256()
+        # precondition when no real fence can be acquired.
+        content_sha256 = await self.pf.sha256() if lifecycle_fence_available else None
         final_input = FinalizeInput(
             pf=self.pf,
             user_id=self.user_id,
@@ -313,52 +323,78 @@ class UploadPipeline:
             final_mime=self.mime_type,
             content_encoding=None,
             thumbnail_path=None,
+            content_sha256=content_sha256,
         )
-        finalize_deadline = asyncio.timeout(self._remaining_pipeline_seconds("finalizing"))
-        try:
-            async with finalize_deadline:
-                final_res = await run_finalize_storage(final_input, self.redis, self.tracer)
-        except TimeoutError as exc:
-            # Only translate cancellation caused by our end-to-end deadline. A
-            # backend TimeoutError remains a backend error rather than being
-            # mislabeled as pipeline exhaustion.
-            if not finalize_deadline.expired():
-                raise
-            raise UploadError(
-                UploadStatus.FAILED,
-                f"Pipeline deadline exceeded at stage 'finalizing' ({self._elapsed():.0f}s)",
-            ) from exc
+        # Garbage collection and CAS admission share a PostgreSQL advisory lock.
+        # Hold it across the object-store write and authoritative Upload publication
+        # so an orphan collector cannot delete the just-admitted CAS object in-between.
+        expected_final_key = (
+            f"cas/{hmac_cas_key(content_sha256).split(':')[-1]}"
+            if content_sha256 is not None
+            else ""
+        )
+        publication_guard = storage_lifecycle_lock(
+            session_factory if lifecycle_fence_available else None,
+            expected_final_key,
+        )
+        async with publication_guard:
+            finalize_deadline = asyncio.timeout(self._remaining_pipeline_seconds("finalizing"))
+            try:
+                async with finalize_deadline:
+                    final_res = await run_finalize_storage(final_input, self.redis, self.tracer)
+            except TimeoutError as exc:
+                # Only translate cancellation caused by our end-to-end deadline. A
+                # backend TimeoutError remains a backend error rather than being
+                # mislabeled as pipeline exhaustion.
+                if not finalize_deadline.expired():
+                    raise
+                raise UploadError(
+                    UploadStatus.FAILED,
+                    f"Pipeline deadline exceeded at stage 'finalizing' ({self._elapsed():.0f}s)",
+                ) from exc
 
-        res_data = {
-            "file_key": final_res.final_key,
-            "file_name": final_res.safe_name,
-            "size": final_res.final_size,
-            "original_size": self.initial_size,
-            "mime_type": self.mime_type,
-            "content_encoding": None,
-            "processing_status": "pending",
-        }
-        published = await self.repo.publish_clean_upload(
-            self.upload_id,
-            sha256=self.original_sha256,
-            content_sha256=final_res.content_sha256,
-            final_key=final_res.final_key,
-            cas_key=final_res.db_cas_key,
-            cas_ref_count=final_res.new_cas_ref if final_res.new_cas_ref > 0 else None,
-        )
-        if not published:
-            # Cancellation committed first. Release the CAS reference acquired by
-            # finalization using an idempotent operation ID.
-            await decrement_cas_ref(
-                self.redis,
-                final_res.content_sha256,
-                operation_id=f"upload-finalize:{self.upload_id}:cancel-compensation",
+            res_data = {
+                "file_key": final_res.final_key,
+                "file_name": final_res.safe_name,
+                "size": final_res.final_size,
+                "original_size": self.initial_size,
+                "mime_type": self.mime_type,
+                "content_encoding": None,
+                "processing_status": "pending",
+            }
+            post_scan_kwargs: dict[str, object] = {
+                "upload_id": self.upload_id,
+                "user_id": self.user_id,
+                "quarantine_key": self.quarantine_key,
+                "original_filename": self.original_filename,
+                "mime_type": self.mime_type,
+                "original_sha256": self.original_sha256,
+                "cas_key": self.cas_key,
+                "cas_s3_key": final_res.final_key,
+                "initial_size": self.initial_size,
+            }
+            published = await self.repo.publish_clean_upload(
+                self.upload_id,
+                sha256=self.original_sha256,
+                content_sha256=final_res.content_sha256,
+                final_key=final_res.final_key,
+                cas_key=final_res.db_cas_key,
+                cas_ref_count=final_res.new_cas_ref if final_res.new_cas_ref > 0 else None,
+                post_scan_kwargs=post_scan_kwargs if has_authoritative_db else None,
             )
-            await self.redis.zrem(
-                f"quota:uploads:{self.user_id}",
-                f"staging:{self.user_id}:{self.upload_id}",
-            )
-            raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
+            if not published:
+                # Cancellation committed first. Release the CAS reference acquired by
+                # finalization using an idempotent operation ID.
+                await decrement_cas_ref(
+                    self.redis,
+                    final_res.content_sha256,
+                    operation_id=f"upload-finalize:{self.upload_id}:cancel-compensation",
+                )
+                await self.redis.zrem(
+                    f"quota:uploads:{self.user_id}",
+                    f"staging:{self.user_id}:{self.upload_id}",
+                )
+                raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
 
         # Publication and cancellation race through the conditional DB update.
         # After publication, compete for the shared lifecycle lock once more:
@@ -428,7 +464,21 @@ class UploadPipeline:
                     self.upload_id,
                 )
 
-            if redis_core.arq_pool is not None:
+            if has_authoritative_db:
+                # The post-scan dispatch intent was committed atomically with CLEAN
+                # publication. Dispatch now for latency; if enqueue is not acknowledged
+                # (process death or ARQ outage), the PostgreSQL outbox retries dispatch.
+                # Once ARQ accepts the job, its existing non-completion-tracked delivery
+                # semantics apply; this does not claim durable execution acknowledgement.
+                try:
+                    await self.repo.dispatch_durable_jobs()
+                except Exception as exc:
+                    logger.warning(
+                        "Immediate durable post-scan dispatch failed for upload %s: %s",
+                        self.upload_id,
+                        exc,
+                    )
+            elif redis_core.arq_pool is not None:
                 try:
                     await redis_core.arq_pool.enqueue_job(
                         "process_upload_post_scan",

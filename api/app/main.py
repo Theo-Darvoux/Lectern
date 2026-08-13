@@ -231,15 +231,30 @@ import re
 # close to the domain limits and enforce it even when nginx is bypassed.
 app.add_middleware(
     RequestBodyLimitMiddleware,
+    # Ordinary JSON mutations should never inherit the proxy's large file-upload
+    # allowance. Explicit large-body routes override this small default.
+    default_limit=1 * 1024 * 1024,
     path_limits={
         "/api/qcm/stage": 20 * 1024 * 1024,
         "/api/qcm/parse-moodle": 11 * 1024 * 1024,
+        "/api/upload/batch-zip": 500 * 1024 * 1024,
+        "/api/admin/backup/restore/upload": 500 * 1024 * 1024,
     },
     pattern_limits=[
         (
             "POST",
             re.compile(r"/api/materials/[^/]+/text-content"),
             10 * 1024 * 1024,
+        ),
+        (
+            "POST",
+            re.compile(r"/api/upload/?"),
+            (settings.max_file_size_mb + 2) * 1024 * 1024,
+        ),
+        (
+            "PATCH",
+            re.compile(r"/api/upload/tus/[^/]+"),
+            settings.tus_chunk_max_bytes,
         ),
     ],
 )
