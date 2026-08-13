@@ -110,7 +110,6 @@ export default function SetupPage() {
                                 autoComplete="email"
                                 value={confirmEmail}
                                 onChange={(e) => setConfirmEmail(e.target.value)}
-                                onPaste={(e) => e.preventDefault()}
                                 placeholder={t("confirmEmailPlaceholder")}
                             />
                         </div>

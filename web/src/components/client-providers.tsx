@@ -34,7 +34,11 @@ export function ClientProviders({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <LocaleProvider initialLocale={locale} initialMessages={messages}>
+    <LocaleProvider
+      initialLocale={locale}
+      initialMessages={messages}
+      messagesByLocale={MESSAGES}
+    >
       <ThemeProvider
         attribute="class"
         defaultTheme="system"

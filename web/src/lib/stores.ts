@@ -27,8 +27,10 @@ interface AuthState {
     user: UserBrief | null;
     isAuthenticated: boolean;
     isLoading: boolean;
+    bootstrapError: string | null;
     setUser: (user: UserBrief | null) => void;
     setLoading: (loading: boolean) => void;
+    setBootstrapError: (error: string | null) => void;
     logout: () => void;
 }
 
@@ -36,9 +38,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     user: null,
     isAuthenticated: false,
     isLoading: true,
-    setUser: (user) => set({ user, isAuthenticated: !!user, isLoading: false }),
+    bootstrapError: null,
+    setUser: (user) => set({ user, isAuthenticated: !!user, isLoading: false, bootstrapError: null }),
     setLoading: (isLoading) => set({ isLoading }),
-    logout: () => set({ user: null, isAuthenticated: false, isLoading: false }),
+    setBootstrapError: (bootstrapError) => set({ bootstrapError }),
+    logout: () => set({ user: null, isAuthenticated: false, isLoading: false, bootstrapError: null }),
 }));
 
 export type SidebarTab = "details" | "edits" | "chat" | "annotations";

@@ -6,6 +6,15 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * Normalize App Router pathnames so route guards behave the same with
+ * `trailingSlash: true` for both direct loads and client-side navigation.
+ */
+export function normalizePathname(pathname: string): string {
+  if (pathname.length <= 1) return pathname;
+  return pathname.replace(/\/+$/, "");
+}
+
+/**
  * Determines if a target (material or directory) is restricted based on its ID 
  * (starts with '$' for drafts) or if it's currently being previewed in a Pull Request.
  */

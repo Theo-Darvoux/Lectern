@@ -65,6 +65,10 @@
     "creating": "Création du compte…",
     "success": "Compte administrateur créé.",
     "failed": "Échec de la configuration. Veuillez réessayer.",
+    "checkingInstallation": "Vérification de l’installation…",
+    "installationCheckFailedTitle": "Le serveur de l’application ne répond pas",
+    "installationCheckFailedDescription": "L’état de l’installation n’a pas pu être chargé. Vérifiez que le serveur est démarré, puis réessayez.",
+    "retry": "Réessayer",
     "passwordTooShort": "Le mot de passe doit comporter au moins 8 caractères.",
     "passwordMismatch": "Les mots de passe ne correspondent pas.",
     "emailMismatch": "Les adresses e-mail ne correspondent pas."
@@ -195,6 +199,9 @@
     "offlineWarning": "Vous semblez être hors ligne. Certaines fonctionnalités peuvent ne pas fonctionner.",
     "redirectingToSetup": "Redirection vers la configuration...",
     "recoveringSession": "Récupération de la session...",
+    "startupErrorTitle": "Impossible de restaurer la session de l’application",
+    "startupErrorDescription": "Le serveur de l’application est injoignable. Vérifiez votre connexion ou l’état du serveur, puis réessayez.",
+    "retry": "Réessayer",
     "organization": "Organisation",
     "github": "GitHub",
     "commit": "Commit"

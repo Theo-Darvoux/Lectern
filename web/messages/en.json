@@ -65,6 +65,10 @@
     "creating": "Creating account…",
     "success": "Admin account created.",
     "failed": "Setup failed. Please try again.",
+    "checkingInstallation": "Checking installation…",
+    "installationCheckFailedTitle": "The application server is not responding",
+    "installationCheckFailedDescription": "The installation state could not be loaded. Check that the server is running, then try again.",
+    "retry": "Retry",
     "passwordTooShort": "Password must be at least 8 characters.",
     "passwordMismatch": "Passwords do not match.",
     "emailMismatch": "Email addresses do not match."
@@ -195,6 +199,9 @@
     "offlineWarning": "You appear to be offline. Some features may not work.",
     "redirectingToSetup": "Redirecting to setup...",
     "recoveringSession": "Recovering session...",
+    "startupErrorTitle": "Unable to restore the application session",
+    "startupErrorDescription": "The application server could not be reached. Check your connection or server status, then try again.",
+    "retry": "Retry",
     "organization": "Organization",
     "github": "GitHub",
     "commit": "Commit"

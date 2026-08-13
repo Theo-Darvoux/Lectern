@@ -6,6 +6,8 @@ import type { UserBrief } from "./guest";
  *  letting the client skip a follow-up `/users/me`. */
 export type RefreshResult = { accessToken: string; user: UserBrief | null };
 
+const AUTH_REQUEST_TIMEOUT_MS = 10_000;
+
 export const API_BASE = (() => {
     // On the server, we use the internal URL to reach the API container directly
     if (typeof window === "undefined") {
@@ -32,15 +34,32 @@ type FetchOptions = RequestInit & {
     timeoutMs?: number;
 };
 
-/** Combine an optional caller signal with an optional per-request timeout. */
+/** Combine an optional caller signal with an optional per-request timeout.
+ * Uses an AbortController rather than AbortSignal.any/timeout so the timeout is
+ * not silently lost on browsers that support only part of the newer API. */
 function withTimeout(signal: AbortSignal | null | undefined, timeoutMs?: number): AbortSignal | undefined {
-    if (!timeoutMs || typeof AbortSignal === "undefined" || !("timeout" in AbortSignal)) {
+    if (!timeoutMs || typeof AbortController === "undefined") {
         return signal ?? undefined;
     }
-    const timeout = AbortSignal.timeout(timeoutMs);
-    if (!signal) return timeout;
-    if ("any" in AbortSignal) return AbortSignal.any([signal, timeout]);
-    return signal;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const abortFromCaller = () => controller.abort(signal?.reason);
+
+    controller.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abortFromCaller);
+    }, { once: true });
+
+    if (signal) {
+        if (signal.aborted) {
+            abortFromCaller();
+        } else {
+            signal.addEventListener("abort", abortFromCaller, { once: true });
+        }
+    }
+
+    return controller.signal;
 }
 
 /** Whether a failed request is worth retrying (transient infra/network), as
@@ -89,6 +108,7 @@ async function refreshToken(): Promise<RefreshResult | null> {
             headers: {
                 "X-Client-ID": getClientId(),
             },
+            signal: withTimeout(undefined, AUTH_REQUEST_TIMEOUT_MS),
         });
     } catch (err) {
         // Network connection error

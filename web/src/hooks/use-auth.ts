@@ -8,7 +8,15 @@ import type { UserBrief } from "@/lib/guest";
 import { broadcastTokenAcquired, performLogout, scheduleRefreshTimer } from "@/lib/auth-sync";
 
 export function useAuth() {
-    const { user, isAuthenticated, isLoading, setUser, setLoading } = useAuthStore();
+    const {
+        user,
+        isAuthenticated,
+        isLoading,
+        bootstrapError,
+        setUser,
+        setLoading,
+        setBootstrapError,
+    } = useAuthStore();
 
     const requestCode = useCallback(async (email: string) => {
         await apiFetch("/auth/request-code", {
@@ -113,6 +121,7 @@ export function useAuth() {
     // request that also returns the user — and skip `/users/me` entirely.
     const bootstrapAuth = useCallback(async () => {
         setLoading(true);
+        setBootstrapError(null);
         try {
             if (!getAccessToken()) {
                 if (!hasAuthHint()) {
@@ -133,16 +142,20 @@ export function useAuth() {
                 }
                 // Token but no user (e.g. older API): fall through to /users/me.
             }
-            const me = await apiFetch<UserBrief>("/users/me");
+            const me = await apiFetch<UserBrief>("/users/me", { timeoutMs: 10_000 });
             setUser(me);
             const token = getAccessToken();
             if (token) scheduleRefreshTimer(token);
         } catch (err) {
-            handleAuthError(err);
+            if (err instanceof ApiError && (err.status === 401 || (err.status === 403 && err.error_code === "USER_PENDING"))) {
+                handleAuthError(err);
+            } else {
+                setBootstrapError(err instanceof Error ? err.message : "Authentication initialization failed");
+            }
         } finally {
             setLoading(false);
         }
-    }, [setUser, setLoading, handleAuthError]);
+    }, [setUser, setLoading, setBootstrapError, handleAuthError]);
 
     const verifyGoogleOAuth = useCallback(async (credential: string) => {
         const data = await apiFetch<{
@@ -208,5 +221,5 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
-    return { user, isAuthenticated, isLoading, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, setup, continueAsGuest, logout, fetchMe, bootstrapAuth };
+    return { user, isAuthenticated, isLoading, bootstrapError, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, setup, continueAsGuest, logout, fetchMe, bootstrapAuth };
 }

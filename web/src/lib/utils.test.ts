@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { compareNatural } from "./utils";
+import { compareNatural, normalizePathname } from "./utils";
 
 describe("compareNatural", () => {
   it("orders numbered names by value, not lexicographically", () => {
@@ -24,5 +24,16 @@ describe("compareNatural", () => {
   it("ignores case and diacritics", () => {
     expect(compareNatural("élève", "ELEVE")).toBe(0);
     expect(compareNatural("a", "B")).toBeLessThan(0);
+  });
+});
+
+describe("normalizePathname", () => {
+  it("removes trailing slashes from non-root paths", () => {
+    expect(normalizePathname("/setup/")).toBe("/setup");
+    expect(normalizePathname("/login///")).toBe("/login");
+  });
+
+  it("preserves the root path", () => {
+    expect(normalizePathname("/")).toBe("/");
   });
 });
