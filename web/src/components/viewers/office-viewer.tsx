@@ -163,11 +163,13 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 if (!isMounted) return;
                 loadEditor(editorConfig);
             } catch (err: any) {
+                // Navigating to another document aborts the previous signed-config
+                // request by design. Treat that lifecycle cancellation as silent;
+                // logging it makes Next's development overlay report a false error.
+                if (!isMounted || controller.signal.aborted) return;
                 console.error("EuroOffice startup error:", err);
-                if (isMounted) {
-                    setError(t("startupError", { message: err.message || "Unknown error" }));
-                    setLoading(false);
-                }
+                setError(t("startupError", { message: err.message || "Unknown error" }));
+                setLoading(false);
             }
         };
 

@@ -3,6 +3,7 @@ import { useRouter } from "next/navigation";
 import { subscribeToSSE } from "@/lib/sse-client";
 import { invalidateMaterialFileUrl } from "@/lib/api-client";
 import { invalidateBrowseEntity } from "@/lib/browse-prefetch";
+import { resolvePendingContributionEvent } from "@/lib/pending-contributions";
 
 interface BrowseData {
     type: "directory_listing" | "material";
@@ -28,7 +29,6 @@ export function useBrowseSSE(
     data: BrowseData | null,
     path: string,
     fetchData: (background: boolean) => void,
-    triggerBrowseRefresh: () => void,
 ): void {
     const router = useRouter();
 
@@ -45,21 +45,19 @@ export function useBrowseSSE(
     // Mutable refs — updated after each render so listeners always see fresh values.
     const pathRef = useRef(path);
     const fetchDataRef = useRef(fetchData);
-    const triggerRefreshRef = useRef(triggerBrowseRefresh);
     const routerRef = useRef(router);
     const breadcrumbSlugsRef = useRef<string[]>([]);
 
     useEffect(() => {
         pathRef.current = path;
         fetchDataRef.current = fetchData;
-        triggerRefreshRef.current = triggerBrowseRefresh;
         routerRef.current = router;
         breadcrumbSlugsRef.current = data?.breadcrumbs?.map((b) => b.slug) ?? [];
     });
 
     useEffect(() => {
         if (!sseEntityKey) return;
-        const listeners: Record<string, () => void> = {};
+        const listeners: Record<string, (event: MessageEvent) => void> = {};
 
         if (sseEntityKey.startsWith("dir:")) {
             const dirId = sseEntityKey.slice(4);
@@ -73,7 +71,6 @@ export function useBrowseSSE(
                             ? `/browse/${parentSlugs.join("/")}`
                             : "/browse";
                     invalidateBrowseEntity(`directory:${dirId}`, pathRef.current);
-                    triggerRefreshRef.current();
                     routerRef.current.replace(parentPath);
                 };
             }
@@ -81,13 +78,15 @@ export function useBrowseSSE(
             const refreshDir = () => {
                 invalidateBrowseEntity(`directory:${dirId}`, pathRef.current);
                 fetchDataRef.current(true);
-                triggerRefreshRef.current();
             };
 
             listeners["child_added"] = refreshDir;
             listeners["child_updated"] = refreshDir;
             listeners["child_removed"] = refreshDir;
-            listeners["pr_closed"] = refreshDir;
+            listeners["pr_closed"] = (event) => {
+                resolvePendingContributionEvent(event);
+                refreshDir();
+            };
         } else {
             // mat: key — material view
             const matId = sseEntityKey.slice(4);
@@ -98,7 +97,6 @@ export function useBrowseSSE(
                         ? `/browse/${slugs.join("/")}`
                         : "/browse";
                 invalidateBrowseEntity(`material:${matId}`, pathRef.current);
-                triggerRefreshRef.current();
                 routerRef.current.replace(parentPath);
             };
             // A new version was applied (e.g. a reviewed/merged edit). Drop the
@@ -107,7 +105,6 @@ export function useBrowseSSE(
                 invalidateMaterialFileUrl(matId);
                 invalidateBrowseEntity(`material:${matId}`, pathRef.current);
                 fetchDataRef.current(true);
-                triggerRefreshRef.current();
             };
         }
 
@@ -127,7 +124,6 @@ export function useBrowseSSE(
                     : `material:${sseEntityKey.slice(4)}`;
                 invalidateBrowseEntity(entityTag, pathRef.current);
                 fetchDataRef.current(true);
-                triggerRefreshRef.current();
             },
             startupDelay: 50,
         });

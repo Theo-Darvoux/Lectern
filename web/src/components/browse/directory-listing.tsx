@@ -24,7 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore, useUIStore, useAuthStore } from "@/lib/stores";
+import { useUIStore, useAuthStore } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
 import { apiFetch } from "@/lib/api-client";
 import {
@@ -94,9 +94,6 @@ export function DirectoryListing({
   const router = useRouter();
   const pathname = usePathname();
   const isMobile = useIsMobile();
-  const triggerBrowseRefresh = useBrowseRefreshStore(
-    (s) => s.triggerBrowseRefresh,
-  );
   const openSidebar = useUIStore((s) => s.openSidebar);
   const guest = isGuest(useAuthStore((s) => s.user));
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -1210,11 +1207,9 @@ export function DirectoryListing({
                   setSubmittingBatch(true);
                   const result = await submitDirectOperations(batchDeleteOps, undefined, undefined, tAutoTitle);
                   setSubmittingBatch(false);
+                  if (!result) return;
                   setBatchDeleteOps(null);
                   setSelectMode(false);
-                  if (result?.status === "approved") {
-                    triggerBrowseRefresh();
-                  }
                 }
               }}
               className="gap-2"
@@ -1276,11 +1271,9 @@ export function DirectoryListing({
                     setSubmittingBatch(true);
                     const result = await submitDirectOperations(batchPasteOps, undefined, undefined, tAutoTitle);
                     setSubmittingBatch(false);
+                    if (!result) return;
                     setBatchPasteOps(null);
                     clearClipboard();
-                    if (result?.status === "approved") {
-                      triggerBrowseRefresh();
-                    }
                   }
                 }}
                 className="gap-2"

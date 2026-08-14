@@ -222,9 +222,7 @@
     "popularTodayTitle": "Popular Today",
     "popularTodaySubtitle": "Most viewed materials in the last 24 hours",
     "trendingFortnightTitle": "Trending This Fortnight",
-    "trendingFortnightSubtitle": "Most viewed materials over the last 14 days",
-    "quickAddContent": "Add content",
-    "libraryRoot": "Library"
+    "trendingFortnightSubtitle": "Most viewed materials over the last 14 days"
   },
   "PendingApproval": {
     "title": "Awaiting Approval",
@@ -307,8 +305,8 @@
     "backToParentFolder": "Back to parent folder",
     "closeInspector": "Close inspector",
     "openInspector": "Open inspector",
-    "focusMode": "Enter focus mode",
-    "exitFocusMode": "Exit focus mode",
+    "expandFolder": "Expand folder",
+    "collapseFolder": "Collapse folder",
     "creationCancelled": "Creation cancelled and removed from draft",
     "addedDeletionToDraft": "Added deletion to current draft",
     "itemDeletedSuccessfully": "{type} deleted successfully",
@@ -868,6 +866,7 @@
     "preview": "Preview",
     "item": "item",
     "changesCount": "{count, plural, =0 {No changes} one {1 change} other {# changes}}",
+    "changes": "Changes",
     "expiredFile": "Uploaded file has expired",
     "expiresIn": "Expires in {time}",
     "unableToPreview": "Unable to load preview",

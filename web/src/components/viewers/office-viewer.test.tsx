@@ -97,4 +97,31 @@ describe("OfficeViewer", () => {
     expect(host.textContent).not.toContain("initializing");
     expect(DocEditor).toHaveBeenCalledTimes(1);
   });
+
+  it("does not report an expected request cancellation when the viewer unmounts", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    apiFetch.mockImplementation(
+      (_path: string, options: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason ?? new DOMException("The operation was aborted.", "AbortError")),
+            { once: true },
+          );
+        }),
+    );
+
+    await act(async () => {
+      root.render(
+        <OfficeViewer materialId="material-2" fileKey="file-2" fileName="budget.xlsx" />,
+      );
+    });
+
+    await act(async () => {
+      root.render(<div />);
+      await Promise.resolve();
+    });
+
+    expect(consoleError).not.toHaveBeenCalled();
+  });
 });

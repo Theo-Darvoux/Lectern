@@ -1,6 +1,7 @@
-import { apiFetch, apiFetchWithResponse } from "@/lib/api-client";
+import { ApiError, apiFetch, apiFetchWithResponse } from "@/lib/api-client";
 import { type Operation } from "@/lib/staging-store";
-import { useConfigStore } from "@/lib/stores";
+import { useAuthStore, useBrowseRefreshStore, useConfigStore } from "@/lib/stores";
+import { usePendingContributionsStore } from "@/lib/pending-contributions";
 import { toast } from "sonner";
 
 export async function fetchOpenPRCount(): Promise<number> {
@@ -34,6 +35,48 @@ export function truncateDescription(text: string): string {
     const max = getMaxDescriptionLength();
     if (max === null || text.length <= max) return text;
     return text.slice(0, max);
+}
+
+/** Keep browse projections in sync with the authoritative submission state. */
+export function reconcileSubmittedOperations(
+    result: { id: string; status: string },
+    operations: Operation[],
+    submittingOwnerId?: string | null,
+): void {
+    if (result.status === "approved") {
+        useBrowseRefreshStore.getState().triggerBrowseRefresh();
+        return;
+    }
+    if (result.status === "open") {
+        const currentUserId = useAuthStore.getState().user?.id;
+        const currentOwnerId = currentUserId ? String(currentUserId) : null;
+        if (submittingOwnerId !== undefined && submittingOwnerId !== currentOwnerId) {
+            return;
+        }
+        const ownerId = submittingOwnerId ?? currentOwnerId;
+        if (ownerId) {
+            usePendingContributionsStore.getState().activateOwner(ownerId);
+        }
+        usePendingContributionsStore.getState().track(result.id, operations);
+        // The close event can race ahead of the POST response for very fast
+        // deferred auto-approvals. Re-read the authoritative status after
+        // tracking so such an event can never leave a stale pending ghost.
+        void reconcilePendingContribution(result.id);
+    }
+}
+
+export async function reconcilePendingContribution(id: string): Promise<void> {
+    try {
+        const pullRequest = await apiFetch<{ status: string }>(`/pull-requests/${id}`);
+        if (pullRequest.status === "open") return;
+    } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 404) return;
+    }
+
+    if (id in usePendingContributionsStore.getState().contributions) {
+        usePendingContributionsStore.getState().resolve(id);
+        useBrowseRefreshStore.getState().triggerBrowseRefresh();
+    }
 }
 
 /** Generate a sensible auto-title from one or multiple operations. */
@@ -90,6 +133,8 @@ export async function submitDirectOperations(
     if (ops.length === 0) return null;
 
     const title = manualTitle || autoTitle(ops, t);
+    const submittingUserId = useAuthStore.getState().user?.id;
+    const submittingOwnerId = submittingUserId ? String(submittingUserId) : null;
 
     const promise = apiFetch<{ id: string; status: string }>(
         "/pull-requests",
@@ -116,6 +161,7 @@ export async function submitDirectOperations(
 
     try {
         const result = await promise;
+        reconcileSubmittedOperations(result, ops, submittingOwnerId);
         return result;
     } catch {
         return null;

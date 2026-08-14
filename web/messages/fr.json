@@ -279,9 +279,7 @@
     "statOpenPrs": "PR ouvertes",
     "statMyContributions": "Vos contributions",
     "quickBrowse": "Explorer",
-    "quickNotifications": "Notifications",
-    "quickAddContent": "Ajouter du contenu",
-    "libraryRoot": "Bibliothèque"
+    "quickNotifications": "Notifications"
   },
   "PendingApproval": {
     "title": "En attente d'approbation",
@@ -358,8 +356,8 @@
     "backToParentFolder": "Retour au dossier parent",
     "closeInspector": "Fermer l'inspecteur",
     "openInspector": "Ouvrir l'inspecteur",
-    "focusMode": "Activer le mode concentration",
-    "exitFocusMode": "Quitter le mode concentration",
+    "expandFolder": "Développer le dossier",
+    "collapseFolder": "Réduire le dossier",
     "creationCancelled": "Création annulée et supprimée du brouillon",
     "addedDeletionToDraft": "Suppression ajoutée au brouillon actuel",
     "itemDeletedSuccessfully": "{type} supprimé avec succès",
@@ -948,6 +946,7 @@
     "preview": "Aperçu",
     "item": "élément",
     "changesCount": "{count, plural, =0 {Aucun changement} one {1 changement} other {# changements}}",
+    "changes": "Modifications",
     "expiredFile": "Le fichier téléchargé a expiré",
     "expiresIn": "Expire dans {time}",
     "unableToPreview": "Impossible de charger l'aperçu",

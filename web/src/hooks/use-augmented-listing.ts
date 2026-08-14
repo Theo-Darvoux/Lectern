@@ -9,6 +9,11 @@ import type {
   StagedOperation,
 } from "@/lib/staging-store";
 import type { SelectedItem } from "@/lib/selection-store";
+import {
+  pendingOperations,
+  usePendingContributionsStore,
+} from "@/lib/pending-contributions";
+import { useAuthStore } from "@/lib/stores";
 
 export function stagedStatus(
   ops: (StagedOperation | Operation)[],
@@ -65,6 +70,15 @@ export function useAugmentedListing({
 }: UseAugmentedListingProps) {
   const rawOperations = useStagingStore((s) => s.operations);
   const operations = useMemo(() => rawOperations ?? [], [rawOperations]);
+  const pendingContributions = usePendingContributionsStore((s) => s.contributions);
+  const pendingOwnerId = usePendingContributionsStore((s) => s.ownerId);
+  const currentOwnerId = useAuthStore((s) => s.user?.id ? String(s.user.id) : null);
+  const submittedOperations = useMemo(
+    () => pendingOwnerId === currentOwnerId
+      ? pendingOperations(usePendingContributionsStore.getState())
+      : [],
+    [currentOwnerId, pendingContributions, pendingOwnerId],
+  );
 
   const [ghostDirStack, setGhostDirStack] = useState<GhostDirEntry[]>([]);
   const activeGhostDir =
@@ -72,8 +86,10 @@ export function useAugmentedListing({
 
   const allOps = useMemo(() => {
     const local = operations.map((s) => unwrapOp(s));
-    const external = (previewOperations ?? [])
-      .map((op, idx) => ({ op, idx }))
+    const external = [
+      ...submittedOperations.map((op) => ({ op, idx: undefined as number | undefined })),
+      ...(previewOperations ?? []).map((op, idx) => ({ op, idx })),
+    ]
       .filter(({ op: externalOp }) => {
         if (
           externalOp.op === "edit_directory" ||
@@ -108,7 +124,7 @@ export function useAugmentedListing({
       })),
       ...external.map((op) => ({ ...op, _storeIndex: undefined as number | undefined })),
     ];
-  }, [operations, previewOperations]);
+  }, [operations, previewOperations, submittedOperations]);
 
   const realDirId = directory?.id ? String(directory.id) : null;
   const realDirName = directory?.name ? String(directory.name) : "Root";

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FolderTree, Upload } from "lucide-react";
+import { FolderTree } from "lucide-react";
 import { SearchInline } from "@/components/search/search-inline";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -19,8 +19,6 @@ interface HeroBarProps {
   displayName: string;
   subtitle: string;
   isLoading?: boolean;
-  showContributorActions?: boolean;
-  onAddContent?: () => void;
 }
 
 export function HeroBar({
@@ -28,8 +26,6 @@ export function HeroBar({
   displayName,
   subtitle,
   isLoading = false,
-  showContributorActions = true,
-  onAddContent,
 }: HeroBarProps) {
   const t = useTranslations("Home");
 
@@ -76,16 +72,6 @@ export function HeroBar({
 
       {/* Quick actions */}
       <div className="mt-5 flex flex-wrap gap-2">
-        {showContributorActions && onAddContent && (
-          <button
-            type="button"
-            onClick={onAddContent}
-            className="inline-flex items-center gap-2 rounded-xl bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          >
-            <Upload className="h-4 w-4" />
-            {t("quickAddContent")}
-          </button>
-        )}
         {actions.map((a) => (
           <Link
             key={a.href}

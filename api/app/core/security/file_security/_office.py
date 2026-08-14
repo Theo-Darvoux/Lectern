@@ -426,6 +426,36 @@ def _reject_external_ooxml_relationships(data: bytes, entry_name: str) -> None:
             )
 
 
+def _strip_xlsx_external_link_references(data: bytes, entry_name: str) -> bytes:
+    """Remove package references to stripped XLSX external-workbook links."""
+
+    root = _parse_package_xml(data, f"OOXML package part '{entry_name}'")
+    normalized_name = entry_name.casefold()
+
+    for parent in root.iter():
+        for child in list(parent):
+            local_name = child.tag.rsplit("}", 1)[-1].casefold()
+            remove = False
+            if normalized_name == "xl/workbook.xml":
+                remove = local_name == "externalreferences"
+            elif normalized_name == "xl/_rels/workbook.xml.rels":
+                relationship_type = _relationship_attribute(child, "type").casefold()
+                remove = (
+                    local_name == "relationship"
+                    and relationship_type.endswith("/externallink")
+                )
+            elif normalized_name == "[content_types].xml":
+                part_name = _relationship_attribute(child, "partname").strip().casefold()
+                remove = (
+                    local_name == "override"
+                    and part_name.startswith("/xl/externallinks/")
+                )
+            if remove:
+                parent.remove(child)
+
+    return StdET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
 def _validate_xml_stream(source, description: str) -> None:
     """Stream-parse XML to reject entities, DTDs, and malformed package parts."""
 
@@ -533,6 +563,13 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                     is_odf and normalized_name == "meta.xml"
                 ):
                     continue
+                # Spreadsheet formulas may retain links to workbooks on the
+                # author's machine. They are not needed to display the cached
+                # values, and retaining them would leak paths or trigger remote
+                # access. Remove the external-link package parts and their
+                # references instead of rejecting an otherwise safe workbook.
+                if is_ooxml and normalized_name.startswith("xl/externallinks/"):
+                    continue
 
                 if is_dir:
                     output_archive.writestr(
@@ -578,8 +615,27 @@ def _zip_strip_file(file_path: Path, new_path: Path, mime_type: str | None = Non
                         raise SanitizationError(
                             f"OOXML relationship file '{safe_name}' is too large"
                         )
+                    if normalized_name == "xl/_rels/workbook.xml.rels":
+                        relationship_data = _strip_xlsx_external_link_references(
+                            relationship_data,
+                            safe_name,
+                        )
                     _reject_external_ooxml_relationships(relationship_data, safe_name)
                     output_archive.writestr(new_info, relationship_data)
+                    continue
+
+                if is_ooxml and normalized_name in {"xl/workbook.xml", "[content_types].xml"}:
+                    package_data = _read_zip_entry_bounded(
+                        source_archive,
+                        item,
+                        total_actual,
+                        max_entry_bytes=_MAX_PACKAGE_XML_BYTES,
+                    )
+                    total_actual += len(package_data)
+                    output_archive.writestr(
+                        new_info,
+                        _strip_xlsx_external_link_references(package_data, safe_name),
+                    )
                     continue
 
                 declared_media = epub_manifest.get(normalized_name) if is_epub else None

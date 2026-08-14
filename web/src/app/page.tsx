@@ -18,7 +18,6 @@ import { AlertCircle, History, Sparkles, Clock, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { HomeData } from "@/components/home/types";
 import { useTranslations } from "next-intl";
-import { useDropZoneStore } from "@/lib/drop-zone-store";
 
 const DirectoryTreeSidebar = dynamic(
   () => import("@/components/browse/directory-tree-sidebar").then((m) => m.DirectoryTreeSidebar),
@@ -41,7 +40,6 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-  const requestUpload = useDropZoneStore((state) => state.requestUpload);
 
   const retry = useCallback(() => setReloadToken((token) => token + 1), []);
 
@@ -82,11 +80,6 @@ export default function HomePage() {
             displayName={displayName}
             subtitle={t("whatsHappening", { siteName: config?.site_name || "" })}
             isLoading={isLoading && !data}
-            showContributorActions={!guest}
-            onAddContent={guest ? undefined : () => requestUpload({
-              directoryId: "",
-              directoryName: t("libraryRoot"),
-            })}
           />
 
           {/* ── Error banner ──────────────────────────────────── */}

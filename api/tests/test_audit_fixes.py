@@ -303,6 +303,46 @@ class TestOOXMLStrip:
         with pytest.raises(ValueError, match="external relationship"):
             await _strip_ooxml_from_path(p)
 
+    async def test_strips_xlsx_external_workbook_links_instead_of_rejecting_upload(self, tmp_path):
+        relationships = b"""<Relationships
+          xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+          <Relationship Id='rId1'
+            Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath'
+            Target='file:///C:/Users/example/source.xlsx' TargetMode='External'/>
+        </Relationships>"""
+        p = _make_zip(
+            tmp_path,
+            {
+                "[Content_Types].xml": b"""<Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'>
+                  <Override PartName='/xl/externalLinks/externalLink1.xml'
+                    ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml'/>
+                </Types>""",
+                "xl/workbook.xml": b"""<workbook xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+                  xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'>
+                  <externalReferences><externalReference r:id='rId5'/></externalReferences>
+                </workbook>""",
+                "xl/_rels/workbook.xml.rels": b"""<Relationships
+                  xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+                  <Relationship Id='rId5'
+                    Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink'
+                    Target='externalLinks/externalLink1.xml'/>
+                </Relationships>""",
+                "xl/externalLinks/externalLink1.xml": b"<externalLink/>",
+                "xl/externalLinks/_rels/externalLink1.xml.rels": relationships,
+            },
+        )
+
+        result = await _strip_ooxml_from_path(p)
+
+        with zipfile.ZipFile(result) as archive:
+            assert not any(
+                name.casefold().startswith("xl/externallinks/")
+                for name in archive.namelist()
+            )
+            assert b"externalLink" not in archive.read("xl/workbook.xml")
+            assert b"externalLink" not in archive.read("xl/_rels/workbook.xml.rels")
+            assert b"externalLink" not in archive.read("[Content_Types].xml")
+
     async def test_malformed_relationship_before_active_content_fails_closed(self, tmp_path):
         p = _make_zip(
             tmp_path,

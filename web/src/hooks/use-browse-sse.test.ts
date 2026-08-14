@@ -11,6 +11,7 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { useBrowseSSE } from "./use-browse-sse";
 import { invalidateBrowseEntity } from "@/lib/browse-prefetch";
+import { pendingOperations, usePendingContributionsStore } from "@/lib/pending-contributions";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -48,7 +49,7 @@ function renderHookWith(
     document.body.appendChild(container);
 
     function TestComponent() {
-        useBrowseSSE(data, "/browse/test", noop, noop);
+        useBrowseSSE(data, "/browse/test", noop);
         return null;
     }
 
@@ -70,6 +71,7 @@ function renderHookWith(
 describe("useBrowseSSE — directory listing", () => {
     beforeEach(() => {
         capturedListeners.length = 0;
+        usePendingContributionsStore.setState({ contributions: {} });
         vi.useFakeTimers();
     });
 
@@ -117,7 +119,7 @@ describe("useBrowseSSE — directory listing", () => {
         document.body.appendChild(container);
 
         function TestComponent() {
-            useBrowseSSE(dirData, "/browse/test", fetchData, noop);
+            useBrowseSSE(dirData, "/browse/test", fetchData);
             return null;
         }
 
@@ -138,6 +140,59 @@ describe("useBrowseSSE — directory listing", () => {
 
         act(() => root.unmount());
         container.remove();
+    });
+
+    it("child_added immediately refreshes the current listing", () => {
+        const fetchData = vi.fn();
+        const container = document.createElement("div");
+        document.body.appendChild(container);
+
+        function TestComponent() {
+            useBrowseSSE(dirData, "/browse/test", fetchData);
+            return null;
+        }
+
+        const root = createRoot(container);
+        act(() => { root.render(React.createElement(TestComponent)); });
+        act(() => { vi.runAllTimers(); });
+
+        const listeners = capturedListeners.find((candidate) => "child_added" in candidate);
+        act(() => {
+            (listeners?.child_added as (event: MessageEvent) => void)(
+                new MessageEvent("child_added"),
+            );
+        });
+
+        expect(fetchData).toHaveBeenCalledWith(true);
+        expect(invalidateBrowseEntity).toHaveBeenCalledWith(
+            "directory:dir-abc",
+            "/browse/test",
+        );
+
+        act(() => root.unmount());
+        container.remove();
+    });
+
+    it("removes optimistic pending files when their contribution closes", () => {
+        usePendingContributionsStore.getState().track("pr-closed", [{
+            op: "create_material",
+            temp_id: "$mat-pending",
+            directory_id: "dir-abc",
+            title: "Pending",
+            type: "document",
+        }]);
+        const cleanup = renderHookWith(dirData);
+        act(() => { vi.runAllTimers(); });
+
+        const listeners = capturedListeners.find((candidate) => "pr_closed" in candidate);
+        act(() => {
+            (listeners?.pr_closed as (event: MessageEvent) => void)(
+                new MessageEvent("pr_closed", { data: JSON.stringify({ id: "pr-closed" }) }),
+            );
+        });
+
+        expect(pendingOperations(usePendingContributionsStore.getState())).toEqual([]);
+        cleanup();
     });
 });
 

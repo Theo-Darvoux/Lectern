@@ -50,7 +50,7 @@ import { usePrint } from "@/hooks/use-print";
 import { apiFetch } from "@/lib/api-client";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore, useAuthStore, useUIStore } from "@/lib/stores";
+import { useAuthStore, useUIStore } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import {
@@ -98,7 +98,6 @@ const ArmContext = createContext<(() => void) | null>(null);
 function useItemActions(item: ItemData, itemPath?: string) {
   const t = useTranslations("Browse");
   const tAuto = useTranslations("AutoTitle");
-  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
   const addOperation = useStagingStore((s) => s.addOperation);
   const removeOperation = useStagingStore((s) => s.removeOperation);
   // Read operations lazily (inside handlers only) so this component doesn't
@@ -172,7 +171,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
   const handleDirectDelete = async () => {
     setDeleting(true);
     try {
-      await submitDirectOperations([
+      const result = await submitDirectOperations([
         isMaterial ? {
           op: "delete_material",
           material_id: item.id,
@@ -181,9 +180,8 @@ function useItemActions(item: ItemData, itemPath?: string) {
           directory_id: item.id,
         },
       ], undefined, undefined, tAuto);
-      toast.success(t("itemDeletedSuccessfully", { type: isMaterial ? t("material") : t("folder") }));
+      if (!result) return;
       setDeleteDialogOpen(false);
-      triggerBrowseRefresh();
     } catch {
       toast.error(t("failedToDeleteItem"));
     } finally {

@@ -12,8 +12,6 @@ import {
   FileText,
   Code2,
   Paperclip,
-  Maximize2,
-  Minimize2,
 } from "lucide-react";
 import { useIsMobile, useIsDesktop } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
@@ -31,7 +29,6 @@ import {
 } from "@/lib/file-utils";
 import { useUIStore, useAuthStore } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
-// useUIStore provides: sidebarOpen, openSidebar, closeSidebar
 import { apiFetch } from "@/lib/api-client";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import type { QCMFile } from "@/lib/qcm-types";
@@ -213,31 +210,20 @@ export function MaterialViewer({
   const materialActionsOpen = useUIStore((state) => state.materialActionsOpen);
   const setMaterialActionsOpen = useUIStore((state) => state.setMaterialActionsOpen);
   const setActiveViewerType = useUIStore((state) => state.setActiveViewerType);
-  const setNavbarVisible = useUIStore((state) => state.setNavbarVisible);
   const setBrowseContext = useDropZoneStore((state) => state.setBrowseContext);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const [focusMode, setFocusMode] = useState(false);
 
-  // Hide footer, enter immersive mode, and prevent page scroll while viewer is active
+  // Keep the document workspace stable and prevent the page behind it from scrolling.
   useEffect(() => {
     setHideFooter(true);
-    setNavbarVisible(true);
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
     return () => {
       setHideFooter(false);
-      setNavbarVisible(true);
       document.body.style.overflow = "";
       document.documentElement.style.overflow = "";
     };
-  }, [setHideFooter, setNavbarVisible]);
-
-  const toggleFocusMode = () => {
-    const next = !focusMode;
-    setFocusMode(next);
-    setNavbarVisible(!next);
-    if (next) closeSidebar();
-  };
+  }, [setHideFooter]);
 
 
 
@@ -408,17 +394,6 @@ export function MaterialViewer({
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5">
-              <Button
-                variant={focusMode ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 shrink-0"
-                onClick={toggleFocusMode}
-                title={focusMode ? t("exitFocusMode") : t("focusMode")}
-                aria-label={focusMode ? t("exitFocusMode") : t("focusMode")}
-                aria-pressed={focusMode}
-              >
-                {focusMode ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-              </Button>
             {isMobile ? (
               <Button
                 variant="ghost"

@@ -154,7 +154,6 @@ function BrowseContent() {
   const sidebarTarget = useUIStore((s) => s.sidebarTarget);
   const setSidebarTarget = useUIStore((s) => s.setSidebarTarget);
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
-  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const t = useTranslations("Browse");
   const config = useConfigStore((state) => state.config);
@@ -331,7 +330,7 @@ function BrowseContent() {
     }
   }, [path, refreshCount, fetchData]);
 
-  useBrowseSSE(data, path, fetchData, triggerBrowseRefresh);
+  useBrowseSSE(data, path, fetchData);
 
   const isLikelyMaterial = path.split("/").filter(Boolean).length >= 3;
 
