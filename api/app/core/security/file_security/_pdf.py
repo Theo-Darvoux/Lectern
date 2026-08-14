@@ -120,9 +120,7 @@ def _validate_interactive_action(
             or (scheme == "mailto" and not parsed.path)
             or any(ord(char) < 0x20 for char in target)
         ):
-            raise ValueError(
-                f"PDF {context} contains a prohibited external hyperlink target"
-            )
+            raise ValueError(f"PDF {context} contains a prohibited external hyperlink target")
     else:
         raise ValueError(f"PDF {context} contains a dangerous action: {subtype or '/A'}")
 

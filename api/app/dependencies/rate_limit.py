@@ -146,7 +146,11 @@ return 1
 
 async def _consume_upload_group(request: Request, user: User, redis: Redis) -> bool:  # type: ignore[type-arg]
     group_id = request.headers.get("X-Upload-Group-ID")
-    if not group_id or request.method != "POST" or request.url.path not in _UPLOAD_GROUP_ELIGIBLE_PATHS:
+    if (
+        not group_id
+        or request.method != "POST"
+        or request.url.path not in _UPLOAD_GROUP_ELIGIBLE_PATHS
+    ):
         return False
 
     if user.role == UserRole.GUEST:

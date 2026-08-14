@@ -105,9 +105,7 @@ class TestCheckPdfSafety:
             "mailto:teacher@example.com",
         ],
     )
-    def test_safe_external_annotation_links_are_allowed_and_preserved(
-        self, tmp_path, target
-    ):
+    def test_safe_external_annotation_links_are_allowed_and_preserved(self, tmp_path, target):
         pdf_path = _make_pdf(tmp_path)
         with pikepdf.open(str(pdf_path), allow_overwriting_input=True) as pdf:
             annotation = pikepdf.Dictionary(
@@ -240,6 +238,7 @@ class TestWalkPageTreeForActions:
 class TestOfficeSanitization:
     def test_docx_content_types_preserves_unprefixed_namespace(self, tmp_path):
         import zipfile
+
         from app.core.security.file_security._office import _zip_strip_file
 
         docx_path = tmp_path / "test.docx"
@@ -250,22 +249,28 @@ class TestOfficeSanitization:
                 '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
                 '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
                 '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-                '</Types>',
+                "</Types>",
             )
             z.writestr(
                 "_rels/.rels",
                 '<?xml version="1.0" encoding="UTF-8"?>'
                 '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
-                '</Relationships>',
+                "</Relationships>",
             )
-            z.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>')
+            z.writestr(
+                "word/document.xml",
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>',
+            )
 
         out_path = tmp_path / "sanitized.docx"
-        _zip_strip_file(docx_path, out_path, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        _zip_strip_file(
+            docx_path,
+            out_path,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
 
         with zipfile.ZipFile(out_path, "r") as z:
             ct = z.read("[Content_Types].xml").decode("utf-8")
             assert "<ns0:Types" not in ct
             assert "<Types" in ct
-

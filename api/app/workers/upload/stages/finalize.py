@@ -49,7 +49,9 @@ async def run_finalize_storage(
     with tracer.start_as_current_span("upload.finalize") as final_span:
         curr_ext = MimeRegistry.get_extension(input_data.original_filename)
         safe_name = input_data.original_filename
-        if not curr_ext or not MimeRegistry.is_valid_extension_for_mime(curr_ext, input_data.final_mime):
+        if not curr_ext or not MimeRegistry.is_valid_extension_for_mime(
+            curr_ext, input_data.final_mime
+        ):
             ext = MimeRegistry.get_canonical_extension(input_data.final_mime)
             if ext and not input_data.original_filename.lower().endswith(ext.lower()):
                 stem = Path(input_data.original_filename).stem

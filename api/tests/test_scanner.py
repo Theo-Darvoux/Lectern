@@ -110,7 +110,7 @@ def test_isolated_yara_result_explains_why_file_was_flagged(tmp_path) -> None:
     source.write_bytes(b"specific-test-marker")
     compiled = tmp_path / "rules.yarac"
     rules = yara.compile(
-        source='''
+        source="""
             rule Explicit_Test_Rule {
                 meta:
                     description = "Contains the explicit test marker"
@@ -119,15 +119,13 @@ def test_isolated_yara_result_explains_why_file_was_flagged(tmp_path) -> None:
                 condition:
                     $marker
             }
-        '''
+        """
     )
     rules.save(str(compiled))
 
     result = _scan_yara([str(source), str(compiled), "10"])
 
-    assert result["match"] == (
-        "Contains the explicit test marker (YARA rule: Explicit_Test_Rule)"
-    )
+    assert result["match"] == ("Contains the explicit test marker (YARA rule: Explicit_Test_Rule)")
 
 
 # ── MalwareBazaar tests ──

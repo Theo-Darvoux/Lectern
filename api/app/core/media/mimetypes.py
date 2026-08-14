@@ -358,7 +358,9 @@ class MimeRegistry:
             return False
         allowed_mimes = ALLOWED_FORMAT_REGISTRY.get(ext, [])
         norm_mime = MimeRegistry.normalize_mime(mime_type)
-        return norm_mime in allowed_mimes or (norm_mime == "text/plain" and "text/plain" in allowed_mimes)
+        return norm_mime in allowed_mimes or (
+            norm_mime == "text/plain" and "text/plain" in allowed_mimes
+        )
 
     @staticmethod
     def get_allowed_mimes_for_extension(ext: str) -> list[str]:

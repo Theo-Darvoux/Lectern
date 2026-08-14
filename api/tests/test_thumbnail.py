@@ -474,9 +474,7 @@ async def test_run_thumbnail_stage_cleans_up_partial_file_on_failure() -> None:
         ("notes.txt", False),
     ],
 )
-def test_is_office_filename_detects_all_office_extensions(
-    filename: str, expected: bool
-) -> None:
+def test_is_office_filename_detects_all_office_extensions(filename: str, expected: bool) -> None:
     from app.workers.upload.stages.thumbnail import _is_office_filename
 
     assert _is_office_filename(filename) is expected
@@ -580,6 +578,7 @@ async def test_run_thumbnail_stage_docx_routes_correctly() -> None:
 def test_ipynb_to_markdown_extracts_markdown_code_and_plots() -> None:
     import base64
     import json
+
     from app.core.security.processing_paths import processing_temp_dir
     from app.workers.upload.stages.thumbnail import _ipynb_to_markdown
 
@@ -662,6 +661,7 @@ async def test_run_thumbnail_stage_ipynb_routes_correctly() -> None:
 async def test_thumbnail_ipynb_calls_soffice_and_thumbnail_pdf() -> None:
     """_thumbnail_ipynb writes markdown and calls soffice/pdf pipeline."""
     import json
+
     from app.workers.upload.stages.thumbnail import _thumbnail_ipynb
 
     nb = {
@@ -687,6 +687,7 @@ async def test_thumbnail_ipynb_calls_soffice_and_thumbnail_pdf() -> None:
                 new_callable=AsyncMock,
             ) as mock_thumb_pdf,
         ):
+
             async def fake_sandboxed_run(cmd, ro_paths, rw_paths, timeout=60):
                 # Simulate LibreOffice creating document.pdf in rw_paths[0]
                 tmp_dir = rw_paths[0]
@@ -717,6 +718,7 @@ async def test_thumbnail_ipynb_calls_soffice_and_thumbnail_pdf() -> None:
 async def test_thumbnail_ipynb_falls_back_to_embedded_plot_if_soffice_fails() -> None:
     """If LibreOffice conversion fails, fallback to rendering the extracted plot image."""
     import json
+
     from app.workers.upload.stages.thumbnail import _thumbnail_ipynb
 
     tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -778,6 +780,7 @@ async def test_thumbnail_ipynb_falls_back_to_embedded_plot_if_soffice_fails() ->
 async def test_run_thumbnail_stage_ipynb_e2e_renders_webp() -> None:
     """Real end-to-end rendering of a Jupyter notebook to WebP."""
     import json
+
     from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
@@ -823,5 +826,3 @@ async def test_run_thumbnail_stage_ipynb_e2e_renders_webp() -> None:
         result_path.unlink(missing_ok=True)
     finally:
         pf.cleanup()
-
-

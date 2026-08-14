@@ -13,7 +13,6 @@ Security model:
 import asyncio
 import contextlib
 import logging
-import mimetypes
 import os
 import shutil
 import unicodedata
@@ -244,7 +243,10 @@ def _extract_zip_sync(
                     f"Zip entry has an invalid compressed size: {info.filename!r}",
                     code=UploadErrorCode.ZIP_BOMB,
                 )
-            if info.compress_size and info.file_size / info.compress_size > BATCH_MAX_COMPRESSION_RATIO:
+            if (
+                info.compress_size
+                and info.file_size / info.compress_size > BATCH_MAX_COMPRESSION_RATIO
+            ):
                 raise BadRequestError(
                     f"Zip entry compression ratio exceeds safety limit: {info.filename!r}",
                     code=UploadErrorCode.ZIP_BOMB,

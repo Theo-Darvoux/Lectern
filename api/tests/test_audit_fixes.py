@@ -336,8 +336,7 @@ class TestOOXMLStrip:
 
         with zipfile.ZipFile(result) as archive:
             assert not any(
-                name.casefold().startswith("xl/externallinks/")
-                for name in archive.namelist()
+                name.casefold().startswith("xl/externallinks/") for name in archive.namelist()
             )
             assert b"externalLink" not in archive.read("xl/workbook.xml")
             assert b"externalLink" not in archive.read("xl/_rels/workbook.xml.rels")
@@ -420,9 +419,7 @@ class TestOOXMLStrip:
 
         result = await _strip_ooxml_from_path(p)
         with zipfile.ZipFile(result) as archive:
-            assert b"https://example.com/reference" in archive.read(
-                "word/_rels/document.xml.rels"
-            )
+            assert b"https://example.com/reference" in archive.read("word/_rels/document.xml.rels")
 
     async def test_preserves_internal_ooxml_relationships(self, tmp_path):
         relationships = b"""<Relationships

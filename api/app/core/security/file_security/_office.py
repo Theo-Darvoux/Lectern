@@ -472,16 +472,12 @@ def _strip_xlsx_external_link_references(data: bytes, entry_name: str) -> bytes:
                 remove = local_name == "externalreferences"
             elif normalized_name == "xl/_rels/workbook.xml.rels":
                 relationship_type = _relationship_attribute(child, "type").casefold()
-                remove = (
-                    local_name == "relationship"
-                    and relationship_type.endswith("/externallink")
+                remove = local_name == "relationship" and relationship_type.endswith(
+                    "/externallink"
                 )
             elif normalized_name == "[content_types].xml":
                 part_name = _relationship_attribute(child, "partname").strip().casefold()
-                remove = (
-                    local_name == "override"
-                    and part_name.startswith("/xl/externallinks/")
-                )
+                remove = local_name == "override" and part_name.startswith("/xl/externallinks/")
             if remove:
                 parent.remove(child)
                 modified = True

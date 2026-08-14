@@ -3,7 +3,6 @@
 import contextlib
 import hashlib
 import logging
-import mimetypes
 from typing import Annotated
 from uuid import UUID, uuid4
 

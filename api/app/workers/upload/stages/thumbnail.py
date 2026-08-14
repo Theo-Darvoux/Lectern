@@ -83,9 +83,7 @@ async def run_thumbnail_stage(
             ext = Path(original_filename).suffix.lower()
             if not ext or ext not in _OFFICE_EXTENSIONS:
                 ext = _OFFICE_MIME_SUFFIXES.get(mime_type, ".docx")
-            generator_coro = _thumbnail_office(
-                pf.path, thumb_path, size, quality, suffix=ext
-            )
+            generator_coro = _thumbnail_office(pf.path, thumb_path, size, quality, suffix=ext)
             check_blank = False
         elif original_filename.lower().endswith(".ipynb"):
             generator_coro = _thumbnail_ipynb(pf.path, thumb_path, size, quality)
@@ -587,15 +585,12 @@ def _ipynb_to_markdown(
     if not isinstance(cells, list):
         return "", None
 
-    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-    lang_info = (
-        metadata.get("language_info")
-        if isinstance(metadata.get("language_info"), dict)
-        else {}
-    )
-    kernelspec = (
-        metadata.get("kernelspec") if isinstance(metadata.get("kernelspec"), dict) else {}
-    )
+    raw_metadata = data.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    raw_lang_info = metadata.get("language_info")
+    lang_info = raw_lang_info if isinstance(raw_lang_info, dict) else {}
+    raw_kernelspec = metadata.get("kernelspec")
+    kernelspec = raw_kernelspec if isinstance(raw_kernelspec, dict) else {}
     lang = lang_info.get("name") or kernelspec.get("language") or "python"
 
     md_parts: list[str] = []
@@ -652,23 +647,15 @@ def _ipynb_to_markdown(
                             for mime in ("image/png", "image/jpeg", "image/webp"):
                                 b64 = out_data.get(mime)
                                 if isinstance(b64, (str, list)):
-                                    b64_str = (
-                                        "".join(b64) if isinstance(b64, list) else b64
-                                    )
+                                    b64_str = "".join(b64) if isinstance(b64, list) else b64
                                     b64_clean = "".join(b64_str.split())
                                     try:
-                                        img_bytes = base64.b64decode(
-                                            b64_clean, validate=True
-                                        )
+                                        img_bytes = base64.b64decode(b64_clean, validate=True)
                                         if len(img_bytes) <= 20 * 1024 * 1024:
                                             img_counter += 1
-                                            img_path = (
-                                                img_dir / f"output_{img_counter}.png"
-                                            )
+                                            img_path = img_dir / f"output_{img_counter}.png"
                                             img_path.write_bytes(img_bytes)
-                                            md_parts.append(
-                                                f"![Output](output_{img_counter}.png)"
-                                            )
+                                            md_parts.append(f"![Output](output_{img_counter}.png)")
                                             if first_image_path is None:
                                                 first_image_path = img_path
                                             break
@@ -742,4 +729,3 @@ async def _thumbnail_ipynb(
 
         # Fallback 2: Plain text render via LibreOffice
         await _thumbnail_via_soffice(input_path, output_path, size, quality, suffix=".txt")
-
