@@ -25,7 +25,9 @@ describe("useViewMode", () => {
 
     function TestComponent() {
       const { mode } = useViewMode();
-      currentMode = mode;
+      React.useEffect(() => {
+        currentMode = mode;
+      });
       return null;
     }
 
@@ -43,7 +45,9 @@ describe("useViewMode", () => {
 
     function TestComponent() {
       const { mode } = useViewMode();
-      currentMode = mode;
+      React.useEffect(() => {
+        currentMode = mode;
+      });
       return null;
     }
 
@@ -59,7 +63,10 @@ describe("useViewMode", () => {
     let hookResult: ReturnType<typeof useViewMode> | undefined;
 
     function TestComponent() {
-      hookResult = useViewMode();
+      const res = useViewMode();
+      React.useEffect(() => {
+        hookResult = res;
+      });
       return null;
     }
 

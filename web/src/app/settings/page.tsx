@@ -16,6 +16,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,6 +45,7 @@ import {
 const commitSha = process.env.NEXT_PUBLIC_COMMIT_SHA;
 
 export default function SettingsPage() {
+  const router = useRouter();
   const t = useTranslations("Settings");
   const tLayout = useTranslations("Layout");
   const tLanguages = useTranslations("Languages");
@@ -118,7 +120,7 @@ export default function SettingsPage() {
           toast.success(
             t("deleteAccount.success"),
           );
-          window.location.href = "/login";
+          router.push("/login");
         } catch {
           toast.error(t("deleteAccount.error"));
         }

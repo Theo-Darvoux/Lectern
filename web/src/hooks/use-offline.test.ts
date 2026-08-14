@@ -23,7 +23,10 @@ describe("useOffline", () => {
     let offlineState: boolean | undefined;
 
     function TestComponent() {
-      offlineState = useOffline();
+      const state = useOffline();
+      React.useEffect(() => {
+        offlineState = state;
+      });
       return null;
     }
 
@@ -39,7 +42,10 @@ describe("useOffline", () => {
     let offlineState: boolean | undefined;
 
     function TestComponent() {
-      offlineState = useOffline();
+      const state = useOffline();
+      React.useEffect(() => {
+        offlineState = state;
+      });
       return null;
     }
 
@@ -67,7 +73,10 @@ describe("useOffline", () => {
     let offlineState: boolean | undefined;
 
     function TestComponent() {
-      offlineState = useOffline();
+      const state = useOffline();
+      React.useEffect(() => {
+        offlineState = state;
+      });
       return null;
     }
 
