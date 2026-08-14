@@ -10,6 +10,13 @@ import { compareNatural } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTranslations } from "next-intl";
 import { useUploadQueue, type QueueItem } from "@/lib/upload-queue";
+import {
+    clearAllUploadTelemetry,
+    clearUploadTelemetry,
+    mergeUploadTelemetry,
+    updateUploadTelemetry,
+    useUploadTelemetry,
+} from "@/lib/upload-telemetry";
 import { useDropZoneStore } from "@/lib/drop-zone-store";
 
 const MAX_CONCURRENT_UPLOADS = 4;
@@ -67,13 +74,19 @@ export function useUploadEngine({
     const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
 
     const {
-        items: files,
+        items: durableFiles,
         addItems,
         updateItem,
         removeItem,
         clearAll,
         setActiveCount,
     } = useUploadQueue();
+
+    const telemetryById = useUploadTelemetry((state) => state.byId);
+    const files = useMemo(
+        () => mergeUploadTelemetry(durableFiles, telemetryById),
+        [durableFiles, telemetryById],
+    );
 
     const doneFiles = useMemo(() => files.filter((i) => i.status === "done"), [files]);
     const errorFiles = useMemo(() => files.filter((i) => i.status === "error" || i.status === "virus"), [files]);
@@ -210,12 +223,13 @@ export function useUploadEngine({
 
                 try {
                     const result = await trackExistingUpload(quarantineKey, {
-                        onProgress: (pct) => updateItem(cid, { progress: pct }),
-                        onStatusUpdate: (msg, si, st) => updateItem(cid, { processingStatus: msg, stageIndex: si, stageTotal: st }),
+                        onProgress: (pct) => updateUploadTelemetry(cid, { progress: pct }),
+                        onStatusUpdate: (msg, si, st) => updateUploadTelemetry(cid, { processingStatus: msg, stageIndex: si, stageTotal: st }),
                         signal: controller.signal,
                     });
 
                     const currentItem = useUploadQueue.getState().items.find(i => i.clientId === cid);
+                    clearUploadTelemetry(cid);
                     updateItem(cid, {
                         status: "done",
                         progress: 100,
@@ -229,6 +243,7 @@ export function useUploadEngine({
                     const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : t("errorProcessing"));
                     if (msg !== "Upload cancelled") {
                         const isVirus = msg.includes("ERR_MALWARE_DETECTED");
+                        clearUploadTelemetry(cid);
                         updateItem(cid, { status: isVirus ? "virus" : "error", error: msg });
                     }
                 } finally {
@@ -254,8 +269,8 @@ export function useUploadEngine({
 
             try {
                 const result = await uploadFile(file, {
-                    onProgress: (pct) => updateItem(cid, { progress: pct }),
-                    onStatusUpdate: (msg, stageIndex, stageTotal) => updateItem(cid, { processingStatus: msg, stageIndex, stageTotal }),
+                    onProgress: (pct) => updateUploadTelemetry(cid, { progress: pct }),
+                    onStatusUpdate: (msg, stageIndex, stageTotal) => updateUploadTelemetry(cid, { processingStatus: msg, stageIndex, stageTotal }),
                     onHashComputed: (hash) => updateItem(cid, { contentSha256: hash }),
                     onBytesProgress: (uploaded, total) => {
                         const now = Date.now();
@@ -297,6 +312,7 @@ export function useUploadEngine({
 
                 const currentItem = useUploadQueue.getState().items.find(i => i.clientId === cid);
 
+                clearUploadTelemetry(cid);
                 updateItem(cid, {
                     status: "done",
                     progress: 100,
@@ -311,6 +327,7 @@ export function useUploadEngine({
                 const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : t("errorProcessing"));
                 if (msg !== "Upload cancelled") {
                     const isVirus = msg.includes("ERR_MALWARE_DETECTED");
+                    clearUploadTelemetry(cid);
                     updateItem(cid, {
                         status: isVirus ? "virus" : "error",
                         error: msg,
@@ -538,18 +555,19 @@ export function useUploadEngine({
 
                 updateItem(placeholderId, { progress: 5, processingStatus: t("zipping") });
                 const zipBlob = await zipScannedFiles(scanned, (ratio) => {
-                    updateItem(placeholderId, { progress: 5 + Math.round(ratio * 25) });
+                    updateUploadTelemetry(placeholderId, { progress: 5 + Math.round(ratio * 25) });
                 });
 
                 if (controller.signal.aborted) return;
 
                 updateItem(placeholderId, { processingStatus: t("uploadsInProgress") });
                 const response = await uploadBatchZip(zipBlob, {
-                    onProgress: (pct) => updateItem(placeholderId, { progress: 30 + Math.round(pct * 0.5) }),
+                    onProgress: (pct) => updateUploadTelemetry(placeholderId, { progress: 30 + Math.round(pct * 0.5) }),
                     signal: controller.signal,
                 });
 
                 abortControllersRef.current.delete(placeholderId);
+                clearUploadTelemetry(placeholderId);
                 removeItem(placeholderId);
 
                 if (response.files.length === 0) {
@@ -603,8 +621,10 @@ export function useUploadEngine({
             } catch (err) {
                 const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : t("folderUploadFailed"));
                 if (msg !== "Upload cancelled") {
+                    clearUploadTelemetry(placeholderId);
                     updateItem(placeholderId, { status: "error", error: msg });
                 } else {
+                    clearUploadTelemetry(placeholderId);
                     removeItem(placeholderId);
                 }
                 abortControllersRef.current.delete(placeholderId);
@@ -726,6 +746,7 @@ export function useUploadEngine({
     const retryFile = (clientId: string) => {
         const item = files.find((f) => f.clientId === clientId);
         if (!item) return;
+        clearUploadTelemetry(clientId);
         updateItem(clientId, {
             status: "pending",
             progress: 0,
@@ -747,6 +768,7 @@ export function useUploadEngine({
             previewUrlsRef.current.delete(clientId);
         }
 
+        clearUploadTelemetry(clientId);
         removeItem(clientId);
         fileObjectsRef.current.delete(clientId);
     };
@@ -883,6 +905,7 @@ export function useUploadEngine({
             if (preview) URL.revokeObjectURL(preview);
         });
         clearAll();
+        clearAllUploadTelemetry();
         fileObjectsRef.current.clear();
         quarantineKeysRef.current.clear();
         previewUrlsRef.current.clear();
