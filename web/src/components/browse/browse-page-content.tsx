@@ -13,7 +13,7 @@ import { useTranslations } from "next-intl";
 import { Eye, X } from "lucide-react";
 import { useBrowseSSE } from "@/hooks/use-browse-sse";
 import type { Operation } from "@/lib/staging-store";
-import { browseCache, setPreviousBrowsePath, fetchBrowsePath } from "@/lib/browse-prefetch";
+import { browseCache, setPreviousBrowsePath, fetchBrowsePath, invalidateBrowsePath } from "@/lib/browse-prefetch";
 import dynamic from "next/dynamic";
 
 interface BrowseResponse {
@@ -326,12 +326,12 @@ function BrowseContent() {
   useEffect(() => {
     if (refreshCount > prevRefreshCountRef.current) {
       prevRefreshCountRef.current = refreshCount;
-      browseCache.delete(path);
+      invalidateBrowsePath(path);
       fetchData(true);
     }
   }, [path, refreshCount, fetchData]);
 
-  useBrowseSSE(data, path, browseCache, fetchData, triggerBrowseRefresh);
+  useBrowseSSE(data, path, fetchData, triggerBrowseRefresh);
 
   const isLikelyMaterial = path.split("/").filter(Boolean).length >= 3;
 

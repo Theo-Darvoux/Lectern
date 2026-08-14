@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { apiRequest, apiFetchRetry, isRetriableError, getClientId, ApiError } from "./api-client";
+import { apiRequest, apiFetchRetry, isRetriableError, getClientId, getMaterialFileUrl, invalidateMaterialFileUrl, ApiError } from "./api-client";
 import { getAccessToken, setAccessToken, clearAccessToken } from "./auth-tokens";
 
 // Mock auth-tokens
@@ -276,6 +276,22 @@ describe("api-client", () => {
         apiFetchRetry("/x", { retries: 3, retryBaseDelayMs: 0, signal: controller.signal }),
       ).rejects.toThrow();
       expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("material file URL cache", () => {
+    it("reuses signed URLs until explicitly invalidated", async () => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(jsonResponse(200, { url: "https://cdn.test/first" }))
+        .mockResolvedValueOnce(jsonResponse(200, { url: "https://cdn.test/second" }));
+
+      await expect(getMaterialFileUrl("cache-test-material")).resolves.toBe("https://cdn.test/first");
+      await expect(getMaterialFileUrl("cache-test-material")).resolves.toBe("https://cdn.test/first");
+      expect(fetch).toHaveBeenCalledOnce();
+
+      invalidateMaterialFileUrl("cache-test-material");
+      await expect(getMaterialFileUrl("cache-test-material")).resolves.toBe("https://cdn.test/second");
+      expect(fetch).toHaveBeenCalledTimes(2);
     });
   });
 });

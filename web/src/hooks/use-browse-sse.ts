@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { subscribeToSSE } from "@/lib/sse-client";
 import { invalidateMaterialFileUrl } from "@/lib/api-client";
+import { invalidateBrowseEntity } from "@/lib/browse-prefetch";
 
 interface BrowseData {
     type: "directory_listing" | "material";
@@ -20,13 +21,12 @@ interface BrowseData {
  * The logical subscription is keyed on the entity ID, NOT on the `data` object
  * reference. This means background revalidations that return new data objects
  * for the same directory/material do not churn the master topic set.
- * Mutable values (path, browseCache, fetchData, etc.) are held in refs so
+ * Mutable values (path, fetchData, etc.) are held in refs so
  * listeners always call the latest version without triggering reconnects.
  */
 export function useBrowseSSE(
     data: BrowseData | null,
     path: string,
-    browseCache: { delete: (key: string) => void },
     fetchData: (background: boolean) => void,
     triggerBrowseRefresh: () => void,
 ): void {
@@ -44,7 +44,6 @@ export function useBrowseSSE(
 
     // Mutable refs — updated after each render so listeners always see fresh values.
     const pathRef = useRef(path);
-    const browseCacheRef = useRef(browseCache);
     const fetchDataRef = useRef(fetchData);
     const triggerRefreshRef = useRef(triggerBrowseRefresh);
     const routerRef = useRef(router);
@@ -52,7 +51,6 @@ export function useBrowseSSE(
 
     useEffect(() => {
         pathRef.current = path;
-        browseCacheRef.current = browseCache;
         fetchDataRef.current = fetchData;
         triggerRefreshRef.current = triggerBrowseRefresh;
         routerRef.current = router;
@@ -74,14 +72,14 @@ export function useBrowseSSE(
                         parentSlugs.length > 0
                             ? `/browse/${parentSlugs.join("/")}`
                             : "/browse";
-                    browseCacheRef.current.delete(pathRef.current);
+                    invalidateBrowseEntity(`directory:${dirId}`, pathRef.current);
                     triggerRefreshRef.current();
                     routerRef.current.replace(parentPath);
                 };
             }
 
             const refreshDir = () => {
-                browseCacheRef.current.delete(pathRef.current);
+                invalidateBrowseEntity(`directory:${dirId}`, pathRef.current);
                 fetchDataRef.current(true);
                 triggerRefreshRef.current();
             };
@@ -99,7 +97,7 @@ export function useBrowseSSE(
                     slugs.length > 0
                         ? `/browse/${slugs.join("/")}`
                         : "/browse";
-                browseCacheRef.current.delete(pathRef.current);
+                invalidateBrowseEntity(`material:${matId}`, pathRef.current);
                 triggerRefreshRef.current();
                 routerRef.current.replace(parentPath);
             };
@@ -107,7 +105,7 @@ export function useBrowseSSE(
             // cached file URL so the viewer re-fetches the updated content.
             listeners["material_updated"] = () => {
                 invalidateMaterialFileUrl(matId);
-                browseCacheRef.current.delete(pathRef.current);
+                invalidateBrowseEntity(`material:${matId}`, pathRef.current);
                 fetchDataRef.current(true);
                 triggerRefreshRef.current();
             };
@@ -124,7 +122,10 @@ export function useBrowseSSE(
                 if (sseEntityKey.startsWith("mat:")) {
                     invalidateMaterialFileUrl(sseEntityKey.slice(4));
                 }
-                browseCacheRef.current.delete(pathRef.current);
+                const entityTag = sseEntityKey.startsWith("dir:")
+                    ? `directory:${sseEntityKey.slice(4)}`
+                    : `material:${sseEntityKey.slice(4)}`;
+                invalidateBrowseEntity(entityTag, pathRef.current);
                 fetchDataRef.current(true);
                 triggerRefreshRef.current();
             },

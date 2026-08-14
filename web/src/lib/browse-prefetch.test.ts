@@ -3,6 +3,8 @@ import { apiFetchRetry } from "./api-client";
 import {
   browseCache,
   fetchBrowsePath,
+  invalidateBrowseEntity,
+  invalidateBrowsePath,
   prefetchBrowsePath,
 } from "./browse-prefetch";
 
@@ -155,5 +157,53 @@ describe("browse-prefetch", () => {
     expect(recovered).toBe(payload);
     expect(mockApiFetch).toHaveBeenCalledTimes(2);
     expect(browseCache.get("flaky")).toBe(payload);
+  });
+
+  it("bounds retained browse responses", () => {
+    for (let index = 0; index < 65; index += 1) {
+      browseCache.set(`path-${index}`, { index });
+    }
+
+    expect(browseCache.size).toBe(64);
+    expect(browseCache.has("path-0")).toBe(false);
+  });
+
+  it("does not let a request invalidated by SSE overwrite a fresh response", async () => {
+    const stale = deferred<unknown>();
+    const fresh = deferred<unknown>();
+    mockApiFetch.mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
+
+    const first = fetchBrowsePath("live");
+    invalidateBrowsePath("live");
+    const second = fetchBrowsePath("live", { force: true });
+
+    expect(mockApiFetch).toHaveBeenCalledTimes(2);
+    stale.resolve({ version: 1 });
+    await first;
+    expect(browseCache.has("live")).toBe(false);
+
+    fresh.resolve({ version: 2 });
+    await second;
+    expect(browseCache.get("live")).toEqual({ version: 2 });
+  });
+
+  it("invalidates every cached representation of an SSE entity", async () => {
+    mockApiFetch
+      .mockResolvedValueOnce({
+        type: "directory_listing",
+        directory: { id: "root" },
+        materials: [{ id: "material-1" }],
+      })
+      .mockResolvedValueOnce({ type: "material", material: { id: "material-1" } })
+      .mockResolvedValueOnce({ type: "material", material: { id: "material-2" } });
+
+    await fetchBrowsePath("");
+    await fetchBrowsePath("material-1");
+    await fetchBrowsePath("material-2");
+    invalidateBrowseEntity("material:material-1");
+
+    expect(browseCache.has("")).toBe(false);
+    expect(browseCache.has("material-1")).toBe(false);
+    expect(browseCache.has("material-2")).toBe(true);
   });
 });

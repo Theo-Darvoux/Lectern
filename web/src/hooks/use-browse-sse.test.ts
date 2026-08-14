@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { useBrowseSSE } from "./use-browse-sse";
+import { invalidateBrowseEntity } from "@/lib/browse-prefetch";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -29,14 +30,16 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/lib/api-client", () => ({ API_BASE: "http://api.test" }));
+vi.mock("@/lib/browse-prefetch", () => ({
+    invalidateBrowseEntity: vi.fn(),
+    invalidateBrowsePath: vi.fn(),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const noop = () => {};
-const fakeCache = { delete: vi.fn() };
-
 /** Render a component that calls the hook, return a cleanup fn. */
 function renderHookWith(
     data: Parameters<typeof useBrowseSSE>[0],
@@ -45,7 +48,7 @@ function renderHookWith(
     document.body.appendChild(container);
 
     function TestComponent() {
-        useBrowseSSE(data, "/browse/test", fakeCache, noop, noop);
+        useBrowseSSE(data, "/browse/test", noop, noop);
         return null;
     }
 
@@ -114,7 +117,7 @@ describe("useBrowseSSE — directory listing", () => {
         document.body.appendChild(container);
 
         function TestComponent() {
-            useBrowseSSE(dirData, "/browse/test", fakeCache, fetchData, noop);
+            useBrowseSSE(dirData, "/browse/test", fetchData, noop);
             return null;
         }
 
@@ -128,6 +131,10 @@ describe("useBrowseSSE — directory listing", () => {
         act(() => { (listenersWithUpdate!["child_updated"] as () => void)(); });
 
         expect(fetchData).toHaveBeenCalled();
+        expect(invalidateBrowseEntity).toHaveBeenCalledWith(
+            "directory:dir-abc",
+            "/browse/test",
+        );
 
         act(() => root.unmount());
         container.remove();

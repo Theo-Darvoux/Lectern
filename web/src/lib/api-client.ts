@@ -1,5 +1,6 @@
 import { clearAccessToken, getAccessToken, setAccessToken, decodeToken } from "./auth-tokens";
 import type { UserBrief } from "./guest";
+import { ResourceCache } from "./resource-cache";
 
 /** Result of a token refresh. `user` is present when the server folds the
  *  caller's profile into the refresh response (reload bootstrap fast-path),
@@ -293,21 +294,22 @@ export async function apiFetchBlob(
 // Reusing the same URL within its TTL hits the CDN edge → full speed.
 // The server issues URLs with a 15-min TTL; we cache for 12 min to stay safe.
 const _URL_CACHE_TTL_MS = 12 * 60 * 1000;
-const _urlCache = new Map<string, { url: string; expiresAt: number }>();
+const _urlCache = new ResourceCache<string, string>({
+    maxEntries: 256,
+    ttlMs: _URL_CACHE_TTL_MS,
+});
 
 export async function getMaterialFileUrl(
     materialId: string,
     signal?: AbortSignal,
 ): Promise<string> {
     const cached = _urlCache.get(materialId);
-    if (cached && Date.now() < cached.expiresAt) {
-        return cached.url;
-    }
+    if (cached) return cached;
     const { url } = await apiFetch<{ url: string }>(`/materials/${materialId}/inline`, {
         signal,
         timeoutMs: 15_000,
     });
-    _urlCache.set(materialId, { url, expiresAt: Date.now() + _URL_CACHE_TTL_MS });
+    _urlCache.set(materialId, url, { tags: [`material:${materialId}`] });
     return url;
 }
 
