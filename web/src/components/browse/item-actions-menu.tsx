@@ -312,7 +312,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
   const handleDetailsClick = () => {
     openSidebar("details", {
-      type: "directory",
+      type: item.type,
       id: item.id,
       data: { ...item.data, __path: context.itemPath },
     });
@@ -320,7 +320,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
   const handleChatClick = () => {
     openSidebar("chat", {
-      type: "directory",
+      type: item.type,
       id: item.id,
       data: item.data,
     });
@@ -332,25 +332,21 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
         {actions.isMaterial ? t("materialActions") : t("folderActions")}
       </Label>
 
-      {!actions.isMaterial && (
-        <>
-          <Item onClick={handleDetailsClick} className="cursor-pointer">
-            <Info className="mr-2 h-4 w-4" />
-            <span>{t("details")}</span>
-          </Item>
-          {!actions.isRestricted && (
-            <Item onClick={handleChatClick} className="cursor-pointer">
-              <MessageSquare className="mr-2 h-4 w-4" />
-              <span>{t("chat")}</span>
-            </Item>
-          )}
-          <Separator />
-        </>
+      <Item onClick={handleDetailsClick} className="cursor-pointer">
+        <Info className="mr-2 h-4 w-4" />
+        <span>{t("details")}</span>
+      </Item>
+      {!actions.isRestricted && (
+        <Item onClick={handleChatClick} className="cursor-pointer">
+          <MessageSquare className="mr-2 h-4 w-4" />
+          <span>{t("chat")}</span>
+        </Item>
       )}
+      <Separator />
 
-      {actions.isMaterial && !actions.isRestricted && (
+      {actions.isMaterial && (!actions.isRestricted || (context.onAddAttachment && !guest)) && (
         <>
-          {actions.viewerType === "qcm" ? (
+          {!actions.isRestricted && (actions.viewerType === "qcm" ? (
             isContextMenu ? (
               <ContextMenuSub>
                 <ContextMenuSubTrigger disabled={isDownloading} className="cursor-pointer">
@@ -395,8 +391,8 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
               {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
               <span>{t("download")}</span>
             </Item>
-          )}
-          {canPrint && (
+          ))}
+          {!actions.isRestricted && canPrint && (
             <Item
               onClick={() => print()}
               disabled={isPrinting}

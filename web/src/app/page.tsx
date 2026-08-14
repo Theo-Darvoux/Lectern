@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetchRetry } from "@/lib/api-client";
 import { useAuth } from "@/hooks/use-auth";
 import { isGuest } from "@/lib/guest";
 import { FeaturedSection } from "@/components/home/featured-section";
@@ -14,9 +14,11 @@ import { RailFavourites } from "@/components/home/rail-favourites";
 import { StatsCard } from "@/components/home/stats-card";
 import { useConfigStore } from "@/lib/stores";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircle, History, Sparkles, Clock } from "lucide-react";
+import { AlertCircle, History, Sparkles, Clock, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { HomeData } from "@/components/home/types";
 import { useTranslations } from "next-intl";
+import { useDropZoneStore } from "@/lib/drop-zone-store";
 
 const DirectoryTreeSidebar = dynamic(
   () => import("@/components/browse/directory-tree-sidebar").then((m) => m.DirectoryTreeSidebar),
@@ -38,15 +40,29 @@ export default function HomePage() {
   const [data, setData] = useState<HomeData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const requestUpload = useDropZoneStore((state) => state.requestUpload);
+
+  const retry = useCallback(() => setReloadToken((token) => token + 1), []);
 
   useEffect(() => {
-    apiFetch<HomeData>("/home")
-      .then(setData)
+    const controller = new AbortController();
+    setIsLoading(true);
+    setError(null);
+    apiFetchRetry<HomeData>("/home", {
+      signal: controller.signal,
+      timeoutMs: 15_000,
+    })
+      .then((nextData) => setData(nextData))
       .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
         setError(err instanceof Error ? err.message : t("loadError"));
       })
-      .finally(() => setIsLoading(false));
-  }, [t]);
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoading(false);
+      });
+    return () => controller.abort();
+  }, [reloadToken, t]);
 
   const greeting = t(`greetings.${getGreetingKey()}` as Parameters<typeof t>[0]);
   const displayName =
@@ -67,21 +83,42 @@ export default function HomePage() {
             subtitle={t("whatsHappening", { siteName: config?.site_name || "" })}
             isLoading={isLoading && !data}
             showContributorActions={!guest}
+            onAddContent={guest ? undefined : () => requestUpload({
+              directoryId: "",
+              directoryName: t("libraryRoot"),
+            })}
           />
 
           {/* ── Error banner ──────────────────────────────────── */}
-          {error && (
-            <div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          {error && !data && (
+            <div className="flex flex-col gap-4 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive sm:flex-row sm:items-center">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div>
+              <div className="min-w-0 flex-1">
                 <p className="font-medium">{t("errorTitle")}</p>
                 <p className="mt-0.5 text-destructive/80">{error}</p>
               </div>
+              <Button variant="outline" size="sm" className="shrink-0 gap-2" onClick={retry}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                {t("retry")}
+              </Button>
             </div>
           )}
 
-          {/* ── Featured (full-bleed) ─────────────────────────── */}
-          {isLoading ? (
+          {showContinue && (
+            <MaterialGridSection
+              title={t("continueTitle")}
+              subtitle={t("continueSubtitle")}
+              icon={<History className="h-4 w-4" />}
+              materials={data?.recently_viewed ?? []}
+              isLoading={isLoading}
+              emptyText={t("nothingHereYet")}
+              emptyIcon={<History className="h-8 w-8 text-muted-foreground/30" />}
+              maxCards={4}
+            />
+          )}
+
+          {/* ── Discovery ─────────────────────────────────────── */}
+          {isLoading && !data ? (
             <div>
               <Skeleton className="mb-4 h-6 w-32" />
               <Skeleton className="h-48 w-full rounded-xl sm:h-56" />
@@ -92,7 +129,7 @@ export default function HomePage() {
           )}
 
           {/* ── Dashboard grid ────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-8 xl:grid-cols-3">
+          {(data || isLoading) && <div className="grid grid-cols-1 gap-8 xl:grid-cols-3">
             {/* Main column */}
             <div className="space-y-10 xl:col-span-2">
               <PopularSection
@@ -112,17 +149,6 @@ export default function HomePage() {
                 emptyIcon={<Sparkles className="h-8 w-8 text-muted-foreground/30" />}
               />
 
-              {showContinue && (
-                <MaterialGridSection
-                  title={t("continueTitle")}
-                  subtitle={t("continueSubtitle")}
-                  icon={<History className="h-4 w-4" />}
-                  materials={data?.recently_viewed ?? []}
-                  isLoading={isLoading}
-                  emptyText={t("nothingHereYet")}
-                  emptyIcon={<History className="h-8 w-8 text-muted-foreground/30" />}
-                />
-              )}
             </div>
 
             {/* Right rail */}
@@ -136,7 +162,7 @@ export default function HomePage() {
               <RecentPRsSection prs={data?.recent_prs ?? []} isLoading={isLoading} />
               <StatsCard stats={data?.stats} isLoading={isLoading} />
             </aside>
-          </div>
+          </div>}
         </div>
       </div>
     </div>

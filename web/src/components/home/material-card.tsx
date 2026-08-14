@@ -37,10 +37,10 @@ export function MaterialCard({ material, className }: MaterialCardProps) {
         className,
       )}
     >
-      <div className="rounded-xl border bg-card shadow-sm overflow-hidden transition-all duration-300 group-hover:shadow-lg group-hover:-translate-y-1 h-full flex flex-col ring-1 ring-border/50 group-hover:ring-primary/20">
+      <div className="flex h-full flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition-[border-color,box-shadow] duration-200 group-hover:border-primary/20 group-hover:shadow-md">
         {/* Preview area — 4:3 aspect ratio */}
         <div className="aspect-4/3 relative overflow-hidden shrink-0">
-          <MaterialPreview material={material} />
+          <MaterialPreview material={material} lazy />
 
           {/* File-type badge overlay — Premium Glassmorphism style */}
           <span

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetchRetry } from "@/lib/api-client";
 import { registerViewerPrint, unregisterViewerPrint } from "@/lib/viewer-print-registry";
 import { ViewerShell } from "./viewer-shell";
 import { useTranslations } from "next-intl";
 import { useConfigStore } from "@/lib/stores";
+import { loadEuroofficeApi } from "@/lib/eurooffice-api";
 
 interface OfficeViewerProps {
     fileKey: string;
@@ -19,14 +20,18 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
     const config = useConfigStore((state) => state.config);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const scriptRef = useRef<HTMLScriptElement | null>(null);
     const editorRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const readyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [loadAttempt, setLoadAttempt] = useState(0);
+    const reactId = useId();
+    const editorContainerId = `office-editor-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+    const retry = useCallback(() => setLoadAttempt((attempt) => attempt + 1), []);
 
     useEffect(() => {
         let isMounted = true;
         let isReady = false;
+        const controller = new AbortController();
 
         const markReady = () => {
             isReady = true;
@@ -37,10 +42,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
             if (isMounted) setLoading(false);
         };
 
-        const rawEuroofficeUrl = config?.eurooffice_public_url || process.env.NEXT_PUBLIC_EUROOFFICE_URL || "/eurooffice/";
-        const euroofficeUrl = rawEuroofficeUrl.endsWith("/") ? rawEuroofficeUrl : `${rawEuroofficeUrl}/`;
-
-        const loadEditor = (config: any) => {
+        const loadEditor = (editorConfig: any) => {
             if (!(window as any).DocsAPI) {
                 setError(t("scriptError"));
                 setLoading(false);
@@ -57,22 +59,28 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 // Prepare the DOM container manually to avoid React hydration/unmount conflicts.
                 // We create a fresh inner div for OnlyOffice to take over.
                 if (containerRef.current) {
-                    containerRef.current.innerHTML = '<div id="office-editor-container" style="width:100%;height:100%;"></div>';
+                    const editorHost = document.createElement("div");
+                    editorHost.id = editorContainerId;
+                    editorHost.style.width = "100%";
+                    editorHost.style.height = "100%";
+                    containerRef.current.replaceChildren(editorHost);
                 }
 
-                // EuroOffice renders some failures (download error, malformed
-                // security token) as its own in-iframe error page WITHOUT firing
-                // the onError JS callback. Without this safeguard our loading
-                // overlay would sit on top of that error page indefinitely. Drop
-                // the overlay after a grace period so the real error is visible.
+                // Treat a missing readiness event as a failure. Dismissing the
+                // overlay as if loading succeeded leaves users with a blank,
+                // non-recoverable editor.
                 if (readyTimeoutRef.current) clearTimeout(readyTimeoutRef.current);
                 readyTimeoutRef.current = setTimeout(() => {
-                    if (isMounted && !isReady) setLoading(false);
-                }, 20000);
+                    if (!isMounted || isReady) return;
+                    try { editorRef.current?.destroyEditor(); } catch {}
+                    editorRef.current = null;
+                    setError(t("readyTimeout"));
+                    setLoading(false);
+                }, 30000);
 
                 // Initialize the editor with the backend-provided config
-                editorRef.current = new (window as any).DocsAPI.DocEditor("office-editor-container", {
-                    ...config,
+                editorRef.current = new (window as any).DocsAPI.DocEditor(editorContainerId, {
+                    ...editorConfig,
                     height: "100%",
                     width: "100%",
                     events: {
@@ -123,36 +131,41 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 setLoading(true);
                 setError(null);
 
-                // 1. Fetch the signed OnlyOffice/Euro-Office config from the backend
-                const config = await apiFetch<any>(`/eurooffice/config/${materialId}`);
+                // Fetch the signed config and load the editor engine in parallel.
+                // A transient engine request gets two bounded retries before the
+                // viewer presents the manual retry action.
+                const rawEuroofficeUrl = config?.eurooffice_public_url || process.env.NEXT_PUBLIC_EUROOFFICE_URL || "/eurooffice/";
+                const loadEngine = async () => {
+                    const retryDelays = [400, 1200];
+                    let lastError: unknown;
+                    for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+                        try {
+                            await loadEuroofficeApi(rawEuroofficeUrl);
+                            return;
+                        } catch (err) {
+                            lastError = err;
+                            if (attempt < retryDelays.length) {
+                                await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt]));
+                            }
+                        }
+                    }
+                    throw lastError;
+                };
+
+                const [editorConfig] = await Promise.all([
+                    apiFetchRetry<any>(`/eurooffice/config/${materialId}`, {
+                        signal: controller.signal,
+                        timeoutMs: 15_000,
+                    }),
+                    loadEngine(),
+                ]);
 
                 if (!isMounted) return;
-
-                // 2. Load the API script if not already present
-                if (!(window as any).DocsAPI) {
-                    const script = document.createElement("script");
-                    script.id = "eurooffice-api-script";
-                    script.src = `${euroofficeUrl}web-apps/apps/api/documents/api.js`;
-                    script.async = true;
-                    script.onload = () => {
-                        if (isMounted) loadEditor(config);
-                    };
-                    script.onerror = (e) => {
-                        console.error("Script load error:", e);
-                        if (isMounted) {
-                            setError(t("loadScriptError"));
-                            setLoading(false);
-                        }
-                    };
-                    document.head.appendChild(script);
-                    scriptRef.current = script;
-                } else {
-                    loadEditor(config);
-                }
+                loadEditor(editorConfig);
             } catch (err: any) {
-                console.error("Config fetch error:", err);
+                console.error("EuroOffice startup error:", err);
                 if (isMounted) {
-                    setError(t("configError", { message: err.message || "Unknown error" }));
+                    setError(t("startupError", { message: err.message || "Unknown error" }));
                     setLoading(false);
                 }
             }
@@ -162,6 +175,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
 
         return () => {
             isMounted = false;
+            controller.abort();
             if (readyTimeoutRef.current) {
                 clearTimeout(readyTimeoutRef.current);
                 readyTimeoutRef.current = null;
@@ -175,10 +189,10 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
             }
             unregisterViewerPrint(materialId);
         };
-    }, [materialId, fileName, fileKey, config?.eurooffice_public_url]);
+    }, [materialId, fileName, fileKey, config?.eurooffice_public_url, editorContainerId, loadAttempt, t]);
 
     return (
-        <ViewerShell loading={false} error={error} className="h-full">
+        <ViewerShell loading={false} error={error} onRetry={retry} className="h-full">
             <div className="relative w-full h-full bg-muted/5">
                 {/* 
                   We use a ref-based container and manual innerHTML to isolate OnlyOffice 
@@ -187,14 +201,14 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 <div ref={containerRef} className="w-full h-full" />
                 
                 {loading && (
-                    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/80 backdrop-blur-md">
-                        <div className="flex flex-col items-center gap-4 p-8 rounded-2xl bg-background/50 border shadow-2xl scale-110">
-                            <Loader2 className="w-12 h-12 animate-spin text-primary" />
+                    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/85 backdrop-blur-sm">
+                        <div className="flex flex-col items-center gap-4 rounded-2xl border bg-background/90 p-8 shadow-lg">
+                            <Loader2 className="h-12 w-12 animate-spin text-primary motion-reduce:animate-none" />
                             <div className="flex flex-col items-center">
                                 <p className="text-lg font-semibold bg-gradient-to-br from-foreground to-foreground/70 bg-clip-text text-transparent">
                                     {t("initializing")}
                                 </p>
-                                <p className="text-xs text-muted-foreground animate-pulse mt-1">
+                                <p className="mt-1 animate-pulse text-xs text-muted-foreground motion-reduce:animate-none">
                                     {t("preparing")}
                                 </p>
                             </div>

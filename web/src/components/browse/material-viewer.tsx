@@ -12,6 +12,8 @@ import {
   FileText,
   Code2,
   Paperclip,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import { useIsMobile, useIsDesktop } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
@@ -172,6 +174,7 @@ import { ItemActionsMenu, ItemActionsDropdownTrigger, type ItemData } from "@/co
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
 import { useTranslations } from "next-intl";
+import { useDropZoneStore } from "@/lib/drop-zone-store";
 
 interface MaterialViewerProps {
   material: Record<string, unknown>;
@@ -210,16 +213,10 @@ export function MaterialViewer({
   const materialActionsOpen = useUIStore((state) => state.materialActionsOpen);
   const setMaterialActionsOpen = useUIStore((state) => state.setMaterialActionsOpen);
   const setActiveViewerType = useUIStore((state) => state.setActiveViewerType);
-  const navbarVisible = useUIStore((state) => state.navbarVisible);
   const setNavbarVisible = useUIStore((state) => state.setNavbarVisible);
+  const setBrowseContext = useDropZoneStore((state) => state.setBrowseContext);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const headerRef = useRef<HTMLDivElement>(null);
-  const [headerHeight, setHeaderHeight] = useState(0);
-  const headerHeightRef = useRef(0);
-  useEffect(() => { headerHeightRef.current = headerHeight; }, [headerHeight]);
-  const navbarVisibleRef = useRef(navbarVisible);
-  const hoveredOpen = useRef(false);
-  useEffect(() => { navbarVisibleRef.current = navbarVisible; }, [navbarVisible]);
+  const [focusMode, setFocusMode] = useState(false);
 
   // Hide footer, enter immersive mode, and prevent page scroll while viewer is active
   useEffect(() => {
@@ -235,45 +232,12 @@ export function MaterialViewer({
     };
   }, [setHideFooter, setNavbarVisible]);
 
-  // Measure the header height so the viewer can reserve exactly that space permanently.
-  // Using ResizeObserver means it stays accurate if fonts/content change.
-  useEffect(() => {
-    const el = headerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setHeaderHeight(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Show navbar on mouse proximity to top edge; hide again when mouse leaves (only if we opened it).
-  useEffect(() => {
-    if (isMobile) return;
-    const THRESHOLD = 20;
-    const onMouseMove = (e: MouseEvent) => {
-      if (e.clientY < THRESHOLD) {
-        if (!navbarVisibleRef.current) {
-          hoveredOpen.current = true;
-          setNavbarVisible(true);
-        }
-      } else if (hoveredOpen.current) {
-        // Use the header's actual viewport bottom so the threshold correctly
-        // accounts for the global navbar height that pushes the overlay header
-        // down when navbarVisible becomes true.
-        const el = headerRef.current;
-        const headerBottom = el
-          ? el.getBoundingClientRect().bottom
-          : (headerHeightRef.current || THRESHOLD);
-        if (e.clientY > headerBottom) {
-          hoveredOpen.current = false;
-          setNavbarVisible(false);
-        }
-      }
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    return () => window.removeEventListener("mousemove", onMouseMove);
-  }, [isMobile, setNavbarVisible]);
+  const toggleFocusMode = () => {
+    const next = !focusMode;
+    setFocusMode(next);
+    setNavbarVisible(!next);
+    if (next) closeSidebar();
+  };
 
 
 
@@ -320,6 +284,20 @@ export function MaterialViewer({
     versionInfo?.file_mime_type ?? "application/octet-stream",
   );
   const fileKey = String(versionInfo?.file_key ?? "");
+
+  // A global drop while a document is open should follow the same mental
+  // model as the visible "Add attachment" action. Without this context the
+  // global drop zone resolves the material route as root and can stage files
+  // in the wrong location.
+  useEffect(() => {
+    if (!materialId || isRestricted) return;
+    setBrowseContext({
+      directoryId,
+      directoryName: title,
+      parentMaterialId: materialId,
+    });
+    return () => setBrowseContext(null);
+  }, [directoryId, isRestricted, materialId, setBrowseContext, title]);
 
   // Record view in background
   useEffect(() => {
@@ -396,16 +374,8 @@ export function MaterialViewer({
     <AnnotationsContext.Provider value={annotationsData}>
       <div className="flex h-full w-full overflow-hidden gap-0">
         <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
-          {/*
-           * Header — absolutely positioned so it overlays the viewer.
-           * Slides in/out via translateY (GPU composited, zero layout reflow).
-           * The viewer below has a permanent paddingTop equal to the measured
-           * header height, so it never resizes when the header shows/hides.
-           */}
           <div
-            ref={headerRef}
-            className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 p-2 sm:px-4 md:px-6 py-2 sm:py-3 bg-background/95 backdrop-blur-sm transition-transform duration-300 ease-in-out border-b"
-            style={{ transform: navbarVisible ? "translateY(0)" : "translateY(-110%)" }}
+            className="z-20 flex shrink-0 items-center justify-between gap-3 border-b bg-background/95 p-2 backdrop-blur-sm sm:px-4 sm:py-2.5 md:px-6"
           >
             <div className="flex items-center gap-2 min-w-0 flex-1">
               <Button
@@ -437,6 +407,18 @@ export function MaterialViewer({
               </Breadcrumbs>
             </div>
 
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Button
+                variant={focusMode ? "secondary" : "ghost"}
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={toggleFocusMode}
+                title={focusMode ? t("exitFocusMode") : t("focusMode")}
+                aria-label={focusMode ? t("exitFocusMode") : t("focusMode")}
+                aria-pressed={focusMode}
+              >
+                {focusMode ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </Button>
             {isMobile ? (
               <Button
                 variant="ghost"
@@ -467,6 +449,7 @@ export function MaterialViewer({
                           onClick={() => print()}
                           disabled={isPrinting}
                           title={t("printDocument")}
+                          aria-label={t("printDocument")}
                         >
                           {isPrinting ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -484,6 +467,7 @@ export function MaterialViewer({
                               className="h-8 w-8 shrink-0"
                               disabled={isDownloading}
                               title={t("downloadDocument")}
+                              aria-label={t("downloadDocument")}
                             >
                               {isDownloading ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -511,6 +495,7 @@ export function MaterialViewer({
                           onClick={() => downloadMaterial(materialId)}
                           disabled={isDownloading}
                           title={t("downloadDocument")}
+                          aria-label={t("downloadDocument")}
                         >
                           {isDownloading ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -528,6 +513,7 @@ export function MaterialViewer({
                     size="icon"
                     className="h-8 w-8 shrink-0 relative"
                     title={t("attachments")}
+                    aria-label={t("attachments")}
                     onClick={() =>
                       openSidebar("details", {
                         type: "material",
@@ -550,6 +536,7 @@ export function MaterialViewer({
                   size="icon"
                   className="h-8 w-8 shrink-0"
                   title={sidebarOpen ? t("closeInspector") : t("openInspector")}
+                  aria-label={sidebarOpen ? t("closeInspector") : t("openInspector")}
                   onClick={() => {
                     if (sidebarOpen) {
                       closeSidebar();
@@ -566,16 +553,11 @@ export function MaterialViewer({
                 </Button>
               </div>
             )}
+            </div>
           </div>
 
-          {/*
-           * Viewer wrapper — paddingTop is dynamically adjusted based on header visibility.
-           * When the header is hidden, it transitions to standard padding (pt-2 / sm:pt-4 / md:pt-6)
-           * to match the sides, ensuring the viewer expands to use the empty top space.
-           */}
           <div
-            className="flex-1 min-h-0 overflow-hidden px-2 pt-2 pb-2 max-sm:pb-20 sm:px-4 sm:pt-4 sm:pb-4 md:px-6 md:pt-6 md:pb-6 transition-all duration-300 ease-in-out"
-            style={{ paddingTop: navbarVisible ? headerHeight : undefined }}
+            className="flex-1 min-h-0 overflow-hidden p-2 max-sm:pb-20 sm:p-4 md:p-5"
           >
           <div
             ref={viewerContainerRef}

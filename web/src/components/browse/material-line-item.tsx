@@ -6,15 +6,13 @@ import { BrowseLink } from "@/components/browse/browse-link";
 import {
     File,
     FileText,
-    Info,
     ListChecks,
-    MessageSquare,
     Paperclip,
     ThumbsUp,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
-import { useUIStore, useLikeOverrides } from "@/lib/stores";
+import { useLikeOverrides } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension, MIME_QCM } from "@/lib/file-utils";
 import { EXT_ICONS, TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
 import { useTranslations } from "next-intl";
@@ -64,7 +62,6 @@ function MaterialLineItemImpl({
 }: MaterialLineItemProps) {
     const t = useTranslations("Browse");
     const tTypes = useTranslations("MaterialTypes");
-    const openSidebar = useUIStore((s) => s.openSidebar);
 
     const title = String(material.title ?? "");
     const slug = String(material.slug ?? "");
@@ -146,18 +143,6 @@ function MaterialLineItemImpl({
         if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
     };
 
-    const handleDetails = (e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openSidebar("details", { type: "material", id, data: { ...material, __path: buildPath() } });
-    };
-
-    const handleChat = (e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openSidebar("chat", { type: "material", id, data: material });
-    };
-
     const handleCardClick = (e: React.MouseEvent) => {
         if (staged === "deleted") {
             e.preventDefault();
@@ -205,8 +190,6 @@ function MaterialLineItemImpl({
                 : (staged === "created" || staged === "edited")
                     ? `text-${themeColor}-700 dark:text-${themeColor}-400`
                     : "";
-
-        const isRestricted = !!staged || !!previewPrId;
 
         return (
         <ItemActionsMenu
@@ -288,39 +271,6 @@ function MaterialLineItemImpl({
                     </div>
                 )}
                     <div className="flex shrink-0 items-center gap-1">
-                        {!isRestricted ? (
-                            <>
-                                <button
-                                    onClick={handleChat}
-                                    className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
-                                    title={t("chat")}
-                                    aria-label={t("chatAbout", { title })}
-                                >
-                                    <MessageSquare className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
-                                </button>
-                            </>
-                        ) : null}
-                        <button
-                            onClick={handleDetails}
-                            className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
-                            title={t("details")}
-                            aria-label={t("viewDetailsFor", { title })}
-                        >
-                            <Info className={`${isMobile ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />
-                        </button>
-                    {staged === "created" && onAddAttachment && (
-                        <button
-                            onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                onAddAttachment(id, title);
-                            }}
-                            className="rounded-md p-2 hover:bg-violet-50 text-violet-600 dark:hover:bg-violet-950/40 dark:text-violet-400 active:scale-95 transition-transform"
-                            title={t("addAttachment")}
-                        >
-                            <Paperclip className={`${isMobile ? "h-5 w-5" : "h-4 w-4"}`} />
-                        </button>
-                    )}
                     <ItemActionsDropdownTrigger />
 
                 </div>

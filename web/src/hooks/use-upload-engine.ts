@@ -43,6 +43,7 @@ type DirPathMap = Map<string, string>;
 interface SpeedEntry {
     lastBytes: number;
     lastTime: number;
+    lastEmitTime: number;
     smoothedBps: number;
     measurements: number;
 }
@@ -277,6 +278,7 @@ export function useUploadEngine({
                         const prev = speedRef.current.get(cid) ?? {
                             lastBytes: 0,
                             lastTime: now,
+                            lastEmitTime: 0,
                             smoothedBps: 0,
                             measurements: 0,
                         };
@@ -289,12 +291,18 @@ export function useUploadEngine({
                         speedRef.current.set(cid, {
                             lastBytes: uploaded,
                             lastTime: now,
+                            lastEmitTime: prev.lastEmitTime,
                             smoothedBps: smoothed,
                             measurements,
                         });
                         
-                        if (measurements >= 3) {
+                        // Native upload progress can fire dozens of times per
+                        // second. ETA is human-readable UI, so updating it more
+                        // than twice a second only rerenders the whole drawer.
+                        if (measurements >= 3 && now - prev.lastEmitTime >= 500) {
                             const etaSec = smoothed > 0 ? Math.round((total - uploaded) / smoothed) : 0;
+                            const current = speedRef.current.get(cid);
+                            if (current) current.lastEmitTime = now;
                             setEtaMap((m) => new Map(m).set(cid, { bps: smoothed, etaSec }));
                         }
                     },
@@ -810,15 +818,10 @@ export function useUploadEngine({
         (f) => f.status === "uploading" || f.status === "pending" || f.status === "paused",
     );
 
-    const canStage = doneFiles.length > 0 && inFlightCount === 0;
+    const canStage = doneFiles.length > 0 && inFlightFiles.length === 0 && errorFiles.length === 0;
 
     const handleStage = () => {
-        if (errorFiles.length > 0) {
-            const confirmed = window.confirm(
-                t("confirmFailedFiles", { count: errorFiles.length })
-            );
-            if (!confirmed) return;
-        }
+        if (!canStage) return;
 
         const dirPaths = [...pendingDirPaths.keys()].sort(
             (a, b) => a.split("/").length - b.split("/").length || compareNatural(a, b),

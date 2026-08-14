@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FolderTree, Bell } from "lucide-react";
+import { FolderTree, Upload } from "lucide-react";
 import { SearchInline } from "@/components/search/search-inline";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -20,6 +20,7 @@ interface HeroBarProps {
   subtitle: string;
   isLoading?: boolean;
   showContributorActions?: boolean;
+  onAddContent?: () => void;
 }
 
 export function HeroBar({
@@ -28,6 +29,7 @@ export function HeroBar({
   subtitle,
   isLoading = false,
   showContributorActions = true,
+  onAddContent,
 }: HeroBarProps) {
   const t = useTranslations("Home");
 
@@ -39,21 +41,10 @@ export function HeroBar({
       className:
         "bg-primary/10 text-primary hover:bg-primary/15 ring-primary/20",
     },
-    ...(showContributorActions
-      ? [
-          {
-            href: "/notifications",
-            label: t("quickNotifications"),
-            icon: <Bell className="h-4 w-4" />,
-            className:
-              "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 ring-amber-500/20",
-          },
-        ]
-      : []),
   ];
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border bg-linear-to-br from-primary/5 via-card to-card p-5 shadow-sm sm:p-7">
+    <div className="relative overflow-hidden rounded-2xl border border-primary/15 bg-card p-5 sm:p-7">
       <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
         {/* Greeting */}
         <div className="min-w-0">
@@ -85,6 +76,16 @@ export function HeroBar({
 
       {/* Quick actions */}
       <div className="mt-5 flex flex-wrap gap-2">
+        {showContributorActions && onAddContent && (
+          <button
+            type="button"
+            onClick={onAddContent}
+            className="inline-flex items-center gap-2 rounded-xl bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <Upload className="h-4 w-4" />
+            {t("quickAddContent")}
+          </button>
+        )}
         {actions.map((a) => (
           <Link
             key={a.href}

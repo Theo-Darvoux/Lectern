@@ -172,7 +172,7 @@ function FeaturedScrollCard({ item }: { item: FeaturedItem }) {
       href={browsePath}
       className="group block w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
     >
-      <div className="flex h-full flex-col rounded-xl border bg-card shadow-sm overflow-hidden transition-all duration-200 group-hover:shadow-md group-hover:-translate-y-0.5">
+      <div className="flex h-full flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition-[border-color,box-shadow] duration-200 group-hover:border-primary/20 group-hover:shadow-md">
         {/* Thumbnail/Gradient banner */}
         <div
           className={cn(

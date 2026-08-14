@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { File } from "lucide-react";
 import { getMaterialThumbnail } from "@/lib/material-preview-source";
+import { useInView } from "@/hooks/use-in-view";
 
 type CellInfo = { url: string; type: "webp" | "fallback" } | null | false;
 
@@ -13,21 +14,8 @@ interface DirectoryPreviewCollageProps {
 export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollageProps) {
   const ids = materialIds.slice(0, 4);
   const [cells, setCells] = useState<CellInfo[]>(Array(ids.length).fill(null));
-  const [visible, setVisible] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) setVisible(true);
-      },
-      { rootMargin: "150px" },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const visible = useInView(ref);
 
   useEffect(() => {
     if (!visible || ids.length === 0) return;

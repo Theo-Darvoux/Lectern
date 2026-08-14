@@ -57,14 +57,14 @@ export function UploadQueueItem({
             className={cn(
                 "group flex items-start gap-3 rounded-lg border p-3",
                 f.status === "virus" &&
-                    "border-destructive bg-destructive/5 dark:bg-destructive/10 animate-[virus-pulse-border_2s_ease-in-out_3]",
+                    "animate-[virus-pulse-border_2s_ease-in-out_3] border-destructive bg-destructive/5 motion-reduce:animate-none dark:bg-destructive/10",
             )}
         >
             <div className="flex flex-col items-center gap-1.5 shrink-0 mt-0.5">
                 <div className="h-4 w-4">
                     {f.status === "done" && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                     {f.status === "virus" && (
-                        <ShieldX className="h-4 w-4 text-destructive animate-[virus-shake_0.6s_ease-in-out_3]" />
+                        <ShieldX className="h-4 w-4 animate-[virus-shake_0.6s_ease-in-out_3] text-destructive motion-reduce:animate-none" />
                     )}
                     {f.status === "error" && <AlertCircle className="h-4 w-4 text-destructive" />}
                     {(f.status === "uploading" || f.status === "pending") && (

@@ -46,6 +46,7 @@ import {
   LayoutGrid,
   Download,
   FolderPen,
+  MoreHorizontal,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -549,47 +550,9 @@ export function DirectoryListing({
           {!selectMode ? (
             <div className="flex items-center justify-between h-11">
               <div className="flex items-center gap-2">
-                {!guest && allSelectableItems.length > 0 && (
-                  <Button
-                    key="select-btn"
-                    size="sm"
-                    variant="ghost"
-                    className="gap-2 text-muted-foreground hover:text-foreground hover:bg-accent/50 group px-2"
-                    onClick={() => setSelectMode(true)}
-                  >
-                    <CheckSquare className="w-4 h-4 opacity-50 group-hover:opacity-100" />
-                    <span className="text-xs font-medium uppercase tracking-wider">{t("select")}</span>
-                  </Button>
-                )}
-                {!activeGhostDir && (
-                  <Button
-                    key="download-zip-btn"
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent/50 group"
-                    onClick={handleDownloadZip}
-                    disabled={isDownloading}
-                    title={t("downloadZipTooltip")}
-                  >
-                    {isDownloading ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Download className="w-4 h-4 opacity-50 group-hover:opacity-100" />
-                    )}
-                  </Button>
-                )}
-                {!guest && !activeGhostDir && !previewPrId && directory && (
-                  <Button
-                    key="edit-folder-btn"
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent/50 group"
-                    onClick={() => setEditFolderOpen(true)}
-                    title={t("editFolder")}
-                  >
-                    <FolderPen className="w-4 h-4 opacity-50 group-hover:opacity-100" />
-                  </Button>
-                )}
+                <span className="hidden text-sm text-muted-foreground sm:inline">
+                  {t("itemsCount", { count: allSelectableItems.length })}
+                </span>
                 <div data-tutorial="view-mode" className="flex items-center border rounded-md overflow-hidden h-8">
                   <button
                     onClick={() => setViewMode("list")}
@@ -608,6 +571,33 @@ export function DirectoryListing({
                     <LayoutGrid className="h-4 w-4" />
                   </button>
                 </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={t("moreActions")}>
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-52">
+                    {!guest && allSelectableItems.length > 0 && (
+                      <DropdownMenuItem onClick={() => setSelectMode(true)}>
+                        <CheckSquare className="mr-2 h-4 w-4" />
+                        {t("select")}
+                      </DropdownMenuItem>
+                    )}
+                    {!activeGhostDir && (
+                      <DropdownMenuItem onClick={handleDownloadZip} disabled={isDownloading}>
+                        {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                        {t("downloadZipTooltip")}
+                      </DropdownMenuItem>
+                    )}
+                    {!guest && !activeGhostDir && !previewPrId && directory && (
+                      <DropdownMenuItem onClick={() => setEditFolderOpen(true)}>
+                        <FolderPen className="mr-2 h-4 w-4" />
+                        {t("editFolder")}
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
 
               <div className="flex items-center gap-2">
@@ -646,9 +636,8 @@ export function DirectoryListing({
                     <Button
                       key="create-btn"
                       size="sm"
-                      variant="outline"
                       data-tutorial="create-menu"
-                      className="gap-1.5 shadow-xs"
+                      className="gap-1.5"
                     >
                       <Plus className="w-4 h-4" />
                       <span className="hidden sm:inline">{tQCM("newContent")}</span>
@@ -686,7 +675,7 @@ export function DirectoryListing({
             </div>
           </div>
         ) : (
-          <div className="flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 h-11 animate-in fade-in slide-in-from-top-1 duration-200 dark:bg-primary/10">
+          <div className="flex min-h-11 flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 animate-in fade-in slide-in-from-top-1 duration-200 dark:bg-primary/10 sm:gap-3 sm:px-4">
             <div
               className="h-8 gap-2 text-muted-foreground hover:text-foreground flex items-center cursor-pointer transition-colors rounded-md hover:bg-accent/50"
               onClick={() => {
