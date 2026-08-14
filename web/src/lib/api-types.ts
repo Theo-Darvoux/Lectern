@@ -890,23 +890,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/directories/{id}/sse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Directory Event Stream */
-        get: operations["directory_event_stream_api_directories__id__sse_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/directories/root/download-chunks": {
         parameters: {
             query?: never;
@@ -1087,23 +1070,6 @@ export interface paths {
         put?: never;
         /** Add Annotation */
         post: operations["add_annotation_api_materials__material_id__annotations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/materials/{material_id}/sse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Material Event Stream */
-        get: operations["material_event_stream_api_materials__material_id__sse_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1425,26 +1391,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/notifications/sse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Sse Stream
-         * @description SSE endpoint authenticated through the restricted read credential.
-         */
-        get: operations["sse_stream_api_notifications_sse_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/og": {
         parameters: {
             query?: never;
@@ -1478,26 +1424,6 @@ export interface paths {
         head?: never;
         /** Update Pr Comment */
         patch: operations["update_pr_comment_api_pr_comments__id__patch"];
-        trace?: never;
-    };
-    "/api/pull-requests/sse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Pull Request Sse
-         * @description Per-user SSE stream for PR list updates (pr_opened / pr_closed events).
-         */
-        get: operations["pull_request_sse_api_pull_requests_sse_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
         trace?: never;
     };
     "/api/pull-requests": {
@@ -1752,6 +1678,26 @@ export interface paths {
          *     JWT expiry (60 s) rather than single-use JTI enforcement so retries work.
          */
         head: operations["serve_file_to_eurooffice_head"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/events/sse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Master Event Stream
+         * @description One authenticated stream multiplexing every live-update channel.
+         */
+        get: operations["master_event_stream_api_events_sse_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -5705,37 +5651,6 @@ export interface operations {
             };
         };
     };
-    directory_event_stream_api_directories__id__sse_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     download_root_chunks_api_directories_root_download_chunks_get: {
         parameters: {
             query?: never;
@@ -6118,37 +6033,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnnotationOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    material_event_stream_api_materials__material_id__sse_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                material_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -6732,26 +6616,6 @@ export interface operations {
             };
         };
     };
-    sse_stream_api_notifications_sse_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
     render_og_api_og_get: {
         parameters: {
             query?: never;
@@ -6836,26 +6700,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    pull_request_sse_api_pull_requests_sse_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };
@@ -7369,6 +7213,37 @@ export interface operations {
             path: {
                 material_id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    master_event_stream_api_events_sse_get: {
+        parameters: {
+            query?: {
+                topic?: string[] | null;
+            };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

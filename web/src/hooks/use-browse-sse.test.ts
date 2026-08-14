@@ -3,7 +3,7 @@
  * correct SSE event listeners so material creates/edits/deletes always trigger
  * a listing refresh without requiring a full page reload.
  *
- * We mock createSSEConnection and capture every `listeners` object passed to it
+ * We mock subscribeToSSE and capture every `listeners` object passed to it
  * across all calls, then assert that every required event type is present.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -18,7 +18,7 @@ import { useBrowseSSE } from "./use-browse-sse";
 const capturedListeners: Array<Record<string, unknown>> = [];
 
 vi.mock("@/lib/sse-client", () => ({
-    createSSEConnection: vi.fn((opts: { listeners: Record<string, unknown> }) => {
+    subscribeToSSE: vi.fn((opts: { listeners: Record<string, unknown> }) => {
         capturedListeners.push(opts.listeners);
         return { close: vi.fn() };
     }),

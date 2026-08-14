@@ -11,25 +11,17 @@ from pydantic import BaseModel, Field, model_validator
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse
 
 from app.core.common.exceptions import (
     BadRequestError,
     ForbiddenError,
-    NotFoundError,
 )
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_client
 from app.core.events.limiter import limiter
-from app.core.events.sse import (
-    broadcast_to_topic,
-    register_topic_queue,
-    sse_event_stream,
-    topic_owner_keys,
-    unregister_topic_queue,
-)
+from app.core.events.sse import broadcast_to_topic
 from app.core.storage.facade import stream_object
-from app.dependencies.auth import ReadUser, SSEUser, get_current_user
+from app.dependencies.auth import ReadUser, get_current_user
 from app.dependencies.rate_limit import rate_limit_downloads
 from app.models.material import Material
 from app.models.user import User
@@ -146,31 +138,6 @@ async def get_directory_path(
 ) -> list[DirectoryBreadcrumb]:
     path = await directory_service.get_directory_path(db, id)
     return [DirectoryBreadcrumb.model_validate(p) for p in path]
-
-
-def _normalize_directory_topic(raw_id: str) -> str:
-    if raw_id == "root":
-        return "root"
-    try:
-        return str(uuid.UUID(raw_id))
-    except ValueError:
-        raise NotFoundError("Directory not found")
-
-
-@router.get("/{id}/sse")
-@limiter.limit("20/minute")
-async def directory_event_stream(request: Request, id: str, _user: SSEUser) -> EventSourceResponse:
-    topic = _normalize_directory_topic(id)
-    owner_keys = topic_owner_keys(
-        client_host=request.client.host if request.client is not None else None,
-        forwarded_for=request.headers.get("x-forwarded-for"),
-        real_ip=request.headers.get("x-real-ip"),
-    )
-    queue = register_topic_queue(topic, owner_keys=owner_keys)
-    return EventSourceResponse(
-        sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(topic, queue)),
-        headers={"X-Accel-Buffering": "no"},
-    )
 
 
 async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes, None]:

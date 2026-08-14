@@ -1,98 +1,97 @@
 import ast
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app.core.common.exceptions import NotFoundError
+from app.core.database.redis import RedisLockTimeoutError
+from app.core.events.sse import SSECapacityError
+from app.routers import events
+from app.routers.events import parse_master_topics
 
 _API_ROOT = Path(__file__).resolve().parents[2]
-_TOPIC_ROUTE_FILES = (
-    "app/routers/annotations.py",
-    "app/routers/directories.py",
-    "app/routers/pull_requests.py",
-)
 
 
-@pytest.mark.parametrize("relative_path", _TOPIC_ROUTE_FILES)
-def test_topic_stream_routes_supply_explicit_owner_key(relative_path: str) -> None:
-    source = (_API_ROOT / relative_path).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    registrations = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "register_topic_queue"
-    ]
-
-    assert registrations, f"{relative_path} must register at least one topic stream"
-    assert all(
-        any(keyword.arg == "owner_keys" for keyword in call.keywords) for call in registrations
+def test_persistent_live_updates_expose_only_the_master_sse_route() -> None:
+    legacy_route_files = (
+        "app/routers/annotations.py",
+        "app/routers/directories.py",
+        "app/routers/notifications.py",
+        "app/routers/pull_requests.py",
     )
 
-
-def test_directory_stream_has_handshake_rate_limit() -> None:
-    source = (_API_ROOT / "app/routers/directories.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    endpoint = next(
-        node
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "directory_event_stream"
-    )
-
-    assert any(
-        isinstance(decorator, ast.Call)
-        and isinstance(decorator.func, ast.Attribute)
-        and isinstance(decorator.func.value, ast.Name)
-        and decorator.func.value.id == "limiter"
-        and decorator.func.attr == "limit"
-        for decorator in endpoint.decorator_list
-    )
+    for relative_path in legacy_route_files:
+        source = (_API_ROOT / relative_path).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        sse_routes = [
+            decorator
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            for decorator in node.decorator_list
+            if isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr == "get"
+            and decorator.args
+            and isinstance(decorator.args[0], ast.Constant)
+            and str(decorator.args[0].value).endswith("/sse")
+        ]
+        assert not sse_routes, f"{relative_path} still exposes a legacy SSE route"
 
 
-def test_directory_stream_keeps_root_string_contract() -> None:
-    source = (_API_ROOT / "app/routers/directories.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    endpoint = next(
-        node
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "directory_event_stream"
-    )
-    id_arg = next(arg for arg in endpoint.args.args if arg.arg == "id")
+def test_master_topics_are_normalized_deduplicated_and_include_user_prs() -> None:
+    user_id = uuid.uuid4()
+    material_id = uuid.uuid4()
 
-    assert isinstance(id_arg.annotation, ast.Name)
-    assert id_arg.annotation.id == "str"
-
-
-def _load_directory_topic_normalizer():
-    source = (_API_ROOT / "app/routers/directories.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    function = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_normalize_directory_topic"
-    )
-    namespace = {"uuid": uuid, "NotFoundError": NotFoundError}
-    exec(
-        compile(ast.Module(body=[function], type_ignores=[]), "<directory-topic>", "exec"),
-        namespace,
-    )
-    return namespace["_normalize_directory_topic"]
+    assert parse_master_topics(
+        user_id,
+        ["directory:root", f"material:{material_id}", f"material:{material_id}"],
+    ) == {
+        "pull_requests": f"pr_updates:{user_id}",
+        "directory:root": "root",
+        f"material:{material_id}": str(material_id),
+    }
 
 
-def test_directory_topic_accepts_root_and_normalizes_uuid() -> None:
-    normalize_directory_topic = _load_directory_topic_normalizer()
-    value = "550E8400-E29B-41D4-A716-446655440000"
-
-    assert normalize_directory_topic("root") == "root"
-    assert normalize_directory_topic(value) == "550e8400-e29b-41d4-a716-446655440000"
+@pytest.mark.parametrize("topic", ["unknown:value", "material:not-a-uuid", "directory:nope"])
+def test_master_topics_reject_unknown_or_malformed_values(topic: str) -> None:
+    with pytest.raises(NotFoundError, match="Live-update topic not found"):
+        parse_master_topics(uuid.uuid4(), [topic])
 
 
-def test_directory_topic_rejects_other_non_uuid_values() -> None:
-    normalize_directory_topic = _load_directory_topic_normalizer()
+@pytest.mark.asyncio
+async def test_master_lease_is_held_for_dependency_lifetime(monkeypatch) -> None:
+    lifecycle: list[str] = []
 
-    with pytest.raises(NotFoundError, match="Directory not found"):
-        normalize_directory_topic("not-a-directory")
+    @asynccontextmanager
+    async def fake_lock(*args, **kwargs):
+        lifecycle.append("acquired")
+        try:
+            yield
+        finally:
+            lifecycle.append("released")
+
+    monkeypatch.setattr(events, "redis_lock", fake_lock)
+    lease = events._hold_master_lease(SimpleNamespace(id=uuid.uuid4()), object())
+
+    assert await anext(lease) is None
+    assert lifecycle == ["acquired"]
+
+    await lease.aclose()
+    assert lifecycle == ["acquired", "released"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_master_lease_is_rejected_before_streaming(monkeypatch) -> None:
+    @asynccontextmanager
+    async def unavailable_lock(*args, **kwargs):
+        raise RedisLockTimeoutError("already held")
+        yield
+
+    monkeypatch.setattr(events, "redis_lock", unavailable_lock)
+    lease = events._hold_master_lease(SimpleNamespace(id=uuid.uuid4()), object())
+
+    with pytest.raises(SSECapacityError, match="already active"):
+        await anext(lease)

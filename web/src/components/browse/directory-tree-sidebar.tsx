@@ -33,7 +33,7 @@ import { apiFetch, apiFetchRetry } from "@/lib/api-client";
 const TREE_TIMEOUT_MS = 15_000;
 import { cn } from "@/lib/utils";
 import { useBrowseRefreshStore, useUIStore } from "@/lib/stores";
-import { createSSEConnection, SSEConnection } from "@/lib/sse-client";
+import { subscribeToSSE } from "@/lib/sse-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -584,53 +584,52 @@ export function DirectoryTreeSidebar() {
     } catch { }
   }, []);
 
-  // Maintain one SSE connection per expanded directory (plus root).
-  // Each connection listens for child_added / child_removed and silently
-  // refetches only the affected directory — no full-tree reload, no spinners.
-  const treeConnectionsRef = useRef<Map<string, SSEConnection>>(new Map());
-
+  // Subscribe to each visible logical branch. These all share the single
+  // per-user transport, so expanding the tree does not create more sockets.
   useEffect(() => {
-    const watched = new Set(["root", ...Array.from(expanded)]);
-    const existing = treeConnectionsRef.current;
+    if (!isOnBrowse || !treeSidebarOpen) return;
 
-    // Close connections for directories no longer watched.
-    for (const id of Array.from(existing.keys())) {
-      if (!watched.has(id)) {
-        existing.get(id)!.close();
-        existing.delete(id);
-      }
+    // Reconcile anything we may have missed while the tree was closed.
+    void refetchRootSilent();
+    for (const id of expandedRef.current) {
+      void refetchChildSilent(id);
     }
 
-    // Open connections for newly watched directories.
-    for (const id of watched) {
-      if (!existing.has(id)) {
-        const handleChange = () => {
-          if (id === "root") void refetchRootSilent();
-          else void refetchChildSilent(id);
-        };
-        const conn = createSSEConnection({
-          url: `/directories/${id}/sse`,
-          listeners: {
-            child_added: handleChange,
-            child_updated: handleChange,
-            child_removed: handleChange,
-            pr_closed: handleChange,
-          },
-          startupDelay: 50,
-        });
-        existing.set(id, conn);
-      }
-    }
-  }, [expanded, refetchRootSilent, refetchChildSilent]);
-
-  // Close all tree SSE connections on unmount.
-  useEffect(() => {
-    const connections = treeConnectionsRef.current;
-    return () => {
-      for (const conn of connections.values()) conn.close();
-      connections.clear();
+    const handleRootChange = () => {
+      void refetchRootSilent();
     };
-  }, []);
+
+    const connections = [subscribeToSSE({
+      channel: "directory:root",
+      listeners: {
+        child_added: handleRootChange,
+        child_updated: handleRootChange,
+        child_removed: handleRootChange,
+        pr_closed: handleRootChange,
+      },
+      onResync: handleRootChange,
+      startupDelay: 50,
+    })];
+
+    for (const id of expanded) {
+      const handleChildChange = () => {
+        void refetchChildSilent(id);
+      };
+      connections.push(subscribeToSSE({
+        channel: `directory:${id}`,
+        listeners: {
+          child_added: handleChildChange,
+          child_updated: handleChildChange,
+          child_removed: handleChildChange,
+          pr_closed: handleChildChange,
+        },
+        onResync: handleChildChange,
+        startupDelay: 50,
+      }));
+    }
+
+    return () => connections.forEach((connection) => connection.close());
+  }, [isOnBrowse, treeSidebarOpen, expanded, refetchRootSilent, refetchChildSilent]);
 
   // Background revalidation for cached-but-stale directories (no loading spinner).
   // Unlike refetchChildSilent, the old cache is kept until fresh data arrives.

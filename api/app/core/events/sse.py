@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _SSE_QUEUE_MAXSIZE = 500
 _MAX_LOCAL_SSE_CONNECTIONS = 2_000
 _MAX_LOCAL_TOPIC_CONNECTIONS = 1_500
-_MAX_USER_SSE_CONNECTIONS = 5
+_MAX_USER_SSE_CONNECTIONS = 1
 _MAX_TOPIC_CONNECTIONS_PER_OWNER = 20
 _MAX_TOPIC_CONNECTIONS_PER_FORWARDED_HOP = 200
 _MAX_TOPIC_CONNECTIONS_PER_PROXY_PEER = 1_200
@@ -40,6 +40,7 @@ _topic_owner_queue_ids: dict[str, set[int]] = {}
 _active_topic_queue_ids: set[int] = set()
 _active_queue_ids: set[int] = set()
 _desynced_queue_ids: set[int] = set()
+_master_topic_channels: dict[int, dict[str, tuple[str, ...]]] = {}
 
 _INSTANCE_ID = uuid.uuid4().hex
 _FANOUT_CHANNEL = "sse:fanout"
@@ -127,7 +128,14 @@ def unregister_user_queue(user_id: uuid.UUID, queue: asyncio.Queue[dict[str, Any
 
 def _deliver_to_user(user_id: uuid.UUID, event: dict[str, Any]) -> None:
     for queue in list(_user_queues.get(user_id, [])):
-        if _enqueue_or_request_resync(queue, event):
+        outgoing = event
+        if id(queue) in _master_topic_channels:
+            outgoing = {
+                "type": str(event.get("type") or "message"),
+                "channel": "notifications",
+                "data": event,
+            }
+        if _enqueue_or_request_resync(queue, outgoing):
             logger.warning("SSE user queue overflow for user %s; requesting resync", user_id)
 
 
@@ -138,6 +146,78 @@ def broadcast_to_user(user_id: uuid.UUID, event: dict[str, Any]) -> None:
 
 
 # --- Topic-keyed queues (1:N mapping, used for material annotations) ---
+
+
+def register_master_queue(
+    user_id: uuid.UUID,
+    topic_channels: dict[str, str],
+) -> asyncio.Queue[dict[str, Any]]:
+    """Register one physical user stream for user and topic event sources.
+
+    ``topic_channels`` maps the public logical channel used by the browser to
+    the existing internal topic key used by publishers. One bounded queue and
+    one capacity slot back the entire multiplexed stream.
+    """
+    queues = _user_queues.get(user_id, [])
+    if len(queues) >= _MAX_USER_SSE_CONNECTIONS:
+        raise SSECapacityError("Too many concurrent live-update connections for this user")
+    if len(_active_topic_queue_ids) >= _MAX_LOCAL_TOPIC_CONNECTIONS:
+        raise SSECapacityError("Topic live updates are temporarily at capacity")
+
+    internal_to_channels: dict[str, list[str]] = {}
+    for channel, topic in topic_channels.items():
+        normalized_channel = channel.strip()
+        normalized_topic = topic.strip()
+        if not normalized_channel or not normalized_topic:
+            raise ValueError("Master SSE topic channels must not be empty")
+        internal_to_channels.setdefault(normalized_topic, []).append(normalized_channel)
+
+    queue = _new_queue()
+    queue_id = id(queue)
+    owner_key = f"user:{user_id}"
+    _user_queues.setdefault(user_id, []).append(queue)
+    for topic in internal_to_channels:
+        _topic_queues.setdefault(topic, []).append(queue)
+    _master_topic_channels[queue_id] = {
+        topic: tuple(channels) for topic, channels in internal_to_channels.items()
+    }
+    _topic_queue_owners[queue_id] = (owner_key,)
+    _topic_owner_queue_ids.setdefault(owner_key, set()).add(queue_id)
+    _active_topic_queue_ids.add(queue_id)
+    return queue
+
+
+def unregister_master_queue(
+    user_id: uuid.UUID,
+    queue: asyncio.Queue[dict[str, Any]],
+) -> None:
+    """Atomically release every source registration for a master stream."""
+    queue_id = id(queue)
+    channels = _master_topic_channels.pop(queue_id, None)
+    if channels is None:
+        return
+
+    user_queues = _user_queues.get(user_id, [])
+    with contextlib.suppress(ValueError):
+        user_queues.remove(queue)
+    if not user_queues:
+        _user_queues.pop(user_id, None)
+
+    for topic in channels:
+        topic_queues = _topic_queues.get(topic, [])
+        with contextlib.suppress(ValueError):
+            topic_queues.remove(queue)
+        if not topic_queues:
+            _topic_queues.pop(topic, None)
+
+    for owner_key in _topic_queue_owners.pop(queue_id, ()):
+        owner_queue_ids = _topic_owner_queue_ids.get(owner_key)
+        if owner_queue_ids is not None:
+            owner_queue_ids.discard(queue_id)
+            if not owner_queue_ids:
+                _topic_owner_queue_ids.pop(owner_key, None)
+    _active_topic_queue_ids.discard(queue_id)
+    _release_queue(queue)
 
 
 def _normalize_owner_host(
@@ -304,6 +384,21 @@ def unregister_topic_queue(topic: str, queue: asyncio.Queue[dict[str, Any]]) -> 
 
 def _deliver_to_topic(topic: str, event: dict[str, Any]) -> None:
     for queue in list(_topic_queues.get(topic, [])):
+        outgoing = event
+        master_topics = _master_topic_channels.get(id(queue))
+        if master_topics is not None:
+            channels = master_topics.get(topic)
+            if channels is None:
+                continue
+            for channel in channels:
+                outgoing = {
+                    "type": str(event.get("type") or "message"),
+                    "channel": channel,
+                    "data": event,
+                }
+                if _enqueue_or_request_resync(queue, outgoing):
+                    logger.warning("SSE topic queue overflow for topic %s; requesting resync", topic)
+            continue
         if _enqueue_or_request_resync(queue, event):
             logger.warning("SSE topic queue overflow for topic %s; requesting resync", topic)
 

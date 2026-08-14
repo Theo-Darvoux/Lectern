@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { createSSEConnection } from "@/lib/sse-client";
+import { subscribeToSSE } from "@/lib/sse-client";
 import { invalidateMaterialFileUrl } from "@/lib/api-client";
 
 interface BrowseData {
@@ -13,14 +13,13 @@ interface BrowseData {
 /**
  * Subscribes to the appropriate SSE topic for the current browse view.
  *
- * - material view      → /materials/{id}/sse  (material_deleted)
- * - attachment listing → /materials/{id}/sse  (material_deleted)
- * - directory listing  → /directories/{id}/sse
- *                        (directory_deleted, child_added, pr_opened, pr_closed)
+ * - material/attachment view → material:{id} logical channel
+ * - directory listing        → directory:{id} logical channel
+ *                              (directory_deleted, child_added, PR changes)
  *
- * The SSE connection is keyed on the entity ID, NOT on the `data` object
+ * The logical subscription is keyed on the entity ID, NOT on the `data` object
  * reference. This means background revalidations that return new data objects
- * for the same directory/material do NOT disconnect and reconnect the SSE.
+ * for the same directory/material do not churn the master topic set.
  * Mutable values (path, browseCache, fetchData, etc.) are held in refs so
  * listeners always call the latest version without triggering reconnects.
  */
@@ -33,17 +32,14 @@ export function useBrowseSSE(
 ): void {
     const router = useRouter();
 
-    // Derive a stable entity key.  The SSE only reconnects when this changes.
+    // Derive a stable entity key. The logical topic changes only with the entity.
     let sseEntityKey: string | null = null;
-    let sseUrl: string | null = null;
     if (data?.type === "directory_listing") {
         const dirId = data.directory ? String(data.directory.id) : "root";
         sseEntityKey = `dir:${dirId}`;
-        sseUrl = `/directories/${dirId}/sse`;
     } else if (data?.type === "material" && data.material) {
         const matId = String(data.material.id);
         sseEntityKey = `mat:${matId}`;
-        sseUrl = `/materials/${matId}/sse`;
     }
 
     // Mutable refs — updated after each render so listeners always see fresh values.
@@ -64,9 +60,7 @@ export function useBrowseSSE(
     });
 
     useEffect(() => {
-        if (!sseEntityKey || !sseUrl) return;
-
-        const capturedUrl = sseUrl;
+        if (!sseEntityKey) return;
         const listeners: Record<string, () => void> = {};
 
         if (sseEntityKey.startsWith("dir:")) {
@@ -121,12 +115,22 @@ export function useBrowseSSE(
 
         if (Object.keys(listeners).length === 0) return;
 
-        const connection = createSSEConnection({
-            url: capturedUrl,
+        const connection = subscribeToSSE({
+            channel: sseEntityKey.startsWith("dir:")
+                ? `directory:${sseEntityKey.slice(4)}`
+                : `material:${sseEntityKey.slice(4)}`,
             listeners,
+            onResync: () => {
+                if (sseEntityKey.startsWith("mat:")) {
+                    invalidateMaterialFileUrl(sseEntityKey.slice(4));
+                }
+                browseCacheRef.current.delete(pathRef.current);
+                fetchDataRef.current(true);
+                triggerRefreshRef.current();
+            },
             startupDelay: 50,
         });
 
         return () => connection.close();
-    }, [sseEntityKey, sseUrl]); // reconnect when entity changes
+    }, [sseEntityKey]); // update the master topic when the entity changes
 }

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { apiFetchWithResponse } from "@/lib/api-client";
-import { createSSEConnection } from "@/lib/sse-client";
+import { subscribeToSSE } from "@/lib/sse-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -97,12 +97,13 @@ export function DirectoryOpenPRs({ directoryId }: DirectoryOpenPRsProps) {
 
     useEffect(() => {
         if (!directoryId) return;
-        const connection = createSSEConnection({
-            url: `/directories/${directoryId}/sse`,
+        const connection = subscribeToSSE({
+            channel: `directory:${directoryId}`,
             listeners: {
                 pr_opened: () => { setPage(1); fetchPRs(1); },
                 pr_closed: () => { setPage(1); fetchPRs(1); },
             },
+            onResync: () => { setPage(1); fetchPRs(1); },
             startupDelay: 50,
         });
         return () => connection.close();

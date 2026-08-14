@@ -1,23 +1,12 @@
-import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse
 
-from app.core.common.exceptions import NotFoundError
 from app.core.database.database import get_db
 from app.core.database.post_commit import add_post_commit_sse
 from app.core.events.limiter import limiter
-from app.core.events.sse import (
-    register_topic_queue,
-    sse_event_stream,
-    topic_owner_keys,
-    unregister_topic_queue,
-)
-from app.dependencies.auth import CurrentUser, OnboardedUser, ReadUser, SSEUser
-from app.models.material import Material
+from app.dependencies.auth import CurrentUser, OnboardedUser, ReadUser
 from app.schemas.annotation import (
     AnnotationCreateIn,
     AnnotationOut,
@@ -138,36 +127,4 @@ async def remove_annotation(
             "id": str(deleted_id),
             "thread_id": str(thread_id),
         },
-    )
-
-
-@material_annotations_router.get("/{material_id}/sse")
-@limiter.limit("20/minute")
-async def material_event_stream(
-    request: Request,
-    material_id: str,
-    _user: SSEUser,
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> EventSourceResponse:
-    try:
-        mid = uuid.UUID(material_id)
-    except ValueError:
-        raise NotFoundError("Material not found")
-
-    result = await db.execute(select(Material).where(Material.id == mid))
-    if not result.scalar_one_or_none():
-        raise NotFoundError("Material not found")
-
-    owner_keys = topic_owner_keys(
-        client_host=request.client.host if request.client is not None else None,
-        forwarded_for=request.headers.get("x-forwarded-for"),
-        real_ip=request.headers.get("x-real-ip"),
-    )
-    queue = register_topic_queue(material_id, owner_keys=owner_keys)
-    return EventSourceResponse(
-        sse_event_stream(
-            queue,
-            cleanup=lambda: unregister_topic_queue(material_id, queue),
-        ),
-        headers={"X-Accel-Buffering": "no"},
     )

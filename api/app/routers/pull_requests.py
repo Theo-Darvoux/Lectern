@@ -7,20 +7,12 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
-from sse_starlette.sse import EventSourceResponse
 
 from app.core.common.exceptions import BadRequestError, NotFoundError
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis
 from app.core.events.limiter import limiter
-from app.core.events.sse import (
-    register_topic_queue,
-    sse_event_stream,
-    topic_owner_keys,
-    unregister_topic_queue,
-)
 from app.dependencies.auth import (
-    SSEUser,
     get_current_user,
     require_moderator,
     require_not_guest,
@@ -52,19 +44,6 @@ from app.services.pr import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pull-requests", tags=["pull-requests"])
-
-
-@router.get("/sse")
-async def pull_request_sse(user: SSEUser) -> EventSourceResponse:
-    """Per-user SSE stream for PR list updates (pr_opened / pr_closed events)."""
-    topic = f"pr_updates:{user.id}"
-    queue = register_topic_queue(topic, owner_keys=topic_owner_keys(user_id=user.id))
-    return EventSourceResponse(
-        sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(topic, queue)),
-        headers={"X-Accel-Buffering": "no"},
-    )
-
-
 @router.post("", response_model=PullRequestOut, status_code=201)
 async def create_pull_request(
     data: PullRequestCreate,

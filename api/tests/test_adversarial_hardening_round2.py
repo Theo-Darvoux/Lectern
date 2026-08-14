@@ -174,7 +174,7 @@ async def test_pending_user_cannot_read_annotations(
     assert response.json()["error_code"] == "USER_PENDING"
 
 
-async def test_material_and_directory_sse_reject_anonymous_clients(
+async def test_master_sse_rejects_anonymous_clients(
     client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
@@ -182,8 +182,14 @@ async def test_material_and_directory_sse_reject_anonymous_clients(
     directory, material = await _material(db_session, owner)
     await db_session.commit()
 
-    assert (await client.get(f"/api/materials/{material.id}/sse")).status_code == 401
-    assert (await client.get(f"/api/directories/{directory.id}/sse")).status_code == 401
+    response = await client.get(
+        "/api/events/sse",
+        params=[
+            ("topic", f"material:{material.id}"),
+            ("topic", f"directory:{directory.id}"),
+        ],
+    )
+    assert response.status_code == 401
 
 
 def _request_with_bearer(token: str, client_ip: str = "203.0.113.10") -> Request:

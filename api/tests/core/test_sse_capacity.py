@@ -16,6 +16,7 @@ def reset_sse_state():
     sse._active_topic_queue_ids.clear()
     sse._active_queue_ids.clear()
     sse._desynced_queue_ids.clear()
+    sse._master_topic_channels.clear()
     yield
     sse._user_queues.clear()
     sse._topic_queues.clear()
@@ -24,6 +25,7 @@ def reset_sse_state():
     sse._active_topic_queue_ids.clear()
     sse._active_queue_ids.clear()
     sse._desynced_queue_ids.clear()
+    sse._master_topic_channels.clear()
 
 
 def test_topic_overflow_replaces_incremental_events_with_resync(monkeypatch) -> None:
@@ -88,6 +90,68 @@ def test_per_user_connection_limit(monkeypatch) -> None:
     replacement = sse.register_user_queue(user_id)
 
     assert replacement is not second
+
+
+def test_master_queue_multiplexes_user_and_topic_events() -> None:
+    user_id = uuid.uuid4()
+    queue = sse.register_master_queue(
+        user_id,
+        {
+            "material:material-id": "material-id",
+            "directory:directory-id": "directory-id",
+        },
+    )
+
+    sse._deliver_to_user(user_id, {"type": "notification", "id": "notification-id"})
+    sse._deliver_to_topic("material-id", {"type": "material_updated", "id": "version-id"})
+
+    assert queue.get_nowait() == {
+        "type": "notification",
+        "channel": "notifications",
+        "data": {"type": "notification", "id": "notification-id"},
+    }
+    assert queue.get_nowait() == {
+        "type": "material_updated",
+        "channel": "material:material-id",
+        "data": {"type": "material_updated", "id": "version-id"},
+    }
+
+    sse.unregister_master_queue(user_id, queue)
+
+    assert queue not in sse._user_queues.get(user_id, [])
+    assert queue not in sse._topic_queues.get("material-id", [])
+    assert queue not in sse._topic_queues.get("directory-id", [])
+
+
+def test_only_one_master_queue_can_be_registered_per_user() -> None:
+    user_id = uuid.uuid4()
+    first = sse.register_master_queue(user_id, {})
+
+    with pytest.raises(sse.SSECapacityError, match="Too many concurrent"):
+        sse.register_master_queue(user_id, {})
+
+    sse.unregister_master_queue(user_id, first)
+    replacement = sse.register_master_queue(user_id, {})
+    assert replacement is not first
+
+
+def test_master_queue_preserves_channel_namespace_for_shared_internal_topic() -> None:
+    user_id = uuid.uuid4()
+    queue = sse.register_master_queue(
+        user_id,
+        {
+            "material:shared-id": "shared-id",
+            "directory:shared-id": "shared-id",
+        },
+    )
+
+    event = {"type": "child_updated", "id": "item-id"}
+    sse._deliver_to_topic("shared-id", event)
+
+    assert [queue.get_nowait(), queue.get_nowait()] == [
+        {"type": "child_updated", "channel": "material:shared-id", "data": event},
+        {"type": "child_updated", "channel": "directory:shared-id", "data": event},
+    ]
 
 
 def test_process_connection_limit(monkeypatch) -> None:

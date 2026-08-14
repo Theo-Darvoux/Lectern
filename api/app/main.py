@@ -26,6 +26,7 @@ from app.routers.browse import router as browse_router
 from app.routers.comments import router as comments_router
 from app.routers.directories import router as directories_router
 from app.routers.eurooffice import router as eurooffice_router
+from app.routers.events import router as events_router
 from app.routers.flags import router as flags_router
 from app.routers.home import router as home_router
 from app.routers.materials import router as materials_router
@@ -337,6 +338,7 @@ app.include_router(pr_comments_router)
 app.include_router(pull_requests_router)
 app.include_router(search_router)
 app.include_router(eurooffice_router)
+app.include_router(events_router)
 app.include_router(tus_router)
 app.include_router(upload_api_router)
 app.include_router(home_router)
