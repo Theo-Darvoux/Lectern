@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useState, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
 import { Info, MessageSquare, Paperclip, File } from "lucide-react";
@@ -16,8 +17,10 @@ import { cn } from "@/lib/utils";
 import type { MaterialDetail } from "@/components/home/types";
 import { useInView } from "@/hooks/use-in-view";
 
-// Lazy import to avoid loading pdf.js in the grid preview
-import { MaterialPreview } from "@/components/home/material-preview";
+const MaterialPreview = dynamic(
+  () => import("@/components/home/material-preview").then((module) => module.MaterialPreview),
+  { ssr: false },
+);
 
 // Frosted-glass circular action button — reads on any preview (light, dark or
 // colourful) without a scrim band behind it.

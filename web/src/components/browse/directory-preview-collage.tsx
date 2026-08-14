@@ -1,13 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { apiFetch } from "@/lib/api-client";
 import { File } from "lucide-react";
-
-interface ThumbnailInfo {
-  url: string;
-  thumbnail_type: "webp" | "fallback";
-}
+import { getMaterialThumbnail } from "@/lib/material-preview-source";
 
 type CellInfo = { url: string; type: "webp" | "fallback" } | null | false;
 
@@ -40,8 +35,12 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
     setCells(Array(ids.length).fill(null));
     Promise.all(
       ids.map((id) =>
-        apiFetch<ThumbnailInfo>(`/materials/${id}/thumbnail`)
-          .then((info): CellInfo => info ? { url: info.url, type: info.thumbnail_type } : false)
+        getMaterialThumbnail(id)
+          .then((info): CellInfo =>
+            info && info.thumbnailType
+              ? { url: info.url, type: info.thumbnailType }
+              : false,
+          )
           .catch((): CellInfo => false),
       ),
     ).then((results) => {

@@ -1,15 +1,24 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import { apiFetchRetry } from "@/lib/api-client";
+import dynamic from "next/dynamic";
+import { getMaterialFileUrl } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { getFileTypeStyle } from "./file-type-display";
 import type { MaterialDetail } from "./types";
 import { Loader2 } from "lucide-react";
-import { MarkdownRenderer } from "../viewers/markdown-renderer";
 import { useInView } from "@/hooks/use-in-view";
 import { MIME_QCM } from "@/lib/file-utils";
 import { createPdfWorker } from "@/lib/pdf-worker";
+import {
+  getMaterialThumbnail,
+  type ThumbnailType,
+} from "@/lib/material-preview-source";
+
+const MarkdownRenderer = dynamic(
+  () => import("../viewers/markdown-renderer").then((module) => module.MarkdownRenderer),
+  { ssr: false },
+);
 
 // Renders the first page of a PDF to a canvas via pdf.js. The engine (~1MB of
 // JS) is imported lazily inside the effect, so it only loads when a card
@@ -90,11 +99,6 @@ function PdfThumbnailCanvas({
   return <canvas ref={canvasRef} className="block w-full" />;
 }
 
-// Concurrency-limited thumbnail fetcher. On first paint of a grid view, every
-// visible card hits /thumbnail simultaneously — 20-30 parallel requests + image
-// decode storms cause severe FPS drops. Queue to a small parallelism cap.
-const MAX_CONCURRENT_THUMBNAILS = 4;
-
 // A signed worker/presigned URL can transiently fail to load (cold edge cache,
 // brief 5xx, flaky connection) and an <img> that errors never re-attempts on its
 // own. Retry a bounded number of times with backoff, cache-busting the request
@@ -102,25 +106,6 @@ const MAX_CONCURRENT_THUMBNAILS = 4;
 // safe: the worker only verifies `token` and strips the query string from its
 // cache key, so it neither breaks signature validation nor pollutes the cache.
 const MAX_IMG_RETRIES = 3;
-let inflightThumbnails = 0;
-const thumbnailQueue: Array<() => void> = [];
-
-function withThumbnailSlot<T>(task: () => Promise<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const run = () => {
-      inflightThumbnails++;
-      task()
-        .then(resolve, reject)
-        .finally(() => {
-          inflightThumbnails--;
-          const next = thumbnailQueue.shift();
-          if (next) next();
-        });
-    };
-    if (inflightThumbnails < MAX_CONCURRENT_THUMBNAILS) run();
-    else thumbnailQueue.push(run);
-  });
-}
 
 interface MaterialPreviewProps {
   material: MaterialDetail;
@@ -128,9 +113,6 @@ interface MaterialPreviewProps {
   /** When true, defers loading until the card scrolls near the viewport. */
   lazy?: boolean;
 }
-
-/** Whether the thumbnail API returned a real generated WebP or a raw-file fallback. */
-type ThumbnailType = "webp" | "fallback" | null;
 
 export function MaterialPreview({ material, className, lazy }: MaterialPreviewProps) {
   const [url, setUrl] = useState<string | null>(null);
@@ -187,6 +169,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     if (!shouldLoad) return;
 
     let mounted = true;
+    const controller = new AbortController();
     setLoading(true);
     setPdfReady(false);
 
@@ -195,14 +178,10 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         // 1. Try the /thumbnail endpoint first.
         //    It returns { url, thumbnail_type: "webp" | "fallback" }.
         try {
-          const thumbData = await withThumbnailSlot(() =>
-            apiFetchRetry<{ url: string; thumbnail_type: ThumbnailType }>(
-              `/materials/${material.id}/thumbnail`
-            )
-          );
+          const thumbData = await getMaterialThumbnail(String(material.id));
           if (mounted && thumbData && thumbData.url) {
             setUrl(thumbData.url);
-            setThumbnailType(thumbData.thumbnail_type ?? "webp");
+            setThumbnailType(thumbData.thumbnailType ?? "webp");
             setLoading(false);
             return;
           }
@@ -220,19 +199,17 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
           return;
         }
 
-        const data = await withThumbnailSlot(() =>
-          apiFetchRetry<{ url: string }>(`/materials/${material.id}/inline`)
-        );
+        const inlineUrl = await getMaterialFileUrl(String(material.id), controller.signal);
         if (!mounted) return;
 
-        if (data && data.url) {
-          setUrl(data.url);
+        if (inlineUrl) {
+          setUrl(inlineUrl);
           setThumbnailType(null);  // plain inline URL
 
           // Fetch text snippet for text/markdown files
           if (isText || isMarkdown) {
           try {
-            const res = await fetch(data.url);
+            const res = await fetch(inlineUrl, { signal: controller.signal });
             const contentEncoding = res.headers.get("Content-Encoding");
             let text = "";
             if (contentEncoding === "gzip" || contentEncoding?.includes("gzip")) {
@@ -272,6 +249,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     const timer = setTimeout(fetchPreview, 100);
     return () => {
       mounted = false;
+      controller.abort();
       clearTimeout(timer);
     };
   }, [material.id, isText, isImage, isVideo, isMarkdown, isPDF, shouldLoad]);
