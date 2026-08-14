@@ -72,9 +72,11 @@ export function MobileBottomBar() {
   const t = useTranslations("Navigation");
   const isMobile = useIsMobile();
   const { isAuthenticated, user } = useAuth();
-  const { unreadCount } = useNotificationStore();
-  const { openPRCount } = usePRStore();
-  const { hideFooter, navbarVisible, setMaterialActionsOpen } = useUIStore();
+  const unreadCount = useNotificationStore((state) => state.unreadCount);
+  const openPRCount = usePRStore((state) => state.openPRCount);
+  const hideFooter = useUIStore((state) => state.hideFooter);
+  const navbarVisible = useUIStore((state) => state.navbarVisible);
+  const setMaterialActionsOpen = useUIStore((state) => state.setMaterialActionsOpen);
   const pathname = usePathname();
   const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
   const touchStartY = useRef<number | null>(null);

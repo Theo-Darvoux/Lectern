@@ -12,7 +12,8 @@ import { normalizePathname } from "@/lib/utils";
 type ConfigLoadState = "loading" | "ready" | "error";
 
 export function ConfigProvider({ children }: { children: ReactNode }) {
-    const { config, setConfig } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
+    const setConfig = useConfigStore((state) => state.setConfig);
     const rawPathname = usePathname();
     const pathname = normalizePathname(rawPathname);
     const router = useRouter();

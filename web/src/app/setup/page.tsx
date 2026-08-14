@@ -15,7 +15,8 @@ export default function SetupPage() {
     const t = useTranslations("Setup");
     const router = useRouter();
     const { setup } = useAuth();
-    const { config, updateConfig } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
+    const updateConfig = useConfigStore((state) => state.updateConfig);
 
     const [email, setEmail] = useState("");
     const [confirmEmail, setConfirmEmail] = useState("");

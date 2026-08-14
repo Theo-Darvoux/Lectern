@@ -8,9 +8,11 @@ import { isGuest } from "@/lib/guest";
 import { fetchOpenPRCount } from "@/lib/pr-client";
 
 export function useSSE() {
-    const { isAuthenticated, user } = useAuthStore();
-    const { increment, setUnreadCount } = useNotificationStore();
-    const { setOpenPRCount } = usePRStore();
+    const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+    const user = useAuthStore((state) => state.user);
+    const increment = useNotificationStore((state) => state.increment);
+    const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
+    const setOpenPRCount = usePRStore((state) => state.setOpenPRCount);
 
     useEffect(() => {
         if (!isAuthenticated) return;

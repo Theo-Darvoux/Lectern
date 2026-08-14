@@ -172,7 +172,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 export function ChatTab({ target, disabled = false }: ChatTabProps) {
   const t = useTranslations("Sidebar");
   const isMobile = useIsMobile();
-  const { user } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
   const guest = isGuest(user);
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(false);

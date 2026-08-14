@@ -202,18 +202,16 @@ export function MaterialViewer({
   })();
   const isMobile = useIsMobile();
   const isDesktop = useIsDesktop();
-  const {
-    openSidebar,
-    setSidebarTarget,
-    closeSidebar,
-    sidebarOpen,
-    setHideFooter,
-    materialActionsOpen,
-    setMaterialActionsOpen,
-    setActiveViewerType,
-    navbarVisible,
-    setNavbarVisible,
-  } = useUIStore();
+  const openSidebar = useUIStore((state) => state.openSidebar);
+  const setSidebarTarget = useUIStore((state) => state.setSidebarTarget);
+  const closeSidebar = useUIStore((state) => state.closeSidebar);
+  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
+  const setHideFooter = useUIStore((state) => state.setHideFooter);
+  const materialActionsOpen = useUIStore((state) => state.materialActionsOpen);
+  const setMaterialActionsOpen = useUIStore((state) => state.setMaterialActionsOpen);
+  const setActiveViewerType = useUIStore((state) => state.setActiveViewerType);
+  const navbarVisible = useUIStore((state) => state.navbarVisible);
+  const setNavbarVisible = useUIStore((state) => state.setNavbarVisible);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const [headerHeight, setHeaderHeight] = useState(0);

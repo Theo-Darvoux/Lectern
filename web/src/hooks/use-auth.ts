@@ -8,15 +8,13 @@ import type { UserBrief } from "@/lib/guest";
 import { broadcastTokenAcquired, performLogout, scheduleRefreshTimer } from "@/lib/auth-sync";
 
 export function useAuth() {
-    const {
-        user,
-        isAuthenticated,
-        isLoading,
-        bootstrapError,
-        setUser,
-        setLoading,
-        setBootstrapError,
-    } = useAuthStore();
+    const user = useAuthStore((state) => state.user);
+    const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+    const isLoading = useAuthStore((state) => state.isLoading);
+    const bootstrapError = useAuthStore((state) => state.bootstrapError);
+    const setUser = useAuthStore((state) => state.setUser);
+    const setLoading = useAuthStore((state) => state.setLoading);
+    const setBootstrapError = useAuthStore((state) => state.setBootstrapError);
 
     const requestCode = useCallback(async (email: string) => {
         await apiFetch("/auth/request-code", {

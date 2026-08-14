@@ -46,7 +46,8 @@ function writeGuestCompleted(ids: string[]): void {
  * reset plus the set of tutorials the current user qualifies for.
  */
 export function useTutorial() {
-    const { user, setUser } = useAuthStore();
+    const user = useAuthStore((state) => state.user);
+    const setUser = useAuthStore((state) => state.setUser);
     const start = useTutorialRun((s) => s.start);
     const isMobile = useIsMobile();
     const tutorialsOff = useConfigStore((s) => s.config?.tutorials_enabled === false);

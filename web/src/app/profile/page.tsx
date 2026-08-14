@@ -11,7 +11,7 @@ import { toast } from "sonner";
 
 function OwnProfileContent() {
     const t = useTranslations("Profile");
-    const { setUser } = useAuthStore();
+    const setUser = useAuthStore((state) => state.setUser);
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [isUploading, setIsUploading] = useState(false);
 

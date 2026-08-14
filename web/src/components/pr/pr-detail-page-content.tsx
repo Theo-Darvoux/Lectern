@@ -735,7 +735,7 @@ function PRDetailContent() {
     const tCommon = useTranslations("Common");
     const locale = useLocale();
     const dateLocale = locale === "fr" ? fr : enUS;
-    const { user } = useAuthStore();
+    const user = useAuthStore((state) => state.user);
     const [pr, setPr] = useState<PullRequestDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [acting, setActing] = useState<"approve" | "reject" | "cancel" | "revert" | null>(null);

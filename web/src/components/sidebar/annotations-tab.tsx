@@ -28,7 +28,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps) {
   const t = useTranslations("Sidebar");
-  const { user } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
   // Guests are read-only: treat them as anonymous so reply/edit/delete
   // affordances (which require a current user id) never render.
   const guest = isGuest(user);

@@ -60,9 +60,12 @@ export function Navbar() {
   const { user, isAuthenticated, logout } = useAuth();
   const guest = isGuest(user);
   const [searchOpen, setSearchOpen] = useState(false);
-  const { unreadCount, setUnreadCount, decrement } = useNotificationStore();
-  const { openPRCount, setOpenPRCount } = usePRStore();
-  const { config } = useConfigStore();
+  const unreadCount = useNotificationStore((state) => state.unreadCount);
+  const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
+  const decrement = useNotificationStore((state) => state.decrement);
+  const openPRCount = usePRStore((state) => state.openPRCount);
+  const setOpenPRCount = usePRStore((state) => state.setOpenPRCount);
+  const config = useConfigStore((state) => state.config);
   const pathname = usePathname();
 
   const [popoverOpen, setPopoverOpen] = useState(false);

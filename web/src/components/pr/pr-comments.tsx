@@ -33,7 +33,7 @@ export function PRComments({ prId }: { prId: string }) {
     const locale = useLocale();
     const dateLocale = locale === "fr" ? fr : enUS;
     const isMobile = useIsMobile();
-    const { user } = useAuthStore();
+    const user = useAuthStore((state) => state.user);
     const [comments, setComments] = useState<PRComment[]>([]);
     const [body, setBody] = useState("");
     const [submitting, setSubmitting] = useState(false);

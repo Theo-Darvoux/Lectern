@@ -64,7 +64,10 @@ export function GlobalDropZone() {
     const [pendingItems, setPendingItems] = useState<DroppedItems>({ files: [], folders: [], inaccessible: [] });
 
 
-    const { uploadTarget, browseContext, setDismissOverlay, clear } = useDropZoneStore();
+    const uploadTarget = useDropZoneStore((state) => state.uploadTarget);
+    const browseContext = useDropZoneStore((state) => state.browseContext);
+    const setDismissOverlay = useDropZoneStore((state) => state.setDismissOverlay);
+    const clear = useDropZoneStore((state) => state.clear);
 
     // Register overlay dismiss so UploadDrawer can clear it on drop
     const dismiss = useCallback(() => {

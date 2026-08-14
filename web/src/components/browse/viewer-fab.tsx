@@ -149,7 +149,9 @@ export function ViewerFab({
   const isDraft = materialId.startsWith("$");
   const isRestricted = isPreview || isDraft;
 
-  const { openSidebar, updateSidebarData, sidebarTarget } = useUIStore();
+  const openSidebar = useUIStore((state) => state.openSidebar);
+  const updateSidebarData = useUIStore((state) => state.updateSidebarData);
+  const sidebarTarget = useUIStore((state) => state.sidebarTarget);
   const guest = isGuest(useAuthStore((s) => s.user));
   const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({

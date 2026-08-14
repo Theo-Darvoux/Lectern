@@ -157,7 +157,7 @@ function BrowseContent() {
   const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const t = useTranslations("Browse");
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const path = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
 
   // Track the path each fetched payload belongs to so a stale payload from the

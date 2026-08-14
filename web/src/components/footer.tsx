@@ -8,7 +8,7 @@ const commitSha = process.env.NEXT_PUBLIC_COMMIT_SHA;
 
 export function Footer() {
     const t = useTranslations("Layout");
-    const { config } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
     const shortCommit = commitSha?.slice(0, 7);
     const repoUrl = config?.repo_url || process.env.NEXT_PUBLIC_REPO_URL || "";
 

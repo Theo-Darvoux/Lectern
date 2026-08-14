@@ -30,7 +30,8 @@ export default function NotificationsPage() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
-  const { setUnreadCount, decrement } = useNotificationStore();
+  const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
+  const decrement = useNotificationStore((state) => state.decrement);
 
   const loadPage = useCallback(
     async (targetPage: number, currentFilter: Filter) => {

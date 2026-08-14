@@ -47,14 +47,15 @@ export default function SettingsPage() {
   const t = useTranslations("Settings");
   const tLayout = useTranslations("Layout");
   const tLanguages = useTranslations("Languages");
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const repoUrl = config?.repo_url || process.env.NEXT_PUBLIC_REPO_URL || "";
   const shortCommit = commitSha?.slice(0, 7);
   const { locale, changeLocale, isPending: localePending } = useChangeLocale();
   const [exporting, setExporting] = useState(false);
   const { show } = useConfirmDialog();
   const { theme, setTheme } = useTheme();
-  const { user, setUser } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
+  const setUser = useAuthStore((state) => state.setUser);
   const [updating, setUpdating] = useState(false);
 
   const handleLanguageChange = (newLocale: string) => {

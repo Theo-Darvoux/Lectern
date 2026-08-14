@@ -30,7 +30,8 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   const t = useTranslations("Layout");
   const { user, isAuthenticated, isLoading, bootstrapError, bootstrapAuth } = useAuth();
   const guest = isGuest(user);
-  const { hideFooter, navbarVisible } = useUIStore();
+  const hideFooter = useUIStore((state) => state.hideFooter);
+  const navbarVisible = useUIStore((state) => state.navbarVisible);
   const rawPathname = usePathname();
   const router = useRouter();
 

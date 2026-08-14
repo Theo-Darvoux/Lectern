@@ -186,6 +186,9 @@ export const useDirectoryIconOverrides = create<DirectoryIconOverrideState>((set
         }),
 }));
 
+export const selectDirectoryIconOverride = (directoryId: string) =>
+    (state: DirectoryIconOverrideState) => state.overrides.get(directoryId);
+
 interface DirectoryColorOverrideState {
     overrides: Map<string, string | null>;
     setColorOverride: (directoryId: string, color: string | null) => void;
@@ -200,6 +203,9 @@ export const useDirectoryColorOverrides = create<DirectoryColorOverrideState>((s
             return { overrides: next };
         }),
 }));
+
+export const selectDirectoryColorOverride = (directoryId: string) =>
+    (state: DirectoryColorOverrideState) => state.overrides.get(directoryId);
 
 interface NotificationState {
     unreadCount: number;
@@ -278,4 +284,3 @@ export const useConfigStore = create<ConfigState>((set) => ({
         config: state.config ? { ...state.config, ...patch } : null
     })),
 }));
-

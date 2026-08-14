@@ -33,7 +33,7 @@ function getGreetingKey(): "morning" | "afternoon" | "evening" {
 export default function HomePage() {
   const t = useTranslations("Home");
   const { user } = useAuth();
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const guest = isGuest(user);
   const [data, setData] = useState<HomeData | null>(null);
   const [isLoading, setIsLoading] = useState(true);

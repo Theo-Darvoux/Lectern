@@ -12,7 +12,12 @@ import { cn } from "@/lib/utils";
 import { getDirectoryIcon } from "@/lib/directory-icons";
 import { getDirectoryColor } from "@/lib/directory-colors";
 import { DirectoryPreviewCollage } from "./directory-preview-collage";
-import { useDirectoryIconOverrides, useDirectoryColorOverrides } from "@/lib/stores";
+import {
+  selectDirectoryColorOverride,
+  selectDirectoryIconOverride,
+  useDirectoryColorOverrides,
+  useDirectoryIconOverrides,
+} from "@/lib/stores";
 
 // Frosted-glass circular action button — reads on any thumbnail (light, dark or
 // colourful) without a scrim band behind it.
@@ -59,12 +64,12 @@ function DirectoryGridCardImpl({
   const childMatCount = Number(directory.child_material_count ?? 0);
   const totalCount = childDirCount + childMatCount;
   const metadata = (directory.metadata ?? {}) as Record<string, unknown>;
-  const iconOverrides = useDirectoryIconOverrides((s) => s.overrides);
-  const colorOverrides = useDirectoryColorOverrides((s) => s.overrides);
+  const iconOverride = useDirectoryIconOverrides(selectDirectoryIconOverride(id));
+  const colorOverride = useDirectoryColorOverrides(selectDirectoryColorOverride(id));
   const rawIconId = metadata.thumbnail_icon ? String(metadata.thumbnail_icon) : null;
   const rawColorId = metadata.thumbnail_color ? String(metadata.thumbnail_color) : null;
-  const thumbnailIconId = iconOverrides.has(id) ? (iconOverrides.get(id) ?? null) : rawIconId;
-  const thumbnailColorId = colorOverrides.has(id) ? (colorOverrides.get(id) ?? null) : rawColorId;
+  const thumbnailIconId = iconOverride !== undefined ? iconOverride : rawIconId;
+  const thumbnailColorId = colorOverride !== undefined ? colorOverride : rawColorId;
   const previewMaterialIds = Array.isArray(directory.preview_material_ids)
     ? (directory.preview_material_ids as string[])
     : [];

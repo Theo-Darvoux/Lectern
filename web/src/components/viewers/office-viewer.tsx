@@ -16,7 +16,7 @@ interface OfficeViewerProps {
 
 export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProps) {
     const t = useTranslations("Viewers.office");
-    const { config } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const scriptRef = useRef<HTMLScriptElement | null>(null);

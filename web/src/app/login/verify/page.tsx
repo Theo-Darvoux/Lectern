@@ -18,7 +18,7 @@ function MagicLinkVerifier() {
     const [token, setToken] = useState<string | null>(null);
     const [linkLoaded, setLinkLoaded] = useState(false);
     const attempted = useRef(false);
-    const { config } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
 
     // URL fragments are never sent in the HTTP request target. Read the
     // capability once and immediately remove it from browser history before
@@ -145,7 +145,7 @@ function MagicLinkVerifier() {
 
 export default function MagicLinkPage() {
     const t = useTranslations("Login");
-    const { config } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
 
     return (
         <Suspense
