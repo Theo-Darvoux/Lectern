@@ -66,6 +66,29 @@ describe("upload-client: uploadFile", () => {
       if (urlStr.includes("/upload/check-exists")) {
         return { json: async () => ({ exists: false }) } as any;
       }
+      if (urlStr.includes("/upload/config")) {
+        return {
+          json: async () => ({
+            allowed_extensions: [".png", ".svg", ".pdf"],
+            allowed_mimetypes: ["image/png", "image/svg+xml", "application/pdf"],
+            max_file_size_mb: 100,
+            max_size_mb_by_mime: {},
+            recommended_path: "direct",
+            direct_threshold_mb: 10,
+          }),
+        } as any;
+      }
+      if (urlStr === "/upload") {
+        return {
+          json: async () => ({
+            upload_id: "u-id",
+            file_key: "q-key",
+            status: "pending",
+            size: mockFile.size,
+            mime_type: mockFile.type,
+          }),
+        } as any;
+      }
       if (urlStr.includes("/upload/init")) {
         return { json: async () => ({ 
           quarantine_key: "q-key", 
@@ -135,6 +158,28 @@ describe("upload-client: uploadFile", () => {
     expect(result.content_sha256).toBe("original-hash");
   }, 10000);
 
+  it("uses the backend-recommended direct endpoint for small files", async () => {
+    vi.mocked(sha256File).mockResolvedValueOnce("original-hash");
+    vi.mocked(compressImageIfNeeded).mockResolvedValueOnce({
+      file: mockFile,
+      compressed: false,
+    });
+
+    await uploadFile(mockFile);
+
+    expect(apiRequest).toHaveBeenCalledWith(
+      "/upload",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.any(FormData),
+        timeoutMs: 120_000,
+      }),
+    );
+    const calls = vi.mocked(apiRequest).mock.calls.map(([u]) => String(u));
+    expect(calls.some((u) => u.includes("/upload/init"))).toBe(false);
+    expect(calls.some((u) => u.includes("/upload/complete"))).toBe(false);
+  }, 10000);
+
   it("skips upload and returns result when dedup check says file exists", async () => {
     vi.mocked(sha256File).mockResolvedValueOnce("known-hash");
 
@@ -202,6 +247,8 @@ describe("getUploadConfig", () => {
     allowed_mimetypes: ["application/pdf", "image/png"],
     max_file_size_mb: 50,
     max_size_mb_by_mime: { "application/pdf": 200, "image/png": 25 },
+    recommended_path: "direct" as const,
+    direct_threshold_mb: 10,
   };
 
   // Run all three behaviours in a single test so module-level cache state

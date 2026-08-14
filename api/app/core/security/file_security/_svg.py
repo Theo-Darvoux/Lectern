@@ -24,7 +24,6 @@ _SVG_BLOCKED_ELEMENTS = frozenset(
         "embed",
         "object",
         "handler",  # SVG 1.2 Tiny event handler element
-        "style",  # CSS injection vector (url(), @import for tracking/SSRF)
         # SMIL animation can mutate otherwise-safe attributes such as a local
         # image href into an external URL after validation has completed.
         "animate",
@@ -178,6 +177,22 @@ def check_svg_safety_stream(file_obj: IO[bytes], filename: str = "") -> None:
                                 "SVG files containing external URLs are not allowed."
                             )
             elif event == "end":
+                local = element.tag
+                if "{" in local:
+                    local = local.split("}", 1)[1]
+                local_lower = local.lower()
+
+                # <style> is common in SVGs exported by design tools. Validate
+                # its contents with the same CSS policy used for style=""
+                # attributes: local url(#id) references are allowed; active or
+                # external resources remain rejected.
+                if local_lower == "style" and element.text:
+                    try:
+                        _validate_svg_style(element.text)
+                    except SvgSecurityError:
+                        logger.warning("SVG unsafe <style> content in %s", filename)
+                        raise
+
                 if element.text and "<script" in element.text.lower():
                     raise SvgSecurityError(
                         "SVG files containing encoded <script> tags are not allowed."

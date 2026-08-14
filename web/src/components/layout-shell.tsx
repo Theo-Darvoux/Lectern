@@ -47,11 +47,11 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   const isOnboardingPage = pathname === "/onboarding";
   const isPendingPage = pathname === "/pending-approval";
 
+  // Auth synchronization is app-lifetime state. Route navigation must not
+  // tear down its BroadcastChannel, visibility listener, or refresh timer.
   useEffect(() => {
-    if (pathname === "/setup") return;
-    const cleanup = initAuthSync();
-    return cleanup;
-  }, [pathname]);
+    return initAuthSync();
+  }, []);
 
   useEffect(() => {
     // `/setup` is deliberately independent from session restoration. If setup

@@ -1,9 +1,8 @@
 "use client";
 
 import { memo, useRef } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
+import { BrowseLink } from "@/components/browse/browse-link";
 import {
     File,
     FileText,
@@ -66,7 +65,6 @@ function MaterialLineItemImpl({
     const t = useTranslations("Browse");
     const tTypes = useTranslations("MaterialTypes");
     const openSidebar = useUIStore((s) => s.openSidebar);
-    const router = useRouter();
 
     const title = String(material.title ?? "");
     const slug = String(material.slug ?? "");
@@ -142,9 +140,6 @@ function MaterialLineItemImpl({
             const builtPath = buildPath();
             const browsePath = builtPath.replace(/^\/browse\/?/, "").split("?")[0].replace(/\/$/, "");
             prefetchBrowsePath(browsePath);
-            // Prefetch the Next.js RSC payload so navigation doesn't block on
-            // deserializing the server component tree (250–440 ms frame gaps).
-            router.prefetch(`${pathBase}/${slug}`);
         }, 100);
     };
     const handlePointerLeave = () => {
@@ -219,7 +214,7 @@ function MaterialLineItemImpl({
             onAddAttachment={onAddAttachment ? () => onAddAttachment(id, title) : undefined}
             itemPath={buildPath()}
         >
-            <Link
+            <BrowseLink
                 href={buildPath()}
                 onClick={handleCardClick}
                 onPointerEnter={handlePointerEnter}
@@ -329,7 +324,7 @@ function MaterialLineItemImpl({
                     <ItemActionsDropdownTrigger />
 
                 </div>
-            </Link>
+            </BrowseLink>
         </ItemActionsMenu>
     );
 }

@@ -109,6 +109,8 @@ export function useUploadEngine({
                 allowed_mimetypes: [],
                 max_file_size_mb: MAX_FILE_SIZE_MB,
                 max_size_mb_by_mime: {},
+                recommended_path: "tus",
+                direct_threshold_mb: 0,
             });
         });
     }, []);

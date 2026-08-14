@@ -614,6 +614,39 @@ def test_svg_dom_accepts_safe_svg() -> None:
     check_svg_safety(svg, "safe.svg")  # must not raise
 
 
+def test_svg_dom_accepts_safe_style_element() -> None:
+    """Embedded CSS and local paint-server references are allowed."""
+    svg = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+        b"<style>.logo{fill:#fff}.accent{fill:url(#paint0)}</style>"
+        b'<defs><linearGradient id="paint0"><stop stop-color="#00f"/></linearGradient></defs>'
+        b'<rect class="logo" width="20" height="20"/>'
+        b'<rect class="accent" x="20" width="20" height="20"/>'
+        b"</svg>"
+    )
+    check_svg_safety(svg, "styled-logo.svg")
+
+
+@pytest.mark.parametrize(
+    "css",
+    [
+        '@import "https://tracker.example/style.css";',
+        ".logo{fill:url(https://tracker.example/pattern.svg)}",
+        ".logo{fill:url(data:image/svg+xml;base64,PHN2Zz4=)}",
+        r".logo{fill:u\72l(https://tracker.example/pattern.svg)}",
+    ],
+)
+def test_svg_dom_rejects_unsafe_style_element(css: str) -> None:
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        f"<style>{css}</style>"
+        '<rect class="logo" width="20" height="20"/>'
+        "</svg>"
+    ).encode()
+    with pytest.raises(SvgSecurityError, match="CSS"):
+        check_svg_safety(svg, "unsafe-style.svg")
+
+
 @pytest.mark.parametrize(
     "attribute",
     [

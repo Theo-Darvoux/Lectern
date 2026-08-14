@@ -1,9 +1,8 @@
 "use client";
 
 import { memo, useRef } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
+import { BrowseLink } from "@/components/browse/browse-link";
 import { Folder, Info, ThumbsUp, MessageSquare } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
@@ -44,7 +43,6 @@ function DirectoryLineItemImpl({
     isMobile,
 }: DirectoryLineItemProps) {
     const openSidebar = useUIStore((s) => s.openSidebar);
-    const router = useRouter();
     const t = useTranslations("Browse");
 
     const name = String(directory.name ?? "");
@@ -70,9 +68,6 @@ function DirectoryLineItemImpl({
             const builtPath = buildPath();
             const browsePath = builtPath.replace(/^\/browse\/?/, "").split("?")[0].replace(/\/$/, "");
             prefetchBrowsePath(browsePath);
-            // Prefetch the Next.js RSC payload so navigation doesn't block on
-            // deserializing the server component tree (250–440 ms frame gaps).
-            router.prefetch(`${pathBase}/${slug}`);
         }, 100);
     };
     const handlePointerLeave = () => {
@@ -151,7 +146,7 @@ function DirectoryLineItemImpl({
             item={{ id, type: "directory", data: directory, staged, isExternal }}
             itemPath={buildPath()}
         >
-            <Link
+            <BrowseLink
                 href={buildPath()}
                 onClick={handleCardClick}
                 onPointerEnter={handlePointerEnter}
@@ -240,7 +235,7 @@ function DirectoryLineItemImpl({
                         <ItemActionsDropdownTrigger />
 
                     </div>
-            </Link>
+            </BrowseLink>
         </ItemActionsMenu>
     );
 }

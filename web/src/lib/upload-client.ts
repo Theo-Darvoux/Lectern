@@ -69,6 +69,14 @@ interface UploadResult {
     content_sha256?: string;
 }
 
+interface DirectUploadResponse {
+    upload_id: string;
+    file_key: string;
+    status: UploadStatus;
+    size: number;
+    mime_type: string;
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** Files above this threshold are uploaded via tus (resumable chunked); below go via presigned PUT. */
@@ -79,6 +87,9 @@ const PRESIGNED_MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024; // 100 MiB
 
 /** tus chunk size — must satisfy S3 minimum part size (5 MiB) for non-final parts. */
 const TUS_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB
+
+/** Direct uploads are small, but still bound the whole request so UI cannot hang forever. */
+const DIRECT_UPLOAD_TIMEOUT_MS = 120_000;
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
@@ -127,6 +138,8 @@ export interface UploadConfig {
     allowed_mimetypes: string[];
     max_file_size_mb: number;
     max_size_mb_by_mime: Record<string, number>;
+    recommended_path: "direct" | "tus";
+    direct_threshold_mb: number;
 }
 
 /** Resolve the same MIME-specific upload cap advertised by the API. */
@@ -141,6 +154,7 @@ export function uploadLimitMbForMime(
 let _configCache: UploadConfig | null = null;
 let _configCacheTime = 0;
 const CONFIG_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const UPLOAD_CONTROL_TIMEOUT_MS = 30_000;
 
 /** Fetch upload configuration (allowed types, size limits) from the backend. */
 export async function getUploadConfig(): Promise<UploadConfig> {
@@ -148,7 +162,7 @@ export async function getUploadConfig(): Promise<UploadConfig> {
     if (_configCache && (now - _configCacheTime < CONFIG_CACHE_TTL)) {
         return _configCache;
     }
-    const resp = await apiRequest("/upload/config");
+    const resp = await apiRequest("/upload/config", { timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS });
     const config = await resp.json() as UploadConfig;
     _configCache = config;
     _configCacheTime = now;
@@ -243,6 +257,39 @@ async function _xhrPutWithRetry(
             await _sleep(delay, signal);
         }
     }
+}
+
+// ── Backend-recommended direct upload path (small files) ──────────────────────
+
+async function _directUpload(
+    file: File,
+    options: UploadFileOptions,
+): Promise<string> {
+    const { onProgress, onStatusUpdate, onBytesProgress, signal, uploadId } = options;
+    const form = new FormData();
+    form.append("file", file, file.name);
+
+    _onStatusUpdate(onStatusUpdate, "uploading", options.t);
+
+    const headers: Record<string, string> = {};
+    if (uploadId) headers["X-Upload-ID"] = uploadId;
+
+    const response = await apiRequest("/upload", {
+        method: "POST",
+        headers,
+        body: form,
+        signal,
+        timeoutMs: DIRECT_UPLOAD_TIMEOUT_MS,
+    });
+    const result = await response.json() as DirectUploadResponse;
+
+    // fetch() does not expose upload-body progress. This route is only selected
+    // below the backend-advertised direct threshold, so report the transfer as
+    // complete once the server has durably accepted the request.
+    onBytesProgress?.(file.size, file.size);
+    onProgress?.(80);
+    _onStatusUpdate(onStatusUpdate, "processing", options.t);
+    return result.file_key;
 }
 
 function _xhrPutPart(
@@ -645,11 +692,30 @@ export async function uploadFile(
     // ── Phase 2: Transfer to S3 (5–80%) ──────────────────────────────────────
     let quarantineKey: string;
 
+    // The backend owns the upload routing policy. In particular, /upload/config
+    // advertises the successor direct endpoint and its size threshold. Keep the
+    // legacy presigned path only as a compatibility fallback when config cannot
+    // be loaded (e.g. mixed-version rolling deployments).
+    let uploadConfig: UploadConfig | null = null;
+    try {
+        uploadConfig = await getUploadConfig();
+    } catch {
+        // Compatibility fallback below.
+    }
+    const directThresholdBytes = Math.max(0, uploadConfig?.direct_threshold_mb ?? 0) * 1024 * 1024;
+    const useDirectUpload =
+        uploadConfig?.recommended_path === "direct" &&
+        directThresholdBytes > 0 &&
+        fileToUpload.size < directThresholdBytes;
+
     if (options.tusUrl) {
         // RESUME: If we have a tusUrl, we must use TUS regardless of current size
         // (the file might have been compressed or is just being resumed).
         _onStatusUpdate(options.onStatusUpdate, "resumingUpload", options.t);
         quarantineKey = await _tusUpload(fileToUpload, options);
+    } else if (useDirectUpload) {
+        // Successor to the deprecated /upload/init + presigned PUT flow.
+        quarantineKey = await _directUpload(fileToUpload, options);
     } else if (fileToUpload.size >= PRESIGNED_MULTIPART_THRESHOLD_BYTES) {
         // Extra-large file: direct S3 multipart
         try {
@@ -681,6 +747,7 @@ export async function uploadFile(
                 sha256: finalSha256, // Pass expected hash for server-side verification
             }),
             signal,
+            timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS,
         }).then((r) => r.json() as Promise<InitUploadResponse>);
 
         // PUT directly to S3 — bypasses the API server entirely
@@ -711,6 +778,7 @@ export async function uploadFile(
                 quarantine_key: initResp.quarantine_key,
             }),
             signal,
+            timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS,
         });
 
         quarantineKey = initResp.quarantine_key;

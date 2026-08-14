@@ -174,7 +174,9 @@ export async function apiRequest(
 ): Promise<Response> {
     const { skipAuth, timeoutMs, ...fetchOptions } = options;
     const headers = new Headers(fetchOptions.headers);
-    const signal = withTimeout(fetchOptions.signal, timeoutMs);
+    // A 401 refresh/retry is a new network attempt and must receive a fresh
+    // timeout budget. The caller's cancellation signal is still shared.
+    const createAttemptSignal = () => withTimeout(fetchOptions.signal, timeoutMs);
 
     headers.set("X-Client-ID", getClientId());
 
@@ -192,7 +194,12 @@ export async function apiRequest(
     const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
     let res: Response;
     try {
-        res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
+        res = await fetch(url, {
+            ...fetchOptions,
+            headers,
+            credentials: "include",
+            signal: createAttemptSignal(),
+        });
         // If we got a response (any response), the API is reachable.
         if (typeof window !== "undefined") {
             window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
@@ -215,7 +222,12 @@ export async function apiRequest(
                 setAccessToken(newToken);
                 _onTokenRefreshed?.(newToken);
                 headers.set("Authorization", `Bearer ${newToken}`);
-                res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
+                res = await fetch(url, {
+                    ...fetchOptions,
+                    headers,
+                    credentials: "include",
+                    signal: createAttemptSignal(),
+                });
                 if (typeof window !== "undefined") {
                     window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
                 }

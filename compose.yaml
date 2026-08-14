@@ -18,6 +18,7 @@
 # Key behavioral env vars (see .env.example for full docs and prod values):
 #   API_CMD             — API server command (default: uvicorn --reload)
 #   WEB_CMD             — web server command (default: next dev --turbopack)
+#   WEB_CPU_LIMIT       — CPU limit for web container (default: 4 cores for dev)
 #   WEB_MEMORY_LIMIT    — memory limit for web container (default: 4G for dev)
 #   NGINX_HOST_PORT     — host port nginx binds to (default: 80)
 #   NGINX_CONF_TEMPLATE — nginx config template path (default: dev template)
@@ -345,10 +346,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
+          cpus: "${WEB_CPU_LIMIT:-4.0}"
           memory: ${WEB_MEMORY_LIMIT:-4G}
         reservations:
-          cpus: "0.1"
+          cpus: "${WEB_CPU_RESERVATION:-1.0}"
           memory: ${WEB_MEMORY_RESERVATION:-1G}
 
   eurooffice:

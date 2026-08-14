@@ -150,6 +150,35 @@ describe("api-client", () => {
       expect(opts?.signal).toBeInstanceOf(AbortSignal);
     });
 
+    it("gives a 401 retry a fresh timeout signal", async () => {
+      vi.mocked(getAccessToken).mockReturnValue("old-token");
+
+      vi.mocked(fetch)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: "new-token" }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true }),
+        } as Response);
+
+      await apiRequest("/test", { timeoutMs: 5000 });
+
+      const initialSignal = vi.mocked(fetch).mock.calls[0][1]?.signal;
+      const retrySignal = vi.mocked(fetch).mock.calls[2][1]?.signal;
+
+      expect(initialSignal).toBeInstanceOf(AbortSignal);
+      expect(retrySignal).toBeInstanceOf(AbortSignal);
+      expect(retrySignal).not.toBe(initialSignal);
+    });
+
     it("does not attach a signal when neither timeoutMs nor signal is provided", async () => {
       vi.mocked(fetch).mockResolvedValue(jsonResponse(200, {}));
 

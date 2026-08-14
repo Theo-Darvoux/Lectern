@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import {
   ArrowLeft,
   Download,
@@ -165,6 +165,7 @@ const QCMViewer = dynamic(
 import { SharedSidebar } from "@/components/sidebar/shared-sidebar";
 import { ViewerFab } from "@/components/browse/viewer-fab";
 import { Breadcrumbs } from "@/components/browse/breadcrumbs";
+import { navigateBrowse } from "@/components/browse/browse-link";
 import { AnnotationSelectionTooltip } from "@/components/annotations/annotation-selection-tooltip";
 import { useAnnotations, AnnotationsContext } from "@/hooks/use-annotations";
 import { ItemActionsMenu, ItemActionsDropdownTrigger, type ItemData } from "@/components/browse/item-actions-menu";
@@ -184,7 +185,6 @@ export function MaterialViewer({
   breadcrumbs = [],
 }: MaterialViewerProps) {
   const t = useTranslations("Browse");
-  const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
@@ -414,7 +414,7 @@ export function MaterialViewer({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 shrink-0"
-                onClick={() => router.push(parentFolderHref)}
+                onClick={() => navigateBrowse(parentFolderHref)}
                 title={t("backToParentFolder")}
               >
                 <ArrowLeft className="h-4 w-4" />

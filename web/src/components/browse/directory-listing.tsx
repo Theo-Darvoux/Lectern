@@ -6,6 +6,7 @@ import { useTutorialMenuOpen } from "@/lib/tutorials/tutorial-store";
 import { DirectoryLineItem } from "@/components/browse/directory-line-item";
 import { MaterialLineItem } from "@/components/browse/material-line-item";
 import { Breadcrumbs } from "@/components/browse/breadcrumbs";
+import { navigateBrowse } from "@/components/browse/browse-link";
 import { EmptyDirectory } from "@/components/browse/empty-directory";
 import { UploadDrawer } from "@/components/pr/upload-drawer";
 import { NewFolderDialog } from "@/components/pr/new-folder-dialog";
@@ -410,11 +411,11 @@ export function DirectoryListing({
         if (!item) return;
         e.preventDefault();
         if (item.type === "dir") {
-          router.push(buildItemPath(String(item.dir.slug ?? "")));
+          navigateBrowse(buildItemPath(String(item.dir.slug ?? "")));
         } else if (item.type === "ghost-dir") {
           enterGhostDir(item.tempId, item.name);
         } else if (item.type === "mat") {
-          router.push(buildItemPath(String(item.mat.slug ?? "")));
+          navigateBrowse(buildItemPath(String(item.mat.slug ?? "")));
         } else if (item.type === "ghost-mat") {
           const op = item.op;
           if (op.isExternal && previewPrId && op._previewIdx !== undefined) {

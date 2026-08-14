@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { BrowseLink } from "@/components/browse/browse-link";
 import { ChevronRight, Home } from "lucide-react";
 
 import { useTranslations } from "next-intl";
@@ -44,10 +44,10 @@ export function Breadcrumbs({ items, previewPrId, linkLast = false, large = fals
 
     return (
         <nav data-tutorial="breadcrumb" className={`flex items-center gap-1 min-w-0 ${large ? "text-lg sm:text-xl" : "text-sm"}`}>
-            <Link href={rootHref} className="flex items-center shrink-0 text-muted-foreground hover:text-foreground gap-1.5">
+            <BrowseLink href={rootHref} className="flex items-center shrink-0 text-muted-foreground hover:text-foreground gap-1.5">
                 <Home className={large ? "h-5 w-5" : "h-4 w-4"} />
                 {large && items.length === 0 && <span className="font-bold tracking-tight text-foreground">{t("home")}</span>}
-            </Link>
+            </BrowseLink>
 
             {collapsed && (
                 <span className="flex items-center gap-1 shrink-0">
@@ -73,12 +73,12 @@ export function Breadcrumbs({ items, previewPrId, linkLast = false, large = fals
                     <span key={item.id} className="flex items-center gap-1 min-w-0 max-w-full">
                         <ChevronRight className={large ? "h-4 w-4 shrink-0 text-muted-foreground" : "h-3.5 w-3.5 shrink-0 text-muted-foreground"} />
                         {shouldLink ? (
-                            <Link
+                            <BrowseLink
                                 href={buildPath(globalIndex)}
                                 className="truncate text-muted-foreground hover:text-foreground"
                             >
                                 {item.name}
-                            </Link>
+                            </BrowseLink>
                         ) : (
                             <span className="truncate font-bold tracking-tight">{item.name}</span>
                         )}

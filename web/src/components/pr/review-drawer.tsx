@@ -527,7 +527,16 @@ export function ReviewDrawer() {
                         <div className="space-y-2 py-1">
                             {operations.map((staged, i) => {
                                 const op = unwrapOp(staged);
-                                const targetId = (op as any).material_id ?? (op as any).directory_id ?? (op as any).target_id ?? (op as any).temp_id ?? i;
+                                // Batch-created items share stagedAt and often the same
+                                // parent directory. Prefer the generated temp_id so each
+                                // staged create keeps a distinct React identity.
+                                const targetId =
+                                    (op as any).material_id ??
+                                    (op as any).target_id ??
+                                    (op as any).temp_id ??
+                                    (op as any).file_key ??
+                                    (op as any).directory_id ??
+                                    i;
                                 const stableKey = `${staged.stagedAt ?? i}-${op.op}-${targetId}`;
                                 return (
                                     <OperationCard

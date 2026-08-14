@@ -1,9 +1,8 @@
 "use client";
 
 import { memo, useState, useEffect, useRef } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
+import { BrowseLink } from "@/components/browse/browse-link";
 import { Info, MessageSquare, Paperclip, File } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
@@ -149,7 +148,6 @@ function MaterialGridCardImpl({
   const t = useTranslations("Browse");
   const tTypes = useTranslations("MaterialTypes");
   const openSidebar = useUIStore((s) => s.openSidebar);
-  const router = useRouter();
   const cardRef = useRef<HTMLAnchorElement>(null);
 
   const title = String(material.title ?? "");
@@ -229,7 +227,6 @@ function MaterialGridCardImpl({
     prefetchTimer.current = setTimeout(() => {
       const browsePath = `${pathBase}/${slug}`.replace(/^\/browse\/?/, "").replace(/\/$/, "");
       prefetchBrowsePath(browsePath);
-      router.prefetch(`${pathBase}/${slug}`);
     }, 100);
   };
   const handlePointerLeave = () => {
@@ -280,7 +277,7 @@ function MaterialGridCardImpl({
       onAddAttachment={onAddAttachment ? () => onAddAttachment(id, title) : undefined}
       itemPath={buildPath()}
     >
-      <Link
+      <BrowseLink
         ref={cardRef}
         href={buildPath()}
         onClick={handleCardClick}
@@ -420,7 +417,7 @@ function MaterialGridCardImpl({
             )}
           </div>
         </div>
-      </Link>
+      </BrowseLink>
     </ItemActionsMenu>
   );
 }

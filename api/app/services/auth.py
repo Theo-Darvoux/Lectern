@@ -214,16 +214,25 @@ async def get_full_auth_config(db: AsyncSession) -> dict[str, Any]:
 
 
 async def validate_email_for_auth(email: str, db: AsyncSession) -> bool:
-    """Validate email domain against DB config.
+    """Validate an email for authentication or first-time registration.
 
-    Returns the domain's ``auto_approve`` flag for new-user role assignment.
-    Raises ``ValueError`` if the email domain is not allowed and
+    Existing accounts are always allowed to authenticate regardless of the
+    current domain registration policy. Domain restrictions govern who may
+    create a *new* account; removing a domain must not lock existing users (and
+    especially the bootstrap administrator) out of the installation.
+
+    For new accounts, returns the matching domain's ``auto_approve`` flag for
+    role assignment. Raises ``ValueError`` when the domain is not allowed and
     ``allow_all_domains`` is False.
-
-    When ``allow_all_domains`` is True any domain passes, but only domains
-    explicitly listed with ``auto_approve=True`` skip the manual review step;
-    unlisted domains still receive ``PENDING`` status (``auto_approve=False``).
     """
+    email = email.strip().lower()
+
+    existing_user = await db.scalar(
+        select(User).where(User.email == email, User.deleted_at.is_(None))
+    )
+    if existing_user is not None:
+        return bool(existing_user.auto_approve)
+
     domains, _ = await get_allowed_domains(db)
 
     domain = email.split("@")[1] if "@" in email else ""

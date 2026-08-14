@@ -1,15 +1,14 @@
 "use client";
 
 import { memo, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
+import { BrowseLink } from "@/components/browse/browse-link";
 import { Info, MessageSquare } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { useUIStore } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
-import Link from "next/link";
 import { getDirectoryIcon } from "@/lib/directory-icons";
 import { getDirectoryColor } from "@/lib/directory-colors";
 import { DirectoryPreviewCollage } from "./directory-preview-collage";
@@ -52,7 +51,6 @@ function DirectoryGridCardImpl({
 }: DirectoryGridCardProps) {
   const t = useTranslations("Browse");
   const openSidebar = useUIStore((s) => s.openSidebar);
-  const router = useRouter();
 
   const name = String(directory.name ?? "");
   const slug = String(directory.slug ?? "");
@@ -147,7 +145,6 @@ function DirectoryGridCardImpl({
     prefetchTimer.current = setTimeout(() => {
       const browsePath = `${pathBase}/${slug}`.replace(/^\/browse\/?/, "").replace(/\/$/, "");
       prefetchBrowsePath(browsePath);
-      router.prefetch(`${pathBase}/${slug}`);
     }, 100);
   };
   const handlePointerLeave = () => {
@@ -198,7 +195,7 @@ function DirectoryGridCardImpl({
       item={{ id, type: "directory", data: directory, staged, isExternal }}
       itemPath={buildPath()}
     >
-      <Link
+      <BrowseLink
         href={buildPath()}
         onClick={handleCardClick}
         onPointerEnter={handlePointerEnter}
@@ -342,7 +339,7 @@ function DirectoryGridCardImpl({
             {t("itemsCount", { count: totalCount })}
           </p>
         </div>
-      </Link>
+      </BrowseLink>
     </ItemActionsMenu>
   );
 }

@@ -28,6 +28,12 @@ export function initAuthSync(): () => void {
 
     initialized = true;
 
+    // The coordinator may mount after bootstrap (or remount in development).
+    // Restore proactive refresh scheduling from the token already in memory
+    // instead of waiting for the next refresh/acquisition event.
+    const currentToken = getAccessToken();
+    if (currentToken) scheduleRefreshTimer(currentToken);
+
     return () => {
         if (channel) {
             channel.close();

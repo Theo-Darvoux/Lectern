@@ -9,8 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { BrowseLink, navigateBrowse } from "@/components/browse/browse-link";
 import {
   ArrowRight,
   ChevronRight,
@@ -152,7 +152,7 @@ const MaterialLeaf = memo(function MaterialLeaf({
 
   return (
     <li>
-      <Link
+      <BrowseLink
         href={buildMaterialHref(parentPath, material.slug)}
         onClick={() => onActivate(material.id)}
         className={cn(
@@ -180,7 +180,7 @@ const MaterialLeaf = memo(function MaterialLeaf({
         <span className={cn("truncate font-mono", isActive && "font-medium")}>
           {title}
         </span>
-      </Link>
+      </BrowseLink>
     </li>
   );
 }, (prev, next) =>
@@ -221,7 +221,6 @@ const TreeNode = memo(function TreeNode({
   onActivate,
 }: TreeNodeProps) {
   const t = useTranslations("Browse");
-  const router = useRouter();
   const isExpanded = expanded.has(node.id);
   const isLoading = loadingIds.has(node.id);
   const isActive = activeId === node.id;
@@ -306,7 +305,7 @@ const TreeNode = memo(function TreeNode({
           onDoubleClick={() => {
             onExpand(node);
             onActivate(node.id);
-            router.push(buildDirHref(node.full_path));
+            navigateBrowse(buildDirHref(node.full_path));
           }}
           className="flex flex-1 items-center gap-1.5 min-w-0 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm text-left"
           title={node.name}
@@ -335,7 +334,7 @@ const TreeNode = memo(function TreeNode({
             {totalItems}
           </span>
         )}
-        <Link
+        <BrowseLink
           href={buildDirHref(node.full_path)}
           onClick={() => onActivate(node.id)}
           className={cn(
@@ -347,7 +346,7 @@ const TreeNode = memo(function TreeNode({
           aria-label={t("navigateTo")}
         >
           <ArrowRight className="h-3 w-3" />
-        </Link>
+        </BrowseLink>
       </div>
       {shouldShowChildren && (
         <ul className="space-y-px">
@@ -907,7 +906,7 @@ export function DirectoryTreeSidebar() {
 
       <nav className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-1.5 py-1">
         {rootMatches && (
-          <Link
+          <BrowseLink
             href="/browse"
             className={cn(
               "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px]",
@@ -927,7 +926,7 @@ export function DirectoryTreeSidebar() {
               )}
             />
             <span>{t("home")}</span>
-          </Link>
+          </BrowseLink>
         )}
 
         {loadingRoots && (
