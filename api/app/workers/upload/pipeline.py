@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 _BAZAAR_ATTEMPTS = 3
 _BAZAAR_RETRY_DELAYS_SECONDS = (0.5, 1.5)
+_BAZAAR_CLEAN_TTL_SECONDS = 7 * 24 * 3600
 
 
 def _get_fallback_scanner() -> MalwareScanner:
@@ -293,17 +294,17 @@ class UploadPipeline:
     async def _fast_finalize_and_enqueue_post_scan(self) -> None:
         """Publish CLEAN and schedule follow-up work without losing cancellation."""
         self._check_deadline("finalizing")
+
+        if self.pf is None:
+            raise UploadError(UploadStatus.FAILED, "Pipeline state missing at finalizing stage")
+
+        await self._check_bazaar_before_finalize()
         await self.emit_status(
             UploadStatus.PROCESSING,
             detail="Finalising upload",
             stage_name_or_label="finalizing",
             stage_percent=0.0,
         )
-
-        if self.pf is None:
-            raise UploadError(UploadStatus.FAILED, "Pipeline state missing at finalizing stage")
-
-        await self._check_bazaar_before_finalize()
         has_authoritative_db = self.ctx.db_sessionmaker is not None
         if has_authoritative_db:
             await self._check_cancellation("immediately before final publication")
@@ -385,6 +386,9 @@ class UploadPipeline:
                 final_key=final_res.final_key,
                 cas_key=final_res.db_cas_key,
                 cas_ref_count=final_res.new_cas_ref if final_res.new_cas_ref > 0 else None,
+                mime_type=self.mime_type,
+                size_bytes=final_res.final_size,
+                filename=final_res.safe_name,
                 post_scan_kwargs=post_scan_kwargs if has_authoritative_db else None,
             )
             if not published:
@@ -443,31 +447,6 @@ class UploadPipeline:
                 await self._check_cancellation("after CLEAN emission")
 
             import app.core.database.redis as redis_core
-
-            if (
-                settings.bazaar_async_enabled
-                and not settings.malwarebazaar_fail_closed
-                and redis_core.arq_pool is not None
-            ):
-                try:
-                    await redis_core.arq_pool.enqueue_job(
-                        "check_bazaar",
-                        upload_id=self.upload_id,
-                        sha256=self.original_sha256,
-                        cas_s3_key=final_res.final_key,
-                        user_id=self.user_id,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to enqueue check_bazaar for upload %s: %s — Bazaar check skipped.",
-                        self.upload_id,
-                        exc,
-                    )
-            elif settings.bazaar_async_enabled and not settings.malwarebazaar_fail_closed:
-                logger.warning(
-                    "arq_pool unavailable — check_bazaar skipped for upload %s.",
-                    self.upload_id,
-                )
 
             if has_authoritative_db:
                 # The post-scan dispatch intent was committed atomically with CLEAN
@@ -531,11 +510,16 @@ class UploadPipeline:
             upload_file_size.labels(mime_category=self.mime_category).observe(self.initial_size)
 
     async def _check_bazaar_before_finalize(self) -> None:
-        """Honor fail-closed and legacy synchronous Bazaar policy before publication."""
-        if settings.bazaar_async_enabled and not settings.malwarebazaar_fail_closed:
-            return
+        """Complete the external malware check before publishing a clean upload."""
         if await self.redis.get(f"bazaar:clean:{self.original_sha256}"):
             return
+
+        await self.emit_status(
+            UploadStatus.PROCESSING,
+            detail="Checking against known malware signatures",
+            stage_name_or_label="scanning",
+            stage_percent=0.9,
+        )
 
         scanner = self.ctx.scanner
         owns_scanner = scanner is None
@@ -548,10 +532,19 @@ class UploadPipeline:
                     threat = await scanner.check_malwarebazaar(
                         self.original_sha256,
                         self.original_filename,
+                        fail_closed=True,
                     )
                     break
                 except (httpx.HTTPError, ServiceUnavailableError) as exc:
                     if attempt == _BAZAAR_ATTEMPTS - 1:
+                        if not settings.malwarebazaar_fail_closed:
+                            logger.warning(
+                                "External malware scan unavailable for upload %s; "
+                                "continuing under fail-open policy without caching a clean verdict: %s",
+                                self.upload_id,
+                                exc,
+                            )
+                            return
                         raise UploadError(
                             UploadStatus.FAILED,
                             "External malware scan is temporarily unavailable; "
@@ -571,19 +564,34 @@ class UploadPipeline:
                             "External malware scan temporarily unavailable; "
                             f"retrying ({attempt + 2}/{_BAZAAR_ATTEMPTS})"
                         ),
-                        stage_name_or_label="finalizing",
-                        stage_percent=0.1,
+                        stage_name_or_label="scanning",
+                        stage_percent=0.9,
                     )
                     await asyncio.sleep(delay)
         finally:
             if owns_scanner:
                 await scanner.close()
 
-        if threat is not None:
-            raise UploadError(
-                UploadStatus.MALICIOUS,
-                f"ERR_MALWARE_DETECTED: Known malware detected: {threat}",
-            )
+        if threat is None:
+            try:
+                await self.redis.set(
+                    f"bazaar:clean:{self.original_sha256}",
+                    "1",
+                    ex=_BAZAAR_CLEAN_TTL_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to cache clean MalwareBazaar verdict for upload %s: %s",
+                    self.upload_id,
+                    exc,
+                )
+            return
+
+        safe_threat = str(threat).strip()[:200] or "unnamed threat"
+        raise UploadError(
+            UploadStatus.MALICIOUS,
+            f'ERR_MALWARE_DETECTED: File hash matched known malware signature "{safe_threat}".',
+        )
 
     async def run(self) -> None:
         self.completed_stage = await self.repo.get_pipeline_stage(self.upload_id)

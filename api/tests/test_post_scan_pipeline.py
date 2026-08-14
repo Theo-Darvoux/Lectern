@@ -1234,3 +1234,38 @@ def test_worker_settings_include_process_upload_post_scan() -> None:
         assert process_upload_post_scan in cls.functions, (
             f"{cls.__name__} must include process_upload_post_scan"
         )
+
+
+@pytest.mark.asyncio
+async def test_run_finalize_storage_preserves_ipynb_extension() -> None:
+    from app.workers.upload.stages.finalize import FinalizeInput, run_finalize_storage
+
+    mock_pf = MagicMock()
+    mock_pf.path = Path("/tmp/fake.ipynb")
+    mock_pf.size = 500
+    mock_pf.sha256 = AsyncMock(return_value="f" * 64)
+
+    input_data = FinalizeInput(
+        pf=mock_pf,
+        user_id=str(uuid.uuid4()),
+        upload_id="upload-ipynb",
+        original_filename="projet_deep_learning_l.ipynb",
+        original_sha256="e" * 64,
+        cas_key="cas-key",
+        initial_size=500,
+        final_mime="application/json",
+        content_sha256="f" * 64,
+    )
+
+    tracer = MagicMock()
+    span = MagicMock()
+    span.__enter__ = MagicMock(return_value=span)
+    span.__exit__ = MagicMock(return_value=False)
+    tracer.start_as_current_span = MagicMock(return_value=span)
+
+    with (
+        patch("app.workers.upload.stages.finalize.upload_file_multipart", AsyncMock()),
+        patch("app.workers.upload.stages.finalize.increment_cas_ref", AsyncMock(return_value=1)),
+    ):
+        result = await run_finalize_storage(input_data, AsyncMock(), tracer)
+        assert result.safe_name == "projet_deep_learning_l.ipynb"

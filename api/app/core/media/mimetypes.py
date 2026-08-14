@@ -347,6 +347,20 @@ class MimeRegistry:
         return MIME_TO_EXTENSION.get(mime_type)
 
     @staticmethod
+    def is_valid_extension_for_mime(filename_or_ext: str, mime_type: str) -> bool:
+        """Check if a filename or extension is compatible with the given MIME type."""
+        ext = (
+            filename_or_ext.lower()
+            if filename_or_ext.startswith(".")
+            else MimeRegistry.get_extension(filename_or_ext)
+        )
+        if not ext:
+            return False
+        allowed_mimes = ALLOWED_FORMAT_REGISTRY.get(ext, [])
+        norm_mime = MimeRegistry.normalize_mime(mime_type)
+        return norm_mime in allowed_mimes or (norm_mime == "text/plain" and "text/plain" in allowed_mimes)
+
+    @staticmethod
     def get_allowed_mimes_for_extension(ext: str) -> list[str]:
         return EXTENSION_MAPPING.get(ext.lower(), [])
 

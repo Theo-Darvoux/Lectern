@@ -89,6 +89,9 @@ _SYSTEM_RO_BINDS: tuple[str, ...] = (
     "/etc/alternatives",
     "/etc/fonts",
     "/etc/ghostscript",
+    # LibreOffice's Debian bootstrap configuration. Without this directory the
+    # binary aborts with an opaque UNO RuntimeException inside the minimal root.
+    "/etc/libreoffice",
 )
 
 
@@ -143,6 +146,10 @@ def _processing_root() -> Path:
     from app.core.security.processing_paths import get_processing_root
 
     return get_processing_root()
+
+
+def _running_in_container() -> bool:
+    return Path("/.dockerenv").exists()
 
 
 def _validate_bind_path(path: Path | str, *, processing_root: Path) -> Path:
@@ -207,7 +214,7 @@ def _sandbox_command(
                 )
 
     bwrap_cmd = [_resolve_bwrap()]
-    if Path("/.dockerenv").exists():
+    if _running_in_container():
         bwrap_cmd.extend(
             [
                 "--unshare-user",
@@ -222,8 +229,13 @@ def _sandbox_command(
         bwrap_cmd.append("--unshare-all")
 
     bwrap_cmd.extend(["--die-with-parent", "--new-session", "--dev", "/dev", "--chdir", "/tmp"])
-    if Path("/.dockerenv").exists():
+    if _running_in_container():
         bwrap_cmd.extend(["--size", "104857600", "--tmpfs", "/proc"])
+        # Docker denies mounting a fresh procfs without CAP_SYS_ADMIN. Keep the
+        # empty, non-secret tmpfs (binding the container's full /proc would leak
+        # worker credentials through /proc/*/environ), but expose the one static
+        # kernel-version file LibreOffice uses to verify procfs availability.
+        bwrap_cmd.extend(["--ro-bind", "/proc/version", "/proc/version"])
     else:
         bwrap_cmd.extend(["--proc", "/proc"])
     bwrap_cmd.extend(["--size", "104857600", "--tmpfs", "/tmp"])

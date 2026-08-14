@@ -101,6 +101,35 @@ def test_init_scanner_keeps_rules_with_duplicate_file_stems(tmp_path) -> None:
     assert set(namespaces.values()) == {str(first_rule), str(second_rule)}
 
 
+def test_isolated_yara_result_explains_why_file_was_flagged(tmp_path) -> None:
+    import yara
+
+    from app.core.security.parser_child import _scan_yara
+
+    source = tmp_path / "flagged.bin"
+    source.write_bytes(b"specific-test-marker")
+    compiled = tmp_path / "rules.yarac"
+    rules = yara.compile(
+        source='''
+            rule Explicit_Test_Rule {
+                meta:
+                    description = "Contains the explicit test marker"
+                strings:
+                    $marker = "specific-test-marker"
+                condition:
+                    $marker
+            }
+        '''
+    )
+    rules.save(str(compiled))
+
+    result = _scan_yara([str(source), str(compiled), "10"])
+
+    assert result["match"] == (
+        "Contains the explicit test marker (YARA rule: Explicit_Test_Rule)"
+    )
+
+
 # ── MalwareBazaar tests ──
 
 

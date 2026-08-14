@@ -14,6 +14,7 @@ import type {
 // it is imported dynamically inside the effect below.
 import "pdfjs-dist/web/pdf_viewer.css";
 import { createPdfWorker } from "@/lib/pdf-worker";
+import { useConfigStore } from "@/lib/stores";
 import type { PDFWorker as PdfJsWorker } from "pdfjs-dist";
 
 // Suppress known pdf.js console noise (cancelled renders / aborted loads). These
@@ -30,10 +31,10 @@ if (typeof window !== "undefined") {
     console.warn = (...args) => { if (!isNoise(args)) orig.warn(...args); };
 }
 
-// pdf.js TextLayerMode.ENABLE / AnnotationMode.DISABLE (we render our own
-// annotation overlay, and links are intentionally not interactive).
+// pdf.js TextLayerMode.ENABLE / AnnotationMode values.
 const TEXT_LAYER_ENABLE = 1;
 const ANNOTATION_DISABLE = 0;
+const ANNOTATION_ENABLE = 1;
 
 const PRESET_SCALES = new Set(["auto", "page-actual", "page-width", "page-fit", "page-height"]);
 /** Delay (ms) before pdf.js re-rasterises during a continuous gesture. While the
@@ -94,6 +95,9 @@ export function usePdfjsDocument({
     enableGestures = true,
     onTextLayerRendered,
 }: UsePdfjsDocumentOptions): UsePdfjsDocumentReturn {
+    const allowExternalLinks = useConfigStore(
+        (state) => state.config?.allow_external_document_links !== false,
+    );
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerElRef = useRef<HTMLDivElement>(null);
 
@@ -155,14 +159,18 @@ export function usePdfjsDocument({
             pdfWorkerRef.current = pdfjs.PDFWorker.fromPort({ port: worker });
 
             const eventBus = new viewerMod.EventBus();
-            const linkService = new viewerMod.PDFLinkService({ eventBus });
+            const linkService = new viewerMod.PDFLinkService({
+                eventBus,
+                externalLinkTarget: viewerMod.LinkTarget.BLANK,
+                externalLinkRel: "noopener noreferrer nofollow",
+            });
             const viewer = new viewerMod.PDFViewer({
                 container,
                 viewer: viewerEl,
                 eventBus,
                 linkService,
                 textLayerMode: TEXT_LAYER_ENABLE,
-                annotationMode: ANNOTATION_DISABLE,
+                annotationMode: allowExternalLinks ? ANNOTATION_ENABLE : ANNOTATION_DISABLE,
             });
             linkService.setViewer(viewer);
 
@@ -215,7 +223,7 @@ export function usePdfjsDocument({
             workerRef.current = null;
             setModulesReady(false);
         };
-    }, [engineNonce]);
+    }, [engineNonce, allowExternalLinks]);
 
     // ── Load (or reload) the document ────────────────────────────────────────
     useEffect(() => {

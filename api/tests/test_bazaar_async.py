@@ -1,8 +1,8 @@
-"""Tests for the fire-and-forget MalwareBazaar pattern.
+"""Tests for MalwareBazaar admission checks and legacy quarantine jobs.
 
 Covers:
-  - Pipeline skips Bazaar in scan_file_path when bazaar_async_enabled=True
-  - Pipeline enqueues check_bazaar job after successful promotion
+  - The local scanner remains responsible for YARA
+  - The upload pipeline waits for MalwareBazaar before successful promotion
   - check_bazaar worker: clean path writes tombstone
   - check_bazaar worker: flagged path calls retroactive_quarantine
   - check_bazaar worker: tombstone idempotency
@@ -69,16 +69,16 @@ def _make_arq_ctx(redis: Any, session_factory: Any = None) -> dict:
     }
 
 
-# ── Scanner path: YARA-only when bazaar_async_enabled=True ───────────────────
+# ── Scanner path: local YARA gate ────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_scan_file_path_skips_bazaar_when_async_enabled(
+async def test_scan_file_path_runs_local_yara_only(
     tmp_path,
     fake_redis_setup,
     mock_redis: AsyncMock,
 ) -> None:
-    """When bazaar_async_enabled=True, scan_file_path must not call check_malwarebazaar."""
+    """The local scanner leaves the external hash-reputation policy to the pipeline."""
     from app.core.security.scanner import MalwareScanner
 
     scanner = MalwareScanner()
@@ -110,24 +110,29 @@ async def test_scan_file_path_skips_bazaar_when_async_enabled(
     bazaar_spy.assert_not_called()
 
 
-# ── Pipeline: enqueues check_bazaar after CLEAN ───────────────────────────────
+# ── Pipeline: MalwareBazaar blocks CLEAN publication ─────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_pipeline_enqueues_check_bazaar_on_clean(mock_redis: AsyncMock) -> None:
-    """_fast_finalize_and_enqueue_post_scan must enqueue check_bazaar when bazaar_async_enabled=True."""
+async def test_pipeline_rejects_bazaar_hit_before_clean_even_when_async_enabled(
+    mock_redis: AsyncMock,
+) -> None:
+    """A legacy async setting must not move malware detection past upload completion."""
     from pathlib import Path
 
+    from app.workers.upload.exceptions import UploadError
     from app.workers.upload.pipeline import UploadPipeline
 
     arq_pool_mock = AsyncMock()
     arq_pool_mock.enqueue_job = AsyncMock()
 
+    scanner = MagicMock()
+    scanner.check_malwarebazaar = AsyncMock(return_value="Win32.Test.Malware")
     ctx = WorkerContext(
         redis=mock_redis,
         db_sessionmaker=None,
         job_try=1,
-        scanner=None,
+        scanner=scanner,
     )
     pipeline = UploadPipeline(
         ctx,
@@ -155,13 +160,11 @@ async def test_pipeline_enqueues_check_bazaar_on_clean(mock_redis: AsyncMock) ->
     final_res_mock.content_sha256 = "content_sha"
     final_res_mock.db_cas_key = "upload:cas:abc"
     final_res_mock.new_cas_ref = 1
+    finalize = AsyncMock(return_value=final_res_mock)
 
     with (
         patch("app.workers.upload.pipeline.settings") as mock_settings,
-        patch(
-            "app.workers.upload.pipeline.run_finalize_storage",
-            AsyncMock(return_value=final_res_mock),
-        ),
+        patch("app.workers.upload.pipeline.run_finalize_storage", finalize),
         patch("app.core.database.redis.arq_pool", arq_pool_mock),
     ):
         mock_settings.bazaar_async_enabled = True
@@ -174,23 +177,27 @@ async def test_pipeline_enqueues_check_bazaar_on_clean(mock_redis: AsyncMock) ->
         pipeline.repo.update_upload_status = AsyncMock()
         pipeline.repo.update_processing_status = AsyncMock()
 
-        await pipeline._fast_finalize_and_enqueue_post_scan()
+        with pytest.raises(
+            UploadError,
+            match='File hash matched known malware signature "Win32.Test.Malware"',
+        ):
+            await pipeline._fast_finalize_and_enqueue_post_scan()
 
     enqueued_job_names = [call.args[0] for call in arq_pool_mock.enqueue_job.call_args_list]
-    assert "check_bazaar" in enqueued_job_names, (
-        f"check_bazaar must be enqueued when bazaar_async_enabled=True; got {enqueued_job_names}"
+    assert "check_bazaar" not in enqueued_job_names
+    scanner.check_malwarebazaar.assert_awaited_once_with(
+        "deadbeef" * 8,
+        "file.pdf",
+        fail_closed=True,
     )
-    bazaar_call = next(
-        c for c in arq_pool_mock.enqueue_job.call_args_list if c.args[0] == "check_bazaar"
-    )
-    assert bazaar_call.kwargs["sha256"] == "deadbeef" * 8
-    assert bazaar_call.kwargs["cas_s3_key"] == "cas/abc123"
-    assert bazaar_call.kwargs["upload_id"] == "upload-abc"
+    finalize.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_pipeline_no_enqueue_when_bazaar_async_disabled(mock_redis: AsyncMock) -> None:
-    """When bazaar_async_enabled=False, no check_bazaar job must be enqueued."""
+async def test_pipeline_caches_clean_bazaar_verdict_without_background_enqueue(
+    mock_redis: AsyncMock,
+) -> None:
+    """A clean synchronous verdict is cached and never followed by a duplicate job."""
     from pathlib import Path
 
     from app.workers.upload.pipeline import UploadPipeline
@@ -252,7 +259,16 @@ async def test_pipeline_no_enqueue_when_bazaar_async_disabled(mock_redis: AsyncM
     assert "check_bazaar" not in enqueued_job_names, (
         f"check_bazaar must NOT be enqueued when bazaar_async_enabled=False; got {enqueued_job_names}"
     )
-    scanner.check_malwarebazaar.assert_awaited_once()
+    scanner.check_malwarebazaar.assert_awaited_once_with(
+        "deadbeef" * 8,
+        "file.pdf",
+        fail_closed=True,
+    )
+    mock_redis.set.assert_any_await(
+        f"bazaar:clean:{'deadbeef' * 8}",
+        "1",
+        ex=7 * 24 * 3600,
+    )
 
 
 @pytest.mark.asyncio
@@ -378,6 +394,46 @@ async def test_fail_closed_bazaar_exhaustion_has_retryable_error(mock_redis: Asy
         await pipeline._check_bazaar_before_finalize()
 
     assert scanner.check_malwarebazaar.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_fail_open_bazaar_outage_is_not_cached_as_clean(mock_redis: AsyncMock) -> None:
+    """Fail-open may admit on outage, but must not turn an unknown verdict into clean."""
+    from app.core.common.exceptions import ServiceUnavailableError
+    from app.workers.upload.pipeline import UploadPipeline
+
+    scanner = MagicMock()
+    scanner.check_malwarebazaar = AsyncMock(
+        side_effect=ServiceUnavailableError("Bazaar unavailable")
+    )
+    pipeline = UploadPipeline(
+        WorkerContext(redis=mock_redis, db_sessionmaker=None, job_try=1, scanner=scanner),
+        user_id="user-123",
+        upload_id="upload-abc",
+        quarantine_key="quarantine/user-123/upload-abc/file.pdf",
+        original_filename="file.pdf",
+        mime_type="application/pdf",
+        expected_sha256=None,
+    )
+    pipeline.original_sha256 = "deadbeef" * 8
+    pipeline.cache = MagicMock()
+    pipeline.cache.emit_event = AsyncMock()
+    mock_redis.get.return_value = None
+    mock_redis.set.reset_mock()
+
+    with (
+        patch("app.workers.upload.pipeline.settings") as mock_settings,
+        patch("app.workers.upload.pipeline.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        mock_settings.malwarebazaar_fail_closed = False
+        mock_settings.upload_pipeline_max_seconds = 600
+        await pipeline._check_bazaar_before_finalize()
+
+    assert scanner.check_malwarebazaar.await_count == 3
+    assert not any(
+        call.args and call.args[0] == f"bazaar:clean:{'deadbeef' * 8}"
+        for call in mock_redis.set.await_args_list
+    )
 
 
 # ── check_bazaar worker ───────────────────────────────────────────────────────

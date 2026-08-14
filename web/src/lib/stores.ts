@@ -264,6 +264,8 @@ export interface PublicConfig {
     guest_access_enabled: boolean;
     /** Disable the in-app guided tours platform-wide (TUTORIALS_ENABLED). */
     tutorials_enabled: boolean;
+    /** Permit safe external links in document viewers (ALLOW_EXTERNAL_DOCUMENT_LINKS). */
+    allow_external_document_links: boolean;
     max_contribution_note_length: number;
     /** True only until the durable one-way installation bootstrap marker is committed. */
     needs_setup: boolean;

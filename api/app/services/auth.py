@@ -155,6 +155,7 @@ async def get_full_auth_config(db: AsyncSession) -> dict[str, Any]:
         "allow_all_domains": settings.allow_all_domains,
         "auto_approve_all_domains": settings.auto_approve_all_domains,
         "guest_access_enabled": settings.guest_access_enabled,
+        "allow_external_document_links": settings.allow_external_document_links,
         "jwt_access_expire_days": settings.jwt_access_token_expire_days,
         "jwt_refresh_expire_days": settings.jwt_refresh_token_expire_days,
         "smtp_host": settings.smtp_host,

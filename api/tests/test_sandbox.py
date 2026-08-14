@@ -75,6 +75,40 @@ def test_sandboxed_run_with_bwrap(
     _reset_bwrap_cache()
 
 
+@patch("app.core.security.sandbox._running_in_container", return_value=True)
+@patch("app.core.security.sandbox.subprocess.Popen")
+@patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
+def test_container_sandbox_exposes_only_safe_proc_version(
+    _mock_which: MagicMock,
+    mock_popen: MagicMock,
+    _mock_container: MagicMock,
+) -> None:
+    """Converters get the static proc marker without access to worker processes."""
+    _reset_bwrap_cache()
+    mock_popen.return_value = _make_mock_popen()
+
+    sandboxed_run(["echo", "hello"], timeout=10)
+
+    command = mock_popen.call_args.args[0]
+    proc_index = command.index("/proc")
+    assert command[proc_index - 3 : proc_index + 1] == [
+        "--size",
+        "104857600",
+        "--tmpfs",
+        "/proc",
+    ]
+    version_index = command.index("/proc/version")
+    assert command[version_index - 1 : version_index + 2] == [
+        "--ro-bind",
+        "/proc/version",
+        "/proc/version",
+    ]
+    assert ["--ro-bind", "/proc", "/proc"] not in [
+        command[index : index + 3] for index in range(len(command) - 2)
+    ]
+    _reset_bwrap_cache()
+
+
 @patch("app.core.security.sandbox.subprocess.Popen")
 @patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
 def test_python_runtime_mount_does_not_expose_the_project_root(

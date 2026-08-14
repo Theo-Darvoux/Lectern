@@ -87,6 +87,26 @@ export function LayoutShell({ children }: { children: ReactNode }) {
     }
   }, [isLoading, bootstrapError, isAuthenticated, user, pathname, router]);
 
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      // Ignore touch events (e.g. emulated mouse events from touch devices)
+      if ("pointerType" in e && (e as PointerEvent).pointerType === "touch") return;
+
+      // When the mouse is brought to the top of the page (within 20px of the top),
+      // open the navbar if it was previously closed.
+      if (e.clientY <= 20) {
+        if (!useUIStore.getState().navbarVisible) {
+          useUIStore.getState().setNavbarVisible(true);
+        }
+      }
+    };
+
+    window.addEventListener("mousemove", handleMouseMove, { passive: true });
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+    };
+  }, []);
+
   const shouldHideContent = !isPublicPage && (
     isLoading ||
     !isAuthenticated ||

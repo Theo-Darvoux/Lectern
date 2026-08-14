@@ -1,3 +1,5 @@
+import base64
+import json
 import logging
 import shutil
 from collections.abc import Coroutine
@@ -48,20 +50,45 @@ async def run_thumbnail_stage(
         generator_coro: Coroutine[Any, Any, bool | None]
 
         # Return None early for unsupported types — no exception, no retry needed.
-        if mime_type == "image/svg+xml":
+        if mime_type == "image/svg+xml" or original_filename.lower().endswith(".svg"):
             generator_coro = _thumbnail_svg(pf.path, thumb_path, size, quality)
             check_blank = False
-        elif mime_type.startswith("image/"):
+        elif mime_type.startswith("image/") or original_filename.lower().endswith(
+            (
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".gif",
+                ".webp",
+                ".bmp",
+                ".tiff",
+                ".tif",
+                ".ico",
+                ".avif",
+                ".jxl",
+                ".heic",
+            )
+        ):
             generator_coro = _thumbnail_image(pf.path, thumb_path, size, quality)
             check_blank = True
-        elif mime_type.startswith("video/"):
+        elif mime_type.startswith("video/") or original_filename.lower().endswith(
+            (".mp4", ".webm", ".avi", ".mkv", ".mov", ".flv", ".wmv", ".m4v", ".ogv")
+        ):
             generator_coro = _thumbnail_video(pf.path, thumb_path, size, quality)
             check_blank = False
-        elif mime_type == "application/pdf":
+        elif mime_type == "application/pdf" or original_filename.lower().endswith(".pdf"):
             generator_coro = _thumbnail_pdf(pf.path, thumb_path, size, quality)
             check_blank = False
-        elif _is_office_mime(mime_type):
-            generator_coro = _thumbnail_office(pf.path, thumb_path, size, quality)
+        elif _is_office_mime(mime_type) or _is_office_filename(original_filename):
+            ext = Path(original_filename).suffix.lower()
+            if not ext or ext not in _OFFICE_EXTENSIONS:
+                ext = _OFFICE_MIME_SUFFIXES.get(mime_type, ".docx")
+            generator_coro = _thumbnail_office(
+                pf.path, thumb_path, size, quality, suffix=ext
+            )
+            check_blank = False
+        elif original_filename.lower().endswith(".ipynb"):
+            generator_coro = _thumbnail_ipynb(pf.path, thumb_path, size, quality)
             check_blank = False
         elif mime_type in (
             "text/markdown",
@@ -160,11 +187,64 @@ _LEGACY_OFFICE_MIMES = frozenset(
         "application/vnd.ms-powerpoint",
     }
 )
+_OFFICE_EXTENSIONS = frozenset(
+    {
+        ".docx",
+        ".xlsx",
+        ".pptx",
+        ".doc",
+        ".xls",
+        ".ppt",
+        ".odt",
+        ".ods",
+        ".odp",
+        ".rtf",
+    }
+)
+_OFFICE_MIME_SUFFIXES: dict[str, str] = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/msword": ".doc",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.oasis.opendocument.text": ".odt",
+    "application/vnd.oasis.opendocument.spreadsheet": ".ods",
+    "application/vnd.oasis.opendocument.presentation": ".odp",
+    "application/rtf": ".rtf",
+    "text/rtf": ".rtf",
+}
+
+
+def _is_office_filename(filename: str) -> bool:
+    """Return True if the filename has an Office / OpenDocument extension."""
+    return Path(filename).suffix.lower() in _OFFICE_EXTENSIONS
 
 
 def _is_office_mime(mime_type: str) -> bool:
     """Return True for any Office / OpenDocument MIME type."""
     return any(sub in mime_type for sub in _OFFICE_SUBSTRINGS) or mime_type in _LEGACY_OFFICE_MIMES
+
+
+def _soffice_command(*arguments: str) -> list[str]:
+    """Build a LibreOffice command that works with the minimal sandbox procfs.
+
+    In production containers ``/proc`` is intentionally an empty tmpfs so a
+    hostile converter cannot inspect worker secrets via ``/proc/*/environ``.
+    LibreOffice normally discovers its private shared libraries through
+    ``/proc/self/exe``; provide the trusted installation directory explicitly
+    instead of exposing the worker's full procfs.
+    """
+    executable = shutil.which("soffice")
+    if executable is None:
+        raise RuntimeError("LibreOffice (soffice) is required for document thumbnails")
+    resolved = Path(executable).resolve()
+    return [
+        "/usr/bin/env",
+        f"LD_LIBRARY_PATH={resolved.parent}",
+        str(resolved),
+        *arguments,
+    ]
 
 
 # ── Image helpers ─────────────────────────────────────────────────────────────
@@ -232,7 +312,10 @@ async def _thumbnail_video(
     # Heuristic: seek to 2 seconds or 10%
     # We use a simple 2s seek first as it's fastest
     with processing_temp_dir(prefix="video-thumb-") as temp_dir:
-        temp_jpg = Path(temp_dir) / "frame.jpg"
+        # Use a lossless intermediary and preserve the source aspect ratio. The
+        # old square JPEG path both distorted frames and applied two lossy
+        # encodes before the browser ever saw the WebP.
+        temp_frame = Path(temp_dir) / "frame.png"
         for seek in ("00:00:02", "00:00:00"):
             cmd = [
                 "ffmpeg",
@@ -243,11 +326,11 @@ async def _thumbnail_video(
                 str(input_path),
                 "-vframes",
                 "1",
-                "-s",
-                f"{size[0]}x{size[1]}",
+                "-vf",
+                (f"scale=w={size[0]}:h={size[1]}:force_original_aspect_ratio=decrease"),
                 "-f",
                 "image2",
-                str(temp_jpg),
+                str(temp_frame),
             ]
             async with _get_concurrency_guard("subprocess"):
                 process = await async_sandboxed_run(
@@ -256,10 +339,10 @@ async def _thumbnail_video(
                     rw_paths=[temp_dir],
                     timeout=60,
                 )
-            if process.returncode == 0 and temp_jpg.exists():
-                await _thumbnail_image(temp_jpg, output_path, size, quality)
+            if process.returncode == 0 and temp_frame.exists():
+                await _thumbnail_image(temp_frame, output_path, size, quality)
                 return
-            temp_jpg.unlink(missing_ok=True)
+            temp_frame.unlink(missing_ok=True)
 
         raise RuntimeError(
             f"ffmpeg failed to generate a thumbnail for {input_path.name}: "
@@ -275,6 +358,11 @@ async def _thumbnail_pdf(
     Tries page 1 first. If the resulting thumbnail is nearly blank (common for
     attestation covers or title pages with minimal content), falls back to page 2.
     """
+    # Render about 1.5x the requested width for good downsampling, bounded so a
+    # small card does not pay for a fixed 150-DPI page and a large configured
+    # thumbnail is not starved of source pixels. 8.27in is A4's page width;
+    # common Letter pages land within a few percent of the same target.
+    render_dpi = max(96, min(200, round(size[0] * 1.5 / 8.27)))
     with processing_temp_dir(prefix="pdf-thumb-") as temp_dir:
         for page_num in (1, 2):
             temp_png = Path(temp_dir) / f"page-{page_num}.png"
@@ -284,9 +372,11 @@ async def _thumbnail_pdf(
                 "-dBATCH",
                 "-dNOPAUSE",
                 "-sDEVICE=png16m",
+                "-dTextAlphaBits=4",
+                "-dGraphicsAlphaBits=4",
                 f"-dFirstPage={page_num}",
                 f"-dLastPage={page_num}",
-                "-r150",
+                f"-r{render_dpi}",
                 f"-sOutputFile={temp_png}",
                 str(input_path),
             ]
@@ -321,30 +411,42 @@ async def _thumbnail_pdf(
                     "Page 1 of %s is blank — trying page 2 for a better thumbnail",
                     input_path.name,
                 )
-                output_path.unlink(missing_ok=True)
+                # Keep page 1 in place until page 2 is successfully rendered.
+                # Sparse single-page documents often cross the conservative
+                # blank threshold; deleting their only usable preview made the
+                # whole thumbnail stage fail when Ghostscript found no page 2.
                 continue
 
             return
 
 
 async def _thumbnail_office(
-    input_path: Path, output_path: Path, size: tuple[int, int], quality: int
+    input_path: Path,
+    output_path: Path,
+    size: tuple[int, int],
+    quality: int,
+    *,
+    suffix: str = ".docx",
 ) -> None:
     """Render the first page of any Office document (OOXML, ODF, legacy OLE2).
 
     Strategy:
-      1. Use LibreOffice headless to convert the document to PDF in a temp dir.
-      2. Pass the resulting PDF through the existing Ghostscript → WebP pipeline.
+      1. Copy the source document to a temp directory with its correct extension
+         so LibreOffice headless can reliably identify the format.
+      2. Use LibreOffice headless to convert the document to PDF in that temp dir.
+      3. Pass the resulting PDF through the existing Ghostscript → WebP pipeline.
 
     This works for every format LibreOffice supports: .docx, .xlsx, .pptx,
     .doc, .xls, .ppt, .odt, .ods, .odp — without relying on optional embedded
     thumbnails that most files simply do not contain.
     """
     with processing_temp_dir(prefix="lectern-office-thumb-") as tmp_dir:
+        temp_file = tmp_dir / f"document{suffix}"
+        await _shielded_to_thread(shutil.copy2, input_path, temp_file)
+
         # 1. Convert to PDF via LibreOffice headless, explicitly defining a custom
         # unique profile directory to avoid lock collisions between concurrent jobs.
-        cmd = [
-            "soffice",
+        cmd = _soffice_command(
             f"-env:UserInstallation=file://{tmp_dir}",
             "--headless",
             "--norestore",
@@ -353,13 +455,13 @@ async def _thumbnail_office(
             "pdf",
             "--outdir",
             str(tmp_dir),
-            str(input_path),
-        ]
+            str(temp_file),
+        )
 
         async with _get_concurrency_guard("subprocess"):
             process = await async_sandboxed_run(
                 cmd,
-                ro_paths=[input_path],
+                ro_paths=[],
                 rw_paths=[tmp_dir],
                 timeout=120,
             )
@@ -430,8 +532,7 @@ async def _thumbnail_via_soffice(
         temp_file = tmp_dir / f"document{suffix}"
         await _shielded_to_thread(shutil.copy2, input_path, temp_file)
 
-        cmd = [
-            "soffice",
+        cmd = _soffice_command(
             f"-env:UserInstallation=file://{tmp_dir}",
             "--headless",
             "--norestore",
@@ -441,7 +542,7 @@ async def _thumbnail_via_soffice(
             "--outdir",
             str(tmp_dir),
             str(temp_file),
-        ]
+        )
 
         async with _get_concurrency_guard("subprocess"):
             process = await async_sandboxed_run(
@@ -463,3 +564,182 @@ async def _thumbnail_via_soffice(
             return
 
         await _thumbnail_pdf(pdf_files[0], output_path, size, quality)
+
+
+def _ipynb_to_markdown(
+    ipynb_bytes: bytes,
+    img_dir: Path,
+    max_cells: int = 20,
+) -> tuple[str, Path | None]:
+    """Extract leading notebook cells into formatted Markdown and raster images.
+
+    Returns (markdown_text, first_extracted_image_path).
+    """
+    try:
+        data = json.loads(ipynb_bytes.decode("utf-8", errors="replace"))
+    except Exception:
+        return "", None
+
+    if not isinstance(data, dict):
+        return "", None
+
+    cells = data.get("cells")
+    if not isinstance(cells, list):
+        return "", None
+
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    lang_info = (
+        metadata.get("language_info")
+        if isinstance(metadata.get("language_info"), dict)
+        else {}
+    )
+    kernelspec = (
+        metadata.get("kernelspec") if isinstance(metadata.get("kernelspec"), dict) else {}
+    )
+    lang = lang_info.get("name") or kernelspec.get("language") or "python"
+
+    md_parts: list[str] = []
+    first_image_path: Path | None = None
+    img_counter = 0
+
+    for cell in cells[:max_cells]:
+        if not isinstance(cell, dict):
+            continue
+        cell_type = cell.get("cell_type")
+        source_raw = cell.get("source")
+        if isinstance(source_raw, list):
+            source = "".join(str(s) for s in source_raw)
+        elif isinstance(source_raw, str):
+            source = source_raw
+        else:
+            source = ""
+
+        if cell_type == "markdown":
+            if source.strip():
+                md_parts.append(source.strip())
+            attachments = cell.get("attachments")
+            if isinstance(attachments, dict):
+                for _att_name, att_bundle in attachments.items():
+                    if isinstance(att_bundle, dict):
+                        for mime in ("image/png", "image/jpeg", "image/webp"):
+                            b64 = att_bundle.get(mime)
+                            if isinstance(b64, (str, list)):
+                                b64_str = "".join(b64) if isinstance(b64, list) else b64
+                                b64_clean = "".join(b64_str.split())
+                                try:
+                                    img_bytes = base64.b64decode(b64_clean, validate=True)
+                                    if len(img_bytes) <= 20 * 1024 * 1024:
+                                        img_counter += 1
+                                        img_path = img_dir / f"att_{img_counter}.png"
+                                        img_path.write_bytes(img_bytes)
+                                        if first_image_path is None:
+                                            first_image_path = img_path
+                                        break
+                                except Exception:
+                                    pass
+        elif cell_type == "code":
+            if source.strip():
+                md_parts.append(f"```{lang}\n{source.strip()}\n```")
+            outputs = cell.get("outputs")
+            if isinstance(outputs, list):
+                for output in outputs:
+                    if not isinstance(output, dict):
+                        continue
+                    out_type = output.get("output_type")
+                    if out_type in ("display_data", "execute_result"):
+                        out_data = output.get("data")
+                        if isinstance(out_data, dict):
+                            for mime in ("image/png", "image/jpeg", "image/webp"):
+                                b64 = out_data.get(mime)
+                                if isinstance(b64, (str, list)):
+                                    b64_str = (
+                                        "".join(b64) if isinstance(b64, list) else b64
+                                    )
+                                    b64_clean = "".join(b64_str.split())
+                                    try:
+                                        img_bytes = base64.b64decode(
+                                            b64_clean, validate=True
+                                        )
+                                        if len(img_bytes) <= 20 * 1024 * 1024:
+                                            img_counter += 1
+                                            img_path = (
+                                                img_dir / f"output_{img_counter}.png"
+                                            )
+                                            img_path.write_bytes(img_bytes)
+                                            md_parts.append(
+                                                f"![Output](output_{img_counter}.png)"
+                                            )
+                                            if first_image_path is None:
+                                                first_image_path = img_path
+                                            break
+                                    except Exception:
+                                        pass
+                    elif out_type == "stream":
+                        text_raw = output.get("text")
+                        if isinstance(text_raw, list):
+                            stream_text = "".join(str(t) for t in text_raw)
+                        elif isinstance(text_raw, str):
+                            stream_text = text_raw
+                        else:
+                            stream_text = ""
+                        if stream_text.strip():
+                            first_line = stream_text.strip().splitlines()[0][:120]
+                            md_parts.append(f"> Output: `{first_line}`")
+
+    markdown_doc = "\n\n".join(md_parts).strip()
+    return markdown_doc, first_image_path
+
+
+async def _thumbnail_ipynb(
+    input_path: Path, output_path: Path, size: tuple[int, int], quality: int
+) -> None:
+    """Render a thumbnail for a Jupyter notebook.
+
+    1. Parses leading notebook cells into formatted Markdown with extracted output plots.
+    2. Uses LibreOffice headless to convert the Markdown document to PDF.
+    3. Renders the PDF first page to WebP via Ghostscript.
+    4. Falls back to the first extracted plot image or raw text conversion if LibreOffice conversion fails.
+    """
+    with processing_temp_dir(prefix="lectern-ipynb-thumb-") as tmp_dir:
+        raw_bytes = await _shielded_to_thread(input_path.read_bytes)
+        md_content, first_image_path = _ipynb_to_markdown(raw_bytes, tmp_dir)
+
+        if md_content:
+            temp_md = tmp_dir / "document.md"
+            temp_md.write_text(md_content, encoding="utf-8")
+
+            cmd = _soffice_command(
+                f"-env:UserInstallation=file://{tmp_dir}",
+                "--headless",
+                "--norestore",
+                "--nofirststartwizard",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(tmp_dir),
+                str(temp_md),
+            )
+
+            async with _get_concurrency_guard("subprocess"):
+                process = await async_sandboxed_run(
+                    cmd,
+                    ro_paths=[],
+                    rw_paths=[tmp_dir],
+                    timeout=60,
+                )
+
+            pdf_files = list(tmp_dir.glob("*.pdf"))
+            if pdf_files:
+                await _thumbnail_pdf(pdf_files[0], output_path, size, quality)
+                if output_path.exists():
+                    return
+
+        # Fallback 1: If LibreOffice produced no PDF, but we found an output plot, use it
+        if first_image_path and first_image_path.exists():
+            await _thumbnail_image(first_image_path, output_path, size, quality)
+            if output_path.exists():
+                return
+
+        # Fallback 2: Plain text render via LibreOffice
+        await _thumbnail_via_soffice(input_path, output_path, size, quality, suffix=".txt")
+

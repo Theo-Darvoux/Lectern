@@ -26,7 +26,7 @@ interface BrowseResponse {
 }
 
 function BrowseSkeleton({ isMaterial = false }: { isMaterial?: boolean }) {
-  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [viewMode, setViewMode] = useState<"list" | "grid">("grid");
   useEffect(() => {
     try {
       const stored = localStorage.getItem("browse-view-mode");

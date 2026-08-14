@@ -105,6 +105,7 @@ const freshConfig = {
   allow_all_domains: false,
   guest_access_enabled: false,
   tutorials_enabled: false,
+  allow_external_document_links: true,
   max_contribution_note_length: 10000,
 };
 

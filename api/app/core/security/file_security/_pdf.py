@@ -6,6 +6,7 @@ import logging
 import zlib
 from pathlib import Path
 from typing import Final, cast
+from urllib.parse import urlsplit
 
 import pikepdf
 from pikepdf.models.image import PdfImage
@@ -46,6 +47,7 @@ _PDF_ACTIVE_ANNOTATION_SUBTYPES = frozenset(
         "/Sound",
     }
 )
+_ALLOWED_EXTERNAL_LINK_SCHEMES = frozenset({"http", "https", "mailto"})
 
 MAX_PDF_PAGES: Final[int] = 500
 MAX_PDF_TREE_DEPTH: Final[int] = 50
@@ -95,6 +97,50 @@ def _validate_goto_action(action: pikepdf.Dictionary, *, context: str, depth: in
     raise ValueError(f"PDF {context} contains a malformed /Next action")
 
 
+def _validate_interactive_action(
+    action: pikepdf.Dictionary,
+    *,
+    context: str,
+    depth: int = 0,
+) -> None:
+    """Allow local navigation and, when configured, safe external hyperlinks."""
+    if depth > MAX_PDF_TREE_DEPTH:
+        raise ValueError(f"PDF {context} action chain exceeds the maximum safe depth")
+
+    subtype = str(action.get("/S")) if action.get("/S") is not None else None
+    if subtype == "/GoTo":
+        pass
+    elif subtype == "/URI" and settings.allow_external_document_links:
+        target = str(action.get("/URI") or "").strip()
+        parsed = urlsplit(target)
+        scheme = parsed.scheme.casefold()
+        if (
+            scheme not in _ALLOWED_EXTERNAL_LINK_SCHEMES
+            or (scheme in {"http", "https"} and not parsed.netloc)
+            or (scheme == "mailto" and not parsed.path)
+            or any(ord(char) < 0x20 for char in target)
+        ):
+            raise ValueError(
+                f"PDF {context} contains a prohibited external hyperlink target"
+            )
+    else:
+        raise ValueError(f"PDF {context} contains a dangerous action: {subtype or '/A'}")
+
+    next_action = action.get("/Next")
+    if next_action is None:
+        return
+    if isinstance(next_action, pikepdf.Dictionary):
+        _validate_interactive_action(next_action, context=context, depth=depth + 1)
+        return
+    if isinstance(next_action, pikepdf.Array):
+        for chained in next_action:
+            if not isinstance(chained, pikepdf.Dictionary):
+                raise ValueError(f"PDF {context} contains a malformed /Next action")
+            _validate_interactive_action(chained, context=context, depth=depth + 1)
+        return
+    raise ValueError(f"PDF {context} contains a malformed /Next action")
+
+
 def _check_interactive_actions(node: pikepdf.Dictionary, *, context: str) -> None:
     """Reject actions attached to annotations or AcroForm fields."""
     subtype = node.get("/Subtype")
@@ -106,7 +152,7 @@ def _check_interactive_actions(node: pikepdf.Dictionary, *, context: str) -> Non
         action = node["/A"]
         if not isinstance(action, pikepdf.Dictionary):
             raise ValueError(f"PDF {context} contains a malformed action: /A")
-        _validate_goto_action(action, context=context)
+        _validate_interactive_action(action, context=context)
 
 
 def _walk_form_fields(fields: pikepdf.Array, depth: int = 0) -> None:
@@ -146,9 +192,16 @@ def _walk_outline_actions(
             pass
 
     if strip:
-        for key in ("/A", "/AA"):
-            if key in node:
-                del node[key]
+        if "/AA" in node:
+            del node["/AA"]
+        action = node.get("/A")
+        if isinstance(action, pikepdf.Dictionary):
+            try:
+                _validate_interactive_action(action, context="outline")
+            except ValueError:
+                del node["/A"]
+        elif action is not None:
+            del node["/A"]
     else:
         _check_interactive_actions(node, context="outline")
 
@@ -169,9 +222,16 @@ def _walk_outline_actions(
 def _strip_interactive_actions(node: pikepdf.Dictionary, depth: int = 0) -> None:
     if depth > 50:
         raise ValueError("PDF interactive object tree exceeds the maximum safe depth")
-    for key in ("/A", "/AA"):
-        if key in node:
-            del node[key]
+    if "/AA" in node:
+        del node["/AA"]
+    action = node.get("/A")
+    if isinstance(action, pikepdf.Dictionary):
+        try:
+            _validate_interactive_action(action, context="annotation")
+        except ValueError:
+            del node["/A"]
+    elif action is not None:
+        del node["/A"]
     kids = node.get("/Kids")
     if isinstance(kids, pikepdf.Array):
         for raw_child in kids:

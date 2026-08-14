@@ -307,3 +307,18 @@ class TestMimeRegistry:
             MimeRegistry.resolve_upload_mime("test.xyzabc", "application/octet-stream")
             == "application/octet-stream"
         )
+
+    def test_resolve_upload_mime_ipynb(self):
+        assert (
+            MimeRegistry.resolve_upload_mime("notebook.ipynb", "application/octet-stream")
+            == "application/json"
+        )
+
+    def test_is_valid_extension_for_mime(self):
+        assert MimeRegistry.is_valid_extension_for_mime(".ipynb", "application/json") is True
+        assert MimeRegistry.is_valid_extension_for_mime("model.ipynb", "application/json") is True
+        assert MimeRegistry.is_valid_extension_for_mime("data.json", "application/json") is True
+        assert MimeRegistry.is_valid_extension_for_mime("image.png", "image/png") is True
+        assert MimeRegistry.is_valid_extension_for_mime("image.png", "image/jpeg") is False
+        assert MimeRegistry.is_valid_extension_for_mime("script.py", "text/x-python") is True
+        assert MimeRegistry.is_valid_extension_for_mime("unnamed", "application/pdf") is False

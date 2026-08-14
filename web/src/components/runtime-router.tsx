@@ -8,7 +8,6 @@ import { requiresAppRuntime } from "@/lib/runtime-policy";
 const AppRuntime = dynamic(
     () => import("@/components/app-runtime").then((module) => module.AppRuntime),
     {
-        ssr: false,
         loading: () => (
             <main className="flex min-h-svh items-center justify-center" aria-busy="true">
                 <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />

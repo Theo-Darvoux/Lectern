@@ -192,6 +192,7 @@ async def get_auth_methods(
         "allow_all_domains": settings.allow_all_domains,
         "guest_access_enabled": settings.guest_access_enabled,
         "tutorials_enabled": settings.tutorials_enabled,
+        "allow_external_document_links": settings.allow_external_document_links,
         "site_name": settings.site_name,
         "site_name_style": settings.site_name_style,
         "site_description": settings.site_description,

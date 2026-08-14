@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlsplit
 import mutagen
 from defusedxml import ElementTree as SafeET
 
+from app.config import settings
 from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
 from app.core.security.file_security._concurrency import (
     image_guard,
@@ -174,6 +175,20 @@ _DANGEROUS_URI_RE = re.compile(
 _CSS_ESCAPE_RE = re.compile(r"\\([0-9a-fA-F]{1,6})(?:\s)?|\\(.)", re.DOTALL)
 
 
+def _validate_external_hyperlink_target(target: str, *, context: str) -> None:
+    """Permit only explicitly enabled, browser-safe external hyperlink schemes."""
+    parsed = urlsplit(target)
+    scheme = parsed.scheme.casefold()
+    if (
+        not settings.allow_external_document_links
+        or scheme not in _ALLOWED_HYPERLINK_SCHEMES
+        or (scheme in {"http", "https"} and not parsed.netloc)
+        or (scheme == "mailto" and not parsed.path)
+        or any(ord(char) < 0x20 for char in target)
+    ):
+        raise UnsafeFileError(f"{context} contains a prohibited external hyperlink target")
+
+
 def _parse_package_xml(data: bytes, description: str):
     """Parse security-sensitive package XML and normalize parser failures."""
     try:
@@ -301,6 +316,13 @@ def _validate_epub_markup(data: bytes, entry_name: str) -> None:
                     raise UnsafeFileError(
                         f"EPUB markup '{entry_name}' references an external resource"
                     )
+            elif name == "href" and local in {"a", "area"}:
+                parsed = urlsplit(value)
+                if parsed.scheme or parsed.netloc or value.startswith("//"):
+                    _validate_external_hyperlink_target(
+                        value,
+                        context=f"EPUB markup '{entry_name}'",
+                    )
         if local == "style" and element.text:
             _validate_epub_css(element.text.encode(), entry_name)
         if local == "meta" and element.attrib.get("http-equiv", "").casefold() == "refresh":
@@ -326,6 +348,17 @@ def _validate_odf_xml_stream(source, description: str) -> None:
                         raise UnsafeFileError(f"ODF {description} contains a macro/event attribute")
                     if value.startswith(("macro:", "vnd.sun.star.script:")):
                         raise UnsafeFileError(f"ODF {description} contains a script URI")
+                    if name == "href":
+                        parsed = urlsplit(value)
+                        if parsed.scheme or parsed.netloc or value.startswith("//"):
+                            if local != "a":
+                                raise UnsafeFileError(
+                                    f"ODF {description} references an external resource"
+                                )
+                            _validate_external_hyperlink_target(
+                                raw_value.strip(),
+                                context=f"ODF {description}",
+                            )
             elif event == "end":
                 element.clear()
     except (UnsafeFileError, SanitizationError):
@@ -418,12 +451,10 @@ def _reject_external_ooxml_relationships(data: bytes, entry_name: str) -> None:
                 f"OOXML relationship file '{entry_name}' contains a prohibited external relationship"
             )
 
-        scheme = urlsplit(target).scheme.casefold()
-        if scheme not in _ALLOWED_HYPERLINK_SCHEMES:
-            raise UnsafeFileError(
-                f"OOXML relationship file '{entry_name}' contains a prohibited "
-                f"external hyperlink target: '{target}'"
-            )
+        _validate_external_hyperlink_target(
+            target,
+            context=f"OOXML relationship file '{entry_name}'",
+        )
 
 
 def _strip_xlsx_external_link_references(data: bytes, entry_name: str) -> bytes:
@@ -432,6 +463,7 @@ def _strip_xlsx_external_link_references(data: bytes, entry_name: str) -> bytes:
     root = _parse_package_xml(data, f"OOXML package part '{entry_name}'")
     normalized_name = entry_name.casefold()
 
+    modified = False
     for parent in root.iter():
         for child in list(parent):
             local_name = child.tag.rsplit("}", 1)[-1].casefold()
@@ -452,6 +484,14 @@ def _strip_xlsx_external_link_references(data: bytes, entry_name: str) -> bytes:
                 )
             if remove:
                 parent.remove(child)
+                modified = True
+
+    if not modified:
+        return data
+
+    if "}" in root.tag and root.tag.startswith("{"):
+        ns = root.tag[1:].split("}", 1)[0]
+        StdET.register_namespace("", ns)
 
     return StdET.tostring(root, encoding="utf-8", xml_declaration=True)
 

@@ -63,6 +63,12 @@ async def test_auth_methods_exposes_guest_flag_default_false(client: AsyncClient
     assert resp.json()["guest_access_enabled"] is False
 
 
+async def test_auth_methods_exposes_external_document_link_policy(client: AsyncClient):
+    resp = await client.get("/api/auth/methods")
+    assert resp.status_code == 200
+    assert resp.json()["allow_external_document_links"] is True
+
+
 async def test_guest_session_rejected_when_disabled(client: AsyncClient, db_session: AsyncSession):
     # A guest identity exists but the admin toggle is off.
     await _create_guest_user(db_session)

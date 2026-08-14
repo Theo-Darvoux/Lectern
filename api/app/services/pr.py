@@ -1777,30 +1777,22 @@ async def create_pull_request_service(
                         raise BadRequestError("Cannot attach a material to another attachment")
 
     if keys_to_check:
-        existence_results = await asyncio.gather(*(object_exists(k) for k in keys_to_check))
-        for key, exists in zip(keys_to_check, existence_results, strict=False):
-            if not exists:
-                raise BadRequestError(
-                    "One or more uploaded files could not be found. "
-                    "They may have expired — try uploading again."
-                )
-
         # Every key must be backed by either this user's clean Upload row or an
         # unexpired, single-use generated-CAS claim.
-        upload_rows = list(
+        owned_upload_rows = list(
             (
                 await db.scalars(
                     select(Upload)
                     .where(
                         (Upload.final_key.in_(keys_to_check))
                         | (Upload.quarantine_key.in_(keys_to_check)),
-                        Upload.status == "clean",
                         Upload.user_id == current_user.id,
                     )
                     .with_for_update()
                 )
             ).all()
         )
+        upload_rows = [upload for upload in owned_upload_rows if upload.status == "clean"]
         authorized_hashes: dict[str, str] = {}
         for upload in upload_rows:
             authorized_key = (
@@ -1840,11 +1832,64 @@ async def create_pull_request_service(
         for claim in claims:
             authorized_hashes.setdefault(claim.file_key, claim.sha256)
 
-        for key in keys_to_check:
+        def upload_label(key: str) -> str:
+            matching_rows = [
+                row
+                for row in owned_upload_rows
+                if row.final_key == key or row.quarantine_key == key
+            ]
+            filename = next((row.filename for row in matching_rows if row.filename), None)
+            return f'The file "{filename}"' if filename else "This staged file"
+
+        for key in sorted(keys_to_check):
             expected_sha = authorized_hashes.get(key)
             if expected_sha is None:
+                matching_rows = [
+                    row
+                    for row in owned_upload_rows
+                    if row.final_key == key or row.quarantine_key == key
+                ]
+                statuses = {row.status for row in matching_rows}
+                label = upload_label(key)
+
+                if "malicious" in statuses:
+                    scanner_reason = next(
+                        (
+                            row.error_detail
+                            for row in matching_rows
+                            if row.status == "malicious" and row.error_detail
+                        ),
+                        None,
+                    )
+                    reason_text = (
+                        " Scanner reason: "
+                        f"{scanner_reason.removeprefix('ERR_MALWARE_DETECTED: ').strip().rstrip('.')}."
+                        if scanner_reason
+                        else ""
+                    )
+                    raise BadRequestError(
+                        f"{label} was blocked because a malware scan flagged it as potentially "
+                        f"unsafe.{reason_text} Remove it from this contribution and upload a safe "
+                        "replacement."
+                    )
+                if statuses & {"pending", "processing"}:
+                    raise BadRequestError(
+                        f"{label} is still being checked for safety. Wait for processing to finish "
+                        "before submitting."
+                    )
+                if "failed" in statuses:
+                    raise BadRequestError(
+                        f"{label} could not be verified because processing failed. Remove it from "
+                        "this contribution and upload it again."
+                    )
+                if matching_rows:
+                    raise BadRequestError(
+                        f"{label} is no longer available for submission. Remove it from this "
+                        "contribution and upload it again."
+                    )
                 raise BadRequestError(
-                    "One or more files do not have a valid security claim for your account."
+                    "This staged file is not available for your account. Remove it from this "
+                    "contribution and upload it again."
                 )
             declared_sha = declared_hashes.get(key)
             if (
@@ -1853,6 +1898,14 @@ async def create_pull_request_service(
                 and declared_sha != expected_sha
             ):
                 raise BadRequestError("A CAS file hash does not match its verified upload claim")
+
+        existence_results = await asyncio.gather(*(object_exists(k) for k in keys_to_check))
+        for key, exists in zip(keys_to_check, existence_results, strict=False):
+            if not exists:
+                raise BadRequestError(
+                    f"{upload_label(key)} could not be found. Remove it from this contribution "
+                    "and upload it again."
+                )
 
         for key, claim in claims_by_key.items():
             if key not in {row.final_key for row in upload_rows}:

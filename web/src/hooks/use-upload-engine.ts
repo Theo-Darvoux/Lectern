@@ -18,6 +18,7 @@ import {
     useUploadTelemetry,
 } from "@/lib/upload-telemetry";
 import { useDropZoneStore } from "@/lib/drop-zone-store";
+import { isMalwareUploadErrorMessage } from "@/lib/upload-errors";
 import { prepareScannedFiles } from "@/lib/upload-preflight";
 
 const MAX_CONCURRENT_UPLOADS = 4;
@@ -268,7 +269,7 @@ export function useUploadEngine({
                 } catch (err) {
                     const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : t("errorProcessing"));
                     if (msg !== "Upload cancelled") {
-                        const isVirus = msg.includes("ERR_MALWARE_DETECTED");
+                        const isVirus = isMalwareUploadErrorMessage(msg);
                         clearUploadTelemetry(cid);
                         updateItem(cid, { status: isVirus ? "virus" : "error", error: msg });
                     }
@@ -360,7 +361,7 @@ export function useUploadEngine({
             } catch (err) {
                 const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : t("errorProcessing"));
                 if (msg !== "Upload cancelled") {
-                    const isVirus = msg.includes("ERR_MALWARE_DETECTED");
+                    const isVirus = isMalwareUploadErrorMessage(msg);
                     clearUploadTelemetry(cid);
                     updateItem(cid, {
                         status: isVirus ? "virus" : "error",

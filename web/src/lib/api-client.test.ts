@@ -187,6 +187,41 @@ describe("api-client", () => {
       const opts = vi.mocked(fetch).mock.calls[0][1];
       expect(opts?.signal).toBeUndefined();
     });
+
+    it("dispatches lectern-api-reachable on successful response", async () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(200, {}));
+
+      await apiRequest("/test");
+
+      expect(dispatchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "lectern-api-reachable" }),
+      );
+    });
+
+    it("dispatches lectern-api-unreachable on network failure", async () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      vi.mocked(fetch).mockRejectedValue(new TypeError("Failed to fetch"));
+
+      await expect(apiRequest("/test")).rejects.toThrow(TypeError);
+
+      expect(dispatchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "lectern-api-unreachable" }),
+      );
+    });
+
+    it("does not dispatch lectern-api-unreachable when request is aborted", async () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      const controller = new AbortController();
+      controller.abort();
+      vi.mocked(fetch).mockRejectedValue(new DOMException("The user aborted a request.", "AbortError"));
+
+      await expect(apiRequest("/test", { signal: controller.signal })).rejects.toThrow(DOMException);
+
+      expect(dispatchSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "lectern-api-unreachable" }),
+      );
+    });
   });
 
   describe("isRetriableError", () => {

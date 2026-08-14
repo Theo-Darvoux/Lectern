@@ -382,6 +382,48 @@ class TestOOXMLStrip:
         with pytest.raises(ValueError, match="prohibited external hyperlink target"):
             await _strip_ooxml_from_path(p)
 
+    async def test_external_ooxml_hyperlinks_can_be_disabled(self, tmp_path, monkeypatch):
+        from app.config import settings
+
+        relationships = b"""<Relationships
+          xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+          <Relationship Id='rId1'
+            Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
+            Target='https://example.com/reference' TargetMode='External'/>
+        </Relationships>"""
+        p = _make_zip(
+            tmp_path,
+            {
+                "word/document.xml": b"<document/>",
+                "word/_rels/document.xml.rels": relationships,
+            },
+        )
+
+        monkeypatch.setattr(settings, "allow_external_document_links", False)
+        with pytest.raises(ValueError, match="prohibited external hyperlink target"):
+            await _strip_ooxml_from_path(p)
+
+    async def test_safe_external_ooxml_hyperlinks_are_preserved(self, tmp_path):
+        relationships = b"""<Relationships
+          xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+          <Relationship Id='rId1'
+            Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
+            Target='https://example.com/reference' TargetMode='External'/>
+        </Relationships>"""
+        p = _make_zip(
+            tmp_path,
+            {
+                "word/document.xml": b"<document/>",
+                "word/_rels/document.xml.rels": relationships,
+            },
+        )
+
+        result = await _strip_ooxml_from_path(p)
+        with zipfile.ZipFile(result) as archive:
+            assert b"https://example.com/reference" in archive.read(
+                "word/_rels/document.xml.rels"
+            )
+
     async def test_preserves_internal_ooxml_relationships(self, tmp_path):
         relationships = b"""<Relationships
           xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
@@ -693,7 +735,7 @@ class TestPDFSafetyBypass:
         with pytest.raises(ValueError, match="dangerous action"):
             check_pdf_safety(p)
 
-    def test_pdf_with_outline_uri_action_is_rejected(self, tmp_path):
+    def test_pdf_with_safe_outline_uri_action_is_allowed(self, tmp_path):
         pdf = pikepdf.new()
         pdf.add_blank_page()
         outline = pdf.make_indirect(
@@ -701,7 +743,7 @@ class TestPDFSafetyBypass:
                 Title=pikepdf.String("external link"),
                 A=pikepdf.Dictionary(
                     S=pikepdf.Name("/URI"),
-                    URI=pikepdf.String("https://attacker.invalid/pixel"),
+                    URI=pikepdf.String("https://example.com/reference"),
                 ),
             )
         )
@@ -709,8 +751,7 @@ class TestPDFSafetyBypass:
         p = tmp_path / "outline-action.pdf"
         pdf.save(str(p))
 
-        with pytest.raises(ValueError, match="outline.*dangerous action"):
-            check_pdf_safety(p)
+        check_pdf_safety(p)
 
 
 # =============================================================================

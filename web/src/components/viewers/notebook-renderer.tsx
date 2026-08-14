@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { useTranslations } from "next-intl";
+import hljs from "highlight.js/lib/common";
 import { MarkdownRenderer } from "./markdown-renderer";
 
 type NotebookCell = {
@@ -14,6 +15,7 @@ type NotebookCell = {
 
 type Notebook = {
     cells: NotebookCell[];
+    language: string;
 };
 
 const ANSI_SEQUENCE = new RegExp("(?:\\u001B\\[|\\u009B)[0-?]*[ -/]*[@-~]", "g");
@@ -50,10 +52,24 @@ function parseNotebook(content: string): Notebook | null {
     try {
         const parsed: unknown = JSON.parse(content);
         if (!parsed || typeof parsed !== "object") return null;
-        const candidate = parsed as { cells?: unknown; nbformat?: unknown };
+        const candidate = parsed as {
+            cells?: unknown;
+            nbformat?: unknown;
+            metadata?: {
+                language_info?: { name?: string };
+                kernelspec?: { language?: string };
+            };
+        };
         const cells = candidate.cells;
         if (!Number.isInteger(candidate.nbformat) || !Array.isArray(cells)) return null;
-        return { cells: cells.filter((cell): cell is NotebookCell => !!cell && typeof cell === "object") };
+        const language =
+            candidate.metadata?.language_info?.name ||
+            candidate.metadata?.kernelspec?.language ||
+            "python";
+        return {
+            cells: cells.filter((cell): cell is NotebookCell => !!cell && typeof cell === "object"),
+            language,
+        };
     } catch {
         return null;
     }
@@ -140,6 +156,56 @@ function NotebookOutputView({ output }: { output: NotebookOutput }) {
     return null;
 }
 
+function NotebookCodeCell({
+    source,
+    executionCount,
+    outputs,
+    language,
+}: {
+    source: string;
+    executionCount: string;
+    outputs?: unknown;
+    language: string;
+}) {
+    const highlighted = useMemo(() => {
+        if (!source.trim()) return "";
+        try {
+            if (language && hljs.getLanguage(language)) {
+                return hljs.highlight(source, { language, ignoreIllegals: true }).value;
+            }
+            return hljs.highlightAuto(source).value;
+        } catch {
+            return "";
+        }
+    }, [source, language]);
+
+    return (
+        <section className="overflow-hidden rounded-lg border bg-background shadow-sm">
+            <div className="flex min-w-0">
+                <span className="w-14 shrink-0 select-none border-r bg-muted/40 px-2 py-4 text-right font-mono text-xs text-muted-foreground">
+                    [{executionCount}]
+                </span>
+                <pre className="min-w-0 flex-1 overflow-x-auto p-4 text-sm leading-relaxed">
+                    {highlighted ? (
+                        <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
+                    ) : (
+                        <code>{source}</code>
+                    )}
+                </pre>
+            </div>
+            {Array.isArray(outputs) && outputs.length > 0 && (
+                <div className="space-y-3 border-t bg-muted/10 py-4 pl-[4.5rem] pr-4">
+                    {outputs.map((output, outputIndex) =>
+                        output && typeof output === "object" ? (
+                            <NotebookOutputView key={outputIndex} output={output as NotebookOutput} />
+                        ) : null,
+                    )}
+                </div>
+            )}
+        </section>
+    );
+}
+
 export function NotebookRenderer({ content }: { content: string }) {
     const t = useTranslations("Viewers.notebook");
     const notebook = useMemo(() => parseNotebook(content), [content]);
@@ -186,25 +252,13 @@ export function NotebookRenderer({ content }: { content: string }) {
                             ? String(cell.execution_count)
                             : " ";
                     return (
-                        <section key={index} className="overflow-hidden rounded-lg border bg-background shadow-sm">
-                            <div className="flex min-w-0">
-                                <span className="w-14 shrink-0 select-none border-r bg-muted/40 px-2 py-4 text-right font-mono text-xs text-muted-foreground">
-                                    [{executionCount}]
-                                </span>
-                                <pre className="min-w-0 flex-1 overflow-x-auto p-4 text-sm leading-relaxed">
-                                    <code>{source}</code>
-                                </pre>
-                            </div>
-                            {Array.isArray(cell.outputs) && cell.outputs.length > 0 && (
-                                <div className="space-y-3 border-t bg-muted/10 py-4 pl-[4.5rem] pr-4">
-                                    {cell.outputs.map((output, outputIndex) =>
-                                        output && typeof output === "object" ? (
-                                            <NotebookOutputView key={outputIndex} output={output as NotebookOutput} />
-                                        ) : null,
-                                    )}
-                                </div>
-                            )}
-                        </section>
+                        <NotebookCodeCell
+                            key={index}
+                            source={source}
+                            executionCount={executionCount}
+                            outputs={cell.outputs}
+                            language={notebook.language}
+                        />
                     );
                 }
 

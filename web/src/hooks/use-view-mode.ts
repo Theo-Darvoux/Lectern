@@ -7,7 +7,7 @@ const STORAGE_KEY = "browse-view-mode";
 export type ViewMode = "list" | "grid";
 
 export function useViewMode() {
-  const [mode, setModeState] = useState<ViewMode>("list");
+  const [mode, setModeState] = useState<ViewMode>("grid");
 
   useEffect(() => {
     try {

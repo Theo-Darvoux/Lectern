@@ -20,7 +20,7 @@ from app.core.database.database import get_db
 from app.core.database.post_commit import register_transaction_callbacks
 from app.core.database.redis import get_redis
 from app.core.events.processing import ProcessingFile
-from app.core.media.mimetypes import guess_mime_from_bytes
+from app.core.media.mimetypes import MimeRegistry, guess_mime_from_bytes
 from app.core.security.file_security import SvgSecurityError, check_svg_safety_stream
 from app.core.storage.facade import delete_object, get_s3_client
 from app.dependencies.auth import CurrentUser
@@ -238,10 +238,10 @@ async def upload_file(
                 safe_name, real_mime, ext, allowed_mimes=allowed_mimes
             )
 
-        mime_type: str = real_mime
+        mime_type = real_mime
         if mime_type == "application/octet-stream":
-            guessed, _enc = mimetypes.guess_type(safe_name)
-            mime_type = guessed or "application/octet-stream"
+            client_mime = (file.content_type or "").strip()
+            mime_type = MimeRegistry.resolve_upload_mime(safe_name, client_mime or real_mime)
 
         _check_per_type_size(mime_type, pf.size)
 

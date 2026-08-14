@@ -206,8 +206,12 @@ export async function apiRequest(
             window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
         }
     } catch (err) {
-        // Network error (not a 4xx/5xx response)
-        if (typeof window !== "undefined") {
+        // Network error (not a 4xx/5xx response). Do not mark unreachable if the request was aborted (e.g. page navigation).
+        const isAbort =
+            fetchOptions.signal?.aborted ||
+            (err instanceof DOMException && err.name === "AbortError") ||
+            (typeof err === "object" && err !== null && "name" in err && (err as { name: string }).name === "AbortError");
+        if (!isAbort && typeof window !== "undefined") {
             window.dispatchEvent(new CustomEvent("lectern-api-unreachable"));
         }
         throw err;
@@ -223,14 +227,25 @@ export async function apiRequest(
                 setAccessToken(newToken);
                 _onTokenRefreshed?.(newToken);
                 headers.set("Authorization", `Bearer ${newToken}`);
-                res = await fetch(url, {
-                    ...fetchOptions,
-                    headers,
-                    credentials: "include",
-                    signal: createAttemptSignal(),
-                });
-                if (typeof window !== "undefined") {
-                    window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
+                try {
+                    res = await fetch(url, {
+                        ...fetchOptions,
+                        headers,
+                        credentials: "include",
+                        signal: createAttemptSignal(),
+                    });
+                    if (typeof window !== "undefined") {
+                        window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
+                    }
+                } catch (retryErr) {
+                    const isAbort =
+                        fetchOptions.signal?.aborted ||
+                        (retryErr instanceof DOMException && retryErr.name === "AbortError") ||
+                        (typeof retryErr === "object" && retryErr !== null && "name" in retryErr && (retryErr as { name: string }).name === "AbortError");
+                    if (!isAbort && typeof window !== "undefined") {
+                        window.dispatchEvent(new CustomEvent("lectern-api-unreachable"));
+                    }
+                    throw retryErr;
                 }
             } else {
                 console.warn("[api-client] Token refresh failed (no new token). Clearing session.");

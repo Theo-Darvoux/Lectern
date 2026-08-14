@@ -125,6 +125,9 @@ class UploadWorkerRepository:
         final_key: str,
         cas_key: str,
         cas_ref_count: int | None,
+        mime_type: str | None = None,
+        size_bytes: int | None = None,
+        filename: str | None = None,
         post_scan_kwargs: dict[str, object] | None = None,
     ) -> bool:
         """Publish CLEAN unless an authoritative cancellation already won."""
@@ -132,21 +135,29 @@ class UploadWorkerRepository:
         if session_factory is None:
             return True
 
+        values: dict[str, object] = {
+            "status": "clean",
+            "updated_at": datetime.now(UTC),
+            "sha256": sha256,
+            "content_sha256": content_sha256,
+            "final_key": final_key,
+            "cas_key": cas_key,
+            "cas_ref_count": cas_ref_count,
+            "processing_status": "pending",
+        }
+        if mime_type is not None:
+            values["mime_type"] = mime_type
+        if size_bytes is not None:
+            values["size_bytes"] = size_bytes
+        if filename is not None:
+            values["filename"] = filename
+
         async def _do_update() -> bool:
             async with session_factory() as session:
                 result = await session.execute(
                     update(Upload)
                     .where(Upload.upload_id == upload_id, Upload.status != "cancelled")
-                    .values(
-                        status="clean",
-                        updated_at=datetime.now(UTC),
-                        sha256=sha256,
-                        content_sha256=content_sha256,
-                        final_key=final_key,
-                        cas_key=cas_key,
-                        cas_ref_count=cas_ref_count,
-                        processing_status="pending",
-                    )
+                    .values(**values)
                 )
                 published = bool(result.rowcount)
                 if published and post_scan_kwargs is not None:

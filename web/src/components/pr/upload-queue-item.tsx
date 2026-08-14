@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
 import type { QueueItem } from "@/lib/upload-queue";
+import { malwareDetectionReason } from "@/lib/upload-errors";
 
 interface UploadQueueItemProps {
     f: QueueItem;
@@ -51,6 +52,7 @@ export function UploadQueueItem({
     onRemove,
 }: UploadQueueItemProps) {
     const t = useTranslations("Upload");
+    const threatReason = f.status === "virus" ? malwareDetectionReason(f.error) : null;
 
     return (
         <div
@@ -186,6 +188,11 @@ export function UploadQueueItem({
                         <p className="mt-0.5 text-[10px] text-destructive/80">
                             {t("threatDescription")}
                         </p>
+                        {threatReason && (
+                            <p className="mt-1 text-[10px] font-medium text-destructive">
+                                {t("threatReason", { reason: threatReason })}
+                            </p>
+                        )}
                     </div>
                 )}
                 {f.status === "error" && f.error && (

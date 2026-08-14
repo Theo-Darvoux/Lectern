@@ -361,6 +361,57 @@ class TestOptimisticLocking:
 
 
 class TestFileClaiming:
+    async def test_malicious_upload_reports_filename_and_recovery_action(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        mock_pr_deps: tuple[AsyncMock, AsyncMock],
+    ) -> None:
+        user = await _create_user(db_session, UserRole.STUDENT)
+        file_key = f"cas/{uuid.uuid4().hex}"
+        # Retroactive quarantine may already have removed the public object. The
+        # persisted malware verdict must still win over a misleading expiry error.
+        mock_pr_deps[0].return_value = False
+        db_session.add(
+            Upload(
+                upload_id=str(uuid.uuid4()),
+                user_id=user.id,
+                final_key=file_key,
+                status="malicious",
+                cas_ref_count=0,
+                filename="Projet Deep Learning I.pdf",
+                mime_type="application/pdf",
+                size_bytes=100,
+                content_sha256="d" * 64,
+                error_detail="Known malware detected: test-signature",
+            )
+        )
+        await db_session.commit()
+
+        response = await client.post(
+            "/api/pull-requests",
+            json={
+                "title": "Add project",
+                "operations": [
+                    {
+                        "op": "create_material",
+                        "title": "Projet Deep Learning I",
+                        "type": "document",
+                        "file_key": file_key,
+                    }
+                ],
+            },
+            headers=_auth_headers(user),
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "Projet Deep Learning I.pdf" in detail
+        assert "malware scan" in detail
+        assert "Known malware detected: test-signature" in detail
+        assert "remove" in detail.lower()
+        mock_pr_deps[0].assert_not_awaited()
+
     async def test_double_claim_rejected(
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:

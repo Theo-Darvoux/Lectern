@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # Feature toggles
     # Set TUTORIALS_ENABLED=false to disable the in-app guided tours platform-wide.
     tutorials_enabled: bool = True
+    # Allow safe http(s)/mailto links embedded in documents and document viewers.
+    # This is public runtime configuration because the browser renderers enforce it too.
+    allow_external_document_links: bool = True
 
     # Allowed domains — comma-separated "domain:auto|domain:manual" entries.
     # When set, this wins over DB rows. Empty means fall back to DB.
@@ -154,9 +157,8 @@ class Settings(BaseSettings):
     # When True, a MalwareBazaar timeout/error fails the scan (fail-closed).
     # When False (default), YARA remains the authoritative gatekeeper on API failure.
     malwarebazaar_fail_closed: bool = True
-    # When True in fail-open mode, MalwareBazaar runs as a background ARQ job after
-    # YARA-only promotion. Fail-closed mode always checks synchronously before publish.
-    # Set to False to use synchronous behaviour in either policy mode.
+    # Deprecated compatibility setting. MalwareBazaar admission checks now always
+    # finish before an upload is published as clean; this flag no longer defers them.
     bazaar_async_enabled: bool = True
     # When True, retroactive quarantine also soft-deletes any approved MaterialVersion
     # rows that reference the flagged cas/ S3 key.
@@ -223,8 +225,8 @@ class Settings(BaseSettings):
     pdf_quality: int = 75
     pdf_compression_level: str | None = None
 
-    thumbnail_quality: int = 85
-    thumbnail_size_px: int = 640
+    thumbnail_quality: int = Field(default=85, ge=0, le=100)
+    thumbnail_size_px: int = Field(default=640, ge=64, le=2048)
 
     # Comma-separated allowed file extensions (e.g. ".pdf,.docx"). Empty = allow all.
     allowed_extensions: str | None = None

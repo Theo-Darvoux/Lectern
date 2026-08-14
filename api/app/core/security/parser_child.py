@@ -98,7 +98,17 @@ def _scan_yara(arguments: list[str]) -> dict[str, object]:
 
     rules = yara.load(str(Path(arguments[1])))
     matches = rules.match(filepath=str(Path(arguments[0])), timeout=int(arguments[2]))
-    return {"match": matches[0].rule if matches else None}
+    if not matches:
+        return {"match": None}
+
+    match = matches[0]
+    description = match.meta.get("description")
+    reason = (
+        f"{description} (YARA rule: {match.rule})"
+        if isinstance(description, str) and description.strip()
+        else f"Matched local malware rule: {match.rule}"
+    )
+    return {"match": reason}
 
 
 def _render_avatar(arguments: list[str]) -> dict[str, object]:

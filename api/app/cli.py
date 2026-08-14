@@ -551,14 +551,13 @@ def recalculate_thumbnails(
 
 
 async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -> None:
-    import shutil
-    import tempfile
     from pathlib import Path
 
     from sqlalchemy import func, or_, select, update
 
     from app.core.database.database import async_session_factory
     from app.core.events.processing import ProcessingFile
+    from app.core.security.processing_paths import processing_temp_dir
     from app.core.storage.facade import download_file, init_s3_client, upload_file
     from app.models.material import MaterialVersion
     from app.services.auth import get_full_auth_config
@@ -604,68 +603,69 @@ async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -
             errors += 1
             continue
 
-        tmp_dir = Path(tempfile.mkdtemp())
-        try:
-            # 1. Download source
-            local_path = tmp_dir / mv.file_name
-            await download_file(mv.file_key, local_path, decompress=True)
-
-            # 2. Setup processing file
-            pf = ProcessingFile(local_path, local_path.stat().st_size)
-
-            # 3. Generate thumbnail (pass auth_config for consistent size/quality)
-            thumb_path_str = await run_thumbnail_stage(
-                pf,
-                mv.file_mime_type,
-                mv.file_name,
-                config=auth_config,  # type: ignore[arg-type]
-            )
-
-            if thumb_path_str:
-                thumb_path = Path(thumb_path_str)
-                s3_thumb_key = f"thumbnails/{mv.id}.webp"
-
-                with open(thumb_path, "rb") as f:
-                    await upload_file(f.read(), s3_thumb_key, content_type="image/webp")
-
-                async with async_session_factory() as db:
-                    await db.execute(
-                        update(MaterialVersion)
-                        .where(MaterialVersion.id == mv.id)
-                        .values(thumbnail_key=s3_thumb_key, thumbnail_status="ok")
-                    )
-                    await db.commit()
-
-                generated += 1
-                typer.echo(f"  OK: {s3_thumb_key}")
-            else:
-                # Unsupported type — mark skipped so re-runs don't retry unnecessarily.
-                async with async_session_factory() as db:
-                    await db.execute(
-                        update(MaterialVersion)
-                        .where(MaterialVersion.id == mv.id)
-                        .values(thumbnail_status="skipped")
-                    )
-                    await db.commit()
-                typer.echo("  SKIP: No thumbnail generated for this type.")
-
-            processed += 1
-        except Exception as e:
-            typer.echo(f"  ERROR: {e}")
-            errors += 1
-            # Persist the failure so the CLI can target just failed materials on retry.
+        # Sandbox binds are deliberately restricted to PROCESSING_ROOT. Using a
+        # generic tempfile directory here made the repair command fail before a
+        # converter could run in production.
+        with processing_temp_dir(prefix="thumbnail-recalc-") as tmp_dir:
             try:
-                async with async_session_factory() as db:
-                    await db.execute(
-                        update(MaterialVersion)
-                        .where(MaterialVersion.id == mv.id)
-                        .values(thumbnail_status="failed")
-                    )
-                    await db.commit()
-            except Exception:
-                pass
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+                # 1. Download source
+                local_path = tmp_dir / Path(mv.file_name).name
+                await download_file(mv.file_key, local_path, decompress=True)
+
+                # 2. Setup processing file
+                pf = ProcessingFile(local_path, local_path.stat().st_size)
+
+                # 3. Generate thumbnail (pass auth_config for consistent size/quality)
+                thumb_path_str = await run_thumbnail_stage(
+                    pf,
+                    mv.file_mime_type,
+                    mv.file_name,
+                    config=auth_config,  # type: ignore[arg-type]
+                )
+
+                if thumb_path_str:
+                    thumb_path = Path(thumb_path_str)
+                    s3_thumb_key = f"thumbnails/{mv.id}.webp"
+
+                    with open(thumb_path, "rb") as f:
+                        await upload_file(f.read(), s3_thumb_key, content_type="image/webp")
+
+                    async with async_session_factory() as db:
+                        await db.execute(
+                            update(MaterialVersion)
+                            .where(MaterialVersion.id == mv.id)
+                            .values(thumbnail_key=s3_thumb_key, thumbnail_status="ok")
+                        )
+                        await db.commit()
+
+                    generated += 1
+                    typer.echo(f"  OK: {s3_thumb_key}")
+                else:
+                    # Unsupported type — mark skipped so re-runs don't retry unnecessarily.
+                    async with async_session_factory() as db:
+                        await db.execute(
+                            update(MaterialVersion)
+                            .where(MaterialVersion.id == mv.id)
+                            .values(thumbnail_status="skipped")
+                        )
+                        await db.commit()
+                    typer.echo("  SKIP: No thumbnail generated for this type.")
+
+                processed += 1
+            except Exception as e:
+                typer.echo(f"  ERROR: {e}")
+                errors += 1
+                # Persist the failure so the CLI can target just failed materials on retry.
+                try:
+                    async with async_session_factory() as db:
+                        await db.execute(
+                            update(MaterialVersion)
+                            .where(MaterialVersion.id == mv.id)
+                            .values(thumbnail_status="failed")
+                        )
+                        await db.commit()
+                except Exception:
+                    pass
 
     typer.echo(f"\nDone. Processed: {processed}, Generated: {generated}, Errors: {errors}")
     if dry_run:

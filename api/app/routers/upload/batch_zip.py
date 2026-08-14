@@ -42,7 +42,7 @@ from app.core.database.database import async_session_factory
 from app.core.database.post_commit import dispatch_post_commit_actions, persist_post_commit_jobs
 from app.core.database.redis import get_redis
 from app.core.events.processing import ProcessingFile
-from app.core.media.mimetypes import guess_mime_from_bytes
+from app.core.media.mimetypes import MimeRegistry, guess_mime_from_bytes
 from app.core.security.async_utils import shielded_to_thread
 from app.core.security.file_security import SvgSecurityError, check_svg_safety_stream
 from app.core.security.isolated_parser import extract_zip_isolated
@@ -473,10 +473,9 @@ async def upload_batch_zip(
                             skipped_count += 1
                             return None
 
-                    mime_type: str = real_mime
+                    mime_type = real_mime
                     if mime_type == "application/octet-stream":
-                        guessed, _ = mimetypes.guess_type(safe_name)
-                        mime_type = guessed or "application/octet-stream"
+                        mime_type = MimeRegistry.resolve_upload_mime(safe_name, real_mime)
 
                     # Per-type size limit
                     try:

@@ -3,6 +3,7 @@ import { API_BASE, ApiError, apiRequest, getClientId } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { compressImageIfNeeded } from "@/lib/file-utils";
 import { sha256File } from "@/lib/crypto-utils";
+import { withMalwareErrorPrefix } from "@/lib/upload-errors";
 
 type UploadStatus = "pending" | "processing" | "clean" | "malicious" | "failed";
 
@@ -1038,11 +1039,17 @@ function _handleUploadEvent(
             onProgress?.(1.0);
             return payload.result;
 
-        case "malicious":
+        case "malicious": {
+            const malwareDetail =
+                payload.detail ??
+                (t
+                    ? t("maliciousRejection")
+                    : "File was rejected: potential security threat detected");
             throw new UploadTerminalError(
                 400,
-                payload.detail ?? (t ? t("maliciousRejection") : "File was rejected: potential security threat detected"),
+                withMalwareErrorPrefix(malwareDetail),
             );
+        }
 
         case "failed":
             throw new UploadTerminalError(500, payload.detail ?? "File processing failed");

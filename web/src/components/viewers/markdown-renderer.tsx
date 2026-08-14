@@ -12,6 +12,7 @@ import { Mermaid } from "./mermaid";
 import { AsyncMaterialImage } from "./async-material-image";
 import { Callout, CalloutType } from "./callout";
 import { cn } from "@/lib/utils";
+import { useConfigStore } from "@/lib/stores";
 
 interface MarkdownRendererProps {
     content: string;
@@ -65,6 +66,9 @@ function getTextFromChildren(children: React.ReactNode, depth = 0): string {
 }
 
 export function MarkdownRenderer({ content, material, className, previewMode, resolveImageUrl }: MarkdownRendererProps) {
+    const allowExternalLinks = useConfigStore(
+        (state) => state.config?.allow_external_document_links !== false,
+    );
     const components: Components = useMemo(() => ({
         img: (props) => {
             const { src, alt } = props;
@@ -79,8 +83,8 @@ export function MarkdownRenderer({ content, material, className, previewMode, re
         },
         a: (props) => {
             const { href, children, ...rest } = props;
-            const isExternal = href?.startsWith("http");
-            if (previewMode) {
+            const isExternal = /^(?:https?:|mailto:|\/\/)/i.test(href || "");
+            if (previewMode || (isExternal && !allowExternalLinks)) {
                 return (
                     <span className="text-primary/80 underline decoration-dotted">
                         {children}
@@ -90,7 +94,7 @@ export function MarkdownRenderer({ content, material, className, previewMode, re
             return (
                 <a
                     href={href}
-                    {...(isExternal
+                    {...(/^https?:\/\//i.test(href || "") || href?.startsWith("//")
                         ? { target: "_blank", rel: "noopener noreferrer" }
                         : {})}
                     {...rest}
@@ -243,7 +247,7 @@ export function MarkdownRenderer({ content, material, className, previewMode, re
 
             return <blockquote className="border-l-4 border-border pl-4 italic my-4">{children}</blockquote>;
         },
-    }), [material, previewMode]);
+    }), [allowExternalLinks, material, previewMode]);
 
     const urlTransform = useMemo<NonNullable<Options["urlTransform"]>>(
         () => (url, key, node) => {

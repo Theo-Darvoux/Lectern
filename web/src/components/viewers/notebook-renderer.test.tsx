@@ -114,4 +114,20 @@ describe("NotebookRenderer", () => {
     expect(host.querySelector("img[alt='plot']")?.getAttribute("src"))
       .toBe("data:image/png;base64,aGVsbG8=");
   });
+
+  it("applies syntax highlighting to code cells", async () => {
+    const content = JSON.stringify({
+      nbformat: 4,
+      metadata: { language_info: { name: "python" } },
+      cells: [
+        { cell_type: "code", execution_count: 1, source: "def add(a, b):\n    return a + b", outputs: [] },
+      ],
+    });
+
+    await act(async () => root.render(<NotebookRenderer content={content} />));
+
+    const codeEl = host.querySelector("code.hljs");
+    expect(codeEl).not.toBeNull();
+    expect(codeEl?.querySelector(".hljs-keyword")?.textContent).toBe("def");
+  });
 });

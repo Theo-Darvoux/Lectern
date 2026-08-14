@@ -149,6 +149,7 @@ export async function submitDirectOperations(
     );
 
     toast.promise(promise, {
+        id: "submit-contribution",
         loading: t("submitting"),
         success: (result) => {
             if (result.status === "approved") {
