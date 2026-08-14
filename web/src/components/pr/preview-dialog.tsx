@@ -23,7 +23,8 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getFileExtension, MIME_QCM } from "@/lib/file-utils";
+import { NotebookRenderer } from "@/components/viewers/notebook-renderer";
+import { getContributionPreviewViewerType } from "./preview-viewer";
 import { useTranslations } from "next-intl";
 
 const QCMViewerPreview = dynamic(
@@ -52,76 +53,9 @@ const PdfPreview = dynamic(
     },
 );
 
-/* ── Viewer type resolution ────────────────────────────────────────────────── */
-
-const MIME_TO_VIEWER: Record<string, string> = {
-    [MIME_QCM]: "qcm",
-    "application/pdf": "pdf",
-    "text/markdown": "markdown",
-    "text/x-markdown": "markdown",
-    "image/png": "image",
-    "image/jpeg": "image",
-    "image/gif": "image",
-    "image/webp": "image",
-    "image/svg+xml": "image",
-    "video/mp4": "video",
-    "video/webm": "video",
-    "video/ogg": "video",
-    "audio/mpeg": "audio",
-    "audio/wav": "audio",
-    "audio/ogg": "audio",
-    "audio/flac": "audio",
-    "audio/aac": "audio",
-    "audio/mp3": "audio",
-    "text/csv": "csv",
-    "application/csv": "csv",
-};
-
-const EXT_TO_VIEWER: Record<string, string> = {
-    qcm: "qcm",
-    pdf: "pdf",
-    md: "markdown",
-    markdown: "markdown",
-    png: "image",
-    jpg: "image",
-    jpeg: "image",
-    gif: "image",
-    webp: "image",
-    svg: "image",
-    mp4: "video",
-    webm: "video",
-    mov: "video",
-    mp3: "audio",
-    wav: "audio",
-    flac: "audio",
-    m4a: "audio",
-    aac: "audio",
-    csv: "csv",
-};
-
-const TEXT_EXTS = new Set([
-    "txt", "log", "ini", "cfg", "conf", "tex", "latex",
-    "js", "ts", "jsx", "tsx", "py", "java", "c", "cpp", "h", "hpp",
-    "rs", "go", "rb", "php", "cs", "swift", "kt", "scala",
-    "html", "css", "scss", "json", "yaml", "yml", "toml", "xml",
-    "sql", "sh", "bash", "zsh", "lua", "r",
-]);
-
-function getViewerType(mimeType: string, fileName: string): string {
-    if (MIME_TO_VIEWER[mimeType]) return MIME_TO_VIEWER[mimeType];
-    if (mimeType.startsWith("image/")) return "image";
-    if (mimeType.startsWith("video/")) return "video";
-    if (mimeType.startsWith("audio/")) return "audio";
-    if (mimeType.startsWith("text/")) return "code";
-    const ext = getFileExtension(fileName);
-    if (EXT_TO_VIEWER[ext]) return EXT_TO_VIEWER[ext];
-    if (TEXT_EXTS.has(ext)) return "code";
-    return "generic";
-}
-
 /* ── Text preview (markdown / code / csv) ──────────────────────────────────── */
 
-function TextPreview({ url, type }: { url: string; type: "markdown" | "code" | "csv" }) {
+function TextPreview({ url, type }: { url: string; type: "markdown" | "code" | "csv" | "notebook" }) {
     const t = useTranslations("Preview");
     const [content, setContent] = useState<string>("");
     const [loading, setLoading] = useState(true);
@@ -152,6 +86,14 @@ function TextPreview({ url, type }: { url: string; type: "markdown" | "code" | "
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none h-full overflow-y-auto px-8 py-6">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            </div>
+        );
+    }
+
+    if (type === "notebook") {
+        return (
+            <div className="h-full overflow-y-auto bg-zinc-200 dark:bg-zinc-800/50">
+                <NotebookRenderer content={content} />
             </div>
         );
     }
@@ -204,6 +146,7 @@ const VIEWER_ICONS: Record<string, React.ElementType> = {
     markdown: Code2,
     code: Code2,
     csv: Code2,
+    notebook: Code2,
     qcm: ListChecks,
     generic: Eye,
 };
@@ -216,6 +159,7 @@ const VIEWER_ICON_COLORS: Record<string, string> = {
     markdown: "text-green-600",
     code: "text-amber-500",
     csv: "text-teal-500",
+    notebook: "text-orange-500",
     qcm: "text-violet-500",
     generic: "text-muted-foreground",
 };
@@ -233,11 +177,11 @@ export function PreviewDialog({
 }) {
     const t = useTranslations("Preview");
     const displayFileName = fileName || t("titleDefault");
-    const viewerType = getViewerType(mimeType, displayFileName);
+    const viewerType = getContributionPreviewViewerType(mimeType, displayFileName);
     const Icon = VIEWER_ICONS[viewerType] ?? Eye;
     const iconColor = VIEWER_ICON_COLORS[viewerType] ?? "";
 
-    const isLarge = viewerType === "pdf" || viewerType === "code" || viewerType === "markdown" || viewerType === "csv" || viewerType === "qcm";
+    const isLarge = viewerType === "pdf" || viewerType === "code" || viewerType === "markdown" || viewerType === "csv" || viewerType === "notebook" || viewerType === "qcm";
 
     return (
         <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -277,7 +221,7 @@ export function PreviewDialog({
                         </div>
                     )}
 
-                    {(viewerType === "markdown" || viewerType === "code" || viewerType === "csv") && (
+                    {(viewerType === "markdown" || viewerType === "code" || viewerType === "csv" || viewerType === "notebook") && (
                         <TextPreview key={url} url={url} type={viewerType} />
                     )}
 

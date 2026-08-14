@@ -851,6 +851,12 @@
     "previewUnavailableTitle": "Preview unavailable"
   },
   "Viewers": {
+    "notebook": {
+      "title": "Jupyter notebook",
+      "invalid": "This file is not a valid Jupyter notebook.",
+      "empty": "This notebook has no cells.",
+      "imageOutput": "Notebook output"
+    },
     "videoTitle": "Video Player",
     "videoNotSupported": "Your browser does not support the video tag.",
     "audioNotSupported": "Your browser does not support the audio element.",

@@ -103,6 +103,17 @@ const CodeViewer = dynamic(
   },
 );
 
+const NotebookViewer = dynamic(
+  () =>
+    import("@/components/viewers/notebook-viewer").then(
+      (mod) => mod.NotebookViewer,
+    ),
+  {
+    loading: () => <Skeleton className="h-full w-full rounded-none" />,
+    ssr: false,
+  },
+);
+
 const CsvViewer = dynamic(
   () => import("@/components/viewers/csv-viewer").then((mod) => mod.CsvViewer),
   {
@@ -583,6 +594,9 @@ export function MaterialViewer({
                 materialId={materialId}
                 fileName={fileName}
               />
+            )}
+            {viewerType === "notebook" && (
+              <NotebookViewer fileKey={fileKey} materialId={materialId} />
             )}
             {viewerType === "csv" && (
               <CsvViewer

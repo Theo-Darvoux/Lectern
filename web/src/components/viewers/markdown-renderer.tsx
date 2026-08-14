@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo } from "react";
-import ReactMarkdown, { type Components, type Options } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkWikiLink from "remark-wiki-link";
 import remarkMark from "@/lib/remark-mark";
@@ -19,6 +19,8 @@ interface MarkdownRendererProps {
     material?: Record<string, unknown>;
     className?: string;
     previewMode?: boolean;
+    /** Resolve trusted image-only schemes before react-markdown sanitizes URLs. */
+    resolveImageUrl?: (url: string) => string | null;
 }
 
 const sanitizeSchema = {
@@ -30,6 +32,13 @@ const sanitizeSchema = {
         span: [...(defaultSchema.attributes?.span || []), "className"],
         img: [...(defaultSchema.attributes?.img || []), "className", "src", "alt", "loading"],
         mark: ["className"],
+    },
+    protocols: {
+        ...defaultSchema.protocols,
+        // Notebook attachments reach a caller-provided resolver after the AST
+        // is sanitized. Unresolved attachment URLs are still rejected by
+        // react-markdown's default URL transform.
+        src: [...(defaultSchema.protocols?.src || []), "attachment"],
     },
 };
 
@@ -55,7 +64,7 @@ function getTextFromChildren(children: React.ReactNode, depth = 0): string {
     return "";
 }
 
-export function MarkdownRenderer({ content, material, className, previewMode }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, material, className, previewMode, resolveImageUrl }: MarkdownRendererProps) {
     const components: Components = useMemo(() => ({
         img: (props) => {
             const { src, alt } = props;
@@ -236,12 +245,24 @@ export function MarkdownRenderer({ content, material, className, previewMode }: 
         },
     }), [material, previewMode]);
 
+    const urlTransform = useMemo<NonNullable<Options["urlTransform"]>>(
+        () => (url, key, node) => {
+            if (key === "src" && node.tagName === "img") {
+                const resolved = resolveImageUrl?.(url);
+                if (resolved) return resolved;
+            }
+            return defaultUrlTransform(url);
+        },
+        [resolveImageUrl],
+    );
+
     return (
         <div className={cn(className, previewMode && "prose-sm pointer-events-none select-none")}>
             <ReactMarkdown
                 remarkPlugins={remarkPlugins}
                 rehypePlugins={rehypePlugins}
                 components={components}
+                urlTransform={urlTransform}
             >
                 {content}
             </ReactMarkdown>

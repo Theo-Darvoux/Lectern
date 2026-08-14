@@ -84,6 +84,13 @@ Reverting creates a new PR containing the inverse operations and auto-approves i
 | `POST` | `/api/pull-requests/{id}/comments` | Add a comment (supports threading via `parent_id`) |
 | `GET` | `/api/events/sse` | Master SSE stream for notifications, PRs, and selected entity topics |
 
+### File previews
+
+Reviewers can preview supported files before approving an operation. Jupyter
+notebooks (`.ipynb`) are shown as a read-only sequence of Markdown and code
+cells with common text, error, Markdown, and raster-image outputs. The preview
+never executes notebook code; active HTML and SVG outputs are not rendered.
+
 ---
 
 ## Real-time updates (SSE)

@@ -8,8 +8,10 @@ import { ArrowLeft, Loader2, AlertCircle, FileText, Image as ImageIcon, Video as
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/lib/api-client";
-import { getFileBadgeColor, getFileBadgeLabel, getFileExtension, MIME_QCM } from "@/lib/file-utils";
+import { getFileBadgeColor, getFileBadgeLabel } from "@/lib/file-utils";
 import { MarkdownRenderer } from "@/components/viewers/markdown-renderer";
+import { NotebookRenderer } from "@/components/viewers/notebook-renderer";
+import { getContributionPreviewViewerType } from "./preview-viewer";
 import { useTranslations } from "next-intl";
 
 const PdfPreview = dynamic(
@@ -36,59 +38,7 @@ const QCMViewerPreview = dynamic(
     },
 );
 
-const MIME_TO_VIEWER: Record<string, string> = {
-    [MIME_QCM]: "qcm",
-    "application/pdf": "pdf",
-    "text/markdown": "markdown",
-    "text/x-markdown": "markdown",
-    "image/png": "image",
-    "image/jpeg": "image",
-    "image/gif": "image",
-    "image/webp": "image",
-    "image/svg+xml": "image",
-    "video/mp4": "video",
-    "video/webm": "video",
-    "video/ogg": "video",
-    "audio/mpeg": "audio",
-    "audio/wav": "audio",
-    "audio/ogg": "audio",
-    "audio/flac": "audio",
-    "audio/aac": "audio",
-    "audio/mp3": "audio",
-    "text/csv": "csv",
-    "application/csv": "csv",
-};
-
-const EXT_TO_VIEWER: Record<string, string> = {
-    qcm: "qcm",
-    pdf: "pdf", md: "markdown", markdown: "markdown",
-    png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", svg: "image",
-    mp4: "video", webm: "video", mov: "video",
-    mp3: "audio", wav: "audio", flac: "audio", m4a: "audio", aac: "audio",
-    csv: "csv",
-};
-
-const TEXT_EXTS = new Set([
-    "txt", "log", "ini", "cfg", "conf", "tex", "latex",
-    "js", "ts", "jsx", "tsx", "py", "java", "c", "cpp", "h", "hpp",
-    "rs", "go", "rb", "php", "cs", "swift", "kt", "scala",
-    "html", "css", "scss", "json", "yaml", "yml", "toml", "xml",
-    "sql", "sh", "bash", "zsh", "lua", "r",
-]);
-
-function getViewerType(mimeType: string, fileName: string): string {
-    if (MIME_TO_VIEWER[mimeType]) return MIME_TO_VIEWER[mimeType];
-    if (mimeType.startsWith("image/")) return "image";
-    if (mimeType.startsWith("video/")) return "video";
-    if (mimeType.startsWith("audio/")) return "audio";
-    if (mimeType.startsWith("text/")) return "code";
-    const ext = getFileExtension(fileName);
-    if (EXT_TO_VIEWER[ext]) return EXT_TO_VIEWER[ext];
-    if (TEXT_EXTS.has(ext)) return "code";
-    return "generic";
-}
-
-function TextPreview({ url, type }: { url: string; type: "markdown" | "code" | "csv" }) {
+function TextPreview({ url, type }: { url: string; type: "markdown" | "code" | "csv" | "notebook" }) {
     const t = useTranslations("Preview");
     const [content, setContent] = useState("");
     const [loading, setLoading] = useState(true);
@@ -119,6 +69,13 @@ function TextPreview({ url, type }: { url: string; type: "markdown" | "code" | "
                 prose-td:border prose-td:border-border prose-td:px-3 prose-td:py-2
                 [&_mark]:bg-yellow-200 [&_mark]:text-yellow-900 dark:[&_mark]:bg-yellow-500/20 dark:[&_mark]:text-yellow-200">
                 <MarkdownRenderer content={content} />
+            </div>
+        );
+    }
+    if (type === "notebook") {
+        return (
+            <div className="h-full overflow-y-auto bg-zinc-200 dark:bg-zinc-800/50">
+                <NotebookRenderer content={content} />
             </div>
         );
     }
@@ -158,12 +115,12 @@ function GenericFallback({ url, fileName, mimeType }: { url: string; fileName: s
 
 const VIEWER_ICONS: Record<string, React.ElementType> = {
     pdf: FileText, image: ImageIcon, video: VideoIcon, audio: Music,
-    markdown: Code2, code: Code2, csv: Code2, qcm: ListChecks, generic: Eye,
+    markdown: Code2, code: Code2, csv: Code2, notebook: Code2, qcm: ListChecks, generic: Eye,
 };
 const VIEWER_ICON_COLORS: Record<string, string> = {
     pdf: "text-red-500", image: "text-blue-500", video: "text-purple-500",
     audio: "text-pink-500", markdown: "text-green-600", code: "text-amber-500",
-    csv: "text-teal-500", qcm: "text-violet-500", generic: "text-muted-foreground",
+    csv: "text-teal-500", notebook: "text-orange-500", qcm: "text-violet-500", generic: "text-muted-foreground",
 };
 
 export function PRPreviewPageContent() {
@@ -212,7 +169,7 @@ export function PRPreviewPageContent() {
         return () => { cancelled = true; };
     }, [prId, opIndex]);
 
-    const viewerType = presignedUrl ? getViewerType(mimeType, fileName) : "generic";
+    const viewerType = presignedUrl ? getContributionPreviewViewerType(mimeType, fileName) : "generic";
     const Icon = VIEWER_ICONS[viewerType] ?? Eye;
     const iconColor = VIEWER_ICON_COLORS[viewerType] ?? "";
 
@@ -299,7 +256,7 @@ export function PRPreviewPageContent() {
                                 <audio src={presignedUrl} controls className="w-full max-w-xl" />
                             </div>
                         )}
-                        {(viewerType === "markdown" || viewerType === "code" || viewerType === "csv") && (
+                        {(viewerType === "markdown" || viewerType === "code" || viewerType === "csv" || viewerType === "notebook") && (
                             <TextPreview key={presignedUrl} url={presignedUrl} type={viewerType} />
                         )}
                         {viewerType === "qcm" && (

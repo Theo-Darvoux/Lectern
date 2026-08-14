@@ -40,7 +40,7 @@ export const ACCEPTED_FILE_TYPES = [
     // .NET
     ".cs", ".vb", ".fs", ".fsx", ".swift",
     // Data science / stats
-    ".r", ".rmd", ".jl", ".m",
+    ".r", ".rmd", ".ipynb", ".jl", ".m",
     // Functional / other
     ".ml", ".mli", ".hs", ".lhs", ".ex", ".exs", ".erl", ".hrl",
     ".clj", ".cljs", ".cljc", ".edn", ".elm",
@@ -191,6 +191,7 @@ export const EXT_TO_MIME: Record<string, string> = {
     // Data science / stats
     r: "text/x-r",
     rmd: "text/plain",
+    ipynb: "application/json",
     jl: "text/x-julia",
     m: "text/plain",
     // Functional / other
@@ -319,6 +320,7 @@ export const EXT_BADGE_COLORS: Record<string, string> = {
     html: "bg-orange-100 text-orange-800 dark:bg-orange-950/40 dark:text-orange-300",
     css: "bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300",
     json: "bg-zinc-100 text-zinc-800 dark:bg-zinc-800/40 dark:text-zinc-300",
+    ipynb: "bg-orange-100 text-orange-800 dark:bg-orange-950/40 dark:text-orange-300",
     qcm: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
 };
 
@@ -385,6 +387,7 @@ export const EXT_ICON_COLORS: Record<string, string> = {
     html: "text-orange-600 dark:text-orange-400",
     css: "text-blue-600 dark:text-blue-400",
     json: "text-zinc-600 dark:text-zinc-400",
+    ipynb: "text-orange-600 dark:text-orange-400",
     qcm: "text-violet-600 dark:text-violet-400",
 };
 
@@ -674,6 +677,9 @@ export function getViewerType(mimeType: string, fileName: string): string {
 
     // QCM check before other lookups
     if (mimeType === MIME_QCM || ext === "qcm") return "qcm";
+    // Browsers report notebooks as generic JSON or plain text, so the extension
+    // must win before those MIME types fall through to the code viewer.
+    if (ext === "ipynb") return "notebook";
 
     // 1. Exact MIME match
     if (MIME_TO_VIEWER[mimeType]) return MIME_TO_VIEWER[mimeType];
@@ -695,6 +701,3 @@ export function getViewerType(mimeType: string, fileName: string): string {
 
     return "generic";
 }
-
-
-

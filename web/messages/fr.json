@@ -851,6 +851,12 @@
     "previewUnavailableTitle": "Aperçu non disponible"
   },
   "Viewers": {
+    "notebook": {
+      "title": "Notebook Jupyter",
+      "invalid": "Ce fichier n’est pas un notebook Jupyter valide.",
+      "empty": "Ce notebook ne contient aucune cellule.",
+      "imageOutput": "Résultat du notebook"
+    },
     "videoTitle": "Lecteur Vidéo",
     "videoNotSupported": "Votre navigateur ne supporte pas la balise vidéo.",
     "audioNotSupported": "Votre navigateur ne supporte pas l'élément audio.",
