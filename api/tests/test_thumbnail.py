@@ -507,6 +507,10 @@ async def test_thumbnail_office_creates_proper_suffix_and_runs_soffice() -> None
     try:
         with (
             patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value="/opt/libreoffice/program/soffice",
+            ),
+            patch(
                 "app.workers.upload.stages.thumbnail.async_sandboxed_run",
                 side_effect=fake_run,
             ),
@@ -679,6 +683,10 @@ async def test_thumbnail_ipynb_calls_soffice_and_thumbnail_pdf() -> None:
     try:
         with (
             patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value="/opt/libreoffice/program/soffice",
+            ),
+            patch(
                 "app.workers.upload.stages.thumbnail.async_sandboxed_run",
                 new_callable=AsyncMock,
             ) as mock_run,
@@ -745,6 +753,10 @@ async def test_thumbnail_ipynb_falls_back_to_embedded_plot_if_soffice_fails() ->
 
     try:
         with (
+            patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value="/opt/libreoffice/program/soffice",
+            ),
             patch(
                 "app.workers.upload.stages.thumbnail.async_sandboxed_run",
                 new_callable=AsyncMock,
