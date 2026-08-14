@@ -44,6 +44,8 @@ from app.services.pr import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pull-requests", tags=["pull-requests"])
+
+
 @router.post("", response_model=PullRequestOut, status_code=201)
 async def create_pull_request(
     data: PullRequestCreate,

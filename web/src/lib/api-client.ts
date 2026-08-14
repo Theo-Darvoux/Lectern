@@ -295,12 +295,18 @@ export async function apiFetchBlob(
 const _URL_CACHE_TTL_MS = 12 * 60 * 1000;
 const _urlCache = new Map<string, { url: string; expiresAt: number }>();
 
-export async function getMaterialFileUrl(materialId: string): Promise<string> {
+export async function getMaterialFileUrl(
+    materialId: string,
+    signal?: AbortSignal,
+): Promise<string> {
     const cached = _urlCache.get(materialId);
     if (cached && Date.now() < cached.expiresAt) {
         return cached.url;
     }
-    const { url } = await apiFetch<{ url: string }>(`/materials/${materialId}/inline`);
+    const { url } = await apiFetch<{ url: string }>(`/materials/${materialId}/inline`, {
+        signal,
+        timeoutMs: 15_000,
+    });
     _urlCache.set(materialId, { url, expiresAt: Date.now() + _URL_CACHE_TTL_MS });
     return url;
 }
@@ -313,7 +319,7 @@ export function invalidateMaterialFileUrl(materialId: string): void {
 }
 
 export async function fetchMaterialFile(materialId: string, signal?: AbortSignal): Promise<Response> {
-    const url = await getMaterialFileUrl(materialId);
+    const url = await getMaterialFileUrl(materialId, signal);
     const res = await fetch(url, signal ? { signal } : undefined);
     if (!res.ok) {
         // A failed signed-URL fetch is usually a stale/expired token or an edge

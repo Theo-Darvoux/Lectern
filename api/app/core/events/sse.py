@@ -397,7 +397,9 @@ def _deliver_to_topic(topic: str, event: dict[str, Any]) -> None:
                     "data": event,
                 }
                 if _enqueue_or_request_resync(queue, outgoing):
-                    logger.warning("SSE topic queue overflow for topic %s; requesting resync", topic)
+                    logger.warning(
+                        "SSE topic queue overflow for topic %s; requesting resync", topic
+                    )
             continue
         if _enqueue_or_request_resync(queue, event):
             logger.warning("SSE topic queue overflow for topic %s; requesting resync", topic)

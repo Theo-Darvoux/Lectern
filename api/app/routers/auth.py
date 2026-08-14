@@ -171,6 +171,7 @@ def _login_response(user: User, response: Response, *, is_new: bool) -> TokenRes
             role=user.role.value,
             onboarded=user.onboarded,
             auto_approve=user.auto_approve,
+            completed_tutorials=list(user.completed_tutorials or []),
         ),
         is_new_user=is_new,
     )
@@ -261,6 +262,7 @@ async def guest_session(
             role=guest.role.value,
             onboarded=guest.onboarded,
             auto_approve=guest.auto_approve,
+            completed_tutorials=list(guest.completed_tutorials or []),
         ),
         is_new_user=False,
     )
@@ -599,6 +601,7 @@ async def refresh_token(
             role=user.role.value,
             onboarded=user.onboarded,
             auto_approve=user.auto_approve,
+            completed_tutorials=list(user.completed_tutorials or []),
         ),
     )
 

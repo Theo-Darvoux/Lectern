@@ -1,10 +1,12 @@
 import uuid
 
 import pytest
+from fastapi import Response
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User, UserRole
+from app.routers.auth import _login_response
 
 
 async def _create_user(db: AsyncSession) -> User:
@@ -38,6 +40,20 @@ async def test_me_returns_completed_tutorials(
     response = await client.get("/api/users/me", headers=_auth_headers(user))
     assert response.status_code == 200
     assert response.json()["completed_tutorials"] == []
+
+
+@pytest.mark.asyncio
+async def test_auth_response_preserves_completed_tutorials(
+    db_session: AsyncSession,
+) -> None:
+    """Login/bootstrap responses must preserve tutorial completion state."""
+    user = await _create_user(db_session)
+    user.completed_tutorials = ["welcome", "browse"]
+    await db_session.flush()
+
+    auth_response = _login_response(user, Response(), is_new=False)
+
+    assert auth_response.user.completed_tutorials == ["welcome", "browse"]
 
 
 @pytest.mark.asyncio

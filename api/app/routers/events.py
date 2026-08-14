@@ -103,6 +103,7 @@ async def _hold_master_lease(
             "A master live-update connection is already active for this user"
         ) from exc
 
+
 @router.get("/sse")
 @limiter.limit("60/minute")
 async def master_event_stream(

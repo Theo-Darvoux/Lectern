@@ -40,6 +40,8 @@ const PRESET_SCALES = new Set(["auto", "page-actual", "page-width", "page-fit", 
  *  timer runs pdf.js keeps the current canvas and applies a CSS transform, so the
  *  zoom is smooth and never flickers; the crisp re-render swaps in afterwards. */
 const GESTURE_DRAWING_DELAY = 400;
+const PDF_ENGINE_TIMEOUT_MS = 45_000;
+const PDF_DOCUMENT_TIMEOUT_MS = 60_000;
 
 export type PdfSpread = "none" | "odd" | "even";
 const SPREAD_VALUE: Record<PdfSpread, number> = { none: 0, odd: 1, even: 2 };
@@ -118,6 +120,7 @@ export function usePdfjsDocument({
     const [currentPage, setCurrentPage] = useState(1);
     const [scalePercent, setScalePercent] = useState(100);
     const [reloadNonce, setReloadNonce] = useState(0);
+    const [engineNonce, setEngineNonce] = useState(0);
 
     // ── Initialise the imperative viewer once ────────────────────────────────
     useEffect(() => {
@@ -125,6 +128,14 @@ export function usePdfjsDocument({
         const container = containerRef.current;
         const viewerEl = viewerElRef.current;
         if (!container || !viewerEl) return;
+
+        setStatus("loading");
+        setError(null);
+        const initTimeout = window.setTimeout(() => {
+            if (destroyed) return;
+            setError("PDF viewer initialization timed out. Please retry.");
+            setStatus("error");
+        }, PDF_ENGINE_TIMEOUT_MS);
 
         (async () => {
             const pdfjs = await import("pdfjs-dist");
@@ -174,11 +185,19 @@ export function usePdfjsDocument({
             eventBusRef.current = eventBus;
             linkServiceRef.current = linkService;
             viewerRef.current = viewer;
+            window.clearTimeout(initTimeout);
             setModulesReady(true);
-        })();
+        })().catch((err) => {
+            window.clearTimeout(initTimeout);
+            if (destroyed) return;
+            setModulesReady(false);
+            setError(err instanceof Error ? err.message : "Failed to initialize PDF viewer");
+            setStatus("error");
+        });
 
         return () => {
             destroyed = true;
+            window.clearTimeout(initTimeout);
             loadingTaskRef.current?.destroy();
             loadingTaskRef.current = null;
             docRef.current?.destroy();
@@ -196,7 +215,7 @@ export function usePdfjsDocument({
             workerRef.current = null;
             setModulesReady(false);
         };
-    }, []);
+    }, [engineNonce]);
 
     // ── Load (or reload) the document ────────────────────────────────────────
     useEffect(() => {
@@ -211,10 +230,19 @@ export function usePdfjsDocument({
 
         const task = pdfjs.getDocument({ url, worker: pdfWorkerRef.current ?? undefined });
         loadingTaskRef.current = task;
+        let timedOut = false;
+        const loadTimeout = window.setTimeout(() => {
+            if (cancelled) return;
+            timedOut = true;
+            setError("PDF document loading timed out. Please retry.");
+            setStatus("error");
+            void task.destroy();
+        }, PDF_DOCUMENT_TIMEOUT_MS);
 
         task.promise.then(
             (doc) => {
-                if (cancelled) { doc.destroy(); return; }
+                window.clearTimeout(loadTimeout);
+                if (cancelled || timedOut) { doc.destroy(); return; }
                 docRef.current?.destroy();
                 docRef.current = doc;
                 viewer.setDocument(doc);
@@ -223,7 +251,8 @@ export function usePdfjsDocument({
                 setStatus("ready");
             },
             (err: Error) => {
-                if (cancelled || err?.name === "AbortException") return;
+                window.clearTimeout(loadTimeout);
+                if (cancelled || timedOut || err?.name === "AbortException") return;
                 setError(err?.message ?? "Failed to load PDF");
                 setStatus("error");
             },
@@ -231,6 +260,7 @@ export function usePdfjsDocument({
 
         return () => {
             cancelled = true;
+            window.clearTimeout(loadTimeout);
             task.destroy();
         };
     }, [url, modulesReady, reloadNonce]);
@@ -349,7 +379,15 @@ export function usePdfjsDocument({
         const viewer = viewerRef.current;
         if (viewer) viewer.spreadMode = SPREAD_VALUE[spread];
     }, []);
-    const reload = useCallback(() => { setReloadNonce((n) => n + 1); }, []);
+    const reload = useCallback(() => {
+        setError(null);
+        setStatus("loading");
+        if (modulesReady) {
+            setReloadNonce((n) => n + 1);
+        } else {
+            setEngineNonce((n) => n + 1);
+        }
+    }, [modulesReady]);
 
     return {
         containerRef,

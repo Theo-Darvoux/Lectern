@@ -97,6 +97,7 @@ class UserBrief(BaseModel):
     role: str
     onboarded: bool
     auto_approve: bool
+    completed_tutorials: list[str] = Field(default_factory=list)
 
     @field_serializer("avatar_url")
     def serialize_avatar_url(self, value: str | None) -> str | None:
