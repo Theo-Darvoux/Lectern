@@ -127,6 +127,55 @@ class TestRateLimitUploads:
         await rate_limit_uploads(request, user, db, redis)
 
     @pytest.mark.asyncio
+    async def test_registered_upload_group_bypasses_only_per_file_upload_counter(self):
+        """One admitted folder consumes bounded group slots, not 2,000 account requests."""
+        from app.dependencies.rate_limit import _UPLOAD_LIMITS, rate_limit_uploads
+
+        minute_limit, _ = _UPLOAD_LIMITS["privileged"]
+        redis = self._make_redis(minute_count=minute_limit + 1, daily_count=1)
+        redis.register_script = MagicMock(return_value=AsyncMock(return_value=1))
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.url.path = "/api/upload"
+        request.headers = {
+            "X-Upload-Group-ID": str(uuid.uuid4()),
+            "X-Upload-ID": str(uuid.uuid4()),
+        }
+
+        await rate_limit_uploads(
+            request,
+            self._make_user(UserRole.MODERATOR),
+            AsyncMock(),
+            redis,
+        )
+
+        redis.pipeline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upload_group_cannot_bypass_non_upload_mutation_limit(self):
+        """The group capability is ignored by QCM/material mutation routes."""
+        from app.dependencies.rate_limit import _UPLOAD_LIMITS, rate_limit_uploads
+
+        minute_limit, _ = _UPLOAD_LIMITS["privileged"]
+        redis = self._make_redis(minute_count=minute_limit + 1, daily_count=1)
+        redis.register_script = MagicMock(return_value=AsyncMock(return_value=1))
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.url.path = "/api/qcm/stage"
+        request.headers = {
+            "X-Upload-Group-ID": str(uuid.uuid4()),
+            "X-Upload-ID": str(uuid.uuid4()),
+        }
+
+        with pytest.raises(RateLimitError, match="uploading too fast"):
+            await rate_limit_uploads(
+                request,
+                self._make_user(UserRole.MODERATOR),
+                AsyncMock(),
+                redis,
+            )
+
+    @pytest.mark.asyncio
     async def test_daily_limit_flags_user(self):
         """Exceeding the daily limit triggers flag_user_account."""
         from app.dependencies.rate_limit import _UPLOAD_LIMITS, rate_limit_uploads

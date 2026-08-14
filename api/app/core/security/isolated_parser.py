@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.common.upload_limits import maximum_upload_size_bytes
 from app.core.media.mimetypes import OLE2_MIME_TYPES, ZIP_MIME_TYPES
 from app.core.security.file_security._concurrency import image_guard, run_managed_subprocess
 from app.core.security.processing_paths import make_processing_temp_dir, make_processing_temp_path
@@ -337,6 +338,7 @@ async def extract_zip_isolated(
         rw_paths=[extraction_root],
         timeout=timeout,
         python_runtime=True,
+        file_size_limit_bytes=maximum_upload_size_bytes(),
         check=False,
     )
     if result.returncode != 0:

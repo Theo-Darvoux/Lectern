@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.config import settings
 from app.core.common.exceptions import BadRequestError
 from app.routers.upload import batch_zip
 
@@ -110,3 +111,25 @@ def test_extract_zip_persists_canonical_relative_path(tmp_path) -> None:
     assert skipped == []
     assert entries[0].relative_path == "Folder/file.txt"
     assert entries[0].filename == "file.txt"
+
+
+@pytest.mark.asyncio
+async def test_isolated_batch_extraction_uses_the_largest_admitted_file_limit(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch extraction must not reject a member accepted by per-MIME upload policy."""
+    monkeypatch.setattr(settings, "processing_root", str(tmp_path))
+    monkeypatch.setattr(settings, "sandbox_file_size_limit_mb", 1)
+    archive_path = tmp_path / "large-member.zip"
+    extraction_path = tmp_path / "extracted-large"
+    extraction_path.mkdir()
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("lecture.mp4", b"0" * (2 * 1024 * 1024))
+
+    entries, skipped = await batch_zip._extract_zip_bounded(
+        str(archive_path), str(extraction_path), max_members=10
+    )
+
+    assert skipped == []
+    assert entries[0].size == 2 * 1024 * 1024

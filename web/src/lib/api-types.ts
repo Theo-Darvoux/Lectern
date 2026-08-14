@@ -1800,6 +1800,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/upload/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Upload Group */
+        post: operations["create_upload_group_api_upload_groups_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/upload/init": {
         parameters: {
             query?: never;
@@ -2531,12 +2548,34 @@ export interface components {
          * @description Response from POST /upload/batch-zip.
          */
         BatchZipResponse: {
+            /** Batch Id */
+            batch_id: string;
             /** Files */
             files: components["schemas"]["BatchZipEntry"][];
             /** Skipped */
             skipped: number;
             /** Errors */
             errors: string[];
+        };
+        /**
+         * UploadGroupOut
+         * @description Server-issued capability for a bounded folder upload.
+         */
+        UploadGroupOut: {
+            /** Group Id */
+            group_id: string;
+            /** Max Files */
+            max_files: number;
+            /** Expires In */
+            expires_in: number;
+        };
+        /**
+         * UploadGroupRequest
+         * @description Reserve a bounded set of per-file admissions for one folder.
+         */
+        UploadGroupRequest: {
+            /** File Count */
+            file_count: number;
         };
         /** Body_parse_moodle_xml_api_qcm_parse_moodle_post */
         Body_parse_moodle_xml_api_qcm_parse_moodle_post: {
@@ -3702,6 +3741,16 @@ export interface components {
             recommended_path: string;
             /** Direct Threshold Mb */
             direct_threshold_mb: number;
+            /** Batch Max Zip Size Bytes */
+            batch_max_zip_size_bytes: number;
+            /** Batch Max Total Extracted Bytes */
+            batch_max_total_extracted_bytes: number;
+            /** Batch Max Files */
+            batch_max_files: number;
+            /** Batch Max Files Privileged */
+            batch_max_files_privileged: number;
+            /** Batch Max Path Depth */
+            batch_max_path_depth: number;
         };
         /**
          * UploadHistoryItem
@@ -7384,7 +7433,9 @@ export interface operations {
     upload_batch_zip_api_upload_batch_zip_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Upload-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7401,6 +7452,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BatchZipResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_upload_group_api_upload_groups_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UploadGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadGroupOut"];
                 };
             };
             /** @description Validation Error */

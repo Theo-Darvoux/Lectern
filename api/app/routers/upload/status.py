@@ -10,6 +10,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.common.batch_upload_limits import (
+    BATCH_MAX_FILES,
+    BATCH_MAX_FILES_PRIVILEGED,
+    BATCH_MAX_PATH_DEPTH,
+    BATCH_MAX_TOTAL_EXTRACTED_BYTES,
+    BATCH_MAX_ZIP_SIZE_BYTES,
+)
 from app.core.common.exceptions import BadRequestError, ForbiddenError
 from app.core.common.upload_limits import upload_size_limit
 from app.core.database.database import get_db
@@ -49,6 +56,11 @@ class UploadConfigOut(BaseModel):
     max_size_mb_by_mime: dict[str, int]
     recommended_path: str  # "direct" | "tus"
     direct_threshold_mb: int  # files below this size → use direct path
+    batch_max_zip_size_bytes: int
+    batch_max_total_extracted_bytes: int
+    batch_max_files: int
+    batch_max_files_privileged: int
+    batch_max_path_depth: int
 
 
 @router.get("/config", response_model=UploadConfigOut)
@@ -75,6 +87,11 @@ async def get_upload_config() -> UploadConfigOut:
         },
         recommended_path="direct",
         direct_threshold_mb=settings.direct_upload_threshold_mb,
+        batch_max_zip_size_bytes=BATCH_MAX_ZIP_SIZE_BYTES,
+        batch_max_total_extracted_bytes=BATCH_MAX_TOTAL_EXTRACTED_BYTES,
+        batch_max_files=BATCH_MAX_FILES,
+        batch_max_files_privileged=BATCH_MAX_FILES_PRIVILEGED,
+        batch_max_path_depth=BATCH_MAX_PATH_DEPTH,
     )
 
 

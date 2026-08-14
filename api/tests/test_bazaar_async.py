@@ -301,6 +301,85 @@ async def test_fail_closed_bazaar_error_prevents_publication(mock_redis: AsyncMo
     assert all('"status": "clean"' not in payload for payload in emitted)
 
 
+@pytest.mark.asyncio
+async def test_fail_closed_bazaar_retries_transient_outage(mock_redis: AsyncMock) -> None:
+    """A brief Bazaar outage must not fail an otherwise clean folder entry."""
+    from app.core.common.exceptions import ServiceUnavailableError
+    from app.workers.upload.pipeline import UploadPipeline
+
+    scanner = MagicMock()
+    scanner.check_malwarebazaar = AsyncMock(
+        side_effect=[
+            ServiceUnavailableError("Bazaar unavailable"),
+            ServiceUnavailableError("Bazaar unavailable"),
+            None,
+        ]
+    )
+    pipeline = UploadPipeline(
+        WorkerContext(redis=mock_redis, db_sessionmaker=None, job_try=1, scanner=scanner),
+        user_id="user-123",
+        upload_id="upload-abc",
+        quarantine_key="quarantine/user-123/upload-abc/file.pdf",
+        original_filename="file.pdf",
+        mime_type="application/pdf",
+        expected_sha256=None,
+    )
+    pipeline.original_sha256 = "deadbeef" * 8
+    pipeline.cache = MagicMock()
+    pipeline.cache.emit_event = AsyncMock()
+    mock_redis.get.return_value = None
+
+    with (
+        patch("app.workers.upload.pipeline.settings") as mock_settings,
+        patch("app.workers.upload.pipeline.asyncio.sleep", new_callable=AsyncMock) as sleep,
+    ):
+        mock_settings.bazaar_async_enabled = True
+        mock_settings.malwarebazaar_fail_closed = True
+        mock_settings.upload_pipeline_max_seconds = 600
+        await pipeline._check_bazaar_before_finalize()
+
+    assert scanner.check_malwarebazaar.await_count == 3
+    assert sleep.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_bazaar_exhaustion_has_retryable_error(mock_redis: AsyncMock) -> None:
+    """A sustained outage remains fail-closed but is not mislabeled as malware."""
+    from app.core.common.exceptions import ServiceUnavailableError
+    from app.workers.upload.exceptions import UploadError
+    from app.workers.upload.pipeline import UploadPipeline
+
+    scanner = MagicMock()
+    scanner.check_malwarebazaar = AsyncMock(
+        side_effect=ServiceUnavailableError("Bazaar unavailable")
+    )
+    pipeline = UploadPipeline(
+        WorkerContext(redis=mock_redis, db_sessionmaker=None, job_try=1, scanner=scanner),
+        user_id="user-123",
+        upload_id="upload-abc",
+        quarantine_key="quarantine/user-123/upload-abc/file.pdf",
+        original_filename="file.pdf",
+        mime_type="application/pdf",
+        expected_sha256=None,
+    )
+    pipeline.original_sha256 = "deadbeef" * 8
+    pipeline.cache = MagicMock()
+    pipeline.cache.emit_event = AsyncMock()
+    mock_redis.get.return_value = None
+
+    with (
+        patch("app.workers.upload.pipeline.settings") as mock_settings,
+        patch("app.workers.upload.pipeline.asyncio.sleep", new_callable=AsyncMock),
+        pytest.raises(UploadError, match="temporarily unavailable.*retry"),
+    ):
+        mock_settings.bazaar_async_enabled = True
+        mock_settings.malwarebazaar_fail_closed = True
+        mock_settings.upload_pipeline_max_seconds = 600
+        await pipeline._check_bazaar_before_finalize()
+
+    assert scanner.check_malwarebazaar.await_count == 3
+
+
 # ── check_bazaar worker ───────────────────────────────────────────────────────
 
 

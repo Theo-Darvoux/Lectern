@@ -104,6 +104,7 @@ async def run_managed_subprocess(
     rw_paths: list[Path | str] | None = None,
     ro_paths: list[Path | str] | None = None,
     python_runtime: bool = False,
+    file_size_limit_bytes: int | None = None,
 ) -> subprocess.CompletedProcess[Any]:
     """Run a cancellation-safe sandboxed subprocess under the global limit with an end-to-end deadline."""
     start_time = asyncio.get_running_loop().time()
@@ -117,6 +118,7 @@ async def run_managed_subprocess(
                 rw_paths=rw_paths,
                 ro_paths=ro_paths,
                 python_runtime=python_runtime,
+                file_size_limit_bytes=file_size_limit_bytes,
             )
     if check and result.returncode != 0:
         raise subprocess.CalledProcessError(

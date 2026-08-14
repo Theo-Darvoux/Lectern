@@ -73,6 +73,21 @@ def upload_size_limit(
     return _configured_bytes("max_file_size_mb", settings.max_file_size_mb, config), True
 
 
+def maximum_upload_size_bytes(config: Mapping[str, Any] | None = None) -> int:
+    """Return the largest configured per-file admission limit."""
+    configured_limits = (
+        ("max_file_size_mb", settings.max_file_size_mb),
+        ("max_svg_size_mb", settings.max_svg_size_mb),
+        ("max_image_size_mb", settings.max_image_size_mb),
+        ("max_audio_size_mb", settings.max_audio_size_mb),
+        ("max_video_size_mb", settings.max_video_size_mb),
+        ("max_document_size_mb", settings.max_document_size_mb),
+        ("max_office_size_mb", settings.max_office_size_mb),
+        ("max_text_size_mb", settings.max_text_size_mb),
+    )
+    return max(_configured_bytes(key, fallback, config) for key, fallback in configured_limits)
+
+
 def enforce_upload_size_limit(
     mime_type: str,
     size_bytes: int,

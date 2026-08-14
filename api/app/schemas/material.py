@@ -209,9 +209,24 @@ class BatchZipEntry(BaseModel):
 class BatchZipResponse(BaseModel):
     """Response from POST /upload/batch-zip."""
 
+    batch_id: str
     files: list[BatchZipEntry]
     skipped: int
     errors: list[str]
+
+
+class UploadGroupRequest(BaseModel):
+    """Reserve a bounded set of per-file admissions for one folder."""
+
+    file_count: int = Field(ge=1)
+
+
+class UploadGroupOut(BaseModel):
+    """Server-issued capability for a bounded folder upload."""
+
+    group_id: str
+    max_files: int
+    expires_in: int
 
 
 # ── V2 endpoints ──────────────────────────────────────────────────────────────

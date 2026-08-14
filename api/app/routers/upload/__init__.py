@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.routers.upload.batch_zip import router as batch_zip_router
 from app.routers.upload.direct import upload_file
+from app.routers.upload.groups import router as groups_router
 from app.routers.upload.helpers import (
     _FAST_QUEUE_NAME,
     _FAST_QUEUE_THRESHOLD,
@@ -61,6 +62,7 @@ router.add_api_route(
 )
 
 router.include_router(batch_zip_router)
+router.include_router(groups_router)
 router.include_router(presigned_router)
 router.include_router(sse_router)
 router.include_router(status_router)

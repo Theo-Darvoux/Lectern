@@ -208,6 +208,11 @@ async def test_batch_entries_never_share_an_async_session(
     with (
         patch("app.routers.upload.batch_zip._reserve_storage_limit", new_callable=AsyncMock),
         patch("app.routers.upload.batch_zip._check_pending_cap", new_callable=AsyncMock),
+        patch(
+            "app.routers.upload.batch_zip._claim_direct_upload_idempotency",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
         patch("app.routers.upload.batch_zip._create_upload_row", side_effect=observe_session),
         patch("app.routers.upload.batch_zip._queue_processing_after_commit"),
         patch("app.routers.upload.batch_zip.persist_post_commit_jobs", new_callable=AsyncMock),
@@ -224,6 +229,72 @@ async def test_batch_entries_never_share_an_async_session(
     assert response.status_code == 202
     assert len(response.json()["files"]) == 2
     assert len(sessions) == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_retry_reuses_committed_entries(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """A lost batch response can be retried without uploading every file again."""
+    user = await _create_user(db_session)
+    batch_id = str(uuid.uuid4())
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("folder/one.pdf", b"%PDF-1.4\none")
+    payload = archive.getvalue()
+
+    def entry_session() -> AsyncSession:
+        return AsyncSession(bind=db_session.bind, expire_on_commit=False)
+
+    with (
+        patch("app.routers.upload.batch_zip.async_session_factory", side_effect=entry_session),
+        patch("app.routers.upload.batch_zip._reserve_storage_limit", new_callable=AsyncMock),
+        patch("app.routers.upload.batch_zip._check_pending_cap", new_callable=AsyncMock),
+        patch("app.routers.upload.batch_zip._queue_processing_after_commit"),
+        patch("app.routers.upload.batch_zip.persist_post_commit_jobs", new_callable=AsyncMock),
+        patch("app.routers.upload.batch_zip.dispatch_post_commit_actions", new_callable=AsyncMock),
+        patch("app.routers.upload.batch_zip.get_s3_client") as s3_context,
+    ):
+        s3 = AsyncMock()
+        s3_context.return_value.__aenter__.return_value = s3
+        headers = {**_auth_headers(user), "X-Upload-ID": batch_id}
+        first = await client.post(
+            "/api/upload/batch-zip",
+            files={"file": ("batch.zip", payload, "application/zip")},
+            headers=headers,
+        )
+        second = await client.post(
+            "/api/upload/batch-zip",
+            files={"file": ("batch.zip", payload, "application/zip")},
+            headers=headers,
+        )
+
+    assert first.status_code == second.status_code == 202
+    assert first.json()["batch_id"] == second.json()["batch_id"] == batch_id
+    assert first.json()["files"] == second.json()["files"]
+    s3.upload_file.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_group_admits_a_bounded_folder(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    mock_redis: AsyncMock,
+) -> None:
+    user = await _create_user(db_session)
+
+    response = await client.post(
+        "/api/upload/groups",
+        json={"file_count": 50},
+        headers=_auth_headers(user),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["max_files"] == 50
+    uuid.UUID(body["group_id"])
+    mock_redis.set.assert_awaited()
 
 
 @pytest.mark.asyncio

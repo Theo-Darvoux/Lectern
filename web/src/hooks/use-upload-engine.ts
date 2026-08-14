@@ -2,10 +2,10 @@ import { useCallback, useRef, useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { useStagingStore } from "@/lib/staging-store";
 import type { CreateMaterialOp } from "@/lib/staging-store";
-import { MAX_FILE_SIZE_MB, ACCEPTED_FILE_TYPES, guessFileMime, sniffFileType, MIME_TO_EXT } from "@/lib/file-utils";
-import { uploadFile, getUploadConfig, logicalFileSize, trackExistingUpload, uploadBatchZip, uploadLimitMbForMime, type UploadConfig, type TusUploadHandle } from "@/lib/upload-client";
+import { MAX_FILE_SIZE_MB, ACCEPTED_FILE_TYPES, guessFileMime } from "@/lib/file-utils";
+import { uploadFile, beginUploadGroup, getUploadConfig, logicalFileSize, trackExistingUpload, uploadLimitMbForMime, type UploadConfig, type TusUploadHandle } from "@/lib/upload-client";
 import { ApiError } from "@/lib/api-client";
-import { collectDroppedItems, extractDirPaths, traverseFolder, zipScannedFiles, type ScannedFile } from "@/lib/drop-utils";
+import { collectDroppedItems, extractDirPaths, traverseFolder, type ScannedFile } from "@/lib/drop-utils";
 import { compareNatural } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTranslations } from "next-intl";
@@ -18,10 +18,30 @@ import {
     useUploadTelemetry,
 } from "@/lib/upload-telemetry";
 import { useDropZoneStore } from "@/lib/drop-zone-store";
+import { prepareScannedFiles } from "@/lib/upload-preflight";
 
 const MAX_CONCURRENT_UPLOADS = 4;
 const maxFilesPerBatch_DEFAULT = 50;
+const maxFilesPerBatch_PRIVILEGED_DEFAULT = 2_000;
 const PRIVILEGED_ROLES = new Set(["moderator", "bureau", "vieux"]);
+
+export function canStageSuccessfulUploads(doneCount: number, inFlightCount: number): boolean {
+    return doneCount > 0 && inFlightCount === 0;
+}
+
+export function isInterruptedQueueMatch(
+    item: QueueItem,
+    scanned: ScannedFile,
+    referenceLostMessage: string,
+): boolean {
+    const itemPath = item.targetDirPath ? `${item.targetDirPath}/${item.fileName}` : item.fileName;
+    return (
+        (item.status === "error" || item.status === "paused") &&
+        (item.referenceLost === true || item.error === referenceLostMessage) &&
+        itemPath === scanned.relativePath &&
+        item.fileSize === scanned.file.size
+    );
+}
 
 export function fileSize(bytes: number, t: (key: string, values?: Record<string, string | number | Date>) => string): string {
     if (bytes < 1024) return t("units.b", { count: bytes });
@@ -68,7 +88,6 @@ export function useUploadEngine({
     const t = useTranslations("Upload");
     const { user } = useAuth();
     const isPrivileged = PRIVILEGED_ROLES.has(user?.role ?? "");
-    const maxFilesPerBatch = isPrivileged ? Infinity : maxFilesPerBatch_DEFAULT;
 
     const addOperations = useStagingStore((s) => s.addOperations);
     const nextTempId = useStagingStore((s) => s.nextTempId);
@@ -115,6 +134,11 @@ export function useUploadEngine({
     const [isDragging, setIsDragging] = useState(false);
     const initialFilesProcessedRef = useRef(false);
     const [config, setConfig] = useState<UploadConfig | null>(null);
+    const maxFilesPerBatch = isPrivileged
+        ? config?.batch_max_files_privileged ?? maxFilesPerBatch_PRIVILEGED_DEFAULT
+        : Math.min(config?.batch_max_files ?? maxFilesPerBatch_DEFAULT, maxFilesPerBatch_DEFAULT);
+    const stagedDirPathsRef = useRef<Set<string>>(new Set());
+    const pendingMimeGroupIdsRef = useRef<Map<string, string>>(new Map());
 
     useEffect(() => {
         getUploadConfig().then(setConfig).catch(() => {
@@ -136,6 +160,7 @@ export function useUploadEngine({
                 updateItem(item.clientId, {
                     status: item.tusUrl ? "paused" : "error",
                     error: t("errorReferenceLost"),
+                    referenceLost: true,
                 });
             }
         });
@@ -184,7 +209,7 @@ export function useUploadEngine({
             previewUrlsRef.current.set(item.clientId, URL.createObjectURL(file));
         }
 
-        updateItem(item.clientId, { error: undefined, processingStatus: "" });
+        updateItem(item.clientId, { error: undefined, processingStatus: "", referenceLost: false });
         setReAttachingClientId(null);
         toast.success(t("completed"));
     }, [files, updateItem, t, reAttachingClientId]);
@@ -314,6 +339,7 @@ export function useUploadEngine({
                     },
                     signal: controller.signal,
                     uploadId: item.uploadId,
+                    uploadGroupId: item.uploadGroupId,
                     tusUrl: item.tusUrl,
                     t: t,
                 });
@@ -390,8 +416,8 @@ export function useUploadEngine({
     );
 
     const processScannedFiles = useCallback(
-        async (scanned: ScannedFile[]) => {
-            if (scanned.length === 0) return;
+        async (scanned: ScannedFile[], uploadGroupId?: string) => {
+            if (scanned.length === 0) return 0;
 
             // Resolve MIME types from extension for files the browser mis-labels as octet-stream
             const normalized = scanned.map(s => {
@@ -420,25 +446,13 @@ export function useUploadEngine({
             // decorated name and a generic MIME type. Sniff magic bytes to recover the
             // real type, and restore the canonical extension so valid files are not
             // rejected here or by server-side filename validation.
-            valid = await Promise.all(valid.map(async (s) => {
-                let f = s.file;
-                const ext = `.${f.name.split(".").pop()?.toLowerCase()}`;
-                const extKnown = config
-                    ? config.allowed_extensions.includes(ext)
-                    : ACCEPTED_FILE_TYPES.split(",").includes(ext);
-                if (extKnown) return s;
-                let mime = f.type;
-                if (!mime || mime === "application/octet-stream") {
-                    const sniffed = await sniffFileType(f);
-                    if (sniffed) mime = sniffed.mime;
-                }
-                const canonicalExt = MIME_TO_EXT[mime];
-                const name = canonicalExt ? `${f.name}.${canonicalExt}` : f.name;
-                if (mime === f.type && name === f.name) return s;
-                f = new File([f], name, { type: mime, lastModified: f.lastModified });
-                return { ...s, file: f };
-            }));
+            const prepared = await prepareScannedFiles(valid, config?.allowed_extensions);
+            prepared.unreadable.forEach((path) => {
+                toast.error(`${path}: ${t("failedToReadDropped")}`);
+            });
+            valid = prepared.files;
 
+            let deferredCount = 0;
             if (config) {
                 const toProcess: ScannedFile[] = [];
                 const needsMime: ScannedFile[] = [];
@@ -463,16 +477,45 @@ export function useUploadEngine({
 
                 if (needsMime.length > 0) {
                     setPendingMimeFiles(prev => [...prev, ...needsMime]);
+                    if (uploadGroupId) {
+                        needsMime.forEach((item) => {
+                            pendingMimeGroupIdsRef.current.set(item.relativePath, uploadGroupId);
+                        });
+                    }
+                    deferredCount = needsMime.length;
                 }
                 valid = toProcess;
             }
 
-            if (valid.length === 0) return;
+            let recoveredCount = 0;
+            const newFiles: ScannedFile[] = [];
+            const queueItems = useUploadQueue.getState().items;
+            for (const scannedFile of valid) {
+                const interrupted = queueItems.find((item) =>
+                    isInterruptedQueueMatch(item, scannedFile, t("errorReferenceLost")),
+                );
+                if (!interrupted || fileObjectsRef.current.has(interrupted.clientId)) {
+                    newFiles.push(scannedFile);
+                    continue;
+                }
+                fileObjectsRef.current.set(interrupted.clientId, scannedFile.file);
+                updateItem(interrupted.clientId, {
+                    status: "pending",
+                    error: undefined,
+                    referenceLost: false,
+                    uploadGroupId: uploadGroupId ?? interrupted.uploadGroupId,
+                });
+                start(interrupted.clientId);
+                recoveredCount += 1;
+            }
+            valid = newFiles;
+
+            if (valid.length === 0) return deferredCount + recoveredCount;
 
             const remaining = maxFilesPerBatch - useUploadQueue.getState().items.length;
             if (remaining <= 0) {
                 toast.error(t("maxFilesPerBatch", { count: maxFilesPerBatch }));
-                return;
+                return 0;
             }
             if (valid.length > remaining) {
                 toast.warning(t("onlyAddingCapped", { count: remaining, limit: maxFilesPerBatch }));
@@ -499,6 +542,7 @@ export function useUploadEngine({
                 return {
                     clientId,
                     uploadId: crypto.randomUUID(),
+                    uploadGroupId,
                     fileName: file.name,
                     fileSize: file.size,
                     fileMimeType: file.type || "application/octet-stream",
@@ -512,8 +556,9 @@ export function useUploadEngine({
 
             addItems(newItems);
             for (const item of newItems) start(item.clientId);
+            return newItems.length + deferredCount + recoveredCount;
         },
-        [start, nextTempId, addItems, config, maxFilesPerBatch, t],
+        [start, nextTempId, addItems, updateItem, config, maxFilesPerBatch, t],
     );
 
     const handleMimeConfirm = useCallback(
@@ -523,18 +568,29 @@ export function useUploadEngine({
                 ...scanned,
                 file: new File([scanned.file], scanned.file.name, { type: mime, lastModified: scanned.file.lastModified }),
             }));
-            processScannedFiles(resolved);
+            const byGroup = new Map<string | undefined, ScannedFile[]>();
+            for (const scanned of resolved) {
+                const groupId = pendingMimeGroupIdsRef.current.get(scanned.relativePath);
+                pendingMimeGroupIdsRef.current.delete(scanned.relativePath);
+                byGroup.set(groupId, [...(byGroup.get(groupId) ?? []), scanned]);
+            }
+            for (const [groupId, groupFiles] of byGroup) {
+                void processScannedFiles(groupFiles, groupId);
+            }
         },
         [processScannedFiles],
     );
 
-    const dismissPendingMime = useCallback(() => setPendingMimeFiles([]), []);
+    const dismissPendingMime = useCallback(() => {
+        pendingMimeFiles.forEach((item) => pendingMimeGroupIdsRef.current.delete(item.relativePath));
+        setPendingMimeFiles([]);
+    }, [pendingMimeFiles]);
 
-    const processFolderViaZip = useCallback(
+    const processFolder = useCallback(
         async (entry: FileSystemDirectoryEntry, folderName: string) => {
             const placeholderId = crypto.randomUUID();
 
-            addItems([{
+            const placeholder: QueueItem = {
                 clientId: placeholderId,
                 uploadId: crypto.randomUUID(),
                 fileName: `${folderName}.zip`,
@@ -546,91 +602,60 @@ export function useUploadEngine({
                 processingStatus: t("scanningFolder"),
                 targetDirPath: "",
                 folderName,
-                isFromBatchZip: true,
-            }]);
+            };
+            addItems([placeholder]);
 
             const controller = new AbortController();
             abortControllersRef.current.set(placeholderId, controller);
 
             try {
                 updateItem(placeholderId, { status: "uploading", progress: 2, processingStatus: t("scanningFolder") });
-                const scanned = await traverseFolder(entry);
+                const scanResult = await traverseFolder(entry);
+                const scanned = scanResult.files;
+
+                if (scanResult.skipped.length > 0) {
+                    toast.warning(`${folderName}: ${t("filesSkipped", {
+                        count: scanResult.skipped.length,
+                        errors: scanResult.skipped.slice(0, 2).join(", ") + (scanResult.skipped.length > 2 ? "…" : ""),
+                    })}`);
+                }
 
                 if (scanned.length === 0) {
                     updateItem(placeholderId, { status: "error", error: t("folderEmpty") });
                     return;
                 }
 
-                updateItem(placeholderId, { progress: 5, processingStatus: t("zipping") });
-                const zipBlob = await zipScannedFiles(scanned, (ratio) => {
-                    updateUploadTelemetry(placeholderId, { progress: 5 + Math.round(ratio * 25) });
-                });
-
                 if (controller.signal.aborted) return;
-
-                updateItem(placeholderId, { processingStatus: t("uploadsInProgress") });
-                const response = await uploadBatchZip(zipBlob, {
-                    onProgress: (pct) => updateUploadTelemetry(placeholderId, { progress: 30 + Math.round(pct * 0.5) }),
-                    signal: controller.signal,
-                });
 
                 abortControllersRef.current.delete(placeholderId);
                 clearUploadTelemetry(placeholderId);
                 removeItem(placeholderId);
-
-                if (response.files.length === 0) {
-                    const msg = response.errors.length > 0 ? response.errors[0] : t("noValidFiles");
-                    toast.warning(`${folderName}: ${msg}`);
+                const remaining = maxFilesPerBatch - useUploadQueue.getState().items.length;
+                if (remaining <= 0) {
+                    const queued = await processScannedFiles(scanned);
+                    if (queued === 0) {
+                        addItems([{ ...placeholder, status: "error", error: t("noValidFiles") }]);
+                    }
                     return;
                 }
-
-                const newDirMap: DirPathMap = new Map();
-                for (const f of response.files) {
-                    const parts = f.relative_path.split("/");
-                    for (let depth = 1; depth < parts.length; depth++) {
-                        const dirPath = parts.slice(0, depth).join("/");
-                        if (!newDirMap.has(dirPath)) newDirMap.set(dirPath, nextTempId("dir"));
-                    }
-                }
-                if (newDirMap.size > 0) {
-                    setPendingDirPaths((prev) => new Map([...prev, ...newDirMap]));
-                }
-
-                const newItems: QueueItem[] = response.files.map((f) => {
-                    const clientId = crypto.randomUUID();
-                    quarantineKeysRef.current.set(clientId, f.quarantine_key);
-
-                    const parts = f.relative_path.split("/");
-                    const targetDirPath = parts.length > 1 ? parts.slice(0, -1).join("/") : folderName;
-
-                    return {
-                        clientId,
-                        uploadId: f.upload_id,
-                        fileName: f.filename,
-                        fileSize: f.size,
-                        fileMimeType: f.mime_type,
-                        title: titleFromFilename(f.filename),
-                        status: "pending" as const,
-                        progress: 0,
-                        processingStatus: "",
-                        targetDirPath,
-                        folderName,
-                        isFromBatchZip: true,
-                    };
-                });
-
-                addItems(newItems);
-                for (const item of newItems) start(item.clientId);
-
-                if (response.skipped > 0) {
-                    toast.warning(`${folderName}: ${t("filesSkipped", { count: response.skipped, errors: response.errors.slice(0, 2).join(", ") + (response.errors.length > 2 ? "…" : "") })}`);
+                const group = await beginUploadGroup(
+                    Math.min(scanned.length, remaining),
+                    controller.signal,
+                );
+                const queued = await processScannedFiles(scanned, group.group_id);
+                if (queued === 0) {
+                    addItems([{ ...placeholder, status: "error", error: t("noValidFiles") }]);
                 }
 
             } catch (err) {
                 const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : t("folderUploadFailed"));
                 if (msg !== "Upload cancelled") {
                     clearUploadTelemetry(placeholderId);
-                    updateItem(placeholderId, { status: "error", error: msg });
+                    const placeholderExists = useUploadQueue.getState().items.some(
+                        (item) => item.clientId === placeholderId,
+                    );
+                    if (placeholderExists) updateItem(placeholderId, { status: "error", error: msg });
+                    else addItems([{ ...placeholder, status: "error", error: msg }]);
                 } else {
                     clearUploadTelemetry(placeholderId);
                     removeItem(placeholderId);
@@ -638,7 +663,7 @@ export function useUploadEngine({
                 abortControllersRef.current.delete(placeholderId);
             }
         },
-        [addItems, updateItem, removeItem, nextTempId, start, t],
+        [addItems, updateItem, removeItem, processScannedFiles, maxFilesPerBatch, t],
     );
 
     const addFlatFiles = useCallback(
@@ -672,15 +697,17 @@ export function useUploadEngine({
             initialFilesProcessedRef.current = true;
             if (hasFiles) queueMicrotask(() => addFlatFiles(initialFiles!));
             if (hasFolders) {
-                for (const { entry, name } of initialFolderEntries!) {
-                    void processFolderViaZip(entry, name);
-                }
+                void (async () => {
+                    for (const { entry, name } of initialFolderEntries!) {
+                        await processFolder(entry, name);
+                    }
+                })();
             }
         }
         if (!open) {
             initialFilesProcessedRef.current = false;
         }
-    }, [open, initialFiles, initialFolderEntries, addFlatFiles, processFolderViaZip]);
+    }, [open, initialFiles, initialFolderEntries, addFlatFiles, processFolder]);
 
     const dismissOverlay = useDropZoneStore((s) => s.dismissOverlay);
 
@@ -719,10 +746,10 @@ export function useUploadEngine({
             }
             if (dropped.files.length > 0) processScannedFiles(dropped.files);
             for (const { entry, name } of dropped.folders) {
-                void processFolderViaZip(entry, name);
+                await processFolder(entry, name);
             }
         },
-        [processScannedFiles, processFolderViaZip, t],
+        [processScannedFiles, processFolder, t],
     );
 
     useEffect(() => {
@@ -818,12 +845,21 @@ export function useUploadEngine({
         (f) => f.status === "uploading" || f.status === "pending" || f.status === "paused",
     );
 
-    const canStage = doneFiles.length > 0 && inFlightFiles.length === 0 && errorFiles.length === 0;
+    const canStage = canStageSuccessfulUploads(doneFiles.length, inFlightFiles.length);
 
     const handleStage = () => {
         if (!canStage) return;
 
-        const dirPaths = [...pendingDirPaths.keys()].sort(
+        const requiredDirPaths = new Set<string>();
+        for (const file of doneFiles) {
+            const parts = file.targetDirPath.split("/").filter(Boolean);
+            for (let depth = 1; depth <= parts.length; depth++) {
+                requiredDirPaths.add(parts.slice(0, depth).join("/"));
+            }
+        }
+        const dirPaths = [...pendingDirPaths.keys()].filter(
+            (path) => requiredDirPaths.has(path) && !stagedDirPathsRef.current.has(path),
+        ).sort(
             (a, b) => a.split("/").length - b.split("/").length || compareNatural(a, b),
         );
 
@@ -864,12 +900,16 @@ export function useUploadEngine({
         });
 
         addOperations([...dirOps, ...matOps]);
+        dirPaths.forEach((path) => stagedDirPathsRef.current.add(path));
 
         doneFiles.forEach((f: QueueItem) => {
             removeItem(f.clientId);
             fileObjectsRef.current.delete(f.clientId);
         });
-        setPendingDirPaths(new Map());
+        if (errorFiles.length === 0) {
+            setPendingDirPaths(new Map());
+            stagedDirPathsRef.current.clear();
+        }
 
         const total = dirOps.length + matOps.length;
         toast.success(t("addedToDraft", { count: total }));
@@ -912,7 +952,9 @@ export function useUploadEngine({
         fileObjectsRef.current.clear();
         quarantineKeysRef.current.clear();
         previewUrlsRef.current.clear();
+        pendingMimeGroupIdsRef.current.clear();
         setPendingDirPaths(new Map());
+        stagedDirPathsRef.current.clear();
         uploadQueueRef.current = [];
         onOpenChange(false);
     };

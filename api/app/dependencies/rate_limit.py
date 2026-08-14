@@ -1,5 +1,6 @@
 import logging
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Request
 from redis.asyncio import Redis
@@ -7,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.common.constants import PRIVILEGED_ROLES
-from app.core.common.exceptions import RateLimitError
+from app.core.common.exceptions import BadRequestError, ForbiddenError, RateLimitError
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis
 from app.core.security.security import BROWSER_READ_COOKIE, decode_token
@@ -118,6 +119,63 @@ _UPLOAD_LIMITS: dict[str, tuple[int, int]] = {
     "privileged": (50, 500) if not settings.is_dev else (200, 5000),
 }
 
+UPLOAD_GROUP_KEY_PREFIX = "upload:group:"
+_UPLOAD_GROUP_SEEN_PREFIX = "upload:group:seen:"
+_UPLOAD_GROUP_ELIGIBLE_PATHS = frozenset(
+    {
+        "/api/upload",
+        "/api/upload/init",
+        "/api/upload/presigned-multipart/init",
+        "/api/upload/tus",
+        "/api/upload/tus/",
+    }
+)
+_CONSUME_UPLOAD_GROUP_LUA = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return -1 end
+local ok, group = pcall(cjson.decode, raw)
+if not ok or tostring(group.user_id) ~= ARGV[1] then return -2 end
+if redis.call('SISMEMBER', KEYS[2], ARGV[2]) == 1 then return 1 end
+if redis.call('SCARD', KEYS[2]) >= tonumber(group.max_files) then return 0 end
+redis.call('SADD', KEYS[2], ARGV[2])
+local ttl = redis.call('TTL', KEYS[1])
+if ttl > 0 then redis.call('EXPIRE', KEYS[2], ttl) end
+return 1
+"""
+
+
+async def _consume_upload_group(request: Request, user: User, redis: Redis) -> bool:  # type: ignore[type-arg]
+    group_id = request.headers.get("X-Upload-Group-ID")
+    if not group_id or request.method != "POST" or request.url.path not in _UPLOAD_GROUP_ELIGIBLE_PATHS:
+        return False
+
+    if user.role == UserRole.GUEST:
+        raise ForbiddenError("Guest uploads cannot use folder admission groups")
+    upload_id = request.headers.get("X-Upload-ID")
+    if not upload_id:
+        raise BadRequestError("X-Upload-ID is required with X-Upload-Group-ID")
+    try:
+        group_id = str(UUID(group_id))
+        upload_id = str(UUID(upload_id))
+    except ValueError:
+        raise BadRequestError("Upload group and upload IDs must be valid UUIDs")
+
+    script = redis.register_script(_CONSUME_UPLOAD_GROUP_LUA)
+    result = int(
+        await script(
+            keys=[f"{UPLOAD_GROUP_KEY_PREFIX}{group_id}", f"{_UPLOAD_GROUP_SEEN_PREFIX}{group_id}"],
+            args=[str(user.id), upload_id],
+            client=redis,
+        )
+    )
+    if result == 1:
+        return True
+    if result == -1:
+        raise BadRequestError("Upload folder admission expired; please select the folder again")
+    if result == -2:
+        raise ForbiddenError("Upload folder admission does not belong to you")
+    raise RateLimitError("Upload folder admission contains no remaining file slots")
+
 
 async def rate_limit_uploads(
     request: Request,
@@ -125,6 +183,9 @@ async def rate_limit_uploads(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> None:
+    if await _consume_upload_group(request, user, redis):
+        return
+
     tier = "privileged" if user.role in PRIVILEGED_ROLES else "default"
     minute_limit, daily_limit = _UPLOAD_LIMITS[tier]
 

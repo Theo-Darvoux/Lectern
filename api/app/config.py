@@ -269,7 +269,7 @@ class Settings(BaseSettings):
 
     # Stored as a comma-separated string so pydantic-settings never attempts JSON
     # parsing on it. Use the `cors_headers_list` property in application code.
-    cors_allowed_headers: str = "Content-Type,Authorization,X-Client-ID,X-Upload-ID,Accept,X-Requested-With,Upload-Checksum,Tus-Checksum-Algorithm"
+    cors_allowed_headers: str = "Content-Type,Authorization,X-Client-ID,X-Upload-ID,X-Upload-Group-ID,Accept,X-Requested-With,Upload-Checksum,Tus-Checksum-Algorithm"
     # Only these reverse proxies may supply X-Forwarded-For/Proto. The API's
     # direct listener must never accept a client-spoofed source address.
     trusted_proxy_hosts: str = "127.0.0.1,::1"

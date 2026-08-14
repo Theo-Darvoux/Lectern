@@ -7,9 +7,11 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config import settings
+from app.core.common.exceptions import ServiceUnavailableError
 from app.core.database.redis import redis_lock
 from app.core.events.processing import ProcessingFile
 from app.core.observability.metrics import mime_category as _mime_cat
@@ -48,6 +50,9 @@ from app.workers.upload.stages.scan_strip import (
 )
 
 logger = logging.getLogger(__name__)
+
+_BAZAAR_ATTEMPTS = 3
+_BAZAAR_RETRY_DELAYS_SECONDS = (0.5, 1.5)
 
 
 def _get_fallback_scanner() -> MalwareScanner:
@@ -537,7 +542,39 @@ class UploadPipeline:
         if scanner is None:
             scanner = _get_fallback_scanner()
         try:
-            threat = await scanner.check_malwarebazaar(self.original_sha256, self.original_filename)
+            threat: str | None = None
+            for attempt in range(_BAZAAR_ATTEMPTS):
+                try:
+                    threat = await scanner.check_malwarebazaar(
+                        self.original_sha256,
+                        self.original_filename,
+                    )
+                    break
+                except (httpx.HTTPError, ServiceUnavailableError) as exc:
+                    if attempt == _BAZAAR_ATTEMPTS - 1:
+                        raise UploadError(
+                            UploadStatus.FAILED,
+                            "External malware scan is temporarily unavailable; "
+                            "please retry this upload.",
+                        ) from exc
+
+                    delay = _BAZAAR_RETRY_DELAYS_SECONDS[attempt]
+                    if self._remaining_pipeline_seconds("malwarebazaar retry") <= delay:
+                        raise UploadError(
+                            UploadStatus.FAILED,
+                            "External malware scan is temporarily unavailable; "
+                            "please retry this upload.",
+                        ) from exc
+                    await self.emit_status(
+                        UploadStatus.PROCESSING,
+                        detail=(
+                            "External malware scan temporarily unavailable; "
+                            f"retrying ({attempt + 2}/{_BAZAAR_ATTEMPTS})"
+                        ),
+                        stage_name_or_label="finalizing",
+                        stage_percent=0.1,
+                    )
+                    await asyncio.sleep(delay)
         finally:
             if owns_scanner:
                 await scanner.close()
@@ -545,7 +582,7 @@ class UploadPipeline:
         if threat is not None:
             raise UploadError(
                 UploadStatus.MALICIOUS,
-                f"Known malware detected: {threat}",
+                f"ERR_MALWARE_DETECTED: Known malware detected: {threat}",
             )
 
     async def run(self) -> None:

@@ -155,12 +155,18 @@ def _validate_bind_path(path: Path | str, *, processing_root: Path) -> Path:
     return resolved
 
 
-def _resource_limit_prefix() -> list[str]:
+def _resource_limit_prefix(*, file_size_limit_bytes: int | None = None) -> list[str]:
     """Build a ``prlimit`` prefix without using unsafe Python ``preexec_fn``."""
     from app.config import settings
 
     memory_bytes = settings.sandbox_memory_limit_mb * 1024 * 1024
-    file_bytes = settings.sandbox_file_size_limit_mb * 1024 * 1024
+    file_bytes = (
+        settings.sandbox_file_size_limit_mb * 1024 * 1024
+        if file_size_limit_bytes is None
+        else file_size_limit_bytes
+    )
+    if file_bytes <= 0:
+        raise ValueError("Sandbox file-size limit must be positive")
     return [
         _resolve_prlimit(),
         f"--as={memory_bytes}",
@@ -178,6 +184,7 @@ def _sandbox_command(
     rw_paths: Sequence[Path | str] | None = None,
     ro_paths: Sequence[Path | str] | None = None,
     python_runtime: bool = False,
+    file_size_limit_bytes: int | None = None,
 ) -> list[str]:
     """Build the resource-limited Bubblewrap command."""
     if not cmd:
@@ -241,7 +248,12 @@ def _sandbox_command(
     for path in dict.fromkeys(validated_rw):
         bwrap_cmd.extend(["--bind", str(path), str(path)])
 
-    return [*bwrap_cmd, "--", *_resource_limit_prefix(), *cmd]
+    return [
+        *bwrap_cmd,
+        "--",
+        *_resource_limit_prefix(file_size_limit_bytes=file_size_limit_bytes),
+        *cmd,
+    ]
 
 
 def _read_sync_bounded_stream(stream: Any, max_bytes: int) -> bytes:
@@ -282,6 +294,7 @@ def sandboxed_run(
     timeout: int = 60,
     capture_output: bool = True,
     python_runtime: bool = False,
+    file_size_limit_bytes: int | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run a sandboxed process with one end-to-end deadline."""
     wrapped = _sandbox_command(
@@ -289,6 +302,7 @@ def sandboxed_run(
         rw_paths=rw_paths,
         ro_paths=ro_paths,
         python_runtime=python_runtime,
+        file_size_limit_bytes=file_size_limit_bytes,
     )
     deadline = time.monotonic() + timeout
 
@@ -451,6 +465,7 @@ async def async_sandboxed_run(
     ro_paths: Sequence[Path | str] | None = None,
     timeout: int = 60,
     python_runtime: bool = False,
+    file_size_limit_bytes: int | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run and reliably reap a sandboxed process under one deadline."""
     wrapped = _sandbox_command(
@@ -458,6 +473,7 @@ async def async_sandboxed_run(
         rw_paths=rw_paths,
         ro_paths=ro_paths,
         python_runtime=python_runtime,
+        file_size_limit_bytes=file_size_limit_bytes,
     )
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout

@@ -192,6 +192,24 @@ def test_sandboxed_run_ro_paths(
 
 @patch("app.core.security.sandbox.subprocess.Popen")
 @patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
+def test_sandboxed_run_accepts_an_operation_specific_output_limit(
+    _mock_which: MagicMock,
+    mock_popen: MagicMock,
+) -> None:
+    """A parser may widen only its output-file limit without changing global policy."""
+    _reset_bwrap_cache()
+    mock_popen.return_value = _make_mock_popen()
+
+    sandboxed_run(["echo", "hello"], file_size_limit_bytes=512 * 1024 * 1024)
+
+    command = mock_popen.call_args.args[0]
+    assert "--fsize=536870912" in command
+    assert f"--as={settings.sandbox_memory_limit_mb * 1024 * 1024}" in command
+    _reset_bwrap_cache()
+
+
+@patch("app.core.security.sandbox.subprocess.Popen")
+@patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
 def test_sandboxed_run_timeout_propagates(
     _mock_which: MagicMock,
     mock_popen: MagicMock,

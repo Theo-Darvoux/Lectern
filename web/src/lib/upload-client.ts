@@ -34,6 +34,8 @@ interface UploadFileOptions {
     signal?: AbortSignal;
     /** Stable UUID for this upload attempt — enables server-side idempotency on retry. */
     uploadId?: string;
+    /** Server-issued bounded admission capability for one folder. */
+    uploadGroupId?: string;
     /** Optional tus URL to resume from. */
     tusUrl?: string;
     /** Skip client-side image compression (useful for 4K+ scans) (U10). */
@@ -140,6 +142,11 @@ export interface UploadConfig {
     max_size_mb_by_mime: Record<string, number>;
     recommended_path: "direct" | "tus";
     direct_threshold_mb: number;
+    batch_max_zip_size_bytes?: number;
+    batch_max_total_extracted_bytes?: number;
+    batch_max_files?: number;
+    batch_max_files_privileged?: number;
+    batch_max_path_depth?: number;
 }
 
 /** Resolve the same MIME-specific upload cap advertised by the API. */
@@ -167,6 +174,35 @@ export async function getUploadConfig(): Promise<UploadConfig> {
     _configCache = config;
     _configCacheTime = now;
     return config;
+}
+
+export interface UploadGroup {
+    group_id: string;
+    max_files: number;
+    expires_in: number;
+}
+
+/** Admit a folder once; contained file IDs consume its bounded slots. */
+export async function beginUploadGroup(
+    fileCount: number,
+    signal?: AbortSignal,
+): Promise<UploadGroup> {
+    const response = await apiRequest("/upload/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_count: fileCount }),
+        signal,
+        timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS,
+    });
+    return response.json() as Promise<UploadGroup>;
+}
+
+function addUploadAdmissionHeaders(
+    headers: Record<string, string>,
+    options: Pick<UploadFileOptions, "uploadId" | "uploadGroupId">,
+): void {
+    if (options.uploadId) headers["X-Upload-ID"] = options.uploadId;
+    if (options.uploadGroupId) headers["X-Upload-Group-ID"] = options.uploadGroupId;
 }
 
 // ── Retry helpers ─────────────────────────────────────────────────────────────
@@ -265,14 +301,14 @@ async function _directUpload(
     file: File,
     options: UploadFileOptions,
 ): Promise<string> {
-    const { onProgress, onStatusUpdate, onBytesProgress, signal, uploadId } = options;
+    const { onProgress, onStatusUpdate, onBytesProgress, signal } = options;
     const form = new FormData();
     form.append("file", file, file.name);
 
     _onStatusUpdate(onStatusUpdate, "uploading", options.t);
 
     const headers: Record<string, string> = {};
-    if (uploadId) headers["X-Upload-ID"] = uploadId;
+    addUploadAdmissionHeaders(headers, options);
 
     const response = await apiRequest("/upload", {
         method: "POST",
@@ -361,6 +397,7 @@ async function _presignedMultipartUpload(
     const token = getAccessToken();
     const baseHeaders: Record<string, string> = { "X-Client-ID": getClientId() };
     if (token) baseHeaders["Authorization"] = `Bearer ${token}`;
+    addUploadAdmissionHeaders(baseHeaders, options);
 
     _onStatusUpdate(onStatusUpdate, "preparingMultipart", options.t);
 
@@ -517,6 +554,7 @@ function _tusUpload(
             "X-Client-ID": getClientId(),
         };
         if (token) headers["Authorization"] = `Bearer ${token}`;
+        addUploadAdmissionHeaders(headers, options);
 
         let quarantineKey: string | undefined;
 
@@ -619,6 +657,7 @@ export async function uploadFile(
         "X-Client-ID": getClientId(),
     };
     if (token) baseHeaders["Authorization"] = `Bearer ${token}`;
+    addUploadAdmissionHeaders(baseHeaders, options);
 
     // Compute hash for deduplication
     const sha256 = await sha256File(file, (pct) => onProgress?.(Math.round(pct * 0.04)), signal);
@@ -1025,6 +1064,7 @@ interface BatchZipEntry {
 }
 
 interface BatchZipResponse {
+    batch_id: string;
     files: BatchZipEntry[];
     skipped: number;
     errors: string[];
@@ -1075,14 +1115,25 @@ export async function trackExistingUpload(
  */
 export async function uploadBatchZip(
     zipBlob: Blob,
-    options: Pick<UploadFileOptions, "onProgress" | "signal"> = {},
+    options: Pick<UploadFileOptions, "onProgress" | "signal" | "uploadId"> = {},
 ): Promise<BatchZipResponse> {
     const { onProgress, signal } = options;
+    const config = await getUploadConfig();
+    const maxBatchBytes = config.batch_max_zip_size_bytes ?? 500 * 1024 * 1024;
+    if (zipBlob.size > maxBatchBytes) {
+        throw new ApiError(
+            413,
+            `Batch archive exceeds the ${Math.floor(maxBatchBytes / (1024 * 1024))} MiB limit`,
+        );
+    }
+
+    const batchId = options.uploadId ?? crypto.randomUUID();
     const token = getAccessToken();
     const headers: Record<string, string> = { "X-Client-ID": getClientId() };
     if (token) headers["Authorization"] = `Bearer ${token}`;
+    headers["X-Upload-ID"] = batchId;
 
-    return new Promise<BatchZipResponse>((resolve, reject) => {
+    const uploadOnce = () => new Promise<BatchZipResponse>((resolve, reject) => {
         if (signal?.aborted) {
             reject(new Error("Upload cancelled"));
             return;
@@ -1125,6 +1176,19 @@ export async function uploadBatchZip(
         form.append("file", zipBlob, "batch.zip");
         xhr.send(form);
     });
+
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await uploadOnce();
+        } catch (error) {
+            const retryable =
+                error instanceof ApiError
+                    ? _isRetryable(error.status)
+                    : error instanceof Error && error.message === "Network error during batch-zip upload";
+            if (!retryable || attempt >= _MAX_RETRIES || signal?.aborted) throw error;
+            await _sleep(500 * 2 ** attempt, signal);
+        }
+    }
 }
 
 // ── Status polling fallback ───────────────────────────────────────────────────

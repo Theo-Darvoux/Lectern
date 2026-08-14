@@ -21,6 +21,8 @@ export interface QueueItem {
     clientId: string;
     /** UUID used for server-side upload idempotency */
     uploadId: string;
+    /** Bounded server-issued folder admission capability. */
+    uploadGroupId?: string;
 
     // File identity (serializable)
     fileName: string;
@@ -55,6 +57,8 @@ export interface QueueItem {
 
     // Error (set once status === "error" | "virus")
     error?: string;
+    /** True when a reload discarded the browser-only File reference. */
+    referenceLost?: boolean;
 
     /** Relative directory path from drop root, e.g. "FolderA/sub". "" = current dir. */
     targetDirPath: string;

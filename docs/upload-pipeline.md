@@ -75,6 +75,32 @@ worker's security gate.
 
 The fast and slow queues run on separate worker replicas with different resource limits, preventing a large video transcode from blocking a quick image upload.
 
+### 5. Folder uploads
+
+The browser traverses folders, preserves each file's relative directory path,
+and sends every readable file through the normal per-file transfer strategy.
+Only four transfers/processors are active at once. This avoids constructing one
+large in-memory archive and gives every file its own resumable upload ID,
+progress, retry, and terminal status. An unreadable, unsupported, oversized, or
+malicious entry is reported on that entry and does not cancel clean siblings.
+Once all entries reach a terminal state, clean files can be added to the draft
+even while failed entries remain visible.
+
+Before the transfers start, the browser requests one bounded admission with
+`POST /api/upload/groups`. Each admitted file sends that group ID together with
+its stable upload ID. The server counts distinct IDs up to the role's advertised
+folder limit, so a large moderator folder does not weaken the ordinary upload
+rate limit or unrelated mutation limits. After a browser reload, persisted queue
+rows no longer hold their `File` objects; dropping the same folder again matches
+interrupted rows by relative path and size, restores those references, and
+resumes them in bulk.
+
+`POST /api/upload/batch-zip` remains available for older clients. Its current
+limits are advertised by `GET /api/upload/config`; clients should reuse one
+`X-Upload-ID` when retrying a batch. Entry IDs are derived from that batch ID,
+the tenant, relative path, and content hash, so a lost response can be retried
+without duplicating committed uploads.
+
 ---
 
 ## Phase 2 : Background processing (ARQ worker)
@@ -100,7 +126,10 @@ Two operations run concurrently:
 **MalwareBazaar** is synchronous by default because
 `MALWAREBAZAAR_FAIL_CLOSED=true`: a lookup error rejects publication. In
 fail-open mode, `BAZAAR_ASYNC_ENABLED=true` moves the lookup to a background job
-after the YARA gate; a later match retroactively quarantines references.
+after the YARA gate; a later match retroactively quarantines references. The
+fail-closed path retries short-lived service/network failures three times. If
+the service remains unavailable, the file fails with an explicit retry-later
+error rather than being labeled as malware.
 
 ### Stage 3 : Content-Addressed Storage (CAS)
 
@@ -137,7 +166,7 @@ On completion, `processing_status=complete`. Failure after 3 ARQ retries sets `p
 | OLE macro detected | Hard | Upload rejected |
 | CAS upload failure | Hard | ARQ retries (max 3), then `degraded` |
 | Thumbnail failure | Soft | No thumbnail, upload completes |
-| MalwareBazaar unreachable | Configurable | Fail-closed by default; asynchronous only in explicit fail-open mode |
+| MalwareBazaar unreachable | Configurable | Three bounded attempts, then retry-later in fail-closed mode; asynchronous only in explicit fail-open mode |
 
 ---
 

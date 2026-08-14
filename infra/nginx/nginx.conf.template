@@ -70,6 +70,25 @@ http {
 
         include /etc/nginx/nginx.eurooffice.snippet;
 
+        # Legacy batch archives need enough room for multipart framing and can
+        # spend longer than the generic API timeout in isolated extraction.
+        # The API still enforces the exact 500 MiB ZIP-content limit.
+        location = /api/upload/batch-zip {
+            set $api_backend api;
+            proxy_pass http://$api_backend:8000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+            proxy_http_version 1.1;
+            proxy_set_header Connection '';
+            client_max_body_size 501m;
+            proxy_request_buffering off;
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+
         location /api/ {
             set $api_backend api;
             proxy_pass http://$api_backend:8000;

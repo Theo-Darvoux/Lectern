@@ -227,6 +227,8 @@ app.add_middleware(
 
 import re
 
+from app.core.common.batch_upload_limits import BATCH_REQUEST_BODY_LIMIT_BYTES
+
 # These endpoints otherwise parse attacker-controlled JSON/multipart bodies in
 # memory before their route-level validators run. Keep the transport ceiling
 # close to the domain limits and enforce it even when nginx is bypassed.
@@ -238,7 +240,7 @@ app.add_middleware(
     path_limits={
         "/api/qcm/stage": 20 * 1024 * 1024,
         "/api/qcm/parse-moodle": 11 * 1024 * 1024,
-        "/api/upload/batch-zip": 500 * 1024 * 1024,
+        "/api/upload/batch-zip": BATCH_REQUEST_BODY_LIMIT_BYTES,
         "/api/admin/backup/restore/upload": 500 * 1024 * 1024,
     },
     pattern_limits=[
