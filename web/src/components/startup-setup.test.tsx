@@ -66,6 +66,7 @@ vi.mock("@/components/pr/global-drop-zone", () => ({ GlobalDropZone: () => null 
 vi.mock("lucide-react", () => ({ WifiOff: () => null }));
 
 import { ConfigProvider } from "./config-provider";
+import { AuthBootstrap } from "./auth-bootstrap";
 import { LayoutShell } from "./layout-shell";
 import { useConfigStore, useUIStore } from "@/lib/stores";
 
@@ -119,6 +120,7 @@ async function renderStartup() {
   await act(async () => {
     root.render(
       <ConfigProvider>
+        <AuthBootstrap />
         <LayoutShell>
           <div data-testid="setup-ui">Setup UI</div>
         </LayoutShell>

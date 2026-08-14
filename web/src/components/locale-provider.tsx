@@ -31,14 +31,16 @@ export function useLocaleContext(): LocaleContextValue {
 interface LocaleProviderProps {
   initialLocale: string;
   initialMessages: AbstractIntlMessages;
-  messagesByLocale: Record<string, AbstractIntlMessages>;
+  supportedLocales: readonly string[];
+  loadMessages: (locale: string) => Promise<AbstractIntlMessages>;
   children: ReactNode;
 }
 
 export function LocaleProvider({
   initialLocale,
   initialMessages,
-  messagesByLocale,
+  supportedLocales,
+  loadMessages,
   children,
 }: LocaleProviderProps) {
   const [locale, setLocale] = useState(initialLocale);
@@ -55,14 +57,13 @@ export function LocaleProvider({
   }, [initialLocale, initialMessages]);
 
   const changeLocale = useCallback(async (newLocale: string) => {
-    const newMessages = messagesByLocale[newLocale];
-    if (!newMessages) {
+    if (!supportedLocales.includes(newLocale)) {
       console.error(`Unsupported locale: ${newLocale}`);
       return;
     }
 
-    // The canonical bundles are already imported by ClientProviders, so avoid
-    // a second network request to stale duplicated files under public/messages.
+    const newMessages = await loadMessages(newLocale);
+
     document.cookie = `NEXT_LOCALE=${newLocale}; path=/; max-age=31536000; SameSite=Lax`;
 
     startTransition(() => {
@@ -72,7 +73,7 @@ export function LocaleProvider({
       // Keep the <html lang="…"> attribute in sync.
       document.documentElement.lang = newLocale;
     });
-  }, [messagesByLocale]);
+  }, [loadMessages, supportedLocales]);
 
   return (
     <LocaleContext.Provider value={{ locale, changeLocale, isPending }}>

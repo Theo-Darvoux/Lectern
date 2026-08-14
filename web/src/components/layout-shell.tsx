@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Navbar } from "@/components/navbar";
 import { MobileBottomBar } from "@/components/mobile-bottom-bar";
 import { Footer } from "@/components/footer";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { CookieBanner } from "@/components/cookie-banner";
 import { StagingFab } from "@/components/pr/staging-fab";
 
 const ReviewDrawer = dynamic(
@@ -20,7 +19,6 @@ const GlobalDropZone = dynamic(
 );
 import { useAuth } from "@/hooks/use-auth";
 import { useOffline } from "@/hooks/use-offline";
-import { initAuthSync } from "@/lib/auth-sync";
 import { WifiOff } from "lucide-react";
 import { cn, normalizePathname, sanitizeNext } from "@/lib/utils";
 
@@ -35,7 +33,6 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   const { hideFooter, navbarVisible } = useUIStore();
   const rawPathname = usePathname();
   const router = useRouter();
-  const authBootstrapStarted = useRef(false);
 
   // `trailingSlash: true` makes route guards vulnerable to direct-load vs
   // client-navigation mismatches unless every pathname is normalized first.
@@ -46,25 +43,6 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   const isPublicPage = pathname === "/setup" || pathname === "/login" || pathname === "/login/verify" || pathname === "/privacy" || pathname === "/terms";
   const isOnboardingPage = pathname === "/onboarding";
   const isPendingPage = pathname === "/pending-approval";
-
-  // Auth synchronization is app-lifetime state. Route navigation must not
-  // tear down its BroadcastChannel, visibility listener, or refresh timer.
-  useEffect(() => {
-    return initAuthSync();
-  }, []);
-
-  useEffect(() => {
-    // `/setup` is deliberately independent from session restoration. If setup
-    // later redirects to a normal route, auth bootstrapping starts there.
-    if (pathname === "/setup" || authBootstrapStarted.current || isAuthenticated || !isLoading) {
-      return;
-    }
-    authBootstrapStarted.current = true;
-    // Resolve auth on load. bootstrapAuth handles every case internally:
-    // reload (hint, no token) → refresh-first; cross-tab token → /users/me;
-    // no token and no hint → logged out without a network round-trip.
-    void bootstrapAuth();
-  }, [pathname, isAuthenticated, isLoading, bootstrapAuth]);
 
   useEffect(() => {
     if (isLoading || bootstrapError) return;
@@ -192,7 +170,6 @@ export function LayoutShell({ children }: { children: ReactNode }) {
           <GlobalDropZone />
         </>
       )}
-      <CookieBanner />
     </div>
   );
 }

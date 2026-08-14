@@ -3,41 +3,48 @@
 import { useState, useEffect, type ReactNode } from "react";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "@/components/ui/sonner";
-import { LayoutShell } from "@/components/layout-shell";
 import { ConfigProvider } from "@/components/config-provider";
 import { LocaleProvider } from "@/components/locale-provider";
-import { TutorialProvider } from "@/components/tutorials/tutorial-provider";
+import { AuthBootstrap } from "@/components/auth-bootstrap";
+import { RuntimeRouter } from "@/components/runtime-router";
+import { CookieBanner } from "@/components/cookie-banner";
 import type { AbstractIntlMessages } from "next-intl";
+import {
+  DEFAULT_LOCALE,
+  DEFAULT_MESSAGES,
+  isSupportedLocale,
+  loadLocaleMessages,
+  SUPPORTED_LOCALES,
+  type SupportedLocale,
+} from "@/lib/locale-messages";
 
-import enMessages from "../../messages/en.json";
-import frMessages from "../../messages/fr.json";
-
-const MESSAGES: Record<string, AbstractIntlMessages> = { en: enMessages, fr: frMessages };
-const DEFAULT_LOCALE = "fr";
-
-function getCookieLocale(): string {
+function getCookieLocale(): SupportedLocale {
   const match = document.cookie.match(/NEXT_LOCALE=([^;]+)/);
   const val = match?.[1];
-  return val && val in MESSAGES ? val : DEFAULT_LOCALE;
+  return val && isSupportedLocale(val) ? val : DEFAULT_LOCALE;
 }
 
 export function ClientProviders({ children }: { children: ReactNode }) {
-  const [locale, setLocale] = useState(DEFAULT_LOCALE);
-  const [messages, setMessages] = useState<AbstractIntlMessages>(MESSAGES[DEFAULT_LOCALE]);
+  const [locale, setLocale] = useState<SupportedLocale>(DEFAULT_LOCALE);
+  const [messages, setMessages] = useState<AbstractIntlMessages>(DEFAULT_MESSAGES);
 
   useEffect(() => {
     const cookieLocale = getCookieLocale();
-    if (cookieLocale !== DEFAULT_LOCALE) {
+    let active = true;
+    void loadLocaleMessages(cookieLocale).then((catalog) => {
+      if (!active) return;
       setLocale(cookieLocale);
-      setMessages(MESSAGES[cookieLocale]);
-    }
+      setMessages(catalog);
+    });
+    return () => { active = false; };
   }, []);
 
   return (
     <LocaleProvider
       initialLocale={locale}
       initialMessages={messages}
-      messagesByLocale={MESSAGES}
+      supportedLocales={SUPPORTED_LOCALES}
+      loadMessages={loadLocaleMessages}
     >
       <ThemeProvider
         attribute="class"
@@ -46,9 +53,10 @@ export function ClientProviders({ children }: { children: ReactNode }) {
         disableTransitionOnChange
       >
         <ConfigProvider>
-          <LayoutShell>{children}</LayoutShell>
-          <TutorialProvider />
+          <AuthBootstrap />
+          <RuntimeRouter>{children}</RuntimeRouter>
         </ConfigProvider>
+        <CookieBanner />
         <Toaster position="bottom-left" expand richColors />
       </ThemeProvider>
     </LocaleProvider>
