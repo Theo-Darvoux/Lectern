@@ -31,17 +31,24 @@ let cacheGeneration = 0;
 
 function runBounded<T>(task: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-        const run = () => {
+        const run = async () => {
             activeRequests += 1;
-            task()
-                .then(resolve, reject)
-                .finally(() => {
-                    activeRequests -= 1;
-                    requestQueue.shift()?.();
-                });
+            try {
+                resolve(await task());
+            } catch (error) {
+                reject(error);
+            } finally {
+                // Release the slot before the returned promise can wake its caller.
+                // This keeps the queue deterministic even when task() itself adds
+                // an async wrapper/microtask (as fetchMaterialThumbnailFresh does).
+                activeRequests -= 1;
+                requestQueue.shift()?.();
+            }
         };
-        if (activeRequests < MAX_CONCURRENT_REQUESTS) run();
-        else requestQueue.push(run);
+        if (activeRequests < MAX_CONCURRENT_REQUESTS) void run();
+        else requestQueue.push(() => {
+            void run();
+        });
     });
 }
 
