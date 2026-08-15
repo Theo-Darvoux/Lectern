@@ -173,8 +173,12 @@ async def test_pdf_thumbnail_raster_work_scales_with_requested_output() -> None:
     process = MagicMock(returncode=0, stdout=b"", stderr=b"")
 
     async def fake_run(command, **_kwargs):
-        png_argument = next(value for value in command if value.startswith("-sOutputFile="))
-        Image.new("RGB", (992, 1403), "white").save(Path(png_argument.split("=", 1)[1]))
+        if command[0] == "pdftoppm":
+            target = Path(f"{command[-1]}.png")
+        else:
+            png_argument = next(value for value in command if value.startswith("-sOutputFile="))
+            target = Path(png_argument.split("=", 1)[1])
+        Image.new("RGB", (992, 1403), "white").save(target)
         return process
 
     async def fake_render(_input, rendered_output, **_kwargs):
@@ -195,10 +199,57 @@ async def test_pdf_thumbnail_raster_work_scales_with_requested_output() -> None:
             await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
 
         command = sandbox_run.call_args.args[0]
+        assert command[0] == "pdftoppm"
+        assert "-png" in command
+        assert "-r" in command
+        assert "116" in command
+        assert "-singlefile" in command
+    finally:
+        input_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_pdf_thumbnail_falls_back_to_ghostscript_when_pdftoppm_missing() -> None:
+    from app.workers.upload.stages.thumbnail import _thumbnail_pdf
+
+    input_path = make_processing_temp_path(suffix=".pdf")
+    input_path.write_bytes(b"%PDF-1.4\n")
+    output_path = make_processing_temp_path(suffix=".webp")
+    output_path.unlink()
+    process = MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    async def fake_run(command, **_kwargs):
+        png_argument = next(value for value in command if value.startswith("-sOutputFile="))
+        Image.new("RGB", (992, 1403), "white").save(Path(png_argument.split("=", 1)[1]))
+        return process
+
+    async def fake_render(_input, rendered_output, **_kwargs):
+        rendered_output.write_bytes(b"webp")
+        return False
+
+    try:
+        with (
+            patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value=None,
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+                side_effect=fake_run,
+            ) as sandbox_run,
+            patch(
+                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
+                side_effect=fake_render,
+            ),
+        ):
+            await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
+
+        command = sandbox_run.call_args.args[0]
+        assert command[0] == "gs"
         assert "-r116" in command
         assert "-dTextAlphaBits=4" in command
         assert "-dGraphicsAlphaBits=4" in command
-        assert "-r150" not in command
     finally:
         input_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
@@ -218,9 +269,14 @@ async def test_sparse_single_page_pdf_keeps_first_page_when_second_is_missing() 
         nonlocal calls
         calls += 1
         if calls == 1:
-            png_argument = next(value for value in command if value.startswith("-sOutputFile="))
-            Image.new("RGB", (640, 640), "white").save(Path(png_argument.split("=", 1)[1]))
-        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+            if command[0] == "pdftoppm":
+                target = Path(f"{command[-1]}.png")
+            else:
+                png_argument = next(value for value in command if value.startswith("-sOutputFile="))
+                target = Path(png_argument.split("=", 1)[1])
+            Image.new("RGB", (640, 640), "white").save(target)
+            return MagicMock(returncode=0, stdout=b"", stderr=b"")
+        return MagicMock(returncode=99, stdout=b"", stderr=b"Page not found")
 
     async def render_sparse_page(_input, rendered_output, **_kwargs):
         rendered_output.write_bytes(b"usable-first-page")
@@ -353,8 +409,12 @@ async def test_pdf_thumbnail_uses_dynamic_dpi_for_oversized_pdf() -> None:
     process = MagicMock(returncode=0, stdout=b"", stderr=b"")
 
     async def fake_run(command, **_kwargs):
-        png_argument = next(value for value in command if value.startswith("-sOutputFile="))
-        Image.new("RGB", (780, 975), "white").save(Path(png_argument.split("=", 1)[1]))
+        if command[0] == "pdftoppm":
+            target = Path(f"{command[-1]}.png")
+        else:
+            png_argument = next(value for value in command if value.startswith("-sOutputFile="))
+            target = Path(png_argument.split("=", 1)[1])
+        Image.new("RGB", (780, 975), "white").save(target)
         return process
 
     async def fake_render(_input, rendered_output, **_kwargs):
@@ -376,7 +436,7 @@ async def test_pdf_thumbnail_uses_dynamic_dpi_for_oversized_pdf() -> None:
 
         command = sandbox_run.call_args.args[0]
         # Oversized PDF renders at dynamically computed 13 DPI, preventing 61M pixel bomb
-        assert "-r13" in command
+        assert "13" in command
     finally:
         input_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)

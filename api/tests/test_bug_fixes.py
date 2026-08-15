@@ -185,11 +185,14 @@ async def test_thumbnail_pdf_cleans_temp_png_on_image_error(tmp_path: Path) -> N
     output_webp = tmp_path / "out.webp"
     actual_temp_png: Path | None = None
 
-    # Ghostscript creates the temp_png file
-    async def fake_gs(cmd: list[str], **kwargs: object) -> MagicMock:
+    # Renderer creates the temp_png file
+    async def fake_renderer(cmd: list[str], **kwargs: object) -> MagicMock:
         nonlocal actual_temp_png
-        output_arg = next(a for a in cmd if a.startswith("-sOutputFile="))
-        actual_temp_png = Path(output_arg.split("=", 1)[1])
+        if cmd[0] == "pdftoppm":
+            actual_temp_png = Path(f"{cmd[-1]}.png")
+        else:
+            output_arg = next(a for a in cmd if a.startswith("-sOutputFile="))
+            actual_temp_png = Path(output_arg.split("=", 1)[1])
         proc = MagicMock()
         proc.returncode = 0
         proc.stdout = b""
@@ -200,7 +203,7 @@ async def test_thumbnail_pdf_cleans_temp_png_on_image_error(tmp_path: Path) -> N
     with (
         patch(
             "app.workers.upload.stages.thumbnail.async_sandboxed_run",
-            side_effect=fake_gs,
+            side_effect=fake_renderer,
         ),
         patch(
             "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
