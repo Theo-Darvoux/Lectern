@@ -188,6 +188,10 @@ async def test_pdf_thumbnail_raster_work_scales_with_requested_output() -> None:
     try:
         with (
             patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value="/usr/bin/pdftoppm",
+            ),
+            patch(
                 "app.workers.upload.stages.thumbnail.async_sandboxed_run",
                 side_effect=fake_run,
             ) as sandbox_run,
@@ -284,6 +288,10 @@ async def test_sparse_single_page_pdf_keeps_first_page_when_second_is_missing() 
 
     try:
         with (
+            patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value="/usr/bin/pdftoppm",
+            ),
             patch(
                 "app.workers.upload.stages.thumbnail.async_sandboxed_run",
                 side_effect=fake_run,
@@ -409,11 +417,7 @@ async def test_pdf_thumbnail_uses_dynamic_dpi_for_oversized_pdf() -> None:
     process = MagicMock(returncode=0, stdout=b"", stderr=b"")
 
     async def fake_run(command, **_kwargs):
-        if command[0] == "pdftoppm":
-            target = Path(f"{command[-1]}.png")
-        else:
-            png_argument = next(value for value in command if value.startswith("-sOutputFile="))
-            target = Path(png_argument.split("=", 1)[1])
+        target = Path(f"{command[-1]}.png")
         Image.new("RGB", (780, 975), "white").save(target)
         return process
 
@@ -423,6 +427,10 @@ async def test_pdf_thumbnail_uses_dynamic_dpi_for_oversized_pdf() -> None:
 
     try:
         with (
+            patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value="/usr/bin/pdftoppm",
+            ),
             patch(
                 "app.workers.upload.stages.thumbnail.async_sandboxed_run",
                 side_effect=fake_run,
@@ -435,8 +443,64 @@ async def test_pdf_thumbnail_uses_dynamic_dpi_for_oversized_pdf() -> None:
             await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
 
         command = sandbox_run.call_args.args[0]
-        # Oversized PDF renders at dynamically computed 13 DPI, preventing 61M pixel bomb
+        assert command[0] == "pdftoppm"
+        assert "-r" in command
         assert "13" in command
+    finally:
+        input_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_pdf_thumbnail_uses_dynamic_dpi_for_oversized_pdf_ghostscript_fallback() -> None:
+    import pikepdf
+
+    from app.workers.upload.stages.thumbnail import _thumbnail_pdf
+
+    pdf_huge = pikepdf.new()
+    pdf_huge.pages.append(
+        pikepdf.Page(
+            pikepdf.Dictionary(
+                Type=pikepdf.Name("/Page"),
+                MediaBox=[0, 0, 4320, 5400],
+            )
+        )
+    )
+    input_path = make_processing_temp_path(suffix=".pdf")
+    pdf_huge.save(input_path)
+    output_path = make_processing_temp_path(suffix=".webp")
+    output_path.unlink(missing_ok=True)
+    process = MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    async def fake_run(command, **_kwargs):
+        png_argument = next(value for value in command if value.startswith("-sOutputFile="))
+        Image.new("RGB", (780, 975), "white").save(Path(png_argument.split("=", 1)[1]))
+        return process
+
+    async def fake_render(_input, rendered_output, **_kwargs):
+        rendered_output.write_bytes(b"webp")
+        return False
+
+    try:
+        with (
+            patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value=None,
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+                side_effect=fake_run,
+            ) as sandbox_run,
+            patch(
+                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
+                side_effect=fake_render,
+            ),
+        ):
+            await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
+
+        command = sandbox_run.call_args.args[0]
+        assert command[0] == "gs"
+        assert "-r13" in command
     finally:
         input_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
