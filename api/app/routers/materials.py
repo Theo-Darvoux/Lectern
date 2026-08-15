@@ -375,23 +375,31 @@ async def recalculate_material_thumbnail(
     """Force recreate the thumbnail for a material.
 
     Moderator or admin privileges required. Dispatches the thumbnail recalculation
-    job to a free background worker.
+    job to a free background worker and waits for completion when possible.
     """
+    import time
+    from typing import cast
+
+    import app.core.database.redis as redis_core
+
     data = await get_material_with_version(db, material_id)
     version = data.get("current_version_info")
     if version is None or version.get("file_key") is None:
         raise NotFoundError("No file available for thumbnail generation")
 
+    target_version_id = version.get("id")
+
     # Invalidate Redis thumbnail cache immediately
     if redis is not None:
         try:
             await redis.delete(f"thumbnail:v1:{material_id}")
+            if target_version_id:
+                async for key in redis.scan_iter(
+                    match=f"presign:get:thumbnails/{target_version_id}.webp*"
+                ):
+                    await redis.delete(key)
         except Exception:
             pass
-
-    from typing import cast
-
-    import app.core.database.redis as redis_core
 
     if redis_core.arq_pool is None:
         raise BadRequestError("Background processing is temporarily unavailable. Please try again.")
@@ -401,17 +409,39 @@ async def recalculate_material_thumbnail(
         version.get("file_size") or 0,
     )
     enqueue_job = cast(Any, redis_core.arq_pool.enqueue_job)
-    await enqueue_job(
+    job = await enqueue_job(
         "recalculate_thumbnail",
         _queue_name=queue_name,
         material_id=str(material_id),
-        version_id=str(version.get("id")) if version.get("id") else None,
+        version_id=str(target_version_id) if target_version_id else None,
     )
 
+    status = "queued"
+    if job is not None:
+        try:
+            res = await job.result(timeout=15.0, poll_delay=0.2)
+            if res is True:
+                status = "ok"
+        except Exception:
+            status = "queued"
+
+    # Invalidate Redis caches again after worker run
+    if redis is not None:
+        try:
+            await redis.delete(f"thumbnail:v1:{material_id}")
+            if target_version_id:
+                async for key in redis.scan_iter(
+                    match=f"presign:get:thumbnails/{target_version_id}.webp*"
+                ):
+                    await redis.delete(key)
+        except Exception:
+            pass
+
     return {
-        "status": "queued",
+        "status": status,
         "material_id": str(material_id),
-        "version_id": str(version.get("id")) if version.get("id") else None,
+        "version_id": str(target_version_id) if target_version_id else None,
+        "timestamp": int(time.time() * 1000),
     }
 
 

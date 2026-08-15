@@ -12,6 +12,7 @@ import { MIME_QCM } from "@/lib/file-utils";
 import { createPdfWorker } from "@/lib/pdf-worker";
 import {
   getMaterialThumbnail,
+  subscribeMaterialThumbnail,
   type ThumbnailType,
 } from "@/lib/material-preview-source";
 
@@ -124,11 +125,20 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
   const handlePdfError = useCallback(() => setPdfReady(false), []);
   const [imgBust, setImgBust] = useState(0);
+  const [cacheBust, setCacheBust] = useState(0);
   const imgAttemptRef = useRef(0);
   const imgRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(300);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    return subscribeMaterialThumbnail((id, ts) => {
+      if (id === String(material.id)) {
+        setCacheBust(ts || Date.now());
+      }
+    });
+  }, [material.id]);
 
   const inView = useInView(containerRef);
   // In lazy mode, gate loading on viewport intersection. In non-lazy mode we
@@ -252,7 +262,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
       controller.abort();
       clearTimeout(timer);
     };
-  }, [material.id, isText, isImage, isVideo, isMarkdown, isPDF, shouldLoad]);
+  }, [material.id, isText, isImage, isVideo, isMarkdown, isPDF, shouldLoad, cacheBust]);
 
   // Reset the image-retry counter whenever the source URL changes, and clear any
   // pending retry timer on unmount.
@@ -277,8 +287,17 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     }, delay);
   };
 
-  const imgSrc =
-    url && imgBust > 0 ? `${url}${url.includes("?") ? "&" : "?"}_r=${imgBust}` : url;
+  const imgSrc = (() => {
+    if (!url) return null;
+    let finalUrl = url;
+    if (cacheBust > 0) {
+      finalUrl = `${finalUrl}${finalUrl.includes("?") ? "&" : "?"}_t=${cacheBust}`;
+    }
+    if (imgBust > 0) {
+      finalUrl = `${finalUrl}${finalUrl.includes("?") ? "&" : "?"}_r=${imgBust}`;
+    }
+    return finalUrl;
+  })();
 
   const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName, mimeType);
 

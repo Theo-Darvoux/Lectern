@@ -4,6 +4,7 @@ import {
     clearMaterialPreviewCache,
     getMaterialThumbnail,
     recalculateMaterialThumbnail,
+    subscribeMaterialThumbnail,
 } from "./material-preview-source";
 
 vi.mock("./api-client", () => ({
@@ -100,12 +101,15 @@ describe("getMaterialThumbnail", () => {
 });
 
 describe("recalculateMaterialThumbnail", () => {
-    it("calls the recalculate endpoint and invalidates cached thumbnail", async () => {
+    it("calls the recalculate endpoint and notifies subscribers with timestamp", async () => {
         mockedApiFetchRetry.mockResolvedValueOnce({
             url: "https://cdn.test/old.webp",
             thumbnail_type: "webp",
         });
-        mockedApiFetch.mockResolvedValueOnce({ status: "queued", material_id: "m-123" });
+        mockedApiFetch.mockResolvedValueOnce({ status: "ok", material_id: "m-123", timestamp: 123456789 });
+
+        const listener = vi.fn();
+        const unsubscribe = subscribeMaterialThumbnail(listener);
 
         // Cache a thumbnail
         await getMaterialThumbnail("m-123");
@@ -116,6 +120,7 @@ describe("recalculateMaterialThumbnail", () => {
         expect(mockedApiFetch).toHaveBeenCalledWith("/materials/m-123/recalculate-thumbnail", {
             method: "POST",
         });
+        expect(listener).toHaveBeenCalledWith("m-123", 123456789);
 
         // Requesting thumbnail again should trigger a new fetch since cache was invalidated
         mockedApiFetchRetry.mockResolvedValueOnce({
@@ -125,6 +130,8 @@ describe("recalculateMaterialThumbnail", () => {
         const fresh = await getMaterialThumbnail("m-123");
         expect(mockedApiFetchRetry).toHaveBeenCalledTimes(2);
         expect(fresh).toEqual({ url: "https://cdn.test/new.webp", thumbnailType: "webp" });
+
+        unsubscribe();
     });
 });
 

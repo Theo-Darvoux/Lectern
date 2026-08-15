@@ -134,12 +134,17 @@ async def recalculate_thumbnail(
                 pass
             return False
         finally:
-            # Invalidate Redis thumbnail cache
+            # Invalidate Redis thumbnail cache and presigned URLs
             try:
                 from app.core.database.redis import redis_client
 
                 if redis_client is not None:
                     await redis_client.delete(f"thumbnail:v1:{material_id}")
+                    if "target_version_id" in locals() and target_version_id:
+                        async for key in redis_client.scan_iter(
+                            match=f"presign:get:thumbnails/{target_version_id}.webp*"
+                        ):
+                            await redis_client.delete(key)
             except Exception:
                 pass
 
