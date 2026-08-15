@@ -348,6 +348,63 @@ async def _thumbnail_video(
         )
 
 
+def _get_pdf_page_dimension_inches(file_path: Path, page_index: int) -> tuple[float, float] | None:
+    """Return (width_inches, height_inches) for a 0-indexed page in a PDF file, or None."""
+    try:
+        import pikepdf
+
+        with pikepdf.open(str(file_path), suppress_warnings=True) as pdf:
+            if page_index < 0 or page_index >= len(pdf.pages):
+                return None
+            page = pdf.pages[page_index]
+            box = page.get("/CropBox") or page.get("/MediaBox")
+            if box is None or len(box) != 4:
+                return None
+            user_unit = 1.0
+            if "/UserUnit" in page:
+                try:
+                    user_unit = float(page["/UserUnit"])
+                except (TypeError, ValueError):
+                    user_unit = 1.0
+            try:
+                x0, y0, x1, y1 = [float(val) for val in box]
+            except (TypeError, ValueError):
+                return None
+            width_pt = abs(x1 - x0) * user_unit
+            height_pt = abs(y1 - y0) * user_unit
+            if width_pt <= 0 or height_pt <= 0:
+                return None
+            return (width_pt / 72.0, height_pt / 72.0)
+    except Exception:
+        return None
+
+
+def _compute_pdf_render_dpi(
+    input_path: Path,
+    page_num: int,
+    size: tuple[int, int],
+) -> int:
+    """Compute the optimal rendering DPI dynamically based on the PDF page's physical dimensions.
+
+    For standard A4/Letter pages, this produces ~80-150 DPI for crisp downsampling.
+    For oversized pages (posters, digital whiteboards, large CAD canvases), this scales DPI down
+    so intermediate renders never balloon into multi-million-pixel bitmaps or trigger
+    Pillow DecompressionBombError.
+    """
+    target_dim_px = max(size[0], size[1]) * 1.5
+    page_dim = _get_pdf_page_dimension_inches(input_path, page_num - 1)
+    if page_dim is not None:
+        width_in, height_in = page_dim
+        max_dim_in = max(width_in, height_in)
+        if max_dim_in > 0:
+            computed_dpi = round(target_dim_px / max_dim_in)
+            return max(12, min(300, computed_dpi))
+
+    # Fallback if page dimensions could not be read (e.g. malformed or minimal test mock)
+    # Assumes standard A4 width (~8.27 in)
+    return max(96, min(200, round(size[0] * 1.5 / 8.27)))
+
+
 async def _thumbnail_pdf(
     input_path: Path, output_path: Path, size: tuple[int, int], quality: int
 ) -> None:
@@ -356,13 +413,9 @@ async def _thumbnail_pdf(
     Tries page 1 first. If the resulting thumbnail is nearly blank (common for
     attestation covers or title pages with minimal content), falls back to page 2.
     """
-    # Render about 1.5x the requested width for good downsampling, bounded so a
-    # small card does not pay for a fixed 150-DPI page and a large configured
-    # thumbnail is not starved of source pixels. 8.27in is A4's page width;
-    # common Letter pages land within a few percent of the same target.
-    render_dpi = max(96, min(200, round(size[0] * 1.5 / 8.27)))
     with processing_temp_dir(prefix="pdf-thumb-") as temp_dir:
         for page_num in (1, 2):
+            render_dpi = _compute_pdf_render_dpi(input_path, page_num, size)
             temp_png = Path(temp_dir) / f"page-{page_num}.png"
             cmd = [
                 "gs",

@@ -385,7 +385,7 @@ def sandboxed_run(
         if proc.stderr is not None:
             with contextlib.suppress(Exception):
                 proc.stderr.close()
-        executor.shutdown(wait=False, cancel_futures=True)
+        executor.shutdown(wait=True, cancel_futures=True)
 
     returncode = proc.returncode or 0
     _raise_if_sandbox_launcher_failed(returncode, stderr)

@@ -82,7 +82,7 @@ async def release_cas_references(
             except CasReferenceMissingError:
                 # Redis CAS refs are an evictable coordination cache. If the key is
                 # absent, there is no live ref to leak and destructive cleanup was already avoided.
-                logger.warning(
+                logger.debug(
                     "CAS reference %.16s… already absent during release; skipping decrement",
                     sha256,
                 )

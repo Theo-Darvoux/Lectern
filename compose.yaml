@@ -52,6 +52,7 @@ x-common-env: &common-env
 
 x-worker-base: &worker-base
   restart: unless-stopped
+  init: true
   entrypoint: [ "./scripts/worker-start.sh" ]
   depends_on:
     postgres:
@@ -172,6 +173,7 @@ services:
 
   api:
     restart: unless-stopped
+    init: true
     build:
       context: ./api
       dockerfile: Dockerfile
@@ -207,9 +209,10 @@ services:
       - SETFCAP
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" ]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 5s
     networks:
       - frontend
       - backend
@@ -248,7 +251,7 @@ services:
         limits:
           cpus: "1.0"
           memory: 1G
-          pids: ${WORKER_PIDS_LIMIT:-256}
+          pids: ${WORKER_PIDS_LIMIT:-512}
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -272,7 +275,7 @@ services:
         limits:
           cpus: "1.0"
           memory: 1G
-          pids: ${WORKER_PIDS_LIMIT:-256}
+          pids: ${WORKER_PIDS_LIMIT:-512}
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -296,7 +299,7 @@ services:
         limits:
           cpus: "2.0"
           memory: 2G
-          pids: ${WORKER_PIDS_LIMIT:-256}
+          pids: ${WORKER_PIDS_LIMIT:-512}
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -397,8 +400,10 @@ services:
       - ./infra/nginx/nginx.eurooffice.snippet:/etc/nginx/nginx.eurooffice.snippet:ro
       - ./infra/nginx/error-expired.html:/etc/nginx/html/error-expired.html:ro
     depends_on:
-      - api
-      - web
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
     healthcheck:
       test: [ "CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/api/health" ]
       interval: 30s

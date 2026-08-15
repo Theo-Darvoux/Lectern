@@ -212,7 +212,7 @@ async def cancel_upload_lifecycle(
                 operation_id=f"cancel-upload:{upload_id}:release",
             )
         except CasReferenceMissingError:
-            logger.warning("CAS cache entry already absent while cancelling %s", upload_id)
+            logger.debug("CAS cache entry already absent while cancelling %s", upload_id)
         except Exception as exc:
             raise ServiceUnavailableError(
                 "Upload was cancelled, but CAS ownership could not be released. Retry cancellation."

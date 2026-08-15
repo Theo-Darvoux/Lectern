@@ -246,6 +246,142 @@ async def test_sparse_single_page_pdf_keeps_first_page_when_second_is_missing() 
         output_path.unlink(missing_ok=True)
 
 
+def test_compute_pdf_render_dpi_standard_and_oversized() -> None:
+    import pikepdf
+
+    from app.workers.upload.stages.thumbnail import (
+        _compute_pdf_render_dpi,
+        _get_pdf_page_dimension_inches,
+    )
+
+    # 1. Standard A4 PDF (595.28 x 841.89 pt = 8.27 x 11.69 in)
+    pdf_a4 = pikepdf.new()
+    pdf_a4.pages.append(
+        pikepdf.Page(
+            pikepdf.Dictionary(
+                Type=pikepdf.Name("/Page"),
+                MediaBox=[0, 0, 595.28, 841.89],
+            )
+        )
+    )
+    a4_path = make_processing_temp_path(suffix=".pdf")
+    pdf_a4.save(a4_path)
+
+    try:
+        dim = _get_pdf_page_dimension_inches(a4_path, 0)
+        assert dim is not None
+        assert abs(dim[0] - 8.27) < 0.1
+        assert abs(dim[1] - 11.69) < 0.1
+
+        # Target 640x640 -> target max dim 960 px -> 960 / 11.69 ≈ 82 DPI
+        dpi_a4 = _compute_pdf_render_dpi(a4_path, 1, (640, 640))
+        assert 75 <= dpi_a4 <= 90
+    finally:
+        a4_path.unlink(missing_ok=True)
+
+    # 2. Oversized / digital whiteboard / poster PDF (4320 x 5400 pt = 60 x 75 in)
+    pdf_huge = pikepdf.new()
+    pdf_huge.pages.append(
+        pikepdf.Page(
+            pikepdf.Dictionary(
+                Type=pikepdf.Name("/Page"),
+                MediaBox=[0, 0, 4320, 5400],
+            )
+        )
+    )
+    huge_path = make_processing_temp_path(suffix=".pdf")
+    pdf_huge.save(huge_path)
+
+    try:
+        dim_huge = _get_pdf_page_dimension_inches(huge_path, 0)
+        assert dim_huge is not None
+        assert abs(dim_huge[0] - 60.0) < 0.1
+        assert abs(dim_huge[1] - 75.0) < 0.1
+
+        # Target 640x640 -> target max dim 960 px -> 960 / 75 = 13 DPI (downscaled!)
+        dpi_huge = _compute_pdf_render_dpi(huge_path, 1, (640, 640))
+        assert dpi_huge == 13
+    finally:
+        huge_path.unlink(missing_ok=True)
+
+    # 3. PDF with /UserUnit multiplier (e.g. 595 x 842 with UserUnit=10 -> 82.7 x 116.9 in)
+    pdf_userunit = pikepdf.new()
+    pdf_userunit.pages.append(
+        pikepdf.Page(
+            pikepdf.Dictionary(
+                Type=pikepdf.Name("/Page"),
+                MediaBox=[0, 0, 595.28, 841.89],
+                UserUnit=10.0,
+            )
+        )
+    )
+    userunit_path = make_processing_temp_path(suffix=".pdf")
+    pdf_userunit.save(userunit_path)
+
+    try:
+        dim_uu = _get_pdf_page_dimension_inches(userunit_path, 0)
+        assert dim_uu is not None
+        assert abs(dim_uu[0] - 82.7) < 0.2
+        assert abs(dim_uu[1] - 116.9) < 0.2
+
+        # 960 / 116.9 ≈ 8 DPI -> clamped to minimum 12 DPI
+        dpi_uu = _compute_pdf_render_dpi(userunit_path, 1, (640, 640))
+        assert dpi_uu == 12
+    finally:
+        userunit_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_pdf_thumbnail_uses_dynamic_dpi_for_oversized_pdf() -> None:
+    import pikepdf
+
+    from app.workers.upload.stages.thumbnail import _thumbnail_pdf
+
+    pdf_huge = pikepdf.new()
+    pdf_huge.pages.append(
+        pikepdf.Page(
+            pikepdf.Dictionary(
+                Type=pikepdf.Name("/Page"),
+                MediaBox=[0, 0, 4320, 5400],
+            )
+        )
+    )
+    input_path = make_processing_temp_path(suffix=".pdf")
+    pdf_huge.save(input_path)
+    output_path = make_processing_temp_path(suffix=".webp")
+    output_path.unlink(missing_ok=True)
+    process = MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    async def fake_run(command, **_kwargs):
+        png_argument = next(value for value in command if value.startswith("-sOutputFile="))
+        Image.new("RGB", (780, 975), "white").save(Path(png_argument.split("=", 1)[1]))
+        return process
+
+    async def fake_render(_input, rendered_output, **_kwargs):
+        rendered_output.write_bytes(b"webp")
+        return False
+
+    try:
+        with (
+            patch(
+                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+                side_effect=fake_run,
+            ) as sandbox_run,
+            patch(
+                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
+                side_effect=fake_render,
+            ),
+        ):
+            await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
+
+        command = sandbox_run.call_args.args[0]
+        # Oversized PDF renders at dynamically computed 13 DPI, preventing 61M pixel bomb
+        assert "-r13" in command
+    finally:
+        input_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+
 @pytest.mark.integration  # needs rsvg-convert
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_svg() -> None:
