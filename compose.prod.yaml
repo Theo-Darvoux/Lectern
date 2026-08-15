@@ -158,7 +158,7 @@ services:
       release-image-policy:
         condition: service_completed_successfully
       api:
-        condition: service_started
+        condition: service_healthy
       web:
         condition: service_started
     ports:

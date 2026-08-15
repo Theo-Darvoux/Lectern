@@ -298,7 +298,11 @@ async def test_cas_release_acknowledges_when_ref_already_missing(
 
     with patch(
         "app.core.security.cas.decrement_cas_ref",
-        new=AsyncMock(side_effect=CasReferenceMissingError("CAS reference is missing; refusing destructive cleanup")),
+        new=AsyncMock(
+            side_effect=CasReferenceMissingError(
+                "CAS reference is missing; refusing destructive cleanup"
+            )
+        ),
     ):
         await release_cas_references(
             {"db_sessionmaker": db_core.async_session_factory, "redis": AsyncMock()},

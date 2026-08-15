@@ -65,7 +65,7 @@ async def _release_expired_cas_material_versions(
         except CasReferenceMissingError:
             # Redis CAS refs are an evictable coordination cache. A missing ref
             # means there is no live ref to leak; the expired DB owner can go.
-            logger.warning(
+            logger.debug(
                 "CAS reference already absent while reaping expired MaterialVersion %s",
                 version.id,
             )

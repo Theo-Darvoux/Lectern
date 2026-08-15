@@ -1,0 +1,63 @@
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: api
+    command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
+    environment:
+      ENVIRONMENT: production
+
+  worker:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: worker
+    environment:
+      ENVIRONMENT: production
+
+  worker-fast:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: worker
+    environment:
+      ENVIRONMENT: production
+
+  worker-slow:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: worker
+    environment:
+      ENVIRONMENT: production
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+        NEXT_PUBLIC_EUROOFFICE_URL: ${NEXT_PUBLIC_EUROOFFICE_URL:-https://intellect.clubcode.fr/eurooffice}
+        NEXT_PUBLIC_REPO_URL: ${NEXT_PUBLIC_REPO_URL:-https://github.com/Theo-Darvoux/WikINT}
+        SITE_NAME: ${SITE_NAME:-Intellect}
+        SITE_DESCRIPTION: ${SITE_DESCRIPTION:-Collaborative course materials platform}
+        SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
+    command: null
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 64M
+        reservations:
+          cpus: "0.1"
+          memory: 32M
+
+  nginx:
+    ports:
+      - "9080:80"
+    volumes:
+      - ./infra/nginx/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
+      - ./infra/nginx/nginx.eurooffice.snippet:/etc/nginx/nginx.eurooffice.snippet:ro
+      - ./infra/nginx/error-expired.html:/etc/nginx/html/error-expired.html:ro
