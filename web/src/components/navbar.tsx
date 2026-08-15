@@ -90,6 +90,7 @@ export function Navbar() {
   }, [pathname, isAuthenticated, user, guest, setOpenPRCount]);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     const down = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         // Only trigger modal on mobile. On desktop, SearchInline handles focusing the input.
@@ -101,7 +102,7 @@ export function Navbar() {
     };
     document.addEventListener("keydown", down);
     return () => document.removeEventListener("keydown", down);
-  }, []);
+  }, [isAuthenticated]);
 
   const fetchRecentNotifications = useCallback(async () => {
     setLoadingNotifications(true);
@@ -222,7 +223,7 @@ export function Navbar() {
         </div>
 
         {/* Center: Search */}
-        {pathname !== "/login" && (
+        {isAuthenticated && (
           <div
             data-tutorial="nav-search"
             className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md px-4 pointer-events-none lg:pointer-events-auto hidden lg:block"
@@ -234,7 +235,7 @@ export function Navbar() {
         {/* Right: Actions */}
         <div className="flex w-1/3 justify-end items-center gap-1 sm:gap-2">
           {/* Search icon — mobile only (desktop uses the centred search bar) */}
-          {pathname !== "/login" && (
+          {isAuthenticated && (
             <Button
               variant="ghost"
               size="icon"
@@ -486,7 +487,7 @@ export function Navbar() {
           )}
         </div>
       </div>
-      <SearchModal open={searchOpen} onOpenChange={setSearchOpen} />
+      {isAuthenticated && <SearchModal open={searchOpen} onOpenChange={setSearchOpen} />}
     </nav>
   );
 }

@@ -103,6 +103,7 @@ const freshConfig = {
   google_client_id: null,
   classic_enabled: false,
   allow_all_domains: false,
+  email_placeholder: null,
   guest_access_enabled: false,
   tutorials_enabled: false,
   allow_external_document_links: true,

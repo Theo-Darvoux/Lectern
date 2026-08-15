@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Example: "example.com:auto,example.org:manual"
     allowed_domains: str = ""
 
+    # Custom placeholder email displayed on login inputs (e.g. "prenom.nom@telecom-sudparis.eu").
+    email_placeholder: str | None = None
+
     # Branding Defaults
     # Default product name; override per-instance with SITE_NAME in .env.
     site_name: str = "Lectern"

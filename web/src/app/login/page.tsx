@@ -1,20 +1,25 @@
 "use client";
 
-import { useState, useEffect, type FormEvent, useRef } from "react";
+import { useState, useEffect, type FormEvent, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
+import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { GoogleOAuthProvider, GoogleLogin, CredentialResponse } from "@react-oauth/google";
 import { useConfigStore } from "@/lib/stores";
-import { sanitizeNext } from "@/lib/utils";
+import { cn, sanitizeNext } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Eye, KeyRound, Mail } from "lucide-react";
+import { SiteName } from "@/components/site-name";
+import { Eye, EyeOff, ExternalLink } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { ShaderText } from "@/components/shader-text";
 
 type Step = "email" | "code" | "password";
+type AuthTab = "code" | "password";
 
 /** Read and validate the post-login redirect target from the current URL. */
 function getNext(): string | null {
@@ -22,15 +27,16 @@ function getNext(): string | null {
     return sanitizeNext(new URLSearchParams(window.location.search).get("next"));
 }
 
-import { useTranslations } from "next-intl";
-
 export default function LoginPage() {
     const t = useTranslations("Login");
     const [step, setStep] = useState<Step>("email");
+    const [authTab, setAuthTab] = useState<AuthTab>("code");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+    const [showPassword, setShowPassword] = useState(false);
     const [code, setCode] = useState("");
     const [loading, setLoading] = useState(false);
+    const [resending, setResending] = useState(false);
     const { requestCode, verifyCode, verifyGoogleOAuth, loginWithPassword, continueAsGuest, isAuthenticated, user } = useAuth();
     const config = useConfigStore((state) => state.config);
     const router = useRouter();
@@ -52,16 +58,25 @@ export default function LoginPage() {
         classic_enabled: config?.classic_enabled ?? false,
     };
 
+    // Auto-select active tab based on available methods
+    useEffect(() => {
+        if (!authMethods.totp_enabled && authMethods.classic_enabled) {
+            setAuthTab("password");
+        } else if (authMethods.totp_enabled) {
+            setAuthTab("code");
+        }
+    }, [authMethods.totp_enabled, authMethods.classic_enabled]);
 
     const handleRequestCode = async (e?: FormEvent) => {
         if (e) e.preventDefault();
+        if (!email.trim()) return;
         setLoading(true);
         try {
-            await requestCode(email);
+            await requestCode(email.trim());
             setStep("code");
             setCode("");
             toast.success(t("codeSent"));
-            setTimeout(() => inputRef.current?.focus(), 100);
+            setTimeout(() => inputRef.current?.focus(), 150);
         } catch (err) {
             toast.error(err instanceof Error ? err.message : t("sendFailed"));
         } finally {
@@ -69,11 +84,24 @@ export default function LoginPage() {
         }
     };
 
-    const handleVerifyCode = async (e: FormEvent) => {
-        e.preventDefault();
+    const handleResendCode = async () => {
+        if (!email.trim() || resending) return;
+        setResending(true);
+        try {
+            await requestCode(email.trim());
+            toast.success(t("codeSent"));
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : t("sendFailed"));
+        } finally {
+            setResending(false);
+        }
+    };
+
+    const executeVerifyCode = useCallback(async (codeToVerify: string) => {
+        if (!codeToVerify.trim() || codeToVerify.length < 8) return;
         setLoading(true);
         try {
-            const data = await verifyCode(email, code);
+            const data = await verifyCode(email.trim(), codeToVerify.trim());
             if (data.is_new_user || !data.user.onboarded) {
                 router.push("/onboarding");
             } else {
@@ -84,13 +112,39 @@ export default function LoginPage() {
         } finally {
             setLoading(false);
         }
+    }, [email, router, t, verifyCode]);
+
+    const handleVerifyCodeSubmit = async (e: FormEvent) => {
+        e.preventDefault();
+        await executeVerifyCode(code);
+    };
+
+    const handleCodeChange = (val: string) => {
+        const cleaned = val.replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+        setCode(cleaned);
+        if (cleaned.length === 8) {
+            void executeVerifyCode(cleaned);
+        }
+    };
+
+    const handleCodePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+        e.preventDefault();
+        const pasted = e.clipboardData.getData("text");
+        const cleaned = pasted.replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+        if (cleaned) {
+            setCode(cleaned);
+            if (cleaned.length === 8) {
+                void executeVerifyCode(cleaned);
+            }
+        }
     };
 
     const handlePasswordLogin = async (e: FormEvent) => {
         e.preventDefault();
+        if (!email.trim() || !password) return;
         setLoading(true);
         try {
-            const data = await loginWithPassword(email, password);
+            const data = await loginWithPassword(email.trim(), password);
             if (data.is_new_user || !data.user.onboarded) {
                 router.push("/onboarding");
             } else {
@@ -132,243 +186,516 @@ export default function LoginPage() {
         }
     };
 
+    const hasAnyAuthMethod =
+        authMethods.totp_enabled ||
+        authMethods.google_enabled ||
+        authMethods.classic_enabled ||
+        config?.guest_access_enabled;
+
+    const emailPlaceholder = config?.email_placeholder || t("emailPlaceholder");
+
     return (
-        <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
-            <Card className="w-full max-w-md">
-                <CardHeader className="text-center">
-                    <CardTitle className="text-2xl font-bold">{config?.site_name || t("title")}</CardTitle>
-                    <CardDescription>
-                        {step === "email"
-                            ? (config?.site_description || t("descEmail"))
-                            : step === "code" ? t("descCode") : t("descPassword")}
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    {step === "email" ? (
-                        <div className="space-y-6">
-                            {authMethods.google_enabled && (
-                                <div className="flex flex-col gap-4 items-center">
-                                    <div className="w-full flex justify-center">
-                                        {authMethods.google_client_id ? (
-                                            <GoogleOAuthProvider clientId={authMethods.google_client_id}>
+        <div className="login-page relative flex min-h-screen w-full flex-col items-center justify-center p-4 sm:p-6 overflow-hidden">
+            {/* Background layers: solid matte base + fine grain texture + dot matrix */}
+            <div className="login-bg-base" aria-hidden="true" />
+            <div className="login-grain" aria-hidden="true" />
+            <div className="login-dots" aria-hidden="true" />
+
+            {/* Auth Card - Simple, elegant, responsive */}
+            <div className="login-card-wrapper relative z-10 w-full max-w-[420px] p-6 sm:p-8 space-y-5">
+                
+                {/* Header: 90s 3D Chrome Shader Title (Fills top space inside card) */}
+                <div className="text-center -mt-2 -mb-1">
+                    {config?.site_logo_url && (
+                        <div className="flex justify-center mb-1">
+                            <Image
+                                src={config.site_logo_url}
+                                alt={config?.site_name || "Logo"}
+                                width={40}
+                                height={40}
+                                className="h-10 w-auto object-contain"
+                                unoptimized
+                            />
+                        </div>
+                    )}
+
+                    <ShaderText
+                        text={config?.site_name || t("title") || "Lectern"}
+                        className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"
+                    />
+
+                    {step !== "email" && (
+                        <p className="text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mt-1">
+                            {step === "code" ? t("descCode") : t("descPassword")}
+                        </p>
+                    )}
+                </div>
+
+                <div className="login-sep" aria-hidden="true" />
+
+                {/* STEP 1: EMAIL & AUTH METHOD SELECTION */}
+                {step === "email" ? (
+                    <div className="space-y-4">
+                        {/* Google OAuth Provider */}
+                        {authMethods.google_enabled && (
+                            <div className="space-y-4">
+                                <div className="flex justify-center w-full min-h-[44px]">
+                                    {authMethods.google_client_id ? (
+                                        <GoogleOAuthProvider clientId={authMethods.google_client_id}>
+                                            <div className="w-full flex justify-center [&>div]:w-full">
                                                 <GoogleLogin
                                                     onSuccess={handleGoogleSuccess}
                                                     onError={() => toast.error(t("googleFailed"))}
-                                                    theme="outline"
+                                                    theme="filled_black"
                                                     size="large"
                                                     width="100%"
                                                     shape="rectangular"
                                                     context="signin"
                                                 />
-                                            </GoogleOAuthProvider>
-                                        ) : (
-                                            <div className="h-[44px] w-full bg-muted animate-pulse rounded-md" />
-                                        )}
-                                    </div>
-                                    {(authMethods.totp_enabled || authMethods.classic_enabled) && (
-                                        <div className="relative w-full">
-                                            <div className="absolute inset-0 flex items-center">
-                                                <span className="w-full border-t" />
                                             </div>
-                                            <div className="relative flex justify-center text-xs uppercase">
-                                                <span className="bg-card px-2 text-muted-foreground">{t("orContinue")}</span>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-
-                            {(authMethods.totp_enabled || authMethods.classic_enabled) && (
-                                <div className="space-y-4">
-                                    <div className="space-y-2">
-                                        <Label htmlFor="email">{t("emailLabel")}</Label>
-                                        <Input
-                                            id="email"
-                                            type="email"
-                                            placeholder={t("emailPlaceholder")}
-                                            value={email}
-                                            onChange={(e) => setEmail(e.target.value)}
-                                            required
-                                            autoFocus
-                                            disabled={loading}
-                                        />
-                                    </div>
-
-                                    {authMethods.totp_enabled && authMethods.classic_enabled ? (
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <Button variant="outline" onClick={handleRequestCode} disabled={loading || !email}>
-                                                <Mail className="mr-2 h-4 w-4" />
-                                                {t("sendCode")}
-                                            </Button>
-                                            <Button variant="outline" onClick={() => setStep("password")} disabled={loading || !email}>
-                                                <KeyRound className="mr-2 h-4 w-4" />
-                                                {t("password")}
-                                            </Button>
-                                        </div>
-                                    ) : authMethods.totp_enabled ? (
-                                        <Button className="w-full" onClick={handleRequestCode} disabled={loading || !email}>
-                                            {loading ? t("sending") : t("sendVerificationCode")}
-                                        </Button>
+                                        </GoogleOAuthProvider>
                                     ) : (
-                                        <Button className="w-full" onClick={() => setStep("password")} disabled={loading || !email}>
-                                            {t("continueWithPassword")}
-                                        </Button>
+                                        <div className="h-11 w-full bg-[#12131d] animate-pulse rounded-md" />
                                     )}
                                 </div>
-                            )}
 
-                            {!authMethods.totp_enabled && !authMethods.google_enabled && !authMethods.classic_enabled && !config?.guest_access_enabled && (
-                                <p className="text-sm text-center text-muted-foreground py-4">
-                                    {t("noMethods")}
-                                </p>
-                            )}
+                                {(authMethods.totp_enabled || authMethods.classic_enabled) && (
+                                    <div className="relative w-full py-1">
+                                        <div className="absolute inset-0 flex items-center">
+                                            <span className="w-full border-t border-[#1a1c29]" />
+                                        </div>
+                                        <div className="relative flex justify-center">
+                                            <span className="login-overline bg-[#0c0d14] px-2.5">
+                                                {t("orContinue")}
+                                            </span>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
-                            {config?.guest_access_enabled && (
-                                <div className="space-y-4">
-                                    {(authMethods.totp_enabled || authMethods.google_enabled || authMethods.classic_enabled) && (
-                                        <div className="relative w-full">
-                                            <div className="absolute inset-0 flex items-center">
-                                                <span className="w-full border-t" />
-                                            </div>
-                                            <div className="relative flex justify-center text-xs uppercase">
-                                                <span className="bg-card px-2 text-muted-foreground">{t("orContinue")}</span>
+                        {/* Dual Methods: Email Code vs Password */}
+                        {authMethods.totp_enabled && authMethods.classic_enabled ? (
+                            <Tabs
+                                value={authTab}
+                                onValueChange={(val) => setAuthTab(val as AuthTab)}
+                                className="w-full space-y-4"
+                            >
+                                <TabsList className="grid w-full grid-cols-2 p-1 bg-[#12131d] rounded-md border border-[#1e2030]">
+                                    <TabsTrigger
+                                        value="code"
+                                        className="rounded text-xs font-medium py-1.5 transition-colors data-[state=active]:bg-[#1d1f30] data-[state=active]:text-[#f0eef5]"
+                                    >
+                                        {t("emailCodeTab")}
+                                    </TabsTrigger>
+                                    <TabsTrigger
+                                        value="password"
+                                        className="rounded text-xs font-medium py-1.5 transition-colors data-[state=active]:bg-[#1d1f30] data-[state=active]:text-[#f0eef5]"
+                                    >
+                                        {t("passwordTab")}
+                                    </TabsTrigger>
+                                </TabsList>
+
+                                {/* Verification Code Tab */}
+                                <TabsContent value="code" className="space-y-4">
+                                    <form onSubmit={handleRequestCode} className="space-y-4">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="email-code" className="login-overline">
+                                                {t("emailLabel")}
+                                            </Label>
+                                            <Input
+                                                id="email-code"
+                                                type="email"
+                                                placeholder={emailPlaceholder}
+                                                value={email}
+                                                onChange={(e) => setEmail(e.target.value)}
+                                                required
+                                                autoFocus
+                                                autoComplete="email"
+                                                disabled={loading}
+                                                className="h-11 text-sm"
+                                            />
+                                        </div>
+                                        <Button
+                                            type="submit"
+                                            className="w-full h-11 text-sm font-medium tracking-wide bg-[#f0eff5] text-[#08090f] hover:bg-[#dedbe8] transition-colors"
+                                            disabled={loading || !email.trim()}
+                                        >
+                                            {loading ? (
+                                                <>
+                                                    <span className="inline-block h-4 w-4 rounded-full border-2 border-current border-r-transparent animate-spin mr-2" />
+                                                    {t("sending")}
+                                                </>
+                                            ) : (
+                                                t("sendVerificationCode")
+                                            )}
+                                        </Button>
+                                    </form>
+                                </TabsContent>
+
+                                {/* Password Tab */}
+                                <TabsContent value="password" className="space-y-4">
+                                    <form onSubmit={handlePasswordLogin} className="space-y-4">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="email-pass" className="login-overline">
+                                                {t("emailLabel")}
+                                            </Label>
+                                            <Input
+                                                id="email-pass"
+                                                type="email"
+                                                placeholder={emailPlaceholder}
+                                                value={email}
+                                                onChange={(e) => setEmail(e.target.value)}
+                                                required
+                                                autoComplete="username"
+                                                disabled={loading}
+                                                className="h-11 text-sm"
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="password-tab-input" className="login-overline">
+                                                {t("passwordLabel")}
+                                            </Label>
+                                            <div className="relative">
+                                                <Input
+                                                    id="password-tab-input"
+                                                    type={showPassword ? "text" : "password"}
+                                                    placeholder={t("passwordPlaceholder")}
+                                                    value={password}
+                                                    onChange={(e) => setPassword(e.target.value)}
+                                                    required
+                                                    autoComplete="current-password"
+                                                    disabled={loading}
+                                                    className="pr-10 h-11 text-sm font-mono"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowPassword(!showPassword)}
+                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#524f64] hover:text-[#f0eef5] transition-colors p-0.5"
+                                                    aria-label={showPassword ? t("hidePassword") : t("showPassword")}
+                                                >
+                                                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                                </button>
                                             </div>
                                         </div>
-                                    )}
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        className="w-full"
-                                        onClick={handleGuest}
+                                        <Button
+                                            type="submit"
+                                            className="w-full h-11 text-sm font-medium tracking-wide bg-[#f0eff5] text-[#08090f] hover:bg-[#dedbe8] transition-colors"
+                                            disabled={loading || !email.trim() || !password}
+                                        >
+                                            {loading ? (
+                                                <>
+                                                    <span className="inline-block h-4 w-4 rounded-full border-2 border-current border-r-transparent animate-spin mr-2" />
+                                                    {t("signingIn")}
+                                                </>
+                                            ) : (
+                                                t("signIn")
+                                            )}
+                                        </Button>
+                                    </form>
+                                </TabsContent>
+                            </Tabs>
+                        ) : authMethods.totp_enabled ? (
+                            /* TOTP Only */
+                            <form onSubmit={handleRequestCode} className="space-y-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="email-single" className="login-overline">
+                                        {t("emailLabel")}
+                                    </Label>
+                                    <Input
+                                        id="email-single"
+                                        type="email"
+                                        placeholder={emailPlaceholder}
+                                        value={email}
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        required
+                                        autoFocus
+                                        autoComplete="email"
                                         disabled={loading}
-                                    >
-                                        <Eye className="mr-2 h-4 w-4" />
-                                        {t("continueAsGuest")}
-                                    </Button>
+                                        className="h-11 text-sm"
+                                    />
                                 </div>
-                            )}
-                        </div>
-                    ) : step === "password" ? (
-                        <form onSubmit={handlePasswordLogin} className="space-y-4">
-                            <div className="space-y-2">
-                                <Label htmlFor="password">{t("passwordLabel")}</Label>
+                                <Button
+                                    type="submit"
+                                    className="w-full h-11 text-sm font-medium tracking-wide bg-[#f0eff5] text-[#08090f] hover:bg-[#dedbe8] transition-colors"
+                                    disabled={loading || !email.trim()}
+                                >
+                                    {loading ? (
+                                        <>
+                                            <span className="inline-block h-4 w-4 rounded-full border-2 border-current border-r-transparent animate-spin mr-2" />
+                                            {t("sending")}
+                                        </>
+                                    ) : (
+                                        t("sendVerificationCode")
+                                    )}
+                                </Button>
+                            </form>
+                        ) : authMethods.classic_enabled ? (
+                            /* Classic Password Only */
+                            <form onSubmit={handlePasswordLogin} className="space-y-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="email-classic" className="login-overline">
+                                        {t("emailLabel")}
+                                    </Label>
+                                    <Input
+                                        id="email-classic"
+                                        type="email"
+                                        placeholder={emailPlaceholder}
+                                        value={email}
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        required
+                                        autoFocus
+                                        autoComplete="username"
+                                        disabled={loading}
+                                        className="h-11 text-sm"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="password-classic" className="login-overline">
+                                        {t("passwordLabel")}
+                                    </Label>
+                                    <div className="relative">
+                                        <Input
+                                            id="password-classic"
+                                            type={showPassword ? "text" : "password"}
+                                            placeholder={t("passwordPlaceholder")}
+                                            value={password}
+                                            onChange={(e) => setPassword(e.target.value)}
+                                            required
+                                            autoComplete="current-password"
+                                            disabled={loading}
+                                            className="pr-10 h-11 text-sm font-mono"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPassword(!showPassword)}
+                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-[#524f64] hover:text-[#f0eef5] transition-colors p-0.5"
+                                            aria-label={showPassword ? t("hidePassword") : t("showPassword")}
+                                        >
+                                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </button>
+                                    </div>
+                                </div>
+                                <Button
+                                    type="submit"
+                                    className="w-full h-11 text-sm font-medium tracking-wide bg-[#f0eff5] text-[#08090f] hover:bg-[#dedbe8] transition-colors"
+                                    disabled={loading || !email.trim() || !password}
+                                >
+                                    {loading ? (
+                                        <>
+                                            <span className="inline-block h-4 w-4 rounded-full border-2 border-current border-r-transparent animate-spin mr-2" />
+                                            {t("signingIn")}
+                                        </>
+                                    ) : (
+                                        t("signIn")
+                                    )}
+                                </Button>
+                            </form>
+                        ) : null}
+
+                        {!hasAnyAuthMethod && (
+                            <p className="text-sm text-center text-[#828096] py-4">
+                                {t("noMethods")}
+                            </p>
+                        )}
+
+                        {/* Guest Access Section */}
+                        {config?.guest_access_enabled && (
+                            <div className="pt-2">
+                                {(authMethods.totp_enabled || authMethods.google_enabled || authMethods.classic_enabled) && (
+                                    <div className="relative w-full py-2">
+                                        <div className="absolute inset-0 flex items-center">
+                                            <span className="w-full border-t border-[#1a1c29]" />
+                                        </div>
+                                        <div className="relative flex justify-center">
+                                            <span className="login-overline bg-[#0c0d14] px-2.5">
+                                                {t("orContinue")}
+                                            </span>
+                                        </div>
+                                    </div>
+                                )}
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="w-full h-11 text-sm font-medium border-[#1c1e2b] bg-[#12131d] hover:bg-[#1a1c29] text-[#dedbe8] transition-colors"
+                                    onClick={handleGuest}
+                                    disabled={loading}
+                                >
+                                    {t("continueAsGuest")}
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                ) : step === "password" ? (
+                    /* STEP 2: PASSWORD FALLBACK */
+                    <form onSubmit={handlePasswordLogin} className="space-y-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="password" className="login-overline">
+                                {t("passwordLabel")}
+                            </Label>
+                            <div className="relative">
                                 <Input
                                     id="password"
-                                    type="password"
+                                    type={showPassword ? "text" : "password"}
                                     placeholder={t("passwordPlaceholder")}
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
                                     required
                                     autoFocus
+                                    autoComplete="current-password"
                                     disabled={loading}
+                                    className="pr-10 h-11 text-sm font-mono"
                                 />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#524f64] hover:text-[#f0eef5] transition-colors p-0.5"
+                                    aria-label={showPassword ? t("hidePassword") : t("showPassword")}
+                                >
+                                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                </button>
                             </div>
-                            <Button type="submit" className="w-full" disabled={loading}>
-                                {loading ? t("signingIn") : t("signIn")}
-                            </Button>
-                            <Button
-                                type="button"
-                                variant="ghost"
-                                className="w-full"
-                                onClick={() => setStep("email")}
-                                disabled={loading}
-                            >
-                                {t("back")}
-                            </Button>
-                        </form>
-                    ) : (
-                        <form onSubmit={handleVerifyCode} className="space-y-6">
-                            <div className="space-y-3">
-                                <div className="flex justify-between items-center px-1">
-                                    <Label htmlFor="code" className="block">{t("verificationCode")}</Label>
-                                    <button 
-                                        type="button" 
-                                        className="text-xs text-primary hover:underline font-medium"
-                                        onClick={() => handleRequestCode()}
-                                        disabled={loading}
-                                    >
-                                        {t("resendCode")}
-                                    </button>
-                                </div>
-                                <div className="relative cursor-text" onClick={() => inputRef.current?.focus()}>
-                                    {/* Invisible actual input - accessible to screen readers */}
-                                    <input
-                                        ref={inputRef}
-                                        id="code"
-                                        type="text"
-                                        maxLength={8}
-                                        value={code}
-                                        onChange={(e) => setCode(e.target.value.toUpperCase())}
-                                        className="absolute inset-0 opacity-0 cursor-text"
-                                        autoFocus
-                                        required
-                                        autoComplete="one-time-code"
-                                        aria-label={t("codeAriaLabel")}
-                                        disabled={loading}
-                                    />
-                                    {/* Visual representation - hidden from screen readers */}
-                                    <div className="flex justify-between gap-2" aria-hidden="true">
-                                        {[...Array(8)].map((_, i) => (
-                                            <div
-                                                key={i}
-                                                className={`
-                                                    flex h-12 w-10 items-center justify-center rounded-md border-2 text-lg font-bold transition-all
-                                                    ${code.length === i && !loading ? "border-primary ring-2 ring-primary/20 scale-105" : "border-muted"}
-                                                    ${code[i] ? "border-primary/50 bg-primary/5" : ""}
-                                                `}
-                                            >
-                                                {code[i] || ""}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                                <p className="text-center text-xs text-muted-foreground">
-                                    {t("codeHelp")}
-                                    <br/>
-                                    <span className="opacity-80">{t("codeHelp2")}</span>
+                        </div>
+                        <Button
+                            type="submit"
+                            className="w-full h-11 text-sm font-medium tracking-wide bg-[#f0eff5] text-[#08090f] hover:bg-[#dedbe8] transition-colors"
+                            disabled={loading || !password}
+                        >
+                            {loading ? (
+                                <>
+                                    <span className="inline-block h-4 w-4 rounded-full border-2 border-current border-r-transparent animate-spin mr-2" />
+                                    {t("signingIn")}
+                                </>
+                            ) : (
+                                t("signIn")
+                            )}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            className="w-full h-9 text-xs text-[#6a667d] hover:text-[#f0eef5]"
+                            onClick={() => setStep("email")}
+                            disabled={loading}
+                        >
+                            {t("back")}
+                        </Button>
+                    </form>
+                ) : (
+                    /* STEP 3: OTP VERIFICATION CODE */
+                    <form onSubmit={handleVerifyCodeSubmit} className="space-y-5">
+                        <div className="flex items-center justify-between p-3 rounded-md bg-[#12131d] border border-[#1e2030]">
+                            <div className="min-w-0">
+                                <p className="text-[11px] text-[#6a667d] tracking-wider uppercase font-mono font-semibold">
+                                    {t("enterCodeSentTo")}
+                                </p>
+                                <p className="text-sm font-medium truncate text-[#f0eef5] mt-0.5">
+                                    {email}
                                 </p>
                             </div>
-                            <Button type="submit" className="w-full" disabled={loading}>
-                                {loading ? t("verifying") : t("verify")}
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setStep("email");
+                                    setCode("");
+                                }}
+                                className="text-xs text-[#828096] hover:text-[#f0eef5] font-medium px-2 py-1 shrink-0 transition-colors"
+                            >
+                                {t("changeEmail")}
+                            </button>
+                        </div>
+
+                        <div className="space-y-3">
+                            <div className="flex justify-between items-center px-0.5">
+                                <Label htmlFor="code" className="login-overline">
+                                    {t("verificationCode")}
+                                </Label>
+                                <button
+                                    type="button"
+                                    className="text-xs text-[#828096] hover:text-[#f0eef5] font-medium flex items-center gap-1.5 transition-colors"
+                                    onClick={handleResendCode}
+                                    disabled={loading || resending}
+                                >
+                                    {resending && (
+                                        <span className="inline-block h-3 w-3 rounded-full border-[1.5px] border-current border-r-transparent animate-spin" />
+                                    )}
+                                    {t("resendCode")}
+                                </button>
+                            </div>
+
+                            <div
+                                className="relative cursor-text select-none"
+                                onClick={() => inputRef.current?.focus()}
+                            >
+                                <input
+                                    ref={inputRef}
+                                    id="code"
+                                    type="text"
+                                    maxLength={8}
+                                    value={code}
+                                    onChange={(e) => handleCodeChange(e.target.value)}
+                                    onPaste={handleCodePaste}
+                                    className="absolute inset-0 opacity-0 cursor-text w-full h-full"
+                                    autoFocus
+                                    required
+                                    autoComplete="one-time-code"
+                                    aria-label={t("codeAriaLabel")}
+                                    disabled={loading}
+                                />
+
+                                <div className="grid grid-cols-8 gap-1" aria-hidden="true">
+                                    {[...Array(8)].map((_, i) => (
+                                        <div
+                                            key={i}
+                                            className={cn(
+                                                "flex h-11 items-center justify-center rounded-md border text-base font-mono font-bold transition-colors",
+                                                code.length === i && !loading
+                                                    ? "border-[#4a4e70] bg-[#1a1c2b] text-[#f0eef5]"
+                                                    : "border-[#1e2030] bg-[#12131d] text-[#828096]",
+                                                code[i] && "border-[#2d3047] bg-[#161826] text-[#f0eef5]"
+                                            )}
+                                        >
+                                            {code[i] || ""}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="rounded-md bg-[#12131d] p-2.5 border border-[#1a1c29] text-center text-xs text-[#6a667d] leading-relaxed">
+                                <p>{t("codeHelp")}</p>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2.5">
+                            <Button
+                                type="submit"
+                                className="w-full h-11 text-sm font-medium tracking-wide bg-[#f0eff5] text-[#08090f] hover:bg-[#dedbe8] transition-colors"
+                                disabled={loading || code.length < 8}
+                            >
+                                {loading ? (
+                                    <>
+                                        <span className="inline-block h-4 w-4 rounded-full border-2 border-current border-r-transparent animate-spin mr-2" />
+                                        {t("verifying")}
+                                    </>
+                                ) : (
+                                    t("verify")
+                                )}
                             </Button>
+
                             <Button
                                 type="button"
-                                variant="default"
-                                className="w-full bg-gradient-to-r from-[#e31b23] to-[#ef5a24] text-white hover:from-[#c2131a] hover:to-[#d94816] font-semibold shadow-md zimbra-btn-glow zimbra-btn-shimmer-container border-none relative overflow-hidden transition-all duration-300 transform hover:scale-[1.02] active:scale-[0.98] py-5 h-auto"
+                                variant="outline"
+                                className="w-full h-11 text-sm font-medium border-[#1c1e2b] bg-[#12131d] hover:bg-[#1a1c29] text-[#dedbe8] transition-colors flex items-center justify-center gap-2"
                                 onClick={() => window.open("https://cerbere.imt.fr/zimbra", "_blank")}
                                 disabled={loading}
                             >
-                                <span className="zimbra-btn-shimmer" />
-                                <div className="flex items-center justify-center gap-2.5">
-                                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-white p-0.5 shadow-sm shrink-0">
-                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 114.55 75.27" className="h-4.5 w-auto">
-                                            <defs>
-                                                <clipPath id="clip1">
-                                                    <path d="M 349 17 L 359.5 17 L 359.5 28 L 349 28 Z" />
-                                                </clipPath>
-                                                <clipPath id="clip2">
-                                                    <path d="M 57 3 L 115 3 L 115 75.27 L 57 75.27 Z" />
-                                                </clipPath>
-                                            </defs>
-                                            <g id="surface1">
-                                                <path fill="#F05C28" d="M 40.515625 64.472656 C 40.527344 64.875 40.820313 64.742188 41.039063 64.738281 C 46.308594 65.164063 51.539063 65.019531 56.683594 63.632813 C 64.355469 62.113281 71.171875 58.835938 76.710938 53.28125 C 84.53125 45.441406 85.914063 35.082031 80.253906 26.476563 C 74.722656 18.066406 66.464844 13.777344 56.863281 11.707031 C 51.636719 10.371094 46.351563 9.839844 40.976563 10.621094 C 35.492188 10.773438 30.300781 12.195313 25.328125 14.410156 C 23.550781 15.199219 22.003906 15.242188 20.261719 14.320313 C 17.667969 12.945313 14.972656 11.765625 11.953125 10.328125 C 12.890625 13.261719 13.664063 15.820313 14.527344 18.347656 C 15.027344 19.816406 14.769531 21.054688 13.75 22.1875 C 13.132813 22.875 12.53125 23.578125 11.953125 24.296875 C 5.542969 32.277344 5.238281 42.011719 11.347656 50.222656 C 16.902344 57.679688 24.75 61.527344 33.570313 63.632813 C 35.847656 64.175781 38.144531 64.851563 40.550781 64.488281 Z M 57.828125 70.796875 C 52.738281 71.550781 47.644531 72.265625 42.476563 71.941406 C 30.140625 71.164063 18.992188 67.449219 9.714844 58.929688 C -1.800781 48.351563 -3.261719 32.359375 6.304688 20.105469 C 7.117188 19.066406 7.171875 18.25 6.769531 17.085938 C 5.402344 13.101563 4.167969 9.074219 2.820313 5.082031 C 2.28125 3.480469 2.40625 2.058594 3.671875 0.914063 C 5.007813 -0.296875 6.480469 -0.203125 8.070313 0.578125 C 12.558594 2.796875 17.089844 4.917969 21.589844 7.117188 C 22.398438 7.515625 23.097656 7.671875 23.992188 7.316406 C 34.90625 2.972656 46.136719 2.339844 57.597656 4.515625 C 63.230469 5.753906 68.507813 7.933594 73.59375 10.617188 C 75.585938 12.117188 77.65625 13.527344 79.5625 15.128906 C 92.367188 25.871094 94.296875 42.507813 84.257813 55.265625 C 81.351563 58.960938 77.699219 61.816406 73.875 64.476563 C 68.8125 67.3125 63.429688 69.339844 57.828125 70.796875" />
-                                                <g clipPath="url(#clip2)">
-                                                    <path fill="#1B86C2" d="M 57.828125 70.800781 C 63.429688 69.339844 68.8125 67.308594 73.875 64.476563 C 74.167969 64.589844 74.484375 64.839844 74.753906 64.792969 C 79.6875 63.996094 84.613281 63.101563 89.152344 60.890625 C 91.003906 59.984375 92.605469 60.105469 94.386719 61.050781 C 96.921875 62.398438 99.554688 63.5625 102.515625 64.980469 C 101.808594 62.761719 101.363281 60.835938 100.582031 59.0625 C 99.316406 56.195313 99.78125 54.035156 101.925781 51.597656 C 109.40625 43.09375 109.472656 32.335938 102.058594 23.742188 C 94.617188 15.113281 84.6875 11.507813 73.59375 10.617188 C 68.507813 7.933594 63.230469 5.753906 57.597656 4.515625 C 75.058594 1.46875 91.164063 4.164063 104.6875 16.378906 C 116.539063 27.085938 117.753906 42.640625 108.070313 55.324219 C 107.359375 56.253906 107.316406 57.011719 107.660156 58.027344 C 108.980469 61.960938 110.226563 65.917969 111.539063 69.855469 C 112.097656 71.53125 112.238281 73.128906 110.785156 74.40625 C 109.339844 75.675781 107.757813 75.375 106.171875 74.601563 C 101.90625 72.527344 97.605469 70.527344 93.375 68.382813 C 92.152344 67.765625 91.164063 67.699219 89.871094 68.199219 C 79.71875 72.117188 69.257813 72.917969 58.5625 71.078125 C 58.308594 71.03125 58.070313 70.894531 57.828125 70.800781" />
-                                                </g>
-                                                <path fill="#1B86C2" d="M 40.550781 64.488281 C 37.761719 62.410156 34.949219 60.378906 32.488281 57.878906 C 20.476563 45.679688 21.035156 27.617188 33.785156 16.132813 C 36.046875 14.097656 38.519531 12.375 40.976563 10.621094 C 46.351563 9.839844 51.636719 10.371094 56.867188 11.707031 C 51.574219 13.175781 46.53125 15.175781 42.019531 18.390625 C 26.980469 29.113281 27.15625 46.714844 42.382813 57.199219 C 46.773438 60.21875 51.65625 62.074219 56.683594 63.632813 C 51.542969 65.019531 46.308594 65.164063 41.039063 64.738281 C 40.863281 64.648438 40.691406 64.558594 40.515625 64.46875" />
-                                                <path fill="#FFA500" d="M 56.78125 53.71875 C 51.503906 53.523438 46.304688 51.371094 42.359375 46.574219 C 40.550781 44.371094 40.570313 42.230469 42.347656 40.835938 C 44.089844 39.476563 45.964844 39.90625 47.765625 42.078125 C 52.867188 48.25 62.371094 48.230469 67.507813 42.039063 C 69.257813 39.929688 71.257813 39.496094 72.960938 40.855469 C 74.671875 42.222656 74.640625 44.472656 72.878906 46.609375 C 69.136719 51.144531 63.597656 53.726563 56.78125 53.71875" />
-                                                <path fill="#1B86C2" d="M 53.15625 29.0625 C 53.152344 31.949219 50.792969 34.332031 47.910156 34.367188 C 44.914063 34.402344 42.507813 32.015625 42.519531 29.019531 C 42.535156 26.023438 44.949219 23.675781 47.957031 23.730469 C 50.855469 26.148438 53.164063 26.148438 53.15625 29.0625" />
-                                                <path fill="#1B86C2" d="M 72.691406 29 C 72.703125 32 70.46875 34.320313 67.519531 34.367188 C 64.53125 34.410156 62.070313 31.960938 62.101563 28.980469 C 62.132813 26.058594 64.503906 23.726563 67.4375 23.730469 C 70.414063 23.734375 72.679688 26.007813 72.691406 29" />
-                                            </g>
-                                        </svg>
-                                    </div>
-                                    <span className="tracking-wide text-sm font-bold">{t("openZimbra")}</span>
-                                </div>
+                                <span>{t("openZimbra")}</span>
+                                <ExternalLink className="h-3.5 w-3.5 text-[#828096]" />
                             </Button>
+
                             <Button
                                 type="button"
                                 variant="ghost"
-                                className="w-full"
+                                className="w-full h-9 text-xs text-[#6a667d] hover:text-[#f0eef5]"
                                 onClick={() => {
                                     setStep("email");
                                     setCode("");
@@ -377,10 +704,21 @@ export default function LoginPage() {
                             >
                                 {t("useDifferentEmail")}
                             </Button>
-                        </form>
-                    )}
-                </CardContent>
-            </Card>
+                        </div>
+                    </form>
+                )}
+            </div>
+
+            {/* Footer Links */}
+            <footer className="relative z-10 mt-6 flex items-center justify-center gap-4 text-center text-xs text-[#524f64]">
+                <Link href="/privacy" className="hover:text-[#828096] transition-colors">
+                    Privacy
+                </Link>
+                <span>·</span>
+                <Link href="/terms" className="hover:text-[#828096] transition-colors">
+                    Terms
+                </Link>
+            </footer>
         </div>
     );
 }

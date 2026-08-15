@@ -190,6 +190,7 @@ async def get_auth_methods(
         "google_client_id": settings.google_client_id,
         "classic_enabled": settings.classic_auth_enabled,
         "allow_all_domains": settings.allow_all_domains,
+        "email_placeholder": settings.email_placeholder,
         "guest_access_enabled": settings.guest_access_enabled,
         "tutorials_enabled": settings.tutorials_enabled,
         "allow_external_document_links": settings.allow_external_document_links,
