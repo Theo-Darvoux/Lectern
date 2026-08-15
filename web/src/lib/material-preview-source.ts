@@ -85,18 +85,42 @@ export function getMaterialThumbnail(materialId: string): Promise<MaterialThumbn
     return request;
 }
 
+const listeners = new Set<(materialId: string, timestamp: number) => void>();
+
+export function subscribeMaterialThumbnail(
+    callback: (materialId: string, timestamp: number) => void,
+): () => void {
+    listeners.add(callback);
+    return () => {
+        listeners.delete(callback);
+    };
+}
+
 export function clearMaterialPreviewCache(): void {
     cacheGeneration += 1;
     cache.clear();
     inFlight.clear();
 }
 
-export function invalidateMaterialThumbnail(materialId: string): void {
+export function invalidateMaterialThumbnail(materialId: string, timestamp: number = Date.now()): void {
     cache.delete(materialId);
+    inFlight.delete(materialId);
+    listeners.forEach((listener) => {
+        try {
+            listener(materialId, timestamp);
+        } catch {
+            // ignore listener errors
+        }
+    });
 }
 
 export async function recalculateMaterialThumbnail(materialId: string): Promise<void> {
-    await apiFetch(`/materials/${materialId}/recalculate-thumbnail`, { method: "POST" });
-    invalidateMaterialThumbnail(materialId);
+    const res = await apiFetch<{ status: string; timestamp?: number }>(
+        `/materials/${materialId}/recalculate-thumbnail`,
+        { method: "POST" },
+    );
+    const ts = res?.timestamp ?? Date.now();
+    invalidateMaterialThumbnail(materialId, ts);
 }
+
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { File } from "lucide-react";
-import { getMaterialThumbnail } from "@/lib/material-preview-source";
+import { getMaterialThumbnail, subscribeMaterialThumbnail } from "@/lib/material-preview-source";
 import { useInView } from "@/hooks/use-in-view";
 
 type CellInfo = { url: string; type: "webp" | "fallback" } | null | false;
@@ -14,8 +14,17 @@ interface DirectoryPreviewCollageProps {
 export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollageProps) {
   const ids = materialIds.slice(0, 4);
   const [cells, setCells] = useState<CellInfo[]>(Array(ids.length).fill(null));
+  const [cacheBust, setCacheBust] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const visible = useInView(ref);
+
+  useEffect(() => {
+    return subscribeMaterialThumbnail((id, ts) => {
+      if (ids.includes(id)) {
+        setCacheBust(ts || Date.now());
+      }
+    });
+  }, [ids.join(",")]);
 
   useEffect(() => {
     if (!visible || ids.length === 0) return;
@@ -24,11 +33,14 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
     Promise.all(
       ids.map((id) =>
         getMaterialThumbnail(id)
-          .then((info): CellInfo =>
-            info && info.thumbnailType
-              ? { url: info.url, type: info.thumbnailType }
-              : false,
-          )
+          .then((info): CellInfo => {
+            if (!info || !info.thumbnailType) return false;
+            let finalUrl = info.url;
+            if (cacheBust > 0) {
+              finalUrl = `${finalUrl}${finalUrl.includes("?") ? "&" : "?"}_t=${cacheBust}`;
+            }
+            return { url: finalUrl, type: info.thumbnailType };
+          })
           .catch((): CellInfo => false),
       ),
     ).then((results) => {
@@ -37,7 +49,7 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
     return () => {
       cancelled = true;
     };
-  }, [visible, ids.join(",")]); // ids is a derived primitive — joining is safe
+  }, [visible, ids.join(","), cacheBust]); // ids is a derived primitive — joining is safe
 
   const gridClass = ids.length === 1 ? "grid-cols-1" : "grid-cols-2";
 

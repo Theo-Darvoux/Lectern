@@ -387,9 +387,11 @@ async def test_recalculate_thumbnail_permissions_and_enqueue(
     )
     assert resp.status_code == 404
 
-    # 4. Moderator -> 200 + queued
+    # 4. Moderator -> 200 + ok/queued
+    mock_job = AsyncMock()
+    mock_job.result = AsyncMock(return_value=True)
     mock_pool = AsyncMock()
-    mock_pool.enqueue_job = AsyncMock()
+    mock_pool.enqueue_job = AsyncMock(return_value=mock_job)
 
     with patch("app.core.database.redis.arq_pool", mock_pool):
         resp = await client.post(
@@ -398,7 +400,7 @@ async def test_recalculate_thumbnail_permissions_and_enqueue(
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "queued"
+        assert data["status"] == "ok"
         assert data["material_id"] == str(material.id)
         assert data["version_id"] == str(version.id)
         mock_pool.enqueue_job.assert_awaited_once()
