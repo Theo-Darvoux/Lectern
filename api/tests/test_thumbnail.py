@@ -1275,11 +1275,19 @@ async def test_recalculate_thumbnail_worker_success(db_session: AsyncSession) ->
         assert mock_download.call_count == 1
         mock_stage.assert_awaited_once()
         mock_upload.assert_awaited_once()
-        assert mock_upload.await_args.args[1] == f"thumbnails/{version.id}.webp"
+        uploaded_key = mock_upload.await_args.args[1]
+        prefix = f"thumbnails/{version.id}/"
+        assert uploaded_key.startswith(prefix)
+        assert uploaded_key.endswith(".webp")
+
+        # Regenerated thumbnails use a fresh immutable object key so an edge cache
+        # can never serve bytes from an older regeneration of the same version.
+        generation_id = uploaded_key[len(prefix) : -len(".webp")]
+        assert uuid.UUID(hex=generation_id).hex == generation_id
         assert mock_upload.await_args.kwargs["content_type"] == "image/webp"
 
     await db_session.refresh(version)
-    assert version.thumbnail_key == f"thumbnails/{version.id}.webp"
+    assert version.thumbnail_key == uploaded_key
     assert version.thumbnail_status == "ok"
 
 
