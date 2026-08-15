@@ -3,10 +3,18 @@
 import { memo, useRef } from "react";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
-import { Folder, ThumbsUp } from "lucide-react";
+import { ThumbsUp } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
-import { useLikeOverrides } from "@/lib/stores";
+import {
+    selectDirectoryColorOverride,
+    selectDirectoryIconOverride,
+    useDirectoryColorOverrides,
+    useDirectoryIconOverrides,
+    useLikeOverrides,
+} from "@/lib/stores";
+import { getDirectoryIcon } from "@/lib/directory-icons";
+import { getDirectoryColor } from "@/lib/directory-colors";
 import { useTranslations } from "next-intl";
 
 interface DirectoryLineItemProps {
@@ -50,6 +58,15 @@ function DirectoryLineItemImpl({
     const childDirCount = Number(directory.child_directory_count ?? 0);
     const childMatCount = Number(directory.child_material_count ?? 0);
     const totalCount = childDirCount + childMatCount;
+    const metadata = (directory.metadata ?? {}) as Record<string, unknown>;
+    const iconOverride = useDirectoryIconOverrides(selectDirectoryIconOverride(id));
+    const colorOverride = useDirectoryColorOverrides(selectDirectoryColorOverride(id));
+    const rawIconId = metadata.thumbnail_icon ? String(metadata.thumbnail_icon) : null;
+    const rawColorId = metadata.thumbnail_color ? String(metadata.thumbnail_color) : null;
+    const thumbnailIconId = iconOverride !== undefined ? iconOverride : rawIconId;
+    const thumbnailColorId = colorOverride !== undefined ? colorOverride : rawColorId;
+    const { Icon: DirectoryIcon } = getDirectoryIcon(thumbnailIconId);
+    const { iconClass: customIconClass } = getDirectoryColor(thumbnailColorId);
     const likeOverride = useLikeOverrides((s) => s.directoryOverrides[id]);
     const likeCount = likeOverride !== undefined ? likeOverride.likeCount : Number(directory.like_count ?? 0);
     const isLiked = likeOverride !== undefined ? likeOverride.isLiked : Boolean(directory.is_liked);
@@ -113,9 +130,9 @@ function DirectoryLineItemImpl({
             ? "text-red-500"
             : staged === "moved"
                 ? "text-amber-500"
-                : staged === "created"
+                : staged === "created" || staged === "edited"
                     ? `text-${themeColor}-500`
-                    : "text-blue-500";
+                    : customIconClass;
 
     const textColor =
         staged === "deleted"
@@ -152,7 +169,7 @@ function DirectoryLineItemImpl({
                         className="shrink-0"
                     />
                 )}
-                <Folder className={`h-6 w-6 shrink-0 ${iconColor}`} />
+                <DirectoryIcon className={`h-6 w-6 shrink-0 ${iconColor}`} />
 
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
