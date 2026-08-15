@@ -18,6 +18,7 @@ import {
   Code2,
   Info,
   MessageSquare,
+  RefreshCw,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
@@ -50,9 +51,11 @@ import { usePrint } from "@/hooks/use-print";
 import { apiFetch } from "@/lib/api-client";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useAuthStore, useUIStore } from "@/lib/stores";
-import { isGuest } from "@/lib/guest";
+import { useAuthStore, useBrowseRefreshStore, useUIStore } from "@/lib/stores";
+import { isGuest, isStaff } from "@/lib/guest";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
+import { isThumbnailEligible } from "@/lib/file-utils";
+import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
 import {
   Dialog,
   DialogContent,
@@ -118,22 +121,41 @@ function useItemActions(item: ItemData, itemPath?: string) {
   // Refined viewerType and mimeType determination for materials
   let viewerType = String(item.data.type || "");
   let mimeType = String(item.data.mime_type || "");
+  let fileName = "";
 
   if (isMaterial) {
     // Check if we have current version info (typical for materials from API)
     const vi = item.data.current_version_info as VersionInfo | undefined;
     if (vi) {
       mimeType = String(vi.file_mime_type || mimeType);
-      const fileName = String(vi.file_name || "");
+      fileName = String(vi.file_name || "");
       viewerType = getViewerType(mimeType, fileName);
     } else {
       // Fallback: maybe it's passed directly or it's a creation draft
-      const fileName = String(item.data.file_name || "");
+      fileName = String(item.data.file_name || "");
       if (mimeType || fileName) {
         viewerType = getViewerType(mimeType, fileName);
       }
     }
   }
+
+  const [isRecalculatingThumbnail, setIsRecalculatingThumbnail] = useState(false);
+  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
+
+  const handleRecalculateThumbnail = async () => {
+    if (isRecalculatingThumbnail || !isMaterial) return;
+    setIsRecalculatingThumbnail(true);
+    toast.loading(t("recalculatingThumbnail"), { id: `thumb-recalc-${item.id}` });
+    try {
+      await recalculateMaterialThumbnail(item.id);
+      toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${item.id}` });
+      triggerBrowseRefresh();
+    } catch {
+      toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${item.id}` });
+    } finally {
+      setIsRecalculatingThumbnail(false);
+    }
+  };
 
   const handleDraftDelete = () => {
     // If this is already a staged creation, "deleting" it means just removing the creation op
@@ -265,6 +287,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
   return {
     t,
     title,
+    fileName,
     isMaterial,
     viewerType,
     mimeType,
@@ -276,6 +299,8 @@ function useItemActions(item: ItemData, itemPath?: string) {
     handleDraftDelete,
     handleDirectDelete,
     handleShare,
+    handleRecalculateThumbnail,
+    isRecalculatingThumbnail,
     downloadMaterial,
     downloadQcmAsXml,
     downloadQcmAsPdf,
@@ -294,11 +319,14 @@ function useItemActions(item: ItemData, itemPath?: string) {
 function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
   const router = useRouter();
   const context = useContext(ActionsContext);
-  const guest = isGuest(useAuthStore((s) => s.user));
+  const user = useAuthStore((s) => s.user);
+  const guest = isGuest(user);
+  const staff = isStaff(user);
   const openSidebar = useUIStore((s) => s.openSidebar);
   if (!context) return null;
   const { item, actions } = context;
   const { t } = actions;
+  const isEligible = isThumbnailEligible(actions.mimeType, actions.fileName || actions.title);
 
   const Item = isContextMenu ? ContextMenuItem : DropdownMenuItem;
   const Separator = isContextMenu ? ContextMenuSeparator : DropdownMenuSeparator;
@@ -434,6 +462,20 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
             <LinkIcon className="mr-2 h-4 w-4" />
             <span>{t("copyLink")}</span>
           </Item>
+          {actions.isMaterial && staff && isEligible && (
+            <Item
+              onClick={actions.handleRecalculateThumbnail}
+              disabled={actions.isRecalculatingThumbnail}
+              className="cursor-pointer"
+            >
+              {actions.isRecalculatingThumbnail ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              <span>{t("recalculateThumbnail")}</span>
+            </Item>
+          )}
           {!actions.isMaterial && (
             <Item
               onClick={actions.handleDownloadDirectory}

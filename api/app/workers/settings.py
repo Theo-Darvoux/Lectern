@@ -18,6 +18,7 @@ from app.workers.index_content import (
 from app.workers.outbox import dispatch_outbox
 from app.workers.process_upload import process_upload
 from app.workers.process_upload_post_scan import process_upload_post_scan
+from app.workers.recalculate_thumbnail import recalculate_thumbnail
 from app.workers.reconcile_multipart import reconcile_multipart_uploads
 from app.workers.recover_cas_storage import recover_cas_storage_mutations
 from app.workers.storage_ops import (
@@ -141,6 +142,7 @@ class WorkerSettings:
         release_upload_quota,
         process_upload,
         process_upload_post_scan,
+        recalculate_thumbnail,
         dispatch_webhook,
         reset_14d_views,
         check_bazaar,
@@ -167,7 +169,7 @@ class UploadFastWorkerSettings:
     redis_settings = build_redis_settings()
     queue_name = UPLOAD_FAST_QUEUE
     max_jobs = settings.worker_fast_max_jobs
-    functions = [process_upload, process_upload_post_scan, check_bazaar]
+    functions = [process_upload, process_upload_post_scan, recalculate_thumbnail, check_bazaar]
     on_startup = startup
     on_shutdown = shutdown
 
@@ -178,6 +180,6 @@ class UploadSlowWorkerSettings:
     redis_settings = build_redis_settings()
     queue_name = UPLOAD_SLOW_QUEUE
     max_jobs = settings.worker_slow_max_jobs
-    functions = [process_upload, process_upload_post_scan, check_bazaar]
+    functions = [process_upload, process_upload_post_scan, recalculate_thumbnail, check_bazaar]
     on_startup = startup
     on_shutdown = shutdown

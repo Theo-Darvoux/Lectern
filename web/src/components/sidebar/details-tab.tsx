@@ -23,6 +23,7 @@ import {
   Plus,
   Pencil,
   Trash2,
+  RefreshCw,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,7 @@ import {
   formatFileSize,
   getFileBadgeColor,
   getFileBadgeLabel,
+  isThumbnailEligible,
 } from "@/lib/file-utils";
 import { apiFetch } from "@/lib/api-client";
 import { ExpandableText } from "@/components/ui/expandable-text";
@@ -44,6 +46,7 @@ import { UploadDrawer } from "@/components/pr/upload-drawer";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { submitDirectOperations } from "@/lib/pr-client";
+import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { isRestrictedTarget } from "@/lib/utils";
@@ -664,6 +667,24 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const searchParams = useSearchParams();
   const isRestricted = isRestrictedTarget(String(data.id ?? ""), searchParams.get("preview_pr"));
 
+  const [isRecalculatingThumbnail, setIsRecalculatingThumbnail] = useState(false);
+  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
+
+  const handleRecalculateThumbnail = async () => {
+    if (isRecalculatingThumbnail || !id) return;
+    setIsRecalculatingThumbnail(true);
+    toast.loading(t("recalculatingThumbnail"), { id: `thumb-recalc-${id}` });
+    try {
+      await recalculateMaterialThumbnail(id);
+      toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${id}` });
+      triggerBrowseRefresh();
+    } catch {
+      toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${id}` });
+    } finally {
+      setIsRecalculatingThumbnail(false);
+    }
+  };
+
   const previewAttVersion = previewAtt
     ? (previewAtt.current_version_info as Record<string, unknown> | null)
     : null;
@@ -762,6 +783,27 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
             ))}
           </div>
         </div>
+      )}
+
+      {/* Staff Actions */}
+      {isStaff(user) && !isRestricted && isThumbnailEligible(fileMimeType, fileName || title) && (
+        <SidebarSection className="space-y-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {t("staffActions")}
+          </span>
+          <button
+            onClick={handleRecalculateThumbnail}
+            disabled={isRecalculatingThumbnail}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            {isRecalculatingThumbnail ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            <span>{t("recalculateThumbnail")}</span>
+          </button>
+        </SidebarSection>
       )}
 
       {/* Attachment upload drawer */}
@@ -887,6 +929,24 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
                               >
                                 <Download className="h-4 w-4 text-muted-foreground hover:text-foreground" />
                               </button>
+                              {isStaff(user) && !isRestricted && isThumbnailEligible(attMime, attFileName || attTitle) && (
+                                <button
+                                  title={t("recalculateThumbnail")}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    toast.loading(t("recalculatingThumbnail"), { id: `thumb-recalc-${attId}` });
+                                    try {
+                                      await recalculateMaterialThumbnail(attId);
+                                      toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${attId}` });
+                                      triggerBrowseRefresh();
+                                    } catch {
+                                      toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${attId}` });
+                                    }
+                                  }}
+                                >
+                                  <RefreshCw className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                                </button>
+                              )}
                             </>
                           )}
                           {!isGuest(user) && !isRestricted && (

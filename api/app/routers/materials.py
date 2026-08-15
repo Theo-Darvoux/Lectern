@@ -29,16 +29,17 @@ from app.core.storage.facade import (
 from app.core.storage.facade import (
     upload_file as storage_upload_file,
 )
-from app.dependencies.auth import CurrentUser, ReadUser
+from app.dependencies.auth import CurrentUser, ReadUser, require_moderator
 from app.dependencies.rate_limit import (
     rate_limit_downloads,
     rate_limit_uploads,
     rate_limit_views,
 )
 from app.models.upload import Upload
-from app.models.user import UserRole
+from app.models.user import User, UserRole
 from app.routers.upload.helpers import (
     _check_pending_cap,
+    _processing_queue_name,
     _release_storage_reservation,
     _reserve_storage_limit,
 )
@@ -361,6 +362,56 @@ async def thumbnail_material(
     return {
         "url": url,
         "thumbnail_type": "webp" if is_dedicated else "fallback",
+    }
+
+
+@router.post("/{material_id}/recalculate-thumbnail")
+async def recalculate_material_thumbnail(
+    material_id: str,
+    user: Annotated[User, Depends(require_moderator())],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis | None, Depends(get_redis)] = None,
+) -> dict[str, Any]:
+    """Force recreate the thumbnail for a material.
+
+    Moderator or admin privileges required. Dispatches the thumbnail recalculation
+    job to a free background worker.
+    """
+    data = await get_material_with_version(db, material_id)
+    version = data.get("current_version_info")
+    if version is None or version.get("file_key") is None:
+        raise NotFoundError("No file available for thumbnail generation")
+
+    # Invalidate Redis thumbnail cache immediately
+    if redis is not None:
+        try:
+            await redis.delete(f"thumbnail:v1:{material_id}")
+        except Exception:
+            pass
+
+    from typing import cast
+
+    import app.core.database.redis as redis_core
+
+    if redis_core.arq_pool is None:
+        raise BadRequestError("Background processing is temporarily unavailable. Please try again.")
+
+    queue_name = _processing_queue_name(
+        version.get("file_mime_type") or "",
+        version.get("file_size") or 0,
+    )
+    enqueue_job = cast(Any, redis_core.arq_pool.enqueue_job)
+    await enqueue_job(
+        "recalculate_thumbnail",
+        _queue_name=queue_name,
+        material_id=str(material_id),
+        version_id=str(version.get("id")) if version.get("id") else None,
+    )
+
+    return {
+        "status": "queued",
+        "material_id": str(material_id),
+        "version_id": str(version.get("id")) if version.get("id") else None,
     }
 
 

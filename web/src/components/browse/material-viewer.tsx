@@ -12,6 +12,7 @@ import {
   FileText,
   Code2,
   Paperclip,
+  RefreshCw,
 } from "lucide-react";
 import { useIsMobile, useIsDesktop } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
@@ -26,11 +27,14 @@ import {
   getFileBadgeColor,
   getFileBadgeLabel,
   getViewerType,
+  isThumbnailEligible,
 } from "@/lib/file-utils";
-import { useUIStore, useAuthStore } from "@/lib/stores";
-import { isGuest } from "@/lib/guest";
+import { useUIStore, useAuthStore, useBrowseRefreshStore } from "@/lib/stores";
+import { isGuest, isStaff } from "@/lib/guest";
 import { apiFetch } from "@/lib/api-client";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
+import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
+import { toast } from "sonner";
 import type { QCMFile } from "@/lib/qcm-types";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -314,6 +318,25 @@ export function MaterialViewer({
   const annotationsData = useAnnotations(materialId);
   const { createAnnotation, threads } = annotationsData;
   const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
+  const user = useAuthStore((s) => s.user);
+  const isEligible = isThumbnailEligible(mimeType, fileName || title);
+  const [isRecalculatingThumbnail, setIsRecalculatingThumbnail] = useState(false);
+  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
+
+  const handleRecalculateThumbnail = async () => {
+    if (isRecalculatingThumbnail || !materialId) return;
+    setIsRecalculatingThumbnail(true);
+    toast.loading(t("recalculatingThumbnail"), { id: `thumb-recalc-${materialId}` });
+    try {
+      await recalculateMaterialThumbnail(materialId);
+      toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${materialId}` });
+      triggerBrowseRefresh();
+    } catch {
+      toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${materialId}` });
+    } finally {
+      setIsRecalculatingThumbnail(false);
+    }
+  };
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId,
@@ -487,6 +510,23 @@ export function MaterialViewer({
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (
                             <Download className="h-4 w-4" />
+                          )}
+                        </Button>
+                      )}
+                      {isStaff(user) && isEligible && !isRestricted && (
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 shrink-0"
+                          onClick={handleRecalculateThumbnail}
+                          disabled={isRecalculatingThumbnail}
+                          title={t("recalculateThumbnail")}
+                          aria-label={t("recalculateThumbnail")}
+                        >
+                          {isRecalculatingThumbnail ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-4 w-4" />
                           )}
                         </Button>
                       )}
