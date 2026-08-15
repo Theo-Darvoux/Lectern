@@ -71,19 +71,10 @@ def _render_code_box_html(code: str) -> str:
 async def send_verification_email(email: str, code: str, magic_link: str) -> None:
     site_name = settings.site_name
     site_name_style = settings.site_name_style
-    avatar_url = settings.smtp_avatar_url
-
     name_html, fonts_url = _render_site_name_html(site_name, site_name_style)
     code_box_html = _render_code_box_html(code)
 
     google_fonts_style = f'<style>@import url("{fonts_url}");</style>' if fonts_url else ""
-
-    avatar_html = (
-        f'<img src="{avatar_url}" alt="" width="56" height="56" '
-        f'style="width: 56px; height: 56px; border-radius: 50%; object-fit: cover; display: block; margin: 0 auto 16px; border: 1px solid #202334;" />'
-        if avatar_url
-        else ""
-    )
 
     subject = f"{site_name} - Sign in to your account"
     body = f"""<!DOCTYPE html>
@@ -131,9 +122,8 @@ async def send_verification_email(email: str, code: str, magic_link: str) -> Non
                 <table role="presentation" class="email-card" width="100%" border="0" cellpadding="0" cellspacing="0" style="max-width: 440px; background-color: #0c0d14; border: 1px solid #1c1e2b; border-radius: 12px; box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.75);">
                     <tr>
                         <td class="email-card-content" style="padding: 36px 32px;">
-                            <!-- Header: Avatar & Site Name -->
+                            <!-- Header: Site Name -->
                             <div style="text-align: center;">
-                                {avatar_html}
                                 <h1 style="margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; color: #f8f7fc; line-height: 1.2;">{name_html}</h1>
                                 <p style="margin: 6px 0 0; font-size: 13px; font-weight: 500; letter-spacing: 0.015em; color: #918da6; line-height: 1.4;">Sign in to your account</p>
                             </div>
