@@ -49,6 +49,12 @@ export default function LoginPage() {
         }
     }, [isAuthenticated, user, router]);
 
+    const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || t("title") || "Lectern";
+
+    useEffect(() => {
+        document.title = `${t("signIn")} • ${siteName}`;
+    }, [siteName, t]);
+
     // authMethods derived from config
     const authMethods = {
         totp_enabled: config?.totp_enabled ?? true,
@@ -206,7 +212,7 @@ export default function LoginPage() {
                 {/* Header: 90s 3D Chrome Shader Title (Fills top space inside card) */}
                 <div className="text-center -mt-2 -mb-1">
                     <ShaderText
-                        text={config?.site_name || t("title") || "Lectern"}
+                        text={siteName}
                         className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"
                     />
 
