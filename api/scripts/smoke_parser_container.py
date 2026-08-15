@@ -133,6 +133,7 @@ async def main() -> None:
         # them under the same container sandbox so a future mount-policy change
         # cannot silently break another supported family.
         converter_smokes = (
+            ["pdftoppm", "-v"],
             ["gs", "--version"],
             ["ffmpeg", "-version"],
             ["rsvg-convert", "--version"],

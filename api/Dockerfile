@@ -79,9 +79,9 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # ── Stage 3b: Worker ─────────────────────────────────────────────────────────
 # Adds the document/media processing toolchain used by the upload pipeline:
-#   ghostscript (PDF), ffmpeg (audio/video),
-#   exiftool (metadata strip), libreoffice-nogui (Office→PDF thumbnails),
-#   librsvg2-bin (SVG→PNG thumbnails).
+#   poppler-utils & poppler-data (PDF rendering & CMaps), ghostscript (PDF fallback/compression),
+#   ffmpeg (audio/video), exiftool (metadata strip), libreoffice-nogui (Office→PDF thumbnails),
+#   librsvg2-bin (SVG→PNG thumbnails), and standard TrueType fallback fonts.
 # This is the default build target (last stage), so a plain `docker build`
 # yields the full-capability image.
 FROM runtime-base AS worker
@@ -93,6 +93,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libimage-exiftool-perl \
     libreoffice-nogui \
     librsvg2-bin \
+    poppler-utils \
+    poppler-data \
+    fonts-dejavu-core \
+    fonts-freefont-ttf \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 USER appuser
 

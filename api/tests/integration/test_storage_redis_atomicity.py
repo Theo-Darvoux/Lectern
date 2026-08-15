@@ -249,7 +249,7 @@ async def test_physical_cas_write_blocks_reconcile_until_delta_commit(
     monkeypatch.setattr(capacity, "_physical_cas_storage_usage", physical_usage)
 
     writer = asyncio.create_task(facade.upload_file(b"x" * 17, "cas/barrier"))
-    await storage.visible.wait()
+    await _bounded_redis_call("waiting for upload visible", storage.visible.wait())
     assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
 
     reconciler = asyncio.create_task(capacity.reconcile_cas_storage_usage(redis))
@@ -288,7 +288,7 @@ async def test_physical_cas_delete_blocks_reconcile_until_delta_commit(
     monkeypatch.setattr(capacity, "_physical_cas_storage_usage", physical_usage)
 
     deleter = asyncio.create_task(facade.delete_object("cas/delete-barrier"))
-    await storage.deleted.wait()
+    await _bounded_redis_call("waiting for delete visible", storage.deleted.wait())
     assert await redis.get(capacity._STORAGE_USAGE_DIRTY_KEY) == "1"
 
     reconciler = asyncio.create_task(capacity.reconcile_cas_storage_usage(redis))
@@ -412,7 +412,7 @@ async def test_promoted_legacy_release_fences_stale_snapshot_with_real_redis(
     monkeypatch.setattr(capacity, "_legacy_storage_usage_from_database", controlled_usage)
 
     reservation = asyncio.create_task(capacity.reserve_storage_limit(50, "new", redis, db_session))
-    await snapshot_read.wait()
+    await _bounded_redis_call("waiting for snapshot read", snapshot_read.wait())
     await capacity.release_promoted_legacy_storage_reservation("promoted", redis)
     allow_first_attempt.set()
     await reservation
@@ -460,7 +460,7 @@ async def test_cas_reconcile_cannot_clear_dirty_before_lease_lost_remote_write_r
     await redis.set(capacity._STORAGE_MUTATION_EPOCH_KEY, 0)
 
     writer = asyncio.create_task(facade.upload_file(b"x" * 17, "cas/lease-loss"))
-    await storage.dispatched.wait()
+    await _bounded_redis_call("waiting for writer dispatch", storage.dispatched.wait())
 
     # The object-store request cannot be dispatched before the durable journal.
     assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 1
@@ -506,7 +506,7 @@ async def test_cas_begin_intent_is_aof_durable_before_writer_dispatch(
     await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
 
     writer = asyncio.create_task(facade.upload_file(b"z", "cas/aof-before-io"))
-    await storage.dispatched.wait()
+    await _bounded_redis_call("waiting for writer dispatch", storage.dispatched.wait())
 
     # At writer entry the begin script has already run on the same pinned Redis
     # connection as WAITAOF and the journal is present/dirty.
@@ -595,24 +595,24 @@ async def test_slow_preflight_cannot_make_live_dispatched_write_recoverable(
     storage = _SlowPreflightLateVisibilityStorage()
     monkeypatch.setattr(facade, "get_storage", lambda: storage)
     monkeypatch.setattr(redis_core, "redis_client", redis)
-    monkeypatch.setattr(settings, "cas_mutation_io_timeout_seconds", 1.0)
-    monkeypatch.setattr(settings, "cas_mutation_recovery_grace_seconds", 0.2)
-    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_EXPIRE", 0.15)
+    monkeypatch.setattr(settings, "cas_mutation_io_timeout_seconds", 0.6)
+    monkeypatch.setattr(settings, "cas_mutation_recovery_grace_seconds", 0.1)
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_EXPIRE", 0.25)
     monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_TIMEOUT", 1.0)
     await redis.set(_STORAGE_USAGE_KEY, 0)
     await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
     await redis.set(capacity._STORAGE_MUTATION_EPOCH_KEY, 0)
     writer = asyncio.create_task(facade.upload_file(b"x" * 17, "cas/slow-preflight-dispatch"))
-    await storage.preflight_started.wait()
+    await _bounded_redis_call("waiting for preflight start", storage.preflight_started.wait())
     intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
     _mutation_id, raw = next(iter(intents.items()))
     preflight = json.loads(raw)
     assert preflight["journal_version"] == 3
     assert preflight["phase"] == "preflight"
     assert "recover_after_ms" not in preflight
-    await asyncio.sleep(1.3)  # beyond the vulnerable creation-based 1.2s window
+    await asyncio.sleep(0.8)  # beyond the vulnerable creation-based 0.7s window
     storage.allow_preflight.set()
-    await storage.dispatched.wait()
+    await _bounded_redis_call("waiting for writer dispatch", storage.dispatched.wait())
     intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
     _mutation_id, raw = next(iter(intents.items()))
     dispatched = json.loads(raw)
@@ -622,7 +622,7 @@ async def test_slow_preflight_cannot_make_live_dispatched_write_recoverable(
     now_ms = int(redis_time[0]) * 1000 + int(redis_time[1]) // 1000
     assert int(dispatched["recover_after_ms"]) > now_ms
     await redis.delete(f"lock:{capacity._CAS_STORAGE_MUTATION_LOCK}")
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.15)
     with pytest.raises(BadRequestError, match="physical CAS mutation resolves"):
         await capacity.reconcile_cas_storage_usage(redis)
     assert int(await redis.hlen(capacity._STORAGE_MUTATION_INTENTS_KEY)) == 1

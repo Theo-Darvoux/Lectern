@@ -408,29 +408,50 @@ def _compute_pdf_render_dpi(
 async def _thumbnail_pdf(
     input_path: Path, output_path: Path, size: tuple[int, int], quality: int
 ) -> None:
-    """Render the first non-blank page of a PDF using Ghostscript.
+    """Render the first non-blank page of a PDF using pdftoppm (Poppler) or Ghostscript.
+
+    pdftoppm renders embedded font subsets, CID fonts, and complex vectors
+    accurately without font substitution or glyph corruption. Ghostscript is
+    retained as a fallback if pdftoppm is not available.
 
     Tries page 1 first. If the resulting thumbnail is nearly blank (common for
     attestation covers or title pages with minimal content), falls back to page 2.
     """
+    has_pdftoppm = shutil.which("pdftoppm") is not None
     with processing_temp_dir(prefix="pdf-thumb-") as temp_dir:
         for page_num in (1, 2):
             render_dpi = _compute_pdf_render_dpi(input_path, page_num, size)
             temp_png = Path(temp_dir) / f"page-{page_num}.png"
-            cmd = [
-                "gs",
-                "-dSAFER",
-                "-dBATCH",
-                "-dNOPAUSE",
-                "-sDEVICE=png16m",
-                "-dTextAlphaBits=4",
-                "-dGraphicsAlphaBits=4",
-                f"-dFirstPage={page_num}",
-                f"-dLastPage={page_num}",
-                f"-r{render_dpi}",
-                f"-sOutputFile={temp_png}",
-                str(input_path),
-            ]
+            if has_pdftoppm:
+                temp_stem = Path(temp_dir) / f"page-{page_num}"
+                cmd = [
+                    "pdftoppm",
+                    "-png",
+                    "-r",
+                    str(render_dpi),
+                    "-f",
+                    str(page_num),
+                    "-l",
+                    str(page_num),
+                    "-singlefile",
+                    str(input_path),
+                    str(temp_stem),
+                ]
+            else:
+                cmd = [
+                    "gs",
+                    "-dSAFER",
+                    "-dBATCH",
+                    "-dNOPAUSE",
+                    "-sDEVICE=png16m",
+                    "-dTextAlphaBits=4",
+                    "-dGraphicsAlphaBits=4",
+                    f"-dFirstPage={page_num}",
+                    f"-dLastPage={page_num}",
+                    f"-r{render_dpi}",
+                    f"-sOutputFile={temp_png}",
+                    str(input_path),
+                ]
 
             async with _get_concurrency_guard("subprocess"):
                 process = await async_sandboxed_run(
@@ -442,7 +463,7 @@ async def _thumbnail_pdf(
 
             if process.returncode != 0 or not temp_png.exists():
                 logger.warning(
-                    "Ghostscript produced no output for page %d of %s (rc=%d): %s",
+                    "PDF renderer produced no output for page %d of %s (rc=%d): %s",
                     page_num,
                     input_path.name,
                     process.returncode,
@@ -465,7 +486,7 @@ async def _thumbnail_pdf(
                 # Keep page 1 in place until page 2 is successfully rendered.
                 # Sparse single-page documents often cross the conservative
                 # blank threshold; deleting their only usable preview made the
-                # whole thumbnail stage fail when Ghostscript found no page 2.
+                # whole thumbnail stage fail when the renderer found no page 2.
                 continue
 
             return
