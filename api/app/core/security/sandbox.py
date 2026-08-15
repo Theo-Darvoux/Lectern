@@ -92,6 +92,8 @@ _SYSTEM_RO_BINDS: tuple[str, ...] = (
     # LibreOffice's Debian bootstrap configuration. Without this directory the
     # binary aborts with an opaque UNO RuntimeException inside the minimal root.
     "/etc/libreoffice",
+    "/var/cache/fontconfig",
+    "/var/lib/fontconfig",
 )
 
 

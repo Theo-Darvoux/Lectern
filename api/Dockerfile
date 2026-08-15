@@ -98,6 +98,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
     fonts-freefont-ttf \
     fonts-liberation \
+    fonts-lmodern \
+    fonts-texgyre \
+    fonts-crosextra-carlito \
+    fonts-crosextra-caladea \
+    fonts-noto-core \
+    fonts-urw-base35 \
     && rm -rf /var/lib/apt/lists/*
 USER appuser
 
