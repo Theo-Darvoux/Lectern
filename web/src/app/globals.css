@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:ital,wght@0,700;0,900;1,700;1,900&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -574,6 +575,112 @@
 }
 
 
+
+/* ─── Login page ─── */
+
+/* Force an always-dark, self-contained palette regardless of theme.
+   Every shadcn component nested inside .login-page inherits these values. */
+.login-page {
+    --background: #06070a;
+    --foreground: #f0eef5;
+    --card: #0d0e15;
+    --card-foreground: #f0eef5;
+    --muted: #141520;
+    --muted-foreground: #828096;
+    --border: #1d1f2e;
+    --input: #12131d;
+    --ring: #3b3e5a;
+    --primary: #f0eff5;
+    --primary-foreground: #08090f;
+    --accent: #151724;
+    --accent-foreground: #f0eef5;
+    --secondary: #131420;
+    --secondary-foreground: #f0eef5;
+    --popover: #0d0e15;
+    --popover-foreground: #f0eef5;
+    --destructive: oklch(0.704 0.191 22.216);
+
+    color-scheme: dark;
+    background-color: #06070a;
+    color: #f0eef5;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ── Background layers & textures (No glassmorphism, No particle mesh, No micro-interactions) ── */
+
+.login-bg-base {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: radial-gradient(circle at 50% 30%, #11131e 0%, #07080c 60%, #040507 100%);
+}
+
+.login-grain {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.04;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.login-dots {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: radial-gradient(circle, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-size: 24px 24px;
+    mask-image: radial-gradient(ellipse 70% 65% at 50% 45%, black 20%, transparent 80%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 65% at 50% 45%, black 20%, transparent 80%);
+}
+
+/* ── Card Container (Solid opaque panel, fully responsive) ── */
+
+.login-card-wrapper {
+    background-color: #0c0d14;
+    border: 1px solid #1c1e2b;
+    border-radius: 0.75rem;
+    box-shadow:
+        0 24px 48px -12px rgba(0, 0, 0, 0.75),
+        0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+/* ── Form Inputs & Controls (High contrast, static solid focus state) ── */
+
+.login-page input:not([type="hidden"]) {
+    background-color: #12131d !important;
+    border-color: #202334 !important;
+    color: #f0eef5 !important;
+    border-radius: 0.5rem;
+}
+
+.login-page input::placeholder {
+    color: #524f64 !important;
+}
+
+.login-page input:focus-visible {
+    border-color: #4a4e70 !important;
+    box-shadow: 0 0 0 1px #4a4e70 !important;
+}
+
+/* ── Decorative Hairline Separator ── */
+
+.login-sep {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #222538 20%, #222538 80%, transparent);
+}
+
+/* ── Monospace Overline Label ── */
+
+.login-overline {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #6a667d;
+    font-weight: 600;
+}
 
 /* Respect the user's OS-level reduced-motion preference across Tailwind and
    custom animations without changing the normal-motion experience. */

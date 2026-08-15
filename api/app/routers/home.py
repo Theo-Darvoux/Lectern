@@ -164,6 +164,7 @@ async def _build_featured_out(
     return out
 
 
+@router.get("", response_model=HomeResponse | PublicHomeResponse, include_in_schema=False)
 @router.get("/", response_model=HomeResponse | PublicHomeResponse)
 async def get_home(
     user: CurrentUser,

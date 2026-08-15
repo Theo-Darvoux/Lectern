@@ -261,6 +261,7 @@ export interface PublicConfig {
     google_client_id: string | null;
     classic_enabled: boolean;
     allow_all_domains: boolean;
+    email_placeholder: string | null;
     guest_access_enabled: boolean;
     /** Disable the in-app guided tours platform-wide (TUTORIALS_ENABLED). */
     tutorials_enabled: boolean;
