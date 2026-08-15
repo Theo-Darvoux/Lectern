@@ -31,7 +31,7 @@ jobs:
       image: ${{ steps.validate.outputs.image }}
       redis_image: ${{ steps.validate.outputs.redis_image }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load pinned release toolchain
         id: toolchain
         run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
@@ -68,7 +68,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load pinned release toolchain
         id: toolchain
         run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
@@ -120,7 +120,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load pinned release toolchain
         id: toolchain
         run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
@@ -159,7 +159,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load pinned release toolchain
         id: toolchain
         run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
@@ -267,7 +267,7 @@ jobs:
       PRODUCTION_SEAWEEDFS_IMAGE: ${{ vars.PRODUCTION_SEAWEEDFS_IMAGE }}
       TESTED_SEAWEEDFS_IMAGE: ${{ needs.validate-tested-storage.outputs.image }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Load pinned release toolchain
         id: toolchain
         run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
