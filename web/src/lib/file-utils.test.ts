@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatFileSize, getFileExtension, getViewerType, guessFileMime, sniffFileType, MIME_TO_EXT, MIME_QCM } from "./file-utils";
+import { ACCEPTED_FILE_TYPES, formatFileSize, getFileExtension, getViewerType, guessFileMime, sniffFileType, MIME_TO_EXT, MIME_QCM } from "./file-utils";
 
 describe("file-utils", () => {
   describe("formatFileSize", () => {
@@ -42,9 +42,21 @@ describe("file-utils", () => {
       // Even with a generic filename, the mime type should win
       expect(getViewerType(MIME_QCM, "data")).toBe("qcm");
     });
+
+    it("uses the notebook viewer for .ipynb files reported as JSON or plain text", () => {
+      expect(getViewerType("application/json", "analysis.ipynb")).toBe("notebook");
+      expect(getViewerType("text/plain", "analysis.ipynb")).toBe("notebook");
+    });
   });
 
   describe("guessFileMime", () => {
+    it("accepts Jupyter notebooks and infers their JSON MIME type", () => {
+      expect(ACCEPTED_FILE_TYPES.split(",")).toContain(".ipynb");
+
+      const file = { name: "analysis.ipynb", type: "" } as File;
+      expect(guessFileMime(file)).toBe("application/json");
+    });
+
     it("returns raw mime if valid", () => {
       const file = { name: "test.pdf", type: "application/pdf" } as File;
       expect(guessFileMime(file)).toBe("application/pdf");
@@ -109,4 +121,3 @@ describe("file-utils", () => {
     });
   });
 });
-

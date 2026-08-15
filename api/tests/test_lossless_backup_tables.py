@@ -73,8 +73,10 @@ def _make_zip_with_rows(tmp_path: Path, rows: dict[str, list[dict]]) -> Path:
         "tables": _TABLE_INSERT_ORDER,
         "s3_prefixes": [],
         "s3_object_count": 0,
+        "s3_objects": {},
         "db_row_counts": {t: len(rows.get(t, [])) for t in _TABLE_INSERT_ORDER},
     }
+
     with zipfile.ZipFile(dest, "w") as zf:
         zf.writestr("manifest.json", json.dumps(manifest))
         zf.writestr("s3_metadata.json", "{}")

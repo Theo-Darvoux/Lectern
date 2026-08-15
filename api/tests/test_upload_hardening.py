@@ -24,7 +24,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -106,7 +106,7 @@ async def test_ooxml_stripping(db_session: AsyncSession):
     import zipfile
     from pathlib import Path
 
-    from app.core.file_security import _strip_ooxml_from_path
+    from app.core.security.file_security._office import _strip_ooxml_from_path
 
     # Create a dummy DOCX with docProps
     tmp_in = Path(tempfile.mktemp(suffix=".docx"))

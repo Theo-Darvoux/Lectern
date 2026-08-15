@@ -20,10 +20,10 @@ import { useConfigStore } from "@/lib/stores";
 
 export default function OnboardingPage() {
     const t = useTranslations("Onboarding");
-    const { config } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
     const siteName = config?.site_name || "";
     const { user, isLoading } = useAuth();
-    const { setUser } = useAuthStore();
+    const setUser = useAuthStore((state) => state.setUser);
     const [displayName, setDisplayName] = useState("");
     const [academicYear, setAcademicYear] = useState<string>("");
     const [gdprConsent, setGdprConsent] = useState(false);

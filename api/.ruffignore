@@ -1,13 +1,2 @@
 # One-off debug/scratch scripts — not production code
-analyze_pdf.py
-analyze_pdf_brute.py
-analyze_pdf_fonts.py
-analyze_pdf_objects.py
-analyze_pdf_recursive.py
-analyze_pdf_streams.py
-analyze_pdf_v2.py
-test_pikepdf_images.py
-test_pdf_strip.py
-test_user_pdf.py
-yara.py
 scratch/

@@ -3,7 +3,7 @@ import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloud
 import { describe, expect, it } from "vitest";
 
 // Must match the HMAC_SECRET binding in vitest.config.ts
-const TEST_SECRET = "test-hmac-secret";
+const TEST_SECRET = "test-hmac-secret-at-least-32-bytes";
 
 /**
  * Produces a signed token in the same format the worker expects:
@@ -100,7 +100,7 @@ describe("/branding/", () => {
 // /file/ — single file, HMAC-token authenticated, edge-cached
 //
 // Each test uses a unique r2Key so that cache entries from one test cannot
-// bleed into another (the route caches by URL with the token stripped).
+// bleed into another (the route caches canonical bytes by a versioned path key).
 // Tests use workerFetch() (direct handler) so ctx.waitUntil(cache.put(...))
 // is flushed before reset() is called in afterEach.
 // ---------------------------------------------------------------------------
@@ -112,6 +112,18 @@ describe("/file/", () => {
 
   it("returns 401 for an invalid token signature", async () => {
     const res = await SELF.fetch("http://worker/file/k?token=eyJleHAiOjk5OTk5OTk5OTl9.badsig");
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects tokens when the configured HMAC key is too weak", async () => {
+    const token = await signToken({ r2_key: "some-key" });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request(`http://worker/file/some-key?token=${token}`),
+      { ...(env as any), HMAC_SECRET: "weak" },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
     expect(res.status).toBe(401);
   });
 
@@ -141,9 +153,55 @@ describe("/file/", () => {
     const res = await workerFetch(`http://worker/file/${r2Key}?token=${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=2592000");
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
     expect(await res.text()).toBe("hello world");
+  });
+
+  it("binds a capability to the decoded file path before consulting cache", async () => {
+    const allowedKey = "files/cache-binding-allowed.txt";
+    const protectedKey = "files/cache-binding-protected.txt";
+    await env.BUCKET.put(allowedKey, "allowed");
+    await env.BUCKET.put(protectedKey, "protected");
+
+    const protectedToken = await signToken({ r2_key: protectedKey });
+    const primed = await workerFetch(
+      `http://worker/file/${protectedKey}?token=${protectedToken}`,
+    );
+    expect(await primed.text()).toBe("protected");
+
+    const allowedToken = await signToken({ r2_key: allowedKey });
+    const attack = await workerFetch(
+      `http://worker/file/${protectedKey}?token=${allowedToken}`,
+    );
+    expect(attack.status).toBe(403);
+    expect(await attack.text()).not.toContain("protected");
+  });
+
+  it("applies response variants after a shared body-cache hit", async () => {
+    const r2Key = "files/cache-header-variant.pdf";
+    await env.BUCKET.put(r2Key, "pdf-bytes", {
+      httpMetadata: { contentType: "application/pdf" },
+    });
+
+    const firstToken = await signToken({ r2_key: r2Key, filename: "First.pdf" });
+    const first = await workerFetch(`http://worker/file/${r2Key}?token=${firstToken}`);
+    expect(first.headers.get("Content-Disposition")).toContain('filename="First.pdf"');
+    await first.arrayBuffer();
+
+    const secondToken = await signToken({
+      r2_key: r2Key,
+      filename: 'Second "safe".pdf',
+      force_download: true,
+      content_type: "application/octet-stream",
+    });
+    const second = await workerFetch(`http://worker/file/${r2Key}?token=${secondToken}`);
+    expect(second.headers.get("Content-Disposition")).toContain("attachment");
+    expect(second.headers.get("Content-Disposition")).toContain(
+      'filename="Second _safe_.pdf"',
+    );
+    expect(second.headers.get("Content-Type")).toBe("application/octet-stream");
+    expect(await second.text()).toBe("pdf-bytes");
   });
 
   it("sets inline Content-Disposition by default", async () => {
@@ -209,7 +267,39 @@ describe("/file/", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-encoding")).toBeNull();
     expect(res.headers.get("content-length")).toBeNull();
+    expect(res.headers.get("Accept-Ranges")).toBe("none");
     expect(await res.text()).toBe(original);
+  });
+
+  it("passes a byte range through R2 and returns a partial response", async () => {
+    const r2Key = "files/range-video.bin";
+    await env.BUCKET.put(r2Key, "0123456789", {
+      httpMetadata: { contentType: "video/mp4" },
+    });
+    const token = await signToken({ r2_key: r2Key, content_type: "video/mp4" });
+
+    const res = await workerFetch(`http://worker/file/${r2Key}?token=${token}`, {
+      headers: { Range: "bytes=2-5" },
+    });
+
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(res.headers.get("Content-Range")).toBe("bytes 2-5/10");
+    expect(res.headers.get("Content-Length")).toBe("4");
+    expect(await res.text()).toBe("2345");
+  });
+
+  it("returns 416 with the object size for an unsatisfiable R2 range", async () => {
+    const r2Key = "files/range-too-far.bin";
+    await env.BUCKET.put(r2Key, "0123456789");
+    const token = await signToken({ r2_key: r2Key });
+
+    const res = await workerFetch(`http://worker/file/${r2Key}?token=${token}`, {
+      headers: { Range: "bytes=50-60" },
+    });
+
+    expect(res.status).toBe(416);
+    expect(res.headers.get("Content-Range")).toBe("bytes */10");
   });
 });
 

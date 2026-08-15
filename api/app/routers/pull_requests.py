@@ -7,15 +7,12 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
-from sse_starlette.sse import EventSourceResponse
 
-from app.core.database import get_db
-from app.core.exceptions import NotFoundError
-from app.core.limiter import limiter
-from app.core.redis import get_redis
-from app.core.sse import register_topic_queue, sse_event_stream, unregister_topic_queue
+from app.core.common.exceptions import BadRequestError, NotFoundError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
+from app.core.events.limiter import limiter
 from app.dependencies.auth import (
-    SSEUser,
     get_current_user,
     require_moderator,
     require_not_guest,
@@ -49,17 +46,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pull-requests", tags=["pull-requests"])
 
 
-@router.get("/sse")
-async def pull_request_sse(user: SSEUser) -> EventSourceResponse:
-    """Per-user SSE stream for PR list updates (pr_opened / pr_closed events)."""
-    topic = f"pr_updates:{user.id}"
-    queue = register_topic_queue(topic)
-    return EventSourceResponse(
-        sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(topic, queue)),
-        headers={"X-Accel-Buffering": "no"},
-    )
-
-
 @router.post("", response_model=PullRequestOut, status_code=201)
 async def create_pull_request(
     data: PullRequestCreate,
@@ -68,7 +54,6 @@ async def create_pull_request(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> PullRequestOut:
     pr = await create_pull_request_service(db, data, current_user, redis=redis)
-    await db.commit()
     return PullRequestOut.model_validate(pr)
 
 
@@ -224,6 +209,17 @@ async def create_pull_request_comment(
     if not pr:
         raise NotFoundError("Pull request not found")
 
+    parent: PRComment | None = None
+    if data.parent_id is not None:
+        parent = await db.scalar(
+            select(PRComment).where(
+                PRComment.id == data.parent_id,
+                PRComment.pr_id == id,
+            )
+        )
+        if parent is None:
+            raise BadRequestError("Parent comment must belong to this pull request")
+
     c = PRComment(
         id=uuid.uuid4(),
         pr_id=id,
@@ -235,15 +231,13 @@ async def create_pull_request_comment(
     await db.flush()
     await db.refresh(c, ["author"])
 
-    if data.parent_id:
-        parent = await db.scalar(select(PRComment).where(PRComment.id == data.parent_id))
-        if parent and parent.author_id and parent.author_id != current_user.id:
-            await notify_user(
-                db,
-                parent.author_id,
-                "pr_comment_reply",
-                f'Someone replied to your comment on "{pr.title}"',
-                link=f"/pull-requests/{pr.id}",
-            )
+    if parent and parent.author_id and parent.author_id != current_user.id:
+        await notify_user(
+            db,
+            parent.author_id,
+            "pr_comment_reply",
+            f'Someone replied to your comment on "{pr.title}"',
+            link=f"/pull-requests/{pr.id}",
+        )
 
     return PRCommentOut.model_validate(c)

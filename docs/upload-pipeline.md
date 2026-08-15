@@ -1,6 +1,7 @@
 # Upload Pipeline
 
-Every file upload goes through two phases: a **prescan gateway** (synchronous, in the API request) followed by **background processing** (asynchronous, in an ARQ worker).
+Every file upload goes through two phases: an **admission and transfer gateway**
+in the API followed by hostile-file scanning and processing in an ARQ worker.
 
 ---
 
@@ -56,12 +57,12 @@ The browser hashes the file with WebCrypto (SHA-256) during upload. This hash is
 - `PATCH /api/upload/tus/{id}` : append chunk
 - `DELETE /api/upload/tus/{id}` : abort
 
-### 3. CAS deduplication check
+### 3. Completion and queue admission
 
-Before enqueuing, the API checks whether the SHA-256 has already been scanned and stored in CAS (Content-Addressed Storage). If a clean copy exists:
-- Processing is skipped
-- The upload is linked to the existing CAS entry immediately
-- Ref count is incremented, no additional storage is consumed
+The API verifies the completed object's size and authoritative MIME type, records
+the upload, and enqueues processing. CAS reuse happens only after the current
+scan policy has been applied; an old clean result is not a bypass around the
+worker's security gate.
 
 ### 4. Queue routing
 
@@ -73,6 +74,32 @@ Before enqueuing, the API checks whether the SHA-256 has already been scanned an
 | Fallback: size ≥ 5 MiB | `upload-slow` |
 
 The fast and slow queues run on separate worker replicas with different resource limits, preventing a large video transcode from blocking a quick image upload.
+
+### 5. Folder uploads
+
+The browser traverses folders, preserves each file's relative directory path,
+and sends every readable file through the normal per-file transfer strategy.
+Only four transfers/processors are active at once. This avoids constructing one
+large in-memory archive and gives every file its own resumable upload ID,
+progress, retry, and terminal status. An unreadable, unsupported, oversized, or
+malicious entry is reported on that entry and does not cancel clean siblings.
+Once all entries reach a terminal state, clean files can be added to the draft
+even while failed entries remain visible.
+
+Before the transfers start, the browser requests one bounded admission with
+`POST /api/upload/groups`. Each admitted file sends that group ID together with
+its stable upload ID. The server counts distinct IDs up to the role's advertised
+folder limit, so a large moderator folder does not weaken the ordinary upload
+rate limit or unrelated mutation limits. After a browser reload, persisted queue
+rows no longer hold their `File` objects; dropping the same folder again matches
+interrupted rows by relative path and size, restores those references, and
+resumes them in bulk.
+
+`POST /api/upload/batch-zip` remains available for older clients. Its current
+limits are advertised by `GET /api/upload/config`; clients should reuse one
+`X-Upload-ID` when retrying a batch. Entry IDs are derived from that batch ID,
+the tenant, relative path, and content hash, so a lost response can be retried
+without duplicating committed uploads.
 
 ---
 
@@ -96,13 +123,22 @@ Two operations run concurrently:
 - Images: EXIF data stripped (piexif, Pillow)
 - Audio/Video: metadata tags stripped
 
-**MalwareBazaar** is checked asynchronously (default). After the YARA gate passes, a `check_bazaar` background job is enqueued : it does not block the upload. If MalwareBazaar later identifies a threat, the upload is flagged and the user is notified. Set `MALWAREBAZAAR_FAIL_CLOSED=true` to reject uploads when MalwareBazaar is unreachable.
+**MalwareBazaar** is synchronous by default because
+`MALWAREBAZAAR_FAIL_CLOSED=true`: a lookup error rejects publication. In
+fail-open mode, `BAZAAR_ASYNC_ENABLED=true` moves the lookup to a background job
+after the YARA gate; a later match retroactively quarantines references. The
+fail-closed path retries short-lived service/network failures three times. If
+the service remains unavailable, the file fails with an explicit retry-later
+error rather than being labeled as malware.
 
 ### Stage 3 : Content-Addressed Storage (CAS)
 
 The file is moved from `quarantine/` to `cas/{hmac(sha256)}`.
 
-The CAS key is `HMAC-SHA256(file_sha256, SECRET_KEY)` : not the raw hash. This prevents users from probing whether a specific file exists in the store without possessing the file.
+The CAS key is HMAC-SHA256 over the content hash using a dedicated key derived
+from `SECRET_KEY` with HKDF (`CAS_HKDF_SALT` and `CAS_HKDF_INFO`), not the raw
+hash. This prevents users from probing for known content by hash alone and
+separates CAS signing from other uses of the application secret.
 
 A Redis entry tracks the ref count. First upload: ref_count=1, storage quota incremented. Duplicate: ref_count+1, no extra storage.
 
@@ -111,11 +147,6 @@ The `Upload` row is updated to `status=clean, processing_status=pending`.
 ### Stage 4 : Post-scan processing
 
 A follow-up `process_upload_post_scan` job runs:
-
-**Compression** (soft failure : original served if this fails):
-- Images: PNG/JPEG re-encoded at reduced quality
-- PDF: quality reduction (controlled by `PDF_QUALITY`, default 75; `100` keeps images lossless — font subsetting and object packing only)
-- Video: FFmpeg transcode using `VIDEO_COMPRESSION_PROFILE` (none | light | medium | aggressive | heavy | extreme)
 
 **Thumbnail generation** (soft failure):
 - Images, video: WebP, 640 px wide, 85% quality
@@ -134,9 +165,8 @@ On completion, `processing_status=complete`. Failure after 3 ARQ retries sets `p
 | YARA match | Hard | Upload rejected, no retry |
 | OLE macro detected | Hard | Upload rejected |
 | CAS upload failure | Hard | ARQ retries (max 3), then `degraded` |
-| Compression failure | Soft | Original served, upload completes |
 | Thumbnail failure | Soft | No thumbnail, upload completes |
-| MalwareBazaar unreachable | Configurable | Fail-open (default) or fail-closed |
+| MalwareBazaar unreachable | Configurable | Three bounded attempts, then retry-later in fail-closed mode; asynchronous only in explicit fail-open mode |
 
 ---
 

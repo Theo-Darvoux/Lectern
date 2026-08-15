@@ -1,261 +1,401 @@
-name: Build and Push Images
+name: Release Implementation
 
 on:
-  push:
-    branches: [main]
-    tags: ['alpha-*']
+  workflow_call:
+    inputs:
+      tested_redis_image:
+        description: Exact immutable Redis image already exercised by required CI
+        required: true
+        type: string
+      tested_seaweedfs_image:
+        description: Exact immutable SeaweedFS image already exercised by required CI
+        required: true
+        type: string
 
-# Cancel superseded runs on the same ref so rapid merges to main don't race to
-# overwrite :latest. Tag builds (releases) are namespaced by their own ref.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+# release.yml owns repository-wide release serialization. This implementation
+# always builds a complete four-component release; only the checksummed
+# production-release-<commit> artifact is a release-complete marker.
 env:
-  API_IMAGE: ghcr.io/theo-darvoux/lectern/api
-  WORKER_IMAGE: ghcr.io/theo-darvoux/lectern/worker
-  WEB_IMAGE: ghcr.io/theo-darvoux/lectern/web
+  API_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/api-candidate
+  WORKER_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/worker-candidate
+  WEB_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/web-candidate
+  DELIVERY_CANDIDATE_IMAGE: ghcr.io/theo-darvoux/lectern/selfhost-worker-candidate
   PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
-  # ── Detect which part of the monorepo changed ──────────────────────────────
-  # On a tag push (release) everything rebuilds regardless; on branch pushes we
-  # skip the half that didn't change.
-  changes:
+  validate-tested-storage:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      api: ${{ steps.filter.outputs.api }}
-      web: ${{ steps.filter.outputs.web }}
+      image: ${{ steps.validate.outputs.image }}
+      redis_image: ${{ steps.validate.outputs.redis_image }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            api:
-              - 'api/**'
-            web:
-              - 'web/**'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - name: Bind release to the exact SeaweedFS image exercised by required CI
+        id: validate
+        shell: bash
+        env:
+          TESTED_IMAGE: ${{ inputs.tested_seaweedfs_image }}
+          PINNED_IMAGE: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
+          TESTED_REDIS_IMAGE: ${{ inputs.tested_redis_image }}
+          PINNED_REDIS_IMAGE: ${{ steps.toolchain.outputs.redis_test_image }}
+        run: |
+          set -euo pipefail
+          [[ "$TESTED_IMAGE" =~ ^docker\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}$ ]]
+          [[ "$TESTED_IMAGE" == "$PINNED_IMAGE" ]] || {
+            echo "CI-tested SeaweedFS image differs from the reviewed toolchain pin" >&2
+            exit 1
+          }
+          echo "image=$TESTED_IMAGE" >> "$GITHUB_OUTPUT"
+          [[ "$TESTED_REDIS_IMAGE" =~ ^docker\.io/library/redis@sha256:[0-9a-f]{64}$ ]]
+          [[ "$TESTED_REDIS_IMAGE" == "$PINNED_REDIS_IMAGE" ]] || {
+            echo "CI-tested Redis image differs from the reviewed toolchain pin" >&2
+            exit 1
+          }
+          echo "redis_image=$TESTED_REDIS_IMAGE" >> "$GITHUB_OUTPUT"
 
-  # ── Test gates (must pass before the matching image is published) ──────────
-  test-api:
-    needs: changes
-    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: api
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: api/uv.lock
-      # --extra dev pulls ruff/pytest/factory-boy from [project.optional-dependencies];
-      # the default [dependency-groups] dev (mypy, aiosqlite, …) is installed too.
-      - run: uv sync --frozen --extra dev
-      - name: Lint (ruff)
-        run: uv run ruff check .
-      - name: Type-check (mypy)
-        run: uv run mypy app/
-      # Hermetic gate: exclude integration tests needing soffice/rsvg/S3 (see
-      # the `integration` marker in pyproject.toml).
-      - name: Tests (pytest, in-memory SQLite)
-        run: uv run pytest -m "not integration"
-
-  test-web:
-    needs: changes
-    if: ${{ needs.changes.outputs.web == 'true' || startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.32.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - name: Lint (eslint)
-        run: pnpm lint
-      - name: Type-check (tsc)
-        run: pnpm tsc --noEmit
-      - name: i18n key check
-        run: pnpm i18n:check
-      - name: Tests (vitest)
-        run: pnpm test
-
-  # ── Build & push API + Worker images (shared layers) ───────────────────────
   build-api:
-    needs: [changes, test-api]
-    if: ${{ needs.changes.outputs.api == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    needs: validate-tested-storage
     runs-on: ubuntu-latest
+    outputs:
+      api_digest: ${{ steps.build-api.outputs.digest }}
+      worker_digest: ${{ steps.build-worker.outputs.digest }}
     permissions:
       contents: read
       packages: write
-      security-events: write
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: ${{ steps.toolchain.outputs.binfmt_image }}
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: ${{ steps.toolchain.outputs.buildx_version }}
+          driver-opts: |
+            image=${{ steps.toolchain.outputs.buildkit_image }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Metadata (api)
-        id: meta-api
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.API_IMAGE }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=long
-            type=ref,event=tag
-
-      - name: Metadata (worker)
-        id: meta-worker
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.WORKER_IMAGE }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=long
-            type=ref,event=tag
-
-      # Slim web-facing image (no document/media toolchain).
-      - name: Build & push api
-        uses: docker/build-push-action@v6
+      - name: Build and push API candidate
+        id: build-api
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./api
           target: api
           platforms: ${{ env.PLATFORMS }}
           push: true
-          tags: ${{ steps.meta-api.outputs.tags }}
-          labels: ${{ steps.meta-api.outputs.labels }}
+          tags: ${{ env.API_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,scope=api,mode=max
-
-      # Full-capability worker image (ghostscript, ffmpeg, libreoffice, …).
-      # Reuses the builder + runtime-base layers from the api build via the gha
-      # cache, so this build is mostly the extra apt layer.
-      - name: Build & push worker
-        uses: docker/build-push-action@v6
+      - name: Build and push Worker candidate
+        id: build-worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./api
           target: worker
           platforms: ${{ env.PLATFORMS }}
           push: true
-          tags: ${{ steps.meta-worker.outputs.tags }}
-          labels: ${{ steps.meta-worker.outputs.labels }}
+          tags: ${{ env.WORKER_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
           cache-from: |
             type=gha,scope=worker
             type=gha,scope=api
           cache-to: type=gha,scope=worker,mode=max
 
-      # ── Vulnerability scan (report-only; results in the Security tab) ───────
-      - name: Scan api image (Trivy)
-        continue-on-error: true # advisory: never block a published image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.API_IMAGE }}:sha-${{ github.sha }}
-          format: sarif
-          output: trivy-api.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-      - name: Upload api scan
-        continue-on-error: true # tolerate code scanning being disabled
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-api.sarif
-          category: trivy-api
-
-      - name: Scan worker image (Trivy)
-        continue-on-error: true # advisory: never block a published image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.WORKER_IMAGE }}:sha-${{ github.sha }}
-          format: sarif
-          output: trivy-worker.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-      - name: Upload worker scan
-        continue-on-error: true # tolerate code scanning being disabled
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-worker.sarif
-          category: trivy-worker
-
-  # ── Build & push Web image ─────────────────────────────────────────────────
   build-web:
-    needs: [changes, test-web]
-    if: ${{ needs.changes.outputs.web == 'true' || startsWith(github.ref, 'refs/tags/') }}
+    needs: validate-tested-storage
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build-web.outputs.digest }}
     permissions:
       contents: read
       packages: write
-      security-events: write
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: ${{ steps.toolchain.outputs.binfmt_image }}
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: ${{ steps.toolchain.outputs.buildx_version }}
+          driver-opts: |
+            image=${{ steps.toolchain.outputs.buildkit_image }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Metadata (web)
-        id: meta-web
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.WEB_IMAGE }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=long
-            type=ref,event=tag
-
-      - name: Build & push web
-        uses: docker/build-push-action@v6
+      - name: Build and push Web candidate
+        id: build-web
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./web
           platforms: ${{ env.PLATFORMS }}
           push: true
-          build-args: |
-            NEXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
-          tags: ${{ steps.meta-web.outputs.tags }}
-          labels: ${{ steps.meta-web.outputs.labels }}
+          build-args: NEXT_PUBLIC_COMMIT_SHA=${{ github.sha }}
+          tags: ${{ env.WEB_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
 
-      - name: Scan web image (Trivy)
-        continue-on-error: true # advisory: never block a published image
-        uses: aquasecurity/trivy-action@v0.36.0
+  build-delivery:
+    needs: validate-tested-storage
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build-delivery.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
         with:
-          image-ref: ${{ env.WEB_IMAGE }}:sha-${{ github.sha }}
-          format: sarif
-          output: trivy-web.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-      - name: Upload web scan
-        continue-on-error: true # tolerate code scanning being disabled
-        uses: github/codeql-action/upload-sarif@v3
+          image: ${{ steps.toolchain.outputs.binfmt_image }}
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
-          sarif_file: trivy-web.sarif
-          category: trivy-web
+          version: ${{ steps.toolchain.outputs.buildx_version }}
+          driver-opts: |
+            image=${{ steps.toolchain.outputs.buildkit_image }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push Delivery candidate
+        id: build-delivery
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./worker
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ env.DELIVERY_CANDIDATE_IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=delivery
+          cache-to: type=gha,scope=delivery,mode=max
+
+  release-api:
+    needs: build-api
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/scan-and-promote.yml
+    with:
+      component: api
+      candidate_ref: ghcr.io/theo-darvoux/lectern/api-candidate@${{ needs.build-api.outputs.api_digest }}
+      release_repository: ghcr.io/theo-darvoux/lectern/api-release
+      release_tag: sha-${{ github.sha }}
+
+  release-worker:
+    needs: build-api
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/scan-and-promote.yml
+    with:
+      component: worker
+      candidate_ref: ghcr.io/theo-darvoux/lectern/worker-candidate@${{ needs.build-api.outputs.worker_digest }}
+      release_repository: ghcr.io/theo-darvoux/lectern/worker-release
+      release_tag: sha-${{ github.sha }}
+
+  release-web:
+    needs: build-web
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/scan-and-promote.yml
+    with:
+      component: web
+      candidate_ref: ghcr.io/theo-darvoux/lectern/web-candidate@${{ needs.build-web.outputs.digest }}
+      release_repository: ghcr.io/theo-darvoux/lectern/web-release
+      release_tag: sha-${{ github.sha }}
+
+  release-delivery:
+    needs: build-delivery
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/scan-and-promote.yml
+    with:
+      component: selfhost-worker
+      candidate_ref: ghcr.io/theo-darvoux/lectern/selfhost-worker-candidate@${{ needs.build-delivery.outputs.digest }}
+      release_repository: ghcr.io/theo-darvoux/lectern/selfhost-worker-release
+      release_tag: sha-${{ github.sha }}
+
+  finalize-release:
+    needs:
+      - validate-tested-storage
+      - release-api
+      - release-worker
+      - release-web
+      - release-delivery
+    runs-on: ubuntu-latest
+    environment: production-release
+    outputs:
+      manifest_sha256: ${{ steps.checksums.outputs.manifest_sha256 }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PRODUCTION_POLICY_IMAGE_DIGEST: ${{ vars.PRODUCTION_POLICY_IMAGE_DIGEST }}
+      PRODUCTION_POSTGRES_IMAGE: ${{ vars.PRODUCTION_POSTGRES_IMAGE }}
+      PRODUCTION_REDIS_IMAGE: ${{ vars.PRODUCTION_REDIS_IMAGE }}
+      TESTED_REDIS_IMAGE: ${{ needs.validate-tested-storage.outputs.redis_image }}
+      PRODUCTION_NGINX_IMAGE: ${{ vars.PRODUCTION_NGINX_IMAGE }}
+      PRODUCTION_MEILI_IMAGE: ${{ vars.PRODUCTION_MEILI_IMAGE }}
+      PRODUCTION_EUROOFFICE_IMAGE: ${{ vars.PRODUCTION_EUROOFFICE_IMAGE }}
+      # This is an independently reviewed expectation only. The manifest uses
+      # the digest that the live suites actually exercised and fails on mismatch.
+      PRODUCTION_SEAWEEDFS_IMAGE: ${{ vars.PRODUCTION_SEAWEEDFS_IMAGE }}
+      TESTED_SEAWEEDFS_IMAGE: ${{ needs.validate-tested-storage.outputs.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: ${{ steps.toolchain.outputs.buildx_version }}
+          driver-opts: |
+            image=${{ steps.toolchain.outputs.buildkit_image }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build trusted release input
+        shell: bash
+        env:
+          API_DIGEST: ${{ needs.release-api.outputs.release_digest }}
+          WORKER_DIGEST: ${{ needs.release-worker.outputs.release_digest }}
+          WEB_DIGEST: ${{ needs.release-web.outputs.release_digest }}
+          DELIVERY_DIGEST: ${{ needs.release-delivery.outputs.release_digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-manifests
+          cp deploy/release-toolchain.env release-manifests/release-toolchain.env
+          ./scripts/require-tested-redis-image.sh \
+            "$TESTED_REDIS_IMAGE" \
+            "$PRODUCTION_REDIS_IMAGE"
+          ./scripts/require-tested-seaweedfs-image.sh \
+            "$TESTED_SEAWEEDFS_IMAGE" \
+            "$PRODUCTION_SEAWEEDFS_IMAGE"
+          cat > "$RUNNER_TEMP/production-images.input.env" <<EOF_INPUT
+          RELEASE_COMMIT=${GITHUB_SHA}
+          COMPOSE_PROFILES=postgres,seaweedfs-prod,selfhost-worker
+          API_IMAGE=ghcr.io/theo-darvoux/lectern/api-release@${API_DIGEST}
+          WORKER_IMAGE=ghcr.io/theo-darvoux/lectern/worker-release@${WORKER_DIGEST}
+          WEB_IMAGE=ghcr.io/theo-darvoux/lectern/web-release@${WEB_DIGEST}
+          SELFHOST_WORKER_IMAGE=ghcr.io/theo-darvoux/lectern/selfhost-worker-release@${DELIVERY_DIGEST}
+          POLICY_IMAGE_DIGEST=${PRODUCTION_POLICY_IMAGE_DIGEST}
+          POSTGRES_IMAGE=${PRODUCTION_POSTGRES_IMAGE}
+          REDIS_IMAGE=${TESTED_REDIS_IMAGE}
+          NGINX_IMAGE=${PRODUCTION_NGINX_IMAGE}
+          MEILI_IMAGE=${PRODUCTION_MEILI_IMAGE}
+          EUROOFFICE_IMAGE=${PRODUCTION_EUROOFFICE_IMAGE}
+          SEAWEEDFS_IMAGE=${TESTED_SEAWEEDFS_IMAGE}
+          EOF_INPUT
+          python3 scripts/sanitize-production-images.py \
+            --env-file "$RUNNER_TEMP/production-images.input.env" \
+            --output release-manifests/production-images.env \
+            --commit "$GITHUB_SHA"
+      - name: Verify registry provenance and platforms
+        run: >-
+          python3 scripts/inspect-production-images.py
+          --env-file release-manifests/production-images.env
+          --output release-manifests/registry-inspection.json
+          --commit "$GITHUB_SHA"
+      - name: Certify production Compose service image mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_env="$RUNNER_TEMP/runtime-validation.env"
+          cp .env.example "$runtime_env"
+
+          profile_args=()
+          profiles=$(sed -n 's/^COMPOSE_PROFILES=//p' release-manifests/production-images.env)
+          IFS=',' read -r -a profile_values <<< "$profiles"
+          for profile in "${profile_values[@]}"; do
+            [[ -n "$profile" ]] && profile_args+=(--profile "$profile")
+          done
+
+          clean_env=(env -i "PATH=$PATH" "RUNTIME_ENV_FILE=$runtime_env")
+          [[ -n ${HOME:-} ]] && clean_env+=("HOME=$HOME")
+          [[ -n ${DOCKER_CONFIG:-} ]] && clean_env+=("DOCKER_CONFIG=$DOCKER_CONFIG")
+          [[ -n ${XDG_RUNTIME_DIR:-} ]] && clean_env+=("XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR")
+          [[ -n ${TMPDIR:-} ]] && clean_env+=("TMPDIR=$TMPDIR")
+
+          compose=(
+            docker compose
+            --env-file "$runtime_env"
+            --env-file release-manifests/production-images.env
+            -f compose.yaml
+            -f compose.prod.yaml
+            "${profile_args[@]}"
+          )
+
+          "${clean_env[@]}" "${compose[@]}" config --quiet --no-env-resolution
+          "${clean_env[@]}" "${compose[@]}" config \
+            --format json --no-env-resolution \
+            > "$RUNNER_TEMP/production-compose.json"
+
+          python3 scripts/validate-production-compose.py \
+            --env-file release-manifests/production-images.env \
+            --compose-config "$RUNNER_TEMP/production-compose.json" \
+            --output release-manifests/production-compose-services.json \
+            --commit "$GITHUB_SHA"
+      - name: Write provenance-bound release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/write-production-release-manifest.py \
+            --env-file release-manifests/production-images.env \
+            --inspection-file release-manifests/registry-inspection.json \
+            --compose-service-map-file release-manifests/production-compose-services.json \
+            --output "release-manifests/production-${GITHUB_SHA}.json" \
+            --commit "$GITHUB_SHA"
+      - name: Checksum authoritative release artifact
+        id: checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="production-${GITHUB_SHA}.json"
+          (
+            cd release-manifests
+            sha256sum \
+              "$manifest" \
+              production-images.env \
+              registry-inspection.json \
+              production-compose-services.json \
+              release-toolchain.env \
+              > SHA256SUMS
+          )
+          digest=$(sha256sum "release-manifests/$manifest" | awk '{print $1}')
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          echo "manifest_sha256=$digest" >> "$GITHUB_OUTPUT"
+      - name: Publish authoritative release-complete artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-release-${{ github.sha }}
+          path: release-manifests/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0

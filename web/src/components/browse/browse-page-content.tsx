@@ -10,10 +10,10 @@ import { useUIStore, useBrowseRefreshStore, useConfigStore } from "@/lib/stores"
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
-import { Eye, X } from "lucide-react";
+import { AlertCircle, Eye, X } from "lucide-react";
 import { useBrowseSSE } from "@/hooks/use-browse-sse";
 import type { Operation } from "@/lib/staging-store";
-import { browseCache, setPreviousBrowsePath, fetchBrowsePath } from "@/lib/browse-prefetch";
+import { browseCache, setPreviousBrowsePath, fetchBrowsePath, invalidateBrowsePath } from "@/lib/browse-prefetch";
 import dynamic from "next/dynamic";
 
 interface BrowseResponse {
@@ -26,7 +26,7 @@ interface BrowseResponse {
 }
 
 function BrowseSkeleton({ isMaterial = false }: { isMaterial?: boolean }) {
-  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [viewMode, setViewMode] = useState<"list" | "grid">("grid");
   useEffect(() => {
     try {
       const stored = localStorage.getItem("browse-view-mode");
@@ -154,10 +154,9 @@ function BrowseContent() {
   const sidebarTarget = useUIStore((s) => s.sidebarTarget);
   const setSidebarTarget = useUIStore((s) => s.setSidebarTarget);
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
-  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const t = useTranslations("Browse");
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const path = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
 
   // Track the path each fetched payload belongs to so a stale payload from the
@@ -326,12 +325,12 @@ function BrowseContent() {
   useEffect(() => {
     if (refreshCount > prevRefreshCountRef.current) {
       prevRefreshCountRef.current = refreshCount;
-      browseCache.delete(path);
+      invalidateBrowsePath(path);
       fetchData(true);
     }
   }, [path, refreshCount, fetchData]);
 
-  useBrowseSSE(data, path, browseCache, fetchData, triggerBrowseRefresh);
+  useBrowseSSE(data, path, fetchData);
 
   const isLikelyMaterial = path.split("/").filter(Boolean).length >= 3;
 
@@ -342,14 +341,20 @@ function BrowseContent() {
     inner = <BrowseSkeleton isMaterial={isLikelyMaterial} />;
   } else if (error) {
     inner = (
-      <div className="flex flex-col items-center justify-center gap-4 py-20 px-4 text-muted-foreground w-full">
+      <div className="flex w-full flex-col items-center justify-center gap-5 px-4 py-20 text-muted-foreground">
+        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+          <AlertCircle className="h-6 w-6" />
+        </span>
         <div className="flex flex-col items-center gap-1 text-center">
-          <p className="text-lg font-medium">{t("notFound")}</p>
-          <p className="text-sm">{error}</p>
+          <p className="text-lg font-medium text-foreground">{t("loadFailedTitle")}</p>
+          <p className="max-w-md text-sm">{error}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => fetchData(false)}>
-          {t("retry")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/browse">{t("backToBrowse")}</Link>
+          </Button>
+          <Button size="sm" onClick={() => fetchData(false)}>{t("retry")}</Button>
+        </div>
       </div>
     );
   } else if (!data) {

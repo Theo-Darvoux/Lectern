@@ -9,16 +9,20 @@
 
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
+import { RangeNotSatisfiableError } from "../handler.js";
 import type { ObjectSource, StoredObject } from "../handler.js";
 
 export function s3Source(client: S3Client, bucket: string): ObjectSource {
   return {
-    async get(key: string): Promise<StoredObject | null> {
+    async get(key: string, rangeHeader?: string): Promise<StoredObject | null> {
       let resp;
       try {
-        resp = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        resp = await client.send(
+          new GetObjectCommand({ Bucket: bucket, Key: key, Range: rangeHeader }),
+        );
       } catch (err: unknown) {
         if (isNotFound(err)) return null;
+        if (isInvalidRange(err)) throw new RangeNotSatisfiableError();
         throw err;
       }
       if (!resp.Body) return null;
@@ -34,6 +38,7 @@ export function s3Source(client: S3Client, bucket: string): ObjectSource {
         size: resp.ContentLength,
         contentEncoding: resp.ContentEncoding,
         etag: resp.ETag,
+        contentRange: resp.ContentRange,
         writeHttpMetadata(headers: Headers) {
           if (resp.ContentType) headers.set("Content-Type", resp.ContentType);
           if (resp.ContentEncoding) headers.set("Content-Encoding", resp.ContentEncoding);
@@ -45,6 +50,15 @@ export function s3Source(client: S3Client, bucket: string): ObjectSource {
       };
     },
   };
+}
+
+function isInvalidRange(err: unknown): boolean {
+  const e = err as { name?: string; Code?: string; $metadata?: { httpStatusCode?: number } };
+  return (
+    e?.name === "InvalidRange" ||
+    e?.Code === "InvalidRange" ||
+    e?.$metadata?.httpStatusCode === 416
+  );
 }
 
 function isNotFound(err: unknown): boolean {

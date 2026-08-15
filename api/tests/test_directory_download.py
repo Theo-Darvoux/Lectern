@@ -16,6 +16,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.security import (
+    BROWSER_READ_COOKIE,
+    create_browser_read_token,
+)
 from app.models.directory import Directory
 from app.models.material import Material, MaterialVersion
 from app.models.user import User, UserRole
@@ -102,17 +106,21 @@ async def _create_material_with_version(
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
 
 
 def _token(user: User) -> str:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return token
+
+
+def _browser_read_cookies(user: User) -> dict[str, str]:
+    return {BROWSER_READ_COOKIE: create_browser_read_token(str(user.id))}
 
 
 def _make_stream_mock(content: bytes):
@@ -300,7 +308,7 @@ class TestGetDirectoryDownloadEntries:
             await get_directory_download_entries(db_session, directory.id)
 
     async def test_nonexistent_directory_raises(self, db_session: AsyncSession) -> None:
-        from app.core.exceptions import NotFoundError
+        from app.core.common.exceptions import NotFoundError
 
         with pytest.raises(NotFoundError):
             await get_directory_download_entries(db_session, uuid.uuid4())
@@ -319,6 +327,28 @@ class TestGetDirectoryDownloadEntries:
         arcnames = {a for a, _ in entries}
         assert "a.pdf" in arcnames
         assert not any("b.pdf" in a for a in arcnames)
+
+
+@pytest.mark.asyncio
+async def test_zip_generator_yields_before_consuming_entire_object() -> None:
+    from app.routers.directories import _generate_zip
+
+    body = AsyncMock()
+    body.read = AsyncMock(side_effect=[b"a" * 65536, b"b" * 65536, b""])
+    body.close = AsyncMock()
+
+    @asynccontextmanager
+    async def _stream(*_args, **_kwargs):
+        yield body
+
+    with patch("app.routers.directories.stream_object", _stream):
+        generator = _generate_zip([("large.bin", "storage-key")])
+        first = await anext(generator)
+        assert first
+        # Backpressure invariant: no second S3 read until the first ZIP bytes
+        # have been consumed by the response.
+        assert body.read.await_count == 1
+        await generator.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -425,21 +455,50 @@ class TestDownloadDirectoryZipEndpoint:
         assert "top.pdf" in names
         assert "Sub/nested.pdf" in names
 
-    async def test_token_query_param_authenticates(
+    async def test_access_token_query_param_is_rejected(
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await _create_user(db_session)
         directory = await _create_directory(db_session, user, name="TokenDir")
+        await db_session.commit()
+
+        response = await client.get(
+            f"/api/directories/{directory.id}/download",
+            params={"token": _token(user)},
+        )
+
+        assert response.status_code == 401
+
+    async def test_browser_read_cookie_authenticates(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await _create_user(db_session)
+        directory = await _create_directory(db_session, user, name="CookieDir")
         await _create_material_with_version(db_session, directory, user, file_name="doc.pdf")
         await db_session.commit()
 
         with patch("app.routers.directories.stream_object", _make_stream_mock(b"data")):
             response = await client.get(
                 f"/api/directories/{directory.id}/download",
-                params={"token": _token(user)},
+                cookies=_browser_read_cookies(user),
             )
 
         assert response.status_code == 200
+
+    async def test_pending_user_cannot_use_browser_read_cookie(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await _create_user(db_session, role=UserRole.PENDING)
+        directory = await _create_directory(db_session, user, name="PendingDir")
+        await db_session.commit()
+
+        response = await client.get(
+            f"/api/directories/{directory.id}/download",
+            cookies=_browser_read_cookies(user),
+        )
+
+        assert response.status_code == 403
+        assert response.json()["error_code"] == "USER_PENDING"
 
     async def test_zip_skips_s3_errors_gracefully(
         self, client: AsyncClient, db_session: AsyncSession

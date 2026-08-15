@@ -52,7 +52,7 @@ import {
 } from "@/lib/staging-store";
 import { autoTitle, submitDirectOperations, truncateDescription } from "@/lib/pr-client";
 import { StagedItemEditDialog } from "./staged-item-edit-dialog";
-import { useBrowseRefreshStore, useConfigStore } from "@/lib/stores";
+import { useConfigStore } from "@/lib/stores";
 import { PreviewDialog } from "./preview-dialog";
 import { apiFetch } from "@/lib/api-client";
 import { useTranslations } from "next-intl";
@@ -200,7 +200,6 @@ export function ReviewDrawer() {
     const t = useTranslations("Staging");
     const tCommon = useTranslations("Common");
     const tAuto = useTranslations("AutoTitle");
-    const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
     const operations = useStagingStore((s) => s.operations) ?? [];
     const reviewOpen = useStagingStore((s) => s.reviewOpen);
     const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
@@ -400,9 +399,6 @@ export function ReviewDrawer() {
             setTitle("");
             setDescription("");
             setReviewOpen(false);
-            if (result.status === "approved") {
-                triggerBrowseRefresh();
-            }
         }
     };
 
@@ -414,16 +410,6 @@ export function ReviewDrawer() {
         setReviewOpen(false);
         toast(t("draftDiscarded"));
     };
-
-    // Summarize operation types
-    const typeCounts = operations.reduce(
-        (acc, staged) => {
-            const innerOp = unwrapOp(staged);
-            acc[innerOp.op] = (acc[innerOp.op] || 0) + 1;
-            return acc;
-        },
-        {} as Record<string, number>,
-    );
 
     return (
         <>
@@ -437,11 +423,11 @@ export function ReviewDrawer() {
             )}
             <StagedItemEditDialog index={editingIndex} onClose={() => setEditingIndex(null)} />
             <Sheet open={reviewOpen} onOpenChange={setReviewOpen}>
-                <SheetContent side="right" className="flex w-full flex-col overflow-hidden sm:max-w-lg">
-                    <SheetHeader className="space-y-1">
+                <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+                    <SheetHeader className="shrink-0 space-y-1 border-b px-5 py-4 pr-12 text-left">
                         <SheetTitle className="flex items-center gap-2">
                             {t("title")}
-                            <Badge variant="secondary" className="text-xs">
+                            <Badge variant="secondary" className="rounded-full text-xs font-medium">
                                 {t("changesCount", { count: operations.length })}
                             </Badge>
                         </SheetTitle>
@@ -450,9 +436,11 @@ export function ReviewDrawer() {
                         </SheetDescription>
                     </SheetHeader>
 
+                    <ScrollArea className="min-h-0 flex-1">
+                        <div className="space-y-5 px-5 py-5">
                     {/* Over limit banner */}
                     {overLimit && (
-                        <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30 my-4">
+                        <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30">
                             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
                             <div className="min-w-0 flex-1">
                                 <p className="text-sm font-medium text-red-700 dark:text-red-400">
@@ -465,31 +453,9 @@ export function ReviewDrawer() {
                         </div>
                     )}
 
-                    {/* Summary badges */}
-                    {Object.keys(typeCounts).length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 px-1 py-2">
-                            {Object.entries(typeCounts).map(([type, count]) => {
-                                const Icon = OP_ICONS[type] ?? FilePlus;
-                                const color = OP_COLORS[type] ?? "";
-                                return (
-                                    <Badge
-                                        key={type}
-                                        variant="outline"
-                                        className="gap-1 text-xs"
-                                    >
-                                        <Icon className={`h-3 w-3 ${color}`} />
-                                        {count}
-                                    </Badge>
-                                );
-                            })}
-                        </div>
-                    )}
-
-                    <Separator />
-
                     {/* Expiry banner */}
                     {hasExpired && (
-                        <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30 my-4">
+                        <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30">
                             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
                             <div className="min-w-0 flex-1">
                                 <p className="text-sm font-medium text-red-700 dark:text-red-400">
@@ -514,7 +480,7 @@ export function ReviewDrawer() {
                         </div>
                     )}
                     {!hasExpired && expiringSoonCount > 0 && (
-                        <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-800 dark:bg-amber-950/30 my-4">
+                        <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-800 dark:bg-amber-950/30">
                             <Clock className="h-4 w-4 shrink-0 text-amber-500" />
                             <p className="text-xs text-amber-700 dark:text-amber-400">
                                 {t("expiringSoonBanner", { count: expiringSoonCount })}
@@ -523,11 +489,23 @@ export function ReviewDrawer() {
                     )}
 
                     {/* Operations list */}
-                    <ScrollArea className="min-h-0 flex-1 -mx-6 px-6 my-2">
-                        <div className="space-y-2 py-1">
+                    <section aria-labelledby="review-change-list" className="space-y-2">
+                        <h3 id="review-change-list" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            {t("changes")}
+                        </h3>
+                        <div className="space-y-2">
                             {operations.map((staged, i) => {
                                 const op = unwrapOp(staged);
-                                const targetId = (op as any).material_id ?? (op as any).directory_id ?? (op as any).target_id ?? (op as any).temp_id ?? i;
+                                // Batch-created items share stagedAt and often the same
+                                // parent directory. Prefer the generated temp_id so each
+                                // staged create keeps a distinct React identity.
+                                const targetId =
+                                    (op as any).material_id ??
+                                    (op as any).target_id ??
+                                    (op as any).temp_id ??
+                                    (op as any).file_key ??
+                                    (op as any).directory_id ??
+                                    i;
                                 const stableKey = `${staged.stagedAt ?? i}-${op.op}-${targetId}`;
                                 return (
                                     <OperationCard
@@ -547,7 +525,7 @@ export function ReviewDrawer() {
                                 </p>
                             )}
                         </div>
-                    </ScrollArea>
+                    </section>
 
                     <Separator />
 
@@ -596,12 +574,14 @@ export function ReviewDrawer() {
                             />
                         </div>
                     </div>
+                        </div>
+                    </ScrollArea>
 
-                    <div className="mt-6 flex flex-col gap-2 pt-2 pb-6">
+                    <div className="shrink-0 border-t bg-background px-5 py-4">
                         <Button
                             onClick={handleSubmit}
                             disabled={!canSubmit}
-                            className="w-full gap-2 text-primary-foreground font-semibold h-11"
+                            className="h-11 w-full gap-2 font-semibold text-primary-foreground"
                         >
                             {submitting ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -614,7 +594,7 @@ export function ReviewDrawer() {
                             variant="ghost"
                             onClick={() => setShowDiscardConfirm(true)}
                             disabled={operations.length === 0 || submitting}
-                            className="w-full text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                            className="mt-1 w-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                         >
                             {t("discardAll")}
                         </Button>

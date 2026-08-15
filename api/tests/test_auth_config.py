@@ -37,7 +37,7 @@ async def _seed_domain(db: AsyncSession, domain: str, auto_approve: bool = True)
 
 
 def _auth(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -163,6 +163,39 @@ async def test_request_code_disallowed_domain(
     assert r.status_code == 400
 
 
+async def test_existing_admin_can_authenticate_when_domain_is_not_allowed(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Domain restrictions apply to registration, not existing accounts."""
+    admin = User(
+        id=uuid.uuid4(),
+        email="bootstrap-admin@telecom-sudparis.eu",
+        display_name="Bootstrap Admin",
+        role=UserRole.BUREAU,
+        onboarded=True,
+        gdpr_consent=True,
+        auto_approve=True,
+    )
+    db_session.add(admin)
+    await db_session.flush()
+
+    # The bootstrap admin predates any allowlist configuration and must still
+    # be able to request an authentication challenge.
+    r = await client.post(
+        "/api/auth/request-code",
+        json={"email": admin.email},
+    )
+    assert r.status_code == 200
+
+    # An unknown account on that same unlisted domain is still a registration,
+    # so domain policy must continue to reject it.
+    r_new = await client.post(
+        "/api/auth/request-code",
+        json={"email": "new-user@telecom-sudparis.eu"},
+    )
+    assert r_new.status_code == 400
+
+
 async def test_request_code_open_registration(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -215,7 +248,7 @@ async def test_pending_user_blocked(client: AsyncClient, db_session: AsyncSessio
     db_session.add(pending)
     await db_session.flush()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(pending.id), pending.role.value, pending.email)
     headers = {"Authorization": f"Bearer {token}"}

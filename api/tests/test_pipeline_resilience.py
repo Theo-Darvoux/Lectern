@@ -1,6 +1,6 @@
 import uuid
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -13,7 +13,7 @@ from app.workers.upload.repository import UploadWorkerRepository
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -73,8 +73,18 @@ async def test_cancel_upload_endpoint(
 ):
     """Test DELETE /api/upload/{upload_id} correctly sets the cancellation flag."""
     user = await _create_user(db_session)
-    await db_session.commit()
     upload_id = str(uuid.uuid4())
+
+    up = Upload(
+        upload_id=upload_id,
+        user_id=user.id,
+        filename="test.pdf",
+        mime_type="application/pdf",
+        size_bytes=100,
+        status="pending",
+    )
+    db_session.add(up)
+    await db_session.commit()
 
     with patch("app.routers.upload.status.delete_object", new_callable=AsyncMock):
         mock_redis.zrange.return_value = []
@@ -82,7 +92,7 @@ async def test_cancel_upload_endpoint(
         assert response.status_code == 204
 
         cancel_key = f"upload:cancel:{upload_id}"
-        mock_redis.set.assert_awaited_with(cancel_key, "1", ex=3600)
+        mock_redis.set.assert_awaited_with(cancel_key, "1", ex=24 * 3600)
 
 
 @pytest.mark.asyncio
@@ -149,7 +159,7 @@ async def test_dead_letter_queue_retry(client: AsyncClient, db_session: AsyncSes
     mock_pool = AsyncMock()
     mock_pool.enqueue_job = AsyncMock(return_value=None)
 
-    with patch("app.core.redis.arq_pool", mock_pool):
+    with patch("app.core.database.redis.arq_pool", mock_pool):
         response = await client.post(
             f"/api/admin/dlq/{job_id}/retry",
             headers=_auth_headers(admin_user),
@@ -170,3 +180,39 @@ async def test_dead_letter_queue_retry(client: AsyncClient, db_session: AsyncSes
 
     await db_session.refresh(dlq_job)
     assert dlq_job.resolved_at is not None
+
+
+@pytest.mark.asyncio
+async def test_unexpected_pipeline_failure_is_reraised_for_arq_retry() -> None:
+    from app.workers.upload.context import WorkerContext
+    from app.workers.upload.pipeline import UploadPipeline
+
+    ctx = WorkerContext(redis=AsyncMock(), db_sessionmaker=None, job_try=1)
+    pipeline = UploadPipeline(
+        ctx,
+        user_id="user-1",
+        upload_id="upload-1",
+        quarantine_key="quarantine/user-1/upload-1/file.pdf",
+        original_filename="file.pdf",
+        mime_type="application/pdf",
+        expected_sha256=None,
+    )
+    pipeline.cache = MagicMock()
+    pipeline.cache.emit_event = AsyncMock()
+    pipeline.cache.is_cancelled = AsyncMock(return_value=False)
+    pipeline.repo = MagicMock()
+    pipeline.repo.get_pipeline_stage = AsyncMock(return_value=0)
+    pipeline.repo.update_upload_status = AsyncMock()
+    pipeline.repo.insert_dead_letter = AsyncMock()
+
+    with (
+        patch(
+            "app.workers.upload.pipeline.run_download_and_validate",
+            AsyncMock(side_effect=RuntimeError("transient storage failure")),
+        ),
+        patch("app.workers.upload.pipeline.release_storage_reservation", AsyncMock()),
+        pytest.raises(RuntimeError, match="transient storage failure"),
+    ):
+        await pipeline.run()
+
+    pipeline.repo.insert_dead_letter.assert_not_awaited()

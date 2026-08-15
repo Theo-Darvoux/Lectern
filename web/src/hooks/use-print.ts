@@ -176,7 +176,7 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
           const blobUrl = URL.createObjectURL(blob);
           const html = `
             <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;">
-              <img src="${blobUrl}" alt="${fileName}" style="max-width:100%;max-height:100vh;object-fit:contain;" />
+              <img src="${blobUrl}" alt="${escHtml(fileName)}" style="max-width:100%;max-height:100vh;object-fit:contain;" />
             </div>
           `;
           printInIframe(html, { title: fileName });
@@ -191,7 +191,7 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
           const blobUrl = URL.createObjectURL(blob);
           const html = `
             <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;">
-              <img src="${blobUrl}" alt="${fileName}" style="max-width:100%;max-height:100vh;object-fit:contain;" />
+              <img src="${blobUrl}" alt="${escHtml(fileName)}" style="max-width:100%;max-height:100vh;object-fit:contain;" />
             </div>
           `;
           printInIframe(html, { title: fileName });

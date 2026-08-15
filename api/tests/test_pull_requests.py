@@ -73,7 +73,7 @@ async def _create_material(
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -156,7 +156,7 @@ class TestTopoSort:
         assert names == ["Root", "Sub", "File"]
 
     def test_cyclic_raises(self) -> None:
-        from app.core.exceptions import BadRequestError
+        from app.core.common.exceptions import BadRequestError
 
         ops = [
             {
@@ -390,7 +390,7 @@ class TestApproveReject:
         assert res.scalar_one().directory_id == d.id
 
     @patch("app.services.pr.object_exists", new_callable=AsyncMock)
-    @patch("app.core.storage.delete_object", new_callable=AsyncMock)
+    @patch("app.core.storage.facade.delete_object", new_callable=AsyncMock)
     async def test_reject_cleans_up_files(
         self,
         mock_delete: AsyncMock,

@@ -1,36 +1,48 @@
 from typing import Annotated
 
-from fastapi import Depends, Query, Request
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.exceptions import ForbiddenError, UnauthorizedError
-from app.core.redis import get_redis
-from app.core.security import decode_token
+from app.core.common.exceptions import ForbiddenError, UnauthorizedError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
+from app.core.security.security import BROWSER_READ_COOKIE, decode_token
 from app.models.user import User, UserRole
-from app.services.auth import is_token_blacklisted
+from app.services.auth import (
+    is_session_revoked,
+    is_token_blacklisted,
+    token_matches_auth_generation,
+)
 from app.services.user import get_user_by_id
 
 security = HTTPBearer(auto_error=False)
 
-# HTTP methods that never mutate state — the only ones a read-only guest may use.
+# HTTP methods that never mutate state.
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
-async def _validate_access_payload(
+async def _validate_token_payload(
     payload: dict,  # type: ignore[type-arg]
     db: AsyncSession,
     redis: Redis,  # type: ignore[type-arg]
+    *,
+    expected_type: str,
 ) -> User:
-    if payload.get("type") != "access":
+    if payload.get("type") != expected_type:
         raise UnauthorizedError("Invalid token type")
 
     jti = payload.get("jti")
     if jti and await is_token_blacklisted(redis, jti):
         raise UnauthorizedError("Token has been revoked")
+
+    session_id = payload.get("sid")
+    if not isinstance(session_id, str) or not session_id:
+        raise UnauthorizedError("Legacy session requires reauthentication")
+    if await is_session_revoked(redis, session_id):
+        raise UnauthorizedError("Session has been revoked")
 
     user_id = payload.get("sub")
     if not user_id:
@@ -39,8 +51,27 @@ async def _validate_access_payload(
     user = await get_user_by_id(db, user_id)
     if not user:
         raise UnauthorizedError("User not found")
-
+    if not token_matches_auth_generation(payload, user):
+        raise UnauthorizedError("Credentials require reauthentication")
+    if user.role == UserRole.PENDING:
+        raise ForbiddenError("Account pending admin approval", code="USER_PENDING")
     return user
+
+
+async def _validate_access_payload(
+    payload: dict,  # type: ignore[type-arg]
+    db: AsyncSession,
+    redis: Redis,  # type: ignore[type-arg]
+) -> User:
+    return await _validate_token_payload(payload, db, redis, expected_type="access")
+
+
+async def _validate_browser_read_payload(
+    payload: dict,  # type: ignore[type-arg]
+    db: AsyncSession,
+    redis: Redis,  # type: ignore[type-arg]
+) -> User:
+    return await _validate_token_payload(payload, db, redis, expected_type="browser_read")
 
 
 async def get_current_user(
@@ -53,14 +84,11 @@ async def get_current_user(
         raise UnauthorizedError()
 
     try:
-        payload = decode_token(credentials.credentials)
+        payload = decode_token(credentials.credentials, expected_type="access")
     except InvalidTokenError:
         raise UnauthorizedError("Invalid token")
 
     user = await _validate_access_payload(payload, db, redis)
-
-    if user.role == UserRole.PENDING:
-        raise ForbiddenError("Account pending admin approval", code="USER_PENDING")
 
     # Central read-only enforcement for guests: every authenticated endpoint
     # funnels through this dependency, so blocking unsafe methods here makes the
@@ -130,33 +158,49 @@ def require_not_guest(message: str = "Guests cannot access this resource"):  # t
 OnboardedUser = Annotated[User, Depends(require_onboarded())]
 
 
-async def get_user_from_token(
+async def get_read_user(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    token: Annotated[str | None, Query()] = None,
 ) -> User:
-    """Authenticate via query-param JWT (useful when headers can't be set)."""
+    """Authenticate an explicitly read-only route.
+
+    API clients may use a normal Authorization bearer. Browser-native surfaces
+    that cannot set headers (EventSource, media elements, plain download links)
+    use a separate HttpOnly cookie whose JWT type is ``browser_read``.
+    """
+    if request.method not in _SAFE_METHODS:
+        raise ForbiddenError("Read-only authentication cannot authorize state changes")
+
+    if credentials is not None:
+        try:
+            payload = decode_token(credentials.credentials, expected_type="access")
+        except InvalidTokenError:
+            raise UnauthorizedError("Invalid token")
+        return await _validate_access_payload(payload, db, redis)
+
+    token = request.cookies.get(BROWSER_READ_COOKIE)
     if not token:
-        raise UnauthorizedError("Token required as query parameter")
-
+        raise UnauthorizedError("Browser read credential required")
     try:
-        payload = decode_token(token)
+        payload = decode_token(token, expected_type="browser_read")
     except InvalidTokenError:
-        raise UnauthorizedError("Invalid token")
+        raise UnauthorizedError("Invalid browser read credential")
+    return await _validate_browser_read_payload(payload, db, redis)
 
-    return await _validate_access_payload(payload, db, redis)
+
+ReadUser = Annotated[User, Depends(get_read_user)]
 
 
 async def get_sse_user(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    token: Annotated[str | None, Query()] = None,
 ) -> User:
-    """Authenticate via query-param JWT (EventSource cannot send headers)."""
-    return await get_user_from_token(db, redis, token)
-
-
-QueryTokenUser = Annotated[User, Depends(get_user_from_token)]
+    """SSE uses the same restricted read authentication as other browser-native GETs."""
+    return await get_read_user(request, credentials, db, redis)
 
 
 SSEUser = Annotated[User, Depends(get_sse_user)]

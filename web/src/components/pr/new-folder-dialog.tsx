@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import { useStagingStore, type Operation } from "@/lib/staging-store";
 import { TagInput } from "@/components/ui/tag-input";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore, useAuthStore } from "@/lib/stores";
+import { useAuthStore } from "@/lib/stores";
 import { isStaff } from "@/lib/guest";
 import { sanitizeNameInput } from "@/lib/utils";
 import { useTranslations } from "next-intl";
@@ -44,7 +44,6 @@ export function NewFolderDialog({
     const [description, setDescription] = useState("");
     const [tags, setTags] = useState<string[]>([]);
     const [submitting, setSubmitting] = useState(false);
-    const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
     const staff = isStaff(useAuthStore((s) => s.user));
     const NAME_MAX = 128;
@@ -81,13 +80,11 @@ export function NewFolderDialog({
         setSubmitting(true);
         const result = await submitDirectOperations([buildOp()], undefined, undefined, tAuto);
         setSubmitting(false);
+        if (!result) return;
         setName("");
         setDescription("");
         setTags([]);
         onOpenChange(false);
-        if (result?.status === "approved") {
-            triggerBrowseRefresh();
-        }
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {

@@ -48,10 +48,9 @@ import { toast } from "sonner";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
 import { apiFetch } from "@/lib/api-client";
-import { getAccessToken } from "@/lib/auth-tokens";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore, useAuthStore, useUIStore } from "@/lib/stores";
+import { useAuthStore, useUIStore } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import {
@@ -99,7 +98,6 @@ const ArmContext = createContext<(() => void) | null>(null);
 function useItemActions(item: ItemData, itemPath?: string) {
   const t = useTranslations("Browse");
   const tAuto = useTranslations("AutoTitle");
-  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
   const addOperation = useStagingStore((s) => s.addOperation);
   const removeOperation = useStagingStore((s) => s.removeOperation);
   // Read operations lazily (inside handlers only) so this component doesn't
@@ -173,7 +171,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
   const handleDirectDelete = async () => {
     setDeleting(true);
     try {
-      await submitDirectOperations([
+      const result = await submitDirectOperations([
         isMaterial ? {
           op: "delete_material",
           material_id: item.id,
@@ -182,9 +180,8 @@ function useItemActions(item: ItemData, itemPath?: string) {
           directory_id: item.id,
         },
       ], undefined, undefined, tAuto);
-      toast.success(t("itemDeletedSuccessfully", { type: isMaterial ? t("material") : t("folder") }));
+      if (!result) return;
       setDeleteDialogOpen(false);
-      triggerBrowseRefresh();
     } catch {
       toast.error(t("failedToDeleteItem"));
     } finally {
@@ -221,9 +218,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
         document.body.removeChild(a);
       };
       if (data.chunks.length === 0) {
-        const token = getAccessToken();
-        const params = token ? `?token=${encodeURIComponent(token)}` : "";
-        triggerLink(`/api/directories/${item.id}/download${params}`);
+        triggerLink(`/api/directories/${item.id}/download`);
       } else if (data.chunks.length === 1) {
         triggerLink(data.chunks[0].url);
       } else {
@@ -315,7 +310,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
   const handleDetailsClick = () => {
     openSidebar("details", {
-      type: "directory",
+      type: item.type,
       id: item.id,
       data: { ...item.data, __path: context.itemPath },
     });
@@ -323,7 +318,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
   const handleChatClick = () => {
     openSidebar("chat", {
-      type: "directory",
+      type: item.type,
       id: item.id,
       data: item.data,
     });
@@ -335,25 +330,21 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
         {actions.isMaterial ? t("materialActions") : t("folderActions")}
       </Label>
 
-      {!actions.isMaterial && (
-        <>
-          <Item onClick={handleDetailsClick} className="cursor-pointer">
-            <Info className="mr-2 h-4 w-4" />
-            <span>{t("details")}</span>
-          </Item>
-          {!actions.isRestricted && (
-            <Item onClick={handleChatClick} className="cursor-pointer">
-              <MessageSquare className="mr-2 h-4 w-4" />
-              <span>{t("chat")}</span>
-            </Item>
-          )}
-          <Separator />
-        </>
+      <Item onClick={handleDetailsClick} className="cursor-pointer">
+        <Info className="mr-2 h-4 w-4" />
+        <span>{t("details")}</span>
+      </Item>
+      {!actions.isRestricted && (
+        <Item onClick={handleChatClick} className="cursor-pointer">
+          <MessageSquare className="mr-2 h-4 w-4" />
+          <span>{t("chat")}</span>
+        </Item>
       )}
+      <Separator />
 
-      {actions.isMaterial && !actions.isRestricted && (
+      {actions.isMaterial && (!actions.isRestricted || (context.onAddAttachment && !guest)) && (
         <>
-          {actions.viewerType === "qcm" ? (
+          {!actions.isRestricted && (actions.viewerType === "qcm" ? (
             isContextMenu ? (
               <ContextMenuSub>
                 <ContextMenuSubTrigger disabled={isDownloading} className="cursor-pointer">
@@ -398,8 +389,8 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
               {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
               <span>{t("download")}</span>
             </Item>
-          )}
-          {canPrint && (
+          ))}
+          {!actions.isRestricted && canPrint && (
             <Item
               onClick={() => print()}
               disabled={isPrinting}

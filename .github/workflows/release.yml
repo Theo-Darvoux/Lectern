@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['alpha-*']
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/build.yml
+    with:
+      tested_redis_image: ${{ needs.ci.outputs.tested_redis_image }}
+      tested_seaweedfs_image: ${{ needs.ci.outputs.tested_seaweedfs_image }}

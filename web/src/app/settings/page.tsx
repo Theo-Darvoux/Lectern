@@ -16,6 +16,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,17 +45,19 @@ import {
 const commitSha = process.env.NEXT_PUBLIC_COMMIT_SHA;
 
 export default function SettingsPage() {
+  const router = useRouter();
   const t = useTranslations("Settings");
   const tLayout = useTranslations("Layout");
   const tLanguages = useTranslations("Languages");
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const repoUrl = config?.repo_url || process.env.NEXT_PUBLIC_REPO_URL || "";
   const shortCommit = commitSha?.slice(0, 7);
   const { locale, changeLocale, isPending: localePending } = useChangeLocale();
   const [exporting, setExporting] = useState(false);
   const { show } = useConfirmDialog();
   const { theme, setTheme } = useTheme();
-  const { user, setUser } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
+  const setUser = useAuthStore((state) => state.setUser);
   const [updating, setUpdating] = useState(false);
 
   const handleLanguageChange = (newLocale: string) => {
@@ -117,7 +120,7 @@ export default function SettingsPage() {
           toast.success(
             t("deleteAccount.success"),
           );
-          window.location.href = "/login";
+          router.push("/login");
         } catch {
           toast.error(t("deleteAccount.error"));
         }

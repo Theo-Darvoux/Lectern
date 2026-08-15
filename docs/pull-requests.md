@@ -82,13 +82,20 @@ Reverting creates a new PR containing the inverse operations and auto-approves i
 | `POST` | `/api/pull-requests/{id}/cancel` | Cancel (author) |
 | `GET` | `/api/pull-requests/{id}/comments` | List comments |
 | `POST` | `/api/pull-requests/{id}/comments` | Add a comment (supports threading via `parent_id`) |
-| `GET` | `/api/pull-requests/sse` | SSE stream for real-time PR state changes |
+| `GET` | `/api/events/sse` | Master SSE stream for notifications, PRs, and selected entity topics |
+
+### File previews
+
+Reviewers can preview supported files before approving an operation. Jupyter
+notebooks (`.ipynb`) are shown as a read-only sequence of Markdown and code
+cells with common text, error, Markdown, and raster-image outputs. The preview
+never executes notebook code; active HTML and SVG outputs are not rendered.
 
 ---
 
 ## Real-time updates (SSE)
 
-`GET /api/pull-requests/sse` opens a Server-Sent Events stream per authenticated user. Events are published when any PR the user is involved in changes state:
+`GET /api/events/sse` is the sole persistent Server-Sent Events endpoint. The frontend elects one master tab per browser profile, multiplexes notification, PR, material, and directory channels over that connection, and routes each event envelope back to logical subscribers. PR events use the `pull_requests` channel; entity interests are supplied as repeated `topic` query parameters.
 
 | Event | Trigger |
 |---|---|

@@ -7,12 +7,13 @@ from urllib.parse import quote
 import jwt
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response, StreamingResponse
+from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database import get_db
-from app.core.exceptions import NotFoundError, UnauthorizedError
-from app.core.storage import stream_object
+from app.core.common.exceptions import NotFoundError, UnauthorizedError
+from app.core.database.database import get_db
+from app.core.storage.facade import stream_object
 from app.dependencies.auth import CurrentUser
 from app.services.material import get_material_file_info, get_material_with_version
 
@@ -32,30 +33,57 @@ _EXT_TO_DOCTYPE: dict[str, str] = {
 }
 
 _ALGORITHM = "HS256"
+_FILE_GRANT_ISSUER = "lectern-api"
+_FILE_GRANT_AUDIENCE = "eurooffice-file"
 
 
-def _create_file_token(material_id: str) -> str:
-    """Create a short-lived JWT for EuroOffice to fetch a specific file."""
-    expire = datetime.now(UTC) + timedelta(seconds=settings.eurooffice_file_token_ttl)
-    payload = {
-        "sub": material_id,
-        "type": "eurooffice_file",
-        "exp": expire,
-    }
-    return jwt.encode(payload, settings.eurooffice_file_token_secret, algorithm=_ALGORITHM)
+def _create_file_grant(material_id: str, version_number: int) -> str:
+    """Mint the API-only half of EuroOffice file authorization."""
+    now = datetime.now(UTC)
+    return jwt.encode(
+        {
+            "sub": material_id,
+            "ver": version_number,
+            "iat": now,
+            "exp": now + timedelta(seconds=settings.eurooffice_file_token_ttl),
+            "iss": _FILE_GRANT_ISSUER,
+            "aud": _FILE_GRANT_AUDIENCE,
+        },
+        settings.eurooffice_file_token_secret,
+        algorithm=_ALGORITHM,
+    )
 
 
-def _verify_file_token(token: str, material_id: str) -> bool:
-    """Validate a file-access JWT signature and claims."""
+def _decode_file_grant(token: str, expected_material_id: str) -> int | None:
     try:
-        payload = jwt.decode(
+        claims = jwt.decode(
             token,
             settings.eurooffice_file_token_secret,
             algorithms=[_ALGORITHM],
+            audience=_FILE_GRANT_AUDIENCE,
+            issuer=_FILE_GRANT_ISSUER,
+            options={"require": ["sub", "ver", "iat", "exp", "iss", "aud"]},
         )
-        return payload.get("sub") == material_id and payload.get("type") == "eurooffice_file"
+        version_number = int(claims["ver"])
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError):
+        return None
+    if claims.get("sub") != expected_material_id or version_number <= 0:
+        return None
+    return version_number
+
+
+def _verify_document_server_token(token: str, expected_url: str) -> bool:
+    """Validate the JWT EuroOffice adds to its outgoing file-download GET."""
+    try:
+        claims = jwt.decode(
+            token,
+            settings.eurooffice_jwt_secret,
+            algorithms=[_ALGORITHM],
+        )
     except jwt.PyJWTError:
         return False
+    payload = claims.get("payload")
+    return isinstance(payload, dict) and payload.get("url") == expected_url
 
 
 @router.get("/config/{material_id}")
@@ -78,12 +106,16 @@ async def get_eurooffice_config(
     ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
     doc_type = _EXT_TO_DOCTYPE.get(ext, "word")
 
-    # Short-lived token for EuroOffice to fetch the file via the internal API.
-    # Embedded in the query string because EuroOffice's file downloader does not
-    # forward custom requestHeaders — it only sends its own JWT.  This is an
-    # internal container-to-container URL, never exposed to the browser.
-    file_token = _create_file_token(material_id_str)
-    file_url = f"{settings.eurooffice_internal_api_base_url}/api/eurooffice/file/{material_id_str}?token={file_token}"
+    # This URL is returned to browser code as part of the signed editor config,
+    # so it must not contain a replayable file credential. EuroOffice signs its
+    # outgoing GET with Authorization: Bearer <JWT>; the file route validates
+    # that server token against this exact URL.
+    version_number = int(version["version_number"])
+    file_grant = _create_file_grant(material_id_str, version_number)
+    file_url = (
+        f"{settings.eurooffice_internal_api_base_url}/api/eurooffice/file/{material_id_str}"
+        f"?grant={quote(file_grant, safe='')}"
+    )
 
     # Cache key: version_number invalidates on new uploads.
     doc_key = f"{material_id_str}-v{version['version_number']}"
@@ -159,22 +191,34 @@ async def serve_file_to_eurooffice(
     """
     Serve the raw file bytes to EuroOffice Document Server.
     Called internally by EuroOffice (not the browser).
-    Authenticated via a short-lived scoped JWT passed as ?token= query param
-    (fallback: X-OO-File-Token header).
-
-    EuroOffice probes the URL with HEAD before downloading and retries failed
-    GETs with the same token — both methods must return 2xx.  We rely on the
-    JWT expiry (60 s) rather than single-use JTI enforcement so retries work.
+    Authorization requires two independent factors: the JWT EuroOffice adds
+    to its outgoing Authorization header proves document-server identity, while
+    the URL carries a short-lived material/version grant signed with an API-only
+    secret that the document server cannot mint. HEAD/GET retries may reuse the
+    grant only until its mandatory expiry.
     """
     material_id_str = str(material_id)
-    token = request.query_params.get("token") or request.headers.get("X-OO-File-Token")
-    if not token:
+    file_grant = request.query_params.get("grant")
+    if not file_grant:
+        raise UnauthorizedError()
+    granted_version = _decode_file_grant(file_grant, material_id_str)
+    if granted_version is None:
         raise UnauthorizedError()
 
-    if not _verify_file_token(token, material_id_str):
+    scheme, token = get_authorization_scheme_param(request.headers.get("Authorization"))
+    if scheme.lower() != "bearer" or not token:
+        raise UnauthorizedError()
+
+    expected_url = (
+        f"{settings.eurooffice_internal_api_base_url}/api/eurooffice/file/{material_id_str}"
+        f"?grant={quote(file_grant, safe='')}"
+    )
+    if not _verify_document_server_token(token, expected_url):
         raise UnauthorizedError()
 
     version = await get_material_file_info(db, material_id)
+    if version.version_number != granted_version:
+        raise UnauthorizedError()
     if version.file_key is None:
         raise NotFoundError("No file available")
 

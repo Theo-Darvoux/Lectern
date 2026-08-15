@@ -2,73 +2,31 @@
 
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_core
-from app.config import settings
-from app.core.cas import _STORAGE_USAGE_KEY
-from app.core.exceptions import BadRequestError
-from app.core.telemetry import inject_trace_context
-from app.core.upload_errors import ERR_QUOTA_EXCEEDED, ERR_STORAGE_FULL
-from app.models.material import MaterialVersion
+import app.core.database.redis as redis_core
+from app.core.common.exceptions import BadRequestError
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.database.post_commit import PostCommitKey, outbox_kwargs
+from app.core.observability.telemetry import inject_trace_context
+from app.core.storage import capacity as storage_capacity
 from app.models.upload import Upload
 
 logger = logging.getLogger(__name__)
 
-
-async def _check_storage_limit(
-    size_bytes: int, db: AsyncSession, config: dict[str, Any] | None = None
-) -> None:
-    """Raise if the global storage limit (max_storage_gb) would be exceeded."""
-    max_gb = (
-        config.get("max_storage_gb")
-        if config and config.get("max_storage_gb") is not None
-        else settings.max_storage_gb
-    )
-    if not max_gb:
-        return
-
-    max_bytes = max_gb * 1024 * 1024 * 1024
-    redis = redis_core.redis_client
-
-    # 1. Try to get cached usage from Redis
-    try:
-        usage_raw = await redis.get(_STORAGE_USAGE_KEY)
-        if usage_raw is not None:
-            usage = max(0, int(usage_raw))
-        else:
-            # 2. Fallback to DB: sum unique CAS blobs only (physical storage)
-            inner_q = (
-                select(func.max(MaterialVersion.file_size).label("size"))
-                .group_by(MaterialVersion.cas_sha256)
-                .subquery()
-            )
-            usage = await db.scalar(select(func.sum(inner_q.c.size))) or 0
-            await redis.set(_STORAGE_USAGE_KEY, usage, ex=3600)
-    except Exception as exc:
-        logger.warning(
-            "Failed to get/set storage usage from Redis: %s. Falling back to logical sum.", exc
-        )
-        # Deep fallback to logical sum if everything else fails
-        usage = await db.scalar(select(func.sum(MaterialVersion.file_size))) or 0
-
-    if usage + size_bytes > max_bytes:
-        logger.warning(
-            "Storage limit reached: %d bytes usage + %d bytes upload > %d bytes limit",
-            usage,
-            size_bytes,
-            max_bytes,
-        )
-        raise BadRequestError(
-            f"Global storage limit reached ({max_gb} GB). Please contact an administrator.",
-            code=ERR_STORAGE_FULL,
-        )
-
+# Backward-compatible router aliases. New non-router callers use the public
+# core storage interface directly.
+_LEGACY_STORAGE_USAGE_KEY = storage_capacity.LEGACY_STORAGE_USAGE_KEY
+_check_storage_limit = storage_capacity.check_storage_limit
+_get_storage_usage = storage_capacity.get_storage_usage
+_refresh_legacy_storage_usage = storage_capacity.refresh_legacy_storage_usage
+_release_storage_reservation = storage_capacity.release_storage_reservation
+_reserve_storage_limit = storage_capacity.reserve_storage_limit
 
 MAX_PENDING_UPLOADS = 50
 LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MiB
@@ -146,7 +104,7 @@ async def _check_pending_cap(
                 raise BadRequestError(
                     f"Too many pending uploads ({cap} max). "
                     "Submit a pull request or wait for existing uploads to expire.",
-                    code=ERR_QUOTA_EXCEEDED,
+                    code=UploadErrorCode.QUOTA_EXCEEDED,
                 )
         else:
             count = await redis.zcard(quota_key)
@@ -154,7 +112,7 @@ async def _check_pending_cap(
                 raise BadRequestError(
                     f"Too many pending uploads ({cap} max). "
                     "Submit a pull request or wait for existing uploads to expire.",
-                    code=ERR_QUOTA_EXCEEDED,
+                    code=UploadErrorCode.QUOTA_EXCEEDED,
                 )
     except BadRequestError:
         raise
@@ -170,22 +128,30 @@ async def _check_pending_cap(
         # Use a fresh session to avoid PendingRollbackError if the request session
         # is in an error state from a previous operation.
         try:
-            from app.core.database import async_session_factory
+            from datetime import UTC, datetime, timedelta
 
+            from app.core.database.database import async_session_factory
+
+            db_cutoff = datetime.now(UTC) - timedelta(hours=25)
             async with async_session_factory() as fallback_db:
                 db_count = (
                     await fallback_db.scalar(
                         select(func.count())
                         .select_from(Upload)
-                        .where(Upload.user_id == UUID(user_id), Upload.status == "pending")
+                        .where(
+                            Upload.user_id == UUID(user_id),
+                            Upload.status.in_(("pending", "clean")),
+                            Upload.updated_at >= db_cutoff,
+                        )
                     )
                     or 0
                 )
+
             if db_count >= MAX_PENDING_UPLOADS:
                 raise BadRequestError(
                     f"Too many pending uploads ({MAX_PENDING_UPLOADS} max). "
                     "Submit a pull request or wait for existing uploads to expire.",
-                    code=ERR_QUOTA_EXCEEDED,
+                    code=UploadErrorCode.QUOTA_EXCEEDED,
                 )
         except BadRequestError:
             raise
@@ -210,6 +176,7 @@ async def _enqueue_processing(
     file_size: int = 0,
     trace_context: dict[str, str] | None = None,
     expected_sha256: str | None = None,
+    job_id: str | None = None,
 ) -> None:
     """Enqueue the background processing ARQ job.
 
@@ -219,7 +186,28 @@ async def _enqueue_processing(
     if redis_core.arq_pool is None:
         raise BadRequestError("Background processing is temporarily unavailable. Please try again.")
 
-    # Priority-based queue routing
+    queue_name = _processing_queue_name(mime_type, file_size)
+
+    tc = trace_context if trace_context is not None else inject_trace_context()
+    job_options: dict[str, object] = {"_queue_name": queue_name}
+    if job_id is not None:
+        job_options["_job_id"] = job_id
+    enqueue_job = cast(Any, redis_core.arq_pool.enqueue_job)
+    await enqueue_job(
+        "process_upload",
+        **job_options,
+        user_id=user_id,
+        upload_id=upload_id,
+        quarantine_key=quarantine_key,
+        original_filename=filename,
+        mime_type=mime_type,
+        expected_sha256=expected_sha256,
+        trace_context=tc,
+    )
+
+
+def _processing_queue_name(mime_type: str, file_size: int) -> str:
+    """Choose the ARQ queue used for an upload's processing job."""
     is_fast_mime = any(mime_type.startswith(m) for m in ("text/", "image/"))
     is_heavy_mime = any(
         mime_type.startswith(m)
@@ -241,15 +229,36 @@ async def _enqueue_processing(
         # Fallback to size-based routing for unknown/mixed types
         queue_name = _FAST_QUEUE_NAME if file_size < _FAST_QUEUE_THRESHOLD else _SLOW_QUEUE_NAME
 
+    return queue_name
+
+
+def _queue_processing_after_commit(
+    db: AsyncSession,
+    user_id: str,
+    upload_id: str,
+    quarantine_key: str,
+    filename: str,
+    mime_type: str,
+    *,
+    file_size: int = 0,
+    trace_context: dict[str, str] | None = None,
+    expected_sha256: str | None = None,
+) -> None:
+    """Persist an upload-processing job in the request transaction's outbox."""
     tc = trace_context if trace_context is not None else inject_trace_context()
-    await redis_core.arq_pool.enqueue_job(
-        "process_upload",
-        _queue_name=queue_name,
-        user_id=user_id,
-        upload_id=upload_id,
-        quarantine_key=quarantine_key,
-        original_filename=filename,
-        mime_type=mime_type,
-        expected_sha256=expected_sha256,
-        trace_context=tc,
+    queue_name = _processing_queue_name(mime_type, file_size)
+    db.info.setdefault(PostCommitKey.JOBS, []).append(
+        (
+            "process_upload",
+            outbox_kwargs(
+                _queue_name=queue_name,
+                user_id=user_id,
+                upload_id=upload_id,
+                quarantine_key=quarantine_key,
+                original_filename=filename,
+                mime_type=mime_type,
+                expected_sha256=expected_sha256,
+                trace_context=tc,
+            ),
+        )
     )

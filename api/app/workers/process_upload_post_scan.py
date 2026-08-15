@@ -1,13 +1,14 @@
-"""Background post-scan processing: compress, thumbnail, and update CAS.
+"""Background post-scan processing: thumbnail and publish derived metadata.
 
 Called by process_upload after the scan gate passes.  The file is already in
-CAS (uncompressed, no thumbnail) and the upload row is status=clean,
+CAS (without a thumbnail) and the upload row is status=clean,
 processing_status=pending.
 
-Failure behaviour (Option A + B):
-  - Compression or thumbnail failures are soft: file stays accessible uncompressed.
-  - CAS overwrite failures trigger arq retries (up to _POST_MAX_RETRIES attempts).
-  - After max retries: processing_status=degraded, dead-letter record, admin alert.
+Failure behaviour:
+  - Thumbnail failures are soft: the sanitized CAS object remains accessible.
+  - A second metadata-strip failure preserves the original sanitized CAS bytes and
+    marks post-processing degraded.
+  - Unexpected failures retry up to ``_POST_MAX_RETRIES`` before dead-lettering.
   - A settled state (complete | degraded) triggers pending auto-merge PRs.
 """
 
@@ -15,38 +16,46 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 from pathlib import Path
-from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import func, select
-from sqlalchemy import update as sa_update
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.core import redis as redis_core
-from app.core.database import _coalesce_index_jobs
-from app.core.metrics import mime_category as _mime_cat
-from app.core.metrics import upload_compression_ratio, upload_file_size
-from app.core.sse import broadcast_to_topic
-from app.core.storage import delete_object, upload_file_multipart
-from app.core.telemetry import get_tracer
-from app.models.material import MaterialVersion
+from app.core.common.exceptions import ConflictError
+from app.core.database.post_commit import (
+    PostCommitKey,
+    dispatch_post_commit_actions,
+    finalize_transaction_callbacks,
+    persist_post_commit_jobs,
+    rollback_transaction_callbacks,
+)
+from app.core.database.redis import redis_lock
+from app.core.events.sse import broadcast_to_topic
+from app.core.observability.telemetry import get_tracer
+from app.core.security.async_utils import settle_awaitable
+from app.core.security.processing_paths import make_processing_temp_path
+from app.core.storage.facade import delete_object, upload_file_multipart
+from app.core.storage.liveness import storage_lifecycle_lock
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
 from app.models.upload import Upload
+from app.routers.upload.cancellation import upload_cancel_key, upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
 from app.services.notification import notify_user
 from app.services.pr import (
     _cleanup_pr_resources,
+    _lock_and_validate_pr_cas_files,
     _pr_directory_topics,
     apply_pr,
     get_pr_all_file_keys,
 )
 from app.workers.upload.cache_repo import UploadCacheRepository
-from app.workers.upload.constants import _STATUS_CACHE_PREFIX, _compression_timeout
+from app.workers.upload.constants import _STATUS_CACHE_PREFIX
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.repository import UploadWorkerRepository
-from app.workers.upload.stages.compress import run_compress_stage
 from app.workers.upload.stages.download import run_download_and_validate
 from app.workers.upload.stages.scan_strip import run_strip_only
 from app.workers.upload.stages.thumbnail import run_thumbnail_stage
@@ -58,6 +67,74 @@ _POST_MAX_RETRIES = 3
 _THUMB_MAX_ATTEMPTS = 2
 # Settled processing statuses — a PR can auto-merge when all its files reach one of these.
 _SETTLED_STATUSES = frozenset({"complete", "degraded"})
+
+
+async def _publish_postprocessed_upload(
+    worker_ctx: WorkerContext,
+    *,
+    upload_id: str,
+    update_values: dict[str, Any],
+) -> bool:
+    """Serialize the completion transition against retroactive quarantine."""
+    session_factory = worker_ctx.db_sessionmaker
+    if session_factory is None:
+        return False
+
+    async with session_factory() as session:
+        upload = await session.scalar(
+            select(Upload).where(Upload.upload_id == upload_id).with_for_update()
+        )
+        if upload is None or upload.status != "clean" or int(upload.cas_ref_count or 0) <= 0:
+            logger.warning(
+                "Skipping post-scan publication for upload %s in status %s with CAS refs %s",
+                upload_id,
+                upload.status if upload is not None else "missing",
+                upload.cas_ref_count if upload is not None else "missing",
+            )
+            return False
+        if await worker_ctx.redis.exists(upload_cancel_key(upload_id)) == 1:
+            logger.info("Skipping post-scan publication for cancelled upload %s", upload_id)
+            return False
+
+        for key, value in update_values.items():
+            setattr(upload, key, value)
+        upload.status = "clean"
+        await session.commit()
+        return True
+
+
+def _post_scan_lifecycle_guard(worker_ctx: WorkerContext, upload_id: str) -> Any:
+    # Production uses SQLAlchemy's async_sessionmaker. The integration fixture
+    # supplies a plain function returning an AsyncSession bound to its test
+    # transaction. Mock callables are intentionally excluded because they do
+    # not provide a real Redis lock or authoritative database state.
+    session_factory = worker_ctx.db_sessionmaker
+    if not (isinstance(session_factory, async_sessionmaker) or inspect.isfunction(session_factory)):
+        return contextlib.nullcontext()
+    return redis_lock(
+        cast(Any, worker_ctx.redis),
+        upload_lifecycle_lock_name(upload_id),
+        timeout=120.0,
+        expire=300.0,
+    )
+
+
+async def _settle_degraded_post_scan(
+    worker_ctx: WorkerContext,
+    repo: UploadWorkerRepository,
+    *,
+    upload_id: str,
+    cas_s3_key: str,
+) -> None:
+    settled = False
+    async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
+        if not await repo.update_processing_status(upload_id, "degraded"):
+            return
+        if await worker_ctx.redis.exists(upload_cancel_key(upload_id)) == 1:
+            return
+        settled = True
+    if settled:
+        await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
 
 
 async def process_upload_post_scan(
@@ -72,25 +149,22 @@ async def process_upload_post_scan(
     cas_s3_key: str,
     initial_size: int,
 ) -> None:
-    """Compress, thumbnail, and overwrite the CAS object for a previously scanned upload.
+    """Generate derived metadata for a previously scanned, immutable CAS object.
 
-    The quarantine object is re-downloaded, stripped (idempotent), compressed, and
-    thumbnailed.  The resulting file overwrites the uncompressed placeholder uploaded
-    by the scan job.  The quarantine object is deleted on success.
+    The quarantine object is re-downloaded and stripped again before thumbnailing.
+    The CAS object created by the scan job is never overwritten.
 
-    On soft failure (compress or thumbnail), we proceed with the original and mark
-    the upload degraded.  On hard failure (CAS upload), arq retries the whole job.
+    A thumbnail failure is soft; unexpected infrastructure failures retry the job.
     """
     worker_ctx = WorkerContext.from_arq_ctx(ctx)
     repo = UploadWorkerRepository(worker_ctx)
     tracer = get_tracer()
     job_try: int = ctx.get("job_try", 1)
 
-    await repo.update_processing_status(upload_id, "running")
+    if not await repo.update_processing_status(upload_id, "running"):
+        return
 
-    tmp = NamedTemporaryFile(delete=False)
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    tmp_path = make_processing_temp_path(prefix="upload-post-scan-")
 
     pf = None
     thumbnail_path: str | None = None
@@ -109,12 +183,16 @@ async def process_upload_post_scan(
         except Exception as exc:
             logger.error(
                 "Post-scan download from quarantine failed for upload %s: %s — "
-                "file remains uncompressed (already in CAS from scan job).",
+                "sanitized file remains available in CAS.",
                 upload_id,
                 exc,
             )
-            await repo.update_processing_status(upload_id, "degraded")
-            await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
+            await _settle_degraded_post_scan(
+                worker_ctx,
+                repo,
+                upload_id=upload_id,
+                cas_s3_key=cas_s3_key,
+            )
             return
 
         pf = download_result.pf
@@ -125,9 +203,19 @@ async def process_upload_post_scan(
         try:
             await run_strip_only(pf, tmp_path, actual_mime, upload_id, tracer)
         except Exception as exc:
-            logger.warning(
-                "Post-scan metadata strip failed for upload %s: %s — continuing.", upload_id, exc
+            logger.error(
+                "Post-scan metadata strip failed for upload %s: %s — preserving existing "
+                "sanitized CAS object.",
+                upload_id,
+                exc,
             )
+            await _settle_degraded_post_scan(
+                worker_ctx,
+                repo,
+                upload_id=upload_id,
+                cas_s3_key=cas_s3_key,
+            )
+            return
 
         # ── 3. Generate thumbnail (soft failure — retried, then accepted without) ─
         thumbnail_status: str = "skipped"
@@ -159,152 +247,119 @@ async def process_upload_post_scan(
                     )
                     thumbnail_status = "failed"
 
-        # ── 4. Compress (soft failure — degrade gracefully) ──────────────────
-        final_mime = actual_mime
-        content_encoding: str | None = None
-        compress_ok = False
-        try:
-            comp_timeout = _compression_timeout(actual_mime)
-            comp_heartbeat = asyncio.create_task(_compress_heartbeat(comp_timeout))
-            try:
-                comp_res = await run_compress_stage(
-                    pf, actual_mime, original_filename, tracer, config=auth_config
-                )
-            finally:
-                comp_heartbeat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await comp_heartbeat
-            final_mime = comp_res.final_mime
-            content_encoding = comp_res.content_encoding
-            compress_ok = True
-        except Exception as exc:
-            logger.warning(
-                "Post-scan compression failed for upload %s: %s — serving uncompressed original.",
-                upload_id,
-                exc,
-            )
-
-        # ── 5. Overwrite CAS object with compressed file (may raise → retry) ─
-        content_sha256 = await pf.sha256()
-        await asyncio.wait_for(
-            upload_file_multipart(
-                pf.path,
-                cas_s3_key,
-                content_type=final_mime,
-                content_encoding=content_encoding,
-            ),
-            timeout=120.0,
-        )
-
-        # ── 6. Upload thumbnail ───────────────────────────────────────────────
+        # CAS objects are immutable and already contain the sanitized bytes.
+        # Background processing adds a thumbnail but never rewrites the CAS key.
+        # Hold the deterministic thumbnail lifecycle lock from physical write through
+        # authoritative Upload.thumbnail_key publication. A stale admin prune must
+        # therefore either delete first (and this retry rewrites) or observe the newly
+        # published thumbnail and skip deletion.
         thumbnail_key: str | None = None
+        thumbnail_candidate_key: str | None = None
         if thumbnail_path:
             cas_id = cas_s3_key.split("/", 1)[-1]
-            _candidate_key = f"thumbnails/{cas_id}.webp"
-            try:
-                await asyncio.wait_for(
-                    upload_file_multipart(
-                        Path(thumbnail_path),
-                        _candidate_key,
-                        content_type="image/webp",
-                    ),
-                    timeout=30.0,
+            thumbnail_candidate_key = f"thumbnails/{cas_id}/{upload_id}.webp"
+
+        published = False
+        async with contextlib.AsyncExitStack() as storage_guard:
+            if thumbnail_candidate_key is not None:
+                assert thumbnail_path is not None
+                await storage_guard.enter_async_context(
+                    storage_lifecycle_lock(worker_ctx.db_sessionmaker, thumbnail_candidate_key)
                 )
-                thumbnail_key = _candidate_key
-            except Exception as exc:
-                logger.warning(
-                    "Thumbnail upload failed for upload %s: %s — skipping thumbnail.",
-                    upload_id,
-                    exc,
-                )
-                thumbnail_status = "failed"
-            finally:
-                with contextlib.suppress(Exception):
-                    Path(thumbnail_path).unlink(missing_ok=True)
-                thumbnail_path = None  # already cleaned up
-
-        # ── 7. Persist results ────────────────────────────────────────────────
-        update_kwargs: dict[str, Any] = {
-            "content_sha256": content_sha256,
-            "processing_status": "complete",
-            "size_bytes": pf.size,
-            "thumbnail_status": thumbnail_status,
-        }
-        if thumbnail_key:
-            update_kwargs["thumbnail_key"] = thumbnail_key
-        if final_mime != mime_type:
-            update_kwargs["mime_type"] = final_mime
-
-        await repo.update_upload_status(upload_id, "clean", **update_kwargs)
-
-        # Backfill MaterialVersion.file_size for any PRs merged before compression
-        # finished (manual approvals where apply_pr ran while size_bytes was still
-        # the pre-compression value).
-        if worker_ctx.db_sessionmaker is not None:
-            try:
-                async with worker_ctx.db_sessionmaker() as db:
-                    await db.execute(
-                        sa_update(MaterialVersion)
-                        .where(MaterialVersion.file_key == cas_s3_key)
-                        .values(file_size=pf.size)
+                try:
+                    await asyncio.wait_for(
+                        upload_file_multipart(
+                            Path(thumbnail_path),
+                            thumbnail_candidate_key,
+                            content_type="image/webp",
+                        ),
+                        timeout=30.0,
                     )
-                    await db.commit()
-            except Exception as exc:
-                logger.warning(
-                    "Failed to backfill MaterialVersion.file_size for %s: %s",
-                    cas_s3_key,
-                    exc,
-                )
-
-        # Update Redis status cache so frontend sees the compressed size
-        cache = UploadCacheRepository(worker_ctx.redis)
-        status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
-        event_channel = f"upload:events:{quarantine_key}"
-        event_log_key = f"upload:eventlog:{quarantine_key}"
-
-        cached_json = await worker_ctx.redis.get(status_key)
-        if cached_json:
-            try:
-                payload = json.loads(cached_json)
-                if payload.get("result"):
-                    payload["result"]["size"] = pf.size
-                    payload["result"]["processing_status"] = "complete"
-                    # If the file was compressed, it's now "correct" to say it's ready
-                    payload["status"] = UploadStatus.CLEAN
-                    payload["detail"] = "Processing complete"
-
-                    # Also update progress to 100% (finalizing stage index is 4, 1.0)
-                    # Actually _overall(4, 1.0) is 100.
-                    payload["stage_index"] = 4
-                    payload["stage_percent"] = 1.0
-                    payload["overall_percent"] = 100
-
-                    new_payload_json = json.dumps(payload)
-                    await cache.emit_event(
-                        status_key, event_channel, event_log_key, new_payload_json
+                    thumbnail_key = thumbnail_candidate_key
+                except Exception as exc:
+                    logger.warning(
+                        "Thumbnail upload failed for upload %s: %s — skipping thumbnail.",
+                        upload_id,
+                        exc,
                     )
-            except Exception as exc:
-                logger.warning("Failed to update status cache for %s: %s", upload_id, exc)
+                    thumbnail_status = "failed"
+                finally:
+                    with contextlib.suppress(Exception):
+                        Path(thumbnail_path).unlink(missing_ok=True)
+                    thumbnail_path = None  # already cleaned up
+
+            # ── 7. Persist results ────────────────────────────────────────────
+            update_kwargs: dict[str, Any] = {
+                "processing_status": "complete",
+                "thumbnail_status": thumbnail_status,
+            }
+            if thumbnail_key:
+                update_kwargs["thumbnail_key"] = thumbnail_key
+
+            async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
+                published = await _publish_postprocessed_upload(
+                    worker_ctx,
+                    upload_id=upload_id,
+                    update_values=update_kwargs,
+                )
+                if published:
+                    # Read and publish the derived CLEAN payload while cancellation is
+                    # excluded by the same upload lifecycle lock.
+                    cache = UploadCacheRepository(worker_ctx.redis)
+                    status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
+                    event_channel = f"upload:events:{quarantine_key}"
+                    event_log_key = f"upload:eventlog:{quarantine_key}"
+
+                    cached_json = await worker_ctx.redis.get(status_key)
+                    if isinstance(cached_json, (str, bytes, bytearray)) and cached_json:
+                        payload = json.loads(cached_json)
+                        if payload.get("result"):
+                            payload["result"]["processing_status"] = "complete"
+                            payload["status"] = UploadStatus.CLEAN
+                            payload["detail"] = "Processing complete"
+                            payload["stage_index"] = 4
+                            payload["stage_percent"] = 1.0
+                            payload["overall_percent"] = 100
+                            await cache.emit_event(
+                                status_key,
+                                event_channel,
+                                event_log_key,
+                                json.dumps(payload),
+                            )
+
+                    await repo.maybe_dispatch_webhook(upload_id)
+
+        if not published:
+            if thumbnail_key:
+                try:
+                    await delete_object(thumbnail_key)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to remove unpublished thumbnail %s: %s",
+                        thumbnail_key,
+                        exc,
+                    )
+            return
+
+        await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
 
         # ── 8. Delete quarantine object ───────────────────────────────────────
         try:
             await delete_object(quarantine_key)
+            try:
+                await worker_ctx.redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+            except Exception as exc:
+                logger.warning(
+                    "Deleted quarantine %s but failed to release quota membership: %s",
+                    quarantine_key,
+                    exc,
+                )
         except Exception as exc:
             logger.warning("Failed to delete quarantine %s: %s", quarantine_key, exc)
 
-        # ── 9. Dispatch webhook ───────────────────────────────────────────────
-        await repo.maybe_dispatch_webhook(upload_id)
-
-        # ── 10. Prometheus metrics ────────────────────────────────────────────
-        mime_cat = _mime_cat(final_mime)
-        upload_file_size.labels(mime_category=mime_cat).observe(initial_size)
-        if compress_ok and initial_size > 0 and pf.size > 0:
-            upload_compression_ratio.labels(mime_category=mime_cat).observe(initial_size / pf.size)
-
         logger.info(
-            "Post-scan processing complete for upload %s (compressed=%s, thumbnail=%s).",
+            "Post-scan processing complete for upload %s (thumbnail=%s).",
             upload_id,
-            compress_ok,
             thumbnail_key is not None,
         )
 
@@ -315,16 +370,30 @@ async def process_upload_post_scan(
         )
 
         if job_try >= _POST_MAX_RETRIES:
-            await _handle_permanent_failure(repo, upload_id, cas_s3_key, exc, job_try)
-            await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
+            settled = False
+            async with _post_scan_lifecycle_guard(worker_ctx, upload_id):
+                settled = await _handle_permanent_failure(
+                    repo,
+                    exc=exc,
+                    attempts=job_try,
+                    payload={
+                        "upload_id": upload_id,
+                        "user_id": user_id,
+                        "quarantine_key": quarantine_key,
+                        "original_filename": original_filename,
+                        "mime_type": mime_type,
+                        "original_sha256": original_sha256,
+                        "cas_key": cas_key,
+                        "cas_s3_key": cas_s3_key,
+                        "initial_size": initial_size,
+                    },
+                )
+            if settled:
+                await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
         else:
             # Reset to pending so status reflects "not yet settled" during retry wait.
             await repo.update_processing_status(upload_id, "pending")
             raise  # Let arq schedule the retry.
-
-    else:
-        # Success — check for PRs waiting on this upload.
-        await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
 
     finally:
         if pf is not None:
@@ -337,53 +406,46 @@ async def process_upload_post_scan(
                 Path(thumbnail_path).unlink(missing_ok=True)
 
 
-async def _compress_heartbeat(max_duration: float) -> None:
-    """Yield control periodically so the event loop stays responsive during compression."""
-    elapsed = 0.0
-    interval = 5.0
-    while elapsed < max_duration:
-        await asyncio.sleep(interval)
-        elapsed += interval
-
-
 async def _handle_permanent_failure(
     repo: UploadWorkerRepository,
-    upload_id: str,
-    cas_s3_key: str,
+    *,
     exc: Exception,
     attempts: int,
-) -> None:
-    """Mark the upload degraded and insert a dead-letter record after max retries."""
-    await repo.update_processing_status(upload_id, "degraded")
+    payload: dict[str, str | int],
+) -> bool:
+    """Mark the upload degraded unless authoritative cancellation already won."""
+    upload_id = str(payload["upload_id"])
+    if not await repo.update_processing_status(upload_id, "degraded"):
+        return False
     await repo.insert_dead_letter(
         upload_id,
         job_name="process_upload_post_scan",
-        payload={"upload_id": upload_id, "cas_s3_key": cas_s3_key},
+        payload=payload,
         error=str(exc),
         attempts=attempts,
     )
     logger.error(
         "Post-scan processing permanently failed for upload %s after %d attempts — "
-        "serving uncompressed original.  Dead-letter record inserted.",
+        "serving the sanitized CAS object without derived metadata. Dead-letter inserted.",
         upload_id,
         attempts,
     )
+    return True
 
 
 async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> None:
-    """After this upload settles, check whether any deferred auto-merge PRs can now proceed.
+    """Auto-merge only when every claimed CAS key is authoritatively eligible.
 
-    A PR is auto-merged when its author has auto_approve=True and every cas/ file
-    referenced in the PR payload has reached a settled processing_status
-    (complete or degraded).
+    Upload lifecycle locks are acquired in stable upload-id order before database
+    row locks. This serializes approval with cancellation and retroactive malware
+    quarantine for every upload referenced by the contribution.
     """
     if ctx.db_sessionmaker is None:
         return
 
     try:
-        async with ctx.db_sessionmaker() as db:
-            # Find the open PR with auto_merge_pending that claims this file.
-            pr = await db.scalar(
+        async with ctx.db_sessionmaker() as discovery_db:
+            candidate_pr = await discovery_db.scalar(
                 select(PullRequest)
                 .join(PRFileClaim, PRFileClaim.pr_id == PullRequest.id)
                 .where(
@@ -391,86 +453,139 @@ async def _trigger_pending_auto_merges(ctx: WorkerContext, cas_s3_key: str) -> N
                     PullRequest.auto_merge_pending.is_(True),
                     PullRequest.status == PRStatus.OPEN,
                 )
-                .with_for_update(skip_locked=True)
             )
-            if pr is None:
+            if candidate_pr is None:
                 return
-
-            # Gather every unique cas/ key in this PR's payload.
-            # Deduplicate: two materials may reference the same CAS key (identical
-            # file content deduped by hash), but there is only one Upload row, so
-            # the DB count must be compared against the number of distinct keys.
-            all_cas_keys = list({k for k in get_pr_all_file_keys(pr) if k.startswith("cas/")})
-            if all_cas_keys:
-                settled_count = await db.scalar(
-                    select(func.count())
-                    .select_from(Upload)
-                    .where(
-                        Upload.final_key.in_(all_cas_keys),
-                        Upload.processing_status.in_(list(_SETTLED_STATUSES)),
+            candidate_pr_id = candidate_pr.id
+            candidate_author_id = candidate_pr.author_id
+            candidate_keys = {
+                key for key in get_pr_all_file_keys(candidate_pr) if key.startswith("cas/")
+            }
+            upload_ids = sorted(
+                set(
+                    await discovery_db.scalars(
+                        select(Upload.upload_id).where(
+                            Upload.final_key.in_(candidate_keys),
+                            Upload.user_id == candidate_author_id,
+                        )
                     )
                 )
-                if settled_count is None or settled_count < len(all_cas_keys):
-                    return  # Other files still processing — wait.
+            )
 
-            # All files settled — execute auto-merge.
-            pr.status = PRStatus.APPROVED
-            pr.reviewed_by = pr.author_id
-            pr.auto_merge_pending = False
+        async with contextlib.AsyncExitStack() as lifecycle_locks:
+            for upload_id in upload_ids:
+                await lifecycle_locks.enter_async_context(
+                    _post_scan_lifecycle_guard(ctx, upload_id)
+                )
 
-            jobs: list[Any] = []
-            db.info["post_commit_jobs"] = jobs
-            db.info.setdefault("post_commit_job_keys", set())
-
-            await apply_pr(db, pr)
-            await _cleanup_pr_resources(db, pr, redis=ctx.redis)  # type: ignore[arg-type]
-
-            sse_broadcasts = db.info.pop("post_commit_sse_broadcasts", [])
-            event = {"type": "pr_closed", "id": str(pr.id)}
-            for topic in _pr_directory_topics(list(pr.payload)):
-                sse_broadcasts.append((topic, event))
-            if pr.author_id:
-                sse_broadcasts.append((f"pr_updates:{pr.author_id}", event))
-
-            await db.commit()
-
-            for topic, event in sse_broadcasts:
-                broadcast_to_topic(topic, event)
-
-            # Dispatch arq jobs queued inside apply_pr (index_material, etc.)
-            await _dispatch_post_commit_jobs(jobs)
-
-            if pr.author_id:
-                async with ctx.db_sessionmaker() as notify_db:
-                    await notify_user(
-                        notify_db,
-                        pr.author_id,
-                        "pr_approved",
-                        f'Your contribution "{pr.title}" was published',
-                        link=f"/pull-requests/{pr.id}",
+            async with ctx.db_sessionmaker() as db:
+                db.info[PostCommitKey.MANAGED_TRANSACTION] = True
+                pr = await db.scalar(
+                    select(PullRequest)
+                    .where(
+                        PullRequest.id == candidate_pr_id,
+                        PullRequest.auto_merge_pending.is_(True),
+                        PullRequest.status == PRStatus.OPEN,
                     )
-                    await notify_db.commit()
+                    .with_for_update()
+                )
+                if pr is None:
+                    return
 
-            logger.info("Auto-merged PR %s after all uploads settled.", pr.id)
+                expected_keys = {key for key in get_pr_all_file_keys(pr) if key.startswith("cas/")}
+                if not expected_keys or cas_s3_key not in expected_keys:
+                    return
+                try:
+                    await _lock_and_validate_pr_cas_files(
+                        db, pr, settled_statuses=_SETTLED_STATUSES
+                    )
+                except ConflictError:
+                    return
 
-    except Exception as exc:
-        logger.error("Failed to trigger auto-merge for cas_s3_key=%s: %s", cas_s3_key, exc)
+                pr.status = PRStatus.APPROVED
+                pr.reviewed_by = pr.author_id
+                pr.auto_merge_pending = False
 
+                jobs: list[Any] = []
+                db.info[PostCommitKey.JOBS] = jobs
+                db.info.setdefault(PostCommitKey.JOB_KEYS, set())
 
-async def _dispatch_post_commit_jobs(jobs: list[Any]) -> None:
-    """Enqueue arq jobs accumulated in db.info['post_commit_jobs'] during apply_pr."""
-    if not jobs:
-        return
+                commit_attempted = False
+                try:
+                    await apply_pr(db, pr)
+                    await _cleanup_pr_resources(db, pr, redis=ctx.redis)  # type: ignore[arg-type]
 
-    coalesced = _coalesce_index_jobs(jobs)
-    if redis_core.arq_pool is None:
-        logger.error(
-            "arq_pool unavailable — %d post-commit jobs from auto-merge lost.", len(coalesced)
-        )
-        return
+                    sse_broadcasts = db.info.pop(PostCommitKey.SSE, [])
+                    event = {"type": "pr_closed", "id": str(pr.id)}
+                    for topic in _pr_directory_topics(list(pr.payload)):
+                        sse_broadcasts.append((topic, event))
+                    if pr.author_id:
+                        sse_broadcasts.append((f"pr_updates:{pr.author_id}", event))
 
-    for job in coalesced:
-        try:
-            await redis_core.arq_pool.enqueue_job(*job)
-        except Exception as exc:
-            logger.error("Failed to enqueue post-commit job %s after auto-merge: %s", job, exc)
+                    await persist_post_commit_jobs(db)
+                    commit_attempted = True
+                    await db.commit()
+                except BaseException:
+                    _result, rollback_error, rollback_cancellation = await settle_awaitable(
+                        db.rollback()
+                    )
+                    compensation_error: BaseException | None = None
+                    if commit_attempted:
+                        # COMMIT acknowledgement is ambiguous after a connection
+                        # failure or cancellation. The transaction may be durable,
+                        # so destructive compensation could remove referenced data.
+                        db.info.pop(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, None)
+                        db.info.pop(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, None)
+                        logger.error(
+                            "Auto-merge COMMIT failed with unknown outcome; preserving "
+                            "external mutations"
+                        )
+                    else:
+                        try:
+                            await rollback_transaction_callbacks(db)
+                        except BaseException as exc:
+                            compensation_error = exc
+                    if compensation_error is not None and not isinstance(
+                        compensation_error, asyncio.CancelledError
+                    ):
+                        raise RuntimeError(
+                            "Auto-merge transaction failed and external-resource "
+                            "compensation was incomplete"
+                        ) from compensation_error
+                    if rollback_error is not None:
+                        raise RuntimeError(
+                            "Auto-merge database rollback failed"
+                        ) from rollback_error
+                    if rollback_cancellation is not None:
+                        raise rollback_cancellation
+                    if compensation_error is not None:
+                        raise compensation_error
+                    raise
+                else:
+                    await finalize_transaction_callbacks(db)
+                finally:
+                    db.info.pop(PostCommitKey.MANAGED_TRANSACTION, None)
+
+                for topic, event in sse_broadcasts:
+                    broadcast_to_topic(topic, event)
+
+                await dispatch_post_commit_actions(db)
+
+                if pr.author_id:
+                    async with ctx.db_sessionmaker() as notify_db:
+                        await notify_user(
+                            notify_db,
+                            pr.author_id,
+                            "pr_approved",
+                            f'Your contribution "{pr.title}" was published',
+                            link=f"/pull-requests/{pr.id}",
+                        )
+                        await persist_post_commit_jobs(notify_db)
+                        await notify_db.commit()
+                        await dispatch_post_commit_actions(notify_db)
+
+                logger.info("Auto-merged PR %s after all uploads settled.", pr.id)
+
+    except Exception:
+        logger.exception("Failed to trigger auto-merge for cas_s3_key=%s", cas_s3_key)
+        raise

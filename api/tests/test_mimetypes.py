@@ -1,12 +1,41 @@
 """Tests for core/mimetypes.py — MIME detection and registry."""
 
-from app.core.mimetypes import (
+from app.core.media.mimetypes import (
     ALLOWED_EXTENSIONS,
+    ALLOWED_MIME_TYPES,
     MimeRegistry,
     guess_mime_from_bytes,
 )
 
 # ── guess_mime_from_bytes ────────────────────────────────────────────────────
+
+
+class TestGetExtension:
+    """Unit tests for MimeRegistry.get_extension."""
+
+    def test_standard_extension(self):
+        assert MimeRegistry.get_extension("document.pdf") == ".pdf"
+        assert MimeRegistry.get_extension("image.PNG") == ".png"
+
+    def test_multiple_dots(self):
+        assert MimeRegistry.get_extension("archive.tar.gz") == ".gz"
+
+    def test_no_extension(self):
+        assert MimeRegistry.get_extension("README") == ""
+        assert MimeRegistry.get_extension("LICENSE") == ""
+
+    def test_special_extensionless_filename(self):
+        assert MimeRegistry.get_extension("Makefile") == ".makefile"
+        assert MimeRegistry.get_extension("Dockerfile") == ".dockerfile"
+
+    def test_leading_dot_hidden_file(self):
+        assert MimeRegistry.get_extension(".gitignore") == ""
+
+    def test_dotfile_registered(self):
+        assert MimeRegistry.get_extension(".env") == ".env"
+
+    def test_empty_string(self):
+        assert MimeRegistry.get_extension("") == ""
 
 
 class TestGuessMimeFromBytes:
@@ -38,6 +67,20 @@ class TestGuessMimeFromBytes:
         # The check is done on data.lower(), so mixed case must work
         assert guess_mime_from_bytes(b"<?xml version='1.0'?><SVG>") == "image/svg+xml"
 
+    def test_svg_with_comment(self):
+        assert (
+            guess_mime_from_bytes(b"<!-- Created with Inkscape -->\n<svg width='100'></svg>")
+            == "image/svg+xml"
+        )
+
+    def test_svg_with_doctype(self):
+        assert (
+            guess_mime_from_bytes(
+                b"<!DOCTYPE svg PUBLIC '-//W3C//DTD SVG 1.1//EN'>\n<svg width='100'></svg>"
+            )
+            == "image/svg+xml"
+        )
+
     def test_djvu(self):
         assert guess_mime_from_bytes(b"AT&TFORM" + b"\x00" * 20) == "image/vnd.djvu"
 
@@ -55,6 +98,10 @@ class TestGuessMimeFromBytes:
 
     def test_ogg(self):
         assert guess_mime_from_bytes(b"OggS" + b"\x00" * 20) == "audio/ogg"
+
+    def test_ogg_theora_is_video(self):
+        data = b"OggS" + b"\x00" * 24 + b"\x80theora" + b"\x00" * 20
+        assert guess_mime_from_bytes(data) == "video/ogg"
 
     def test_wav(self):
         data = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 20
@@ -109,10 +156,9 @@ class TestGuessMimeFromBytes:
         result = guess_mime_from_bytes(data)
         assert result == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
-    def test_ole2_default(self):
-        # OLE2 magic without type inference → returns default
+    def test_ole2_container_is_detected(self):
         data = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 20
-        assert guess_mime_from_bytes(data) == "application/octet-stream"
+        assert guess_mime_from_bytes(data) == "application/x-ole-storage"
 
     def test_too_short_returns_default(self):
         assert guess_mime_from_bytes(b"\xff\xd8") == "application/octet-stream"
@@ -195,6 +241,13 @@ class TestMimeRegistry:
     def test_allowed_extensions_not_empty(self):
         assert len(ALLOWED_EXTENSIONS) > 0
 
+    def test_every_allowed_extension_resolves_to_an_allowed_mime(self):
+        for extension in ALLOWED_EXTENSIONS:
+            resolved = MimeRegistry.get_authoritative_mime(
+                f"file{extension}", "application/octet-stream"
+            )
+            assert resolved in ALLOWED_MIME_TYPES, (extension, resolved)
+
     def test_text_code_extensions_present(self):
         # Ensure a sample of code extensions passed through
         for ext in (".py", ".js", ".rs", ".go", ".ts"):
@@ -203,6 +256,24 @@ class TestMimeRegistry:
     def test_resolve_upload_mime_preserves_valid(self):
         assert MimeRegistry.resolve_upload_mime("test.pdf", "application/pdf") == "application/pdf"
         assert MimeRegistry.resolve_upload_mime("test.png", "image/png") == "image/png"
+
+    def test_resolve_upload_mime_canonicalizes_parameters_and_case(self):
+        assert (
+            MimeRegistry.resolve_upload_mime("test.doc", " Application/MSWord ; charset=binary ")
+            == "application/msword"
+        )
+
+    def test_authoritative_mime_preserves_specific_ole_type(self):
+        assert (
+            MimeRegistry.get_authoritative_mime("test.doc", "application/x-ole-storage")
+            == "application/msword"
+        )
+
+    def test_authoritative_mime_uses_m4a_extension_for_generic_mp4(self):
+        assert MimeRegistry.get_authoritative_mime("track.m4a", "video/mp4") == "audio/mp4"
+
+    def test_authoritative_mime_uses_detected_ogg_video(self):
+        assert MimeRegistry.get_authoritative_mime("clip.ogg", "video/ogg") == "video/ogg"
 
     def test_resolve_upload_mime_extension_mapping(self):
         # Mapped extensions resolve to their first mapped MIME
@@ -236,3 +307,18 @@ class TestMimeRegistry:
             MimeRegistry.resolve_upload_mime("test.xyzabc", "application/octet-stream")
             == "application/octet-stream"
         )
+
+    def test_resolve_upload_mime_ipynb(self):
+        assert (
+            MimeRegistry.resolve_upload_mime("notebook.ipynb", "application/octet-stream")
+            == "application/json"
+        )
+
+    def test_is_valid_extension_for_mime(self):
+        assert MimeRegistry.is_valid_extension_for_mime(".ipynb", "application/json") is True
+        assert MimeRegistry.is_valid_extension_for_mime("model.ipynb", "application/json") is True
+        assert MimeRegistry.is_valid_extension_for_mime("data.json", "application/json") is True
+        assert MimeRegistry.is_valid_extension_for_mime("image.png", "image/png") is True
+        assert MimeRegistry.is_valid_extension_for_mime("image.png", "image/jpeg") is False
+        assert MimeRegistry.is_valid_extension_for_mime("script.py", "text/x-python") is True
+        assert MimeRegistry.is_valid_extension_for_mime("unnamed", "application/pdf") is False

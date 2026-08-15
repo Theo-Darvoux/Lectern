@@ -1,30 +1,169 @@
 import asyncio
+from pathlib import Path
 
 import typer
 
 app = typer.Typer(help="Lectern CLI")
 
 
+@app.command(name="create-backup-offline")
+def create_backup_offline(
+    destination: Path = typer.Argument(..., dir_okay=False),
+    confirm_offline: bool = typer.Option(
+        False,
+        "--confirm-offline",
+        help="Confirm that every API and worker instance is stopped.",
+    ),
+) -> None:
+    """Create a cross-datastore backup while all mutating processes are stopped."""
+    if not confirm_offline:
+        typer.echo("Refusing backup: stop every API/worker and pass --confirm-offline.")
+        raise typer.Exit(code=2)
+    resolved = destination.resolve()
+    if resolved.exists():
+        typer.echo(f"Refusing backup: destination already exists: {resolved}")
+        raise typer.Exit(code=2)
+    if not resolved.parent.is_dir():
+        typer.echo(f"Refusing backup: destination directory does not exist: {resolved.parent}")
+        raise typer.Exit(code=2)
+    asyncio.run(_create_backup_offline(resolved))
+
+
+async def _create_backup_offline(destination: Path) -> None:
+    from app.core.database.database import async_session_factory
+    from app.services.backup import create_backup_zip
+
+    try:
+        async with async_session_factory() as session:
+            try:
+                manifest = await create_backup_zip(session, destination)
+            finally:
+                await session.rollback()
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+    typer.echo(
+        "Offline backup complete "
+        f"(version {manifest.get('version')}, {manifest.get('s3_object_count')} objects): "
+        f"{destination}"
+    )
+
+
+@app.command(name="restore-backup-offline")
+def restore_backup_offline(
+    path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+    confirm_offline: bool = typer.Option(
+        False,
+        "--confirm-offline",
+        help="Confirm that every API and worker instance is stopped.",
+    ),
+) -> None:
+    """Restore a full backup while all mutating application processes are stopped."""
+    if not confirm_offline:
+        typer.echo("Refusing restore: stop every API/worker and pass --confirm-offline.")
+        raise typer.Exit(code=2)
+    asyncio.run(_restore_backup_offline(path.resolve()))
+
+
+async def _restore_backup_offline(path: Path) -> None:
+    from app.core.database.database import async_session_factory
+    from app.core.database.post_commit import (
+        PostCommitKey,
+        finalize_transaction_callbacks,
+        rollback_transaction_callbacks,
+    )
+    from app.core.security.async_utils import settle_awaitable
+    from app.services.backup import restore_from_zip_path
+
+    async with async_session_factory() as session:
+        session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+        commit_attempted = False
+        try:
+            manifest = await restore_from_zip_path(session, path)
+            commit_attempted = True
+            await session.commit()
+        except BaseException:
+            _result, rollback_error, rollback_cancellation = await settle_awaitable(
+                session.rollback()
+            )
+            compensation_error: BaseException | None = None
+            if commit_attempted:
+                # Keep both restored storage and the rollback journal. A lost
+                # COMMIT acknowledgement cannot be compensated safely.
+                session.info.pop(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, None)
+                session.info.pop(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, None)
+            else:
+                try:
+                    await rollback_transaction_callbacks(session)
+                except BaseException as exc:
+                    compensation_error = exc
+            if compensation_error is not None and not isinstance(
+                compensation_error, asyncio.CancelledError
+            ):
+                raise RuntimeError(
+                    "Offline restore failed and external-resource compensation was incomplete"
+                ) from compensation_error
+            if rollback_error is not None:
+                raise RuntimeError("Offline restore database rollback failed") from rollback_error
+            if rollback_cancellation is not None:
+                raise rollback_cancellation
+            if compensation_error is not None:
+                raise compensation_error
+            raise
+        else:
+            await finalize_transaction_callbacks(session)
+        finally:
+            session.info.pop(PostCommitKey.MANAGED_TRANSACTION, None)
+    typer.echo(f"Offline restore complete (backup version {manifest.get('version')}).")
+
+
 @app.command()
 def seed(
     email: str = typer.Option(..., help="Email for the first Bureau account"),
     role: str = typer.Option("bureau", help="Role to assign"),
+    confirm_offline: bool = typer.Option(
+        False,
+        "--confirm-offline",
+        help="Confirm that every API and worker instance is stopped (required in production).",
+    ),
 ) -> None:
+    from app.config import settings
+
+    if settings.environment == "production" and not confirm_offline:
+        typer.echo(
+            "Refusing production seed while services may be live; stop API/workers "
+            "and pass --confirm-offline."
+        )
+        raise typer.Exit(code=2)
     asyncio.run(_seed(email, role))
 
 
 async def _seed(email: str, role: str) -> None:
     from sqlalchemy import select
 
-    from app.core.database import async_session_factory
+    from app.core.database.database import async_session_factory
     from app.models.user import User, UserRole
 
     async with async_session_factory() as session:
-        user_res = await session.execute(select(User).where(User.email == email))
-        user = user_res.scalar_one_or_none()
-
         role_enum = UserRole(role)
+        from app.services.auth import (
+            acquire_setup_lock,
+            ensure_admin_removal_safe,
+            mark_installation_bootstrapped,
+        )
+
+        # Seed is an offline/admin tool, but serialize it with the same authority
+        # boundary so it cannot violate the application's role invariant when used.
+        await acquire_setup_lock(session)
+        user = await session.scalar(
+            select(User)
+            .where(User.email == email)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if user is not None:
+            if user.is_admin and role_enum not in (UserRole.BUREAU, UserRole.VIEUX):
+                await ensure_admin_removal_safe(session, user.id)
             user.role = role_enum
             typer.echo(f"Updated {email} to role '{role}'")
         else:
@@ -32,8 +171,58 @@ async def _seed(email: str, role: str) -> None:
             session.add(user)
             typer.echo(f"Created user {email} with role '{role}'")
 
+        if role_enum in (UserRole.BUREAU, UserRole.VIEUX):
+            await mark_installation_bootstrapped(session)
+
         await session.commit()
         typer.echo("Seed complete.")
+
+
+@app.command(name="recover-admin-offline")
+def recover_admin_offline(
+    email: str = typer.Option(..., help="Email of the administrator to create or recover"),
+    password: str = typer.Option(
+        ...,
+        prompt=True,
+        hide_input=True,
+        confirmation_prompt=True,
+        help="Recovery password (at least 8 characters)",
+    ),
+    confirm_offline: bool = typer.Option(
+        False,
+        "--confirm-offline",
+        help="Confirm that every API and worker instance is stopped.",
+    ),
+) -> None:
+    """Recover administrative authority without reopening HTTP bootstrap."""
+    if not confirm_offline:
+        typer.echo("Refusing admin recovery: stop every API/worker and pass --confirm-offline.")
+        raise typer.Exit(code=2)
+    if len(password) < 8 or len(password) > 128:
+        typer.echo("Recovery password must contain between 8 and 128 characters.")
+        raise typer.Exit(code=2)
+    asyncio.run(_recover_admin_offline(email, password))
+
+
+async def _recover_admin_offline(email: str, password: str) -> None:
+    from app.core.database.database import async_session_factory
+    from app.services.auth import recover_admin_account
+
+    normalized = email.strip().lower()
+    if "@" not in normalized or "+" in normalized or len(normalized) > 254:
+        typer.echo("Invalid recovery email address.")
+        raise typer.Exit(code=2)
+
+    async with async_session_factory() as session:
+        user, created = await recover_admin_account(session, normalized, password)
+        await session.commit()
+        action = "Created" if created else "Recovered"
+        typer.echo(f"{action} recovery administrator {normalized}")
+        typer.echo(
+            "Admin recovery complete. HTTP bootstrap remains permanently consumed and "
+            "all credentials issued before recovery for this account are invalid. "
+            "If classic authentication is disabled, use an enabled login method for this account."
+        )
 
 
 @app.command()
@@ -45,8 +234,8 @@ async def _reindex() -> None:
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
-    from app.core.database import async_session_factory
-    from app.core.meilisearch import meili_client, setup_meilisearch
+    from app.core.database.database import async_session_factory
+    from app.core.events.meilisearch import meili_admin_client, setup_meilisearch
     from app.models.directory import Directory
     from app.models.material import Material
     from app.services.directory import get_directory_path
@@ -119,7 +308,7 @@ async def _reindex() -> None:
             )
 
         if m_docs:
-            await meili_client.index("materials").add_documents(m_docs)
+            await meili_admin_client.index("materials").add_documents(m_docs)
             typer.echo(f"Reindexed {len(m_docs)} materials.")
         else:
             typer.echo("0 materials to reindex.")
@@ -166,7 +355,7 @@ async def _reindex() -> None:
             )
 
         if d_docs:
-            await meili_client.index("directories").add_documents(d_docs)
+            await meili_admin_client.index("directories").add_documents(d_docs)
             typer.echo(f"Reindexed {len(d_docs)} directories.")
         else:
             typer.echo("0 directories to reindex.")
@@ -221,10 +410,10 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
 
     from sqlalchemy import func, select
 
-    from app.core.cas import hmac_cas_key, increment_cas_ref
-    from app.core.database import async_session_factory
-    from app.core.redis import redis_client
-    from app.core.storage import copy_object, init_s3_client, object_exists
+    from app.core.database.database import async_session_factory
+    from app.core.database.redis import redis_client
+    from app.core.security.cas import hmac_cas_key, increment_cas_ref
+    from app.core.storage.facade import copy_object, init_s3_client, object_exists
     from app.models.material import MaterialVersion
     from app.models.upload import Upload
 
@@ -319,7 +508,17 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
                     mv.cas_sha256 = sha256
 
                     # Initialize CAS ref count
-                    await increment_cas_ref(redis_client, sha256)
+                    await increment_cas_ref(
+                        redis_client,
+                        sha256,
+                        initial_data={
+                            "final_key": cas_s3_key,
+                            "size": mv.file_size,
+                            "mime_type": mv.file_mime_type,
+                            "file_name": mv.file_name,
+                        },
+                        operation_id=f"migrate-cas:material-version:{mv.id}:add",
+                    )
 
                     migrated += 1
 
@@ -352,15 +551,14 @@ def recalculate_thumbnails(
 
 
 async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -> None:
-    import shutil
-    import tempfile
     from pathlib import Path
 
     from sqlalchemy import func, or_, select, update
 
-    from app.core.database import async_session_factory
-    from app.core.processing import ProcessingFile
-    from app.core.storage import download_file, init_s3_client, upload_file
+    from app.core.database.database import async_session_factory
+    from app.core.events.processing import ProcessingFile
+    from app.core.security.processing_paths import processing_temp_dir
+    from app.core.storage.facade import download_file, init_s3_client, upload_file
     from app.models.material import MaterialVersion
     from app.services.auth import get_full_auth_config
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
@@ -405,68 +603,69 @@ async def _recalculate_thumbnails(batch_size: int, dry_run: bool, force: bool) -
             errors += 1
             continue
 
-        tmp_dir = Path(tempfile.mkdtemp())
-        try:
-            # 1. Download source
-            local_path = tmp_dir / mv.file_name
-            await download_file(mv.file_key, local_path)
-
-            # 2. Setup processing file
-            pf = ProcessingFile(local_path, local_path.stat().st_size)
-
-            # 3. Generate thumbnail (pass auth_config for consistent size/quality)
-            thumb_path_str = await run_thumbnail_stage(
-                pf,
-                mv.file_mime_type,
-                mv.file_name,
-                config=auth_config,  # type: ignore[arg-type]
-            )
-
-            if thumb_path_str:
-                thumb_path = Path(thumb_path_str)
-                s3_thumb_key = f"thumbnails/{mv.id}.webp"
-
-                with open(thumb_path, "rb") as f:
-                    await upload_file(f.read(), s3_thumb_key, content_type="image/webp")
-
-                async with async_session_factory() as db:
-                    await db.execute(
-                        update(MaterialVersion)
-                        .where(MaterialVersion.id == mv.id)
-                        .values(thumbnail_key=s3_thumb_key, thumbnail_status="ok")
-                    )
-                    await db.commit()
-
-                generated += 1
-                typer.echo(f"  OK: {s3_thumb_key}")
-            else:
-                # Unsupported type — mark skipped so re-runs don't retry unnecessarily.
-                async with async_session_factory() as db:
-                    await db.execute(
-                        update(MaterialVersion)
-                        .where(MaterialVersion.id == mv.id)
-                        .values(thumbnail_status="skipped")
-                    )
-                    await db.commit()
-                typer.echo("  SKIP: No thumbnail generated for this type.")
-
-            processed += 1
-        except Exception as e:
-            typer.echo(f"  ERROR: {e}")
-            errors += 1
-            # Persist the failure so the CLI can target just failed materials on retry.
+        # Sandbox binds are deliberately restricted to PROCESSING_ROOT. Using a
+        # generic tempfile directory here made the repair command fail before a
+        # converter could run in production.
+        with processing_temp_dir(prefix="thumbnail-recalc-") as tmp_dir:
             try:
-                async with async_session_factory() as db:
-                    await db.execute(
-                        update(MaterialVersion)
-                        .where(MaterialVersion.id == mv.id)
-                        .values(thumbnail_status="failed")
-                    )
-                    await db.commit()
-            except Exception:
-                pass
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+                # 1. Download source
+                local_path = tmp_dir / Path(mv.file_name).name
+                await download_file(mv.file_key, local_path, decompress=True)
+
+                # 2. Setup processing file
+                pf = ProcessingFile(local_path, local_path.stat().st_size)
+
+                # 3. Generate thumbnail (pass auth_config for consistent size/quality)
+                thumb_path_str = await run_thumbnail_stage(
+                    pf,
+                    mv.file_mime_type,
+                    mv.file_name,
+                    config=auth_config,  # type: ignore[arg-type]
+                )
+
+                if thumb_path_str:
+                    thumb_path = Path(thumb_path_str)
+                    s3_thumb_key = f"thumbnails/{mv.id}.webp"
+
+                    with open(thumb_path, "rb") as f:
+                        await upload_file(f.read(), s3_thumb_key, content_type="image/webp")
+
+                    async with async_session_factory() as db:
+                        await db.execute(
+                            update(MaterialVersion)
+                            .where(MaterialVersion.id == mv.id)
+                            .values(thumbnail_key=s3_thumb_key, thumbnail_status="ok")
+                        )
+                        await db.commit()
+
+                    generated += 1
+                    typer.echo(f"  OK: {s3_thumb_key}")
+                else:
+                    # Unsupported type — mark skipped so re-runs don't retry unnecessarily.
+                    async with async_session_factory() as db:
+                        await db.execute(
+                            update(MaterialVersion)
+                            .where(MaterialVersion.id == mv.id)
+                            .values(thumbnail_status="skipped")
+                        )
+                        await db.commit()
+                    typer.echo("  SKIP: No thumbnail generated for this type.")
+
+                processed += 1
+            except Exception as e:
+                typer.echo(f"  ERROR: {e}")
+                errors += 1
+                # Persist the failure so the CLI can target just failed materials on retry.
+                try:
+                    async with async_session_factory() as db:
+                        await db.execute(
+                            update(MaterialVersion)
+                            .where(MaterialVersion.id == mv.id)
+                            .values(thumbnail_status="failed")
+                        )
+                        await db.commit()
+                except Exception:
+                    pass
 
     typer.echo(f"\nDone. Processed: {processed}, Generated: {generated}, Errors: {errors}")
     if dry_run:
@@ -490,7 +689,7 @@ async def _config_export_env() -> None:
 
     from sqlalchemy import text
 
-    from app.core.database import async_session_factory
+    from app.core.database.database import async_session_factory
 
     # Column → env-var name overrides.  Columns not listed here map to UPPERCASE(column).
     column_map: dict[str, str] = {
@@ -560,14 +759,30 @@ def magic_link(
 
 async def _magic_link(email: str) -> None:
     from app.config import settings
-    from app.core.redis import redis_client
-    from app.services.auth import generate_magic_token, store_magic_token
+    from app.core.database.database import async_session_factory
+    from app.core.database.redis import redis_client
+    from app.services.auth import (
+        generate_code,
+        generate_magic_token,
+        login_challenge_auth_generation,
+        store_login_challenge,
+    )
+
+    normalized_email = email.strip().lower()
+    async with async_session_factory() as session:
+        auth_generation = await login_challenge_auth_generation(session, normalized_email)
 
     token = generate_magic_token()
-    await store_magic_token(redis_client, email, token)
+    await store_login_challenge(
+        redis_client,
+        normalized_email,
+        generate_code(),
+        token,
+        auth_generation=auth_generation,
+    )
 
-    link = f"{settings.frontend_url}/login/verify?token={token}"
-    typer.echo(f"Magic link for {email}:")
+    link = f"{settings.frontend_url.rstrip('/')}/login/verify#token={token}"
+    typer.echo(f"Magic link for {normalized_email}:")
     typer.echo(link)
 
 
@@ -583,7 +798,7 @@ def change_email(
 async def _change_email(current_email: str, new_email: str) -> None:
     from sqlalchemy import func, select
 
-    from app.core.database import async_session_factory
+    from app.core.database.database import async_session_factory
     from app.models.user import User
 
     current = current_email.strip().lower()

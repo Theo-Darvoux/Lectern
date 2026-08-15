@@ -4,8 +4,9 @@
  * Navigation-persistent upload queue backed by Zustand.
  *
  * File objects and AbortControllers are NOT stored here (they can't be serialized).
- * This store tracks upload state (progress, status, result) so the UI can reconnect
- * after navigation without losing visible progress.
+ * This store tracks durable upload state (identity, status, resume URL, result).
+ * Frame-batched progress and processing messages live in upload-telemetry.ts so
+ * hot callbacks do not synchronously serialize the queue into localStorage.
  *
  * The upload engine (async uploadFile calls, AbortController management) lives in
  * the UploadDrawer component via `useUploadQueueEngine`.
@@ -20,6 +21,8 @@ export interface QueueItem {
     clientId: string;
     /** UUID used for server-side upload idempotency */
     uploadId: string;
+    /** Bounded server-issued folder admission capability. */
+    uploadGroupId?: string;
 
     // File identity (serializable)
     fileName: string;
@@ -54,6 +57,8 @@ export interface QueueItem {
 
     // Error (set once status === "error" | "virus")
     error?: string;
+    /** True when a reload discarded the browser-only File reference. */
+    referenceLost?: boolean;
 
     /** Relative directory path from drop root, e.g. "FolderA/sub". "" = current dir. */
     targetDirPath: string;
@@ -83,6 +88,18 @@ interface UploadQueueState {
     setActiveCount: (n: number) => void;
 }
 
+function durableQueueItem(item: QueueItem): QueueItem {
+    return {
+        ...item,
+        // Progress messages are a live display concern. A resumed transfer gets its
+        // authoritative progress from tus/server callbacks after reconnecting.
+        progress: item.status === "done" ? 100 : 0,
+        processingStatus: "",
+        stageIndex: undefined,
+        stageTotal: undefined,
+    };
+}
+
 export const useUploadQueue = create<UploadQueueState>()(
     persist(
         (set) => ({
@@ -107,7 +124,7 @@ export const useUploadQueue = create<UploadQueueState>()(
         {
             name: "lectern_upload_queue",
             storage: createJSONStorage(() => safeLocalStorage),
-            partialize: (s) => ({ items: s.items }),
+            partialize: (s) => ({ items: s.items.map(durableQueueItem) }),
             // Recover stale 'uploading' items after page reload (audit review fix):
             // items with a tusUrl can be resumed; others are marked as errored.
             onRehydrateStorage: () => (state) => {
@@ -117,10 +134,14 @@ export const useUploadQueue = create<UploadQueueState>()(
                         return {
                             ...item,
                             status: item.tusUrl ? "paused" : "error",
+                            progress: 0,
+                            processingStatus: "",
+                            stageIndex: undefined,
+                            stageTotal: undefined,
                             error: item.tusUrl ? undefined : "Upload interrupted by page reload",
                         };
                     }
-                    return item;
+                    return durableQueueItem(item);
                 });
             },
         },
@@ -136,6 +157,3 @@ if (typeof window !== "undefined") {
         }
     });
 }
-
-// ── Selectors (A11) ──────────────────────────────────────────────────────────
-

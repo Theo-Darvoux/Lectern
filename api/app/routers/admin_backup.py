@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 from pathlib import Path
 from typing import Annotated, Any
@@ -10,12 +11,13 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.common.exceptions import BadRequestError, NotFoundError
+from app.core.database.database import get_db
 from app.routers.admin import AdminUser
 from app.services.backup import (
     MAX_LOCAL_BACKUPS,
     backup_filename,
+    backup_restore_max_bytes,
     create_backup_zip,
     enforce_backup_rotation,
     list_local_backups,
@@ -25,6 +27,33 @@ from app.services.backup import (
 router = APIRouter(prefix="/api/admin/backup", tags=["Admin Backup"])
 logger = logging.getLogger(__name__)
 
+_BACKUP_ID_RE = re.compile(
+    r"^backup_\d{8}_\d{6}(?:_[0-9a-f]{32})?$",
+    re.IGNORECASE,
+)
+
+
+def _require_offline_restore_in_production() -> None:
+    if settings.environment == "production":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Online restore is disabled in production. Stop API/workers and use "
+                "`python -m app.cli restore-backup-offline --confirm-offline PATH`."
+            ),
+        )
+
+
+def _require_offline_backup_creation_in_production() -> None:
+    if settings.environment == "production":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Online backup creation is disabled in production. Stop API/workers and use "
+                "`python -m app.cli create-backup-offline --confirm-offline PATH`."
+            ),
+        )
+
 
 def _backup_dir() -> Path:
     d = Path(settings.backup_dir)
@@ -33,8 +62,10 @@ def _backup_dir() -> Path:
 
 
 def _resolve_backup(backup_id: str, backup_dir: Path) -> Path:
+    if _BACKUP_ID_RE.fullmatch(backup_id) is None:
+        raise NotFoundError(f"Backup not found: {backup_id!r}")
     path = backup_dir / f"{backup_id}.zip"
-    if ".." in backup_id or not path.exists():
+    if not path.is_file():
         raise NotFoundError(f"Backup not found: {backup_id!r}")
     return path
 
@@ -57,6 +88,7 @@ async def save_backup(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
     """Create a backup and save it on the server (max 3 kept; oldest rotated out)."""
+    _require_offline_backup_creation_in_production()
     backup_dir = _backup_dir()
     filename = backup_filename()
     dest = backup_dir / f"{filename}.zip"
@@ -95,6 +127,7 @@ async def export_backup(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> FileResponse:
     """Create a backup and stream it directly to the client (no server copy kept)."""
+    _require_offline_backup_creation_in_production()
     filename = backup_filename()
 
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
@@ -161,6 +194,7 @@ async def restore_local_backup(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
     """Full-replacement restore from a server-local backup."""
+    _require_offline_restore_in_production()
     path = _resolve_backup(backup_id, _backup_dir())
 
     try:
@@ -184,6 +218,7 @@ async def restore_uploaded_backup(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
     """Full-replacement restore from an uploaded backup ZIP."""
+    _require_offline_restore_in_production()
     if not (file.filename or "").lower().endswith(".zip"):
         raise BadRequestError("Uploaded file must be a .zip backup")
 
@@ -191,17 +226,25 @@ async def restore_uploaded_backup(
     tmp_path = Path(tmp.name)
     try:
         # Stream upload to temp file
+        bytes_written = 0
+        max_bytes = backup_restore_max_bytes()
         while chunk := await file.read(1024 * 1024):
+            bytes_written += len(chunk)
+            if bytes_written > max_bytes:
+                raise BadRequestError("Uploaded backup exceeds the configured storage capacity")
             tmp.write(chunk)
         tmp.close()
 
         manifest = await restore_from_zip_path(db, tmp_path)
     except ValueError as exc:
         raise BadRequestError(str(exc)) from exc
+    except BadRequestError:
+        raise
     except Exception as exc:
         logger.exception("Restore from upload failed")
         raise HTTPException(status_code=500, detail=f"Restore failed: {exc}") from exc
     finally:
+        tmp.close()
         tmp_path.unlink(missing_ok=True)
 
     return {"status": "ok", "manifest": manifest}

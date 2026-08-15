@@ -49,6 +49,9 @@ class User(UUIDMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_hash: Mapped[str | None] = mapped_column(String(255))
+    # Monotonic credential generation. Tokens issued against an older generation
+    # are invalid even if their Redis session/JTI state is otherwise still live.
+    auth_generation: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
     auto_approve: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

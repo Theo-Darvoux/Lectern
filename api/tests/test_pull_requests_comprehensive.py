@@ -77,7 +77,7 @@ async def _create_material(
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -190,7 +190,11 @@ class TestOptimisticLocking:
             final_key="cas/abc",
             status="clean",
             processing_status="complete",
+            cas_ref_count=1,
             filename="test.txt",
+            mime_type="text/plain",
+            size_bytes=100,
+            content_sha256="a" * 64,
         )
         db_session.add(u_row)
         await db_session.commit()
@@ -239,7 +243,11 @@ class TestOptimisticLocking:
             final_key="cas/xyz",
             status="clean",
             processing_status="complete",
+            cas_ref_count=1,
             filename="test.txt",
+            mime_type="text/plain",
+            size_bytes=100,
+            content_sha256="b" * 64,
         )
         db_session.add(u_row)
         await db_session.commit()
@@ -307,8 +315,13 @@ class TestOptimisticLocking:
             final_key="cas/ok",
             status="clean",
             processing_status="complete",
+            cas_ref_count=1,
             filename="ok.txt",
+            mime_type="text/plain",
+            size_bytes=100,
+            content_sha256="c" * 64,
         )
+
         db_session.add(u_row)
         await db_session.commit()
 
@@ -348,12 +361,64 @@ class TestOptimisticLocking:
 
 
 class TestFileClaiming:
+    async def test_malicious_upload_reports_filename_and_recovery_action(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        mock_pr_deps: tuple[AsyncMock, AsyncMock],
+    ) -> None:
+        user = await _create_user(db_session, UserRole.STUDENT)
+        file_key = f"cas/{uuid.uuid4().hex}"
+        # Retroactive quarantine may already have removed the public object. The
+        # persisted malware verdict must still win over a misleading expiry error.
+        mock_pr_deps[0].return_value = False
+        db_session.add(
+            Upload(
+                upload_id=str(uuid.uuid4()),
+                user_id=user.id,
+                final_key=file_key,
+                status="malicious",
+                cas_ref_count=0,
+                filename="Projet Deep Learning I.pdf",
+                mime_type="application/pdf",
+                size_bytes=100,
+                content_sha256="d" * 64,
+                error_detail="Known malware detected: test-signature",
+            )
+        )
+        await db_session.commit()
+
+        response = await client.post(
+            "/api/pull-requests",
+            json={
+                "title": "Add project",
+                "operations": [
+                    {
+                        "op": "create_material",
+                        "title": "Projet Deep Learning I",
+                        "type": "document",
+                        "file_key": file_key,
+                    }
+                ],
+            },
+            headers=_auth_headers(user),
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "Projet Deep Learning I.pdf" in detail
+        assert "malware scan" in detail
+        assert "Known malware detected: test-signature" in detail
+        assert "remove" in detail.lower()
+        mock_pr_deps[0].assert_not_awaited()
+
     async def test_double_claim_rejected(
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user1 = await _create_user(db_session, UserRole.STUDENT)
         user2 = await _create_user(db_session, UserRole.STUDENT)
         file_key = f"cas/{uuid.uuid4().hex}"
+        content_sha256 = "d" * 64
 
         # We need a 'clean' upload row for both
         for u in [user1, user2]:
@@ -362,7 +427,11 @@ class TestFileClaiming:
                 user_id=u.id,
                 final_key=file_key,
                 status="clean",
+                cas_ref_count=1,
                 filename="test.pdf",
+                mime_type="application/pdf",
+                size_bytes=100,
+                content_sha256=content_sha256,
             )
             db_session.add(u_row)
         await db_session.commit()

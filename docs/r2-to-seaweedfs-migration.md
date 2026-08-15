@@ -9,63 +9,56 @@ uses the lossless backup system (v2.0) built into the admin panel.
 ## Prerequisites
 
 - [ ] SeaweedFS prod server provisioned (two disks/volumes minimum)
-- [ ] SeaweedFS prod cluster deployed (`COMPOSE_PROFILES=seaweedfs-prod`) and `seaweedfs-s3` healthy
+- [ ] Canonical production release prepared with the certified `seaweedfs-prod,selfhost-worker` profiles (see [Production release manifest](production-release-manifest.md))
 - [ ] `s3.json` rendered from template with prod credentials:
   ```sh
   envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
   ```
 - [ ] `selfhost-worker` image built and pushed to registry
-- [ ] nginx `worker-cache.conf` enabled in prod nginx config
+- [ ] nginx `worker-cache.conf` enabled as the delivery proxy policy (authenticated routes remain uncached)
 - [ ] DNS/proxy for `files.example.com` updated to point at selfhost-worker
 
 ---
 
 ## Migration Steps
 
-### Step 1 — Freeze Uploads (Optional but Recommended)
+### Step 1 — Freeze Mutations (Required)
 
-Disable new uploads at the API level to prevent objects being written to R2
-during the transfer window. Either:
-- Set an env var `MAINTENANCE=true` and deploy a maintenance response, or
-- Simply proceed during low-traffic hours (any uploads during transfer are lost)
+Put the external reverse proxy into maintenance mode for every mutating API
+method before taking the backup. The application has no `MAINTENANCE` setting;
+setting an invented environment variable does nothing. Verify with an ordinary
+user that an upload initiation and PR creation are rejected, then wait for the
+upload queues and open write requests to drain. Uploads accepted after the
+backup would be destroyed by the full restore.
 
 ### Step 2 — Take a Lossless Backup from R2
 
 With `STORAGE_BACKEND=r2` still active in production:
 
 ```sh
-# Via the admin panel:
-POST /api/admin/backup/save
-
-# Or via curl (replace TOKEN):
-curl -X POST https://api.example.com/api/admin/backup/save \
-  -H "Authorization: Bearer $TOKEN"
+# Run inside the stopped API image/container with the production runtime env.
+python -m app.cli create-backup-offline \
+  --confirm-offline /var/lib/lectern/backups/r2-migration.zip
 ```
 
-Download the resulting ZIP:
+Copy the resulting ZIP to durable operator-controlled storage. Production HTTP
+backup creation is intentionally disabled: even with a reverse-proxy mutation
+freeze, an in-flight worker could otherwise produce a database/object-store
+snapshot from different points in time.
 
-```sh
-curl -O https://api.example.com/api/admin/backup/{id}/download \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-**Verify the ZIP**: open it and confirm `s3_metadata.json` is present and
-`manifest.json` shows `"version": "2.0"`.
+**Verify the ZIP**: open it and confirm `s3_metadata.json` is present,
+`manifest.json` shows `"version": "2.0"`, and the manifest contains an
+`s3_objects` size/SHA-256 record for every stored object. Restore independently
+checks these records before changing the database or object store.
 
 ### Step 3 — Deploy SeaweedFS Stack
 
-```sh
-# Render credentials
-envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
-
-# Set the profile and bring up the storage stack
-# (COMPOSE_PROFILES can be set in .env or passed on the command line)
-COMPOSE_PROFILES=seaweedfs-prod docker compose up -d \
-  seaweedfs-master seaweedfs-volume1 seaweedfs-volume2 seaweedfs-filer seaweedfs-s3
-
-# Wait for S3 gateway to be healthy
-docker compose ps seaweedfs-s3
-```
+Prepare and deploy the exact canonical release as described in
+[Option B](setup.md#option-b--production-deployment), selecting the
+`seaweedfs-prod,selfhost-worker` profiles. Use the generated
+`production-<commit>.deployment-images.env` for both startup and later `ps`
+commands. Do not export a hand-written `SEAWEEDFS_IMAGE` or start the production
+profile from `compose.yaml` alone.
 
 The `seaweedfs-dev` profile's `seaweedfs-setup` one-shot container is not available
 in `seaweedfs-prod`. Create the bucket manually if needed:
@@ -93,21 +86,23 @@ Redeploy the API and worker containers (they now point at SeaweedFS).
 ### Step 5 — Restore the Backup to SeaweedFS
 
 ```sh
-# Via the admin panel → "Upload backup" → select the ZIP from Step 2
-POST /api/admin/backup/restore/upload
-
-# Or via curl:
-curl -X POST https://api.example.com/api/admin/backup/restore/upload \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "file=@backup_YYYYMMDD_HHMMSS.zip"
+# Keep API/workers stopped and run inside the new API image/container.
+python -m app.cli restore-backup-offline \
+  --confirm-offline /var/lib/lectern/backups/r2-migration.zip
 ```
 
-This:
-1. Wipes existing DB rows (full replacement)
-2. Re-inserts all 24 tables in FK order
-3. Wipes all S3 prefixes on SeaweedFS
-4. Re-uploads every object with its original `Content-Type`, `Content-Encoding`,
-   `Content-Disposition` headers
+This destructive full replacement:
+1. Fully validates and reads the archive within configured storage bounds
+2. Replaces all 24 database tables in one database transaction
+3. Creates server-side rollback copies of the current managed S3 objects
+4. Re-uploads every backup object with its original `Content-Type`,
+   `Content-Encoding`, and `Content-Disposition` headers
+5. Deletes stale managed objects and removes the rollback copies only after the
+   object replacement succeeds
+
+An object-store failure during replacement restores the server-side snapshot.
+Keep the mutation freeze active until the command has completed and the smoke
+tests pass; database and S3 cannot participate in one distributed transaction.
 
 ### Step 6 — Smoke Test
 
@@ -152,7 +147,7 @@ Redeploy — R2 was never wiped.
 ## Checklist Summary
 
 - [ ] Backup ZIP downloaded and verified (v2.0, s3_metadata.json present)
-- [ ] SeaweedFS running with replication=001 (2 volume nodes)
+- [ ] SeaweedFS running with replication=010 (2 volume nodes in separate racks)
 - [ ] `s3.json` uses prod credentials (not minioadmin)
 - [ ] API `.env` updated to `STORAGE_BACKEND=seaweedfs`
 - [ ] Restore completed without errors

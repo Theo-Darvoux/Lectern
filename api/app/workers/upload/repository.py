@@ -1,19 +1,28 @@
 import asyncio
 import contextlib
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, update
 
-from app.core import redis as redis_core
+import app.core.database.redis as redis_core
+from app.core.database.post_commit import dispatch_pending_outbox, outbox_kwargs
 from app.models.dead_letter import DeadLetterJob
+from app.models.outbox import OutboxJob
 from app.models.upload import Upload
 from app.services.auth import get_full_auth_config
 from app.workers.upload.context import WorkerContext
 
 logger = logging.getLogger(__name__)
+
+_POST_SCAN_OUTBOX_NAMESPACE = uuid.UUID("a8adf5d8-6559-5cc8-a13b-6aa8f97af50c")
+
+
+def _post_scan_outbox_id(upload_id: str) -> uuid.UUID:
+    return uuid.uuid5(_POST_SCAN_OUTBOX_NAMESPACE, upload_id)
 
 
 async def _retry_db[T](
@@ -63,13 +72,13 @@ class UploadWorkerRepository:
         processing_status: str | None = None,
         mime_type: str | None = None,
         size_bytes: int | None = None,
-    ) -> None:
-        """Best-effort DB status update with retry for transient failures."""
+    ) -> bool:
+        """Persist a lifecycle transition without overwriting cancellation."""
         session_factory = self._session_factory()
         if session_factory is None:
-            return
+            return True
 
-        async def _do_update() -> None:
+        async def _do_update() -> bool:
             async with session_factory() as session:
                 values: dict[str, Any] = {
                     "status": status,
@@ -98,33 +107,115 @@ class UploadWorkerRepository:
                 if size_bytes is not None:
                     values["size_bytes"] = size_bytes
 
-                await session.execute(
-                    update(Upload).where(Upload.upload_id == upload_id).values(**values)
-                )
+                statement = update(Upload).where(Upload.upload_id == upload_id)
+                if status != "cancelled":
+                    statement = statement.where(Upload.status != "cancelled")
+                result = await session.execute(statement.values(**values))
                 await session.commit()
+                return bool(getattr(result, "rowcount", 0))
 
-        try:
-            await _retry_db(_do_update, context=f"update_upload_status for {upload_id}")
-        except Exception:
-            pass  # Already logged in _retry_db
+        return await _retry_db(_do_update, context=f"update_upload_status for {upload_id}")
 
-    async def update_processing_status(self, upload_id: str, processing_status: str) -> None:
-        """Best-effort update of processing_status only (does not touch status)."""
+    async def publish_clean_upload(
+        self,
+        upload_id: str,
+        *,
+        sha256: str,
+        content_sha256: str,
+        final_key: str,
+        cas_key: str,
+        cas_ref_count: int | None,
+        mime_type: str | None = None,
+        size_bytes: int | None = None,
+        filename: str | None = None,
+        post_scan_kwargs: dict[str, object] | None = None,
+    ) -> bool:
+        """Publish CLEAN unless an authoritative cancellation already won."""
+        session_factory = self._session_factory()
+        if session_factory is None:
+            return True
+
+        values: dict[str, object] = {
+            "status": "clean",
+            "updated_at": datetime.now(UTC),
+            "sha256": sha256,
+            "content_sha256": content_sha256,
+            "final_key": final_key,
+            "cas_key": cas_key,
+            "cas_ref_count": cas_ref_count,
+            "processing_status": "pending",
+        }
+        if mime_type is not None:
+            values["mime_type"] = mime_type
+        if size_bytes is not None:
+            values["size_bytes"] = size_bytes
+        if filename is not None:
+            values["filename"] = filename
+
+        async def _do_update() -> bool:
+            async with session_factory() as session:
+                result = await session.execute(
+                    update(Upload)
+                    .where(Upload.upload_id == upload_id, Upload.status != "cancelled")
+                    .values(**values)
+                )
+                published = bool(result.rowcount)
+                if published and post_scan_kwargs is not None:
+                    outbox_id = _post_scan_outbox_id(upload_id)
+                    if await session.get(OutboxJob, outbox_id) is None:
+                        session.add(
+                            OutboxJob(
+                                id=outbox_id,
+                                job_name="process_upload_post_scan",
+                                args=[outbox_kwargs(**post_scan_kwargs)],
+                            )
+                        )
+                await session.commit()
+                return published
+
+        return await _retry_db(_do_update, context=f"publish_clean_upload for {upload_id}")
+
+    async def dispatch_durable_jobs(self) -> None:
+        """Best-effort dispatch of DB-persisted intent until ARQ accepts enqueue."""
         session_factory = self._session_factory()
         if session_factory is None:
             return
 
-        async def _do_update() -> None:
+        async with session_factory() as session:
+            await dispatch_pending_outbox(session)
+
+    async def update_processing_status(self, upload_id: str, processing_status: str) -> bool:
+        """Best-effort processing transition that never revives a cancelled upload."""
+        session_factory = self._session_factory()
+        if session_factory is None:
+            return True
+
+        async def _do_update() -> bool:
             async with session_factory() as session:
-                await session.execute(
+                result = await session.execute(
                     update(Upload)
-                    .where(Upload.upload_id == upload_id)
+                    .where(Upload.upload_id == upload_id, Upload.status != "cancelled")
                     .values(processing_status=processing_status, updated_at=datetime.now(UTC))
                 )
                 await session.commit()
+                return bool(getattr(result, "rowcount", 0))
 
-        with contextlib.suppress(Exception):
-            await _retry_db(_do_update, context=f"update_processing_status for {upload_id}")
+        return await _retry_db(_do_update, context=f"update_processing_status for {upload_id}")
+
+    async def is_upload_cancelled(self, upload_id: str) -> bool:
+        """Read the authoritative cancellation state from the upload row."""
+        session_factory = self._session_factory()
+        if session_factory is None:
+            return False
+
+        async def _do_get() -> bool:
+            async with session_factory() as session:
+                status = await session.scalar(
+                    select(Upload.status).where(Upload.upload_id == upload_id)
+                )
+                return status == "cancelled"
+
+        return await _retry_db(_do_get, context=f"is_upload_cancelled for {upload_id}")
 
     async def checkpoint_pipeline_stage(self, upload_id: str, stage: int) -> None:
         """Persist a completed pipeline stage for resume-on-retry behavior."""
@@ -222,7 +313,14 @@ class UploadWorkerRepository:
         async def _check_webhook() -> str | None:
             async with session_factory() as session:
                 row = await session.scalar(select(Upload).where(Upload.upload_id == upload_id))
-                return row.webhook_url if row else None
+                if (
+                    row is None
+                    or row.status != "clean"
+                    or not row.final_key
+                    or (row.final_key.startswith("cas/") and int(row.cas_ref_count or 0) <= 0)
+                ):
+                    return None
+                return row.webhook_url
 
         try:
             webhook_url = await _retry_db(

@@ -10,8 +10,10 @@ from starlette.responses import JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.config import settings
-from app.core.exceptions import AppError
-from app.core.limiter import limiter
+from app.core.common.exceptions import AppError
+from app.core.events.limiter import limiter
+from app.core.http.body_limit import RequestBodyLimitMiddleware
+from app.core.observability.telemetry import instrument_fastapi, setup_telemetry
 from app.routers.admin import router as admin_router
 from app.routers.admin_backup import router as admin_backup_router
 from app.routers.admin_storage import router as admin_storage_router
@@ -24,6 +26,7 @@ from app.routers.browse import router as browse_router
 from app.routers.comments import router as comments_router
 from app.routers.directories import router as directories_router
 from app.routers.eurooffice import router as eurooffice_router
+from app.routers.events import router as events_router
 from app.routers.flags import router as flags_router
 from app.routers.home import router as home_router
 from app.routers.materials import router as materials_router
@@ -57,14 +60,14 @@ _S3_CSP_DOMAIN = _s3_csp_domain()
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("API starting up")
 
-    from app.core.meilisearch import setup_meilisearch
-    from app.core.redis import close_arq_pool, init_arq_pool
-    from app.core.scanner import MalwareScanner
-    from app.core.storage import close_s3_client, init_s3_client
-    from app.core.telemetry import setup_telemetry
+    # Gunicorn preloads this module before forking. Exporter threads and Redis
+    # monkeypatching therefore belong in each worker's lifespan, not import time.
+    setup_telemetry()
 
-    # Initialize OpenTelemetry
-    setup_telemetry(app)
+    from app.core.database.redis import close_arq_pool, init_arq_pool
+    from app.core.events.meilisearch import setup_meilisearch
+    from app.core.security.scanner import MalwareScanner
+    from app.core.storage.facade import close_s3_client, init_s3_client
 
     # Soft-fail: degraded but non-critical services
     try:
@@ -78,7 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.error("ARQ pool setup failed (background jobs degraded): %s", e)
 
     # SSE fan-out: deliver real-time events across API replicas and from workers.
-    from app.core.sse import start_sse_pubsub
+    from app.core.events.sse import start_sse_pubsub
 
     try:
         await start_sse_pubsub(subscribe=True)
@@ -99,21 +102,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
     logger.info("API shutting down")
-    from app.core.sse import stop_sse_pubsub
+    from app.core.events.sse import stop_sse_pubsub
 
     await stop_sse_pubsub()
     await scanner.close()
     await close_arq_pool()
     await close_s3_client()
-    from app.core.redis import redis_client
+    from app.core.database.redis import close_redis_client
 
-    await redis_client.close()
+    await close_redis_client()
 
-    from app.core.meilisearch import meili_admin_client, meili_search_client
+    from app.core.events.meilisearch import meili_admin_client, meili_search_client
 
     await meili_admin_client.aclose()
-    if meili_search_client is not meili_admin_client:
+    if meili_search_client is not None and meili_search_client is not meili_admin_client:
         await meili_search_client.aclose()
+
+    from app.core.observability.telemetry import shutdown_telemetry
+
+    shutdown_telemetry()
 
 
 app = FastAPI(
@@ -124,6 +131,10 @@ app = FastAPI(
     openapi_url="/api/openapi.json" if settings.is_dev else None,
     lifespan=lifespan,
 )
+
+# Instrument before Starlette builds its middleware stack. Calling the
+# instrumentor from inside lifespan startup is too late for the first stack.
+instrument_fastapi(app)
 
 # ── Security Headers (S23) ───────────────────────────────────────────────────
 
@@ -186,11 +197,10 @@ async def rate_limit_handler(request: Request, exc: Exception) -> Response:
 async def app_error_handler(request: Request, exc: Exception) -> Response:
     if not isinstance(exc, AppError):
         raise exc
-    code = getattr(exc, "code", None)
     return JSONResponse(
         status_code=exc.status_code,
         content={
-            "error_code": code,
+            "error_code": exc.code,
             "error_message": exc.detail,
             "detail": exc.detail,  # backward compat
         },
@@ -208,8 +218,49 @@ app.add_middleware(
     allow_headers=settings.cors_headers_list,
 )
 
-# Trust X-Forwarded-* headers (S24)
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# Honor forwarding headers only when the immediate peer is an explicitly
+# configured reverse proxy. This keeps IP-based limits meaningful on port 8000.
+app.add_middleware(
+    ProxyHeadersMiddleware,
+    trusted_hosts=settings.trusted_proxy_hosts_list,
+)
+
+import re
+
+from app.core.common.batch_upload_limits import BATCH_REQUEST_BODY_LIMIT_BYTES
+
+# These endpoints otherwise parse attacker-controlled JSON/multipart bodies in
+# memory before their route-level validators run. Keep the transport ceiling
+# close to the domain limits and enforce it even when nginx is bypassed.
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    # Ordinary JSON mutations should never inherit the proxy's large file-upload
+    # allowance. Explicit large-body routes override this small default.
+    default_limit=1 * 1024 * 1024,
+    path_limits={
+        "/api/qcm/stage": 20 * 1024 * 1024,
+        "/api/qcm/parse-moodle": 11 * 1024 * 1024,
+        "/api/upload/batch-zip": BATCH_REQUEST_BODY_LIMIT_BYTES,
+        "/api/admin/backup/restore/upload": 500 * 1024 * 1024,
+    },
+    pattern_limits=[
+        (
+            "POST",
+            re.compile(r"/api/materials/[^/]+/text-content"),
+            10 * 1024 * 1024,
+        ),
+        (
+            "POST",
+            re.compile(r"/api/upload/?"),
+            (settings.max_file_size_mb + 2) * 1024 * 1024,
+        ),
+        (
+            "PATCH",
+            re.compile(r"/api/upload/tus/[^/]+"),
+            settings.tus_chunk_max_bytes,
+        ),
+    ],
+)
 
 
 @app.middleware("http")
@@ -231,7 +282,7 @@ async def log_requests(
 
 @app.get("/api/health", response_model=HealthResponse, tags=["health"])
 async def health() -> HealthResponse:
-    from app.core.redis import arq_pool, redis_client
+    from app.core.database.redis import arq_pool, redis_client
 
     redis_ok = False
     try:
@@ -258,14 +309,12 @@ async def metrics(request: Request) -> Response:
     """
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-    from app.core.metrics import REGISTRY
+    from app.core.observability.metrics import REGISTRY
 
     if settings.metrics_token:
         import hmac
 
-        token = request.headers.get("Authorization", "").removeprefix(
-            "Bearer "
-        ).strip() or request.query_params.get("token", "")
+        token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         if not hmac.compare_digest(token, settings.metrics_token):
             return Response(status_code=403, content="Forbidden")
 
@@ -291,6 +340,7 @@ app.include_router(pr_comments_router)
 app.include_router(pull_requests_router)
 app.include_router(search_router)
 app.include_router(eurooffice_router)
+app.include_router(events_router)
 app.include_router(tus_router)
 app.include_router(upload_api_router)
 app.include_router(home_router)
@@ -304,7 +354,7 @@ if settings.is_dev:
         from starlette.requests import Request
         from starlette.responses import RedirectResponse
 
-        from app.core.database import engine
+        from app.core.database.database import engine
 
         class SimpleAdminAuth(AuthenticationBackend):
             async def login(self, request: Request) -> bool:

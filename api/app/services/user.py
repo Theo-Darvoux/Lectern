@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import typing
 import uuid
@@ -7,9 +6,15 @@ from datetime import UTC, datetime
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.avatar_processor import process_avatar
-from app.core.exceptions import BadRequestError
-from app.core.storage import delete_object, download_file, upload_file
+from app.core.common.exceptions import BadRequestError
+from app.core.database.post_commit import (
+    PostCommitKey,
+    add_post_commit_job,
+    register_transaction_callbacks,
+)
+from app.core.security.isolated_parser import process_avatar_isolated
+from app.core.security.processing_paths import processing_temp_dir
+from app.core.storage.facade import delete_object, download_file_raw, upload_file
 from app.models.annotation import Annotation
 from app.models.comment import Comment
 from app.models.flag import Flag
@@ -19,6 +24,7 @@ from app.models.pull_request import PRComment, PullRequest
 from app.models.upload import Upload
 from app.models.user import User
 from app.models.view_history import ViewHistory
+from app.services.avatar import is_owned_avatar_storage_key
 from app.services.material import get_liked_favourited_sets, material_orm_to_dict
 
 logger = logging.getLogger(__name__)
@@ -194,7 +200,11 @@ async def get_user_contributions(
         ]
         return materials_out, total
     elif contribution_type == "annotations":
-        ann_base = select(Annotation).where(Annotation.author_id == uid)
+        ann_base = (
+            select(Annotation)
+            .join(Material, Annotation.material_id == Material.id)
+            .where(Annotation.author_id == uid, Material.deleted_at.is_(None))
+        )
         count_result = await db.execute(select(func.count()).select_from(ann_base.subquery()))
         total = count_result.scalar_one()
         result = await db.execute(
@@ -218,6 +228,7 @@ async def update_user_profile(
     bio: str | None = UNSET,
     academic_year: str | None = UNSET,
     avatar_url: str | None = UNSET,
+    avatar_upload_id: uuid.UUID | str | None = UNSET,
     auto_approve: bool | None = UNSET,
 ) -> User:
     if display_name is not UNSET and display_name is not None:
@@ -229,74 +240,103 @@ async def update_user_profile(
     if auto_approve is not UNSET and auto_approve is not None:
         user.auto_approve = auto_approve
 
-    if avatar_url is not UNSET and avatar_url != user.avatar_url:
-        if avatar_url is None:
-            # Clear avatar
-            if user.avatar_url and user.avatar_url.startswith("avatars/"):
-                await delete_object(user.avatar_url)
-            user.avatar_url = None
-        else:
-            final_url = avatar_url
+    if avatar_url is not UNSET and avatar_upload_id is not UNSET:
+        raise BadRequestError("Choose either avatar clear or avatar upload, not both")
 
-            # Handle new avatar from quarantine
-            if avatar_url.startswith("quarantine/"):
-                # 1. Security check: Verify ownership and existence
-                stmt = select(Upload).where(
-                    Upload.quarantine_key == avatar_url, Upload.user_id == user.id
+    if avatar_url is not UNSET:
+        # avatar_url is a server-owned output field. The only accepted client
+        # mutation is explicit null to clear an existing avatar.
+        if avatar_url is not None:
+            raise BadRequestError("avatar_url is read-only; use avatar_upload_id")
+        if is_owned_avatar_storage_key(user.avatar_url, user.id):
+            add_post_commit_job(db, ("delete_storage_objects", [user.avatar_url]))
+        user.avatar_url = None
+
+    elif avatar_upload_id is not UNSET and avatar_upload_id is not None:
+        upload_rec = await db.scalar(
+            select(Upload)
+            .where(
+                Upload.upload_id == str(avatar_upload_id),
+                Upload.user_id == user.id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if upload_rec is None:
+            raise BadRequestError("Invalid avatar upload or unauthorized")
+
+        quarantine_key = upload_rec.quarantine_key
+        expected_quarantine_prefix = f"quarantine/{user.id}/"
+        if (
+            upload_rec.status != "clean"
+            or not upload_rec.mime_type
+            or not upload_rec.mime_type.startswith("image/")
+            or not upload_rec.final_key
+            or not upload_rec.final_key.startswith("cas/")
+            or int(upload_rec.cas_ref_count or 0) <= 0
+            or not quarantine_key
+            or not quarantine_key.startswith(expected_quarantine_prefix)
+        ):
+            raise BadRequestError("Avatar upload has not passed image security processing")
+
+        # The CAS key is read only from the caller-owned Upload row. It is never
+        # accepted from request data and never persisted as the avatar reference.
+        import uuid as uuid_pkg
+        from pathlib import Path
+
+        with processing_temp_dir(prefix="avatar-") as tmp_dir:
+            local_input = Path(tmp_dir) / "input_avatar"
+            await download_file_raw(
+                upload_rec.final_key,
+                local_input,
+                max_bytes=20 * 1024 * 1024,
+            )
+
+            try:
+                processed_bytes = await process_avatar_isolated(local_input)
+                avatar_uuid = uuid_pkg.uuid4()
+                new_key = f"avatars/{user.id}/{avatar_uuid}.webp"
+
+                async def _remove_uncommitted_avatar() -> None:
+                    await delete_object(new_key)
+
+                async def _avatar_commit_complete() -> None:
+                    return None
+
+                managed_transaction = register_transaction_callbacks(
+                    db,
+                    on_rollback=_remove_uncommitted_avatar,
+                    on_commit=_avatar_commit_complete,
                 )
-                res = await db.execute(stmt)
-                upload_rec = res.scalar_one_or_none()
 
-                if not upload_rec:
-                    raise BadRequestError("Invalid avatar upload key or unauthorized")
-
-                # 2. Process and Compress (Synchronous-ish)
-                import tempfile
-                import uuid as uuid_pkg
-                from pathlib import Path
-
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    local_input = Path(tmp_dir) / "input_avatar"
-                    await download_file(avatar_url, local_input)
-
-                    try:
-                        processed_path = await asyncio.to_thread(process_avatar, local_input)
+                try:
+                    await upload_file(
+                        processed_bytes,
+                        new_key,
+                        content_type="image/webp",
+                        content_disposition="inline",
+                    )
+                except Exception:
+                    if not managed_transaction:
                         try:
-                            # 3. Upload to permanent avatars/ prefix
-                            avatar_uuid = uuid_pkg.uuid4()
-                            new_key = f"avatars/{user.id}/{avatar_uuid}.webp"
+                            await delete_object(new_key)
+                        except Exception:
+                            logger.exception(
+                                "Failed to remove avatar after an uncertain upload failure"
+                            )
+                    raise
+            except Exception as exc:
+                logger.error("Avatar processing failed: %s", exc)
+                raise BadRequestError(f"Failed to process avatar: {exc}")
 
-                            with open(processed_path, "rb") as f:
-                                await upload_file(
-                                    f.read(),
-                                    new_key,
-                                    content_type="image/webp",
-                                    content_disposition="inline",  # Avatars should be viewable inline
-                                )
-                            final_url = new_key
-                        finally:
-                            if processed_path.exists():
-                                processed_path.unlink()
-                    except Exception as exc:
-                        logger.error("Avatar processing failed: %s", exc)
-                        raise BadRequestError(f"Failed to process avatar: {exc}")
+        add_post_commit_job(db, ("delete_storage_objects", [quarantine_key]))
 
-                # 4. Cleanup quarantine
-                await delete_object(avatar_url)
+        if is_owned_avatar_storage_key(user.avatar_url, user.id) and user.avatar_url != new_key:
+            add_post_commit_job(db, ("delete_storage_objects", [user.avatar_url]))
 
-            # Delete old avatar from permanent storage if it's being replaced
-            if (
-                user.avatar_url
-                and user.avatar_url.startswith("avatars/")
-                and user.avatar_url != final_url
-            ):
-                await delete_object(user.avatar_url)
-
-            if final_url.startswith("quarantine/"):
-                # Safety: never let a quarantine URL into the User model
-                raise BadRequestError("Cannot set avatar to unscanned quarantine key")
-
-            user.avatar_url = final_url
+        if not is_owned_avatar_storage_key(new_key, user.id):
+            raise RuntimeError("Generated avatar key escaped the user avatar namespace")
+        user.avatar_url = new_key
 
     await db.flush()
     return user
@@ -401,14 +441,47 @@ async def export_user_data(db: AsyncSession, user: User) -> dict[str, typing.Any
 async def hard_delete_user(db: AsyncSession, user: User) -> None:
     from sqlalchemy import delete
 
-    # 1. Delete avatar from storage
-    if user.avatar_url:
-        await delete_object(user.avatar_url)
+    # Always enter the authority boundary before deleting. The caller may hold a
+    # stale ORM object whose role changed after it was loaded; the service re-reads
+    # authoritative role/deletion state under the shared lock and a row lock.
+    from app.services.auth import ensure_admin_removal_safe
 
-    # 2. Cleanup orphaned Upload records (since they might not have a formal FK)
+    await ensure_admin_removal_safe(db, user.id)
+
+    # Durably release storage/CAS/quota resources only after the user deletion
+    # commits. OAuth avatar URLs are external and never object-store keys.
+    uploads = list((await db.scalars(select(Upload).where(Upload.user_id == user.id))).all())
+    cas_references: list[dict[str, str]] = []
+    storage_keys: set[str] = set()
+    if user.avatar_url and user.avatar_url.startswith("avatars/"):
+        storage_keys.add(user.avatar_url)
+    quota_members: list[str] = []
+    for upload in uploads:
+        reference_sha = upload.content_sha256 or upload.sha256
+        if upload.cas_ref_count > 0 and reference_sha:
+            cas_references.append(
+                {
+                    "sha256": reference_sha,
+                    "operation_id": f"hard-delete:upload:{upload.id}:release",
+                }
+            )
+        for key in (upload.quarantine_key, upload.final_key):
+            if key and not key.startswith("cas/"):
+                storage_keys.add(key)
+        quota_members.append(f"staging:{upload.user_id}:{upload.upload_id}")
+
+    jobs = db.info.setdefault(PostCommitKey.JOBS, [])
+    if cas_references:
+        jobs.append(("release_cas_references", cas_references))
+    if storage_keys:
+        jobs.append(("delete_storage_objects", sorted(storage_keys)))
+    if quota_members:
+        jobs.append(("release_upload_quota", str(user.id), quota_members))
+
+    # Cleanup orphaned Upload records (since they might not have a formal FK)
     await db.execute(delete(Upload).where(Upload.user_id == user.id))
 
-    # 3. Delete the user — related rows (annotations, comments, PRs) are handled
+    # Delete the user — related rows (annotations, comments, PRs) are handled
     #    by DB-level ON DELETE CASCADE / SET NULL constraints, not ORM cascade.
     await db.execute(delete(User).where(User.id == user.id))
     await db.flush()

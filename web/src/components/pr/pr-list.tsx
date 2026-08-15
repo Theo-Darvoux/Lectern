@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiFetchWithResponse } from "@/lib/api-client";
-import { getAccessToken } from "@/lib/auth-tokens";
-import { createSSEConnection } from "@/lib/sse-client";
+import { subscribeToSSE } from "@/lib/sse-client";
 import { PRCard } from "./pr-card";
 import { type PullRequestOut } from "@/components/home/types";
 import { usePRStore } from "@/lib/stores";
@@ -110,14 +109,13 @@ export function PRList() {
 
   // Subscribe to per-user SSE for live PR list updates.
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) return;
-    const connection = createSSEConnection({
-      url: `/pull-requests/sse?token=${encodeURIComponent(token)}`,
+    const connection = subscribeToSSE({
+      channel: "pull_requests",
       listeners: {
         pr_opened: () => setRefreshKey((k) => k + 1),
         pr_closed: () => setRefreshKey((k) => k + 1),
       },
+      onResync: () => setRefreshKey((k) => k + 1),
       startupDelay: 50,
     });
     return () => connection.close();

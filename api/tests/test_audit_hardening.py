@@ -6,9 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
+from app.models.cas_staging_claim import CasStagingClaim
+from app.models.outbox import OutboxJob
 from app.models.upload import Upload
 from app.models.user import User, UserRole
 from app.routers.upload.helpers import (
@@ -41,10 +44,10 @@ def _auth_headers(user: User) -> dict[str, str]:
 def mock_storage_audit():
     with (
         patch(
-            "app.routers.upload.presigned.complete_multipart_upload", new_callable=AsyncMock
+            "app.routers.upload.presigned.complete_multipart_verified", new_callable=AsyncMock
         ) as m_complete,
-        patch("app.core.storage.read_object_bytes", new_callable=AsyncMock) as m_read,
-        patch("app.core.storage.delete_object", new_callable=AsyncMock) as m_delete,
+        patch("app.core.storage.facade.read_object_bytes", new_callable=AsyncMock) as m_read,
+        patch("app.core.storage.facade.delete_object", new_callable=AsyncMock) as m_delete,
         patch("app.routers.upload.status.delete_object", new_callable=AsyncMock) as m_delete_status,
         patch("app.routers.upload.presigned.get_object_info", new_callable=AsyncMock) as m_info,
     ):
@@ -132,9 +135,12 @@ async def test_presigned_multipart_abort_cleans_db_and_quota(
     db_session.add(up)
     await db_session.commit()
 
-    with patch(
-        "app.routers.upload.presigned.abort_multipart_upload", new_callable=AsyncMock
-    ) as m_abort:
+    with (
+        patch(
+            "app.routers.upload.presigned.abort_multipart_upload", new_callable=AsyncMock
+        ) as m_abort,
+        patch("app.routers.upload.presigned.delete_object", new_callable=AsyncMock),
+    ):
         headers = _auth_headers(user)
         response = await client.delete(
             f"/api/upload/presigned-multipart/{upload_id}", headers=headers
@@ -156,10 +162,21 @@ async def test_cancel_upload_finds_uploads_prefix(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup, mock_storage_audit
 ):
     user = await _create_user(db_session)
-    await db_session.commit()
 
     upload_id = str(uuid.uuid4())
     final_key = f"uploads/{user.id}/{upload_id}/test.txt"
+
+    up = Upload(
+        upload_id=upload_id,
+        user_id=user.id,
+        filename="test.txt",
+        mime_type="text/plain",
+        size_bytes=100,
+        quarantine_key=final_key,
+        status="pending",
+    )
+    db_session.add(up)
+    await db_session.commit()
 
     await fake_redis_setup.zadd(f"{_QUOTA_KEY_PREFIX}{user.id}", {final_key: time.time()})
 
@@ -235,6 +252,7 @@ async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis
     db_session.add_all([up1, up2])
     await db_session.commit()
 
+    import app.core.database.database as database
     from app.workers.cleanup_uploads import cleanup_uploads
 
     mock_s3 = AsyncMock()
@@ -257,10 +275,15 @@ async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis
             yield
 
     with (
+        patch(
+            "app.workers.cleanup_uploads.async_session_factory",
+            database.async_session_factory,
+        ),
         patch("app.workers.cleanup_uploads.get_s3_client", return_value=mock_cm),
         patch("app.workers.cleanup_uploads.list_multipart_uploads", mock_list_multipart),
-        patch("app.core.storage.object_exists", AsyncMock(return_value=True)),
+        patch("app.core.storage.facade.object_exists", AsyncMock(return_value=True)),
         patch("app.workers.storage_ops.delete_storage_objects", AsyncMock()),
+        patch("app.workers.cleanup_uploads.reconcile_cas_storage_usage", new_callable=AsyncMock),
     ):
         await cleanup_uploads({"redis": fake_redis_setup})
 
@@ -268,6 +291,109 @@ async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis
     await db_session.refresh(up2)
     assert up1.status == "failed"
     assert up2.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_expired_cas_staging_claim_releases_once(
+    db_session: AsyncSession,
+    fake_redis_setup,
+    mock_redis: AsyncMock,
+) -> None:
+    """Only an expired, unconsumed claim owns a CAS reference to release."""
+    import app.core.database.database as database
+    from app.workers.cleanup_uploads import cleanup_uploads
+
+    user = await _create_user(db_session)
+    now = datetime.now(UTC)
+    expired_id = uuid.uuid4()
+    consumed_id = uuid.uuid4()
+    expired = CasStagingClaim(
+        id=expired_id,
+        user_id=user.id,
+        file_key="cas/expired",
+        sha256="a" * 64,
+        expires_at=now - timedelta(minutes=1),
+    )
+    consumed = CasStagingClaim(
+        id=consumed_id,
+        user_id=user.id,
+        file_key="cas/consumed",
+        sha256="b" * 64,
+        expires_at=now + timedelta(days=1),
+        consumed_at=now - timedelta(days=8),
+    )
+    db_session.add_all([expired, consumed])
+    await db_session.commit()
+    # cleanup_uploads uses a separate session. Keep this fixture session from
+    # participating in SQLAlchemy's in-memory synchronization of the bulk DELETE
+    # (SQLite drops timezone information when materializing DateTime values).
+    db_session.expunge_all()
+    mock_redis.scan_iter = fake_redis_setup.scan_iter
+
+    mock_s3 = MagicMock()
+    mock_s3.get_paginator = MagicMock()
+    paginator = MagicMock()
+
+    async def empty_pages():
+        if False:
+            yield {}
+
+    paginator.paginate.side_effect = lambda **_kwargs: empty_pages()
+    mock_s3.get_paginator.return_value = paginator
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_s3)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    async def empty_multipart_uploads():
+        if False:
+            yield {}
+
+    from sqlalchemy import delete as sqlalchemy_delete
+
+    def sqlite_safe_delete(model):
+        # PostgreSQL stores timezone-aware values. SQLite does not, so disable
+        # ORM-side evaluation of the bulk-delete predicate in this test backend.
+        return sqlalchemy_delete(model).execution_options(synchronize_session=False)
+
+    with (
+        patch(
+            "app.workers.cleanup_uploads.async_session_factory",
+            database.async_session_factory,
+        ),
+        patch("app.workers.cleanup_uploads.get_s3_client", return_value=mock_cm),
+        patch(
+            "app.workers.cleanup_uploads.list_multipart_uploads",
+            empty_multipart_uploads,
+        ),
+        patch(
+            "app.workers.cleanup_uploads.dispatch_post_commit_actions",
+            new_callable=AsyncMock,
+        ),
+        patch("app.workers.cleanup_uploads.delete", side_effect=sqlite_safe_delete),
+        patch("app.workers.storage_ops.delete_storage_objects", new_callable=AsyncMock),
+        patch(
+            "app.workers.cleanup_uploads.reconcile_cas_storage_usage",
+            new_callable=AsyncMock,
+        ) as reconcile_usage,
+    ):
+        await cleanup_uploads({"redis": mock_redis})
+
+    reconcile_usage.assert_awaited_once_with(mock_redis)
+    db_session.expire_all()
+    claims = list((await db_session.scalars(select(CasStagingClaim))).all())
+    jobs = list((await db_session.scalars(select(OutboxJob))).all())
+
+    assert claims == []
+    assert len(jobs) == 1
+    assert jobs[0].job_name == "release_cas_references"
+    assert jobs[0].args == [
+        [
+            {
+                "sha256": "a" * 64,
+                "operation_id": f"qcm-claim:{expired_id}:expire",
+            }
+        ]
+    ]
 
 
 # ── CSP s3_domain helper ──────────────────────────────────────────────────────

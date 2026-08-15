@@ -1,26 +1,21 @@
 "use client";
 
 import { memo, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
-import { Info, MessageSquare } from "lucide-react";
+import { BrowseLink } from "@/components/browse/browse-link";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
-import { useUIStore } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
-import Link from "next/link";
 import { getDirectoryIcon } from "@/lib/directory-icons";
 import { getDirectoryColor } from "@/lib/directory-colors";
 import { DirectoryPreviewCollage } from "./directory-preview-collage";
-import { useDirectoryIconOverrides, useDirectoryColorOverrides } from "@/lib/stores";
-
-// Frosted-glass circular action button — reads on any thumbnail (light, dark or
-// colourful) without a scrim band behind it.
-const FLOATING_ACTION_BTN =
-  "flex items-center justify-center h-8 w-8 rounded-full bg-background/85 text-foreground/80 " +
-  "backdrop-blur-md ring-1 ring-border/60 shadow-md hover:bg-background hover:text-foreground " +
-  "active:scale-90 transition-all";
+import {
+  selectDirectoryColorOverride,
+  selectDirectoryIconOverride,
+  useDirectoryColorOverrides,
+  useDirectoryIconOverrides,
+} from "@/lib/stores";
 
 interface DirectoryGridCardProps {
   directory: Record<string, unknown>;
@@ -51,8 +46,6 @@ function DirectoryGridCardImpl({
   pathBase,
 }: DirectoryGridCardProps) {
   const t = useTranslations("Browse");
-  const openSidebar = useUIStore((s) => s.openSidebar);
-  const router = useRouter();
 
   const name = String(directory.name ?? "");
   const slug = String(directory.slug ?? "");
@@ -61,12 +54,12 @@ function DirectoryGridCardImpl({
   const childMatCount = Number(directory.child_material_count ?? 0);
   const totalCount = childDirCount + childMatCount;
   const metadata = (directory.metadata ?? {}) as Record<string, unknown>;
-  const iconOverrides = useDirectoryIconOverrides((s) => s.overrides);
-  const colorOverrides = useDirectoryColorOverrides((s) => s.overrides);
+  const iconOverride = useDirectoryIconOverrides(selectDirectoryIconOverride(id));
+  const colorOverride = useDirectoryColorOverrides(selectDirectoryColorOverride(id));
   const rawIconId = metadata.thumbnail_icon ? String(metadata.thumbnail_icon) : null;
   const rawColorId = metadata.thumbnail_color ? String(metadata.thumbnail_color) : null;
-  const thumbnailIconId = iconOverrides.has(id) ? (iconOverrides.get(id) ?? null) : rawIconId;
-  const thumbnailColorId = colorOverrides.has(id) ? (colorOverrides.get(id) ?? null) : rawColorId;
+  const thumbnailIconId = iconOverride !== undefined ? iconOverride : rawIconId;
+  const thumbnailColorId = colorOverride !== undefined ? colorOverride : rawColorId;
   const previewMaterialIds = Array.isArray(directory.preview_material_ids)
     ? (directory.preview_material_ids as string[])
     : [];
@@ -139,15 +132,12 @@ function DirectoryGridCardImpl({
           ? `text-${themeColor}-700 dark:text-${themeColor}-400`
           : "";
 
-  const isRestricted = !!staged || !!previewPrId;
-
   const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlePointerEnter = () => {
     if (!slug || staged === "deleted" || onNavigate) return;
     prefetchTimer.current = setTimeout(() => {
       const browsePath = `${pathBase}/${slug}`.replace(/^\/browse\/?/, "").replace(/\/$/, "");
       prefetchBrowsePath(browsePath);
-      router.prefetch(`${pathBase}/${slug}`);
     }, 100);
   };
   const handlePointerLeave = () => {
@@ -177,28 +167,12 @@ function DirectoryGridCardImpl({
     // else: let Next.js Link handle client-side navigation
   };
 
-  const handleDetails = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    // Drop focus so the buttons don't stay revealed via group-focus-within
-    // once the pointer leaves the card.
-    (e.currentTarget as HTMLElement).blur();
-    openSidebar("details", { type: "directory", id, data: { ...directory, __path: buildPath() } });
-  };
-
-  const handleChat = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    (e.currentTarget as HTMLElement).blur();
-    openSidebar("chat", { type: "directory", id, data: directory });
-  };
-
   return (
     <ItemActionsMenu
       item={{ id, type: "directory", data: directory, staged, isExternal }}
       itemPath={buildPath()}
     >
-      <Link
+      <BrowseLink
         href={buildPath()}
         onClick={handleCardClick}
         onPointerEnter={handlePointerEnter}
@@ -288,45 +262,13 @@ function DirectoryGridCardImpl({
             </div>
           )}
 
-          {/* Floating action buttons — the kebab is always visible; the rest
-              reveal on hover / keyboard focus. No scrim band: each control is a
-              self-contained frosted-glass chip. The reveal animates transform +
-              opacity only, so it stays on the compositor thread during scroll. */}
           {!selectMode && (
             <div
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
-              className="absolute bottom-2 right-2 z-10 flex items-center gap-1.5"
+              className="absolute bottom-2 right-2 z-10"
             >
-              {/* Secondary actions — revealed on hover / focus, and only on
-                  hover-capable devices. On touch (no hover) they're removed
-                  entirely so they neither occupy tappable space nor get
-                  revealed by the card's focus when tapped — only the kebab
-                  stays. */}
-              <div className="hidden [@media(hover:hover)]:flex items-center gap-1.5 opacity-0 translate-x-1.5 pointer-events-none transition-all duration-200 ease-out group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-x-0 group-focus-within:pointer-events-auto">
-                {!isRestricted && (
-                  <button
-                    onClick={handleChat}
-                    className={FLOATING_ACTION_BTN}
-                    title={t("chat")}
-                    aria-label={t("chatAbout", { title: name })}
-                  >
-                    <MessageSquare className="h-4 w-4" />
-                  </button>
-                )}
-                <button
-                  onClick={handleDetails}
-                  className={FLOATING_ACTION_BTN}
-                  title={t("details")}
-                  aria-label={t("viewDetailsFor", { title: name })}
-                >
-                  <Info className="h-4 w-4" />
-                </button>
-
-              </div>
-
-              {/* Always-visible kebab */}
               <ItemActionsDropdownTrigger
-                className="h-8 w-8 rounded-full bg-background/85 backdrop-blur-md ring-1 ring-border/60 shadow-lg hover:bg-background active:scale-90 transition-all"
+                className="h-8 w-8 rounded-full bg-background/90 ring-1 ring-border/60 shadow-sm hover:bg-background"
                 iconClassName="h-4 w-4 text-foreground"
               />
             </div>
@@ -342,7 +284,7 @@ function DirectoryGridCardImpl({
             {t("itemsCount", { count: totalCount })}
           </p>
         </div>
-      </Link>
+      </BrowseLink>
     </ItemActionsMenu>
   );
 }

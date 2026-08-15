@@ -1,5 +1,3 @@
-import asyncio
-import io
 import logging
 import uuid
 import zipfile
@@ -7,26 +5,23 @@ from collections.abc import AsyncGenerator
 from typing import Annotated, Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse
 
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError, ForbiddenError, UnauthorizedError
-from app.core.redis import get_redis, redis_client
-from app.core.sse import (
-    broadcast_to_topic,
-    register_topic_queue,
-    sse_event_stream,
-    unregister_topic_queue,
+from app.core.common.exceptions import (
+    BadRequestError,
+    ForbiddenError,
 )
-from app.core.storage import stream_object
-from app.dependencies.auth import get_current_user, get_user_from_token, security
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis, redis_client
+from app.core.events.limiter import limiter
+from app.core.events.sse import broadcast_to_topic
+from app.core.storage.facade import stream_object
+from app.dependencies.auth import ReadUser, get_current_user
 from app.dependencies.rate_limit import rate_limit_downloads
 from app.models.material import Material
 from app.models.user import User
@@ -39,6 +34,7 @@ router = APIRouter(prefix="/api/directories", tags=["directories"])
 
 
 _CHUNK_SIZE = 50
+_MAX_RESOLVE_PATH_IDS = 250
 
 
 class DownloadChunk(BaseModel):
@@ -52,8 +48,16 @@ class DownloadChunksResponse(BaseModel):
 
 
 class ResolvePathsRequest(BaseModel):
-    directory_ids: list[uuid.UUID] = []
-    material_ids: list[uuid.UUID] = []
+    directory_ids: list[uuid.UUID] = Field(default_factory=list, max_length=_MAX_RESOLVE_PATH_IDS)
+    material_ids: list[uuid.UUID] = Field(default_factory=list, max_length=_MAX_RESOLVE_PATH_IDS)
+
+    @model_validator(mode="after")
+    def validate_combined_cardinality(self) -> "ResolvePathsRequest":
+        # This is a work budget, not merely a uniqueness budget. A material can
+        # resolve to a directory ID different from every explicit directory ID.
+        if len(self.directory_ids) + len(self.material_ids) > _MAX_RESOLVE_PATH_IDS:
+            raise ValueError(f"At most {_MAX_RESOLVE_PATH_IDS} IDs may be resolved at once")
+        return self
 
 
 class MaterialResolveOut(BaseModel):
@@ -67,7 +71,9 @@ class ResolvePathsResponse(BaseModel):
 
 
 @router.post("/resolve-paths", response_model=ResolvePathsResponse)
+@limiter.limit("60/minute")
 async def resolve_paths(
+    request: Request,
     req: ResolvePathsRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -90,19 +96,17 @@ async def resolve_paths(
         req.directory_ids.extend(dir_ids_from_mat)
 
     if req.directory_ids:
-
-        async def fetch_dir_path(did: uuid.UUID) -> tuple[uuid.UUID, list[DirectoryBreadcrumb]]:
-            try:
-                p = await directory_service.get_directory_path(db, did)
-                return did, [DirectoryBreadcrumb.model_validate(x) for x in p]
-            except Exception:
-                return did, []
-
         unique_dir_ids = set(req.directory_ids)
-        dir_paths = await asyncio.gather(*(fetch_dir_path(did) for did in unique_dir_ids))
-        for did, p in dir_paths:
-            if p:
-                resp.directories[did] = p
+        # Defense in depth: cap the actual recursive-CTE roots after materials have
+        # been translated to directories, not just the incoming JSON cardinality.
+        if len(unique_dir_ids) > _MAX_RESOLVE_PATH_IDS:
+            raise BadRequestError(
+                f"At most {_MAX_RESOLVE_PATH_IDS} directory paths may be resolved"
+            )
+        dir_paths = await directory_service.get_directory_breadcrumb_paths(db, unique_dir_ids)
+        for did, path in dir_paths.items():
+            if path:
+                resp.directories[did] = [DirectoryBreadcrumb.model_validate(x) for x in path]
 
     return resp
 
@@ -136,74 +140,85 @@ async def get_directory_path(
     return [DirectoryBreadcrumb.model_validate(p) for p in path]
 
 
-@router.get("/{id}/sse")
-async def directory_event_stream(id: str) -> EventSourceResponse:
-    queue = register_topic_queue(id)
-    return EventSourceResponse(
-        sse_event_stream(queue, cleanup=lambda: unregister_topic_queue(id, queue)),
-        headers={"X-Accel-Buffering": "no"},
-    )
-
-
 async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes, None]:
-    """Stream a ZIP file for the given (arcname, file_key) pairs.
+    """Stream a ZIP with bounded memory and storage backpressure.
 
-    Each file is fetched from S3 and added to the ZIP sequentially.  New bytes
-    are yielded to the client after each entry so the connection stays alive and
-    the browser can show download progress.
+    The sink is intentionally unseekable, so ``zipfile`` emits data descriptors
+    and never needs the complete archive in memory. The generator retains at
+    most one storage chunk plus compressed output waiting to be yielded.
     """
 
-    class _Buf:
-        """Writable BytesIO wrapper that tracks how many bytes have been flushed."""
-
+    class _StreamingZipSink:
         def __init__(self) -> None:
-            self._b = io.BytesIO()
-            self._flushed = 0
+            self._pending = bytearray()
+            self._position = 0
 
         def write(self, data: bytes) -> int:
-            self._b.write(data)
+            self._pending.extend(data)
+            self._position += len(data)
             return len(data)
 
         def tell(self) -> int:
-            return self._b.tell()
+            return self._position
 
-        def seek(self, pos: int, whence: int = 0) -> int:
-            return self._b.seek(pos, whence)
+        def seek(self, *_args: Any) -> int:
+            raise OSError("streaming ZIP sink is not seekable")
 
         def flush(self) -> None:
             pass
 
         def pop(self) -> bytes:
-            cur = self._b.tell()
-            self._b.seek(self._flushed)
-            chunk = self._b.read()
-            self._flushed = cur
-            return chunk
+            if not self._pending:
+                return b""
+            data = bytes(self._pending)
+            self._pending.clear()
+            return data
 
-    buf = _Buf()
-    zf = zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True)  # type: ignore[call-overload]
+    sink = _StreamingZipSink()
+    zf = zipfile.ZipFile(
+        sink,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        allowZip64=True,
+    )  # type: ignore[call-overload]
     try:
         for arcname, file_key in entries:
+            entry_started = False
             try:
-                data = bytearray()
                 async with stream_object(file_key) as body:
-                    while True:
-                        chunk = await body.read(65536)
-                        if not chunk:
-                            break
-                        data.extend(chunk)
-                zf.writestr(arcname, bytes(data))
+                    # Probe storage before writing the ZIP entry header. If the
+                    # object cannot be opened/read at all, it can still be omitted
+                    # without corrupting bytes already sent for the archive.
+                    chunk = await body.read(65536)
+                    with zf.open(arcname, mode="w", force_zip64=True) as member:
+                        entry_started = True
+                        while chunk:
+                            member.write(chunk)
+                            pending = sink.pop()
+                            if pending:
+                                yield pending
+                            # Backpressure is preserved: the next storage read
+                            # happens only after the consumer resumes the generator.
+                            chunk = await body.read(65536)
+
+                    pending = sink.pop()
+                    if pending:
+                        yield pending
             except Exception as exc:
                 logger.warning(
-                    "Failed to stream ZIP entry for key %s: %s", file_key, exc, exc_info=True
+                    "Failed to stream ZIP entry for key %s: %s",
+                    file_key,
+                    exc,
+                    exc_info=True,
                 )
+                if entry_started:
+                    # Returning a valid ZIP containing a silently truncated file
+                    # would be worse than an interrupted download.
+                    raise
                 continue
-            new_bytes = buf.pop()
-            if new_bytes:
-                yield new_bytes
 
         zf.close()
-        final = buf.pop()
+        final = sink.pop()
         if final:
             yield final
     finally:
@@ -269,39 +284,15 @@ async def download_directory_chunks(
 async def download_directory_zip(
     id: uuid.UUID,
     request: Request,
+    current_user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)] = None,
-    token: Annotated[str | None, Query()] = None,
     redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
 ) -> StreamingResponse:
-    """Stream all files in a directory (recursively) as a single ZIP archive.
-
-    Accepts auth via ``Authorization: Bearer`` header or ``?token=`` query param
-    so that a plain browser link (window.location.href) can trigger the download.
-
-    When ``WORKER_ZIP_URL`` is configured the heavy work (fetching from R2 and
-    assembling the ZIP) is offloaded to a Cloudflare Worker.  The API only does
-    auth + DB work and then issues a redirect carrying a short-lived HMAC-signed
-    token so the Worker can verify the request without calling back to the API.
-    """
+    """Stream a directory ZIP for bearer API clients or cookie-authenticated browsers."""
     if redis is None:
         redis = redis_client
 
-    effective_user: User | None = None
-    if credentials is not None:
-        try:
-            effective_user = await get_user_from_token(db, redis, credentials.credentials)
-        except Exception:
-            pass
-    if not effective_user and token:
-        try:
-            effective_user = await get_user_from_token(db, redis, token)
-        except Exception:
-            pass
-    if not effective_user:
-        raise UnauthorizedError()
-
-    await rate_limit_downloads(request, effective_user, db, redis)
+    await rate_limit_downloads(request, current_user, db, redis)
 
     try:
         dir_name, entries = await directory_service.get_directory_download_entries(db, id)
@@ -310,8 +301,6 @@ async def download_directory_zip(
 
     if not entries:
         raise BadRequestError("This directory contains no downloadable files.")
-
-    # Zip streaming is now fully handled by the backend directly below.
 
     safe_name = dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
     encoded_name = quote(dir_name)

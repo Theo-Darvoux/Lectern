@@ -33,7 +33,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -99,7 +99,7 @@ async def test_high2_svg_detection_rejects_non_svg_with_svg_substring():
     """A text file mentioning '<svg' deep in the content must NOT be
     detected as image/svg+xml.
     """
-    from app.core.mimetypes import guess_mime_from_bytes
+    from app.core.media.mimetypes import guess_mime_from_bytes
 
     # A plain text file that happens to discuss SVGs
     text_about_svg = b"This is a text file.\nHere we discuss <svg elements in HTML.\n"
@@ -114,7 +114,7 @@ async def test_high2_svg_detection_rejects_non_svg_with_svg_substring():
 @pytest.mark.asyncio
 async def test_high2_svg_detection_accepts_real_svg():
     """A real SVG file must still be correctly detected."""
-    from app.core.mimetypes import guess_mime_from_bytes
+    from app.core.media.mimetypes import guess_mime_from_bytes
 
     real_svg = b'<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>'
     assert guess_mime_from_bytes(real_svg) == "image/svg+xml"
@@ -206,8 +206,8 @@ async def test_medium1_check_exists_does_not_expose_raw_cas_key(
     mock_redis.set.side_effect = AsyncMock()
 
     with (
-        patch("app.core.cas.hmac_cas_key", return_value="upload:cas:test123"),
-        patch("app.core.storage.object_exists", AsyncMock(return_value=True)),
+        patch("app.core.security.cas.hmac_cas_key", return_value="upload:cas:test123"),
+        patch("app.core.storage.facade.object_exists", AsyncMock(return_value=True)),
     ):
         resp = await client.post(
             "/api/upload/check-exists",
@@ -339,7 +339,7 @@ async def test_low1_octet_stream_still_has_size_limit():
     _check_per_type_size("application/octet-stream", 1024)
 
     # This should raise — over the global limit
-    from app.core.exceptions import BadRequestError
+    from app.core.common.exceptions import BadRequestError
 
     over_limit = (settings.max_file_size_mb * 1024 * 1024) + 1
     with pytest.raises(BadRequestError):

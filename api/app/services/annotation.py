@@ -7,7 +7,7 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
+from app.core.common.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.annotation import Annotation
 from app.models.material import Material, MaterialVersion
 from app.models.user import User, UserRole

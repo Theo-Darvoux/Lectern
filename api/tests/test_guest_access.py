@@ -2,12 +2,12 @@
 
 import uuid
 from contextlib import contextmanager
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
 from app.models.user import User, UserRole
 
 
@@ -63,6 +63,12 @@ async def test_auth_methods_exposes_guest_flag_default_false(client: AsyncClient
     assert resp.json()["guest_access_enabled"] is False
 
 
+async def test_auth_methods_exposes_external_document_link_policy(client: AsyncClient):
+    resp = await client.get("/api/auth/methods")
+    assert resp.status_code == 200
+    assert resp.json()["allow_external_document_links"] is True
+
+
 async def test_guest_session_rejected_when_disabled(client: AsyncClient, db_session: AsyncSession):
     # A guest identity exists but the admin toggle is off.
     await _create_guest_user(db_session)
@@ -80,6 +86,26 @@ async def test_guest_session_issued_when_enabled(client: AsyncClient, db_session
     assert body["user"]["display_name"] == "Guest"
     assert body["access_token"]
     assert body["is_new_user"] is False
+
+
+async def test_guest_session_mint_is_source_limited_in_production(
+    client: AsyncClient, db_session: AsyncSession, mock_redis: AsyncMock
+) -> None:
+    from app.config import settings
+    from app.services import auth as auth_service
+
+    await _create_guest_user(db_session)
+    pipe = mock_redis.pipeline.return_value
+    pipe.execute.return_value = [auth_service.GUEST_SESSION_MINT_MAX + 1, True]
+
+    with (
+        _enable_guest_access(),
+        patch.object(settings, "environment", "production"),
+    ):
+        response = await client.post("/api/auth/guest")
+
+    assert response.status_code == 429
+    assert "Too many guest sessions" in response.json()["detail"]
 
 
 async def test_guest_session_unavailable_without_seeded_guest(

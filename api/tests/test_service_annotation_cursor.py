@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.core.exceptions import BadRequestError
+from app.core.common.exceptions import BadRequestError
 from app.services.annotation import _decode_cursor, _encode_cursor
 
 

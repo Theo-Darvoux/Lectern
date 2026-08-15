@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/api-client";
-import { createSSEConnection } from "@/lib/sse-client";
+import { subscribeToSSE } from "@/lib/sse-client";
 
 interface AnnotationAuthor {
     id: string;
@@ -167,8 +167,8 @@ export function useAnnotations(materialId: string | null) {
     useEffect(() => {
         if (!materialId) return;
 
-        const connection = createSSEConnection({
-            url: `/materials/${materialId}/sse`,
+        const connection = subscribeToSSE({
+            channel: `material:${materialId}`,
             listeners: {
                 annotation_created: (e) => {
                     try {
@@ -193,6 +193,7 @@ export function useAnnotations(materialId: string | null) {
                     }
                 },
             },
+            onResync: () => fetchAnnotations(true),
             startupDelay: 50,
         });
 

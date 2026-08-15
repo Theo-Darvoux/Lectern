@@ -32,7 +32,6 @@ import { toast } from "sonner";
 import { useStagingStore, type Operation } from "@/lib/staging-store";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { TagInput } from "@/components/ui/tag-input";
-import { useBrowseRefreshStore } from "@/lib/stores";
 import { apiRequest } from "@/lib/api-client";
 import { uploadFile, logicalFileSize } from "@/lib/upload-client";
 import { useTheme } from "next-themes";
@@ -398,9 +397,6 @@ export function FileEditDialog({
     const tUpload = useTranslations("Upload");
 
     const addOperation = useStagingStore((s) => s.addOperation);
-    const triggerBrowseRefresh = useBrowseRefreshStore(
-        (s) => s.triggerBrowseRefresh,
-    );
     const { resolvedTheme } = useTheme();
     const isDark = resolvedTheme === "dark";
 
@@ -599,8 +595,8 @@ export function FileEditDialog({
                 setSubmitting(true);
                 const result = await submitDirectOperations(ops, undefined, undefined, tAuto);
                 setSubmitting(false);
+                if (!result) return;
                 onOpenChange(false);
-                if (result?.status === "approved") triggerBrowseRefresh();
             }
         } catch (e) {
             toast.error(
@@ -665,8 +661,8 @@ export function FileEditDialog({
         }
         const result = await submitDirectOperations(ops, undefined, undefined, tAuto);
         setSubmitting(false);
+        if (!result) return;
         onOpenChange(false);
-        if (result?.status === "approved") triggerBrowseRefresh();
     };
 
     const Icon = isMaterial ? FilePenLine : FolderPen;
@@ -940,5 +936,3 @@ export function FileEditDialog({
         </Dialog>
     );
 }
-
-

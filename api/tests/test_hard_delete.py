@@ -1,5 +1,6 @@
 import uuid
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +27,7 @@ async def _create_user(db: AsyncSession, email_prefix: str = "test") -> User:
 
 
 async def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -118,3 +119,52 @@ async def test_admin_hard_delete_user(client: AsyncClient, db_session: AsyncSess
     await db_session.commit()
     res = await db_session.execute(select(User).where(User.id == target_id))
     assert res.scalar_one_or_none() is None
+
+
+async def test_hard_delete_allows_soft_deleted_admin_retention_purge(
+    db_session: AsyncSession,
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.services.user import hard_delete_user
+
+    stale_admin = User(
+        email="soft-deleted-admin@example.com",
+        role=UserRole.BUREAU,
+        onboarded=True,
+        deleted_at=datetime.now(UTC),
+    )
+    db_session.add(stale_admin)
+    await db_session.commit()
+
+    await hard_delete_user(db_session, stale_admin)
+    await db_session.flush()
+
+    remaining = await db_session.scalar(
+        select(User).where(User.id == stale_admin.id).execution_options(include_deleted=True)
+    )
+    assert remaining is None
+
+
+async def test_hard_delete_refuses_final_administrator(db_session: AsyncSession) -> None:
+    from app.core.common.exceptions import ConflictError
+    from app.services.user import hard_delete_user
+
+    admin = User(
+        email="only-admin@example.com",
+        role=UserRole.BUREAU,
+        onboarded=True,
+    )
+    db_session.add(admin)
+    await db_session.flush()
+    admin_id = admin.id
+    await db_session.commit()
+
+    with pytest.raises(ConflictError, match="final administrator"):
+        await hard_delete_user(db_session, admin)
+    await db_session.rollback()
+
+    # Rollback expires ORM state; use the scalar UUID captured before rollback so
+    # this assertion cannot trigger implicit async IO through an expired object.
+    remaining = await db_session.get(User, admin_id)
+    assert remaining is not None

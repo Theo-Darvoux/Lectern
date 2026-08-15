@@ -1,28 +1,39 @@
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import time
 from pathlib import Path
-from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, cast
+
+import httpx
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config import settings
-from app.core.metrics import mime_category as _mime_cat
-from app.core.metrics import (
+from app.core.common.exceptions import ServiceUnavailableError
+from app.core.database.redis import redis_lock
+from app.core.events.processing import ProcessingFile
+from app.core.observability.metrics import mime_category as _mime_cat
+from app.core.observability.metrics import (
     upload_file_size,
     upload_pipeline_duration,
     upload_pipeline_total,
 )
-from app.core.processing import ProcessingFile
-from app.core.scanner import MalwareScanner
-from app.core.storage import delete_object
-from app.core.telemetry import get_tracer
+from app.core.observability.telemetry import get_tracer
+from app.core.security.cas import decrement_cas_ref, hmac_cas_key
+from app.core.security.processing_paths import make_processing_temp_path
+from app.core.security.scanner import MalwareScanner
+from app.core.storage.capacity import release_storage_reservation
+from app.core.storage.facade import delete_object
+from app.core.storage.liveness import storage_lifecycle_lock
+from app.routers.upload.cancellation import upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
 from app.workers.upload.cache_repo import UploadCacheRepository
 from app.workers.upload.constants import (
     _CANCEL_KEY_PREFIX,
     _MAX_ARQ_RETRIES,
+    _SHA256_CACHE_PREFIX,
     _STAGE_TOTAL,
     _STAGES,
     _overall,
@@ -39,6 +50,10 @@ from app.workers.upload.stages.scan_strip import (
 )
 
 logger = logging.getLogger(__name__)
+
+_BAZAAR_ATTEMPTS = 3
+_BAZAAR_RETRY_DELAYS_SECONDS = (0.5, 1.5)
+_BAZAAR_CLEAN_TTL_SECONDS = 7 * 24 * 3600
 
 
 def _get_fallback_scanner() -> MalwareScanner:
@@ -140,28 +155,54 @@ class UploadPipeline:
         await self.emit_status(status, detail=detail)
         status_str = "malicious" if status == UploadStatus.MALICIOUS else "failed"
         await self.repo.update_upload_status(self.upload_id, status_str, error_detail=detail)
+        try:
+            await release_storage_reservation(self.upload_id, self.redis)
+        except Exception as exc:
+            # Capacity reservations self-expire and are reconciled by the next reserve.
+            logger.warning(
+                "Failed to release storage reservation for upload %s: %s",
+                self.upload_id,
+                exc,
+            )
 
-    def _check_deadline(self, stage_name: str) -> None:
+    def _remaining_pipeline_seconds(self, stage_name: str) -> float:
         elapsed = self._elapsed()
-        if elapsed > settings.upload_pipeline_max_seconds:
+        remaining = float(settings.upload_pipeline_max_seconds) - elapsed
+        if remaining <= 0:
             msg = f"Pipeline deadline exceeded at stage '{stage_name}' ({elapsed:.0f}s)"
             raise UploadError(UploadStatus.FAILED, msg)
+        return remaining
+
+    def _check_deadline(self, stage_name: str) -> None:
+        self._remaining_pipeline_seconds(stage_name)
 
     async def _cancel_current_upload(self, where: str) -> None:
         logger.info("Upload %s cancelled %s", self.upload_id, where)
         await self._fail_upload("Upload cancelled by user")
         try:
-            await delete_object(self.quarantine_key)
+            await self._delete_quarantine_object()
         except Exception as exc:
             logger.warning("Failed to delete quarantined object on cancel: %s", exc)
+
+    async def _delete_quarantine_object(self) -> None:
+        """Delete quarantine bytes and release their upload-quota membership."""
+        await delete_object(self.quarantine_key)
+        try:
+            await self.redis.zrem(f"quota:uploads:{self.user_id}", self.quarantine_key)
+        except Exception as exc:
+            logger.warning(
+                "Deleted quarantine object %s but failed to release quota membership: %s",
+                self.quarantine_key,
+                exc,
+            )
 
     async def _run_stages(self) -> None:
         """Core pipeline execution logic.
 
         Stage 1-2: scan + strip (the security gate — user blocks until here).
-        Stage 5:   fast finalize — upload uncompressed stripped file to CAS,
+        Stage 5:   fast finalize — upload stripped file to immutable CAS,
                    emit CLEAN so the user is immediately unblocked, then enqueue
-                   process_upload_post_scan for background compression/thumbnailing.
+                   process_upload_post_scan for background thumbnailing.
         """
         # Checkpoint 1: Metadata Strip + Scan
         if self.completed_stage < 2:
@@ -212,9 +253,9 @@ class UploadPipeline:
         await self._check_cancellation("after scan+strip stage")
 
         # Checkpoint 5: Fast finalize (idempotent via completed_stage guard).
-        # Uploads the stripped (uncompressed) file to CAS so the user can
-        # immediately add it to a PR draft.  Background compression/thumbnail
-        # is handled by process_upload_post_scan.
+        # Uploads the stripped file to immutable CAS so the user can
+        # immediately add it to a PR draft. Background thumbnail generation is
+        # handled by process_upload_post_scan.
         if self.completed_stage < 5:
             await self._fast_finalize_and_enqueue_post_scan()
             await self.repo.checkpoint_pipeline_stage(self.upload_id, 5)
@@ -240,30 +281,43 @@ class UploadPipeline:
 
     async def _check_cancellation(self, where: str) -> None:
         cancel_key = f"{_CANCEL_KEY_PREFIX}{self.upload_id}"
-        if await self.cache.is_cancelled(cancel_key):
+        redis_cancelled = await self.cache.is_cancelled(cancel_key)
+        db_cancelled = False
+        session_factory = self.ctx.db_sessionmaker
+        if isinstance(session_factory, async_sessionmaker) or inspect.isfunction(session_factory):
+            db_cancelled = await self.repo.is_upload_cancelled(self.upload_id)
+        if redis_cancelled or db_cancelled:
             await self._cancel_current_upload(where)
             # We raise a special error to stop execution but it's handled gracefully
             raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
 
     async def _fast_finalize_and_enqueue_post_scan(self) -> None:
-        """Upload the stripped (uncompressed) file to CAS, emit CLEAN, enqueue post-scan job.
-
-        This unblocks the user immediately after the scan gate passes.
-        Compression and thumbnail generation happen in process_upload_post_scan
-        running in the background.  The quarantine object is NOT deleted here —
-        the post-scan job re-downloads it to compress, then deletes it.
-        """
+        """Publish CLEAN and schedule follow-up work without losing cancellation."""
         self._check_deadline("finalizing")
+
+        if self.pf is None:
+            raise UploadError(UploadStatus.FAILED, "Pipeline state missing at finalizing stage")
+
+        await self._check_bazaar_before_finalize()
         await self.emit_status(
             UploadStatus.PROCESSING,
             detail="Finalising upload",
             stage_name_or_label="finalizing",
             stage_percent=0.0,
         )
+        has_authoritative_db = self.ctx.db_sessionmaker is not None
+        if has_authoritative_db:
+            await self._check_cancellation("immediately before final publication")
 
-        if self.pf is None:
-            raise UploadError(UploadStatus.FAILED, "Pipeline state missing at finalizing stage")
-
+        session_factory = self.ctx.db_sessionmaker if has_authoritative_db else None
+        lifecycle_fence_available = isinstance(
+            session_factory, async_sessionmaker
+        ) or inspect.isfunction(session_factory)
+        # Production workers and the real PostgreSQL integration fixture can hold the
+        # cross-process lifecycle fence. Hermetic tests deliberately use minimal/mocked
+        # ProcessingFile objects and session factories; do not add a new sha256()
+        # precondition when no real fence can be acquired.
+        content_sha256 = await self.pf.sha256() if lifecycle_fence_available else None
         final_input = FinalizeInput(
             pf=self.pf,
             user_id=self.user_id,
@@ -274,99 +328,270 @@ class UploadPipeline:
             initial_size=self.initial_size,
             final_mime=self.mime_type,
             content_encoding=None,
-            thumbnail_path=None,  # generated later by post-scan job
+            thumbnail_path=None,
+            content_sha256=content_sha256,
         )
-        final_res = await run_finalize_storage(final_input, self.redis, self.tracer)
-
-        res_data = {
-            "file_key": final_res.final_key,
-            "file_name": final_res.safe_name,
-            "size": final_res.final_size,
-            "original_size": self.initial_size,
-            "mime_type": self.mime_type,
-            "content_encoding": None,
-            "processing_status": "pending",
-        }
-        await self.emit_status(
-            UploadStatus.CLEAN,
-            detail="File ready — optimising in background",
-            result=res_data,
-            stage_name_or_label="finalizing",
-            stage_percent=1.0,
+        # Garbage collection and CAS admission share a PostgreSQL advisory lock.
+        # Hold it across the object-store write and authoritative Upload publication
+        # so an orphan collector cannot delete the just-admitted CAS object in-between.
+        expected_final_key = (
+            f"cas/{hmac_cas_key(content_sha256).split(':')[-1]}"
+            if content_sha256 is not None
+            else ""
         )
-
-        await self.repo.update_upload_status(
-            self.upload_id,
-            "clean",
-            sha256=self.original_sha256,
-            content_sha256=final_res.content_sha256,
-            final_key=final_res.final_key,
-            thumbnail_key=None,
-            cas_key=final_res.db_cas_key,
-            cas_ref_count=final_res.new_cas_ref if final_res.new_cas_ref > 0 else None,
-            processing_status="pending",
+        publication_guard = storage_lifecycle_lock(
+            session_factory if lifecycle_fence_available else None,
+            expected_final_key,
         )
-
-        from app.core import redis as redis_core
-
-        # Fire-and-forget MalwareBazaar check — runs against the original SHA-256,
-        # independent of whether the file is later compressed.  If Bazaar flags it,
-        # retroactive_quarantine() handles the cleanup.
-        if settings.bazaar_async_enabled and redis_core.arq_pool is not None:
+        async with publication_guard:
+            finalize_deadline = asyncio.timeout(self._remaining_pipeline_seconds("finalizing"))
             try:
-                await redis_core.arq_pool.enqueue_job(
-                    "check_bazaar",
-                    upload_id=self.upload_id,
-                    sha256=self.original_sha256,
-                    cas_s3_key=final_res.final_key,
-                    user_id=self.user_id,
+                async with finalize_deadline:
+                    final_res = await run_finalize_storage(final_input, self.redis, self.tracer)
+            except TimeoutError as exc:
+                # Only translate cancellation caused by our end-to-end deadline. A
+                # backend TimeoutError remains a backend error rather than being
+                # mislabeled as pipeline exhaustion.
+                if not finalize_deadline.expired():
+                    raise
+                raise UploadError(
+                    UploadStatus.FAILED,
+                    f"Pipeline deadline exceeded at stage 'finalizing' ({self._elapsed():.0f}s)",
+                ) from exc
+
+            res_data = {
+                "file_key": final_res.final_key,
+                "file_name": final_res.safe_name,
+                "size": final_res.final_size,
+                "original_size": self.initial_size,
+                "mime_type": self.mime_type,
+                "content_encoding": None,
+                "processing_status": "pending",
+            }
+            post_scan_kwargs: dict[str, object] = {
+                "upload_id": self.upload_id,
+                "user_id": self.user_id,
+                "quarantine_key": self.quarantine_key,
+                "original_filename": self.original_filename,
+                "mime_type": self.mime_type,
+                "original_sha256": self.original_sha256,
+                "cas_key": self.cas_key,
+                "cas_s3_key": final_res.final_key,
+                "initial_size": self.initial_size,
+            }
+            published = await self.repo.publish_clean_upload(
+                self.upload_id,
+                sha256=self.original_sha256,
+                content_sha256=final_res.content_sha256,
+                final_key=final_res.final_key,
+                cas_key=final_res.db_cas_key,
+                cas_ref_count=final_res.new_cas_ref if final_res.new_cas_ref > 0 else None,
+                mime_type=self.mime_type,
+                size_bytes=final_res.final_size,
+                filename=final_res.safe_name,
+                post_scan_kwargs=post_scan_kwargs if has_authoritative_db else None,
+            )
+            if not published:
+                # Cancellation committed first. Release the CAS reference acquired by
+                # finalization using an idempotent operation ID.
+                await decrement_cas_ref(
+                    self.redis,
+                    final_res.content_sha256,
+                    operation_id=f"upload-finalize:{self.upload_id}:cancel-compensation",
+                )
+                await self.redis.zrem(
+                    f"quota:uploads:{self.user_id}",
+                    f"staging:{self.user_id}:{self.upload_id}",
+                )
+                raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
+
+        # Publication and cancellation race through the conditional DB update.
+        # After publication, compete for the shared lifecycle lock once more:
+        # a cancellation that is already pending can acquire it first, release
+        # CAS ownership, and set the marker before CLEAN is emitted or follow-up
+        # work is scheduled. If this worker acquires it first, publication wins
+        # and a later cancellation will clear the cached CLEAN state and CAS ref.
+        lifecycle_guard = (
+            redis_lock(
+                cast(Any, self.redis),
+                upload_lifecycle_lock_name(self.upload_id),
+                timeout=120.0,
+                expire=300.0,
+            )
+            if has_authoritative_db
+            else contextlib.nullcontext()
+        )
+        async with lifecycle_guard:
+            if has_authoritative_db:
+                await self._check_cancellation("after clean publication")
+            try:
+                await self.redis.set(
+                    f"{_SHA256_CACHE_PREFIX}{self.user_id}:{self.original_sha256}",
+                    final_res.final_key,
+                    ex=24 * 3600,
                 )
             except Exception as exc:
                 logger.warning(
-                    "Failed to enqueue check_bazaar for upload %s: %s — Bazaar check skipped.",
+                    "Failed to publish personal dedup cache for upload %s: %s",
                     self.upload_id,
                     exc,
                 )
-        elif settings.bazaar_async_enabled:
-            logger.warning(
-                "arq_pool unavailable — check_bazaar skipped for upload %s.",
-                self.upload_id,
+            await self.emit_status(
+                UploadStatus.CLEAN,
+                detail="File ready — optimising in background",
+                result=res_data,
+                stage_name_or_label="finalizing",
+                stage_percent=1.0,
             )
+            if has_authoritative_db:
+                await self._check_cancellation("after CLEAN emission")
 
-        # Enqueue background compression + thumbnail job.
-        if redis_core.arq_pool is not None:
+            import app.core.database.redis as redis_core
+
+            if has_authoritative_db:
+                # The post-scan dispatch intent was committed atomically with CLEAN
+                # publication. Dispatch now for latency; if enqueue is not acknowledged
+                # (process death or ARQ outage), the PostgreSQL outbox retries dispatch.
+                # Once ARQ accepts the job, its existing non-completion-tracked delivery
+                # semantics apply; this does not claim durable execution acknowledgement.
+                try:
+                    await self.repo.dispatch_durable_jobs()
+                except Exception as exc:
+                    logger.warning(
+                        "Immediate durable post-scan dispatch failed for upload %s: %s",
+                        self.upload_id,
+                        exc,
+                    )
+            elif redis_core.arq_pool is not None:
+                try:
+                    await redis_core.arq_pool.enqueue_job(
+                        "process_upload_post_scan",
+                        upload_id=self.upload_id,
+                        user_id=self.user_id,
+                        quarantine_key=self.quarantine_key,
+                        original_filename=self.original_filename,
+                        mime_type=self.mime_type,
+                        original_sha256=self.original_sha256,
+                        cas_key=self.cas_key,
+                        cas_s3_key=final_res.final_key,
+                        initial_size=self.initial_size,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Failed to enqueue process_upload_post_scan for upload %s: %s — "
+                        "file will remain available without a thumbnail.",
+                        self.upload_id,
+                        exc,
+                    )
+                    try:
+                        await self.repo.update_processing_status(self.upload_id, "degraded")
+                    except Exception as status_exc:
+                        logger.warning(
+                            "Failed to mark post-scan processing degraded for upload %s: %s",
+                            self.upload_id,
+                            status_exc,
+                        )
+            else:
+                logger.warning(
+                    "arq_pool unavailable — post-scan processing skipped for upload %s. "
+                    "File will remain available without a thumbnail.",
+                    self.upload_id,
+                )
+                try:
+                    await self.repo.update_processing_status(self.upload_id, "degraded")
+                except Exception as status_exc:
+                    logger.warning(
+                        "Failed to mark post-scan processing degraded for upload %s: %s",
+                        self.upload_id,
+                        status_exc,
+                    )
+
+            self._record_pipeline_metrics("clean")
+            upload_file_size.labels(mime_category=self.mime_category).observe(self.initial_size)
+
+    async def _check_bazaar_before_finalize(self) -> None:
+        """Complete the external malware check before publishing a clean upload."""
+        if await self.redis.get(f"bazaar:clean:{self.original_sha256}"):
+            return
+
+        await self.emit_status(
+            UploadStatus.PROCESSING,
+            detail="Checking against known malware signatures",
+            stage_name_or_label="scanning",
+            stage_percent=0.9,
+        )
+
+        scanner = self.ctx.scanner
+        owns_scanner = scanner is None
+        if scanner is None:
+            scanner = _get_fallback_scanner()
+        try:
+            threat: str | None = None
+            for attempt in range(_BAZAAR_ATTEMPTS):
+                try:
+                    threat = await scanner.check_malwarebazaar(
+                        self.original_sha256,
+                        self.original_filename,
+                        fail_closed=True,
+                    )
+                    break
+                except (httpx.HTTPError, ServiceUnavailableError) as exc:
+                    if attempt == _BAZAAR_ATTEMPTS - 1:
+                        if not settings.malwarebazaar_fail_closed:
+                            logger.warning(
+                                "External malware scan unavailable for upload %s; "
+                                "continuing under fail-open policy without caching a clean verdict: %s",
+                                self.upload_id,
+                                exc,
+                            )
+                            return
+                        raise UploadError(
+                            UploadStatus.FAILED,
+                            "External malware scan is temporarily unavailable; "
+                            "please retry this upload.",
+                        ) from exc
+
+                    delay = _BAZAAR_RETRY_DELAYS_SECONDS[attempt]
+                    if self._remaining_pipeline_seconds("malwarebazaar retry") <= delay:
+                        raise UploadError(
+                            UploadStatus.FAILED,
+                            "External malware scan is temporarily unavailable; "
+                            "please retry this upload.",
+                        ) from exc
+                    await self.emit_status(
+                        UploadStatus.PROCESSING,
+                        detail=(
+                            "External malware scan temporarily unavailable; "
+                            f"retrying ({attempt + 2}/{_BAZAAR_ATTEMPTS})"
+                        ),
+                        stage_name_or_label="scanning",
+                        stage_percent=0.9,
+                    )
+                    await asyncio.sleep(delay)
+        finally:
+            if owns_scanner:
+                await scanner.close()
+
+        if threat is None:
             try:
-                await redis_core.arq_pool.enqueue_job(
-                    "process_upload_post_scan",
-                    upload_id=self.upload_id,
-                    user_id=self.user_id,
-                    quarantine_key=self.quarantine_key,
-                    original_filename=self.original_filename,
-                    mime_type=self.mime_type,
-                    original_sha256=self.original_sha256,
-                    cas_key=self.cas_key,
-                    cas_s3_key=final_res.final_key,
-                    initial_size=self.initial_size,
+                await self.redis.set(
+                    f"bazaar:clean:{self.original_sha256}",
+                    "1",
+                    ex=_BAZAAR_CLEAN_TTL_SECONDS,
                 )
             except Exception as exc:
-                logger.error(
-                    "Failed to enqueue process_upload_post_scan for upload %s: %s — "
-                    "file will remain uncompressed and without thumbnail.",
+                logger.warning(
+                    "Failed to cache clean MalwareBazaar verdict for upload %s: %s",
                     self.upload_id,
                     exc,
                 )
-                # Mark as degraded immediately since we can't schedule the optimization.
-                await self.repo.update_processing_status(self.upload_id, "degraded")
-        else:
-            logger.warning(
-                "arq_pool unavailable — post-scan processing skipped for upload %s. "
-                "File will remain uncompressed.",
-                self.upload_id,
-            )
-            await self.repo.update_processing_status(self.upload_id, "degraded")
+            return
 
-        self._record_pipeline_metrics("clean")
-        upload_file_size.labels(mime_category=self.mime_category).observe(self.initial_size)
+        safe_threat = str(threat).strip()[:200] or "unnamed threat"
+        raise UploadError(
+            UploadStatus.MALICIOUS,
+            f'ERR_MALWARE_DETECTED: File hash matched known malware signature "{safe_threat}".',
+        )
 
     async def run(self) -> None:
         self.completed_stage = await self.repo.get_pipeline_stage(self.upload_id)
@@ -378,15 +603,16 @@ class UploadPipeline:
         except UploadError:
             return
 
+        if not await self.repo.update_upload_status(self.upload_id, "processing"):
+            logger.info("Upload %s was cancelled before processing began", self.upload_id)
+            return
+
         stage_name, stage_label, _ = _STAGES[0]
         await self.emit_status(
             UploadStatus.PROCESSING, detail=stage_label, stage_name_or_label=stage_name
         )
-        await self.repo.update_upload_status(self.upload_id, "processing")
 
-        tmp = NamedTemporaryFile(delete=False)
-        self.tmp_path = Path(tmp.name)
-        tmp.close()
+        self.tmp_path = make_processing_temp_path(prefix="upload-pipeline-")
 
         try:
             download_result = await run_download_and_validate(
@@ -438,11 +664,13 @@ class UploadPipeline:
                 )
 
                 try:
-                    await delete_object(self.quarantine_key)
+                    await self._delete_quarantine_object()
                 except Exception as del_exc:
                     logger.warning(
                         "Failed to clean up quarantine object %s: %s", self.quarantine_key, del_exc
                     )
+            else:
+                raise
         finally:
             if self.pf is not None:
                 self.pf.cleanup()

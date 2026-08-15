@@ -1,13 +1,12 @@
 "use client";
 
 import { memo, useRef } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
-import { Folder, Info, ThumbsUp, MessageSquare } from "lucide-react";
+import { BrowseLink } from "@/components/browse/browse-link";
+import { Folder, ThumbsUp } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
-import { useUIStore, useLikeOverrides } from "@/lib/stores";
+import { useLikeOverrides } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 
 interface DirectoryLineItemProps {
@@ -43,8 +42,6 @@ function DirectoryLineItemImpl({
     pathBase,
     isMobile,
 }: DirectoryLineItemProps) {
-    const openSidebar = useUIStore((s) => s.openSidebar);
-    const router = useRouter();
     const t = useTranslations("Browse");
 
     const name = String(directory.name ?? "");
@@ -70,25 +67,10 @@ function DirectoryLineItemImpl({
             const builtPath = buildPath();
             const browsePath = builtPath.replace(/^\/browse\/?/, "").split("?")[0].replace(/\/$/, "");
             prefetchBrowsePath(browsePath);
-            // Prefetch the Next.js RSC payload so navigation doesn't block on
-            // deserializing the server component tree (250–440 ms frame gaps).
-            router.prefetch(`${pathBase}/${slug}`);
         }, 100);
     };
     const handlePointerLeave = () => {
         if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
-    };
-
-    const handleDetails = (e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openSidebar("details", { type: "directory", id, data: { ...directory, __path: buildPath() } });
-    };
-
-    const handleChat = (e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openSidebar("chat", { type: "directory", id, data: directory });
     };
 
     const handleCardClick = (e: React.MouseEvent) => {
@@ -144,14 +126,12 @@ function DirectoryLineItemImpl({
                     ? `text-${themeColor}-700 dark:text-${themeColor}-400`
                     : "";
 
-        const isRestricted = !!staged || !!previewPrId;
-
         return (
         <ItemActionsMenu 
             item={{ id, type: "directory", data: directory, staged, isExternal }}
             itemPath={buildPath()}
         >
-            <Link
+            <BrowseLink
                 href={buildPath()}
                 onClick={handleCardClick}
                 onPointerEnter={handlePointerEnter}
@@ -217,30 +197,10 @@ function DirectoryLineItemImpl({
                     </div>
                 )}
                     <div className="flex shrink-0 items-center gap-1">
-                        {!isMobile && !isRestricted && (
-                            <button
-                                onClick={handleChat}
-                                className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
-                                title={t("chat")}
-                                aria-label={t("chatAbout", { title: name })}
-                            >
-                                <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                            </button>
-                        )}
-                        {!isMobile && (
-                            <button
-                                onClick={handleDetails}
-                                className="rounded-md p-2 hover:bg-muted active:scale-95 transition-transform"
-                                title={t("details")}
-                                aria-label={t("viewDetailsFor", { title: name })}
-                            >
-                                <Info className="h-4 w-4 text-muted-foreground" />
-                            </button>
-                        )}
                         <ItemActionsDropdownTrigger />
 
                     </div>
-            </Link>
+            </BrowseLink>
         </ItemActionsMenu>
     );
 }

@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { apiFetch, apiFetchBlob, fetchMaterialFile } from "@/lib/api-client";
-import { generateQcmPdfBlob } from "@/lib/qcm-pdf-renderer";
 import { toast } from "sonner";
 
 function triggerBlobDownload(blob: Blob, filename: string) {
@@ -66,6 +65,10 @@ export function useDownload() {
         try {
             const response = await fetchMaterialFile(materialId);
             const qcm = await response.json();
+            // @react-pdf/renderer + KaTeX are large and QCM-specific. Loading
+            // them statically makes every material viewer (including images)
+            // compile this stack in development. Keep it off the common path.
+            const { generateQcmPdfBlob } = await import("@/lib/qcm-pdf-renderer");
             const blob = await generateQcmPdfBlob(qcm, title ?? "QCM");
             const blobUrl = URL.createObjectURL(blob);
             window.open(blobUrl, "_blank", "noopener,noreferrer");

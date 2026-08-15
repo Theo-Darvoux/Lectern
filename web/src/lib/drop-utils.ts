@@ -10,10 +10,15 @@ export interface ScannedFile {
     relativePath: string;
 }
 
+export interface FolderScanResult {
+    files: ScannedFile[];
+    skipped: string[];
+}
+
 export interface DroppedItems {
     /** Flat files dropped directly (not inside a folder at the top level). */
     files: ScannedFile[];
-    /** Top-level folder entries — each will be zipped and uploaded via batch-zip. */
+    /** Top-level folder entries — traversed and uploaded file-by-file by the caller. */
     folders: Array<{ entry: FileSystemDirectoryEntry; name: string }>;
     /**
      * Items the browser refused to expose via the FileSystem API (no entry, no file).
@@ -37,23 +42,38 @@ async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSy
 
 const MAX_TRAVERSE_DEPTH = 20;
 
+function errorMessage(error: unknown, fallback: string): string {
+    if (typeof error !== "object" || error === null || !("message" in error)) return fallback;
+    const message = (error as { message?: unknown }).message;
+    return typeof message === "string" && message.length > 0 ? message : fallback;
+}
+
 async function traverseEntry(
     entry: FileSystemEntry,
     pathPrefix: string,
     out: ScannedFile[],
+    skipped: string[],
     visited: Set<string>,
     depth: number,
 ): Promise<void> {
-    if (depth > MAX_TRAVERSE_DEPTH) return; // guard against very deep trees
+    if (depth > MAX_TRAVERSE_DEPTH) {
+        skipped.push(`${pathPrefix}${entry.name}: folder nesting exceeds ${MAX_TRAVERSE_DEPTH} levels`);
+        return;
+    }
 
     // Skip hidden files and folders (starting with .)
     if (entry.name.startsWith(".")) return;
 
     if (entry.isFile) {
-        const file = await new Promise<File>((res, rej) =>
-            (entry as FileSystemFileEntry).file(res, rej),
-        );
-        out.push({ file, relativePath: pathPrefix + file.name });
+        try {
+            const file = await new Promise<File>((res, rej) =>
+                (entry as FileSystemFileEntry).file(res, rej),
+            );
+            out.push({ file, relativePath: pathPrefix + file.name });
+        } catch (error) {
+            const detail = errorMessage(error, "file could not be read");
+            skipped.push(`${pathPrefix}${entry.name}: ${detail}`);
+        }
     } else if (entry.isDirectory) {
         const dirEntry = entry as FileSystemDirectoryEntry;
         // Use the full path to detect symlink cycles
@@ -67,10 +87,19 @@ async function traverseEntry(
             // OS or browser denied access to this subdirectory — skip it rather
             // than aborting the entire traversal.
             console.warn(`drop-utils: could not read directory "${dirEntry.fullPath}":`, err);
+            const detail = errorMessage(err, "folder could not be read");
+            skipped.push(`${pathPrefix}${dirEntry.name}: ${detail}`);
             return;
         }
         for (const child of children) {
-            await traverseEntry(child, pathPrefix + dirEntry.name + "/", out, visited, depth + 1);
+            await traverseEntry(
+                child,
+                pathPrefix + dirEntry.name + "/",
+                out,
+                skipped,
+                visited,
+                depth + 1,
+            );
         }
     }
 }
@@ -79,11 +108,12 @@ async function traverseEntry(
  * Traverse a folder entry recursively and return all contained ScannedFiles.
  * The relative path of each file starts with the folder's name.
  */
-export async function traverseFolder(entry: FileSystemDirectoryEntry): Promise<ScannedFile[]> {
+export async function traverseFolder(entry: FileSystemDirectoryEntry): Promise<FolderScanResult> {
     const out: ScannedFile[] = [];
+    const skipped: string[] = [];
     const visited = new Set<string>();
-    await traverseEntry(entry, "", out, visited, 0);
-    return out;
+    await traverseEntry(entry, "", out, skipped, visited, 0);
+    return { files: out, skipped };
 }
 
 /**
@@ -115,10 +145,14 @@ export async function collectDroppedItems(items: DataTransferItemList): Promise<
         if (entry) {
             if (entry.name.startsWith(".")) continue;
             if (entry.isFile) {
-                const f = await new Promise<File>((res, rej) =>
-                    (entry as FileSystemFileEntry).file(res, rej),
-                );
-                files.push({ file: f, relativePath: f.name });
+                try {
+                    const f = await new Promise<File>((res, rej) =>
+                        (entry as FileSystemFileEntry).file(res, rej),
+                    );
+                    files.push({ file: f, relativePath: f.name });
+                } catch {
+                    inaccessible.push(entry.name);
+                }
             } else if (entry.isDirectory) {
                 folders.push({ entry: entry as FileSystemDirectoryEntry, name: entry.name });
             }
@@ -175,14 +209,17 @@ export async function zipScannedFiles(
 ): Promise<Blob> {
     const fflate = await import("fflate");
     const chunks: Uint8Array[] = [];
-    
-    // Create a Zip stream that collects chunks into an array
-    const zip = new fflate.Zip((err, chunk, final) => {
-        if (err) {
-            console.error("Zip error:", err);
-            return;
-        }
-        chunks.push(chunk);
+    let zip!: InstanceType<typeof fflate.Zip>;
+
+    const completed = new Promise<void>((resolve, reject) => {
+        zip = new fflate.Zip((err, chunk, final) => {
+            if (err) {
+                reject(err);
+                return;
+            }
+            chunks.push(chunk);
+            if (final) resolve();
+        });
     });
 
     for (let i = 0; i < files.length; i++) {
@@ -198,6 +235,7 @@ export async function zipScannedFiles(
     }
 
     zip.end();
+    await completed;
 
     return new Blob(chunks as any[], { type: "application/zip" });
 }

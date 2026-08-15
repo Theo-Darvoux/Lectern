@@ -1,10 +1,13 @@
 import { clearAccessToken, getAccessToken, setAccessToken, decodeToken } from "./auth-tokens";
 import type { UserBrief } from "./guest";
+import { ResourceCache } from "./resource-cache";
 
 /** Result of a token refresh. `user` is present when the server folds the
  *  caller's profile into the refresh response (reload bootstrap fast-path),
  *  letting the client skip a follow-up `/users/me`. */
 export type RefreshResult = { accessToken: string; user: UserBrief | null };
+
+const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 
 export const API_BASE = (() => {
     // On the server, we use the internal URL to reach the API container directly
@@ -32,15 +35,32 @@ type FetchOptions = RequestInit & {
     timeoutMs?: number;
 };
 
-/** Combine an optional caller signal with an optional per-request timeout. */
+/** Combine an optional caller signal with an optional per-request timeout.
+ * Uses an AbortController rather than AbortSignal.any/timeout so the timeout is
+ * not silently lost on browsers that support only part of the newer API. */
 function withTimeout(signal: AbortSignal | null | undefined, timeoutMs?: number): AbortSignal | undefined {
-    if (!timeoutMs || typeof AbortSignal === "undefined" || !("timeout" in AbortSignal)) {
+    if (!timeoutMs || typeof AbortController === "undefined") {
         return signal ?? undefined;
     }
-    const timeout = AbortSignal.timeout(timeoutMs);
-    if (!signal) return timeout;
-    if ("any" in AbortSignal) return AbortSignal.any([signal, timeout]);
-    return signal;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const abortFromCaller = () => controller.abort(signal?.reason);
+
+    controller.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abortFromCaller);
+    }, { once: true });
+
+    if (signal) {
+        if (signal.aborted) {
+            abortFromCaller();
+        } else {
+            signal.addEventListener("abort", abortFromCaller, { once: true });
+        }
+    }
+
+    return controller.signal;
 }
 
 /** Whether a failed request is worth retrying (transient infra/network), as
@@ -89,6 +109,7 @@ async function refreshToken(): Promise<RefreshResult | null> {
             headers: {
                 "X-Client-ID": getClientId(),
             },
+            signal: withTimeout(undefined, AUTH_REQUEST_TIMEOUT_MS),
         });
     } catch (err) {
         // Network connection error
@@ -154,7 +175,9 @@ export async function apiRequest(
 ): Promise<Response> {
     const { skipAuth, timeoutMs, ...fetchOptions } = options;
     const headers = new Headers(fetchOptions.headers);
-    const signal = withTimeout(fetchOptions.signal, timeoutMs);
+    // A 401 refresh/retry is a new network attempt and must receive a fresh
+    // timeout budget. The caller's cancellation signal is still shared.
+    const createAttemptSignal = () => withTimeout(fetchOptions.signal, timeoutMs);
 
     headers.set("X-Client-ID", getClientId());
 
@@ -172,14 +195,23 @@ export async function apiRequest(
     const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
     let res: Response;
     try {
-        res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
+        res = await fetch(url, {
+            ...fetchOptions,
+            headers,
+            credentials: "include",
+            signal: createAttemptSignal(),
+        });
         // If we got a response (any response), the API is reachable.
         if (typeof window !== "undefined") {
             window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
         }
     } catch (err) {
-        // Network error (not a 4xx/5xx response)
-        if (typeof window !== "undefined") {
+        // Network error (not a 4xx/5xx response). Do not mark unreachable if the request was aborted (e.g. page navigation).
+        const isAbort =
+            fetchOptions.signal?.aborted ||
+            (err instanceof DOMException && err.name === "AbortError") ||
+            (typeof err === "object" && err !== null && "name" in err && (err as { name: string }).name === "AbortError");
+        if (!isAbort && typeof window !== "undefined") {
             window.dispatchEvent(new CustomEvent("lectern-api-unreachable"));
         }
         throw err;
@@ -195,9 +227,25 @@ export async function apiRequest(
                 setAccessToken(newToken);
                 _onTokenRefreshed?.(newToken);
                 headers.set("Authorization", `Bearer ${newToken}`);
-                res = await fetch(url, { ...fetchOptions, headers, credentials: "include", signal });
-                if (typeof window !== "undefined") {
-                    window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
+                try {
+                    res = await fetch(url, {
+                        ...fetchOptions,
+                        headers,
+                        credentials: "include",
+                        signal: createAttemptSignal(),
+                    });
+                    if (typeof window !== "undefined") {
+                        window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
+                    }
+                } catch (retryErr) {
+                    const isAbort =
+                        fetchOptions.signal?.aborted ||
+                        (retryErr instanceof DOMException && retryErr.name === "AbortError") ||
+                        (typeof retryErr === "object" && retryErr !== null && "name" in retryErr && (retryErr as { name: string }).name === "AbortError");
+                    if (!isAbort && typeof window !== "undefined") {
+                        window.dispatchEvent(new CustomEvent("lectern-api-unreachable"));
+                    }
+                    throw retryErr;
                 }
             } else {
                 console.warn("[api-client] Token refresh failed (no new token). Clearing session.");
@@ -261,15 +309,22 @@ export async function apiFetchBlob(
 // Reusing the same URL within its TTL hits the CDN edge → full speed.
 // The server issues URLs with a 15-min TTL; we cache for 12 min to stay safe.
 const _URL_CACHE_TTL_MS = 12 * 60 * 1000;
-const _urlCache = new Map<string, { url: string; expiresAt: number }>();
+const _urlCache = new ResourceCache<string, string>({
+    maxEntries: 256,
+    ttlMs: _URL_CACHE_TTL_MS,
+});
 
-export async function getMaterialFileUrl(materialId: string): Promise<string> {
+export async function getMaterialFileUrl(
+    materialId: string,
+    signal?: AbortSignal,
+): Promise<string> {
     const cached = _urlCache.get(materialId);
-    if (cached && Date.now() < cached.expiresAt) {
-        return cached.url;
-    }
-    const { url } = await apiFetch<{ url: string }>(`/materials/${materialId}/inline`);
-    _urlCache.set(materialId, { url, expiresAt: Date.now() + _URL_CACHE_TTL_MS });
+    if (cached) return cached;
+    const { url } = await apiFetch<{ url: string }>(`/materials/${materialId}/inline`, {
+        signal,
+        timeoutMs: 15_000,
+    });
+    _urlCache.set(materialId, url, { tags: [`material:${materialId}`] });
     return url;
 }
 
@@ -281,7 +336,7 @@ export function invalidateMaterialFileUrl(materialId: string): void {
 }
 
 export async function fetchMaterialFile(materialId: string, signal?: AbortSignal): Promise<Response> {
-    const url = await getMaterialFileUrl(materialId);
+    const url = await getMaterialFileUrl(materialId, signal);
     const res = await fetch(url, signal ? { signal } : undefined);
     if (!res.ok) {
         // A failed signed-URL fetch is usually a stale/expired token or an edge

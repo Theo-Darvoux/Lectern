@@ -4,8 +4,8 @@ import uuid
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
-from app.core.sse import broadcast_to_user
+from app.core.common.exceptions import NotFoundError
+from app.core.database.post_commit import add_post_commit_user_sse
 from app.models.annotation import Annotation
 from app.models.comment import Comment
 from app.models.material import Material, MaterialFavourite, MaterialLike
@@ -35,19 +35,17 @@ async def create_notification(
     )
     db.add(notif)
     await db.flush()
-    try:
-        broadcast_to_user(
-            user_id,
-            {
-                "type": notification_type,
-                "id": str(notif.id),
-                "title": title,
-                "body": body,
-                "link": link,
-            },
-        )
-    except Exception:
-        logger.exception("SSE broadcast failed for notification %s", notif.id)
+    add_post_commit_user_sse(
+        db,
+        user_id,
+        {
+            "type": notification_type,
+            "id": str(notif.id),
+            "title": title,
+            "body": body,
+            "link": link,
+        },
+    )
     return notif
 
 
@@ -189,7 +187,8 @@ async def notify_admins_pending_user(db: AsyncSession, user: User) -> None:
         db.add_all(notifications)
         await db.flush()
         for notif in notifications:
-            broadcast_to_user(
+            add_post_commit_user_sse(
+                db,
                 notif.user_id,
                 {
                     "type": "pending_user",
@@ -228,7 +227,8 @@ async def notify_moderators(
         db.add_all(notifications)
         await db.flush()
         for notif in notifications:
-            broadcast_to_user(
+            add_post_commit_user_sse(
+                db,
                 notif.user_id,
                 {
                     "type": notification_type,

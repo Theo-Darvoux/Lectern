@@ -1,6 +1,7 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def test_health(client: AsyncClient) -> None:
@@ -34,16 +35,13 @@ async def test_verify_code_invalid(client: AsyncClient, mock_redis: AsyncMock) -
     original_env = settings.environment
     settings.environment = "production"
 
-    # Mock redis to return no previous attempts
-    mock_redis.get = AsyncMock(return_value=None)
-
     try:
         response = await client.post(
             "/api/auth/verify-code",
             json={"email": "test@example.com", "code": "WRONGCOD"},
         )
         assert response.status_code == 400
-        # Check that increment was called
+        # The attempt is consumed atomically before the verifier runs.
         mock_redis.pipeline.assert_called()
     finally:
         settings.environment = original_env
@@ -60,8 +58,8 @@ async def test_verify_code_rate_limit(client: AsyncClient, mock_redis: AsyncMock
     settings.environment = "production"
 
     try:
-        # Mock redis to return max rate limit
-        mock_redis.get = AsyncMock(return_value=str(auth_service.VERIFY_RATE_LIMIT_MAX))
+        pipe = mock_redis.pipeline.return_value
+        pipe.execute.return_value = [auth_service.VERIFY_RATE_LIMIT_MAX + 1, True]
 
         response = await client.post(
             "/api/auth/verify-code",
@@ -74,7 +72,7 @@ async def test_verify_code_rate_limit(client: AsyncClient, mock_redis: AsyncMock
 
 
 async def test_setup_creates_first_admin(client: AsyncClient) -> None:
-    # Fresh instance: no admin exists yet, so setup is allowed.
+    # Fresh non-production instance: durable installation marker is absent, so setup is allowed.
     methods = await client.get("/api/auth/methods")
     assert methods.status_code == 200
     assert methods.json()["needs_setup"] is True
@@ -93,7 +91,7 @@ async def test_setup_creates_first_admin(client: AsyncClient) -> None:
     assert data["user"]["onboarded"] is True
     assert data["access_token"]
 
-    # Once an admin exists, the instance no longer advertises setup.
+    # Once the installation marker is committed, setup is permanently consumed.
     methods = await client.get("/api/auth/methods")
     assert methods.json()["needs_setup"] is False
 
@@ -119,3 +117,146 @@ async def test_setup_rejects_short_password(client: AsyncClient) -> None:
         json={"email": "admin@example.com", "password": "short"},
     )
     assert response.status_code == 422
+
+
+async def test_production_setup_requires_configured_operator_token(client: AsyncClient) -> None:
+    from app.config import settings
+
+    original_env = settings.environment
+    original_token = settings.bootstrap_token
+    settings.environment = "production"
+    settings.bootstrap_token = None
+    try:
+        methods = await client.get("/api/auth/methods")
+        assert methods.status_code == 200
+        assert methods.json()["needs_setup"] is True
+        assert methods.json()["bootstrap_token_required"] is True
+
+        response = await client.post(
+            "/api/auth/setup",
+            json={
+                "email": "admin@example.com",
+                "password": "supersecret123",
+                "bootstrap_token": "a" * 64,
+            },
+        )
+        assert response.status_code == 503
+        assert response.json()["error_code"] == "BOOTSTRAP_TOKEN_NOT_CONFIGURED"
+    finally:
+        settings.environment = original_env
+        settings.bootstrap_token = original_token
+
+
+async def test_production_setup_token_is_one_time_and_not_reopened_by_admin_loss(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from pydantic import SecretStr
+    from sqlalchemy import delete
+
+    from app.config import settings
+    from app.models.user import User
+
+    original_env = settings.environment
+    original_token = settings.bootstrap_token
+    settings.environment = "production"
+    settings.bootstrap_token = SecretStr("b" * 64)
+    try:
+        wrong = await client.post(
+            "/api/auth/setup",
+            json={
+                "email": "admin@example.com",
+                "password": "supersecret123",
+                "bootstrap_token": "a" * 64,
+            },
+        )
+        assert wrong.status_code == 401
+
+        created = await client.post(
+            "/api/auth/setup",
+            json={
+                "email": "admin@example.com",
+                "password": "supersecret123",
+                "bootstrap_token": "b" * 64,
+            },
+        )
+        assert created.status_code == 200
+
+        # Simulate catastrophic/operator-level removal outside normal protected APIs.
+        # The irreversible installation marker must still prevent HTTP re-bootstrap.
+        await db_session.execute(delete(User))
+        await db_session.commit()
+
+        methods = await client.get("/api/auth/methods")
+        assert methods.json()["needs_setup"] is False
+        replay = await client.post(
+            "/api/auth/setup",
+            json={
+                "email": "intruder@example.com",
+                "password": "supersecret123",
+                "bootstrap_token": "b" * 64,
+            },
+        )
+        assert replay.status_code == 409
+    finally:
+        settings.environment = original_env
+        settings.bootstrap_token = original_token
+
+
+async def test_classic_login_uses_distributed_source_and_account_budget(
+    client: AsyncClient, mock_redis: AsyncMock
+) -> None:
+    from app.config import settings
+    from app.services import auth as auth_service
+
+    pipe = mock_redis.pipeline.return_value
+    pipe.execute.return_value = [auth_service.CLASSIC_LOGIN_SOURCE_MAX + 1, True, 1, True]
+    with (
+        patch.object(settings, "environment", "production"),
+        patch.object(settings, "classic_auth_enabled", True),
+        patch("app.services.auth.authenticate_user", new_callable=AsyncMock) as authenticate,
+    ):
+        response = await client.post(
+            "/api/auth/login",
+            json={"email": "user@example.com", "password": "not-the-password"},
+        )
+
+    assert response.status_code == 429
+    authenticate.assert_not_awaited()
+
+
+async def test_unknown_classic_account_runs_dummy_password_work() -> None:
+    from app.services import auth as auth_service
+
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=result)
+
+    with patch(
+        "app.services.auth._verify_password_bounded",
+        new_callable=AsyncMock,
+        return_value=False,
+    ) as verify:
+        user = await auth_service.authenticate_user(db, "missing@example.com", "guess")
+
+    assert user is None
+    verify.assert_awaited_once_with("guess", auth_service._DUMMY_PASSWORD_HASH)
+
+
+async def test_password_verification_is_offloaded_from_event_loop() -> None:
+    from app.services import auth as auth_service
+
+    with patch(
+        "app.services.auth.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=False,
+    ) as offload:
+        result = await auth_service._verify_password_bounded(
+            "guess", auth_service._DUMMY_PASSWORD_HASH
+        )
+
+    assert result is False
+
+    offload.assert_awaited_once_with(
+        auth_service.verify_password, "guess", auth_service._DUMMY_PASSWORD_HASH
+    )

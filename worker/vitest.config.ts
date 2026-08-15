@@ -13,7 +13,7 @@ export default defineConfig({
       wrangler: { configPath: "./wrangler.toml" },
       miniflare: {
         // Must match TEST_SECRET in src/index.test.ts.
-        bindings: { HMAC_SECRET: "test-hmac-secret" },
+        bindings: { HMAC_SECRET: "test-hmac-secret-at-least-32-bytes" },
       },
     }),
   ],

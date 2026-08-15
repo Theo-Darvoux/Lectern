@@ -19,7 +19,7 @@ from app.models.user import User, UserRole
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -53,6 +53,14 @@ async def test_upload_config_has_recommended_path(client: AsyncClient):
     assert "direct_threshold_mb" in data
     assert isinstance(data["direct_threshold_mb"], int)
     assert data["direct_threshold_mb"] > 0
+    assert data["max_size_mb_by_mime"]["application/pdf"] == 200
+    assert data["max_size_mb_by_mime"]["video/mp4"] == 500
+    assert data["max_size_mb_by_mime"]["image/svg+xml"] == 5
+    assert data["batch_max_zip_size_bytes"] == 500 * 1024 * 1024
+    assert data["batch_max_total_extracted_bytes"] == 2 * 1024**3
+    assert data["batch_max_files"] == 200
+    assert data["batch_max_files_privileged"] == 2_000
+    assert data["batch_max_path_depth"] == 20
 
 
 # ── 4A: Batch status endpoint ─────────────────────────────────────────────────

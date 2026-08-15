@@ -10,7 +10,7 @@ Covers (in issue order):
   #7  config.get(x) or default treats 0 as falsy — fixed with is not None
   #8  Admin cannot set a user to PENDING via role-update endpoint
   #9  TestEmailIn rejects malformed / header-injection email
-  #10 Storage usage counter clamped to >= 0 in helpers
+  #10 Corrupt negative storage usage state fails closed
   #11 get_or_create_user accepts explicit auto_approve (no second validate call)
   #12 get_s3_client receives pre-fetched cfg — only one _get_s3_settings call
   #13 TUS OPTIONS reads Redis only, no DB session
@@ -40,7 +40,7 @@ async def test_admin_get_auth_config_does_not_return_secrets(
     db_session.add(admin)
     await db_session.flush()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
@@ -67,13 +67,13 @@ async def test_prune_rejects_non_pruneable_prefix(
     db_session.add(admin)
     await db_session.commit()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
     fake_rc = AsyncMock()
     fake_rc.delete = AsyncMock()
-    with patch("app.core.redis.redis_client", fake_rc):
+    with patch("app.core.database.redis.redis_client", fake_rc):
         for bad_key in [
             "materials/some/file.pdf",
             "uploads/user123/upload-id/file.pdf",
@@ -100,7 +100,7 @@ async def test_prune_accepts_valid_prefixes(
     db_session.add(admin)
     await db_session.flush()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
@@ -292,35 +292,21 @@ async def test_allow_all_domains_new_user_unlisted_gets_pending(
     assert user.role == UserRole.PENDING
 
 
-# ── Issue #6: TUS inflight TTL ────────────────────────────────────────────────
+# ── Issue #6: TUS renewable concurrency leases ───────────────────────────────
 
 
-def test_tus_patch_sets_inflight_ttl_in_source():
-    """PATCH handler must call expire() on the inflight key immediately after incr().
-
-    We verify via source inspection since the full S3-backed PATCH flow
-    cannot be exercised in unit tests without a live S3 backend.
-    """
+def test_tus_patch_uses_renewable_global_and_user_semaphores() -> None:
+    """PATCH admission must not use fixed-expiry shared counters."""
     import inspect
 
     from app.routers.tus import tus_patch
 
     src = inspect.getsource(tus_patch)
-    # Both calls must appear and expire must follow incr
-    assert "redis.incr(_inflight_key)" in src
-    assert "redis.expire(_inflight_key" in src
-
-    incr_pos = src.index("redis.incr(_inflight_key)")
-    expire_pos = src.index("redis.expire(_inflight_key")
-    assert expire_pos > incr_pos, "expire() must come after incr() in the source"
-
-    # Extract the TTL argument — must be >= 60
-    import re
-
-    ttl_match = re.search(r"redis\.expire\(_inflight_key,\s*(\d+)\)", src)
-    assert ttl_match, "expire() must have a literal integer TTL argument"
-    ttl = int(ttl_match.group(1))
-    assert ttl >= 60, f"Inflight TTL must be >= 60s, got {ttl}"
+    assert src.count("redis_semaphore(") == 2
+    assert '"tus:global"' in src
+    assert 'f"tus:user:{user.id}"' in src
+    assert "redis.incr(" not in src
+    assert "redis.decr(" not in src
 
 
 # ── Issue #7: 0 quality values not silently ignored ──────────────────────────
@@ -344,7 +330,7 @@ def test_pdf_quality_zero_not_ignored():
     """pdf_quality=0 from config must be used, not replaced by settings default."""
     import inspect
 
-    from app.core.file_security._pdf import _compress_pdf_path
+    from app.core.security.file_security._pdf import _compress_pdf_path
 
     src = inspect.getsource(_compress_pdf_path)
     assert "is not None" in src, "pdf_quality config read must use 'is not None' check"
@@ -354,7 +340,7 @@ def test_video_profile_config_zero_not_ignored():
     """video_compression_profile from config must use is-not-None guard."""
     import inspect
 
-    from app.core.file_security._audio_video import _build_video_codec_args
+    from app.core.security.file_security._audio_video import _build_video_codec_args
 
     src = inspect.getsource(_build_video_codec_args)
     assert "is not None" in src, (
@@ -375,7 +361,7 @@ async def test_admin_cannot_set_pending_role(
     db_session.add_all([admin, target])
     await db_session.flush()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
@@ -400,7 +386,7 @@ async def test_admin_test_email_rejects_invalid_email(
     db_session.add(admin)
     await db_session.commit()
 
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
 
@@ -413,19 +399,23 @@ async def test_admin_test_email_rejects_invalid_email(
         assert response.status_code == 422, f"Expected 422 for email: {bad_email!r}"
 
 
-# ── Issue #10: Storage usage clamped to >= 0 ─────────────────────────────────
+# ── Issue #10: Corrupt storage usage fails closed ─────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_check_storage_limit_clamps_negative_redis_value():
-    """A negative Redis counter (post-flush scenario) must not allow unlimited uploads."""
-    import app.core.redis as redis_core
+async def test_check_storage_limit_rejects_negative_redis_value():
+    """A corrupt negative physical-usage counter must fail closed, never undercount."""
+    import app.core.database.redis as redis_core
+    from app.core.common.exceptions import BadRequestError
     from app.routers.upload.helpers import _check_storage_limit
 
     fake_redis = AsyncMock()
-    # Simulate a negative counter value after a Redis flush + DECRBY
-    fake_redis.get = AsyncMock(return_value=b"-999999999")
-    fake_redis.set = AsyncMock()
+    fake_redis.mget = AsyncMock(return_value=[b"-999999999", b"0", None])
+
+    def unexpected_lock(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("clean corrupt cache must fail before lock acquisition")
+
+    fake_redis.lock = unexpected_lock
 
     original_client = redis_core.redis_client
     redis_core.redis_client = fake_redis
@@ -433,13 +423,12 @@ async def test_check_storage_limit_clamps_negative_redis_value():
     mock_db = AsyncMock()
 
     try:
-        # With 1 GB max and effectively 0 usage (clamped), a small upload should pass
-        await _check_storage_limit(
-            1024,
-            mock_db,
-            config={"max_storage_gb": 1},
-        )
-        # No exception = pass (usage was clamped to 0, not kept as -999999999)
+        with pytest.raises(BadRequestError, match="accounting state is invalid"):
+            await _check_storage_limit(
+                1024,
+                mock_db,
+                config={"max_storage_gb": 1},
+            )
     finally:
         redis_core.redis_client = original_client
 
@@ -501,7 +490,7 @@ def test_get_s3_client_accepts_cfg_param():
     """get_s3_client must accept an optional cfg dict to prevent double Redis lookup."""
     import inspect
 
-    from app.core.storage import get_s3_client
+    from app.core.storage.facade import get_s3_client
 
     sig = inspect.signature(get_s3_client)
     assert "cfg" in sig.parameters, "get_s3_client must have a cfg parameter"
@@ -597,3 +586,48 @@ async def test_validate_email_listed_domain_checked_before_allow_all(
     with patch.object(settings, "allow_all_domains", True):
         result = await validate_email_for_auth("user@example.com", db_session)
     assert result is True
+
+
+@pytest.mark.asyncio
+async def test_prune_rechecks_and_skips_cas_key_that_is_now_live(
+    client: AsyncClient,
+    db_session: AsyncSession,
+):
+    from app.models.upload import Upload
+
+    admin = User(email="admin-live-prune@example.com", role=UserRole.VIEUX)
+    db_session.add(admin)
+    await db_session.flush()
+    db_session.add(
+        Upload(
+            upload_id="live-prune-upload",
+            user_id=admin.id,
+            final_key="cas/live123",
+            status="clean",
+            filename="live.pdf",
+            cas_ref_count=1,
+        )
+    )
+    await db_session.commit()
+
+    from app.core.security.security import create_access_token
+
+    token, _ = create_access_token(user_id=str(admin.id), role=admin.role.value, email=admin.email)
+    fake_rc = AsyncMock()
+    fake_rc.delete = AsyncMock()
+    fake_rc.exists = AsyncMock(return_value=0)
+
+    with (
+        patch("app.routers.admin_storage.delete_object", new_callable=AsyncMock) as delete_object,
+        patch("app.routers.admin_storage.redis_client", fake_rc),
+    ):
+        response = await client.post(
+            "/api/admin/storage/prune",
+            json=["cas/live123"],
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["deleted_count"] == 0
+    assert response.json()["skipped_live_count"] == 1
+    delete_object.assert_not_awaited()

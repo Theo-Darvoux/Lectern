@@ -32,7 +32,7 @@ export default function LoginPage() {
     const [code, setCode] = useState("");
     const [loading, setLoading] = useState(false);
     const { requestCode, verifyCode, verifyGoogleOAuth, loginWithPassword, continueAsGuest, isAuthenticated, user } = useAuth();
-    const { config } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
     const router = useRouter();
     const inputRef = useRef<HTMLInputElement>(null);
 

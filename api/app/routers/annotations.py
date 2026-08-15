@@ -1,22 +1,12 @@
-import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse
 
-from app.core.database import get_db
-from app.core.exceptions import NotFoundError
-from app.core.limiter import limiter
-from app.core.sse import (
-    broadcast_to_topic,
-    register_topic_queue,
-    sse_event_stream,
-    unregister_topic_queue,
-)
-from app.dependencies.auth import CurrentUser, OnboardedUser
-from app.models.material import Material
+from app.core.database.database import get_db
+from app.core.database.post_commit import add_post_commit_sse
+from app.core.events.limiter import limiter
+from app.dependencies.auth import CurrentUser, OnboardedUser, ReadUser
 from app.schemas.annotation import (
     AnnotationCreateIn,
     AnnotationOut,
@@ -43,6 +33,7 @@ annotations_router = APIRouter(prefix="/api/annotations", tags=["annotations"])
 async def list_annotations(
     request: Request,
     material_id: str,
+    _user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[str | None, Query()] = None,
@@ -90,7 +81,8 @@ async def add_annotation(
         data.reply_to_id,
     )
     out = AnnotationOut.model_validate(annotation)
-    broadcast_to_topic(
+    add_post_commit_sse(
+        db,
         material_id,
         {
             "type": "annotation_created",
@@ -109,7 +101,8 @@ async def edit_annotation(
 ) -> AnnotationOut:
     annotation = await update_annotation(db, annotation_id, user, data.body)
     out = AnnotationOut.model_validate(annotation)
-    broadcast_to_topic(
+    add_post_commit_sse(
+        db,
         str(annotation.material_id),
         {
             "type": "annotation_updated",
@@ -126,37 +119,12 @@ async def remove_annotation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     material_id, deleted_id, thread_id = await delete_annotation(db, annotation_id, user)
-    broadcast_to_topic(
+    add_post_commit_sse(
+        db,
         str(material_id),
         {
             "type": "annotation_deleted",
             "id": str(deleted_id),
             "thread_id": str(thread_id),
         },
-    )
-
-
-@material_annotations_router.get("/{material_id}/sse")
-@limiter.limit("20/minute")
-async def material_event_stream(
-    request: Request,
-    material_id: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> EventSourceResponse:
-    try:
-        mid = uuid.UUID(material_id)
-    except ValueError:
-        raise NotFoundError("Material not found")
-
-    result = await db.execute(select(Material).where(Material.id == mid))
-    if not result.scalar_one_or_none():
-        raise NotFoundError("Material not found")
-
-    queue = register_topic_queue(material_id)
-    return EventSourceResponse(
-        sse_event_stream(
-            queue,
-            cleanup=lambda: unregister_topic_queue(material_id, queue),
-        ),
-        headers={"X-Accel-Buffering": "no"},
     )

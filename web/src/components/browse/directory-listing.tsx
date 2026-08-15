@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo, startTransition } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useTutorialMenuOpen } from "@/lib/tutorials/tutorial-store";
 import { DirectoryLineItem } from "@/components/browse/directory-line-item";
 import { MaterialLineItem } from "@/components/browse/material-line-item";
 import { Breadcrumbs } from "@/components/browse/breadcrumbs";
+import { navigateBrowse } from "@/components/browse/browse-link";
 import { EmptyDirectory } from "@/components/browse/empty-directory";
 import { UploadDrawer } from "@/components/pr/upload-drawer";
 import { NewFolderDialog } from "@/components/pr/new-folder-dialog";
@@ -23,9 +24,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useBrowseRefreshStore, useUIStore, useAuthStore } from "@/lib/stores";
+import { useUIStore, useAuthStore } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
-import { getAccessToken } from "@/lib/auth-tokens";
 import { apiFetch } from "@/lib/api-client";
 import {
   Plus,
@@ -46,6 +46,7 @@ import {
   LayoutGrid,
   Download,
   FolderPen,
+  MoreHorizontal,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -65,6 +66,10 @@ import { useViewMode } from "@/hooks/use-view-mode";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { MaterialGridCard } from "@/components/browse/material-grid-card";
 import { DirectoryGridCard } from "@/components/browse/directory-grid-card";
+import {
+  VirtualizedDirectoryGrid,
+  VirtualizedDirectoryList,
+} from "@/components/browse/virtualized-directory-items";
 
 interface DirectoryListingProps {
   directory: Record<string, unknown> | null;
@@ -89,9 +94,6 @@ export function DirectoryListing({
   const router = useRouter();
   const pathname = usePathname();
   const isMobile = useIsMobile();
-  const triggerBrowseRefresh = useBrowseRefreshStore(
-    (s) => s.triggerBrowseRefresh,
-  );
   const openSidebar = useUIStore((s) => s.openSidebar);
   const guest = isGuest(useAuthStore((s) => s.user));
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -130,51 +132,6 @@ export function DirectoryListing({
   });
 
   const { mode: viewMode, setMode: setViewMode } = useViewMode();
-
-  // Progressive rendering: mounting every row/card in one synchronous pass is a
-  // single long task (each item carries a context menu, dropdown and—in grid
-  // mode—a preview), which tanks FPS the moment the listing replaces the
-  // skeleton. Render a viewport-worth immediately, then stream the rest across
-  // animation frames so no single frame mounts the whole directory.
-  const INITIAL_RENDER = 12;
-  const RENDER_CHUNK = 16;
-  const totalItems =
-    sortedDirs.length + ghostDirs.length + sortedMats.length + ghostMaterials.length;
-  const [renderLimit, setRenderLimit] = useState(INITIAL_RENDER);
-  // Reset the budget synchronously when the listing changes so the first paint
-  // of a freshly-navigated directory never mounts the previous (larger) count.
-  // (Official React "adjust state on prop change" pattern — previous value in
-  // state, compared during render.)
-  const [renderedDir, setRenderedDir] = useState(dirId);
-  if (renderedDir !== dirId) {
-    setRenderedDir(dirId);
-    setRenderLimit(INITIAL_RENDER);
-  }
-  useEffect(() => {
-    if (renderLimit >= totalItems) return;
-    const raf = requestAnimationFrame(() =>
-      startTransition(() =>
-        setRenderLimit((n) => Math.min(totalItems, n + RENDER_CHUNK)),
-      )
-    );
-    return () => cancelAnimationFrame(raf);
-  }, [renderLimit, totalItems]);
-
-  // Per-group caps derived from the global budget (groups render in order:
-  // dirs → ghost dirs → materials → ghost materials).
-  const showDirs = Math.min(sortedDirs.length, renderLimit);
-  const showGhostDirs = Math.min(
-    ghostDirs.length,
-    Math.max(0, renderLimit - sortedDirs.length),
-  );
-  const showMats = Math.min(
-    sortedMats.length,
-    Math.max(0, renderLimit - sortedDirs.length - ghostDirs.length),
-  );
-  const showGhostMats = Math.max(
-    0,
-    renderLimit - sortedDirs.length - ghostDirs.length - sortedMats.length,
-  );
 
   // Index staged operations by target id once per render so each item is an
   // O(1) lookup instead of scanning allOps per row (O(items × ops)). First
@@ -244,9 +201,7 @@ export function DirectoryListing({
       if (data.chunks.length === 0) {
         // Worker not configured — fall back to backend streaming endpoint (root has no streaming fallback).
         if (realDirId) {
-          const token = getAccessToken();
-          const params = token ? `?token=${encodeURIComponent(token)}` : "";
-          triggerLink(`/api/directories/${realDirId}/download${params}`);
+          triggerLink(`/api/directories/${realDirId}/download`);
         } else {
           toast.error(t("downloadZipTooLarge"));
         }
@@ -413,11 +368,11 @@ export function DirectoryListing({
         if (!item) return;
         e.preventDefault();
         if (item.type === "dir") {
-          router.push(buildItemPath(String(item.dir.slug ?? "")));
+          navigateBrowse(buildItemPath(String(item.dir.slug ?? "")));
         } else if (item.type === "ghost-dir") {
           enterGhostDir(item.tempId, item.name);
         } else if (item.type === "mat") {
-          router.push(buildItemPath(String(item.mat.slug ?? "")));
+          navigateBrowse(buildItemPath(String(item.mat.slug ?? "")));
         } else if (item.type === "ghost-mat") {
           const op = item.op;
           if (op.isExternal && previewPrId && op._previewIdx !== undefined) {
@@ -592,47 +547,9 @@ export function DirectoryListing({
           {!selectMode ? (
             <div className="flex items-center justify-between h-11">
               <div className="flex items-center gap-2">
-                {!guest && allSelectableItems.length > 0 && (
-                  <Button
-                    key="select-btn"
-                    size="sm"
-                    variant="ghost"
-                    className="gap-2 text-muted-foreground hover:text-foreground hover:bg-accent/50 group px-2"
-                    onClick={() => setSelectMode(true)}
-                  >
-                    <CheckSquare className="w-4 h-4 opacity-50 group-hover:opacity-100" />
-                    <span className="text-xs font-medium uppercase tracking-wider">{t("select")}</span>
-                  </Button>
-                )}
-                {!activeGhostDir && (
-                  <Button
-                    key="download-zip-btn"
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent/50 group"
-                    onClick={handleDownloadZip}
-                    disabled={isDownloading}
-                    title={t("downloadZipTooltip")}
-                  >
-                    {isDownloading ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Download className="w-4 h-4 opacity-50 group-hover:opacity-100" />
-                    )}
-                  </Button>
-                )}
-                {!guest && !activeGhostDir && !previewPrId && directory && (
-                  <Button
-                    key="edit-folder-btn"
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent/50 group"
-                    onClick={() => setEditFolderOpen(true)}
-                    title={t("editFolder")}
-                  >
-                    <FolderPen className="w-4 h-4 opacity-50 group-hover:opacity-100" />
-                  </Button>
-                )}
+                <span className="hidden text-sm text-muted-foreground sm:inline">
+                  {t("itemsCount", { count: allSelectableItems.length })}
+                </span>
                 <div data-tutorial="view-mode" className="flex items-center border rounded-md overflow-hidden h-8">
                   <button
                     onClick={() => setViewMode("list")}
@@ -651,6 +568,33 @@ export function DirectoryListing({
                     <LayoutGrid className="h-4 w-4" />
                   </button>
                 </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={t("moreActions")}>
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-52">
+                    {!guest && allSelectableItems.length > 0 && (
+                      <DropdownMenuItem onClick={() => setSelectMode(true)}>
+                        <CheckSquare className="mr-2 h-4 w-4" />
+                        {t("select")}
+                      </DropdownMenuItem>
+                    )}
+                    {!activeGhostDir && (
+                      <DropdownMenuItem onClick={handleDownloadZip} disabled={isDownloading}>
+                        {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                        {t("downloadZipTooltip")}
+                      </DropdownMenuItem>
+                    )}
+                    {!guest && !activeGhostDir && !previewPrId && directory && (
+                      <DropdownMenuItem onClick={() => setEditFolderOpen(true)}>
+                        <FolderPen className="mr-2 h-4 w-4" />
+                        {t("editFolder")}
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
 
               <div className="flex items-center gap-2">
@@ -689,9 +633,8 @@ export function DirectoryListing({
                     <Button
                       key="create-btn"
                       size="sm"
-                      variant="outline"
                       data-tutorial="create-menu"
-                      className="gap-1.5 shadow-xs"
+                      className="gap-1.5"
                     >
                       <Plus className="w-4 h-4" />
                       <span className="hidden sm:inline">{tQCM("newContent")}</span>
@@ -729,7 +672,7 @@ export function DirectoryListing({
             </div>
           </div>
         ) : (
-          <div className="flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 h-11 animate-in fade-in slide-in-from-top-1 duration-200 dark:bg-primary/10">
+          <div className="flex min-h-11 flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 animate-in fade-in slide-in-from-top-1 duration-200 dark:bg-primary/10 sm:gap-3 sm:px-4">
             <div
               className="h-8 gap-2 text-muted-foreground hover:text-foreground flex items-center cursor-pointer transition-colors rounded-md hover:bg-accent/50"
               onClick={() => {
@@ -831,8 +774,8 @@ export function DirectoryListing({
       ) : (
         !isEmpty && (
           viewMode === "list" ? (
-            <div data-tutorial="browse-item" className={`divide-y rounded-lg border ${selectMode ? "select-none" : ""}`}>
-              {sortedDirs.slice(0, showDirs).map((dir, i) => {
+            <VirtualizedDirectoryList focusedIndex={focusedIndex} className={`rounded-lg border ${selectMode ? "select-none" : ""}`}>
+              {sortedDirs.map((dir, i) => {
                 const id = String(dir.id);
                 const op = dirOpById.get(id);
 
@@ -872,7 +815,7 @@ export function DirectoryListing({
                 );
               })}
 
-              {ghostDirs.slice(0, showGhostDirs).map((op, i) => {
+              {ghostDirs.map((op, i) => {
                 const tempId =
                   (op.op === "create_directory" ? op.temp_id : op.target_id) ||
                   `ghost-${i}`;
@@ -904,7 +847,7 @@ export function DirectoryListing({
                 );
               })}
 
-              {sortedMats.slice(0, showMats).map((mat, i) => {
+              {sortedMats.map((mat, i) => {
                 const id = String(mat.id);
                 const op = matOpById.get(id);
 
@@ -950,7 +893,7 @@ export function DirectoryListing({
                 );
               })}
 
-              {ghostMaterials.slice(0, showGhostMats).map((op, i) => {
+              {ghostMaterials.map((op, i) => {
                 const isExternal = op.isExternal;
                 const title = op.op === "create_material" ? op.title : op.target_title;
                 const tempId = op.op === "create_material" ? op.temp_id : op.target_id;
@@ -1005,11 +948,11 @@ export function DirectoryListing({
                   />
                 );
               })}
-            </div>
+            </VirtualizedDirectoryList>
           ) : (
             /* ── Grid view ──────────────────────────────────────────────────── */
-            <div data-tutorial="browse-item" className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 ${selectMode ? "select-none" : ""}`}>
-              {sortedDirs.slice(0, showDirs).map((dir, i) => {
+            <VirtualizedDirectoryGrid focusedIndex={focusedIndex} className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 ${selectMode ? "select-none" : ""}`}>
+              {sortedDirs.map((dir, i) => {
                 const id = String(dir.id);
                 const op = dirOpById.get(id);
 
@@ -1048,7 +991,7 @@ export function DirectoryListing({
                 );
               })}
 
-              {ghostDirs.slice(0, showGhostDirs).map((op, i) => {
+              {ghostDirs.map((op, i) => {
                 const tempId =
                   (op.op === "create_directory" ? op.temp_id : op.target_id) ||
                   `ghost-${i}`;
@@ -1079,7 +1022,7 @@ export function DirectoryListing({
                 );
               })}
 
-              {sortedMats.slice(0, showMats).map((mat, i) => {
+              {sortedMats.map((mat, i) => {
                 const id = String(mat.id);
                 const op = matOpById.get(id);
 
@@ -1124,7 +1067,7 @@ export function DirectoryListing({
                 );
               })}
 
-              {ghostMaterials.slice(0, showGhostMats).map((op, i) => {
+              {ghostMaterials.map((op, i) => {
                 const isExternal = op.isExternal;
                 const title = op.op === "create_material" ? op.title : op.target_title;
                 const tempId = op.op === "create_material" ? op.temp_id : op.target_id;
@@ -1185,7 +1128,7 @@ export function DirectoryListing({
                   />
                 );
               })}
-            </div>
+            </VirtualizedDirectoryGrid>
           )
         )
       )}
@@ -1264,11 +1207,9 @@ export function DirectoryListing({
                   setSubmittingBatch(true);
                   const result = await submitDirectOperations(batchDeleteOps, undefined, undefined, tAutoTitle);
                   setSubmittingBatch(false);
+                  if (!result) return;
                   setBatchDeleteOps(null);
                   setSelectMode(false);
-                  if (result?.status === "approved") {
-                    triggerBrowseRefresh();
-                  }
                 }
               }}
               className="gap-2"
@@ -1330,11 +1271,9 @@ export function DirectoryListing({
                     setSubmittingBatch(true);
                     const result = await submitDirectOperations(batchPasteOps, undefined, undefined, tAutoTitle);
                     setSubmittingBatch(false);
+                    if (!result) return;
                     setBatchPasteOps(null);
                     clearClipboard();
-                    if (result?.status === "approved") {
-                      triggerBrowseRefresh();
-                    }
                   }
                 }}
                 className="gap-2"

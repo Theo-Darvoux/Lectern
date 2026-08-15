@@ -16,8 +16,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from app.config import settings
-from app.core.storage import generate_presigned_get, get_public_url
 from app.core.storage.delivery import DirectDelivery, WorkerDelivery, get_delivery
+from app.core.storage.facade import generate_presigned_get, get_public_url
 
 SECRET = "delivery-test-secret"
 

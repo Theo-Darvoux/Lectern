@@ -8,7 +8,13 @@ import type { UserBrief } from "@/lib/guest";
 import { broadcastTokenAcquired, performLogout, scheduleRefreshTimer } from "@/lib/auth-sync";
 
 export function useAuth() {
-    const { user, isAuthenticated, isLoading, setUser, setLoading } = useAuthStore();
+    const user = useAuthStore((state) => state.user);
+    const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+    const isLoading = useAuthStore((state) => state.isLoading);
+    const bootstrapError = useAuthStore((state) => state.bootstrapError);
+    const setUser = useAuthStore((state) => state.setUser);
+    const setLoading = useAuthStore((state) => state.setLoading);
+    const setBootstrapError = useAuthStore((state) => state.setBootstrapError);
 
     const requestCode = useCallback(async (email: string) => {
         await apiFetch("/auth/request-code", {
@@ -113,6 +119,7 @@ export function useAuth() {
     // request that also returns the user — and skip `/users/me` entirely.
     const bootstrapAuth = useCallback(async () => {
         setLoading(true);
+        setBootstrapError(null);
         try {
             if (!getAccessToken()) {
                 if (!hasAuthHint()) {
@@ -133,16 +140,20 @@ export function useAuth() {
                 }
                 // Token but no user (e.g. older API): fall through to /users/me.
             }
-            const me = await apiFetch<UserBrief>("/users/me");
+            const me = await apiFetch<UserBrief>("/users/me", { timeoutMs: 10_000 });
             setUser(me);
             const token = getAccessToken();
             if (token) scheduleRefreshTimer(token);
         } catch (err) {
-            handleAuthError(err);
+            if (err instanceof ApiError && (err.status === 401 || (err.status === 403 && err.error_code === "USER_PENDING"))) {
+                handleAuthError(err);
+            } else {
+                setBootstrapError(err instanceof Error ? err.message : "Authentication initialization failed");
+            }
         } finally {
             setLoading(false);
         }
-    }, [setUser, setLoading, handleAuthError]);
+    }, [setUser, setLoading, setBootstrapError, handleAuthError]);
 
     const verifyGoogleOAuth = useCallback(async (credential: string) => {
         const data = await apiFetch<{
@@ -180,14 +191,24 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
-    const setup = useCallback(async (email: string, password: string, displayName?: string) => {
+    const setup = useCallback(async (
+        email: string,
+        password: string,
+        displayName?: string,
+        bootstrapToken?: string,
+    ) => {
         const data = await apiFetch<{
             access_token: string;
             user: UserBrief;
             is_new_user: boolean;
         }>("/auth/setup", {
             method: "POST",
-            body: JSON.stringify({ email, password, display_name: displayName || null }),
+            body: JSON.stringify({
+                email,
+                password,
+                display_name: displayName || null,
+                bootstrap_token: bootstrapToken || null,
+            }),
             skipAuth: true,
         });
 
@@ -198,5 +219,5 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
-    return { user, isAuthenticated, isLoading, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, setup, continueAsGuest, logout, fetchMe, bootstrapAuth };
+    return { user, isAuthenticated, isLoading, bootstrapError, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, setup, continueAsGuest, logout, fetchMe, bootstrapAuth };
 }

@@ -8,15 +8,21 @@ from collections import defaultdict
 from datetime import UTC, datetime
 
 from redis.asyncio import Redis
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.config import settings
-from app.core.exceptions import BadRequestError, ConflictError, ForbiddenError, NotFoundError
-from app.core.storage import copy_object, get_object_info, object_exists
+from app.core.common.exceptions import BadRequestError, ConflictError, ForbiddenError, NotFoundError
+from app.core.common.upload_limits import enforce_upload_size_limit
+from app.core.database.post_commit import PostCommitKey, register_transaction_callbacks
+from app.core.events.coalesce import JobKind
+from app.core.security.async_utils import shielded_await
+from app.core.storage.facade import copy_object, delete_object, get_object_info, object_exists
+from app.models.cas_staging_claim import CasStagingClaim
 from app.models.directory import Directory
 from app.models.material import Material, MaterialVersion
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
@@ -27,9 +33,16 @@ from app.models.user import User
 from app.schemas.pull_request import PullRequestCreate
 from app.services.directory import slugify
 from app.services.notification import notify_user
+from app.services.reaction_lock import acquire_reaction_toggle_lock
 from app.services.tag import get_or_create_tags, prune_orphan_tags
 
 logger = logging.getLogger(__name__)
+
+# All directory-parent mutations take this transaction-level lock on PostgreSQL.
+# Row locks cannot prevent two independent directory rows from being moved below
+# one another concurrently, so the tree invariant needs a shared serialization
+# point.  The value is arbitrary but stable (ASCII "WIKINT").
+_DIRECTORY_TREE_LOCK_KEY = 0x57494B494E54
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,6 +88,43 @@ def _resolve(value: str | None, id_map: dict[str, uuid.UUID]) -> uuid.UUID | Non
         return uuid.UUID(s)
     except ValueError:
         raise BadRequestError(f"Invalid UUID: {s}")
+
+
+async def _acquire_directory_tree_lock(db: AsyncSession) -> None:
+    """Serialize directory hierarchy and live namespace mutation on PostgreSQL."""
+    if db.get_bind().dialect.name == "postgresql":
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": _DIRECTORY_TREE_LOCK_KEY},
+        )
+
+
+async def _validate_directory_parent(
+    db: AsyncSession, target_id: uuid.UUID, new_parent_id: uuid.UUID | None
+) -> None:
+    """Require a present parent and preserve an acyclic directory hierarchy."""
+    if new_parent_id == target_id:
+        raise BadRequestError("Cannot move a directory into itself")
+
+    check_id = new_parent_id
+    seen: set[uuid.UUID] = set()
+    while check_id is not None:
+        if check_id == target_id:
+            raise BadRequestError("Cannot move a directory into one of its own descendants")
+        if check_id in seen:
+            raise BadRequestError("Cannot move a directory below an existing circular hierarchy")
+        seen.add(check_id)
+
+        row = (
+            await db.execute(
+                select(Directory.id, Directory.parent_id).where(
+                    Directory.id == check_id, Directory.deleted_at.is_(None)
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            raise NotFoundError("Parent directory not found")
+        check_id = row.parent_id
 
 
 def _collect_temp_refs(op: dict[str, typing.Any]) -> set[str]:
@@ -126,46 +176,160 @@ def get_pr_all_file_keys(pr: PullRequest) -> list[str]:
     return keys
 
 
+async def _lock_open_pr_for_transition(db: AsyncSession, pr_id: uuid.UUID) -> PullRequest:
+    """Lock and refresh an OPEN PR before any terminal transition."""
+    pr = await db.scalar(
+        select(PullRequest)
+        .where(PullRequest.id == pr_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if pr is None:
+        raise NotFoundError("Pull request not found")
+    if pr.status != PRStatus.OPEN:
+        raise BadRequestError("This contribution is no longer open")
+    return pr
+
+
+async def _lock_and_validate_pr_cas_files(
+    db: AsyncSession,
+    pr: PullRequest,
+    *,
+    settled_statuses: set[str] | frozenset[str] | None = None,
+) -> list[Upload]:
+    """Lock and validate every CAS key claimed by a contribution.
+
+    A key is eligible when it is backed by an author-owned clean upload with an
+    active staging reference, or by a consumed generated-CAS claim. Duplicate
+    upload rows cannot satisfy a different missing key because validation is set
+    based. Callers hold these row locks through approval.
+    """
+    expected_keys = {key for key in get_pr_all_file_keys(pr) if key.startswith("cas/")}
+    if not expected_keys:
+        return []
+
+    claimed_keys = set(
+        await db.scalars(
+            select(PRFileClaim.file_key)
+            .where(PRFileClaim.pr_id == pr.id, PRFileClaim.file_key.in_(expected_keys))
+            .with_for_update()
+        )
+    )
+    if claimed_keys != expected_keys:
+        raise ConflictError("Contribution file claims changed; reload and retry")
+
+    upload_rows = list(
+        (
+            await db.scalars(
+                select(Upload)
+                .where(
+                    Upload.final_key.in_(expected_keys),
+                    Upload.user_id == pr.author_id,
+                )
+                .with_for_update()
+            )
+        ).all()
+    )
+    eligible_keys = {
+        upload.final_key
+        for upload in upload_rows
+        if upload.final_key
+        and upload.status == "clean"
+        and int(upload.cas_ref_count or 0) > 0
+        and (settled_statuses is None or upload.processing_status in settled_statuses)
+    }
+
+    consumed_claim_keys = set(
+        await db.scalars(
+            select(CasStagingClaim.file_key)
+            .where(
+                CasStagingClaim.user_id == pr.author_id,
+                CasStagingClaim.file_key.in_(expected_keys),
+                CasStagingClaim.consumed_at.is_not(None),
+            )
+            .with_for_update()
+        )
+    )
+    eligible_keys.update(consumed_claim_keys)
+    if eligible_keys != expected_keys:
+        raise ConflictError("One or more contribution files are no longer clean, settled, or owned")
+    return upload_rows
+
+
 async def _release_pr_upload_quota(
     db: AsyncSession,
     pr: PullRequest,
     redis: Redis,
     approved: bool = False,  # type: ignore[type-arg]
-) -> None:
-    """Find all uploads associated with the PR and remove them from the user's Redis quota.
+) -> list[str]:
+    """Queue quota cleanup and return the selected uploads' reservation IDs.
 
-    If ``approved`` is True, also updates the Upload row status to 'applied'.
+    Approval makes the legacy object durable, so its reservation is released by
+    a separate post-commit job after invalidating usage. Rejection cleanup
+    couples reservation release to successful staging-object deletion.
     """
     keys = get_pr_all_file_keys(pr)
     if not keys:
-        return
+        return []
 
-    # Find uploads by their quarantine or final keys
-    stmt = select(Upload).where((Upload.quarantine_key.in_(keys)) | (Upload.final_key.in_(keys)))
+    # A CAS key may have many duplicate Upload rows. Select one author-owned
+    # staging owner per claimed key deterministically; never mutate another
+    # user's duplicate upload.
+    stmt = (
+        select(Upload)
+        .where(
+            (Upload.quarantine_key.in_(keys)) | (Upload.final_key.in_(keys)),
+            Upload.user_id == pr.author_id,
+        )
+        .order_by(Upload.updated_at.desc(), Upload.created_at.desc())
+        .with_for_update()
+    )
     result = await db.execute(stmt)
-    uploads = list(result.scalars().all())
+    candidate_uploads = list(result.scalars().all())
+    candidates_by_key: dict[str, list[Upload]] = {}
+    for upload in candidate_uploads:
+        matched_key = upload.final_key if upload.final_key in keys else upload.quarantine_key
+        if matched_key:
+            candidates_by_key.setdefault(matched_key, []).append(upload)
+    uploads: list[Upload] = []
+    for claimed_key in keys:
+        candidates = candidates_by_key.get(claimed_key, [])
+        if not candidates:
+            continue
+        selected = candidates[0]
+        if approved:
+            selected = next(
+                (
+                    upload
+                    for upload in candidates
+                    if upload.status == "clean"
+                    and (not claimed_key.startswith("cas/") or int(upload.cas_ref_count or 0) > 0)
+                ),
+                selected,
+            )
+        uploads.append(selected)
 
     if not uploads:
-        return
+        return []
 
-    from app.routers.upload.helpers import _QUOTA_KEY_PREFIX
-
-    quota_key = f"{_QUOTA_KEY_PREFIX}{pr.author_id}"
     keys_to_remove: list[str] = []
+    reservation_ids: list[str] = []
 
     for upload in uploads:
         if upload.quarantine_key:
             keys_to_remove.append(upload.quarantine_key)
         keys_to_remove.append(f"staging:{upload.user_id}:{upload.upload_id}")
+        reservation_ids.append(upload.upload_id)
 
-        if approved:
+        if approved and upload.status == "clean":
             upload.status = "applied"
 
     if keys_to_remove:
-        try:
-            await redis.zrem(quota_key, *keys_to_remove)
-        except Exception as exc:
-            logger.warning("Failed to release upload quota for PR %s: %s", pr.id, exc)
+        db.info.setdefault(PostCommitKey.JOBS, []).append(
+            ("release_upload_quota", str(pr.author_id), sorted(set(keys_to_remove)))
+        )
+
+    return sorted(set(reservation_ids))
 
 
 async def _cleanup_pr_resources(
@@ -177,22 +341,127 @@ async def _cleanup_pr_resources(
     """Release file claims and optionally schedule deletion of staging files."""
     await db.execute(delete(PRFileClaim).where(PRFileClaim.pr_id == pr.id))
 
-    # Release upload quota slots immediately
+    # Select affected uploads and queue external cleanup in the transaction outbox.
     if redis is None:
-        from app.core.redis import redis_client
+        from app.core.database.redis import redis_client
 
         redis = redis_client
 
+    reservation_ids: list[str] = []
     if redis:  # type: ignore[truthy-bool]
         # If delete_staging is False, it's likely an approval
-        await _release_pr_upload_quota(db, pr, redis, approved=not delete_staging)
+        reservation_ids = await _release_pr_upload_quota(
+            db,
+            pr,
+            redis,
+            approved=not delete_staging,
+        )
 
-    if delete_staging:
-        uploads_to_delete = get_pr_staging_files(pr)
-        if uploads_to_delete:
-            db.info.setdefault("post_commit_jobs", []).append(
-                ("delete_storage_objects", uploads_to_delete)
+    # CAS staging refs need the original SHA-256, but PR payload hashes are
+    # optional/untrusted. Resolve release identities from authoritative Upload
+    # rows or consumed generated-CAS claims instead.
+    cas_keys = {key for key in get_pr_all_file_keys(pr) if key.startswith("cas/")}
+    if cas_keys:
+        upload_rows = list(
+            (
+                await db.scalars(
+                    select(Upload)
+                    .where(
+                        Upload.final_key.in_(cas_keys),
+                        Upload.user_id == pr.author_id,
+                    )
+                    .order_by(Upload.updated_at.desc(), Upload.created_at.desc())
+                    .with_for_update()
+                )
+            ).all()
+        )
+        claim_rows = list(
+            (
+                await db.scalars(
+                    select(CasStagingClaim)
+                    .where(
+                        CasStagingClaim.user_id == pr.author_id,
+                        CasStagingClaim.file_key.in_(cas_keys),
+                        CasStagingClaim.consumed_at.is_not(None),
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+
+        all_uploads_by_key: dict[str, list[Upload]] = {}
+        uploads_by_key: dict[str, Upload] = {}
+        for upload_row in upload_rows:
+            if upload_row.final_key:
+                all_uploads_by_key.setdefault(upload_row.final_key, []).append(upload_row)
+            if (
+                upload_row.final_key
+                and upload_row.final_key not in uploads_by_key
+                and upload_row.status in ("clean", "applied")
+                and int(upload_row.cas_ref_count or 0) > 0
+            ):
+                uploads_by_key[upload_row.final_key] = upload_row
+        claims_by_key = {claim.file_key: claim for claim in claim_rows}
+
+        refs_to_release: list[str] = []
+        for key in sorted(cas_keys):
+            upload = uploads_by_key.get(key)
+            if upload is not None:
+                reference_sha = upload.content_sha256 or upload.sha256
+                if not reference_sha:
+                    logger.error(
+                        "Cannot release CAS staging reference for %s: authoritative hash missing",
+                        key,
+                    )
+                    continue
+                refs_to_release.append(reference_sha)
+                upload.cas_ref_count = 0
+                if delete_staging and upload.status == "clean":
+                    upload.status = "failed"
+                continue
+
+            # If Upload rows exist but none owns a live CAS ref, do not release a
+            # second owner for the same key. Claim fallback is for generated-CAS
+            # files that genuinely have no Upload owner.
+            if key in all_uploads_by_key:
+                continue
+            claim = claims_by_key.get(key)
+            if claim is not None:
+                refs_to_release.append(claim.sha256)
+            else:
+                logger.warning(
+                    "No authoritative CAS staging owner found while cleaning PR %s key %s",
+                    pr.id,
+                    key,
+                )
+
+        if refs_to_release:
+            db.info.setdefault(PostCommitKey.JOBS, []).append(
+                (
+                    "release_cas_references",
+                    [
+                        {
+                            "sha256": sha256,
+                            "operation_id": f"pr:{pr.id}:staging:{sha256}:release",
+                        }
+                        for sha256 in sorted(set(refs_to_release))
+                    ],
+                )
             )
+
+    uploads_to_delete = get_pr_staging_files(pr)
+    if uploads_to_delete:
+        job: tuple[typing.Any, ...] = (
+            "delete_storage_objects",
+            uploads_to_delete,
+            reservation_ids,
+        )
+        if not delete_staging:
+            # Approval already copied uploads/ bytes to durable materials/.
+            # Release capacity only after the source object is actually gone,
+            # and fence stale legacy-usage snapshots in that same worker step.
+            job = (*job, True)
+        db.info.setdefault(PostCommitKey.JOBS, []).append(job)
 
 
 def _slug_pattern(base: str) -> re.Pattern[str]:
@@ -242,6 +511,77 @@ async def _unique_material_slug(
     return f"{base}-{uuid.uuid4().hex[:8]}"
 
 
+async def _assert_directory_slug_available(
+    db: AsyncSession,
+    parent_id: uuid.UUID | None,
+    slug: str,
+    *,
+    exclude_id: uuid.UUID | None = None,
+) -> None:
+    """Reject a live sibling/root slug collision under the namespace lock.
+
+    PostgreSQL's partial unique indexes remain the final authority.  The shared
+    transaction-level lock makes application create/move/restore schedules
+    deterministic even when there is no existing row available to lock.
+    """
+    await _acquire_directory_tree_lock(db)
+
+    stmt = select(Directory.id).where(Directory.slug == slug, Directory.deleted_at.is_(None))
+    if parent_id is None:
+        stmt = stmt.where(Directory.parent_id.is_(None))
+    else:
+        stmt = stmt.where(Directory.parent_id == parent_id)
+    if exclude_id is not None:
+        stmt = stmt.where(Directory.id != exclude_id)
+
+    if await db.scalar(stmt.limit(1)) is not None:
+        raise ConflictError(
+            f'Directory path "{slug}" is already in use at this location; reload and retry'
+        )
+
+
+async def _assert_directory_restore_paths_available(
+    db: AsyncSession, restore_rows: list[Directory]
+) -> None:
+    """Preflight an entire undelete subtree against the current live namespace."""
+    await _acquire_directory_tree_lock(db)
+
+    restoring_ids = {directory.id for directory in restore_rows}
+    restoring_keys: set[tuple[uuid.UUID | None, str]] = set()
+    for directory in restore_rows:
+        key = (directory.parent_id, directory.slug)
+        if key in restoring_keys:
+            raise ConflictError(
+                "Cannot restore directory subtree because it contains duplicate paths"
+            )
+        restoring_keys.add(key)
+
+    if not restoring_keys:
+        return
+
+    slugs = {slug for _parent_id, slug in restoring_keys}
+    parent_ids = {parent_id for parent_id, _slug in restoring_keys if parent_id is not None}
+    parent_scope: ColumnElement[bool] = Directory.parent_id.in_(parent_ids)
+    if any(parent_id is None for parent_id, _slug in restoring_keys):
+        parent_scope = parent_scope | Directory.parent_id.is_(None)
+
+    live_rows = await db.execute(
+        select(Directory.parent_id, Directory.slug).where(
+            Directory.deleted_at.is_(None),
+            Directory.id.not_in(restoring_ids),
+            Directory.slug.in_(slugs),
+            parent_scope,
+        )
+    )
+    live_keys = {(row.parent_id, row.slug) for row in live_rows}
+    conflicts = restoring_keys & live_keys
+    if conflicts:
+        _parent_id, slug = sorted(conflicts, key=lambda item: (str(item[0]), item[1]))[0]
+        raise ConflictError(
+            f'Directory path "{slug}" is already in use at this location; reload and retry'
+        )
+
+
 async def _unique_directory_slug(
     db: AsyncSession,
     parent_id: uuid.UUID | None,
@@ -250,9 +590,12 @@ async def _unique_directory_slug(
 ) -> str:
     """Generate a slug unique among sibling directories.
 
-    Uses SELECT ... FOR UPDATE to prevent race conditions. Same prefix-collision
-    fix as _unique_material_slug.
+    The transaction-level directory namespace lock closes the empty-result race
+    that SELECT ... FOR UPDATE alone cannot serialize. Same prefix-collision fix
+    as _unique_material_slug.
     """
+    await _acquire_directory_tree_lock(db)
+
     base = slugify(name) or "untitled"
     pattern = _slug_pattern(base)
 
@@ -296,7 +639,7 @@ async def _enqueue_deindex_material_recursive(db: AsyncSession, material_id: uui
     all_mat_ids = (await db.scalars(select(mat_cte.c.id))).all()
 
     for mid in all_mat_ids:
-        db.info.setdefault("post_commit_jobs", []).append(
+        db.info.setdefault(PostCommitKey.JOBS, []).append(
             ("delete_indexed_item", "materials", str(mid))
         )
 
@@ -319,19 +662,19 @@ async def _enqueue_reindex_directory_recursive(db: AsyncSession, directory_id: u
         await db.scalars(select(Material.id).where(Material.directory_id.in_(all_dir_ids)))
     ).all()
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
 
     for did in all_dir_ids:
         key = ("index_directory", str(did))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_directory", did))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_DIRECTORY, did))
 
     for mid in mat_ids:
         key = ("index_material", str(mid))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_material", mid))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mid))
 
 
 async def _enqueue_deindex_directory_recursive(db: AsyncSession, directory_id: uuid.UUID) -> None:
@@ -359,12 +702,12 @@ async def _enqueue_deindex_directory_recursive(db: AsyncSession, directory_id: u
         await _enqueue_deindex_material_recursive(db, mid)
 
     # 4. Enqueue the directories themselves (dedup via set)
-    seen_deindex: set[tuple[str, str, str]] = db.info.setdefault("post_commit_deindex_keys", set())
+    seen_deindex: set[tuple[str, str, str]] = db.info.setdefault(PostCommitKey.DEINDEX_KEYS, set())
     for did in all_dir_ids:
         key = ("delete_indexed_item", "directories", str(did))
         if key not in seen_deindex:
             seen_deindex.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(key)
+            db.info.setdefault(PostCommitKey.JOBS, []).append(key)
 
 
 def topo_sort_operations(operations: list[dict[str, typing.Any]]) -> list[dict[str, typing.Any]]:
@@ -425,14 +768,21 @@ def _resolve_mime_type(
 
 
 async def _resolve_thumbnail_info(
-    db: AsyncSession, cas_file_key: str
+    db: AsyncSession,
+    cas_file_key: str,
+    owner_id: uuid.UUID | None,
 ) -> tuple[str | None, str | None]:
-    """Return (thumbnail_key, thumbnail_status) from the uploads table for the given CAS key."""
+    """Resolve only the contribution author's active upload thumbnail."""
     from app.models.upload import Upload as _Upload
 
     row = await db.execute(
         select(_Upload.thumbnail_key, _Upload.thumbnail_status)
-        .where(_Upload.final_key == cas_file_key)
+        .where(
+            _Upload.final_key == cas_file_key,
+            _Upload.user_id == owner_id,
+            _Upload.status == "clean",
+            _Upload.cas_ref_count > 0,
+        )
         .order_by(_Upload.updated_at.desc())
         .limit(1)
     )
@@ -440,6 +790,158 @@ async def _resolve_thumbnail_info(
     if result is None:
         return None, None
     return result[0], result[1]
+
+
+_PR_PREPARED_VERSION_FILES_KEY = "pr_prepared_version_files"
+_PR_PREPARED_VERSION_FILES_ACTIVE_KEY = "pr_prepared_version_files_active"
+
+
+class _PreparedVersionFile(typing.TypedDict):
+    file_key: str
+    file_size: int
+    file_mime_type: str
+    cas_sha256: str | None
+    thumbnail_key: str | None
+    thumbnail_status: str | None
+
+
+async def _prepare_version_file(
+    db: AsyncSession,
+    *,
+    file_key: str,
+    payload: dict[str, typing.Any],
+    author_id: uuid.UUID | None,
+) -> _PreparedVersionFile:
+    """Resolve/copy external file state before any hierarchy transaction lock is taken."""
+    stored_content_sha256: str | None = None
+    if file_key.startswith("cas/"):
+        upload_row = (
+            await db.execute(
+                select(Upload.size_bytes, Upload.content_sha256, Upload.mime_type)
+                .where(
+                    Upload.final_key == file_key,
+                    Upload.user_id == author_id,
+                    Upload.status == "clean",
+                    Upload.cas_ref_count > 0,
+                )
+                .order_by(Upload.updated_at.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+
+        if upload_row is not None:
+            upload_size = upload_row[0]
+            content_sha = upload_row[1] if len(upload_row) > 1 else None
+            stored_mime = upload_row[2] if len(upload_row) > 2 else None
+
+            if (
+                upload_size is None
+                or not stored_mime
+                or stored_mime == "application/octet-stream"
+                or not content_sha
+            ):
+                raise ConflictError("Verified upload metadata is incomplete")
+
+            real_size = int(upload_size)
+            mime_type = stored_mime
+            stored_content_sha256 = content_sha
+        else:
+            claim = await db.scalar(
+                select(CasStagingClaim)
+                .where(
+                    CasStagingClaim.user_id == author_id,
+                    CasStagingClaim.file_key == file_key,
+                    CasStagingClaim.consumed_at.is_not(None),
+                )
+                .with_for_update()
+            )
+
+            if claim is None:
+                raise ConflictError("Verified CAS ownership is unavailable")
+
+            info = await get_object_info(file_key)
+
+            real_size = int(info["size"])
+            mime_type = info.get("content_type")
+
+            if not mime_type or mime_type == "application/octet-stream":
+                raise ConflictError("Verified generated-CAS MIME metadata is unavailable")
+
+            stored_content_sha256 = claim.sha256
+
+        enforce_upload_size_limit(mime_type, real_size)
+        thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key, author_id)
+        final_key = file_key
+    else:
+        info = await get_object_info(file_key)
+        real_size = int(info["size"])
+        mime_type = _resolve_mime_type(file_key, payload, s3_mime=info.get("content_type"))
+
+        enforce_upload_size_limit(mime_type, real_size)
+
+        final_key = file_key.replace("uploads/", "materials/", 1)
+
+        async def rollback_copy() -> None:
+            await delete_object(final_key)
+
+        async def finalize_copy() -> None:
+            return None
+
+        managed_transaction = register_transaction_callbacks(
+            db,
+            on_rollback=rollback_copy,
+            on_commit=finalize_copy,
+        )
+
+        try:
+            await copy_object(file_key, final_key)
+        except BaseException:
+            if not managed_transaction:
+                await shielded_await(
+                    rollback_copy(), description="legacy material copy compensation"
+                )
+            raise
+        thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key, author_id)
+
+    return {
+        "file_key": final_key,
+        "file_size": real_size,
+        "file_mime_type": mime_type,
+        "cas_sha256": stored_content_sha256 if final_key.startswith("cas/") else None,
+        "thumbnail_key": thumbnail_key,
+        "thumbnail_status": thumbnail_status,
+    }
+
+
+async def _prepare_pr_version_files(
+    db: AsyncSession,
+    operations: list[dict[str, typing.Any]],
+    author_id: uuid.UUID | None,
+) -> None:
+    """Perform every external file read/copy before PR hierarchy locking begins."""
+    prepared: dict[int, _PreparedVersionFile] = {}
+    for op in operations:
+        op_type = str(op.get("op") or op.get("pr_type") or "")
+        payloads: list[dict[str, typing.Any]] = []
+        if op_type == "create_material":
+            payloads.append(op)
+            payloads.extend(typing.cast(list[dict[str, typing.Any]], op.get("attachments") or []))
+        elif op_type == "edit_material":
+            payloads.append(op)
+
+        for payload in payloads:
+            raw_key = payload.get("file_key")
+            if not raw_key:
+                continue
+            prepared[id(payload)] = await _prepare_version_file(
+                db,
+                file_key=str(raw_key),
+                payload=payload,
+                author_id=author_id,
+            )
+
+    db.info[_PR_PREPARED_VERSION_FILES_KEY] = prepared
+    db.info[_PR_PREPARED_VERSION_FILES_ACTIVE_KEY] = True
 
 
 async def _make_version_for_file(
@@ -460,26 +962,27 @@ async def _make_version_for_file(
     V1 keys are copied to the materials/ prefix and scheduled for deletion.
     CAS keys get their content-addressed ref incremented.
     """
-    if file_key.startswith("cas/"):
-        upload_size = await db.scalar(
-            select(Upload.size_bytes)
-            .where(Upload.final_key == file_key)
-            .order_by(Upload.updated_at.desc())
-            .limit(1)
+    prepared_files = typing.cast(
+        dict[int, _PreparedVersionFile],
+        db.info.get(_PR_PREPARED_VERSION_FILES_KEY, {}),
+    )
+    prepared = prepared_files.pop(id(payload), None)
+    if prepared is None:
+        if db.info.get(_PR_PREPARED_VERSION_FILES_ACTIVE_KEY) is True:
+            raise RuntimeError("PR file was not prepared before hierarchy mutation")
+        prepared = await _prepare_version_file(
+            db,
+            file_key=file_key,
+            payload=payload,
+            author_id=author_id,
         )
-        real_size = upload_size if upload_size is not None else (payload.get("file_size") or 0)
-        mime_type = payload.get("file_mime_type") or "application/octet-stream"
-        thumbnail_key, thumbnail_status = await _resolve_thumbnail_info(db, file_key)
-    else:
-        info = await get_object_info(file_key)
-        real_size = info["size"]
-        mime_type = _resolve_mime_type(file_key, payload, s3_mime=info.get("content_type"))
-        new_key = file_key.replace("uploads/", "materials/", 1)
-        await copy_object(file_key, new_key)
-        db.info.setdefault("post_commit_jobs", []).append(("delete_storage_objects", [file_key]))
-        file_key = new_key
-        thumbnail_key = None
-        thumbnail_status = None
+
+    file_key = prepared["file_key"]
+    real_size = prepared["file_size"]
+    mime_type = prepared["file_mime_type"]
+    stored_content_sha256 = prepared["cas_sha256"]
+    thumbnail_key = prepared["thumbnail_key"]
+    thumbnail_status = prepared["thumbnail_status"]
 
     mv = MaterialVersion(
         id=uuid.uuid4(),
@@ -489,7 +992,7 @@ async def _make_version_for_file(
         file_name=payload.get("file_name"),
         file_size=real_size,
         file_mime_type=mime_type,
-        cas_sha256=payload.get("content_sha256"),
+        cas_sha256=stored_content_sha256 if file_key.startswith("cas/") else None,
         author_id=author_id,
         pr_id=pr_id,
         virus_scan_result=VirusScanResult.CLEAN,
@@ -502,10 +1005,23 @@ async def _make_version_for_file(
     await db.flush()
 
     if mv.file_key and mv.file_key.startswith("cas/") and mv.cas_sha256:
-        from app.core.cas import increment_cas_ref
-        from app.core.redis import redis_client
-
-        await increment_cas_ref(redis_client, mv.cas_sha256)
+        db.info.setdefault(PostCommitKey.JOBS, []).append(
+            (
+                "add_cas_references",
+                [
+                    {
+                        "sha256": mv.cas_sha256,
+                        "operation_id": f"pr:{pr_id}:version:{mv.id}:add",
+                        "initial_data": {
+                            "final_key": mv.file_key,
+                            "size": mv.file_size,
+                            "mime_type": mv.file_mime_type,
+                            "file_name": mv.file_name,
+                        },
+                    }
+                ],
+            )
+        )
 
     return mv
 
@@ -528,6 +1044,24 @@ async def _exec_create_material(
 
     mat_id = uuid.uuid4()
     directory_id = _resolve(str(p.get("directory_id")) if p.get("directory_id") else None, id_map)
+    if directory_id is not None:
+        parent_dir = await db.scalar(
+            select(Directory.id).where(Directory.id == directory_id, Directory.deleted_at.is_(None))
+        )
+        if parent_dir is None:
+            raise NotFoundError("Parent directory not found")
+
+    parent_material_id = _resolve(
+        str(p["parent_material_id"]) if p.get("parent_material_id") else None, id_map
+    )
+    if parent_material_id is not None:
+        parent_mat = await db.scalar(
+            select(Material.id).where(
+                Material.id == parent_material_id, Material.deleted_at.is_(None)
+            )
+        )
+        if parent_mat is None:
+            raise NotFoundError("Parent material not found")
 
     slug = await _unique_material_slug(db, directory_id, p["title"])
     m = Material(
@@ -537,10 +1071,7 @@ async def _exec_create_material(
         slug=slug,
         description=p.get("description"),
         type=p["type"],
-        parent_material_id=_resolve(
-            str(p["parent_material_id"]) if p.get("parent_material_id") else None,
-            id_map,
-        ),
+        parent_material_id=parent_material_id,
         author_id=pr.author_id,
         metadata_=p.get("metadata", {}),
         tags=tag_objs,
@@ -548,7 +1079,7 @@ async def _exec_create_material(
     db.add(m)
     await db.flush()
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     parent_topic = str(m.directory_id) if m.directory_id else "root"
     broadcasts.append((parent_topic, {"type": "child_added", "kind": "material", "id": str(m.id)}))
 
@@ -592,11 +1123,30 @@ async def _exec_create_material(
                 pr_id=pr.id,
             )
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    # External object metadata/copies are complete before entering the global
+    # hierarchy critical section. Re-read the authoritative parents under the
+    # transaction lock so a concurrent soft-delete cannot leave a live child.
+    await _acquire_directory_tree_lock(db)
+    if directory_id is not None:
+        parent_dir = await db.scalar(
+            select(Directory.id).where(Directory.id == directory_id, Directory.deleted_at.is_(None))
+        )
+        if parent_dir is None:
+            raise NotFoundError("Parent directory not found")
+    if parent_material_id is not None:
+        parent_mat = await db.scalar(
+            select(Material.id).where(
+                Material.id == parent_material_id, Material.deleted_at.is_(None)
+            )
+        )
+        if parent_mat is None:
+            raise NotFoundError("Parent material not found")
+
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_material", str(mat_id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_material", mat_id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat_id))
 
     return mat_id
 
@@ -662,7 +1212,7 @@ async def _exec_edit_material(
         )
 
     parent_topic = str(mat.directory_id) if mat.directory_id else "root"
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     broadcasts.append(
         (parent_topic, {"type": "child_updated", "kind": "material", "id": str(mat.id)})
     )
@@ -670,11 +1220,11 @@ async def _exec_edit_material(
     # file URL and re-fetch the new version's content.
     broadcasts.append((str(mat.id), {"type": "material_updated", "id": str(mat.id)}))
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_material", str(mat.id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
 
     return mat.id
 
@@ -684,7 +1234,7 @@ async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
     now = datetime.now(UTC)
     mat.deleted_at = now
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     broadcasts.append((str(mat.id), {"type": "material_deleted"}))
     parent_topic = str(mat.directory_id) if mat.directory_id else "root"
     broadcasts.append(
@@ -717,8 +1267,11 @@ async def _soft_delete_material_tree(db: AsyncSession, mat: Material) -> None:
 async def _exec_delete_material(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
+    await _acquire_directory_tree_lock(db)
     mat_id = _resolve(str(p["material_id"]), id_map)
-    mat = await db.scalar(select(Material).where(Material.id == mat_id))
+    mat = await db.scalar(
+        select(Material).where(Material.id == mat_id, Material.deleted_at.is_(None))
+    )
     if not mat:
         raise NotFoundError("Material not found")
 
@@ -733,6 +1286,7 @@ async def _exec_delete_material(
 async def _exec_create_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
+    await _acquire_directory_tree_lock(db)
     tags = p.get("tags", [])
     tag_objs = []
     if tags:
@@ -743,6 +1297,12 @@ async def _exec_create_directory(
 
     dir_id = uuid.uuid4()
     parent_id = _resolve(str(p["parent_id"]) if p.get("parent_id") else None, id_map)
+    if parent_id is not None:
+        parent_dir = await db.scalar(
+            select(Directory.id).where(Directory.id == parent_id, Directory.deleted_at.is_(None))
+        )
+        if parent_dir is None:
+            raise NotFoundError("Parent directory not found")
     dir_slug = await _unique_directory_slug(db, parent_id, p["name"])
     d = Directory(
         id=dir_id,
@@ -758,15 +1318,15 @@ async def _exec_create_directory(
     db.add(d)
     await db.flush()
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     parent_topic = str(d.parent_id) if d.parent_id else "root"
     broadcasts.append((parent_topic, {"type": "child_added", "kind": "directory", "id": str(d.id)}))
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_directory", str(d.id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_directory", d.id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_DIRECTORY, d.id))
 
     return dir_id
 
@@ -774,6 +1334,9 @@ async def _exec_create_directory(
 async def _exec_edit_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
+    if p.get("name") is not None:
+        await _acquire_directory_tree_lock(db)
+
     dir_id = _resolve(str(p["directory_id"]), id_map)
     dir_obj = await db.scalar(
         select(Directory).where(Directory.id == dir_id).options(selectinload(Directory.tags))
@@ -807,11 +1370,11 @@ async def _exec_edit_directory(
         # Rename propagates ancestor_path to all descendants — reindex the whole subtree.
         await _enqueue_reindex_directory_recursive(db, dir_obj.id)
     else:
-        seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+        seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
         key = ("index_directory", str(dir_obj.id))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_directory", dir_obj.id))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_DIRECTORY, dir_obj.id))
 
     return dir_obj.id
 
@@ -838,7 +1401,7 @@ async def _soft_delete_directory_tree(db: AsyncSession, directory_id: uuid.UUID)
         .where(Directory.id.in_(all_dir_ids), Directory.deleted_at.is_(None))
         .values(deleted_at=now)
     )
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     for did in all_dir_ids:
         broadcasts.append((str(did), {"type": "directory_deleted"}))
 
@@ -852,8 +1415,11 @@ async def _soft_delete_directory_tree(db: AsyncSession, directory_id: uuid.UUID)
 async def _exec_delete_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
+    await _acquire_directory_tree_lock(db)
     dir_id = _resolve(str(p["directory_id"]), id_map)
-    dir_obj = await db.scalar(select(Directory).where(Directory.id == dir_id))
+    dir_obj = await db.scalar(
+        select(Directory).where(Directory.id == dir_id, Directory.deleted_at.is_(None))
+    )
     if not dir_obj:
         raise NotFoundError("Directory not found")
 
@@ -864,7 +1430,7 @@ async def _exec_delete_directory(
     await _soft_delete_directory_tree(db, deleted_id)
 
     parent_topic = str(parent_id) if parent_id else "root"
-    db.info.setdefault("post_commit_sse_broadcasts", []).append(
+    db.info.setdefault(PostCommitKey.SSE, []).append(
         (parent_topic, {"type": "child_removed", "kind": "directory", "id": str(deleted_id)})
     )
 
@@ -875,50 +1441,51 @@ async def _exec_move_item(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
     target_id = _resolve(str(p["target_id"]), id_map)
+    if target_id is None:
+        raise BadRequestError("Move target is required")
 
     if p["target_type"] == "directory":
+        await _acquire_directory_tree_lock(db)
         dir_obj = await db.scalar(select(Directory).where(Directory.id == target_id))
         if not dir_obj:
             raise NotFoundError("Directory not found")
         new_parent_id = _resolve(
             str(p["new_parent_id"]) if p.get("new_parent_id") else None, id_map
         )
-        # Reject self-move and circular ancestry
-        if new_parent_id == target_id:
-            raise BadRequestError("Cannot move a directory into itself")
-        if new_parent_id is not None:
-            # Walk up from new_parent to ensure target is not an ancestor
-            check_id: uuid.UUID | None = new_parent_id
-            seen: set[uuid.UUID] = set()
-            while check_id:
-                if check_id == target_id:
-                    raise BadRequestError("Cannot move a directory into one of its own descendants")
-                if check_id in seen:
-                    break  # existing circular chain — stop
-                seen.add(check_id)
-                parent = await db.scalar(
-                    select(Directory.parent_id).where(Directory.id == check_id)
-                )
-                check_id = parent
+        await _validate_directory_parent(db, target_id, new_parent_id)
+        await _assert_directory_slug_available(
+            db, new_parent_id, dir_obj.slug, exclude_id=dir_obj.id
+        )
         dir_obj.parent_id = new_parent_id
         await db.flush()
         # Moving a directory changes ancestor_path for the whole subtree.
         await _enqueue_reindex_directory_recursive(db, dir_obj.id)
         return dir_obj.id
     else:
-        mat = await db.scalar(select(Material).where(Material.id == target_id))
+        await _acquire_directory_tree_lock(db)
+        mat = await db.scalar(
+            select(Material).where(Material.id == target_id, Material.deleted_at.is_(None))
+        )
         if not mat:
             raise NotFoundError("Material not found")
         new_parent = _resolve(str(p["new_parent_id"]) if p.get("new_parent_id") else None, id_map)
+        if new_parent is not None:
+            parent_dir = await db.scalar(
+                select(Directory.id).where(
+                    Directory.id == new_parent, Directory.deleted_at.is_(None)
+                )
+            )
+            if parent_dir is None:
+                raise NotFoundError("Parent directory not found")
         mat.directory_id = new_parent
         # Re-slug to ensure uniqueness in new location
         mat.slug = await _unique_material_slug(db, new_parent, mat.title, exclude_id=mat.id)
         await db.flush()
-        seen_jobs: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+        seen_jobs: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
         key = ("index_material", str(mat.id))
         if key not in seen_jobs:
             seen_jobs.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
         return mat.id
 
 
@@ -984,6 +1551,31 @@ async def _build_browse_path(db: AsyncSession, op_type: str, result_id: uuid.UUI
 # ---------------------------------------------------------------------------
 
 
+def _operation_uses_directory_tree_lock(op_type: str, op: dict[str, typing.Any]) -> bool:
+    """Return whether an operation mutates the shared hierarchy/slug namespace.
+
+    Reverse edit operations carry only ``pre_state`` rather than the forward
+    ``name``/``title`` field.  Treat those as namespace mutations too: the
+    revert executor restores the captured slug even when it happens to be
+    unchanged.
+    """
+    if op_type in {
+        "create_material",
+        "create_directory",
+        "delete_material",
+        "delete_directory",
+        "undelete_material",
+        "undelete_directory",
+        "move_item",
+    }:
+        return True
+    if op_type == "edit_directory":
+        return op.get("name") is not None or "pre_state" in op
+    if op_type == "edit_material":
+        return op.get("title") is not None or "pre_state" in op
+    return False
+
+
 async def _capture_pre_state(
     db: AsyncSession,
     op_type: str,
@@ -996,7 +1588,10 @@ async def _capture_pre_state(
     if op_type == "edit_material":
         mat_id = _resolve(str(op["material_id"]), id_map)
         mat = await db.scalar(
-            select(Material).where(Material.id == mat_id).options(selectinload(Material.tags))
+            select(Material)
+            .where(Material.id == mat_id)
+            .options(selectinload(Material.tags))
+            .with_for_update()
         )
         if not mat:
             return None
@@ -1027,7 +1622,10 @@ async def _capture_pre_state(
     if op_type == "edit_directory":
         dir_id = _resolve(str(op["directory_id"]), id_map)
         d = await db.scalar(
-            select(Directory).where(Directory.id == dir_id).options(selectinload(Directory.tags))
+            select(Directory)
+            .where(Directory.id == dir_id)
+            .options(selectinload(Directory.tags))
+            .with_for_update()
         )
         if not d:
             return None
@@ -1044,14 +1642,18 @@ async def _capture_pre_state(
     if op_type == "move_item":
         target_id = _resolve(str(op["target_id"]), id_map)
         if op["target_type"] == "directory":
-            d = await db.scalar(select(Directory).where(Directory.id == target_id))
+            d = await db.scalar(
+                select(Directory).where(Directory.id == target_id).with_for_update()
+            )
             if d:
                 return {
                     "target_type": "directory",
                     "prev_parent_id": str(d.parent_id) if d.parent_id else None,
                 }
         else:
-            mat = await db.scalar(select(Material).where(Material.id == target_id))
+            mat = await db.scalar(
+                select(Material).where(Material.id == target_id).with_for_update()
+            )
             if mat:
                 return {
                     "target_type": "material",
@@ -1090,8 +1692,16 @@ async def create_pull_request_service(
                 f"You can include at most {settings.pr_max_ops_staff} changes per contribution"
             )
 
-    # Open PR limit for non-staff users
+    # Serialize count+insert for one non-staff author. A cardinality limit cannot
+    # be expressed as a uniqueness constraint, so the admission decision needs a
+    # transaction-scoped per-user serialization point.
     if not current_user.is_staff:
+        await acquire_reaction_toggle_lock(
+            db,
+            kind="user-pr-create",
+            user_id=current_user.id,
+            target_id=current_user.id,
+        )
         open_count = await db.scalar(
             select(func.count())
             .select_from(PullRequest)
@@ -1120,12 +1730,16 @@ async def create_pull_request_service(
     user_upload_prefix = f"uploads/{current_user.id}/"
     cas_prefix = "cas/"
     keys_to_check: set[str] = set()
+    declared_hashes: dict[str, str] = {}
     for op in data.operations:
         file_key = getattr(op, "file_key", None)
         if file_key:
             if not (file_key.startswith(user_upload_prefix) or file_key.startswith(cas_prefix)):
                 raise BadRequestError("One of the attached files does not belong to your account")
             keys_to_check.add(file_key)
+            content_sha = getattr(op, "content_sha256", None)
+            if content_sha:
+                declared_hashes[file_key] = str(content_sha)
 
         if getattr(op, "op", None) == "create_material":
             for att in getattr(op, "attachments", []):
@@ -1140,6 +1754,13 @@ async def create_pull_request_service(
                             "One of the attachment files does not belong to your account"
                         )
                     keys_to_check.add(att_fk)
+                    att_sha = (
+                        getattr(att, "content_sha256", None)
+                        if not isinstance(att, dict)
+                        else att.get("content_sha256")
+                    )
+                    if att_sha:
+                        declared_hashes[att_fk] = str(att_sha)
 
             pmid = getattr(op, "parent_material_id", None)
             if pmid:
@@ -1156,31 +1777,139 @@ async def create_pull_request_service(
                         raise BadRequestError("Cannot attach a material to another attachment")
 
     if keys_to_check:
+        # Every key must be backed by either this user's clean Upload row or an
+        # unexpired, single-use generated-CAS claim.
+        owned_upload_rows = list(
+            (
+                await db.scalars(
+                    select(Upload)
+                    .where(
+                        (Upload.final_key.in_(keys_to_check))
+                        | (Upload.quarantine_key.in_(keys_to_check)),
+                        Upload.user_id == current_user.id,
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+        upload_rows = [upload for upload in owned_upload_rows if upload.status == "clean"]
+        authorized_hashes: dict[str, str] = {}
+        for upload in upload_rows:
+            authorized_key = (
+                upload.final_key if upload.final_key in keys_to_check else upload.quarantine_key
+            )
+            if authorized_key:
+                if authorized_key.startswith("cas/"):
+                    if (
+                        int(upload.cas_ref_count or 0) <= 0
+                        or upload.size_bytes is None
+                        or not upload.mime_type
+                        or upload.mime_type == "application/octet-stream"
+                        or not upload.content_sha256
+                    ):
+                        continue
+                    authorized_hashes[authorized_key] = upload.content_sha256
+                else:
+                    # Legacy uploads are revalidated against S3 during promotion.
+                    authorized_hashes[authorized_key] = upload.content_sha256 or upload.sha256 or ""
+
+        now = datetime.now(UTC)
+        claims = list(
+            (
+                await db.scalars(
+                    select(CasStagingClaim)
+                    .where(
+                        CasStagingClaim.user_id == current_user.id,
+                        CasStagingClaim.file_key.in_(keys_to_check),
+                        CasStagingClaim.consumed_at.is_(None),
+                        CasStagingClaim.expires_at > now,
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+        claims_by_key = {claim.file_key: claim for claim in claims}
+        for claim in claims:
+            authorized_hashes.setdefault(claim.file_key, claim.sha256)
+
+        def upload_label(key: str) -> str:
+            matching_rows = [
+                row
+                for row in owned_upload_rows
+                if row.final_key == key or row.quarantine_key == key
+            ]
+            filename = next((row.filename for row in matching_rows if row.filename), None)
+            return f'The file "{filename}"' if filename else "This staged file"
+
+        for key in sorted(keys_to_check):
+            expected_sha = authorized_hashes.get(key)
+            if expected_sha is None:
+                matching_rows = [
+                    row
+                    for row in owned_upload_rows
+                    if row.final_key == key or row.quarantine_key == key
+                ]
+                statuses = {row.status for row in matching_rows}
+                label = upload_label(key)
+
+                if "malicious" in statuses:
+                    scanner_reason = next(
+                        (
+                            row.error_detail
+                            for row in matching_rows
+                            if row.status == "malicious" and row.error_detail
+                        ),
+                        None,
+                    )
+                    reason_text = (
+                        " Scanner reason: "
+                        f"{scanner_reason.removeprefix('ERR_MALWARE_DETECTED: ').strip().rstrip('.')}."
+                        if scanner_reason
+                        else ""
+                    )
+                    raise BadRequestError(
+                        f"{label} was blocked because a malware scan flagged it as potentially "
+                        f"unsafe.{reason_text} Remove it from this contribution and upload a safe "
+                        "replacement."
+                    )
+                if statuses & {"pending", "processing"}:
+                    raise BadRequestError(
+                        f"{label} is still being checked for safety. Wait for processing to finish "
+                        "before submitting."
+                    )
+                if "failed" in statuses:
+                    raise BadRequestError(
+                        f"{label} could not be verified because processing failed. Remove it from "
+                        "this contribution and upload it again."
+                    )
+                if matching_rows:
+                    raise BadRequestError(
+                        f"{label} is no longer available for submission. Remove it from this "
+                        "contribution and upload it again."
+                    )
+                raise BadRequestError(
+                    "This staged file is not available for your account. Remove it from this "
+                    "contribution and upload it again."
+                )
+            declared_sha = declared_hashes.get(key)
+            if (
+                declared_sha is not None
+                and key.startswith(cas_prefix)
+                and declared_sha != expected_sha
+            ):
+                raise BadRequestError("A CAS file hash does not match its verified upload claim")
+
         existence_results = await asyncio.gather(*(object_exists(k) for k in keys_to_check))
         for key, exists in zip(keys_to_check, existence_results, strict=False):
             if not exists:
                 raise BadRequestError(
-                    "One or more uploaded files could not be found. "
-                    "They may have expired — try uploading again."
+                    f"{upload_label(key)} could not be found. Remove it from this contribution "
+                    "and upload it again."
                 )
 
-        # Verify scan results via DB — only for user-uploaded files (uploads/ prefix).
-        # CAS-staged files (cas/ prefix) are programmatically generated and already
-        # verified at stage time; they have no Upload row.
-        upload_keys_to_check = {k for k in keys_to_check if k.startswith("uploads/")}
-        if upload_keys_to_check:
-            stmt = select(Upload.final_key).where(
-                Upload.final_key.in_(list(upload_keys_to_check)),
-                Upload.status == "clean",
-                Upload.user_id == current_user.id,
-            )
-            clean_keys = set(await db.scalars(stmt))
-            for key in upload_keys_to_check:
-                if key not in clean_keys:
-                    raise BadRequestError(
-                        "One or more files are still being processed or could not be verified. "
-                        "Please wait a moment and try again."
-                    )
+        for key, claim in claims_by_key.items():
+            if key not in {row.final_key for row in upload_rows}:
+                claim.consumed_at = now
 
     # Serialize operations to list[dict]
     ops_payload = [op.model_dump(mode="json") for op in data.operations]
@@ -1246,7 +1975,7 @@ async def create_pull_request_service(
             await apply_pr(db, pr)
             await _cleanup_pr_resources(db, pr, redis=redis)
 
-            broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+            broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
             closed_event = {"type": "pr_closed", "id": str(pr.id)}
             for topic in _pr_directory_topics(list(pr.payload)):
                 broadcasts.append((topic, closed_event))
@@ -1259,7 +1988,7 @@ async def create_pull_request_service(
     await db.refresh(pr, ["author", "created_at", "updated_at"])
 
     if pr.status == PRStatus.OPEN:
-        broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+        broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
         event = {"type": "pr_opened", "id": str(pr.id)}
         for topic in _pr_directory_topics(list(pr.payload)):
             broadcasts.append((topic, event))
@@ -1288,57 +2017,81 @@ async def apply_pr(db: AsyncSession, pr: PullRequest) -> None:
     id_map: dict[str, uuid.UUID] = {}
     result_ops: list[dict[str, typing.Any]] = []
 
-    for op in sorted_ops:
-        op_type = str(op.get("op") or op.get("pr_type") or "")  # pr_type for legacy rows
-        if not op_type:
-            raise BadRequestError(f"Operation missing 'op' field: {op}")
+    # Storage calls can block on S3/SeaweedFS. Finish all of them before any
+    # transaction-scoped global hierarchy lock can be acquired.
+    await _prepare_pr_version_files(db, sorted_ops, pr.author_id)
 
-        executor = _EXECUTORS.get(op_type)
-        if not executor:
-            raise BadRequestError(f"Unknown operation type: {op_type}")
+    # Enforce one transaction-wide lock order for mixed-operation PRs:
+    # hierarchy advisory lock -> any target-row FOR UPDATE -> mutation.  Taking
+    # this once before the loop prevents an early ordinary edit from holding a
+    # row lock and later attempting the advisory lock while a competing move
+    # holds the advisory lock and waits on that row.
+    if any(
+        _operation_uses_directory_tree_lock(
+            str(op.get("op") or op.get("pr_type") or ""),
+            op,
+        )
+        for op in sorted_ops
+    ):
+        await _acquire_directory_tree_lock(db)
 
-        is_delete = "delete" in op_type
+    try:
+        for op in sorted_ops:
+            op_type = str(op.get("op") or op.get("pr_type") or "")  # pr_type for legacy rows
+            if not op_type:
+                raise BadRequestError(f"Operation missing 'op' field: {op}")
 
-        # Capture pre-state before mutation (for revertable edits/moves)
-        pre_state: dict[str, typing.Any] | None = None
-        if op_type in ("edit_material", "edit_directory", "move_item"):
-            pre_state = await _capture_pre_state(db, op_type, op, id_map)
+            executor = _EXECUTORS.get(op_type)
+            if not executor:
+                raise BadRequestError(f"Unknown operation type: {op_type}")
 
-        # For deletes, capture the browse path BEFORE the item is removed
-        pre_delete_browse_path: str | None = None
-        if is_delete:
-            try:
-                id_field = "directory_id" if "directory" in op_type else "material_id"
-                raw_id = str(op.get(id_field, ""))
-                target_uuid = _resolve(raw_id, id_map) if raw_id else None
-                if target_uuid:
-                    pre_delete_browse_path = await _build_browse_path(db, op_type, target_uuid)
-            except Exception:
-                pass
+            is_delete = "delete" in op_type
 
-        result_id = await executor(db, op, pr, id_map)
+            # Capture pre-state after the PR-wide hierarchy lock (when needed),
+            # so the authoritative snapshot and mutation share one lock order.
+            pre_state: dict[str, typing.Any] | None = None
+            if op_type in ("edit_material", "edit_directory", "move_item"):
+                pre_state = await _capture_pre_state(db, op_type, op, id_map)
 
-        # Register temp_id -> real UUID for downstream inter-op references
-        temp_id = str(op.get("temp_id")) if op.get("temp_id") else None
-        if temp_id:
-            id_map[temp_id] = result_id
+            # For deletes, capture the browse path BEFORE the item is removed
+            pre_delete_browse_path: str | None = None
+            if is_delete:
+                try:
+                    id_field = "directory_id" if "directory" in op_type else "material_id"
+                    raw_id = str(op.get(id_field, ""))
+                    target_uuid = _resolve(raw_id, id_map) if raw_id else None
+                    if target_uuid:
+                        pre_delete_browse_path = await _build_browse_path(db, op_type, target_uuid)
+                except Exception:
+                    pass
 
-        # Build the enriched operation record for applied_result
-        enriched: dict[str, typing.Any] = dict(op)
-        enriched["result_id"] = str(result_id)
-        if pre_state is not None:
-            enriched["pre_state"] = pre_state
-        if is_delete and pre_delete_browse_path:
-            enriched["result_browse_path"] = pre_delete_browse_path
-        elif not is_delete:
-            try:
-                browse_path = await _build_browse_path(db, op_type, result_id)
-                if browse_path:
-                    enriched["result_browse_path"] = browse_path
-            except Exception:
-                pass
+            result_id = await executor(db, op, pr, id_map)
 
-        result_ops.append(enriched)
+            # Register temp_id -> real UUID for downstream inter-op references
+            temp_id = str(op.get("temp_id")) if op.get("temp_id") else None
+            if temp_id:
+                id_map[temp_id] = result_id
+
+            # Build the enriched operation record for applied_result
+            enriched: dict[str, typing.Any] = dict(op)
+            enriched["result_id"] = str(result_id)
+            if pre_state is not None:
+                enriched["pre_state"] = pre_state
+            if is_delete and pre_delete_browse_path:
+                enriched["result_browse_path"] = pre_delete_browse_path
+            elif not is_delete:
+                try:
+                    browse_path = await _build_browse_path(db, op_type, result_id)
+                    if browse_path:
+                        enriched["result_browse_path"] = browse_path
+                except Exception:
+                    pass
+
+            result_ops.append(enriched)
+
+    finally:
+        db.info.pop(_PR_PREPARED_VERSION_FILES_KEY, None)
+        db.info.pop(_PR_PREPARED_VERSION_FILES_ACTIVE_KEY, None)
 
     pr.applied_result = result_ops
     flag_modified(pr, "applied_result")
@@ -1354,12 +2107,30 @@ async def _exec_undelete_material(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
     """Restore a soft-deleted material and all its attachments."""
+    await _acquire_directory_tree_lock(db)
     mat_id = _resolve(str(p["material_id"]), id_map)
     mat = await db.scalar(
         select(Material).where(Material.id == mat_id).execution_options(include_deleted=True)
     )
     if not mat:
         raise NotFoundError("Material not found (even among deleted)")
+
+    if mat.directory_id is not None:
+        parent_dir = await db.scalar(
+            select(Directory.id).where(
+                Directory.id == mat.directory_id, Directory.deleted_at.is_(None)
+            )
+        )
+        if parent_dir is None:
+            raise NotFoundError("Parent directory not found")
+    if mat.parent_material_id is not None:
+        parent_mat = await db.scalar(
+            select(Material.id).where(
+                Material.id == mat.parent_material_id, Material.deleted_at.is_(None)
+            )
+        )
+        if parent_mat is None:
+            raise NotFoundError("Parent material not found")
 
     mat.deleted_at = None
 
@@ -1388,11 +2159,11 @@ async def _exec_undelete_material(
         for av in att_vs:
             av.deleted_at = None
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_material", str(mat.id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
 
     return mat.id
 
@@ -1400,8 +2171,15 @@ async def _exec_undelete_material(
 async def _exec_undelete_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
-    """Restore a soft-deleted directory and its entire subtree."""
+    """Restore a soft-deleted directory subtree without stealing a live path."""
     dir_id = _resolve(str(p["directory_id"]), id_map)
+    if dir_id is None:
+        raise BadRequestError("Directory ID is required")
+
+    # Serialize against every application path that can allocate/change a
+    # directory slug or parent.  The DB unique indexes remain authoritative,
+    # while this lock lets us reject obsolete reverts before mutating the tree.
+    await _acquire_directory_tree_lock(db)
 
     dir_cte = (
         select(Directory.id)
@@ -1415,16 +2193,42 @@ async def _exec_undelete_directory(
         .where(dir_alias.parent_id == dir_cte.c.id)
         .execution_options(include_deleted=True)
     )
-    all_dir_ids = (
-        await db.scalars(select(dir_cte.c.id).execution_options(include_deleted=True))
-    ).all()
+    all_dir_ids = list(
+        (await db.scalars(select(dir_cte.c.id).execution_options(include_deleted=True))).all()
+    )
+    if not all_dir_ids:
+        raise NotFoundError("Directory not found (even among deleted)")
 
-    for did in all_dir_ids:
-        d = await db.scalar(
-            select(Directory).where(Directory.id == did).execution_options(include_deleted=True)
+    restore_rows = list(
+        (
+            await db.scalars(
+                select(Directory)
+                .where(Directory.id.in_(all_dir_ids))
+                .order_by(Directory.id)
+                .with_for_update()
+                .execution_options(include_deleted=True)
+            )
+        ).all()
+    )
+    root_row = next((row for row in restore_rows if row.id == dir_id), None)
+    if root_row is None:
+        raise NotFoundError("Directory not found (even among deleted)")
+    if root_row.parent_id is not None:
+        live_parent = await db.scalar(
+            select(Directory.id).where(
+                Directory.id == root_row.parent_id, Directory.deleted_at.is_(None)
+            )
         )
-        if d:
-            d.deleted_at = None
+        if live_parent is None:
+            raise NotFoundError("Parent directory not found")
+
+    # Check every path before clearing any deleted_at value.  This covers both
+    # the root NULL-parent hole and a child slug that was legitimately reused
+    # under a surviving parent after the subtree was deleted.
+    await _assert_directory_restore_paths_available(db, restore_rows)
+
+    for directory in restore_rows:
+        directory.deleted_at = None
 
     mat_rows = (
         await db.scalars(
@@ -1443,8 +2247,6 @@ async def _exec_undelete_directory(
         for v in vs:
             v.deleted_at = None
 
-    if dir_id is None:
-        raise BadRequestError("Directory ID is required")
     await _enqueue_reindex_directory_recursive(db, dir_id)
     return dir_id
 
@@ -1485,10 +2287,17 @@ async def _exec_revert_edit_material(
         )
         for v in versions_to_drop:
             if v.cas_sha256 and v.file_key and v.file_key.startswith("cas/"):
-                from app.core.cas import decrement_cas_ref
-                from app.core.redis import redis_client
-
-                await decrement_cas_ref(redis_client, v.cas_sha256)
+                db.info.setdefault(PostCommitKey.JOBS, []).append(
+                    (
+                        "release_cas_references",
+                        [
+                            {
+                                "sha256": v.cas_sha256,
+                                "operation_id": f"revert:version:{v.id}:release",
+                            }
+                        ],
+                    )
+                )
             await db.delete(v)
 
         mat.current_version = pre["prev_version_number"]
@@ -1497,11 +2306,11 @@ async def _exec_revert_edit_material(
     if "tags" in pre:
         await prune_orphan_tags(db)
 
-    seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+    seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
     key = ("index_material", str(mat.id))
     if key not in seen:
         seen.add(key)
-        db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+        db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
 
     return mat.id
 
@@ -1510,6 +2319,8 @@ async def _exec_revert_edit_directory(
     db: AsyncSession, p: dict[str, typing.Any], pr: PullRequest, id_map: dict[str, uuid.UUID]
 ) -> uuid.UUID:
     """Revert a directory to its pre-PR state."""
+    await _acquire_directory_tree_lock(db)
+
     dir_id = _resolve(str(p["directory_id"]), id_map)
     pre = p.get("pre_state", {})
     d = await db.scalar(
@@ -1519,6 +2330,7 @@ async def _exec_revert_edit_directory(
         raise NotFoundError("Directory not found")
 
     name_changed = d.name != pre["name"]
+    await _assert_directory_slug_available(db, d.parent_id, pre["slug"], exclude_id=d.id)
     d.name = pre["name"]
     d.slug = pre["slug"]
     d.type = pre["type"]
@@ -1541,11 +2353,11 @@ async def _exec_revert_edit_directory(
     if name_changed:
         await _enqueue_reindex_directory_recursive(db, d.id)
     else:
-        seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+        seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
         key = ("index_directory", str(d.id))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_directory", d.id))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_DIRECTORY, d.id))
 
     return d.id
 
@@ -1555,32 +2367,46 @@ async def _exec_revert_move_item(
 ) -> uuid.UUID:
     """Move an item back to its pre-PR location."""
     target_id = _resolve(str(p["target_id"]), id_map)
+    if target_id is None:
+        raise BadRequestError("Revert move target is required")
     pre = p.get("pre_state", {})
 
     if pre.get("target_type") == "directory":
+        await _acquire_directory_tree_lock(db)
         d = await db.scalar(select(Directory).where(Directory.id == target_id))
         if not d:
             raise NotFoundError("Directory not found")
         prev_parent = uuid.UUID(pre["prev_parent_id"]) if pre.get("prev_parent_id") else None
+        await _validate_directory_parent(db, target_id, prev_parent)
+        await _assert_directory_slug_available(db, prev_parent, d.slug, exclude_id=d.id)
         d.parent_id = prev_parent
         await db.flush()
         await _enqueue_reindex_directory_recursive(db, d.id)
         return d.id
     else:
-        mat = await db.scalar(select(Material).where(Material.id == target_id))
+        await _acquire_directory_tree_lock(db)
+        mat = await db.scalar(
+            select(Material).where(Material.id == target_id, Material.deleted_at.is_(None))
+        )
         if not mat:
             raise NotFoundError("Material not found")
         prev_dir = uuid.UUID(pre["prev_directory_id"]) if pre.get("prev_directory_id") else None
+        if prev_dir is not None:
+            live_parent = await db.scalar(
+                select(Directory.id).where(Directory.id == prev_dir, Directory.deleted_at.is_(None))
+            )
+            if live_parent is None:
+                raise NotFoundError("Parent directory not found")
         mat.directory_id = prev_dir
         mat.slug = pre.get("prev_slug") or await _unique_material_slug(
             db, prev_dir, mat.title, exclude_id=mat.id
         )
         await db.flush()
-        seen: set[tuple[str, str]] = db.info.setdefault("post_commit_job_keys", set())
+        seen: set[tuple[str, str]] = db.info.setdefault(PostCommitKey.JOB_KEYS, set())
         key = ("index_material", str(mat.id))
         if key not in seen:
             seen.add(key)
-            db.info.setdefault("post_commit_jobs", []).append(("index_material", mat.id))
+            db.info.setdefault(PostCommitKey.JOBS, []).append((JobKind.INDEX_MATERIAL, mat.id))
         return mat.id
 
 
@@ -1692,6 +2518,13 @@ async def revert_pr(
 
     id_map: dict[str, uuid.UUID] = {}
     result_ops: list[dict[str, typing.Any]] = []
+
+    # Reverts can also contain a non-hierarchy row-locking edit followed by a
+    # hierarchy/namespace mutation.  Acquire the advisory lock before the first
+    # reverse executor whenever any reverse operation needs it, preserving the
+    # same advisory-lock -> row-lock ordering as normal PR application.
+    if any(_operation_uses_directory_tree_lock(str(op.get("op") or ""), op) for op in reverse_ops):
+        await _acquire_directory_tree_lock(db)
 
     for op in reverse_ops:
         op_type = str(op["op"])
@@ -1853,12 +2686,9 @@ async def list_prs_for_item_service(
 
 async def approve_pr_service(db: AsyncSession, pr_id: uuid.UUID, reviewer: User) -> PullRequest:
     """Approve and apply a contribution."""
-    pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id))
-    if not pr:
-        raise NotFoundError("Pull request not found")
+    pr = await _lock_open_pr_for_transition(db, pr_id)
 
-    if pr.status != PRStatus.OPEN:
-        raise BadRequestError("This contribution is no longer open")
+    await _lock_and_validate_pr_cas_files(db, pr)
 
     pr.status = PRStatus.APPROVED
     pr.reviewed_by = reviewer.id
@@ -1866,14 +2696,12 @@ async def approve_pr_service(db: AsyncSession, pr_id: uuid.UUID, reviewer: User)
     await apply_pr(db, pr)
     await _cleanup_pr_resources(db, pr)
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     event = {"type": "pr_closed", "id": str(pr.id)}
     for topic in _pr_directory_topics(list(pr.payload)):
         broadcasts.append((topic, event))
     if pr.author_id is not None:
         broadcasts.append((f"pr_updates:{pr.author_id}", event))
-
-    await db.commit()
 
     if pr.author_id is not None:
         await notify_user(
@@ -1890,12 +2718,7 @@ async def reject_pr_service(
     db: AsyncSession, pr_id: uuid.UUID, reason: str, reviewer: User
 ) -> PullRequest:
     """Reject a contribution and clean up its staging files."""
-    pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id))
-    if not pr:
-        raise NotFoundError("Pull request not found")
-
-    if pr.status != PRStatus.OPEN:
-        raise BadRequestError("This contribution is no longer open")
+    pr = await _lock_open_pr_for_transition(db, pr_id)
 
     pr.status = PRStatus.REJECTED
     pr.reviewed_by = reviewer.id
@@ -1903,14 +2726,12 @@ async def reject_pr_service(
 
     await _cleanup_pr_resources(db, pr, delete_staging=True)
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     event = {"type": "pr_closed", "id": str(pr.id)}
     for topic in _pr_directory_topics(list(pr.payload)):
         broadcasts.append((topic, event))
     if pr.author_id is not None:
         broadcasts.append((f"pr_updates:{pr.author_id}", event))
-
-    await db.commit()
 
     if pr.author_id is not None:
         await notify_user(
@@ -1925,34 +2746,32 @@ async def reject_pr_service(
 
 async def cancel_pr_service(db: AsyncSession, pr_id: uuid.UUID, current_user: User) -> PullRequest:
     """Author cancels their own open pull request."""
-    pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id))
-    if not pr:
-        raise NotFoundError("Pull request not found")
+    pr = await _lock_open_pr_for_transition(db, pr_id)
 
     if pr.author_id != current_user.id:
         raise ForbiddenError("Only the author can cancel this contribution")
 
-    if pr.status != PRStatus.OPEN:
-        raise BadRequestError("This contribution is no longer open")
-
     pr.status = PRStatus.CANCELLED
     await _cleanup_pr_resources(db, pr, delete_staging=True)
 
-    broadcasts = db.info.setdefault("post_commit_sse_broadcasts", [])
+    broadcasts = db.info.setdefault(PostCommitKey.SSE, [])
     event = {"type": "pr_closed", "id": str(pr.id)}
     for topic in _pr_directory_topics(list(pr.payload)):
         broadcasts.append((topic, event))
     if pr.author_id is not None:
         broadcasts.append((f"pr_updates:{pr.author_id}", event))
 
-    await db.commit()
     return pr
 
 
 async def revert_pr_service(db: AsyncSession, pr_id: uuid.UUID, admin: User) -> PullRequest:
-    """Validate and execute a revert for an approved PR."""
+    """Validate and execute a serialized revert for an approved PR."""
     pr = await db.scalar(
-        select(PullRequest).where(PullRequest.id == pr_id).options(selectinload(PullRequest.author))
+        select(PullRequest)
+        .where(PullRequest.id == pr_id)
+        .options(selectinload(PullRequest.author))
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if not pr:
         raise NotFoundError("Pull request not found")
@@ -1970,7 +2789,6 @@ async def revert_pr_service(db: AsyncSession, pr_id: uuid.UUID, admin: User) -> 
         raise BadRequestError("The 7-day revert grace period has expired")
 
     revert = await revert_pr(db, pr, admin.id)
-    await db.commit()
     await db.refresh(revert, ["author", "created_at", "updated_at"])
 
     if pr.author_id and pr.author_id != admin.id:
@@ -1989,7 +2807,7 @@ async def get_pr_preview_service(
     db: AsyncSession, pr_id: uuid.UUID, op_index: int, current_user: User
 ) -> dict[str, typing.Any]:
     """Resolve a presigned URL for a file in a PR operation."""
-    from app.core.storage import generate_presigned_get
+    from app.core.storage.facade import generate_presigned_get
 
     pr = await db.scalar(select(PullRequest).where(PullRequest.id == pr_id))
     if not pr:

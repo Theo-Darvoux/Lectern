@@ -167,7 +167,7 @@ async def test_index_materials_batch_single_add_documents_call(db_session: Async
     mock_index = AsyncMock()
     mock_index.add_documents = AsyncMock()
 
-    import app.core.database as c_db
+    import app.core.database.database as c_db
 
     orig = c_db.async_session_factory
 
@@ -183,7 +183,10 @@ async def test_index_materials_batch_single_add_documents_call(db_session: Async
     c_db.async_session_factory = test_factory
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_admin.index = MagicMock(return_value=mock_index)
             from app.workers.index_content import index_materials_batch
 
@@ -207,7 +210,7 @@ async def test_index_materials_batch_ancestor_path_correct(db_session: AsyncSess
     mat = await _mat(db_session, "Optics Paper", directory_id=child.id, author_id=u.id)
     await db_session.commit()
 
-    import app.core.database as c_db
+    import app.core.database.database as c_db
 
     orig = c_db.async_session_factory
     engine = db_session.bind
@@ -218,7 +221,10 @@ async def test_index_materials_batch_ancestor_path_correct(db_session: AsyncSess
     captured_docs = []
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_idx = AsyncMock()
             mock_idx.add_documents = AsyncMock(side_effect=lambda docs: captured_docs.extend(docs))
             mock_admin.index = MagicMock(return_value=mock_idx)
@@ -258,7 +264,7 @@ async def test_index_directories_batch_single_add_documents_call(db_session: Asy
     ]
     await db_session.commit()
 
-    import app.core.database as c_db
+    import app.core.database.database as c_db
 
     orig = c_db.async_session_factory
     engine = db_session.bind
@@ -270,7 +276,10 @@ async def test_index_directories_batch_single_add_documents_call(db_session: Asy
     mock_idx.add_documents = AsyncMock()
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_admin.index = MagicMock(return_value=mock_idx)
             from app.workers.index_content import index_directories_batch
 
@@ -290,7 +299,7 @@ async def test_index_directories_batch_ancestor_path_uses_parent(db_session: Asy
     child = await _dir(db_session, "Physics", "physics", parent_id=root.id)
     await db_session.commit()
 
-    import app.core.database as c_db
+    import app.core.database.database as c_db
 
     orig = c_db.async_session_factory
     engine = db_session.bind
@@ -301,7 +310,10 @@ async def test_index_directories_batch_ancestor_path_uses_parent(db_session: Asy
     captured = []
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_idx = AsyncMock()
             mock_idx.add_documents = AsyncMock(side_effect=lambda docs: captured.extend(docs))
             mock_admin.index = MagicMock(return_value=mock_idx)
@@ -324,7 +336,7 @@ async def test_index_directories_batch_root_has_empty_ancestor_path(db_session: 
     root = await _dir(db_session, "Root", "root")
     await db_session.commit()
 
-    import app.core.database as c_db
+    import app.core.database.database as c_db
 
     orig = c_db.async_session_factory
     engine = db_session.bind
@@ -335,7 +347,10 @@ async def test_index_directories_batch_root_has_empty_ancestor_path(db_session: 
     captured = []
 
     try:
-        with patch("app.workers.index_content.meili_admin_client") as mock_admin:
+        with (
+            patch("app.workers.index_content.meili_admin_client") as mock_admin,
+            patch("app.workers.index_content._wait_for_meili_task", new_callable=AsyncMock),
+        ):
             mock_idx = AsyncMock()
             mock_idx.add_documents = AsyncMock(side_effect=lambda docs: captured.extend(docs))
             mock_admin.index = MagicMock(return_value=mock_idx)
@@ -358,13 +373,24 @@ async def test_index_directories_batch_empty_list():
         mock_admin.index.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_delete_indexed_item_propagates_failure_for_worker_retry() -> None:
+    from app.workers.index_content import delete_indexed_item
+
+    index = MagicMock()
+    index.delete_document = AsyncMock(side_effect=OSError("search unavailable"))
+    with patch("app.workers.index_content.meili_admin_client.index", return_value=index):
+        with pytest.raises(OSError, match="search unavailable"):
+            await delete_indexed_item({}, "materials", "material-id")
+
+
 # ---------------------------------------------------------------------------
 # Post-commit job coalescing (_coalesce_index_jobs)
 # ---------------------------------------------------------------------------
 
 
 def test_coalesce_single_material():
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     mid = uuid.uuid4()
     result = _coalesce_index_jobs([("index_material", mid)])
@@ -372,7 +398,7 @@ def test_coalesce_single_material():
 
 
 def test_coalesce_two_consecutive_materials_become_batch():
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     m1, m2 = uuid.uuid4(), uuid.uuid4()
     result = _coalesce_index_jobs([("index_material", m1), ("index_material", m2)])
@@ -380,7 +406,7 @@ def test_coalesce_two_consecutive_materials_become_batch():
 
 
 def test_coalesce_five_consecutive_materials():
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     ids = [uuid.uuid4() for _ in range(5)]
     jobs = [("index_material", i) for i in ids]
@@ -391,7 +417,7 @@ def test_coalesce_five_consecutive_materials():
 
 
 def test_coalesce_single_directory():
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     did = uuid.uuid4()
     result = _coalesce_index_jobs([("index_directory", did)])
@@ -399,7 +425,7 @@ def test_coalesce_single_directory():
 
 
 def test_coalesce_two_consecutive_directories_become_batch():
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     d1, d2 = uuid.uuid4(), uuid.uuid4()
     result = _coalesce_index_jobs([("index_directory", d1), ("index_directory", d2)])
@@ -407,7 +433,7 @@ def test_coalesce_two_consecutive_directories_become_batch():
 
 
 def test_coalesce_preserves_non_index_jobs():
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     del_job = ("delete_indexed_item", "materials", "abc")
     storage_job = ("delete_storage_objects", ["key1"])
@@ -417,7 +443,7 @@ def test_coalesce_preserves_non_index_jobs():
 
 def test_coalesce_interleaved_preserves_order():
     """delete_indexed_item between two index runs → two separate batch calls."""
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     m1, m2, m3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     del_job = ("delete_indexed_item", "materials", "x")
@@ -435,7 +461,7 @@ def test_coalesce_interleaved_preserves_order():
 
 def test_coalesce_mixed_material_then_directory():
     """Consecutive mats then consecutive dirs → two batches."""
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     m1, m2 = uuid.uuid4(), uuid.uuid4()
     d1, d2 = uuid.uuid4(), uuid.uuid4()
@@ -451,14 +477,14 @@ def test_coalesce_mixed_material_then_directory():
 
 
 def test_coalesce_empty_list():
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     assert _coalesce_index_jobs([]) == []
 
 
 def test_coalesce_complex_sequence():
     """Full realistic sequence from a subtree rename."""
-    from app.core.database import _coalesce_index_jobs
+    from app.core.events.coalesce import coalesce_index_jobs as _coalesce_index_jobs
 
     d1, d2, d3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     m1, m2 = uuid.uuid4(), uuid.uuid4()

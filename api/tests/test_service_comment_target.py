@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.common.exceptions import BadRequestError, NotFoundError
 from app.models.directory import Directory
 from app.models.material import Material
 from app.services.comment import validate_target

@@ -79,6 +79,22 @@ http {
         listen 80;
         server_name _;
 
+        # Compatibility path for clients that still submit one folder archive.
+        location = /api/upload/batch-zip {
+            proxy_pass http://api;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_http_version 1.1;
+            client_max_body_size 501m;
+            proxy_request_buffering off;
+            proxy_buffering off;
+            proxy_connect_timeout 3s;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+
         # API requests
         location /api/ {
             proxy_pass http://api;
@@ -89,6 +105,10 @@ http {
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection $connection_upgrade;
+
+            # The API container is local in development. Fail fast when it is
+            # stopped instead of leaving frontend actions pending for ~60s.
+            proxy_connect_timeout 3s;
         }
 
         # EuroOffice Routing Logic

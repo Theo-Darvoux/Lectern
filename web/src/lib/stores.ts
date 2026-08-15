@@ -27,8 +27,10 @@ interface AuthState {
     user: UserBrief | null;
     isAuthenticated: boolean;
     isLoading: boolean;
+    bootstrapError: string | null;
     setUser: (user: UserBrief | null) => void;
     setLoading: (loading: boolean) => void;
+    setBootstrapError: (error: string | null) => void;
     logout: () => void;
 }
 
@@ -36,9 +38,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     user: null,
     isAuthenticated: false,
     isLoading: true,
-    setUser: (user) => set({ user, isAuthenticated: !!user, isLoading: false }),
+    bootstrapError: null,
+    setUser: (user) => set({ user, isAuthenticated: !!user, isLoading: false, bootstrapError: null }),
     setLoading: (isLoading) => set({ isLoading }),
-    logout: () => set({ user: null, isAuthenticated: false, isLoading: false }),
+    setBootstrapError: (bootstrapError) => set({ bootstrapError }),
+    logout: () => set({ user: null, isAuthenticated: false, isLoading: false, bootstrapError: null }),
 }));
 
 export type SidebarTab = "details" | "edits" | "chat" | "annotations";
@@ -182,6 +186,9 @@ export const useDirectoryIconOverrides = create<DirectoryIconOverrideState>((set
         }),
 }));
 
+export const selectDirectoryIconOverride = (directoryId: string) =>
+    (state: DirectoryIconOverrideState) => state.overrides.get(directoryId);
+
 interface DirectoryColorOverrideState {
     overrides: Map<string, string | null>;
     setColorOverride: (directoryId: string, color: string | null) => void;
@@ -196,6 +203,9 @@ export const useDirectoryColorOverrides = create<DirectoryColorOverrideState>((s
             return { overrides: next };
         }),
 }));
+
+export const selectDirectoryColorOverride = (directoryId: string) =>
+    (state: DirectoryColorOverrideState) => state.overrides.get(directoryId);
 
 interface NotificationState {
     unreadCount: number;
@@ -254,9 +264,13 @@ export interface PublicConfig {
     guest_access_enabled: boolean;
     /** Disable the in-app guided tours platform-wide (TUTORIALS_ENABLED). */
     tutorials_enabled: boolean;
+    /** Permit safe external links in document viewers (ALLOW_EXTERNAL_DOCUMENT_LINKS). */
+    allow_external_document_links: boolean;
     max_contribution_note_length: number;
-    /** True on a fresh instance with no admin account — drives the first-run setup flow. */
+    /** True only until the durable one-way installation bootstrap marker is committed. */
     needs_setup: boolean;
+    /** Whether the setup form must collect the out-of-band operator capability. */
+    bootstrap_token_required: boolean;
 }
 
 interface ConfigState {
@@ -272,4 +286,3 @@ export const useConfigStore = create<ConfigState>((set) => ({
         config: state.config ? { ...state.config, ...patch } : null
     })),
 }));
-

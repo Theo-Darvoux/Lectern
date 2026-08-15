@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.core.email import send_email
+from app.core.events.email import send_email
 
 
 @pytest.mark.asyncio
@@ -46,9 +46,8 @@ async def test_send_email_with_ip_override_port_587() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_email_with_ip_override_port_465() -> None:
-    """When smtp_ip is set and port=465 (implicit TLS), we downgrade to the
-    STARTTLS path so server_hostname can be injected for cert validation."""
+async def test_send_email_with_ip_override_port_465_is_rejected() -> None:
+    """Implicit TLS cannot safely validate a certificate when connecting by IP."""
     from app.config import settings
 
     with (
@@ -61,23 +60,35 @@ async def test_send_email_with_ip_override_port_465() -> None:
         patch.object(settings, "smtp_use_tls", True),
         patch("aiosmtplib.SMTP", autospec=True) as mock_smtp_class,
     ):
+        with pytest.raises(ValueError, match="SMTP_IP cannot be used with implicit TLS"):
+            await send_email("to@example.com", "Subject", "Body")
+
+        mock_smtp_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_port_25_uses_starttls_when_tls_enabled() -> None:
+    """TLS on a non-465 port means STARTTLS, not implicit TLS."""
+    from app.config import settings
+
+    with (
+        patch.object(settings, "smtp_host", "mail.example.com"),
+        patch.object(settings, "smtp_ip", None),
+        patch.object(settings, "smtp_port", 25),
+        patch.object(settings, "smtp_use_tls", True),
+        patch.object(settings, "smtp_tls_mode", None),
+        patch.object(settings, "smtp_from", "noreply@example.com"),
+        patch("aiosmtplib.SMTP", autospec=True) as mock_smtp_class,
+    ):
         mock_smtp = mock_smtp_class.return_value
         mock_smtp.connect = AsyncMock()
         mock_smtp.starttls = AsyncMock()
-        mock_smtp.login = AsyncMock()
         mock_smtp.send_message = AsyncMock()
-        mock_smtp.close = AsyncMock()
 
         await send_email("to@example.com", "Subject", "Body")
 
-        init_kwargs = mock_smtp_class.call_args.kwargs
-        assert init_kwargs["hostname"] == "1.2.3.4"
-        # Forced down to STARTTLS path, so use_tls must be False
-        assert init_kwargs["use_tls"] is False
-
-        mock_smtp.connect.assert_called_once_with()
-        mock_smtp.starttls.assert_called_once_with(server_hostname="mail.example.com")
-        mock_smtp.send_message.assert_called_once()
+        assert mock_smtp_class.call_args.kwargs["use_tls"] is False
+        mock_smtp.starttls.assert_awaited_once_with(server_hostname=None)
 
 
 @pytest.mark.asyncio

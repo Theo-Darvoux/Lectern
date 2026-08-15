@@ -46,6 +46,9 @@
   "Setup": {
     "title": "Welcome to {siteName}",
     "description": "Create the first administrator account to finish setting up this instance.",
+    "bootstrapTokenLabel": "Bootstrap token",
+    "bootstrapTokenPlaceholder": "Paste the one-time bootstrap token",
+    "bootstrapTokenHint": "Use the BOOTSTRAP_TOKEN configured by the deployment operator. It is never stored by the browser.",
     "emailLabel": "Email",
     "emailPlaceholder": "admin@example.com",
     "emailHint": "This becomes your sign-in identity and can't be changed later from the app.",
@@ -62,6 +65,10 @@
     "creating": "Creating account…",
     "success": "Admin account created.",
     "failed": "Setup failed. Please try again.",
+    "checkingInstallation": "Checking installation…",
+    "installationCheckFailedTitle": "The application server is not responding",
+    "installationCheckFailedDescription": "The installation state could not be loaded. Check that the server is running, then try again.",
+    "retry": "Retry",
     "passwordTooShort": "Password must be at least 8 characters.",
     "passwordMismatch": "Passwords do not match.",
     "emailMismatch": "Email addresses do not match."
@@ -192,6 +199,9 @@
     "offlineWarning": "You appear to be offline. Some features may not work.",
     "redirectingToSetup": "Redirecting to setup...",
     "recoveringSession": "Recovering session...",
+    "startupErrorTitle": "Unable to restore the application session",
+    "startupErrorDescription": "The application server could not be reached. Check your connection or server status, then try again.",
+    "retry": "Retry",
     "organization": "Organization",
     "github": "GitHub",
     "commit": "Commit"
@@ -248,6 +258,7 @@
     "whatsHappening": "Here's what's happening on {siteName}",
     "errorTitle": "Could not load home data",
     "loadError": "Failed to load home data",
+    "retry": "Try again",
     "popularTodayTitle": "Popular Today",
     "popularTodaySubtitle": "Most viewed materials in the last 24 hours",
     "trendingFortnightTitle": "Trending This Fortnight",
@@ -281,6 +292,7 @@
     "staged": "Staged",
     "directoryDetails": "Directory details",
     "select": "Select",
+    "moreActions": "More folder actions",
     "paste": "Paste (",
     "newFolder": "New Folder",
     "cut": "Cut",
@@ -344,6 +356,8 @@
     "backToParentFolder": "Back to parent folder",
     "closeInspector": "Close inspector",
     "openInspector": "Open inspector",
+    "expandFolder": "Expand folder",
+    "collapseFolder": "Collapse folder",
     "creationCancelled": "Creation cancelled and removed from draft",
     "addedDeletionToDraft": "Added deletion to current draft",
     "itemDeletedSuccessfully": "{type} deleted successfully",
@@ -355,6 +369,8 @@
     "itemsCount": "{count, plural, =1 {1 item} other {# items}}",
     "notFound": "Not found",
     "loadError": "Failed to load",
+    "loadFailedTitle": "This location could not be loaded",
+    "backToBrowse": "Back to library",
     "home": "Home",
     "courseMaterials": "Lectern",
     "contributionPreview": "Contribution preview",
@@ -544,6 +560,12 @@
     "foldersNotAccessible": "{count, plural, =1 {# folder} other {# folders}} could not be read. Try dragging folders one at a time, or use the file picker instead."
   },
   "Upload": {
+    "steps": {
+      "label": "Upload progress",
+      "choose": "Choose files",
+      "process": "Upload & scan",
+      "review": "Review"
+    },
     "uploading": "Uploading",
     "processing": "Processing…",
     "compressing": "Compressing…",
@@ -559,6 +581,8 @@
     "batchTags": "Batch Tags",
     "batchTagsPlaceholder": "Apply tags to all files and folders…",
     "batchTagsHint": "Tags entered here will be applied to every file and folder in this batch.",
+    "optionalSettings": "Optional settings",
+    "tagCount": "{count, plural, =1 {# tag} other {# tags}}",
     "dropzoneDefault": "Drag & drop files or folders, or click to browse",
     "dropzoneActive": "Drop files or folders here",
     "dropzoneHint": "Max {limit} MiB per file · Folder structure preserved on drop",
@@ -573,13 +597,19 @@
     "fileReferenceLost": "File reference lost. Re-add file to resume.",
     "paused": "Paused",
     "threatDetected": "Threat detected — file rejected",
-    "threatDescription": "This file was flagged as malicious by the virus scanner and has been deleted from storage. It cannot be uploaded.",
+    "threatDescription": "Security scanning rejected this file and deleted it from storage. It cannot be uploaded.",
+    "threatReason": "Reason: {reason}",
     "pause": "Pause",
     "resume": "Resume",
     "retry": "Retry",
     "remove": "Remove",
     "addToDraft": "Add to draft ({count})",
     "addToDraftProgress": "Add to draft ({count}/{total})",
+    "readyCount": "{ready} of {total} ready",
+    "failedCount": "{count, plural, =1 {# failed} other {# failed}}",
+    "removeFailed": "Remove failed files",
+    "finishBeforeDraft": "Uploads and security checks must finish before these files can be added to your draft.",
+    "noReadyFiles": "Retry or remove failed files to continue.",
     "addedToDraft": "{count, plural, =1 {# change} other {# changes}} added to draft",
     "uploadsInProgress": "Uploads are in progress — wait for them to finish",
     "scanningFolder": "Scanning folder…",
@@ -822,6 +852,12 @@
     "previewUnavailableTitle": "Preview unavailable"
   },
   "Viewers": {
+    "notebook": {
+      "title": "Jupyter notebook",
+      "invalid": "This file is not a valid Jupyter notebook.",
+      "empty": "This notebook has no cells.",
+      "imageOutput": "Notebook output"
+    },
     "videoTitle": "Video Player",
     "videoNotSupported": "Your browser does not support the video tag.",
     "audioNotSupported": "Your browser does not support the audio element.",
@@ -869,7 +905,9 @@
       "engineError": "Office Engine Error",
       "initFailed": "Initialization failed: {message}",
       "configError": "Failed to fetch editor configuration: {message}",
-      "loadScriptError": "Failed to load Office API script"
+      "loadScriptError": "Failed to load Office API script",
+      "startupError": "Euro-Office could not start: {message}",
+      "readyTimeout": "Euro-Office took too long to open this document. Please try again."
     },
     "retry": "Retry",
     "imageLoadFailed": "This image could not be displayed. It may not have downloaded fully."
@@ -915,6 +953,7 @@
     "preview": "Preview",
     "item": "item",
     "changesCount": "{count, plural, =0 {No changes} one {1 change} other {# changes}}",
+    "changes": "Changes",
     "expiredFile": "Uploaded file has expired",
     "expiresIn": "Expires in {time}",
     "unableToPreview": "Unable to load preview",
@@ -1892,6 +1931,37 @@
       "start": "Start",
       "replay": "Replay",
       "completed": "Completed",
+      "progress": "{completed} of {total} tutorials completed",
+      "searchPlaceholder": "Search guides and common questions…",
+      "searchLabel": "Search help",
+      "noResultsTitle": "No matching help found",
+      "noResultsDescription": "Try a broader term such as upload, viewer, or browse.",
+      "categories": {
+        "gettingStarted": "Getting started",
+        "create": "Create and contribute",
+        "collaborate": "Collaborate and review"
+      },
+      "categoryDescriptions": {
+        "gettingStarted": "Learn the library and find your way around.",
+        "create": "Add, organize, and propose learning materials.",
+        "collaborate": "Discuss, annotate, and review community changes."
+      },
+      "quickAnswers": "Quick answers",
+      "quickAnswersDescription": "Short guidance for the most common sticking points.",
+      "faq": {
+        "find": {
+          "title": "How do I find a document quickly?",
+          "body": "Use the global search for a title, file name, tag, or person. In the library, use the folder tree for structure and switch between list and grid without losing your location."
+        },
+        "upload": {
+          "title": "What happens after I upload a file?",
+          "body": "The file is uploaded, checked, and then placed in your draft. Review its title and destination, add it to the draft, then submit the draft when you are ready to propose the change."
+        },
+        "viewer": {
+          "title": "What should I do when a document does not open?",
+          "body": "Use the viewer's Retry action first. For Office documents, the editor automatically retries transient startup failures. If the issue persists, download the original file and report the document from its actions menu."
+        }
+      },
       "resetAll": "Reset all tutorials",
       "resetDone": "Tutorials reset - auto tours will show again.",
       "empty": "No tutorials are available for your account yet."

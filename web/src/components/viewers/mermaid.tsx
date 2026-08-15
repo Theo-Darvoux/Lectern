@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useId } from "react";
-import mermaid from "mermaid";
 import { useTheme } from "next-themes";
 import { Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -39,6 +38,8 @@ export function Mermaid({ chart }: MermaidProps) {
             }
 
             try {
+                const { default: mermaid } = await import("mermaid");
+                if (!isMounted) return;
                 // Initialize on every render ensures theme is correct
                 mermaid.initialize({
                     startOnLoad: false,

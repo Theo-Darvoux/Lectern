@@ -16,8 +16,8 @@ sys.path.append(os.path.join(os.getcwd(), "api"))
 try:
     from sqlalchemy import select
 
-    from app.core.database import async_session_factory
-    from app.core.meilisearch import meili_admin_client
+    from app.core.database.database import async_session_factory
+    from app.core.events.meilisearch import meili_admin_client
     from app.models.directory import Directory
     from app.models.material import Material
     from app.workers.index_content import index_directory, index_material

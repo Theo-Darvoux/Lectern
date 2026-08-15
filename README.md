@@ -32,10 +32,15 @@ docker compose up         # dev: compose.yaml + compose.override.yaml are merged
 
 The app is available at `http://localhost` (Nginx on port 80). SeaweedFS (local S3 storage) is started automatically in dev.
 
-For production deployment, see [docs/setup.md : Option B](docs/setup.md#option-b--production-deployment):
+For production deployment, use the canonical release artifact described in
+[docs/setup.md : Option B](docs/setup.md#option-b--production-deployment). Do
+not deploy mutable tags or invoke the production overlay without its generated
+digest file:
 
 ```bash
-docker compose -f compose.yaml -f compose.prod.yaml up -d
+./scripts/prepare-production-release.sh \
+  --canonical-manifest /secure/release/production-<commit>.json \
+  --runtime-env /secure/runtime/production.env
 ```
 
 For a full local dev setup (running components individually, seeding the database, env var reference), see [docs/setup.md](docs/setup.md).

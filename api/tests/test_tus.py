@@ -8,7 +8,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
 from app.models.user import User, UserRole
 
 
@@ -36,8 +36,9 @@ def mock_storage():
     with (
         patch("app.routers.tus.create_multipart_upload", new_callable=AsyncMock) as m_create,
         patch("app.routers.tus.upload_part", new_callable=AsyncMock) as m_upload,
-        patch("app.routers.tus.complete_multipart_upload", new_callable=AsyncMock) as m_complete,
+        patch("app.routers.tus.complete_multipart_verified", new_callable=AsyncMock) as m_complete,
         patch("app.routers.tus.abort_multipart_upload", new_callable=AsyncMock) as m_abort,
+        patch("app.routers.tus.delete_object", new_callable=AsyncMock) as m_delete,
     ):
         m_create.return_value = "mock_s3_upload_id"
         m_upload.return_value = "mock_etag"
@@ -46,6 +47,7 @@ def mock_storage():
             "upload": m_upload,
             "complete": m_complete,
             "abort": m_abort,
+            "delete": m_delete,
         }
 
 
@@ -55,7 +57,7 @@ async def test_tus_options(client: AsyncClient):
     assert response.status_code == 204
     assert response.headers["Tus-Resumable"] == "1.0.0"
     assert response.headers["Tus-Version"] == "1.0.0"
-    assert "Tus-Max-Size" in response.headers
+    assert response.headers["Tus-Max-Size"] == str(settings.tus_max_size_bytes)
     assert response.headers["Tus-Extension"] == "creation,termination,checksum"
 
 
@@ -133,6 +135,40 @@ async def test_tus_create_too_large(client: AsyncClient, db_session: AsyncSessio
     response = await client.post("/api/upload/tus", headers=headers)
     assert response.status_code == 400
     assert "exceeds server maximum" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_tus_create_uses_tus_specific_ceiling(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    fake_redis_setup,
+    mock_storage,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Prove TUS is not accidentally capped by the lower generic upload limit.
+    monkeypatch.setattr(settings, "max_file_size_mb", 10)
+    monkeypatch.setattr(settings, "tus_max_size_bytes", 50 * 1024 * 1024)
+
+    user = await _create_user(db_session)
+    await db_session.commit()
+
+    filename = "test.mp4"
+    filename_b64 = base64.b64encode(filename.encode()).decode()
+    mime_b64 = base64.b64encode(b"video/mp4").decode()
+    headers = _auth_headers(user)
+    headers.update(
+        {
+            "Tus-Resumable": "1.0.0",
+            "Upload-Length": str(20 * 1024 * 1024),
+            "Upload-Metadata": f"filename {filename_b64}, filetype {mime_b64}",
+        }
+    )
+
+    response = await client.post("/api/upload/tus", headers=headers)
+
+    assert response.status_code == 201
+    assert "Location" in response.headers
+    mock_storage["create"].assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -252,8 +288,10 @@ async def test_tus_patch_success_final(
     mock_storage["complete"].assert_called_once()
     mock_arq_pool.enqueue_job.assert_called_once()
 
-    # State should be deleted
-    assert f"tus:state:{tus_id}" not in fake_redis_setup.data
+    # A complete tombstone remains so response-loss retries and DELETE are safe.
+    completed_state = await fake_redis_setup.hgetall(f"tus:state:{tus_id}")
+    assert completed_state[b"enqueued"] == b"1"
+    assert completed_state[b"multipart_completed"] == b"1"
 
 
 @pytest.mark.asyncio
@@ -304,7 +342,13 @@ async def test_tus_patch_offset_mismatch(
     await db_session.commit()
 
     tus_id = str(uuid.uuid4())
-    state = {"user_id": str(user.id), "offset": "500", "length": "1000", "parts": "[]"}
+    state = {
+        "user_id": str(user.id),
+        "upload_id": "empty-chunk-upload",
+        "offset": "500",
+        "length": "1000",
+        "parts": "[]",
+    }
     await fake_redis_setup.hset(f"tus:state:{tus_id}", state)
 
     headers = _auth_headers(user)
@@ -329,7 +373,13 @@ async def test_tus_patch_chunk_too_small(
     await db_session.commit()
 
     tus_id = str(uuid.uuid4())
-    state = {"user_id": str(user.id), "offset": "0", "length": "20000000", "parts": "[]"}
+    state = {
+        "user_id": str(user.id),
+        "upload_id": "small-chunk-upload",
+        "offset": "0",
+        "length": "20000000",
+        "parts": "[]",
+    }
     await fake_redis_setup.hset(f"tus:state:{tus_id}", state)
 
     headers = _auth_headers(user)
@@ -386,7 +436,13 @@ async def test_tus_patch_empty_chunk(
     await db_session.commit()
 
     tus_id = str(uuid.uuid4())
-    state = {"user_id": str(user.id), "offset": "500", "length": "1000", "parts": "[]"}
+    state = {
+        "user_id": str(user.id),
+        "upload_id": "empty-patch-upload",
+        "offset": "500",
+        "length": "1000",
+        "parts": "[]",
+    }
     await fake_redis_setup.hset(f"tus:state:{tus_id}", state)
 
     headers = _auth_headers(user)
@@ -411,7 +467,13 @@ async def test_tus_delete_success(
     await db_session.commit()
 
     tus_id = str(uuid.uuid4())
-    state = {"user_id": str(user.id), "quarantine_key": "q-key", "s3_upload_id": "s3-id"}
+    upload_id = str(uuid.uuid4())
+    state = {
+        "user_id": str(user.id),
+        "upload_id": upload_id,
+        "quarantine_key": "q-key",
+        "s3_upload_id": "s3-id",
+    }
     await fake_redis_setup.hset(f"tus:state:{tus_id}", state)
 
     headers = _auth_headers(user)
@@ -420,6 +482,8 @@ async def test_tus_delete_success(
     assert response.status_code == 204
 
     mock_storage["abort"].assert_called_once_with("q-key", "s3-id")
+    mock_storage["delete"].assert_called_once_with("q-key")
+    assert await fake_redis_setup.get(f"upload:cancel:{upload_id}")
     assert f"tus:state:{tus_id}" not in fake_redis_setup.data
 
 

@@ -21,7 +21,7 @@ import pytest
 @pytest.mark.asyncio
 async def test_read_full_object_rejects_large_object():
     """read_full_object raises ValueError for objects exceeding 50 MiB."""
-    from app.core.storage import read_full_object
+    from app.core.storage.facade import read_full_object
 
     mock_response = {
         "ContentLength": 60 * 1024 * 1024,  # 60 MiB
@@ -36,7 +36,7 @@ async def test_read_full_object_rejects_large_object():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.core.storage.get_s3_client", return_value=mock_client):
+    with patch("app.core.storage.s3.S3Backend.get_s3_client", return_value=mock_client):
         with pytest.raises(ValueError, match="50 MiB"):
             await read_full_object("uploads/user/id/file.pdf")
 
@@ -44,7 +44,7 @@ async def test_read_full_object_rejects_large_object():
 @pytest.mark.asyncio
 async def test_read_full_object_allows_small_object():
     """read_full_object succeeds for objects below the 50 MiB limit."""
-    from app.core.storage import read_full_object
+    from app.core.storage.facade import read_full_object
 
     payload = b"small content"
     mock_body = AsyncMock()
@@ -59,7 +59,7 @@ async def test_read_full_object_allows_small_object():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.core.storage.get_s3_client", return_value=mock_client):
+    with patch("app.core.storage.s3.S3Backend.get_s3_client", return_value=mock_client):
         result = await read_full_object("uploads/user/id/small.txt")
 
     assert result == payload
@@ -70,7 +70,7 @@ async def test_read_full_object_allows_small_object():
 
 def test_dynamic_part_size_small_file():
     """Files ≤ 100 MiB get 8 MiB parts."""
-    from app.core.storage import dynamic_part_size
+    from app.core.storage.facade import dynamic_part_size
 
     assert dynamic_part_size(50 * 1024 * 1024) == 8 * 1024 * 1024
     assert dynamic_part_size(100 * 1024 * 1024) == 8 * 1024 * 1024
@@ -78,7 +78,7 @@ def test_dynamic_part_size_small_file():
 
 def test_dynamic_part_size_medium_file():
     """Files 100–500 MiB get 16 MiB parts."""
-    from app.core.storage import dynamic_part_size
+    from app.core.storage.facade import dynamic_part_size
 
     assert dynamic_part_size(101 * 1024 * 1024) == 16 * 1024 * 1024
     assert dynamic_part_size(500 * 1024 * 1024) == 16 * 1024 * 1024
@@ -86,7 +86,7 @@ def test_dynamic_part_size_medium_file():
 
 def test_dynamic_part_size_large_file():
     """Files > 500 MiB get 32 MiB parts."""
-    from app.core.storage import dynamic_part_size
+    from app.core.storage.facade import dynamic_part_size
 
     assert dynamic_part_size(501 * 1024 * 1024) == 32 * 1024 * 1024
     assert dynamic_part_size(2 * 1024 * 1024 * 1024) == 32 * 1024 * 1024
@@ -98,7 +98,7 @@ def test_dynamic_part_size_large_file():
 @pytest.mark.asyncio
 async def test_compress_file_path_skips_tiny_files(tmp_path: Path):
     """compress_file_path returns the original path unchanged for files < 10 KiB."""
-    from app.core.file_security import compress_file_path
+    from app.core.security.file_security import compress_file_path
 
     small_file = tmp_path / "tiny.pdf"
     small_file.write_bytes(b"%PDF-1.7\n" + b"x" * 100)  # well under 10 KB
@@ -111,14 +111,17 @@ async def test_compress_file_path_skips_tiny_files(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_compress_file_path_does_not_skip_larger_files(tmp_path: Path):
     """compress_file_path does NOT short-circuit for files ≥ 10 KiB."""
-    from app.core.file_security import _COMPRESSION_SKIP_THRESHOLD, compress_file_path
+    from app.core.security.file_security import compress_file_path
+    from app.core.security.file_security.compress import _COMPRESSION_SKIP_THRESHOLD
 
     large_file = tmp_path / "large.txt"
     large_file.write_bytes(b"a" * (_COMPRESSION_SKIP_THRESHOLD + 1))
 
     # We only verify it doesn't immediately return the same path (it tries to compress)
     # The actual compression may or may not reduce size, so we just check it ran.
-    with patch("app.core.file_security._gzip_compress_path", return_value=large_file):
+    with patch(
+        "app.core.security.file_security.compress._gzip_compress_path", return_value=large_file
+    ):
         result = await compress_file_path(large_file, "text/plain")
     assert result is not None  # didn't raise
 
@@ -130,9 +133,9 @@ def test_pdf_quality_used_in_pdf_compression():
     """_compress_pdf_path reads pdf_quality from settings."""
     import inspect
 
-    from app.core import file_security
+    import app.core.security.file_security._pdf as pdf_security
 
-    src = inspect.getsource(file_security._compress_pdf_path)
+    src = inspect.getsource(pdf_security._compress_pdf_path)
     assert "pdf_quality" in src
 
 
@@ -154,7 +157,7 @@ def test_parallel_scan_strip_uses_gather():
 @pytest.mark.asyncio
 async def test_scan_failure_discards_strip_result(tmp_path: Path):
     """When scan raises BadRequestError, strip result is discarded."""
-    from app.core.exceptions import BadRequestError
+    from app.core.common.exceptions import BadRequestError
 
     strip_called = []
 

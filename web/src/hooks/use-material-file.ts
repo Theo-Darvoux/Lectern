@@ -75,12 +75,35 @@ function isTransient(err: unknown): boolean {
     return false;
 }
 
-/** Combine the caller's cancel signal with a per-attempt timeout, when supported. */
-function attemptSignal(cancelSignal: AbortSignal): AbortSignal {
-    if (typeof AbortSignal !== "undefined" && "any" in AbortSignal && "timeout" in AbortSignal) {
-        return AbortSignal.any([cancelSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+/** Create a per-attempt signal with a timeout on every browser. */
+function createAttemptSignal(cancelSignal: AbortSignal): {
+    signal: AbortSignal;
+    didTimeout: () => boolean;
+    cleanup: () => void;
+} {
+    const controller = new AbortController();
+    let timedOut = false;
+    const abortFromCaller = () => controller.abort(cancelSignal.reason);
+
+    if (cancelSignal.aborted) {
+        abortFromCaller();
+    } else {
+        cancelSignal.addEventListener("abort", abortFromCaller, { once: true });
     }
-    return cancelSignal;
+
+    const timer = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort(new DOMException("Material load timed out", "TimeoutError"));
+    }, REQUEST_TIMEOUT_MS);
+
+    return {
+        signal: controller.signal,
+        didTimeout: () => timedOut,
+        cleanup: () => {
+            window.clearTimeout(timer);
+            cancelSignal.removeEventListener("abort", abortFromCaller);
+        },
+    };
 }
 
 export function useMaterialFile({
@@ -106,11 +129,11 @@ export function useMaterialFile({
 
         // A single fetch attempt. Throws on failure (so the retry loop can react),
         // sets the relevant state on success.
-        const runAttempt = async (): Promise<void> => {
+        const runAttempt = async (signal: AbortSignal): Promise<void> => {
             if (mode === "url") {
                 const { getMaterialFileUrl } = await import("@/lib/api-client");
-                const url = await getMaterialFileUrl(materialId);
-                if (!cancelled) setBlobUrl(url);
+                const url = await getMaterialFileUrl(materialId, signal);
+                if (!cancelled && !signal.aborted) setBlobUrl(url);
                 return;
             }
 
@@ -121,7 +144,7 @@ export function useMaterialFile({
                 // causing double-decompression. The /text-content endpoint handles
                 // decompression correctly server-side and returns clean UTF-8 text.
                 const res = await apiRequest(`/materials/${materialId}/text-content`, {
-                    signal: attemptSignal(controller.signal),
+                    signal,
                 });
                 let text = await res.text();
                 let didTruncate = false;
@@ -136,7 +159,7 @@ export function useMaterialFile({
                 return;
             }
 
-            const res = await fetchMaterialFile(materialId, attemptSignal(controller.signal));
+            const res = await fetchMaterialFile(materialId, signal);
 
             if (mode === "blob") {
                 const blob = await res.blob();
@@ -179,13 +202,20 @@ export function useMaterialFile({
             });
 
             for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                const attemptSignal = createAttemptSignal(controller.signal);
                 try {
-                    await runAttempt();
+                    await runAttempt(attemptSignal.signal);
                     if (!cancelled) setLoading(false);
                     return;
                 } catch (err) {
                     // The effect was torn down (unmount / new request) — stay silent.
                     if (cancelled || controller.signal.aborted) return;
+
+                    if (attemptSignal.didTimeout()) {
+                        setError("Loading timed out. Please retry.");
+                        setLoading(false);
+                        return;
+                    }
 
                     if (attempt < MAX_ATTEMPTS && isTransient(err)) {
                         await backoff(attempt);
@@ -196,6 +226,8 @@ export function useMaterialFile({
                     setError(err instanceof Error ? err.message : "Failed to load material file");
                     setLoading(false);
                     return;
+                } finally {
+                    attemptSignal.cleanup();
                 }
             }
         };

@@ -33,6 +33,10 @@ const CodeViewer = dynamic(
     () => import("@/components/viewers/code-viewer").then((m) => m.CodeViewer),
     { loading: () => <Skeleton className="h-full w-full rounded-none" />, ssr: false },
 );
+const NotebookViewer = dynamic(
+    () => import("@/components/viewers/notebook-viewer").then((m) => m.NotebookViewer),
+    { loading: () => <Skeleton className="h-full w-full rounded-none" />, ssr: false },
+);
 const CsvViewer = dynamic(
     () => import("@/components/viewers/csv-viewer").then((m) => m.CsvViewer),
     { loading: () => <Skeleton className="h-full w-full rounded-none" />, ssr: false },
@@ -141,6 +145,9 @@ export function AttachmentPreviewDialog({
                     )}
                     {viewerType === "code" && (
                         <CodeViewer fileKey={fileKey} materialId={materialId} fileName={fileName} />
+                    )}
+                    {viewerType === "notebook" && (
+                        <NotebookViewer fileKey={fileKey} materialId={materialId} />
                     )}
                     {viewerType === "csv" && (
                         <CsvViewer fileKey={fileKey} materialId={materialId} fileName={fileName} />

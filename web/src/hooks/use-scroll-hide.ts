@@ -12,6 +12,7 @@ export function useScrollHide(
   scrollRef: React.RefObject<HTMLElement | null>,
   options?: ScrollHideOptions
 ) {
+  const navbarVisible = useUIStore((s) => s.navbarVisible);
   const setNavbarVisible = useUIStore((s) => s.setNavbarVisible);
   const materialActionsOpen = useUIStore((s) => s.materialActionsOpen);
   const isMobile = useIsMobile();
@@ -19,6 +20,12 @@ export function useScrollHide(
   const accumulated = useRef(0);
   const materialActionsOpenRef = useRef(materialActionsOpen);
   useEffect(() => { materialActionsOpenRef.current = materialActionsOpen; }, [materialActionsOpen]);
+
+  useEffect(() => {
+    if (navbarVisible) {
+      accumulated.current = 0;
+    }
+  }, [navbarVisible]);
 
   useEffect(() => {
     const el = scrollRef.current;

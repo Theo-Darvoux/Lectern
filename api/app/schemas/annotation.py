@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, BeforeValidator, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, field_serializer, field_validator
 
 from app.core.sanitization import SanitizedStr, sanitize_json_payload
+from app.services.avatar import is_safe_avatar_reference
 
 StrFromUUID = Annotated[str, BeforeValidator(lambda v: str(v))]
 OptStrFromUUID = Annotated[str | None, BeforeValidator(lambda v: str(v) if v is not None else None)]
@@ -16,6 +17,10 @@ class AnnotationAuthor(BaseModel):
     id: StrFromUUID
     display_name: str | None
     avatar_url: str | None
+
+    @field_serializer("avatar_url")
+    def serialize_avatar_url(self, value: str | None) -> str | None:
+        return value if is_safe_avatar_reference(value, self.id) else None
 
     model_config = {"from_attributes": True}
 

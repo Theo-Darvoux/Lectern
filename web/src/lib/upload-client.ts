@@ -3,6 +3,7 @@ import { API_BASE, ApiError, apiRequest, getClientId } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { compressImageIfNeeded } from "@/lib/file-utils";
 import { sha256File } from "@/lib/crypto-utils";
+import { withMalwareErrorPrefix } from "@/lib/upload-errors";
 
 type UploadStatus = "pending" | "processing" | "clean" | "malicious" | "failed";
 
@@ -34,6 +35,8 @@ interface UploadFileOptions {
     signal?: AbortSignal;
     /** Stable UUID for this upload attempt — enables server-side idempotency on retry. */
     uploadId?: string;
+    /** Server-issued bounded admission capability for one folder. */
+    uploadGroupId?: string;
     /** Optional tus URL to resume from. */
     tusUrl?: string;
     /** Skip client-side image compression (useful for 4K+ scans) (U10). */
@@ -69,6 +72,14 @@ interface UploadResult {
     content_sha256?: string;
 }
 
+interface DirectUploadResponse {
+    upload_id: string;
+    file_key: string;
+    status: UploadStatus;
+    size: number;
+    mime_type: string;
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** Files above this threshold are uploaded via tus (resumable chunked); below go via presigned PUT. */
@@ -80,8 +91,8 @@ const PRESIGNED_MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024; // 100 MiB
 /** tus chunk size — must satisfy S3 minimum part size (5 MiB) for non-final parts. */
 const TUS_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB
 
-/** Direct S3 multipart part size. */
-const S3_PART_SIZE = 8 * 1024 * 1024; // 8 MiB
+/** Direct uploads are small, but still bound the whole request so UI cannot hang forever. */
+const DIRECT_UPLOAD_TIMEOUT_MS = 120_000;
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
@@ -97,6 +108,7 @@ interface InitMultipartResponse {
     s3_multipart_id: string;
     parts: Array<{
         part_number: number;
+        size: number;
         url: string;
     }>;
 }
@@ -128,11 +140,29 @@ export interface UploadConfig {
     allowed_extensions: string[];
     allowed_mimetypes: string[];
     max_file_size_mb: number;
+    max_size_mb_by_mime: Record<string, number>;
+    recommended_path: "direct" | "tus";
+    direct_threshold_mb: number;
+    batch_max_zip_size_bytes?: number;
+    batch_max_total_extracted_bytes?: number;
+    batch_max_files?: number;
+    batch_max_files_privileged?: number;
+    batch_max_path_depth?: number;
+}
+
+/** Resolve the same MIME-specific upload cap advertised by the API. */
+export function uploadLimitMbForMime(
+    config: UploadConfig | null,
+    mimeType: string,
+    fallbackMb: number,
+): number {
+    return config?.max_size_mb_by_mime[mimeType] ?? config?.max_file_size_mb ?? fallbackMb;
 }
 
 let _configCache: UploadConfig | null = null;
 let _configCacheTime = 0;
 const CONFIG_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const UPLOAD_CONTROL_TIMEOUT_MS = 30_000;
 
 /** Fetch upload configuration (allowed types, size limits) from the backend. */
 export async function getUploadConfig(): Promise<UploadConfig> {
@@ -140,11 +170,40 @@ export async function getUploadConfig(): Promise<UploadConfig> {
     if (_configCache && (now - _configCacheTime < CONFIG_CACHE_TTL)) {
         return _configCache;
     }
-    const resp = await apiRequest("/upload/config");
+    const resp = await apiRequest("/upload/config", { timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS });
     const config = await resp.json() as UploadConfig;
     _configCache = config;
     _configCacheTime = now;
     return config;
+}
+
+export interface UploadGroup {
+    group_id: string;
+    max_files: number;
+    expires_in: number;
+}
+
+/** Admit a folder once; contained file IDs consume its bounded slots. */
+export async function beginUploadGroup(
+    fileCount: number,
+    signal?: AbortSignal,
+): Promise<UploadGroup> {
+    const response = await apiRequest("/upload/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_count: fileCount }),
+        signal,
+        timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS,
+    });
+    return response.json() as Promise<UploadGroup>;
+}
+
+function addUploadAdmissionHeaders(
+    headers: Record<string, string>,
+    options: Pick<UploadFileOptions, "uploadId" | "uploadGroupId">,
+): void {
+    if (options.uploadId) headers["X-Upload-ID"] = options.uploadId;
+    if (options.uploadGroupId) headers["X-Upload-Group-ID"] = options.uploadGroupId;
 }
 
 // ── Retry helpers ─────────────────────────────────────────────────────────────
@@ -237,6 +296,39 @@ async function _xhrPutWithRetry(
     }
 }
 
+// ── Backend-recommended direct upload path (small files) ──────────────────────
+
+async function _directUpload(
+    file: File,
+    options: UploadFileOptions,
+): Promise<string> {
+    const { onProgress, onStatusUpdate, onBytesProgress, signal } = options;
+    const form = new FormData();
+    form.append("file", file, file.name);
+
+    _onStatusUpdate(onStatusUpdate, "uploading", options.t);
+
+    const headers: Record<string, string> = {};
+    addUploadAdmissionHeaders(headers, options);
+
+    const response = await apiRequest("/upload", {
+        method: "POST",
+        headers,
+        body: form,
+        signal,
+        timeoutMs: DIRECT_UPLOAD_TIMEOUT_MS,
+    });
+    const result = await response.json() as DirectUploadResponse;
+
+    // fetch() does not expose upload-body progress. This route is only selected
+    // below the backend-advertised direct threshold, so report the transfer as
+    // complete once the server has durably accepted the request.
+    onBytesProgress?.(file.size, file.size);
+    onProgress?.(80);
+    _onStatusUpdate(onStatusUpdate, "processing", options.t);
+    return result.file_key;
+}
+
 function _xhrPutPart(
     url: string,
     blob: Blob,
@@ -306,6 +398,7 @@ async function _presignedMultipartUpload(
     const token = getAccessToken();
     const baseHeaders: Record<string, string> = { "X-Client-ID": getClientId() };
     if (token) baseHeaders["Authorization"] = `Bearer ${token}`;
+    addUploadAdmissionHeaders(baseHeaders, options);
 
     _onStatusUpdate(onStatusUpdate, "preparingMultipart", options.t);
 
@@ -336,11 +429,27 @@ async function _presignedMultipartUpload(
         onBytesProgress?.(totalUploaded, file.size);
     };
 
-    const tasks = parts.map((p) => async () => {
-        const start = (p.part_number - 1) * S3_PART_SIZE;
-        const end = Math.min(start + S3_PART_SIZE, file.size);
+    let nextPartOffset = 0;
+    const partSpecs = parts.map((part) => {
+        const start = nextPartOffset;
+        const end = start + part.size;
+        nextPartOffset = end;
+        return { part, start, end };
+    });
+    if (nextPartOffset !== file.size) {
+        throw new Error(
+            `Server multipart plan totals ${nextPartOffset} bytes, expected ${file.size}`,
+        );
+    }
+
+    const tasks = partSpecs.map(({ part: p, start, end }) => async () => {
         const blob = file.slice(start, end);
-        const partSize = end - start;
+        if (blob.size !== p.size) {
+            throw new Error(
+                `Server/client multipart size mismatch for part ${p.part_number}: ${blob.size} !== ${p.size}`,
+            );
+        }
+        const partSize = p.size;
 
         const onPartProgress = (partPct: number) => {
             progressPerPart[p.part_number] = (partPct / 100) * partSize;
@@ -360,6 +469,7 @@ async function _presignedMultipartUpload(
         calculateProgress();
     });
 
+    let completionStarted = false;
     try {
         for (const task of tasks) {
             const promise = task().finally(() => {
@@ -375,25 +485,47 @@ async function _presignedMultipartUpload(
 
         _onStatusUpdate(onStatusUpdate, "finalizingMultipart", options.t);
 
-        await apiRequest("/upload/presigned-multipart/complete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...baseHeaders },
-            body: JSON.stringify({
-                upload_id: initResp.upload_id,
-                parts: etags,
-            }),
-            signal,
-        });
+        completionStarted = true;
+        let completionAttempts = 0;
+        while (true) {
+            try {
+                await apiRequest("/upload/presigned-multipart/complete", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", ...baseHeaders },
+                    body: JSON.stringify({
+                        upload_id: initResp.upload_id,
+                        parts: etags,
+                    }),
+                    signal,
+                });
+                break;
+            } catch (err) {
+                completionAttempts++;
+                const retryable =
+                    (err instanceof ApiError && _isRetryable(err.status)) ||
+                    (!(err instanceof ApiError) && !signal?.aborted);
+                if (!retryable || completionAttempts >= _MAX_RETRIES) throw err;
+                await _sleep(Math.min(1000 * 2 ** completionAttempts, 30_000), signal);
+            }
+        }
 
         return initResp.quarantine_key;
     } catch (err) {
-        // Abort S3 multipart to free orphaned parts immediately (audit review fix)
-        try {
-            await apiRequest(`/upload/presigned-multipart/${initResp.upload_id}`, {
-                method: "DELETE",
-                headers: baseHeaders,
-            });
-        } catch { /* best-effort cleanup */ }
+        const uncertainCompletion =
+            completionStarted &&
+            !signal?.aborted &&
+            ((err instanceof ApiError && _isRetryable(err.status)) || !(err instanceof ApiError));
+
+        // A timeout or 5xx may mean S3 committed and only the response was lost.
+        // Preserve that intent so the exact manifest can be retried/reconciled.
+        if (!uncertainCompletion) {
+            try {
+                await apiRequest(`/upload/presigned-multipart/${initResp.upload_id}`, {
+                    method: "DELETE",
+                    headers: baseHeaders,
+                });
+            } catch { /* best-effort cleanup */ }
+        }
         throw err;
     }
 }
@@ -423,6 +555,7 @@ function _tusUpload(
             "X-Client-ID": getClientId(),
         };
         if (token) headers["Authorization"] = `Bearer ${token}`;
+        addUploadAdmissionHeaders(headers, options);
 
         let quarantineKey: string | undefined;
 
@@ -525,6 +658,7 @@ export async function uploadFile(
         "X-Client-ID": getClientId(),
     };
     if (token) baseHeaders["Authorization"] = `Bearer ${token}`;
+    addUploadAdmissionHeaders(baseHeaders, options);
 
     // Compute hash for deduplication
     const sha256 = await sha256File(file, (pct) => onProgress?.(Math.round(pct * 0.04)), signal);
@@ -598,11 +732,30 @@ export async function uploadFile(
     // ── Phase 2: Transfer to S3 (5–80%) ──────────────────────────────────────
     let quarantineKey: string;
 
+    // The backend owns the upload routing policy. In particular, /upload/config
+    // advertises the successor direct endpoint and its size threshold. Keep the
+    // legacy presigned path only as a compatibility fallback when config cannot
+    // be loaded (e.g. mixed-version rolling deployments).
+    let uploadConfig: UploadConfig | null = null;
+    try {
+        uploadConfig = await getUploadConfig();
+    } catch {
+        // Compatibility fallback below.
+    }
+    const directThresholdBytes = Math.max(0, uploadConfig?.direct_threshold_mb ?? 0) * 1024 * 1024;
+    const useDirectUpload =
+        uploadConfig?.recommended_path === "direct" &&
+        directThresholdBytes > 0 &&
+        fileToUpload.size < directThresholdBytes;
+
     if (options.tusUrl) {
         // RESUME: If we have a tusUrl, we must use TUS regardless of current size
         // (the file might have been compressed or is just being resumed).
         _onStatusUpdate(options.onStatusUpdate, "resumingUpload", options.t);
         quarantineKey = await _tusUpload(fileToUpload, options);
+    } else if (useDirectUpload) {
+        // Successor to the deprecated /upload/init + presigned PUT flow.
+        quarantineKey = await _directUpload(fileToUpload, options);
     } else if (fileToUpload.size >= PRESIGNED_MULTIPART_THRESHOLD_BYTES) {
         // Extra-large file: direct S3 multipart
         try {
@@ -634,6 +787,7 @@ export async function uploadFile(
                 sha256: finalSha256, // Pass expected hash for server-side verification
             }),
             signal,
+            timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS,
         }).then((r) => r.json() as Promise<InitUploadResponse>);
 
         // PUT directly to S3 — bypasses the API server entirely
@@ -664,6 +818,7 @@ export async function uploadFile(
                 quarantine_key: initResp.quarantine_key,
             }),
             signal,
+            timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS,
         });
 
         quarantineKey = initResp.quarantine_key;
@@ -845,6 +1000,10 @@ async function _waitForUploadCompletion(
     }
 }
 
+// Public alias for workflows (such as avatar adoption) that need to await the
+// same security-processing terminal state without duplicating SSE/poll logic.
+export { _waitForUploadCompletion as waitForUploadCompletion };
+
 function _handleUploadEvent(
     eventType: string,
     rawData: string,
@@ -880,11 +1039,17 @@ function _handleUploadEvent(
             onProgress?.(1.0);
             return payload.result;
 
-        case "malicious":
+        case "malicious": {
+            const malwareDetail =
+                payload.detail ??
+                (t
+                    ? t("maliciousRejection")
+                    : "File was rejected: potential security threat detected");
             throw new UploadTerminalError(
                 400,
-                payload.detail ?? (t ? t("maliciousRejection") : "File was rejected: potential security threat detected"),
+                withMalwareErrorPrefix(malwareDetail),
             );
+        }
 
         case "failed":
             throw new UploadTerminalError(500, payload.detail ?? "File processing failed");
@@ -906,6 +1071,7 @@ interface BatchZipEntry {
 }
 
 interface BatchZipResponse {
+    batch_id: string;
     files: BatchZipEntry[];
     skipped: number;
     errors: string[];
@@ -928,7 +1094,7 @@ export async function trackExistingUpload(
     onProgress?.(80);
 
     const result = await _waitForUploadCompletion(quarantineKey, {
-        onProgress: (p) => onProgress?.(80 + Math.round(p * 19)),
+        onProgress: (p: number) => onProgress?.(80 + Math.round(p * 19)),
         onStatusUpdate: options.onStatusUpdate,
         signal,
         t: options.t,
@@ -956,14 +1122,25 @@ export async function trackExistingUpload(
  */
 export async function uploadBatchZip(
     zipBlob: Blob,
-    options: Pick<UploadFileOptions, "onProgress" | "signal"> = {},
+    options: Pick<UploadFileOptions, "onProgress" | "signal" | "uploadId"> = {},
 ): Promise<BatchZipResponse> {
     const { onProgress, signal } = options;
+    const config = await getUploadConfig();
+    const maxBatchBytes = config.batch_max_zip_size_bytes ?? 500 * 1024 * 1024;
+    if (zipBlob.size > maxBatchBytes) {
+        throw new ApiError(
+            413,
+            `Batch archive exceeds the ${Math.floor(maxBatchBytes / (1024 * 1024))} MiB limit`,
+        );
+    }
+
+    const batchId = options.uploadId ?? crypto.randomUUID();
     const token = getAccessToken();
     const headers: Record<string, string> = { "X-Client-ID": getClientId() };
     if (token) headers["Authorization"] = `Bearer ${token}`;
+    headers["X-Upload-ID"] = batchId;
 
-    return new Promise<BatchZipResponse>((resolve, reject) => {
+    const uploadOnce = () => new Promise<BatchZipResponse>((resolve, reject) => {
         if (signal?.aborted) {
             reject(new Error("Upload cancelled"));
             return;
@@ -1006,6 +1183,19 @@ export async function uploadBatchZip(
         form.append("file", zipBlob, "batch.zip");
         xhr.send(form);
     });
+
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await uploadOnce();
+        } catch (error) {
+            const retryable =
+                error instanceof ApiError
+                    ? _isRetryable(error.status)
+                    : error instanceof Error && error.message === "Network error during batch-zip upload";
+            if (!retryable || attempt >= _MAX_RETRIES || signal?.aborted) throw error;
+            await _sleep(500 * 2 ** attempt, signal);
+        }
+    }
 }
 
 // ── Status polling fallback ───────────────────────────────────────────────────

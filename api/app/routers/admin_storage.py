@@ -5,11 +5,15 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cas import _STORAGE_USAGE_KEY, hmac_cas_key
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError
-from app.core.redis import redis_client
-from app.core.storage import delete_object, list_objects
+from app.core.common.exceptions import BadRequestError
+from app.core.database.database import get_db
+from app.core.database.redis import redis_client
+from app.core.security.cas import _STORAGE_USAGE_KEY, hmac_cas_key
+from app.core.storage.facade import delete_object, list_objects
+from app.core.storage.liveness import (
+    acquire_storage_lifecycle_xact_lock,
+    storage_key_is_live,
+)
 from app.models.material import MaterialVersion
 from app.models.pull_request import PRStatus, PullRequest
 from app.models.upload import Upload
@@ -128,6 +132,7 @@ async def reconcile_storage(
 async def prune_storage(
     _user: AdminUser,
     keys: list[str],
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Delete specified orphaned objects from S3.
 
@@ -147,9 +152,18 @@ async def prune_storage(
             )
 
     deleted_count = 0
+    skipped_live = 0
 
     for key in keys:
         try:
+            # The caller's reconciliation result is only a candidate list. Re-establish
+            # liveness while holding the same PostgreSQL advisory lock used by CAS
+            # admission, so a stale reconcile response can never authorize deletion.
+            await acquire_storage_lifecycle_xact_lock(db, key)
+            if await storage_key_is_live(db, key, redis=redis_client):
+                skipped_live += 1
+                logger.info("Skipping prune of storage key that became live: %s", key)
+                continue
             await delete_object(key)
             deleted_count += 1
         except Exception as e:
@@ -161,5 +175,10 @@ async def prune_storage(
     return {
         "status": "success",
         "deleted_count": deleted_count,
-        "message": f"Successfully pruned {deleted_count} objects. Storage counter will be re-synced on next upload.",
+        "skipped_live_count": skipped_live,
+        "message": (
+            f"Successfully pruned {deleted_count} objects; "
+            f"skipped {skipped_live} that are now live. "
+            "Storage counter will be re-synced on next upload."
+        ),
     }

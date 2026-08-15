@@ -890,23 +890,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/directories/{id}/sse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Directory Event Stream */
-        get: operations["directory_event_stream_api_directories__id__sse_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/directories/root/download-chunks": {
         parameters: {
             query?: never;
@@ -961,15 +944,7 @@ export interface paths {
         };
         /**
          * Download Directory Zip
-         * @description Stream all files in a directory (recursively) as a single ZIP archive.
-         *
-         *     Accepts auth via ``Authorization: Bearer`` header or ``?token=`` query param
-         *     so that a plain browser link (window.location.href) can trigger the download.
-         *
-         *     When ``WORKER_ZIP_URL`` is configured the heavy work (fetching from R2 and
-         *     assembling the ZIP) is offloaded to a Cloudflare Worker.  The API only does
-         *     auth + DB work and then issues a redirect carrying a short-lived HMAC-signed
-         *     token so the Worker can verify the request without calling back to the API.
+         * @description Stream a directory ZIP for bearer API clients or cookie-authenticated browsers.
          */
         get: operations["download_directory_zip_api_directories__id__download_get"];
         put?: never;
@@ -1101,23 +1076,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/materials/{material_id}/sse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Material Event Stream */
-        get: operations["material_event_stream_api_materials__material_id__sse_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/materials/{material_id}": {
         parameters: {
             query?: never;
@@ -1202,7 +1160,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Stream Material File */
+        /**
+         * Stream Material File
+         * @description Redirect a read-authenticated client to an immutable presigned object URL.
+         */
         get: operations["stream_material_file_api_materials__material_id__file_get"];
         put?: never;
         post?: never;
@@ -1430,26 +1391,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/notifications/sse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Sse Stream
-         * @description SSE endpoint. Accepts token via query param since EventSource can't send headers.
-         */
-        get: operations["sse_stream_api_notifications_sse_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/og": {
         parameters: {
             query?: never;
@@ -1483,26 +1424,6 @@ export interface paths {
         head?: never;
         /** Update Pr Comment */
         patch: operations["update_pr_comment_api_pr_comments__id__patch"];
-        trace?: never;
-    };
-    "/api/pull-requests/sse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Pull Request Sse
-         * @description Per-user SSE stream for PR list updates (pr_opened / pr_closed events).
-         */
-        get: operations["pull_request_sse_api_pull_requests_sse_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
         trace?: never;
     };
     "/api/pull-requests": {
@@ -1760,6 +1681,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/events/sse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Master Event Stream
+         * @description One authenticated stream multiplexing every live-update channel.
+         */
+        get: operations["master_event_stream_api_events_sse_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/upload/tus": {
         parameters: {
             query?: never;
@@ -1792,17 +1733,14 @@ export interface paths {
         post?: never;
         /**
          * Tus Delete
-         * @description Terminate a pending upload.  Aborts the S3 multipart upload.
+         * @description Cancel through the shared CAS-aware lifecycle operation.
          */
         delete: operations["tus_delete_api_upload_tus__tus_id__delete"];
         options?: never;
         head?: never;
         /**
          * Tus Patch
-         * @description Append a chunk to the upload at Upload-Offset.
-         *
-         *     On the final chunk, completes the S3 multipart upload and enqueues
-         *     background processing.  Returns X-Lectern-File-Key for the SSE stream.
+         * @description Append a chunk while holding renewable global and per-user leases.
          */
         patch: operations["tus_patch_api_upload_tus__tus_id__patch"];
         trace?: never;
@@ -1856,6 +1794,23 @@ export interface paths {
          *     paths (zip slip) or triggers zip-bomb heuristics is rejected entirely (4xx).
          */
         post: operations["upload_batch_zip_api_upload_batch_zip_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/upload/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Upload Group */
+        post: operations["create_upload_group_api_upload_groups_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1933,7 +1888,7 @@ export interface paths {
         put?: never;
         /**
          * Presigned Multipart Complete
-         * @description Finalise a presigned multipart upload.
+         * @description Finalise a presigned multipart upload under the cancellation lock.
          */
         post: operations["presigned_multipart_complete_api_upload_presigned_multipart_complete_post"];
         delete?: never;
@@ -1954,7 +1909,7 @@ export interface paths {
         post?: never;
         /**
          * Presigned Multipart Abort
-         * @description Abort an in-progress multipart upload.
+         * @description Cancel multipart state and CAS ownership through one lifecycle operation.
          */
         delete: operations["presigned_multipart_abort_api_upload_presigned_multipart__upload_id__delete"];
         options?: never;
@@ -1971,10 +1926,7 @@ export interface paths {
         };
         /**
          * Upload Status
-         * @description Non-SSE status poll for upload processing.
-         *
-         *     Returns the cached status written by the background worker.
-         *     Returns PENDING if no status has been written yet.
+         * @description Return upload status with the database overriding stale terminal cache state.
          */
         get: operations["upload_status_api_upload_status__file_key__get"];
         put?: never;
@@ -1997,7 +1949,7 @@ export interface paths {
          * @description SSE stream for upload processing status.
          *
          *     Auth via Authorization: Bearer header (fetch-based SSE, not native EventSource).
-         *     Reconnect-safe: serves the cached terminal event immediately on reconnect.
+         *     Reconnect-safe: replays the bounded durable log at least once on reconnect.
          *
          *     Events:
          *       - type=upload, data=UploadStatusOut JSON  (status updates from worker)
@@ -2047,12 +1999,7 @@ export interface paths {
         post?: never;
         /**
          * Cancel Upload
-         * @description Cancel a pending or in-progress upload.
-         *
-         *     Sets a Redis cancellation flag so the background worker aborts between
-         *     stages, then deletes the quarantine object from S3 and removes it from
-         *     the user's quota sorted set. Idempotent -- returns 204 even if the
-         *     upload_id is not found.
+         * @description Cancel any upload through the shared CAS-aware lifecycle operation.
          */
         delete: operations["cancel_upload_api_upload__upload_id__delete"];
         options?: never;
@@ -2601,12 +2548,34 @@ export interface components {
          * @description Response from POST /upload/batch-zip.
          */
         BatchZipResponse: {
+            /** Batch Id */
+            batch_id: string;
             /** Files */
             files: components["schemas"]["BatchZipEntry"][];
             /** Skipped */
             skipped: number;
             /** Errors */
             errors: string[];
+        };
+        /**
+         * UploadGroupOut
+         * @description Server-issued capability for a bounded folder upload.
+         */
+        UploadGroupOut: {
+            /** Group Id */
+            group_id: string;
+            /** Max Files */
+            max_files: number;
+            /** Expires In */
+            expires_in: number;
+        };
+        /**
+         * UploadGroupRequest
+         * @description Reserve a bounded set of per-file admissions for one folder.
+         */
+        UploadGroupRequest: {
+            /** File Count */
+            file_count: number;
         };
         /** Body_parse_moodle_xml_api_qcm_parse_moodle_post */
         Body_parse_moodle_xml_api_qcm_parse_moodle_post: {
@@ -3067,6 +3036,7 @@ export interface components {
              * Format: uuid
              */
             target_id: string;
+            target?: components["schemas"]["FlagTarget"] | null;
             /** Reason */
             reason: string;
             /** Description */
@@ -3094,6 +3064,19 @@ export interface components {
             display_name: string | null;
             /** Email */
             email: string;
+        };
+        /**
+         * FlagTarget
+         * @description Resolved context for a flagged item: whether it still exists, a short
+         *     content preview, and a navigable frontend link to its parent container.
+         */
+        FlagTarget: {
+            /** Exists */
+            exists: boolean;
+            /** Preview */
+            preview?: string | null;
+            /** Link */
+            link?: string | null;
         };
         /** FlagUpdateIn */
         FlagUpdateIn: {
@@ -3381,7 +3364,7 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
-            author: components["schemas"]["UserOut"] | null;
+            author: components["schemas"]["PublicUserBrief"] | null;
         };
         /** PaginatedResponse[Any] */
         PaginatedResponse_Any_: {
@@ -3451,6 +3434,8 @@ export interface components {
         PresignedMultipartPart: {
             /** Part Number */
             part_number: number;
+            /** Size */
+            size: number;
             /** Url */
             url: string;
         };
@@ -3467,6 +3452,66 @@ export interface components {
             presigned_url: string;
             /** Expires In */
             expires_in: number;
+        };
+        /** PublicUserBrief */
+        PublicUserBrief: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string | null;
+            /** Avatar Url */
+            avatar_url: string | null;
+        };
+        /** PublicUserProfileOut */
+        PublicUserProfileOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string | null;
+            /** Avatar Url */
+            avatar_url: string | null;
+            /** Role */
+            role: string;
+            /** Bio */
+            bio: string | null;
+            /** Academic Year */
+            academic_year: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Prs Approved
+             * @default 0
+             */
+            prs_approved: number;
+            /**
+             * Prs Total
+             * @default 0
+             */
+            prs_total: number;
+            /**
+             * Annotations Count
+             * @default 0
+             */
+            annotations_count: number;
+            /**
+             * Comments Count
+             * @default 0
+             */
+            comments_count: number;
+            /**
+             * Reputation
+             * @default 0
+             */
+            reputation: number;
         };
         /** PullRequestCreate */
         PullRequestCreate: {
@@ -3509,7 +3554,7 @@ export interface components {
             virus_scan_result: components["schemas"]["VirusScanResult"];
             /** Rejection Reason */
             rejection_reason?: string | null;
-            author: components["schemas"]["UserOut"] | null;
+            author: components["schemas"]["PublicUserBrief"] | null;
             /**
              * Created At
              * Format: date-time
@@ -3688,10 +3733,24 @@ export interface components {
             allowed_mimetypes: string[];
             /** Max File Size Mb */
             max_file_size_mb: number;
+            /** Max Size Mb By Mime */
+            max_size_mb_by_mime: {
+                [key: string]: number;
+            };
             /** Recommended Path */
             recommended_path: string;
             /** Direct Threshold Mb */
             direct_threshold_mb: number;
+            /** Batch Max Zip Size Bytes */
+            batch_max_zip_size_bytes: number;
+            /** Batch Max Total Extracted Bytes */
+            batch_max_total_extracted_bytes: number;
+            /** Batch Max Files */
+            batch_max_files: number;
+            /** Batch Max Files Privileged */
+            batch_max_files_privileged: number;
+            /** Batch Max Path Depth */
+            batch_max_path_depth: number;
         };
         /**
          * UploadHistoryItem
@@ -3923,8 +3982,10 @@ export interface components {
             bio?: string | null;
             /** Academic Year */
             academic_year?: string | null;
-            /** Avatar Url */
-            avatar_url?: string | null;
+            /** Avatar Url — null is accepted only to clear the server-owned avatar reference. */
+            avatar_url?: null;
+            /** Avatar Upload Id */
+            avatar_upload_id?: string | null;
             /** Auto Approve */
             auto_approve?: boolean | null;
         };
@@ -5639,37 +5700,6 @@ export interface operations {
             };
         };
     };
-    directory_event_stream_api_directories__id__sse_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     download_root_chunks_api_directories_root_download_chunks_get: {
         parameters: {
             query?: never;
@@ -5723,9 +5753,7 @@ export interface operations {
     };
     download_directory_zip_api_directories__id__download_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 id: string;
@@ -6067,37 +6095,6 @@ export interface operations {
             };
         };
     };
-    material_event_stream_api_materials__material_id__sse_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                material_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_material_api_materials__material_id__get: {
         parameters: {
             query?: never;
@@ -6232,9 +6229,7 @@ export interface operations {
     };
     stream_material_file_api_materials__material_id__file_get: {
         parameters: {
-            query?: {
-                token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 material_id: string;
@@ -6670,37 +6665,6 @@ export interface operations {
             };
         };
     };
-    sse_stream_api_notifications_sse_get: {
-        parameters: {
-            query?: {
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     render_og_api_og_get: {
         parameters: {
             query?: never;
@@ -6776,37 +6740,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PRCommentOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    pull_request_sse_api_pull_requests_sse_get: {
-        parameters: {
-            query?: {
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -7353,6 +7286,37 @@ export interface operations {
             };
         };
     };
+    master_event_stream_api_events_sse_get: {
+        parameters: {
+            query?: {
+                topic?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     tus_create_api_upload_tus_post: {
         parameters: {
             query?: never;
@@ -7469,7 +7433,9 @@ export interface operations {
     upload_batch_zip_api_upload_batch_zip_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Upload-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7486,6 +7452,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BatchZipResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_upload_group_api_upload_groups_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UploadGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadGroupOut"];
                 };
             };
             /** @description Validation Error */
@@ -8335,7 +8334,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserProfileOut"];
+                    "application/json": components["schemas"]["PublicUserProfileOut"];
                 };
             };
             /** @description Validation Error */

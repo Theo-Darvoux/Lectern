@@ -27,15 +27,17 @@ import pikepdf
 import pytest
 from PIL import Image
 
-from app.core.file_security import (
+from app.core.security.file_security import (
     SvgSecurityError,
-    _scan_vba_for_autoexec,
-    _strip_image_metadata,
-    _strip_ooxml_from_path,
     check_pdf_safety,
     check_svg_safety,
     compress_file_path,
     strip_metadata_file,
+)
+from app.core.security.file_security._image import _strip_image_metadata
+from app.core.security.file_security._office import (
+    _check_ole2_macros,
+    _strip_ooxml_from_path,
 )
 from app.workers.process_upload import (
     _STAGES,
@@ -100,10 +102,17 @@ class TestCASRefCount:
 
     async def test_incr_creates_new_entry_with_initial_data(self, fake_redis):
         """When key doesn't exist and ARGV[1] is provided, create with ref_count=1."""
-        from app.core.cas import _LUA_CAS_INCR
+        from app.core.security.cas import _LUA_CAS_INCR
 
         initial = json.dumps({"final_key": "cas/abc", "size": 100})
-        result = await fake_redis.eval(_LUA_CAS_INCR, 1, "upload:cas:abc", initial)
+        result = await fake_redis.eval(
+            _LUA_CAS_INCR,
+            3,
+            "upload:cas:abc",
+            "storage:total_usage_bytes",
+            "cas:operation:create-abc",
+            initial,
+        )
         assert result == 1
 
         raw = await fake_redis.get("upload:cas:abc")
@@ -113,34 +122,58 @@ class TestCASRefCount:
 
     async def test_incr_increments_existing_entry(self, fake_redis):
         """When key exists, increment ref_count."""
-        from app.core.cas import _LUA_CAS_INCR
+        from app.core.security.cas import _LUA_CAS_INCR
 
         await fake_redis.set("upload:cas:abc", json.dumps({"ref_count": 2, "final_key": "cas/abc"}))
-        result = await fake_redis.eval(_LUA_CAS_INCR, 1, "upload:cas:abc")
+        result = await fake_redis.eval(
+            _LUA_CAS_INCR,
+            3,
+            "upload:cas:abc",
+            "storage:total_usage_bytes",
+            "cas:operation:increment-abc",
+        )
         assert result == 3
 
     async def test_incr_no_key_no_initial_data_returns_zero(self, fake_redis):
-        """When key doesn't exist and no ARGV[1], return 0."""
-        from app.core.cas import _LUA_CAS_INCR
+        """When key doesn't exist and no ARGV[1], report missing state."""
+        from app.core.security.cas import _LUA_CAS_INCR
 
-        result = await fake_redis.eval(_LUA_CAS_INCR, 1, "upload:cas:missing")
-        assert result == 0
+        result = await fake_redis.eval(
+            _LUA_CAS_INCR,
+            3,
+            "upload:cas:missing",
+            "storage:total_usage_bytes",
+            "cas:operation:increment-missing",
+        )
+        assert result == -1
 
     async def test_decr_to_zero_deletes_key(self, fake_redis):
         """When ref_count reaches 0, key is deleted."""
-        from app.core.cas import _LUA_CAS_DECR
+        from app.core.security.cas import _LUA_CAS_DECR
 
         await fake_redis.set("upload:cas:abc", json.dumps({"ref_count": 1, "final_key": "cas/abc"}))
-        result = await fake_redis.eval(_LUA_CAS_DECR, 1, "upload:cas:abc")
+        await fake_redis.set("storage:total_usage_bytes", 100)
+        result = await fake_redis.eval(
+            _LUA_CAS_DECR,
+            2,
+            "upload:cas:abc",
+            "cas:operation:decrement-abc",
+        )
         assert result == 0
         assert await fake_redis.get("upload:cas:abc") is None
+        assert int(await fake_redis.get("storage:total_usage_bytes")) == 100
 
     async def test_decr_nonexistent_returns_zero(self, fake_redis):
-        """DECR on nonexistent key returns 0."""
-        from app.core.cas import _LUA_CAS_DECR
+        """DECR on nonexistent key reports missing state."""
+        from app.core.security.cas import _LUA_CAS_DECR
 
-        result = await fake_redis.eval(_LUA_CAS_DECR, 1, "upload:cas:missing")
-        assert result == 0
+        result = await fake_redis.eval(
+            _LUA_CAS_DECR,
+            2,
+            "upload:cas:missing",
+            "cas:operation:decrement-missing",
+        )
+        assert result == -1
 
 
 # =============================================================================
@@ -152,52 +185,40 @@ class TestCASRefCount:
 
 
 class TestOLE2MacroDetection:
-    """Verify that the shared _scan_vba_for_autoexec helper works correctly."""
+    """Legacy Office files containing any VBA project are rejected."""
 
-    def test_no_macros_passes(self):
-        vba = MagicMock()
-        vba.detect_vba_macros.return_value = False
-        # Should not raise
-        _scan_vba_for_autoexec(vba)
+    def test_no_macros_passes_and_closes_parser(self):
+        parser = MagicMock()
+        parser.detect_vba_macros.return_value = False
 
-    def test_autoexec_macro_raises(self):
-        vba = MagicMock()
-        vba.detect_vba_macros.return_value = True
-        vba.analyze_macros.return_value = [
-            ("AutoExec", "AutoOpen", "Runs when the document is opened"),
-        ]
-        with pytest.raises(ValueError, match="auto-executing macros"):
-            _scan_vba_for_autoexec(vba)
+        with patch("oletools.olevba.VBA_Parser", return_value=parser):
+            _check_ole2_macros(Path("document.doc"))
 
-    def test_non_autoexec_macro_allowed(self):
-        vba = MagicMock()
-        vba.detect_vba_macros.return_value = True
-        vba.analyze_macros.return_value = [
-            ("Suspicious", "Shell", "May run a system command"),
-        ]
-        # Should not raise — only AutoExec type is blocked
-        _scan_vba_for_autoexec(vba)
+        parser.close.assert_called_once_with()
 
-    def test_autoexec_not_in_our_allowlist_is_ignored(self):
-        """AutoExec macros not in _OLE2_AUTO_EXEC are allowed through."""
-        vba = MagicMock()
-        vba.detect_vba_macros.return_value = True
-        vba.analyze_macros.return_value = [
-            ("AutoExec", "CustomAutoHandler", "Unknown auto-exec trigger"),
-        ]
-        # customautohandler is not in _OLE2_AUTO_EXEC, so should pass
-        _scan_vba_for_autoexec(vba)
+    def test_any_macro_is_rejected_and_parser_is_closed(self):
+        parser = MagicMock()
+        parser.detect_vba_macros.return_value = True
 
-    def test_multiple_results_with_one_autoexec_raises(self):
-        vba = MagicMock()
-        vba.detect_vba_macros.return_value = True
-        vba.analyze_macros.return_value = [
-            ("Suspicious", "Shell", "May run a system command"),
-            ("AutoExec", "Document_Open", "Runs when document is opened"),
-            ("IOC", "http://evil.com", "Suspicious URL"),
-        ]
-        with pytest.raises(ValueError, match="auto-executing macros"):
-            _scan_vba_for_autoexec(vba)
+        with (
+            patch("oletools.olevba.VBA_Parser", return_value=parser),
+            pytest.raises(ValueError, match="Macro-enabled legacy Office files"),
+        ):
+            _check_ole2_macros(Path("document.doc"))
+
+        parser.close.assert_called_once_with()
+
+    def test_parser_failure_fails_closed_and_closes_parser(self):
+        parser = MagicMock()
+        parser.detect_vba_macros.side_effect = RuntimeError("broken OLE stream")
+
+        with (
+            patch("oletools.olevba.VBA_Parser", return_value=parser),
+            pytest.raises(ValueError, match="could not be validated"),
+        ):
+            _check_ole2_macros(Path("document.doc"))
+
+        parser.close.assert_called_once_with()
 
 
 # =============================================================================
@@ -243,17 +264,293 @@ class TestOOXMLStrip:
         assert "docProps/app.xml" not in names
         assert "docProps/thumbnail.jpeg" not in names
 
+    @pytest.mark.parametrize(
+        "active_path",
+        [
+            "word/vbaProject.bin",
+            "word/activeX/activeX1.bin",
+            "word/embeddings/oleObject1.bin",
+        ],
+    )
+    async def test_rejects_ooxml_active_content(self, tmp_path, active_path):
+        p = _make_zip(
+            tmp_path,
+            {
+                "[Content_Types].xml": b"<Types/>",
+                "word/document.xml": b"<document/>",
+                active_path: b"active content",
+            },
+        )
+
+        with pytest.raises(ValueError, match="prohibited active content"):
+            await _strip_ooxml_from_path(p)
+
+    async def test_rejects_external_ooxml_relationships(self, tmp_path):
+        relationships = b"""<?xml version='1.0' encoding='UTF-8'?>
+        <Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+          <Relationship Id='rId1' Type='urn:test' Target='https://example.invalid/pixel'
+                        TargetMode='External'/>
+        </Relationships>"""
+        p = _make_zip(
+            tmp_path,
+            {
+                "[Content_Types].xml": b"<Types/>",
+                "word/document.xml": b"<document/>",
+                "word/_rels/document.xml.rels": relationships,
+            },
+        )
+
+        with pytest.raises(ValueError, match="external relationship"):
+            await _strip_ooxml_from_path(p)
+
+    async def test_strips_xlsx_external_workbook_links_instead_of_rejecting_upload(self, tmp_path):
+        relationships = b"""<Relationships
+          xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+          <Relationship Id='rId1'
+            Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath'
+            Target='file:///C:/Users/example/source.xlsx' TargetMode='External'/>
+        </Relationships>"""
+        p = _make_zip(
+            tmp_path,
+            {
+                "[Content_Types].xml": b"""<Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'>
+                  <Override PartName='/xl/externalLinks/externalLink1.xml'
+                    ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml'/>
+                </Types>""",
+                "xl/workbook.xml": b"""<workbook xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+                  xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'>
+                  <externalReferences><externalReference r:id='rId5'/></externalReferences>
+                </workbook>""",
+                "xl/_rels/workbook.xml.rels": b"""<Relationships
+                  xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+                  <Relationship Id='rId5'
+                    Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink'
+                    Target='externalLinks/externalLink1.xml'/>
+                </Relationships>""",
+                "xl/externalLinks/externalLink1.xml": b"<externalLink/>",
+                "xl/externalLinks/_rels/externalLink1.xml.rels": relationships,
+            },
+        )
+
+        result = await _strip_ooxml_from_path(p)
+
+        with zipfile.ZipFile(result) as archive:
+            assert not any(
+                name.casefold().startswith("xl/externallinks/") for name in archive.namelist()
+            )
+            assert b"externalLink" not in archive.read("xl/workbook.xml")
+            assert b"externalLink" not in archive.read("xl/_rels/workbook.xml.rels")
+            assert b"externalLink" not in archive.read("[Content_Types].xml")
+
+    async def test_malformed_relationship_before_active_content_fails_closed(self, tmp_path):
+        p = _make_zip(
+            tmp_path,
+            {
+                "word/_rels/document.xml.rels": b"<Relationships><broken>",
+                "word/vbaProject.bin": b"macro",
+            },
+        )
+
+        with pytest.raises(ValueError, match="prohibited active content|Malformed"):
+            await _strip_ooxml_from_path(p)
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/plain,secret",
+            r"\\server\share\file.docx",
+        ],
+    )
+    async def test_rejects_unsafe_external_hyperlink_schemes(self, tmp_path, target):
+        relationships = f"""<Relationships
+          xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+          <Relationship Id='rId1'
+            Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
+            Target='{target}' TargetMode='External'/>
+        </Relationships>""".encode()
+        p = _make_zip(
+            tmp_path,
+            {
+                "word/document.xml": b"<document/>",
+                "word/_rels/document.xml.rels": relationships,
+            },
+        )
+
+        with pytest.raises(ValueError, match="prohibited external hyperlink target"):
+            await _strip_ooxml_from_path(p)
+
+    async def test_external_ooxml_hyperlinks_can_be_disabled(self, tmp_path, monkeypatch):
+        from app.config import settings
+
+        relationships = b"""<Relationships
+          xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+          <Relationship Id='rId1'
+            Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
+            Target='https://example.com/reference' TargetMode='External'/>
+        </Relationships>"""
+        p = _make_zip(
+            tmp_path,
+            {
+                "word/document.xml": b"<document/>",
+                "word/_rels/document.xml.rels": relationships,
+            },
+        )
+
+        monkeypatch.setattr(settings, "allow_external_document_links", False)
+        with pytest.raises(ValueError, match="prohibited external hyperlink target"):
+            await _strip_ooxml_from_path(p)
+
+    async def test_safe_external_ooxml_hyperlinks_are_preserved(self, tmp_path):
+        relationships = b"""<Relationships
+          xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+          <Relationship Id='rId1'
+            Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
+            Target='https://example.com/reference' TargetMode='External'/>
+        </Relationships>"""
+        p = _make_zip(
+            tmp_path,
+            {
+                "word/document.xml": b"<document/>",
+                "word/_rels/document.xml.rels": relationships,
+            },
+        )
+
+        result = await _strip_ooxml_from_path(p)
+        with zipfile.ZipFile(result) as archive:
+            assert b"https://example.com/reference" in archive.read("word/_rels/document.xml.rels")
+
+    async def test_preserves_internal_ooxml_relationships(self, tmp_path):
+        relationships = b"""<Relationships
+          xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>
+          <Relationship Id='rId1' Type='urn:test' Target='styles.xml'/>
+        </Relationships>"""
+        p = _make_zip(
+            tmp_path,
+            {
+                "word/document.xml": b"<document/>",
+                "word/_rels/document.xml.rels": relationships,
+            },
+        )
+
+        result = await _strip_ooxml_from_path(p)
+        with zipfile.ZipFile(result) as archive:
+            assert archive.read("word/_rels/document.xml.rels") == relationships
+
     async def test_zip_bomb_total_too_large(self, tmp_path):
         """ZIP total declared size exceeding limit should raise ValueError."""
 
         # Patch the threshold low so we can test with small data
-        with patch("app.core.file_security._office._ZIP_MAX_TOTAL_BYTES", 50):
+        with patch("app.core.security.file_security._office._ZIP_MAX_TOTAL_BYTES", 50):
             entries = {
                 "word/document.xml": b"x" * 60,  # 60 bytes > patched 50 limit
             }
             p = _make_zip(tmp_path, entries)
             with pytest.raises(ValueError, match="too large"):
                 await _strip_ooxml_from_path(p)
+
+    async def test_rejects_case_insensitive_sanitized_name_collisions(self, tmp_path):
+        p = _make_zip(
+            tmp_path,
+            {
+                "word/document.xml": b"one",
+                "WORD/DOCUMENT.XML": b"two",
+            },
+        )
+
+        with pytest.raises(ValueError, match="duplicate sanitized entry"):
+            await _strip_ooxml_from_path(p)
+
+    async def test_zip_entry_count_limit_is_enforced(self, tmp_path):
+        p = _make_zip(tmp_path, {"one.xml": b"1", "two.xml": b"2"})
+
+        with (
+            patch("app.core.security.file_security._office._ZIP_MAX_ENTRIES", 1),
+            pytest.raises(ValueError, match="too many entries"),
+        ):
+            await _strip_ooxml_from_path(p)
+
+    async def test_odf_removes_meta_xml(self, tmp_path):
+        p = _make_zip(
+            tmp_path,
+            {
+                "mimetype": b"application/vnd.oasis.opendocument.text",
+                "meta.xml": b"<office:meta>Secret Author</office:meta>",
+                "content.xml": b"<document>Public content</document>",
+            },
+        )
+
+        result = await _strip_ooxml_from_path(p, "application/vnd.oasis.opendocument.text")
+
+        with zipfile.ZipFile(result) as archive:
+            assert "meta.xml" not in archive.namelist()
+            assert archive.read("content.xml") == b"<document>Public content</document>"
+
+    async def test_metadata_paths_are_checked_after_sanitization(self, tmp_path):
+        p = _make_zip(
+            tmp_path,
+            {
+                "./docProps/core.xml": b"<author>Secret</author>",
+                "word/document.xml": b"<doc>Content</doc>",
+            },
+        )
+
+        result = await _strip_ooxml_from_path(p)
+
+        with zipfile.ZipFile(result) as archive:
+            assert "docProps/core.xml" not in archive.namelist()
+
+    async def test_backslash_macro_and_metadata_paths_are_stripped(self, tmp_path):
+        p = _make_zip(
+            tmp_path,
+            {
+                "docProps\\core.xml": b"<author>Secret</author>",
+                "Basic\\Standard\\Module.xml": b"macro",
+                "word/document.xml": b"<doc>Content</doc>",
+            },
+        )
+
+        result = await _strip_ooxml_from_path(p)
+
+        with zipfile.ZipFile(result) as archive:
+            assert archive.namelist() == ["word/document.xml"]
+
+    async def test_epub_strips_private_opf_fields_and_preserves_mimetype(self, tmp_path):
+        opf = b"""<?xml version='1.0' encoding='utf-8'?>
+        <package xmlns='http://www.idpf.org/2007/opf'
+                 xmlns:dc='http://purl.org/dc/elements/1.1/'>
+          <metadata><dc:title>Public</dc:title><dc:creator>Secret Author</dc:creator></metadata>
+        </package>"""
+        p = tmp_path / "book.epub"
+        with zipfile.ZipFile(p, "w") as archive:
+            mimetype = zipfile.ZipInfo("mimetype")
+            mimetype.compress_type = zipfile.ZIP_STORED
+            archive.writestr(mimetype, b"application/epub+zip")
+            archive.writestr("EPUB/package.opf", opf)
+
+        result = await _strip_ooxml_from_path(p, "application/epub+zip")
+
+        with zipfile.ZipFile(result) as archive:
+            first = archive.infolist()[0]
+            assert first.filename == "mimetype"
+            assert first.compress_type == zipfile.ZIP_STORED
+            cleaned = archive.read("EPUB/package.opf")
+            assert b"Secret Author" not in cleaned
+            assert b"Public" in cleaned
+
+    async def test_epub_moves_mimetype_to_first_entry(self, tmp_path):
+        p = tmp_path / "misordered.epub"
+        with zipfile.ZipFile(p, "w") as archive:
+            archive.writestr("EPUB/content.xhtml", b"<html/>")
+            archive.writestr("mimetype", b"application/epub+zip")
+
+        result = await _strip_ooxml_from_path(p, "application/epub+zip")
+
+        with zipfile.ZipFile(result) as archive:
+            first = archive.infolist()[0]
+            assert first.filename == "mimetype"
+            assert first.compress_type == zipfile.ZIP_STORED
 
 
 # =============================================================================
@@ -262,27 +559,16 @@ class TestOOXMLStrip:
 
 
 class TestGIFPixelBudget:
-    """Verify that animated GIFs exceeding the pixel budget are rejected."""
+    """Verify that animated/multi-frame GIFs are rejected while single-frame GIFs pass."""
 
-    def test_small_gif_passes(self):
-        """A small animated GIF should not hit the pixel budget."""
+    def test_multi_frame_gif_rejected(self):
+        """An animated multi-frame GIF should be rejected."""
         gif_bytes = _make_gif(10, 10, 3)
-        # Should not raise
-        result = _strip_image_metadata(gif_bytes)
-        assert len(result) > 0
-
-    def test_gif_exceeds_pixel_budget_raises(self):
-        """A GIF with too many large frames should raise ValueError."""
-        # 2048x2048 * 25 frames = ~105M pixels > 100M limit
-        # We can't easily create a real 2048x2048 GIF in tests without
-        # heavy memory, so we patch the constant instead.
-        with patch("app.core.file_security._image.MAX_GIF_TOTAL_PIXELS", 100):
-            gif_bytes = _make_gif(10, 10, 3)  # 10*10*3 = 300 > 100
-            with pytest.raises(ValueError, match="memory budget"):
-                _strip_image_metadata(gif_bytes)
+        with pytest.raises(ValueError, match="Animated and multi-frame images are not supported"):
+            _strip_image_metadata(gif_bytes)
 
     def test_single_frame_gif_passes(self):
-        """A single-frame GIF should always pass (no animation budget issue)."""
+        """A single-frame GIF should pass metadata stripping."""
         gif_bytes = _make_gif(100, 100, 1)
         result = _strip_image_metadata(gif_bytes)
         assert len(result) > 0
@@ -361,6 +647,36 @@ class TestPDFSafetyBypass:
 
         check_pdf_safety(p)  # must not raise
 
+    def test_pdf_with_remote_goto_openaction_is_rejected(self, tmp_path):
+        pdf = pikepdf.new()
+        pdf.add_blank_page()
+        pdf.Root["/OpenAction"] = pikepdf.Dictionary(
+            S=pikepdf.Name("/GoToR"),
+            F=pikepdf.String("https://example.invalid/file.pdf"),
+            D=pikepdf.String("dest"),
+        )
+        p = tmp_path / "remote-goto.pdf"
+        pdf.save(str(p))
+
+        with pytest.raises(ValueError, match="dangerous /OpenAction"):
+            check_pdf_safety(p)
+
+    def test_pdf_with_dangerous_chained_action_is_rejected(self, tmp_path):
+        pdf = pikepdf.new()
+        pdf.add_blank_page()
+        pdf.Root["/OpenAction"] = pikepdf.Dictionary(
+            S=pikepdf.Name("/GoTo"),
+            D=pikepdf.String("dest"),
+            Next=pikepdf.Dictionary(
+                S=pikepdf.Name("/JavaScript"), JS=pikepdf.String("app.alert(1)")
+            ),
+        )
+        p = tmp_path / "chained-action.pdf"
+        pdf.save(str(p))
+
+        with pytest.raises(ValueError, match="dangerous /OpenAction"):
+            check_pdf_safety(p)
+
     def test_pdf_with_javascript_in_names(self, tmp_path):
         """PDF with /JavaScript in Names tree should be rejected."""
         pdf = pikepdf.new()
@@ -416,6 +732,24 @@ class TestPDFSafetyBypass:
         with pytest.raises(ValueError, match="dangerous action"):
             check_pdf_safety(p)
 
+    def test_pdf_with_safe_outline_uri_action_is_allowed(self, tmp_path):
+        pdf = pikepdf.new()
+        pdf.add_blank_page()
+        outline = pdf.make_indirect(
+            pikepdf.Dictionary(
+                Title=pikepdf.String("external link"),
+                A=pikepdf.Dictionary(
+                    S=pikepdf.Name("/URI"),
+                    URI=pikepdf.String("https://example.com/reference"),
+                ),
+            )
+        )
+        pdf.Root["/Outlines"] = pikepdf.Dictionary(First=outline, Last=outline)
+        p = tmp_path / "outline-action.pdf"
+        pdf.save(str(p))
+
+        check_pdf_safety(p)
+
 
 # =============================================================================
 # T4: Security bypass attempts — SVG
@@ -439,6 +773,39 @@ class TestSVGSafetyBypass:
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><rect/></a></svg>'
         with pytest.raises((ValueError, SvgSecurityError)):
             check_svg_safety(svg, "jsuri.svg")
+
+    @pytest.mark.parametrize("reference", ["../secret.png", "/internal.png", "asset.png"])
+    def test_svg_with_nonlocal_reference(self, reference):
+        svg = (
+            f'<svg xmlns="http://www.w3.org/2000/svg"><image href="{reference}"/></svg>'
+        ).encode()
+        with pytest.raises(SvgSecurityError, match="external URLs"):
+            check_svg_safety(svg, "reference.svg")
+
+    def test_svg_with_local_fragment_reference_passes(self):
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><use href="#shape"/></svg>'
+        check_svg_safety(svg, "local.svg")
+
+    def test_svg_xml_base_cannot_externalize_local_reference(self):
+        svg = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" '
+            b'xml:base="https://example.invalid/"><use href="#shape"/></svg>'
+        )
+        with pytest.raises(SvgSecurityError, match="base URI"):
+            check_svg_safety(svg, "xml-base.svg")
+
+    @pytest.mark.parametrize("element", ["animate", "animateMotion", "animateTransform", "set"])
+    def test_svg_smil_cannot_mutate_safe_href_to_external_url(self, element):
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<image id="target" href="#safe"/>'
+            f'<{element} href="#target" attributeName="href" '
+            'to="https://attacker.invalid/pixel" dur="1s"/>'
+            "</svg>"
+        ).encode()
+
+        with pytest.raises(SvgSecurityError, match="elements are not allowed"):
+            check_svg_safety(svg, "smil.svg")
 
     def test_clean_svg_passes(self):
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100"/></svg>'
@@ -505,45 +872,36 @@ class TestScannerFailClosed:
         """When malwarebazaar_fail_closed=True, timeout should propagate."""
         import httpx
 
-        from app.core.scanner import MalwareScanner
+        from app.core.security.scanner import MalwareScanner
 
         scanner = MalwareScanner()
-        scanner.rules = MagicMock()
-        scanner.rules.match.return_value = []
         scanner.client = AsyncMock(spec=httpx.AsyncClient)
         scanner.client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
 
-        with patch("app.core.scanner.settings") as mock_settings:
-            mock_settings.bazaar_async_enabled = False
+        with patch("app.core.security.scanner.settings") as mock_settings:
             mock_settings.malwarebazaar_fail_closed = True
             mock_settings.malwarebazaar_url = "https://mb-api.abuse.ch/api/v1/"
             mock_settings.malwarebazaar_api_key = None
-            mock_settings.yara_scan_timeout = 60
-            from app.core.exceptions import ServiceUnavailableError
 
-            with pytest.raises(ServiceUnavailableError):
-                await scanner.scan_file(b"test content", "test.txt")
+            with pytest.raises(httpx.TimeoutException):
+                await scanner.check_malwarebazaar("a" * 64, "test.txt")
 
     async def test_malwarebazaar_timeout_without_fail_closed_passes(self):
-        """When malwarebazaar_fail_closed=False (default), timeout is swallowed."""
+        """When malwarebazaar_fail_closed=False (default), timeout returns None."""
         import httpx
 
-        from app.core.scanner import MalwareScanner
+        from app.core.security.scanner import MalwareScanner
 
         scanner = MalwareScanner()
-        scanner.rules = MagicMock()
-        scanner.rules.match.return_value = []
         scanner.client = AsyncMock(spec=httpx.AsyncClient)
         scanner.client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
 
-        with patch("app.core.scanner.settings") as mock_settings:
-            mock_settings.bazaar_async_enabled = False
+        with patch("app.core.security.scanner.settings") as mock_settings:
             mock_settings.malwarebazaar_fail_closed = False
             mock_settings.malwarebazaar_url = "https://mb-api.abuse.ch/api/v1/"
             mock_settings.malwarebazaar_api_key = None
-            mock_settings.yara_scan_timeout = 60
-            # Should NOT raise — timeout is fail-soft
-            await scanner.scan_file(b"test content", "test.txt")
+            res = await scanner.check_malwarebazaar("a" * 64, "test.txt")
+            assert res is None
 
 
 # =============================================================================
@@ -561,29 +919,25 @@ class TestStripMetadataEdgeCases:
         result = await strip_metadata_file(p, "application/octet-stream")
         assert result == p
 
-    async def test_image_strip_corrupt_returns_original(self, tmp_path):
-        """Corrupt images should fail open (return original path) at the inner level."""
+    async def test_image_strip_corrupt_fails_closed(self, tmp_path):
         p = tmp_path / "bad.jpg"
         p.write_bytes(b"not-an-image")
-        # _strip_image_from_path catches PIL errors and returns the original
-        result = await strip_metadata_file(p, "image/jpeg")
-        assert result == p
+        with pytest.raises(ValueError, match="sanitize"):
+            await strip_metadata_file(p, "image/jpeg")
 
     async def test_image_strip_gif_bomb_propagates(self, tmp_path):
-        """GIF pixel budget ValueError should propagate through strip_metadata_file."""
+        """Animated GIF ValueError should propagate through strip_metadata_file."""
         gif_bytes = _make_gif(10, 10, 3)
         p = tmp_path / "bomb.gif"
         p.write_bytes(gif_bytes)
-        with patch("app.core.file_security._image.MAX_GIF_TOTAL_PIXELS", 100):
-            with pytest.raises(ValueError, match="memory budget"):
-                await strip_metadata_file(p, "image/gif")
+        with pytest.raises(ValueError, match="Animated and multi-frame images are not supported"):
+            await strip_metadata_file(p, "image/gif")
 
-    async def test_pdf_strip_corrupt_returns_original(self, tmp_path):
-        """Corrupt PDFs return original path (inner fail-open catches pikepdf errors)."""
+    async def test_pdf_strip_corrupt_fails_closed(self, tmp_path):
         p = tmp_path / "bad.pdf"
         p.write_bytes(b"not-a-pdf")
-        result = await strip_metadata_file(p, "application/pdf")
-        assert result == p
+        with pytest.raises(ValueError, match="sanitize"):
+            await strip_metadata_file(p, "application/pdf")
 
 
 # =============================================================================

@@ -9,8 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { BrowseLink, navigateBrowse } from "@/components/browse/browse-link";
 import {
   ArrowRight,
   ChevronRight,
@@ -20,6 +20,7 @@ import {
   Home,
   ListChecks,
   Loader2,
+  Clock3,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -32,12 +33,17 @@ import { apiFetch, apiFetchRetry } from "@/lib/api-client";
 // leave a node spinner (loadingIds) or the root spinner stuck until reload.
 const TREE_TIMEOUT_MS = 15_000;
 import { cn } from "@/lib/utils";
-import { useBrowseRefreshStore, useUIStore } from "@/lib/stores";
-import { createSSEConnection, SSEConnection } from "@/lib/sse-client";
+import { useAuthStore, useBrowseRefreshStore, useUIStore } from "@/lib/stores";
+import { subscribeToSSE } from "@/lib/sse-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslations } from "next-intl";
+import {
+  pendingCreatesForParent,
+  pendingOperations,
+  usePendingContributionsStore,
+} from "@/lib/pending-contributions";
 import { EXT_ICONS, TYPE_ICONS } from "@/lib/material-icons";
 import {
   getFileExtension,
@@ -54,6 +60,7 @@ interface DirNode {
   child_directory_count?: number;
   child_material_count?: number;
   parent_id?: string | null;
+  pending?: boolean;
 }
 
 interface MaterialNode {
@@ -63,6 +70,7 @@ interface MaterialNode {
   type: string;
   file_name?: string;
   file_mime_type?: string;
+  pending?: boolean;
 }
 
 interface ChildrenPayload {
@@ -115,11 +123,17 @@ const childrenCache = new Map<string, ChildrenPayload>();
 // keeps previously-opened folders open instead of collapsing everything except
 // the path that was just navigated to.
 let expandedCache = new Set<string>();
+let rootRequestGeneration = 0;
+const childRequestGenerations = new Map<string, number>();
 
-function clearTreeCaches() {
-  rootsCache.dirs = null;
-  rootsCache.mats = [];
-  childrenCache.clear();
+function beginChildRequest(id: string): number {
+  const generation = (childRequestGenerations.get(id) ?? 0) + 1;
+  childRequestGenerations.set(id, generation);
+  return generation;
+}
+
+function isLatestChildRequest(id: string, generation: number): boolean {
+  return childRequestGenerations.get(id) === generation;
 }
 
 function buildDirHref(fullPath?: string): string {
@@ -147,12 +161,29 @@ const MaterialLeaf = memo(function MaterialLeaf({
   activeId,
   onActivate,
 }: MaterialLeafProps) {
+  const t = useTranslations("Browse");
   const isActive = activeId === material.id;
   const title = material.title || "Untitled";
 
+  if (material.pending) {
+    return (
+      <li>
+        <div
+          className="flex items-center gap-1.5 rounded-md py-1.5 pr-1 text-[13px] text-blue-700 dark:text-blue-300"
+          style={{ paddingLeft: `${depth * 10 + 20}px` }}
+          title={t("contribution")}
+        >
+          <Clock3 className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate font-mono">{title}</span>
+          <span className="sr-only">({t("contribution")})</span>
+        </div>
+      </li>
+    );
+  }
+
   return (
     <li>
-      <Link
+      <BrowseLink
         href={buildMaterialHref(parentPath, material.slug)}
         onClick={() => onActivate(material.id)}
         className={cn(
@@ -180,7 +211,7 @@ const MaterialLeaf = memo(function MaterialLeaf({
         <span className={cn("truncate font-mono", isActive && "font-medium")}>
           {title}
         </span>
-      </Link>
+      </BrowseLink>
     </li>
   );
 }, (prev, next) =>
@@ -221,15 +252,15 @@ const TreeNode = memo(function TreeNode({
   onActivate,
 }: TreeNodeProps) {
   const t = useTranslations("Browse");
-  const router = useRouter();
   const isExpanded = expanded.has(node.id);
   const isLoading = loadingIds.has(node.id);
   const isActive = activeId === node.id;
   const children = childrenMap.get(node.id);
   const childDirCount = node.child_directory_count ?? 0;
   const childMatCount = node.child_material_count ?? 0;
-  const hasChildren = childDirCount > 0 || childMatCount > 0;
-  const totalItems = childDirCount + childMatCount;
+  const projectedChildCount = (children?.directories.length ?? 0) + (children?.materials.length ?? 0);
+  const hasChildren = childDirCount > 0 || childMatCount > 0 || projectedChildCount > 0;
+  const totalItems = Math.max(childDirCount + childMatCount, projectedChildCount);
   const ownPath = node.full_path ?? (parentPath ? `${parentPath}/${node.slug}` : node.slug);
 
   const trimmedFilter = filter.trim().toLowerCase();
@@ -258,6 +289,68 @@ const TreeNode = memo(function TreeNode({
     return null;
   }
 
+  if (node.pending) {
+    const shouldShowPendingChildren = isExpanded || (filtering && descendantMatches);
+    return (
+      <li>
+        <div className="flex items-center gap-0.5 rounded-md pr-1 text-[13px] text-blue-700 dark:text-blue-300">
+          <button
+            type="button"
+            onClick={() => hasChildren && onToggle(node)}
+            className={cn(
+              "flex h-7 w-5 shrink-0 items-center justify-center rounded-sm",
+              !hasChildren && "pointer-events-none opacity-0",
+            )}
+            aria-label={isExpanded ? t("collapseFolder") : t("expandFolder")}
+            aria-expanded={hasChildren ? isExpanded : undefined}
+            tabIndex={hasChildren ? 0 : -1}
+            style={{ marginLeft: `${depth * 10}px` }}
+          >
+            <ChevronRight
+              className={cn(
+                "h-3.5 w-3.5 transition-transform duration-150",
+                shouldShowPendingChildren && "rotate-90",
+              )}
+            />
+          </button>
+          <Clock3 className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate font-mono">{node.name}</span>
+          <span className="sr-only">({t("contribution")})</span>
+        </div>
+        {shouldShowPendingChildren && children && (
+          <ul>
+            {children.directories.map((child) => (
+              <TreeNode
+                key={child.id}
+                node={child}
+                depth={depth + 1}
+                parentPath={ownPath}
+                expanded={expanded}
+                childrenMap={childrenMap}
+                loadingIds={loadingIds}
+                activeId={activeId}
+                filter={filter}
+                onToggle={onToggle}
+                onExpand={onExpand}
+                onActivate={onActivate}
+              />
+            ))}
+            {children.materials.map((material) => (
+              <MaterialLeaf
+                key={material.id}
+                material={material}
+                depth={depth + 1}
+                parentPath={ownPath}
+                activeId={activeId}
+                onActivate={onActivate}
+              />
+            ))}
+          </ul>
+        )}
+      </li>
+    );
+  }
+
   // Force expansion when filtering reveals a deeper match
   const shouldShowChildren = isExpanded || (filtering && descendantMatches);
 
@@ -283,7 +376,8 @@ const TreeNode = memo(function TreeNode({
             "text-muted-foreground hover:text-foreground",
             !hasChildren && "pointer-events-none opacity-0",
           )}
-          aria-label={isExpanded ? "Collapse" : "Expand"}
+          aria-label={isExpanded ? t("collapseFolder") : t("expandFolder")}
+          aria-expanded={hasChildren ? isExpanded : undefined}
           tabIndex={hasChildren ? 0 : -1}
           style={{ marginLeft: `${depth * 10}px` }}
         >
@@ -306,7 +400,7 @@ const TreeNode = memo(function TreeNode({
           onDoubleClick={() => {
             onExpand(node);
             onActivate(node.id);
-            router.push(buildDirHref(node.full_path));
+            navigateBrowse(buildDirHref(node.full_path));
           }}
           className="flex flex-1 items-center gap-1.5 min-w-0 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm text-left"
           title={node.name}
@@ -335,7 +429,7 @@ const TreeNode = memo(function TreeNode({
             {totalItems}
           </span>
         )}
-        <Link
+        <BrowseLink
           href={buildDirHref(node.full_path)}
           onClick={() => onActivate(node.id)}
           className={cn(
@@ -347,7 +441,7 @@ const TreeNode = memo(function TreeNode({
           aria-label={t("navigateTo")}
         >
           <ArrowRight className="h-3 w-3" />
-        </Link>
+        </BrowseLink>
       </div>
       {shouldShowChildren && (
         <ul className="space-y-px">
@@ -434,13 +528,75 @@ export function DirectoryTreeSidebar() {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(expandedCache));
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeDirectoryId, setActiveDirectoryId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loadingRoots, setLoadingRoots] = useState(!rootsCache.dirs);
+  const pendingContributions = usePendingContributionsStore((s) => s.contributions);
+  const pendingOwnerId = usePendingContributionsStore((s) => s.ownerId);
+  const currentOwnerId = useAuthStore((s) => s.user?.id ? String(s.user.id) : null);
+  const submittedOperations = useMemo(
+    () => pendingOwnerId === currentOwnerId
+      ? pendingOperations(usePendingContributionsStore.getState())
+      : [],
+    [currentOwnerId, pendingContributions, pendingOwnerId],
+  );
+
+  const pendingNodesFor = useCallback((parentId: string | null) => {
+    const projected = pendingCreatesForParent(submittedOperations, parentId);
+    return {
+      directories: projected.directories.map((operation) => ({
+        id: operation.temp_id || `pending-dir-${operation.name}`,
+        name: operation.name,
+        slug: "",
+        pending: true,
+      } satisfies DirNode)),
+      materials: projected.materials.map((operation) => ({
+        id: operation.temp_id || `pending-material-${operation.title}`,
+        title: operation.title,
+        slug: "",
+        type: operation.type,
+        file_name: operation.file_name ?? undefined,
+        file_mime_type: operation.file_mime_type ?? undefined,
+        pending: true,
+      } satisfies MaterialNode)),
+    };
+  }, [submittedOperations]);
+
+  const projectedRoots = useMemo(() => {
+    const pending = pendingNodesFor(null);
+    return {
+      directories: [...(roots ?? []), ...pending.directories],
+      materials: [...rootMaterials, ...pending.materials],
+    };
+  }, [roots, rootMaterials, pendingNodesFor]);
+
+  const projectedChildrenMap = useMemo(() => {
+    const next = new Map(childrenMap);
+    const parentIds = new Set(childrenMap.keys());
+    for (const operation of submittedOperations) {
+      if (operation.op === "create_directory" && operation.parent_id) {
+        parentIds.add(operation.parent_id);
+      } else if (operation.op === "create_material" && operation.directory_id) {
+        parentIds.add(operation.directory_id);
+      }
+    }
+    for (const id of parentIds) {
+      const children = childrenMap.get(id) ?? { directories: [], materials: [] };
+      const pending = pendingNodesFor(id);
+      if (pending.directories.length === 0 && pending.materials.length === 0) continue;
+      next.set(id, {
+        directories: [...children.directories, ...pending.directories],
+        materials: [...children.materials, ...pending.materials],
+      });
+    }
+    return next;
+  }, [childrenMap, pendingNodesFor, submittedOperations]);
 
   const refreshRef = useRef(refreshCount);
 
   const fetchRoots = useCallback(async () => {
+    const requestGeneration = ++rootRequestGeneration;
     setLoadingRoots(true);
     setError(null);
     try {
@@ -450,14 +606,16 @@ export function DirectoryTreeSidebar() {
       }>("/browse", { timeoutMs: TREE_TIMEOUT_MS });
       const dirs = res.directories || [];
       const mats = normalizeMaterials(res.materials || []);
+      if (requestGeneration !== rootRequestGeneration) return;
       rootsCache.dirs = dirs;
       rootsCache.mats = mats;
       setRoots(dirs);
       setRootMaterials(mats);
     } catch (e) {
+      if (requestGeneration !== rootRequestGeneration) return;
       setError(e instanceof Error ? e.message : t("loadError"));
     } finally {
-      setLoadingRoots(false);
+      if (requestGeneration === rootRequestGeneration) setLoadingRoots(false);
     }
   }, [t]);
 
@@ -494,6 +652,7 @@ export function DirectoryTreeSidebar() {
         n.add(id);
         return n;
       });
+      const requestGeneration = beginChildRequest(id);
       try {
         const res = await apiFetchRetry<{
           directories: DirNode[];
@@ -503,6 +662,9 @@ export function DirectoryTreeSidebar() {
           directories: res.directories || [],
           materials: normalizeMaterials(res.materials || []),
         };
+        if (!isLatestChildRequest(id, requestGeneration)) {
+          return childrenCache.get(id) ?? null;
+        }
         childrenCache.set(id, data);
         setChildrenMap((m) => {
           const n = new Map(m);
@@ -511,14 +673,18 @@ export function DirectoryTreeSidebar() {
         });
         return data;
       } catch {
-        return null;
+        return isLatestChildRequest(id, requestGeneration)
+          ? null
+          : childrenCache.get(id) ?? null;
       } finally {
-        setLoadingIds((s) => {
-          if (!s.has(id)) return s;
-          const n = new Set(s);
-          n.delete(id);
-          return n;
-        });
+        if (isLatestChildRequest(id, requestGeneration)) {
+          setLoadingIds((s) => {
+            if (!s.has(id)) return s;
+            const n = new Set(s);
+            n.delete(id);
+            return n;
+          });
+        }
       }
     },
     [],
@@ -533,6 +699,7 @@ export function DirectoryTreeSidebar() {
     async (id: string): Promise<ChildrenPayload | null> => {
       const cached = childrenCache.get(id);
       if (cached) return cached;
+      const requestGeneration = beginChildRequest(id);
       try {
         const res = await apiFetchRetry<{
           directories: DirNode[];
@@ -542,10 +709,24 @@ export function DirectoryTreeSidebar() {
           directories: res.directories || [],
           materials: normalizeMaterials(res.materials || []),
         };
+        if (!isLatestChildRequest(id, requestGeneration)) {
+          return childrenCache.get(id) ?? null;
+        }
         childrenCache.set(id, data);
         return data;
       } catch {
-        return null;
+        return isLatestChildRequest(id, requestGeneration)
+          ? null
+          : childrenCache.get(id) ?? null;
+      } finally {
+        if (isLatestChildRequest(id, requestGeneration)) {
+          setLoadingIds((s) => {
+            if (!s.has(id)) return s;
+            const next = new Set(s);
+            next.delete(id);
+            return next;
+          });
+        }
       }
     },
     [],
@@ -553,19 +734,24 @@ export function DirectoryTreeSidebar() {
 
   // Silent refetches for SSE-triggered updates — no loading spinners.
   const refetchRootSilent = useCallback(async () => {
+    const requestGeneration = ++rootRequestGeneration;
     try {
       const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>("/browse", { timeoutMs: TREE_TIMEOUT_MS });
       const dirs = res.directories || [];
       const mats = normalizeMaterials(res.materials || []);
+      if (requestGeneration !== rootRequestGeneration) return;
       rootsCache.dirs = dirs;
       rootsCache.mats = mats;
       setRoots(dirs);
       setRootMaterials(mats);
     } catch { }
+    finally {
+      if (requestGeneration === rootRequestGeneration) setLoadingRoots(false);
+    }
   }, []);
 
   const refetchChildSilent = useCallback(async (id: string) => {
-    childrenCache.delete(id);
+    const requestGeneration = beginChildRequest(id);
     try {
       const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>(
         `/directories/${id}/children`,
@@ -575,67 +761,82 @@ export function DirectoryTreeSidebar() {
         directories: res.directories || [],
         materials: normalizeMaterials(res.materials || []),
       };
+      if (!isLatestChildRequest(id, requestGeneration)) return;
       childrenCache.set(id, data);
       setChildrenMap((m) => {
-        if (!m.has(id)) return m;
         const n = new Map(m);
         n.set(id, data);
         return n;
       });
-    } catch { }
-  }, []);
-
-  // Maintain one SSE connection per expanded directory (plus root).
-  // Each connection listens for child_added / child_removed and silently
-  // refetches only the affected directory — no full-tree reload, no spinners.
-  const treeConnectionsRef = useRef<Map<string, SSEConnection>>(new Map());
-
-  useEffect(() => {
-    const watched = new Set(["root", ...Array.from(expanded)]);
-    const existing = treeConnectionsRef.current;
-
-    // Close connections for directories no longer watched.
-    for (const id of Array.from(existing.keys())) {
-      if (!watched.has(id)) {
-        existing.get(id)!.close();
-        existing.delete(id);
-      }
-    }
-
-    // Open connections for newly watched directories.
-    for (const id of watched) {
-      if (!existing.has(id)) {
-        const handleChange = () => {
-          if (id === "root") void refetchRootSilent();
-          else void refetchChildSilent(id);
-        };
-        const conn = createSSEConnection({
-          url: `/directories/${id}/sse`,
-          listeners: {
-            child_added: handleChange,
-            child_updated: handleChange,
-            child_removed: handleChange,
-            pr_closed: handleChange,
-          },
-          startupDelay: 50,
+    } catch {
+      // Keep the last known branch visible; a later SSE/resync retries it.
+    } finally {
+      if (isLatestChildRequest(id, requestGeneration)) {
+        setLoadingIds((s) => {
+          if (!s.has(id)) return s;
+          const next = new Set(s);
+          next.delete(id);
+          return next;
         });
-        existing.set(id, conn);
       }
     }
-  }, [expanded, refetchRootSilent, refetchChildSilent]);
-
-  // Close all tree SSE connections on unmount.
-  useEffect(() => {
-    const connections = treeConnectionsRef.current;
-    return () => {
-      for (const conn of connections.values()) conn.close();
-      connections.clear();
-    };
   }, []);
+
+  // Subscribe to each visible logical branch. These all share the single
+  // per-user transport, so expanding the tree does not create more sockets.
+  useEffect(() => {
+    if (!treeSidebarOpen) return;
+
+    // Reconcile anything we may have missed while the tree was closed.
+    void refetchRootSilent();
+    const visibleBranches = new Set(expandedRef.current);
+    if (activeDirectoryId) visibleBranches.add(activeDirectoryId);
+    for (const id of visibleBranches) {
+      void refetchChildSilent(id);
+    }
+
+    const handleRootChange = () => {
+      void refetchRootSilent();
+    };
+
+    const connections = [subscribeToSSE({
+      channel: "directory:root",
+      listeners: {
+        child_added: handleRootChange,
+        child_updated: handleRootChange,
+        child_removed: handleRootChange,
+        pr_closed: handleRootChange,
+      },
+      onResync: handleRootChange,
+      startupDelay: 50,
+    })];
+
+    const subscribedBranches = new Set(expanded);
+    if (activeDirectoryId) subscribedBranches.add(activeDirectoryId);
+    for (const id of subscribedBranches) {
+      const handleChildChange = () => {
+        void refetchChildSilent(id);
+      };
+      connections.push(subscribeToSSE({
+        channel: `directory:${id}`,
+        listeners: {
+          child_added: handleChildChange,
+          child_updated: handleChildChange,
+          child_removed: handleChildChange,
+          pr_closed: handleChildChange,
+        },
+        onResync: handleChildChange,
+        startupDelay: 50,
+      }));
+    }
+
+    return () => connections.forEach((connection) => connection.close());
+  }, [treeSidebarOpen, expanded, activeDirectoryId, refetchRootSilent, refetchChildSilent]);
 
   // Background revalidation for cached-but-stale directories (no loading spinner).
   // Unlike refetchChildSilent, the old cache is kept until fresh data arrives.
   const revalidateChildSilent = useCallback(async (id: string) => {
+    const requestGeneration = beginChildRequest(id);
     try {
       const res = await apiFetch<{ directories: DirNode[]; materials: unknown[] }>(
         `/directories/${id}/children`,
@@ -645,13 +846,25 @@ export function DirectoryTreeSidebar() {
         directories: res.directories || [],
         materials: normalizeMaterials(res.materials || []),
       };
+      if (!isLatestChildRequest(id, requestGeneration)) return;
       childrenCache.set(id, data);
       setChildrenMap((m) => {
         const n = new Map(m);
         n.set(id, data);
         return n;
       });
-    } catch { }
+    } catch {
+      // Keep the last known branch visible; a later interaction retries it.
+    } finally {
+      if (isLatestChildRequest(id, requestGeneration)) {
+        setLoadingIds((s) => {
+          if (!s.has(id)) return s;
+          const next = new Set(s);
+          next.delete(id);
+          return next;
+        });
+      }
+    }
   }, []);
 
   const handleToggle = useCallback(
@@ -697,32 +910,28 @@ export function DirectoryTreeSidebar() {
     [fetchChildren, revalidateChildSilent],
   );
 
-  // Invalidate caches whenever the browse data changes elsewhere (e.g. a PR
-  // got approved and the directory layout shifted). Keep expanded ids so the
-  // tree visually re-opens at the same nodes once refetched.
+  // Reconcile cached branches without discarding them. The old hierarchy stays
+  // interactive while approved changes are fetched in the background.
   useEffect(() => {
     if (refreshCount === refreshRef.current) return;
     refreshRef.current = refreshCount;
-
-    const previouslyExpanded = expandedRef.current;
-    clearTreeCaches();
-    setChildrenMap(new Map());
-    fetchRoots().then(() => {
-      previouslyExpanded.forEach((id) => {
-        void fetchChildren(id);
-      });
-    });
-  }, [refreshCount, fetchRoots, fetchChildren]);
+    void refetchRootSilent();
+    const branches = new Set(expandedRef.current);
+    if (activeDirectoryId) branches.add(activeDirectoryId);
+    branches.forEach((id) => void refetchChildSilent(id));
+  }, [refreshCount, activeDirectoryId, refetchRootSilent, refetchChildSilent]);
 
   // Auto-expand the path to the current directory whenever it changes
   // (or after fresh root data lands).
   useEffect(() => {
     if (!roots) {
       setActiveId(null);
+      setActiveDirectoryId(null);
       return;
     }
     if (currentSlugs.length === 0) {
       setActiveId(null);
+      setActiveDirectoryId(null);
       return;
     }
     let cancelled = false;
@@ -732,6 +941,7 @@ export function DirectoryTreeSidebar() {
       let currentMats: MaterialNode[] = rootMaterials;
       const toExpand: string[] = [];
       let lastId: string | null = null;
+      let currentDirectoryId: string | null = null;
 
       for (let i = 0; i < currentSlugs.length; i++) {
         const slug = currentSlugs[i];
@@ -749,6 +959,7 @@ export function DirectoryTreeSidebar() {
 
         if (!dirMatch) break;
         lastId = dirMatch.id;
+        currentDirectoryId = dirMatch.id;
 
         if (!isLast) {
           toExpand.push(dirMatch.id);
@@ -811,6 +1022,7 @@ export function DirectoryTreeSidebar() {
         });
       }
       setActiveId(lastId);
+      setActiveDirectoryId(currentDirectoryId);
     })();
 
     return () => {
@@ -907,7 +1119,7 @@ export function DirectoryTreeSidebar() {
 
       <nav className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-1.5 py-1">
         {rootMatches && (
-          <Link
+          <BrowseLink
             href="/browse"
             className={cn(
               "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px]",
@@ -927,7 +1139,7 @@ export function DirectoryTreeSidebar() {
               )}
             />
             <span>{t("home")}</span>
-          </Link>
+          </BrowseLink>
         )}
 
         {loadingRoots && (
@@ -952,14 +1164,14 @@ export function DirectoryTreeSidebar() {
 
         {!loadingRoots && !error && roots && (
           <ul className="space-y-px mt-0.5">
-            {roots.map((r) => (
+            {projectedRoots.directories.map((r) => (
               <TreeNode
                 key={r.id}
                 node={r}
                 depth={0}
                 parentPath=""
                 expanded={expanded}
-                childrenMap={childrenMap}
+                childrenMap={projectedChildrenMap}
                 loadingIds={loadingIds}
                 activeId={activeId}
                 filter={filter}
@@ -968,7 +1180,7 @@ export function DirectoryTreeSidebar() {
                 onActivate={setActiveId}
               />
             ))}
-            {rootMaterials
+            {projectedRoots.materials
               .filter(
                 (m) =>
                   !filter.trim() ||
@@ -984,7 +1196,7 @@ export function DirectoryTreeSidebar() {
                   onActivate={setActiveId}
                 />
               ))}
-            {roots.length === 0 && rootMaterials.length === 0 && (
+            {projectedRoots.directories.length === 0 && projectedRoots.materials.length === 0 && (
               <li className="text-xs text-muted-foreground italic px-3 py-2">
                 {t("emptyDirectory")}
               </li>

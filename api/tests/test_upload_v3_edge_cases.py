@@ -5,7 +5,8 @@ from fastapi import Request
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.upload_errors import ERR_TUS_CONCURRENCY_LIMIT
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.database.redis import RedisSemaphoreTimeoutError
 from app.routers.tus import tus_patch
 from tests.test_tus import _create_user
 
@@ -48,7 +49,7 @@ async def test_tus_checksum_missing_header(
 
     with (
         patch("app.routers.tus.upload_part", new_callable=AsyncMock) as m_upload,
-        patch("app.routers.tus.complete_multipart_upload", new_callable=AsyncMock),
+        patch("app.routers.tus.complete_multipart_verified", new_callable=AsyncMock),
         patch("app.routers.tus._enqueue_processing", new_callable=AsyncMock),
     ):
         m_upload.return_value = "etag-123"
@@ -65,32 +66,41 @@ async def test_tus_checksum_missing_header(
 async def test_tus_concurrency_limit_hit(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup
 ):
-    """Test Phase 2.3: Per-user concurrency limit enforced."""
+    """Per-user semaphore saturation returns the TUS concurrency error."""
     user = await _create_user(db_session)
     await db_session.commit()
-
     tus_id = "00000000-0000-0000-0000-000000000000"
-
-    # Mock Redis INCR to return a value above the limit (8)
-    async def mock_incr(key):
-        if "tus:inflight:" in key:
-            return 9
-        return 1
-
-    fake_redis_setup.incr = mock_incr
 
     mock_request = MagicMock(spec=Request)
     mock_request.headers = {
         "Content-Type": "application/offset+octet-stream",
         "Upload-Offset": "0",
+        "Content-Length": "0",
     }
 
-    import uuid
+    with (
+        patch(
+            "app.routers.tus._load_state",
+            new_callable=AsyncMock,
+            return_value={
+                "user_id": str(user.id),
+                "upload_id": "upload-123",
+                "offset": "0",
+            },
+        ),
+        patch(
+            "app.routers.tus.redis_semaphore",
+            side_effect=RedisSemaphoreTimeoutError("full"),
+        ),
+    ):
+        import uuid
 
-    response = await tus_patch(uuid.UUID(tus_id), mock_request, user, fake_redis_setup, db_session)
+        response = await tus_patch(
+            uuid.UUID(tus_id), mock_request, user, fake_redis_setup, db_session
+        )
 
     assert response.status_code == 429
-    assert response.headers["X-Lectern-Error"] == ERR_TUS_CONCURRENCY_LIMIT
+    assert response.headers["X-Lectern-Error"] == UploadErrorCode.TUS_CONCURRENCY_LIMIT
 
 
 @pytest.mark.asyncio

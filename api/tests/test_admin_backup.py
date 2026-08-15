@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import uuid
@@ -13,10 +14,13 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import typer
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token
+from app.core.common.exceptions import NotFoundError
+from app.core.security.security import create_access_token
 from app.models.directory import Directory, DirectoryType
 from app.models.material import Material
 from app.models.pull_request import PRStatus, PullRequest
@@ -38,6 +42,53 @@ from app.services.backup import (
 )
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
+
+def test_production_requires_offline_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import settings
+    from app.routers.admin_backup import _require_offline_restore_in_production
+
+    monkeypatch.setattr(settings, "environment", "production")
+    with pytest.raises(HTTPException) as raised:
+        _require_offline_restore_in_production()
+
+    assert raised.value.status_code == 503
+    assert "restore-backup-offline" in str(raised.value.detail)
+
+
+def test_production_requires_offline_backup_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import settings
+    from app.routers.admin_backup import _require_offline_backup_creation_in_production
+
+    monkeypatch.setattr(settings, "environment", "production")
+    with pytest.raises(HTTPException) as raised:
+        _require_offline_backup_creation_in_production()
+
+    assert raised.value.status_code == 503
+    assert "create-backup-offline" in str(raised.value.detail)
+
+
+def test_offline_backup_cli_requires_confirmation(tmp_path: Path) -> None:
+    from app.cli import create_backup_offline
+
+    with pytest.raises(typer.Exit) as raised:
+        create_backup_offline(tmp_path / "snapshot.zip", confirm_offline=False)
+
+    assert raised.value.exit_code == 2
+
+
+def test_offline_backup_cli_refuses_to_overwrite(tmp_path: Path) -> None:
+    from app.cli import create_backup_offline
+
+    destination = tmp_path / "snapshot.zip"
+    destination.write_bytes(b"existing")
+    with pytest.raises(typer.Exit) as raised:
+        create_backup_offline(destination, confirm_offline=True)
+
+    assert raised.value.exit_code == 2
+    assert destination.read_bytes() == b"existing"
 
 
 async def _make_admin(db: AsyncSession) -> User:
@@ -234,15 +285,29 @@ def test_topological_sort_external_parent_ignored() -> None:
 def test_backup_filename_format() -> None:
     name = backup_filename()
     assert name.startswith("backup_")
-    assert len(name) == len("backup_20260425_103045")
+    timestamp, random_suffix = name.removeprefix("backup_").rsplit("_", 1)
+    assert len(timestamp) == len("20260425_103045")
+    assert len(random_suffix) == 32
+    assert all(character in "0123456789abcdef" for character in random_suffix)
 
 
 def test_backup_filename_unique() -> None:
     names = {backup_filename() for _ in range(3)}
-    # All may be identical if called in the same second — that's fine,
-    # the timestamps just need the right format.
+    assert len(names) == 3
     for name in names:
         assert name.startswith("backup_")
+
+
+def test_backup_resolution_rejects_an_existing_absolute_path(tmp_path: Path) -> None:
+    from app.routers.admin_backup import _resolve_backup
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    outside = tmp_path / "backup_20260425_103045.zip"
+    outside.write_bytes(b"sensitive")
+
+    with pytest.raises(NotFoundError):
+        _resolve_backup(str(outside.with_suffix("")), backup_dir)
 
 
 # ── Unit tests: local backup management ──────────────────────────────────────
@@ -415,8 +480,10 @@ def _make_minimal_zip(tmp_path: Path, rows: dict[str, list[dict]] | None = None)
         "tables": _TABLE_INSERT_ORDER,
         "s3_prefixes": ["cas/", "uploads/", "thumbnails/"],
         "s3_object_count": 0,
+        "s3_objects": {},
         "db_row_counts": {t: len(db_data.get(t, [])) for t in _TABLE_INSERT_ORDER},
     }
+
     with zipfile.ZipFile(dest, "w") as zf:
         zf.writestr("manifest.json", json.dumps(manifest))
         for tbl in _TABLE_INSERT_ORDER:
@@ -692,6 +759,7 @@ async def test_restore_wipes_s3_and_reuploads(db_session: AsyncSession, tmp_path
     """Existing S3 objects must be deleted and backup S3 objects re-uploaded."""
     zip_path = tmp_path / "backup.zip"
     s3_content = b"hello s3"
+    digest = hashlib.sha256(s3_content).hexdigest()
     with zipfile.ZipFile(zip_path, "w") as zf:
         manifest = {
             "version": BACKUP_VERSION,
@@ -699,6 +767,9 @@ async def test_restore_wipes_s3_and_reuploads(db_session: AsyncSession, tmp_path
             "tables": _TABLE_INSERT_ORDER,
             "s3_prefixes": ["cas/", "uploads/", "thumbnails/"],
             "s3_object_count": 1,
+            "s3_objects": {
+                "cas/deadbeef": {"size": len(s3_content), "sha256": digest},
+            },
             "db_row_counts": {},
         }
         zf.writestr("manifest.json", json.dumps(manifest))
@@ -708,6 +779,7 @@ async def test_restore_wipes_s3_and_reuploads(db_session: AsyncSession, tmp_path
 
     delete_mock = AsyncMock()
     upload_mock = AsyncMock()
+    copy_mock = AsyncMock()
 
     existing_s3 = [{"Key": "cas/old_file", "Size": 5}]
 
@@ -718,12 +790,15 @@ async def test_restore_wipes_s3_and_reuploads(db_session: AsyncSession, tmp_path
 
     with (
         patch("app.services.backup.list_objects", side_effect=_fake_list),
+        patch("app.services.backup.copy_object", copy_mock),
         patch("app.services.backup.delete_object", delete_mock),
         patch("app.services.backup.upload_file", upload_mock),
     ):
         await restore_from_zip_path(db_session, zip_path)
 
-    delete_mock.assert_called_once_with("cas/old_file")
+    delete_mock.assert_any_call("cas/old_file")
+    assert copy_mock.await_args_list[0].args[0] == "cas/old_file"
+    assert copy_mock.await_args_list[0].args[1].startswith("restore-rollback/")
     upload_mock.assert_called_once()
     call_args = upload_mock.call_args
     assert call_args[0][0] == s3_content
@@ -750,6 +825,38 @@ async def test_restore_returns_manifest(db_session: AsyncSession, tmp_path: Path
 
 
 # ── API endpoint tests ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/admin/backup/save"),
+        ("GET", "/api/admin/backup/export"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_production_http_backup_creation_is_disabled(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    method: str,
+    path: str,
+) -> None:
+    admin = await _make_admin(db_session)
+    await db_session.commit()
+
+    with (
+        patch("app.routers.admin_backup.settings") as mock_settings,
+        patch(
+            "app.routers.admin_backup.create_backup_zip",
+            new_callable=AsyncMock,
+        ) as create,
+    ):
+        mock_settings.environment = "production"
+        response = await client.request(method, path, headers=_auth(admin))
+
+    assert response.status_code == 503
+    assert "create-backup-offline" in response.json()["detail"]
+    create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -977,6 +1084,7 @@ async def test_restore_local_backup(client: AsyncClient, db_session: AsyncSessio
             "tables": _TABLE_INSERT_ORDER,
             "s3_prefixes": ["cas/", "uploads/", "thumbnails/"],
             "s3_object_count": 0,
+            "s3_objects": {},
             "db_row_counts": {},
         }
         with zipfile.ZipFile(zip_path, "w") as zf:
@@ -1040,8 +1148,10 @@ async def test_restore_upload(client: AsyncClient, db_session: AsyncSession) -> 
         "tables": _TABLE_INSERT_ORDER,
         "s3_prefixes": ["cas/", "uploads/", "thumbnails/"],
         "s3_object_count": 0,
+        "s3_objects": {},
         "db_row_counts": {},
     }
+
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("manifest.json", json.dumps(manifest))

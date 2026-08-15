@@ -3,15 +3,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse
 
-from app.core.database import get_db
-from app.core.sse import (
-    register_user_queue,
-    sse_event_stream,
-    unregister_user_queue,
-)
-from app.dependencies.auth import CurrentUser, SSEUser
+from app.core.database.database import get_db
+from app.dependencies.auth import CurrentUser
 from app.dependencies.pagination import PaginationParams
 from app.schemas.common import PaginatedResponse
 from app.schemas.notification import NotificationOut
@@ -69,17 +63,3 @@ async def read_all(
 ) -> dict[str, int]:
     count = await mark_all_read(db, user.id)
     return {"marked": count}
-
-
-@router.get("/sse")
-async def sse_stream(user: SSEUser) -> EventSourceResponse:
-    """SSE endpoint. Accepts token via query param since EventSource can't send headers."""
-    queue = register_user_queue(user.id)
-    return EventSourceResponse(
-        sse_event_stream(
-            queue,
-            cleanup=lambda: unregister_user_queue(user.id, queue),
-            event_name="notification",
-        ),
-        headers={"X-Accel-Buffering": "no"},
-    )

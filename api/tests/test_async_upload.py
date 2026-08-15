@@ -26,7 +26,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -49,10 +49,12 @@ async def test_async_upload_flow(
     with (
         patch("app.routers.upload.direct.get_s3_client") as mock_s3_cm,
         patch("app.dependencies.auth.is_token_blacklisted", new_callable=AsyncMock) as mock_bl,
+        patch("app.dependencies.auth.is_session_revoked", new_callable=AsyncMock) as mock_session,
     ):
         mock_s3 = AsyncMock()
         mock_s3_cm.return_value.__aenter__.return_value = mock_s3
         mock_bl.return_value = False
+        mock_session.return_value = False
 
         # 1. POST Upload → 202 Accepted
         resp = await client.post("/api/upload", files=files, headers=headers)
@@ -112,26 +114,43 @@ async def test_worker_process_upload_logic():
         patch(
             "app.workers.upload.stages.download.get_object_info", new_callable=AsyncMock
         ) as mock_info,
-        patch("app.workers.upload.stages.scan_strip.check_pdf_safety"),
+        patch(
+            "app.workers.upload.stages.download.inspect_upload", new_callable=AsyncMock
+        ) as mock_inspect,
+        patch(
+            "app.workers.upload.stages.scan_strip.check_pdf_safety_isolated",
+            new_callable=AsyncMock,
+        ),
         patch("app.workers.upload.pipeline.MalwareScanner") as mock_scanner_cls,
         patch(
-            "app.workers.upload.stages.scan_strip.strip_metadata_file", new_callable=AsyncMock
-        ) as mock_strip,
+            "app.workers.upload.stages.scan_strip.sanitize_upload", new_callable=AsyncMock
+        ) as mock_sanitize,
         patch(
             "app.workers.upload.stages.compress.compress_file_path", new_callable=AsyncMock
         ) as mock_comp,
         patch("app.workers.upload.stages.finalize.upload_file_multipart", new_callable=AsyncMock),
         patch("app.workers.upload.pipeline.delete_object", new_callable=AsyncMock),
-        patch("app.core.processing.ProcessingFile.sha256", new_callable=AsyncMock) as mock_sha,
+        patch(
+            "app.core.events.processing.ProcessingFile.sha256", new_callable=AsyncMock
+        ) as mock_sha,
     ):
         mock_dl.return_value = "mocksha256"
         mock_info.return_value = {"size": 100, "content_type": "application/pdf"}
+        from app.core.security.isolated_parser import UploadInspection
+
+        mock_inspect.return_value = UploadInspection(
+            actual_mime="application/pdf",
+            uncompressed_size=None,
+            parser_pid=1234,
+            parser_uid=1000,
+        )
 
         mock_sha.return_value = "fake-sha"
 
         # Mock scanner instance
         mock_scanner = MagicMock()
         mock_scanner.scan_file_path = AsyncMock()
+        mock_scanner.check_malwarebazaar = AsyncMock(return_value=None)
         mock_scanner.close = AsyncMock()
         mock_scanner_cls.return_value = mock_scanner
 
@@ -149,9 +168,9 @@ async def test_worker_process_upload_logic():
         t2.close()
         comp_path = Path(t2.name)
 
-        mock_strip.return_value = clean_path
+        mock_sanitize.return_value = clean_path
 
-        from app.core.file_security import CompressResultPath
+        from app.core.security.file_security import CompressResultPath
 
         mock_comp.return_value = CompressResultPath(comp_path, 500, None, "application/pdf")
 

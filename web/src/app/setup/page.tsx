@@ -15,11 +15,13 @@ export default function SetupPage() {
     const t = useTranslations("Setup");
     const router = useRouter();
     const { setup } = useAuth();
-    const { config, updateConfig } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
+    const updateConfig = useConfigStore((state) => state.updateConfig);
 
     const [email, setEmail] = useState("");
     const [confirmEmail, setConfirmEmail] = useState("");
     const [displayName, setDisplayName] = useState("");
+    const [bootstrapToken, setBootstrapToken] = useState("");
     const [password, setPassword] = useState("");
     const [confirm, setConfirm] = useState("");
     const [loading, setLoading] = useState(false);
@@ -47,7 +49,7 @@ export default function SetupPage() {
         }
         setLoading(true);
         try {
-            await setup(email, password, displayName);
+            await setup(email, password, displayName, bootstrapToken);
             // Mark setup complete in the local config so ConfigProvider doesn't bounce us back.
             updateConfig({ needs_setup: false });
             toast.success(t("success"));
@@ -70,6 +72,23 @@ export default function SetupPage() {
                 </CardHeader>
                 <CardContent>
                     <form onSubmit={handleSubmit} className="space-y-4">
+                        {config?.bootstrap_token_required && (
+                            <div className="space-y-2">
+                                <Label htmlFor="bootstrapToken">{t("bootstrapTokenLabel")}</Label>
+                                <Input
+                                    id="bootstrapToken"
+                                    type="password"
+                                    required
+                                    autoComplete="off"
+                                    value={bootstrapToken}
+                                    onChange={(e) => setBootstrapToken(e.target.value)}
+                                    placeholder={t("bootstrapTokenPlaceholder")}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    {t("bootstrapTokenHint")}
+                                </p>
+                            </div>
+                        )}
                         <div className="space-y-2">
                             <Label htmlFor="email">{t("emailLabel")}</Label>
                             <Input
@@ -92,7 +111,6 @@ export default function SetupPage() {
                                 autoComplete="email"
                                 value={confirmEmail}
                                 onChange={(e) => setConfirmEmail(e.target.value)}
-                                onPaste={(e) => e.preventDefault()}
                                 placeholder={t("confirmEmailPlaceholder")}
                             />
                         </div>

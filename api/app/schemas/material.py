@@ -25,6 +25,25 @@ class MaterialVersionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PublicMaterialVersionOut(BaseModel):
+    version_number: int
+    file_name: str | None
+    file_size: int | None
+    file_mime_type: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+MaterialVersionResponse = MaterialVersionOut | PublicMaterialVersionOut
+
+
+def project_material_version(value: object, *, public: bool) -> MaterialVersionResponse:
+    """Project one material version through the member or public boundary."""
+    schema = PublicMaterialVersionOut if public else MaterialVersionOut
+    return schema.model_validate(value)
+
+
 class MaterialOut(BaseModel):
     id: uuid.UUID
     directory_id: uuid.UUID | None
@@ -62,6 +81,19 @@ class MaterialOut(BaseModel):
 
 class MaterialDetail(MaterialOut):
     current_version_info: MaterialVersionOut | None = None
+
+
+class PublicMaterialDetail(MaterialOut):
+    current_version_info: PublicMaterialVersionOut | None = None
+
+
+MaterialDetailResponse = MaterialDetail | PublicMaterialDetail
+
+
+def project_material_detail(value: object, *, public: bool) -> MaterialDetailResponse:
+    """Project one material through the member or public version boundary."""
+    schema = PublicMaterialDetail if public else MaterialDetail
+    return schema.model_validate(value)
 
 
 class UploadStatus(StrEnum):
@@ -177,9 +209,24 @@ class BatchZipEntry(BaseModel):
 class BatchZipResponse(BaseModel):
     """Response from POST /upload/batch-zip."""
 
+    batch_id: str
     files: list[BatchZipEntry]
     skipped: int
     errors: list[str]
+
+
+class UploadGroupRequest(BaseModel):
+    """Reserve a bounded set of per-file admissions for one folder."""
+
+    file_count: int = Field(ge=1)
+
+
+class UploadGroupOut(BaseModel):
+    """Server-issued capability for a bounded folder upload."""
+
+    group_id: str
+    max_files: int
+    expires_in: int
 
 
 # ── V2 endpoints ──────────────────────────────────────────────────────────────
@@ -253,6 +300,7 @@ class UploadHistoryOut(BaseModel):
 
 class PresignedMultipartPart(BaseModel):
     part_number: int
+    size: int = Field(ge=1)
     url: str
 
 
@@ -265,10 +313,14 @@ class PresignedMultipartInitOut(BaseModel):
 
 
 class S3PartETag(BaseModel):
-    PartNumber: int
-    ETag: str
+    PartNumber: int = Field(ge=1, le=10_000)
+    ETag: str = Field(min_length=1, max_length=256)
+
+    model_config = {"extra": "forbid"}
 
 
 class PresignedMultipartCompleteRequest(BaseModel):
-    upload_id: str
-    parts: list[S3PartETag]
+    upload_id: str = Field(min_length=1, max_length=128)
+    parts: list[S3PartETag] = Field(min_length=1, max_length=10_000)
+
+    model_config = {"extra": "forbid"}

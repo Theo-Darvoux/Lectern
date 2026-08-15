@@ -1,4 +1,4 @@
-"""Tests for app.core.worker_token — HMAC-SHA256 signed tokens for the Cloudflare Worker.
+"""Tests for app.core.security.worker_token — HMAC-SHA256 signed tokens for the Cloudflare Worker.
 
 Both make_zip_token (directory ZIP) and make_file_token (single-file edge serve)
 produce two-part tokens: <base64url(payload_json)>.<base64url(hmac_sha256)>.
@@ -19,7 +19,7 @@ import hmac
 import json
 import time
 
-from app.core.worker_token import make_file_token, make_zip_token
+from app.core.security.worker_token import make_file_token, make_zip_token
 
 SECRET = "test-hmac-secret"
 

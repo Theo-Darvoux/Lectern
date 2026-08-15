@@ -8,7 +8,7 @@ Payload shape
 {
   "event":      "upload.complete",
   "upload_id":  "<uuid>",
-  "status":     "clean" | "malicious" | "failed",
+  "status":     "clean",
   "file_key":   "<s3-key or null>",
   "mime_type":  "<mime or null>",
   "size":       <bytes or null>,
@@ -26,18 +26,26 @@ The HMAC is computed over the UTF-8-encoded JSON body using the webhook secret
 (``settings.webhook_secret``, which falls back to ``settings.secret_key``).
 """
 
+import contextlib
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import uuid
 from datetime import UTC, datetime
-
-import httpx
+from typing import Any, cast
 
 from app.config import settings
-from app.core.metrics import upload_webhook_total
-from app.core.url_validation import is_safe_url
+from app.core.database.redis import redis_lock
+from app.core.observability.metrics import upload_webhook_total
+from app.core.security.url_validation import (
+    PinnedRequestError,
+    post_pinned_https,
+    resolve_safe_url,
+    resolve_safe_url_async,
+)
+from app.routers.upload.cancellation import upload_lifecycle_lock_name
 
 logger = logging.getLogger(__name__)
 
@@ -60,80 +68,99 @@ def _sign(body: bytes) -> str:
 
 def validate_webhook_url(url: str) -> bool:
     """Validate a webhook URL to prevent SSRF. Delegates to core/url_validation.py."""
-    return is_safe_url(url)
+    return resolve_safe_url(url) is not None
 
 
-async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> None:  # type: ignore[type-arg]
-    """ARQ job: look up the Upload row and POST the signed payload to the webhook URL.
+async def _deliver_webhook_once(
+    session_factory: Any,
+    *,
+    upload_id: str,
+    attempt: int,
+) -> str | None:
+    """Deliver while holding the authoritative upload row lock.
 
-    On transient failure (network error or 5xx), re-enqueues itself via ARQ with
-    exponential backoff (30s, 2m, 8m).  After _MAX_ATTEMPTS failures, inserts a
-    dead-letter record and gives up.  Permanent errors (4xx, bad URL) are not retried.
+    Returning a string requests a deferred retry. ``None`` means the attempt was
+    delivered or authoritatively skipped. Database failures propagate so ARQ can
+    retry instead of silently losing the completion event.
     """
-    session_factory = ctx.get("db_sessionmaker")
-    if session_factory is None:
-        logger.warning(
-            "dispatch_webhook: no db_sessionmaker in ctx — skipping upload %s", upload_id
+    from sqlalchemy import select
+
+    from app.models.upload import Upload
+
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(Upload).where(Upload.upload_id == upload_id).with_for_update()
         )
-        upload_webhook_total.labels(outcome="skipped").inc()
-        return
+        if row is None:
+            logger.warning("dispatch_webhook: Upload %s not found in DB — skipping", upload_id)
+            upload_webhook_total.labels(outcome="skipped").inc()
+            return None
+        if not row.webhook_url:
+            upload_webhook_total.labels(outcome="skipped").inc()
+            return None
+        if row.status not in ("clean", "applied") or not row.final_key:
+            logger.info(
+                "dispatch_webhook: upload %s is no longer publishable (status=%s) — skipping",
+                upload_id,
+                row.status,
+            )
+            upload_webhook_total.labels(outcome="skipped").inc()
+            return None
+        if (
+            row.status == "clean"
+            and row.final_key.startswith("cas/")
+            and int(row.cas_ref_count or 0) <= 0
+        ):
+            logger.info(
+                "dispatch_webhook: upload %s no longer owns its CAS object — skipping",
+                upload_id,
+            )
+            upload_webhook_total.labels(outcome="skipped").inc()
+            return None
 
-    # ── Load Upload row ───────────────────────────────────────────────────────
-    try:
-        from sqlalchemy import select
+        resolved_target = await resolve_safe_url_async(row.webhook_url)
+        if resolved_target is None:
+            # Callback URLs commonly contain provider capabilities in their
+            # query string. Never serialize the configured URL into logs.
+            logger.warning(
+                "dispatch_webhook: invalid webhook URL for upload %s — skipping",
+                upload_id,
+            )
+            upload_webhook_total.labels(outcome="skipped").inc()
+            return None
 
-        from app.models.upload import Upload
+        payload = {
+            "event": "upload.complete",
+            "upload_id": row.upload_id,
+            # Applied uploads transferred ownership into MaterialVersion, but
+            # the immutable event being delivered is still upload completion.
+            "status": "clean",
+            "file_key": row.final_key,
+            "mime_type": getattr(row, "mime_type", None),
+            "size": getattr(row, "size_bytes", None),
+            "sha256": row.sha256,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        headers = {
+            "Content-Type": "application/json",
+            "X-Lectern-Signature": _sign(body),
+            "X-Lectern-Delivery": str(uuid.uuid4()),
+            "X-Lectern-Event": "upload.complete",
+            "User-Agent": "Lectern-Webhook/1.0",
+        }
 
-        async with session_factory() as session:
-            row = await session.scalar(select(Upload).where(Upload.upload_id == upload_id))
-    except Exception as exc:
-        logger.error("dispatch_webhook: DB read failed for upload %s: %s", upload_id, exc)
-        upload_webhook_total.labels(outcome="skipped").inc()
-        return
+        try:
+            response = await post_pinned_https(
+                resolved_target,
+                content=body,
+                headers=headers,
+                timeout=_TIMEOUT_SECONDS,
+            )
+        except PinnedRequestError:
+            # aiohttp exception strings can include the full request URL.
+            return "pinned HTTPS request failed"
 
-    if row is None:
-        logger.warning("dispatch_webhook: Upload %s not found in DB — skipping", upload_id)
-        upload_webhook_total.labels(outcome="skipped").inc()
-        return
-
-    if not row.webhook_url:
-        upload_webhook_total.labels(outcome="skipped").inc()
-        return
-
-    # ── SSRF Validation ───────────────────────────────────────────────────────
-    if not validate_webhook_url(row.webhook_url):
-        logger.warning("dispatch_webhook: invalid webhook URL %s — skipping", row.webhook_url)
-        upload_webhook_total.labels(outcome="skipped").inc()
-        return
-
-    # ── Build payload ─────────────────────────────────────────────────────────
-    payload = {
-        "event": "upload.complete",
-        "upload_id": row.upload_id,
-        "status": row.status,
-        "file_key": row.final_key,
-        "mime_type": getattr(row, "mime_type", None),
-        "size": getattr(row, "size_bytes", None),
-        "sha256": row.sha256,
-        "timestamp": datetime.now(UTC).isoformat(),
-    }
-    body = json.dumps(payload, separators=(",", ":")).encode()
-    signature = _sign(body)
-
-    delivery_id = str(uuid.uuid4())
-    headers = {
-        "Content-Type": "application/json",
-        "X-Lectern-Signature": signature,
-        "X-Lectern-Delivery": delivery_id,
-        "X-Lectern-Event": "upload.complete",
-        "User-Agent": "Lectern-Webhook/1.0",
-    }
-
-    # ── Single delivery attempt ───────────────────────────────────────────────
-    transient_failure: str | None = None
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
-            response = await client.post(row.webhook_url, content=body, headers=headers)
         if response.is_success:
             logger.info(
                 "Webhook delivered for upload %s (attempt %d/%d, status %d)",
@@ -143,21 +170,59 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
                 response.status_code,
             )
             upload_webhook_total.labels(outcome="success").inc()
-            return
-        elif response.status_code < 500:
-            # 4xx: permanent client error — don't retry
+            return None
+        if response.status_code < 500:
             logger.warning(
                 "Webhook HTTP %d for upload %s (permanent, not retrying)",
                 response.status_code,
                 upload_id,
             )
             upload_webhook_total.labels(outcome="http_error").inc()
-            return
-        else:
-            transient_failure = f"HTTP {response.status_code}"
-    except httpx.TransportError as exc:
-        transient_failure = str(exc)
+            return None
+        return f"HTTP {response.status_code}"
 
+
+async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> None:  # type: ignore[type-arg]
+    """Deliver one immutable completion event serialized with terminal transitions."""
+    session_factory = ctx.get("db_sessionmaker")
+    if session_factory is None:
+        logger.warning(
+            "dispatch_webhook: no db_sessionmaker in ctx — skipping upload %s", upload_id
+        )
+        upload_webhook_total.labels(outcome="skipped").inc()
+        return
+
+    coordination_redis = ctx.get("redis")
+    supports_lifecycle_lock = coordination_redis is not None and not inspect.iscoroutinefunction(
+        getattr(coordination_redis, "register_script", None)
+    )
+    lifecycle_guard = (
+        redis_lock(
+            cast(Any, coordination_redis),
+            upload_lifecycle_lock_name(upload_id),
+            timeout=120.0,
+            expire=300.0,
+        )
+        if supports_lifecycle_lock
+        else contextlib.nullcontext()
+    )
+
+    try:
+        async with lifecycle_guard:
+            transient_failure = await _deliver_webhook_once(
+                session_factory,
+                upload_id=upload_id,
+                attempt=attempt,
+            )
+    except Exception as exc:
+        logger.error("dispatch_webhook: delivery attempt failed for upload %s: %s", upload_id, exc)
+        raise
+
+    if transient_failure is None:
+        return
+
+    # Retry scheduling happens after releasing all lifecycle/row locks. A
+    # terminal transition may win before the retry, which then exits above.
     logger.warning(
         "Webhook transient failure for upload %s (attempt %d/%d): %s",
         upload_id,
@@ -165,13 +230,11 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
         _MAX_ATTEMPTS,
         transient_failure,
     )
-
-    # ── Exponential backoff via ARQ re-enqueue ────────────────────────────────
     if attempt < _MAX_ATTEMPTS:
         from datetime import timedelta
 
         backoff = _BACKOFF_SECONDS[attempt - 1]
-        arq = ctx.get("arq")
+        arq = ctx.get("redis") or ctx.get("arq")
         if arq is not None:
             await arq.enqueue_job(
                 "dispatch_webhook",
@@ -188,7 +251,6 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
             )
             return
 
-    # ── All attempts exhausted — insert dead-letter record ────────────────────
     logger.error(
         "Webhook delivery failed for upload %s after %d attempts", upload_id, _MAX_ATTEMPTS
     )
@@ -203,7 +265,7 @@ async def dispatch_webhook(ctx: dict, *, upload_id: str, attempt: int = 1) -> No
             upload_id=upload_id,
             job_name="dispatch_webhook",
             payload={"upload_id": upload_id, "attempt": attempt},
-            error=transient_failure or "unknown",
+            error=transient_failure,
             attempts=attempt,
         )
     except Exception as dlq_exc:

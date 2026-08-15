@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -32,6 +33,7 @@ class PRStatus(enum.StrEnum):
 
 class PullRequest(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "pull_requests"
+    __table_args__ = (UniqueConstraint("reverts_pr_id", name="uq_pull_requests_reverts_pr_id"),)
 
     type: Mapped[str] = mapped_column(
         String(50),

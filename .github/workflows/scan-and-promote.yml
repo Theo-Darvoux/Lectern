@@ -1,0 +1,194 @@
+name: Scan and Promote Immutable Manifest
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        required: true
+        type: string
+      candidate_ref:
+        required: true
+        type: string
+      release_repository:
+        required: true
+        type: string
+      release_tag:
+        required: true
+        type: string
+    outputs:
+      release_digest:
+        description: Exact digest copied into the release repository
+        value: ${{ jobs.promote.outputs.release_digest }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate immutable component references
+        shell: bash
+        env:
+          COMPONENT: ${{ inputs.component }}
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          RELEASE_REPOSITORY: ${{ inputs.release_repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          case "$COMPONENT" in
+            api|worker|web|selfhost-worker) ;;
+            *) echo "unsupported component: $COMPONENT" >&2; exit 64 ;;
+          esac
+          candidate_repository=${CANDIDATE_REF%@sha256:*}
+          candidate_digest=${CANDIDATE_REF##*@sha256:}
+          expected_candidate="ghcr.io/theo-darvoux/lectern/${COMPONENT}-candidate"
+          expected_release="ghcr.io/theo-darvoux/lectern/${COMPONENT}-release"
+          [[ "$candidate_repository" == "$expected_candidate" ]]
+          [[ "$candidate_digest" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$RELEASE_REPOSITORY" == "$expected_release" ]]
+          [[ "$RELEASE_TAG" =~ ^sha-[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_TAG" == "sha-${GITHUB_SHA}" ]]
+
+  scan:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            slug: linux-amd64
+          - platform: linux/arm64
+            slug: linux-arm64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    env:
+      TRIVY_PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan exact ${{ matrix.platform }} child image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ inputs.candidate_ref }}
+          format: sarif
+          output: trivy-${{ inputs.component }}-${{ matrix.slug }}.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Upload ${{ matrix.platform }} scan
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+        with:
+          sarif_file: trivy-${{ inputs.component }}-${{ matrix.slug }}.sarif
+          category: trivy-${{ inputs.component }}-${{ matrix.slug }}
+
+  runtime-smoke:
+    needs: [validate, scan]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: docker.io/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: release_smoke
+          POSTGRES_PASSWORD: release_smoke
+          POSTGRES_DB: release_smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U release_smoke -d release_smoke"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+      redis:
+        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: ${{ steps.toolchain.outputs.binfmt_image }}
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: ${{ steps.toolchain.outputs.buildx_version }}
+          driver-opts: |
+            image=${{ steps.toolchain.outputs.buildkit_image }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Execute exact ${{ matrix.platform }} candidate
+        env:
+          COMPONENT: ${{ inputs.component }}
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          PLATFORM: ${{ matrix.platform }}
+        run: ./scripts/smoke-release-candidate.sh "$COMPONENT" "$CANDIDATE_REF" "$PLATFORM"
+
+  promote:
+    needs: [validate, scan, runtime-smoke]
+    runs-on: ubuntu-latest
+    outputs:
+      release_digest: ${{ steps.promote.outputs.release_digest }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: ${{ steps.toolchain.outputs.buildx_version }}
+          driver-opts: |
+            image=${{ steps.toolchain.outputs.buildkit_image }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy immutable commit tag
+        id: promote
+        shell: bash
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          RELEASE_REPOSITORY: ${{ inputs.release_repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          digest=$(./scripts/promote-release-image.sh \
+            "$CANDIDATE_REF" \
+            "$RELEASE_REPOSITORY" \
+            "$RELEASE_TAG")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "release_digest=$digest" >> "$GITHUB_OUTPUT"

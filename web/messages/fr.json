@@ -46,6 +46,9 @@
   "Setup": {
     "title": "Bienvenue sur {siteName}",
     "description": "Créez le premier compte administrateur pour terminer la configuration de cette instance.",
+    "bootstrapTokenLabel": "Jeton de configuration",
+    "bootstrapTokenPlaceholder": "Collez le jeton de configuration à usage unique",
+    "bootstrapTokenHint": "Utilisez le BOOTSTRAP_TOKEN configuré par l’opérateur du déploiement. Il n’est jamais stocké par le navigateur.",
     "emailLabel": "E-mail",
     "emailPlaceholder": "admin@exemple.com",
     "emailHint": "Cette adresse devient votre identifiant de connexion et ne pourra pas être modifiée depuis l'application.",
@@ -62,6 +65,10 @@
     "creating": "Création du compte…",
     "success": "Compte administrateur créé.",
     "failed": "Échec de la configuration. Veuillez réessayer.",
+    "checkingInstallation": "Vérification de l’installation…",
+    "installationCheckFailedTitle": "Le serveur de l’application ne répond pas",
+    "installationCheckFailedDescription": "L’état de l’installation n’a pas pu être chargé. Vérifiez que le serveur est démarré, puis réessayez.",
+    "retry": "Réessayer",
     "passwordTooShort": "Le mot de passe doit comporter au moins 8 caractères.",
     "passwordMismatch": "Les mots de passe ne correspondent pas.",
     "emailMismatch": "Les adresses e-mail ne correspondent pas."
@@ -192,6 +199,9 @@
     "offlineWarning": "Vous semblez être hors ligne. Certaines fonctionnalités peuvent ne pas fonctionner.",
     "redirectingToSetup": "Redirection vers la configuration...",
     "recoveringSession": "Récupération de la session...",
+    "startupErrorTitle": "Impossible de restaurer la session de l’application",
+    "startupErrorDescription": "Le serveur de l’application est injoignable. Vérifiez votre connexion ou l’état du serveur, puis réessayez.",
+    "retry": "Réessayer",
     "organization": "Organisation",
     "github": "GitHub",
     "commit": "Commit"
@@ -248,6 +258,7 @@
     "whatsHappening": "Voici ce qui se passe sur {siteName}",
     "errorTitle": "Impossible de charger les données d'accueil",
     "loadError": "Échec du chargement des données d'accueil",
+    "retry": "Réessayer",
     "popularTodayTitle": "Populaire aujourd'hui",
     "popularTodaySubtitle": "Matériels les plus consultés ces dernières 24 heures",
     "trendingFortnightTitle": "Tendances de la quinzaine",
@@ -281,6 +292,7 @@
     "staged": "En préparation",
     "directoryDetails": "Détails du dossier",
     "select": "Sélectionner",
+    "moreActions": "Plus d'actions sur le dossier",
     "paste": "Coller (",
     "newFolder": "Nouveau dossier",
     "cut": "Couper",
@@ -344,6 +356,8 @@
     "backToParentFolder": "Retour au dossier parent",
     "closeInspector": "Fermer l'inspecteur",
     "openInspector": "Ouvrir l'inspecteur",
+    "expandFolder": "Développer le dossier",
+    "collapseFolder": "Réduire le dossier",
     "creationCancelled": "Création annulée et supprimée du brouillon",
     "addedDeletionToDraft": "Suppression ajoutée au brouillon actuel",
     "itemDeletedSuccessfully": "{type} supprimé avec succès",
@@ -355,6 +369,8 @@
     "itemsCount": "{count, plural, =1 {1 élément} other {# éléments}}",
     "notFound": "Introuvable",
     "loadError": "Échec du chargement",
+    "loadFailedTitle": "Impossible de charger cet emplacement",
+    "backToBrowse": "Retour à la bibliothèque",
     "home": "Accueil",
     "courseMaterials": "Supports de cours",
     "contributionPreview": "Aperçu de la contribution",
@@ -544,6 +560,12 @@
     "foldersNotAccessible": "{count, plural, =1 {# dossier} other {# dossiers}} n'ont pas pu être lus. Essayez de glisser les dossiers un par un, ou utilisez le sélecteur de fichiers."
   },
   "Upload": {
+    "steps": {
+      "label": "Progression du téléversement",
+      "choose": "Choisir les fichiers",
+      "process": "Téléverser et analyser",
+      "review": "Vérifier"
+    },
     "uploading": "Téléversement",
     "processing": "Traitement…",
     "compressing": "Compression…",
@@ -559,6 +581,8 @@
     "batchTags": "Tags groupés",
     "batchTagsPlaceholder": "Appliquer des tags à tous les fichiers et dossiers…",
     "batchTagsHint": "Les tags saisis ici seront appliqués à chaque fichier et dossier de ce lot.",
+    "optionalSettings": "Paramètres facultatifs",
+    "tagCount": "{count, plural, =1 {# tag} other {# tags}}",
     "dropzoneDefault": "Glissez-déposez des fichiers ou dossiers, ou cliquez pour parcourir",
     "dropzoneActive": "Déposez les fichiers ou dossiers ici",
     "dropzoneHint": "Max {limit} MiB par fichier · Structure des dossiers préservée au dépôt",
@@ -573,13 +597,19 @@
     "fileReferenceLost": "Référence du fichier perdue. Ré-ajoutez le fichier pour reprendre.",
     "paused": "En pause",
     "threatDetected": "Menace détectée — fichier rejeté",
-    "threatDescription": "Ce fichier a été signalé comme malveillant par le scanner de virus et a été supprimé du stockage. Il ne peut pas être téléversé.",
+    "threatDescription": "L’analyse de sécurité a rejeté ce fichier et l’a supprimé du stockage. Il ne peut pas être téléversé.",
+    "threatReason": "Motif : {reason}",
     "pause": "Pause",
     "resume": "Reprendre",
     "retry": "Réessayer",
     "remove": "Retirer",
     "addToDraft": "Ajouter au brouillon ({count})",
     "addToDraftProgress": "Ajouter au brouillon ({count}/{total})",
+    "readyCount": "{ready} sur {total} prêts",
+    "failedCount": "{count, plural, =1 {# en échec} other {# en échec}}",
+    "removeFailed": "Retirer les fichiers en échec",
+    "finishBeforeDraft": "Les téléversements et les contrôles de sécurité doivent se terminer avant l'ajout au brouillon.",
+    "noReadyFiles": "Réessayez ou retirez les fichiers en échec pour continuer.",
     "addedToDraft": "{count, plural, =1 {# modification ajoutée} other {# modifications ajoutées}} au brouillon",
     "uploadsInProgress": "Téléversements en cours — attendez qu'ils se terminent",
     "scanningFolder": "Analyse du dossier…",
@@ -822,6 +852,12 @@
     "previewUnavailableTitle": "Aperçu non disponible"
   },
   "Viewers": {
+    "notebook": {
+      "title": "Notebook Jupyter",
+      "invalid": "Ce fichier n’est pas un notebook Jupyter valide.",
+      "empty": "Ce notebook ne contient aucune cellule.",
+      "imageOutput": "Résultat du notebook"
+    },
     "videoTitle": "Lecteur Vidéo",
     "videoNotSupported": "Votre navigateur ne supporte pas la balise vidéo.",
     "audioNotSupported": "Votre navigateur ne supporte pas l'élément audio.",
@@ -869,7 +905,9 @@
       "engineError": "Erreur du moteur Office",
       "initFailed": "Échec de l'initialisation : {message}",
       "configError": "Échec de la récupération de la configuration de l'éditeur : {message}",
-      "loadScriptError": "Échec du chargement du script de l'API Office"
+      "loadScriptError": "Échec du chargement du script de l'API Office",
+      "startupError": "Euro-Office n'a pas pu démarrer : {message}",
+      "readyTimeout": "Euro-Office met trop de temps à ouvrir ce document. Veuillez réessayer."
     },
     "retry": "Réessayer",
     "imageLoadFailed": "Cette image n'a pas pu être affichée. Elle n'a peut-être pas été téléchargée entièrement."
@@ -915,6 +953,7 @@
     "preview": "Aperçu",
     "item": "élément",
     "changesCount": "{count, plural, =0 {Aucun changement} one {1 changement} other {# changements}}",
+    "changes": "Modifications",
     "expiredFile": "Le fichier téléchargé a expiré",
     "expiresIn": "Expire dans {time}",
     "unableToPreview": "Impossible de charger l'aperçu",
@@ -1892,6 +1931,37 @@
       "start": "Commencer",
       "replay": "Revoir",
       "completed": "Terminé",
+      "progress": "{completed} tutoriels terminés sur {total}",
+      "searchPlaceholder": "Rechercher dans les guides et questions…",
+      "searchLabel": "Rechercher dans l'aide",
+      "noResultsTitle": "Aucune aide correspondante",
+      "noResultsDescription": "Essayez un terme plus général comme téléverser, visionneuse ou parcourir.",
+      "categories": {
+        "gettingStarted": "Bien démarrer",
+        "create": "Créer et contribuer",
+        "collaborate": "Collaborer et vérifier"
+      },
+      "categoryDescriptions": {
+        "gettingStarted": "Découvrez la bibliothèque et apprenez à vous repérer.",
+        "create": "Ajoutez, organisez et proposez des ressources pédagogiques.",
+        "collaborate": "Discutez, annotez et vérifiez les changements de la communauté."
+      },
+      "quickAnswers": "Réponses rapides",
+      "quickAnswersDescription": "Des indications courtes pour les difficultés les plus courantes.",
+      "faq": {
+        "find": {
+          "title": "Comment trouver rapidement un document ?",
+          "body": "Utilisez la recherche globale avec un titre, un nom de fichier, un tag ou une personne. Dans la bibliothèque, utilisez l'arborescence pour la structure et passez de la liste à la grille sans perdre votre emplacement."
+        },
+        "upload": {
+          "title": "Que se passe-t-il après le téléversement ?",
+          "body": "Le fichier est téléversé, contrôlé, puis placé dans votre brouillon. Vérifiez son titre et sa destination, ajoutez-le au brouillon, puis soumettez celui-ci lorsque vous êtes prêt à proposer le changement."
+        },
+        "viewer": {
+          "title": "Que faire lorsqu'un document ne s'ouvre pas ?",
+          "body": "Utilisez d'abord l'action Réessayer de la visionneuse. Pour les documents Office, l'éditeur retente automatiquement les démarrages transitoires. Si le problème persiste, téléchargez le fichier original et signalez le document depuis son menu d'actions."
+        }
+      },
       "resetAll": "Réinitialiser les tutoriels",
       "resetDone": "Tutoriels réinitialisés - les visites guidées réapparaîtront.",
       "empty": "Aucun tutoriel n'est disponible pour votre compte pour le moment."

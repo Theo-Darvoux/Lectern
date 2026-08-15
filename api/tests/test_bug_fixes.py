@@ -20,24 +20,33 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_delete_storage_objects_cas_uses_decrement_cas_ref() -> None:
-    """delete_storage_objects must use decrement_cas_ref (2-key Lua) for cas/ keys."""
+async def test_delete_storage_objects_rejects_opaque_cas_key() -> None:
+    """An opaque HMAC object ID must never be mistaken for the source SHA-256."""
     from app.workers.storage_ops import delete_storage_objects
 
     mock_redis = AsyncMock()
     ctx = {"redis": mock_redis}
 
-    mock_decrement = AsyncMock(return_value=1)  # ref still > 0, no S3 delete
-    # Patch at source so the local import inside the function picks up the mock.
-    with patch("app.core.cas.decrement_cas_ref", mock_decrement):
+    with pytest.raises(ExceptionGroup):
         await delete_storage_objects(ctx, ["cas/deadbeef"])
-
-    mock_decrement.assert_awaited_once_with(mock_redis, "deadbeef")
 
 
 @pytest.mark.asyncio
-async def test_delete_storage_objects_cas_deletes_s3_when_ref_reaches_zero() -> None:
-    """delete_storage_objects must delete the S3 object when decrement_cas_ref returns 0."""
+async def test_delete_storage_objects_cas_never_deletes_without_source_hash() -> None:
+    from app.workers.storage_ops import delete_storage_objects
+
+    mock_redis = AsyncMock()
+    ctx = {"redis": mock_redis}
+
+    mock_delete = AsyncMock()
+    with patch("app.workers.storage_ops.delete_object", mock_delete), pytest.raises(ExceptionGroup):
+        await delete_storage_objects(ctx, ["cas/deadbeef"])
+
+    mock_delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_storage_objects_reports_cas_rejection() -> None:
     from app.workers.storage_ops import delete_storage_objects
 
     mock_redis = AsyncMock()
@@ -45,26 +54,8 @@ async def test_delete_storage_objects_cas_deletes_s3_when_ref_reaches_zero() -> 
 
     mock_delete = AsyncMock()
     with (
-        patch("app.core.cas.decrement_cas_ref", AsyncMock(return_value=0)),
         patch("app.workers.storage_ops.delete_object", mock_delete),
-    ):
-        await delete_storage_objects(ctx, ["cas/deadbeef"])
-
-    mock_delete.assert_awaited_once_with("cas/deadbeef")
-
-
-@pytest.mark.asyncio
-async def test_delete_storage_objects_cas_skips_s3_on_decrement_error() -> None:
-    """delete_storage_objects must not delete from S3 when decrement_cas_ref errors (-1)."""
-    from app.workers.storage_ops import delete_storage_objects
-
-    mock_redis = AsyncMock()
-    ctx = {"redis": mock_redis}
-
-    mock_delete = AsyncMock()
-    with (
-        patch("app.core.cas.decrement_cas_ref", AsyncMock(return_value=-1)),
-        patch("app.workers.storage_ops.delete_object", mock_delete),
+        pytest.raises(ExceptionGroup, match="could not be deleted"),
     ):
         await delete_storage_objects(ctx, ["cas/deadbeef"])
 
@@ -81,7 +72,7 @@ async def test_delete_storage_objects_non_cas_deletes_directly() -> None:
 
     mock_delete = AsyncMock()
     with (
-        patch("app.core.cas.decrement_cas_ref", AsyncMock()) as mock_decrement,
+        patch("app.core.security.cas.decrement_cas_ref", AsyncMock()) as mock_decrement,
         patch("app.workers.storage_ops.delete_object", mock_delete),
     ):
         await delete_storage_objects(ctx, ["quarantine/user/upload/file.pdf"])
@@ -93,14 +84,38 @@ async def test_delete_storage_objects_non_cas_deletes_directly() -> None:
 @pytest.mark.asyncio
 async def test_decrement_cas_ref_returns_count() -> None:
     """decrement_cas_ref must return the new ref count, not None (was previously void)."""
-    from app.core.cas import decrement_cas_ref
+    from app.core.security.cas import decrement_cas_ref
 
     mock_redis = AsyncMock()
     mock_redis.eval = AsyncMock(return_value=2)  # Lua returns new count
 
-    result = await decrement_cas_ref(mock_redis, "a" * 64)
+    result = await decrement_cas_ref(
+        mock_redis,
+        "a" * 64,
+        operation_id="test-decrement-returns-count",
+    )
 
     assert result == 2, "decrement_cas_ref must return the Lua script's return value"
+
+
+@pytest.mark.asyncio
+async def test_decrement_cas_ref_preserves_physical_storage_usage() -> None:
+    """Dropping the last reference must not claim the S3 object was deleted."""
+    from app.core.security.cas import _LUA_CAS_DECR, decrement_cas_ref
+
+    mock_redis = AsyncMock()
+    mock_redis.eval = AsyncMock(return_value=0)
+
+    await decrement_cas_ref(
+        mock_redis,
+        "b" * 64,
+        operation_id="test-last-reference-release",
+    )
+
+    eval_args = mock_redis.eval.await_args.args
+    assert eval_args[1] == 2
+    assert "storage:total_usage_bytes" not in eval_args[2:]
+    assert "DECRBY" not in _LUA_CAS_DECR
 
 
 # ── Bug 2: Webhook dead-letter type mismatch ─────────────────────────────────
@@ -123,7 +138,8 @@ async def test_webhook_dlq_uses_worker_context() -> None:
     row.webhook_url = "https://example.com/hook"
     row.upload_id = upload_id
     row.status = "clean"
-    row.final_key = None
+    row.final_key = "cas/webhook-dlq"
+    row.cas_ref_count = 1
     row.sha256 = None
     row.mime_type = None
     row.size_bytes = None
@@ -135,19 +151,21 @@ async def test_webhook_dlq_uses_worker_context() -> None:
     ctx = {"db_sessionmaker": lambda: mock_session, "redis": AsyncMock()}
 
     with (
-        patch("app.workers.webhook_dispatch.validate_webhook_url", return_value=True),
-        patch("httpx.AsyncClient") as mock_client_cls,
+        patch(
+            "app.workers.webhook_dispatch.resolve_safe_url_async",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.workers.webhook_dispatch.post_pinned_https",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
         patch(
             "app.workers.upload.repository.UploadWorkerRepository.insert_dead_letter",
             mock_insert_dlq,
         ),
     ):
-        mock_http = AsyncMock()
-        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-        mock_http.__aexit__ = AsyncMock(return_value=False)
-        mock_http.post = AsyncMock(return_value=mock_response)
-        mock_client_cls.return_value = mock_http
-
         await dispatch_webhook(ctx, upload_id=upload_id, attempt=_MAX_ATTEMPTS)
 
     # insert_dead_letter must be called (repo was constructed correctly)
@@ -168,20 +186,24 @@ async def test_thumbnail_pdf_cleans_temp_png_on_image_error(tmp_path: Path) -> N
     actual_temp_png: Path | None = None
 
     # Ghostscript creates the temp_png file
-    async def fake_gs(*args, **kwargs):
+    async def fake_gs(cmd: list[str], **kwargs: object) -> MagicMock:
         nonlocal actual_temp_png
-        output_arg = next(a for a in args if a.startswith("-sOutputFile="))
+        output_arg = next(a for a in cmd if a.startswith("-sOutputFile="))
         actual_temp_png = Path(output_arg.split("=", 1)[1])
         proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b"", b""))
         proc.returncode = 0
+        proc.stdout = b""
+        proc.stderr = b""
         actual_temp_png.write_bytes(b"fakepng")
         return proc
 
     with (
-        patch("asyncio.create_subprocess_exec", side_effect=fake_gs),
         patch(
-            "app.workers.upload.stages.thumbnail._thumbnail_image",
+            "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+            side_effect=fake_gs,
+        ),
+        patch(
+            "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
             AsyncMock(side_effect=OSError("PIL failure")),
         ),
         pytest.raises(OSError),
@@ -202,18 +224,23 @@ async def test_thumbnail_video_cleans_temp_jpg_on_image_error(tmp_path: Path) ->
     input_vid = tmp_path / "in.mp4"
     input_vid.write_bytes(b"fakevideo")
     output_webp = tmp_path / "out.webp"
-    temp_jpg = output_webp.with_suffix(".jpg")
+    actual_temp_jpg: Path | None = None
 
-    async def fake_ffmpeg(*args, **kwargs):
+    async def fake_ffmpeg(cmd: list[str], **kwargs: object) -> MagicMock:
+        nonlocal actual_temp_jpg
+        actual_temp_jpg = Path(cmd[-1])
         proc = MagicMock()
-        proc.communicate = AsyncMock(return_value=(b"", b""))
         proc.returncode = 0
-        proc.wait = AsyncMock()
-        temp_jpg.write_bytes(b"fakejpg")
+        proc.stdout = b""
+        proc.stderr = b""
+        actual_temp_jpg.write_bytes(b"fakejpg")
         return proc
 
     with (
-        patch("asyncio.create_subprocess_exec", side_effect=fake_ffmpeg),
+        patch(
+            "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+            side_effect=fake_ffmpeg,
+        ),
         patch(
             "app.workers.upload.stages.thumbnail._thumbnail_image",
             AsyncMock(side_effect=OSError("PIL failure")),
@@ -222,7 +249,10 @@ async def test_thumbnail_video_cleans_temp_jpg_on_image_error(tmp_path: Path) ->
     ):
         await _thumbnail_video(input_vid, output_webp, (320, 240), 80)
 
-    assert not temp_jpg.exists(), "temp_jpg must be cleaned up even after _thumbnail_image error"
+    assert actual_temp_jpg is not None
+    assert not actual_temp_jpg.exists(), (
+        "private temp_jpg must be cleaned up even after _thumbnail_image error"
+    )
 
 
 # ── Bug 4: redis.KEYS → scan_iter ────────────────────────────────────────────
@@ -282,7 +312,6 @@ async def test_reset_daily_views_uses_ctx_session_factory() -> None:
     mock_result = MagicMock(rowcount=3)
     mock_session.execute = AsyncMock(return_value=mock_result)
     mock_session.commit = AsyncMock()
-
     mock_factory = MagicMock(return_value=mock_session)
     ctx = {"db_sessionmaker": mock_factory}
 
@@ -331,6 +360,10 @@ async def test_year_rollover_uses_ctx_session_factory() -> None:
         )
     )
     mock_session.commit = AsyncMock()
+    nested = MagicMock()
+    nested.__aenter__ = AsyncMock(return_value=nested)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=nested)
 
     mock_factory = MagicMock(return_value=mock_session)
     ctx = {"db_sessionmaker": mock_factory}
@@ -373,7 +406,7 @@ async def test_reset_daily_views_creates_engine_when_ctx_missing() -> None:
 
 def test_build_redis_settings_has_resilient_timeouts() -> None:
     """build_redis_settings must set conn_timeout >= 10 and retry_on_timeout=True."""
-    from app.core.redis import build_redis_settings
+    from app.core.database.redis import build_redis_settings
 
     rs = build_redis_settings()
     assert rs.conn_timeout >= 10, "conn_timeout must be >= 10s to survive BGSAVE latency spikes"
@@ -387,7 +420,7 @@ def test_build_redis_settings_retry_on_error_includes_transient() -> None:
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from app.core.redis import build_redis_settings
+    from app.core.database.redis import build_redis_settings
 
     rs = build_redis_settings()
     assert rs.retry_on_error is not None
@@ -399,7 +432,7 @@ def test_build_redis_settings_retry_on_error_includes_transient() -> None:
 
 def test_worker_settings_use_resilient_redis_settings() -> None:
     """All three WorkerSettings classes must use build_redis_settings() (not bare from_dsn)."""
-    from app.core.redis import build_redis_settings
+    from app.core.database.redis import build_redis_settings
     from app.workers.settings import (
         UploadFastWorkerSettings,
         UploadSlowWorkerSettings,
@@ -417,7 +450,7 @@ def test_worker_settings_use_resilient_redis_settings() -> None:
 
 def test_redis_client_has_retry_on_timeout() -> None:
     """The global redis_client must be created with retry_on_timeout=True."""
-    from app.core.redis import redis_client
+    from app.core.database.redis import redis_client
 
     # redis-py exposes retry_on_timeout via the connection pool's connection_kwargs
     kwargs = redis_client.connection_pool.connection_kwargs

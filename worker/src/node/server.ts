@@ -3,9 +3,9 @@
  *
  * The off-Cloudflare equivalent of src/index.ts. Same {@link handleRequest}
  * logic, but the object source is an S3 client (SeaweedFS/Garage/RustFS) and
- * there is no in-process edge cache — an nginx `proxy_cache` location in front
- * of this service replaces Cloudflare's `caches.default` (see
- * infra/nginx + compose). It honours the same WORKER_ZIP_HMAC_SECRET token
+ * there is no in-process edge cache. Public branding may be cached by nginx,
+ * but authenticated file/ZIP requests must reach this handler so the HMAC is
+ * verified on every request (see infra/nginx/worker-cache.conf). It honours the same WORKER_ZIP_HMAC_SECRET token
  * contract as the API, so the API only needs WORKER_ZIP_URL pointed here.
  *
  * Config (env):
@@ -33,11 +33,8 @@ const REGION = process.env.S3_REGION ?? "us-east-1";
 const USE_SSL = (process.env.S3_USE_SSL ?? "false").toLowerCase() === "true";
 const ENDPOINT_HOST = process.env.S3_ENDPOINT ?? "localhost:8333";
 
-if (!SECRET) {
-  console.warn(
-    "[selfhost-worker] WORKER_ZIP_HMAC_SECRET is empty — all /file and /zip " +
-      "requests will fail token verification.",
-  );
+if (Buffer.byteLength(SECRET, "utf8") < 32) {
+  throw new Error("WORKER_ZIP_HMAC_SECRET must contain at least 32 bytes");
 }
 
 const client = new S3Client({

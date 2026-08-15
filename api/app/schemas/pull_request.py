@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime
 from typing import Annotated, Literal
@@ -5,8 +6,9 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, Discriminator, Field, Tag, field_validator
 
 from app.core.sanitization import NameStr, SanitizedStr, strip_null_chars
+from app.models.directory import DirectoryType
 from app.models.security import VirusScanResult
-from app.schemas.user import UserOut
+from app.schemas.user import PublicUserBrief
 
 # ---------------------------------------------------------------------------
 # Shared validation constants
@@ -24,7 +26,7 @@ ALLOWED_MATERIAL_TYPES = {
     "other",
     "qcm",
 }
-ALLOWED_DIRECTORY_TYPES = {"folder", "course", "year", "semester", "other"}
+ALLOWED_DIRECTORY_TYPES = {member.value for member in DirectoryType}
 MAX_TAGS = 20
 MAX_TAG_LENGTH = 20
 MAX_METADATA_KEYS = 20
@@ -70,6 +72,20 @@ def _validate_file_key(file_key: str | None) -> str | None:
     if ".." in file_key or "\x00" in file_key:
         raise ValueError("Invalid file_key")
     return file_key
+
+
+def _validate_directory_name(name: str | None) -> str | None:
+    if name is None:
+        return None
+    if "/" in name or "\\" in name or "\x00" in name:
+        raise ValueError("Directory name must be a single path component")
+
+    component = name.strip().rstrip(" .")
+    if component in {"", ".", ".."}:
+        raise ValueError("Invalid directory path component")
+    if re.match(r"^[A-Za-z]:", component):
+        raise ValueError("Directory name cannot be a drive prefix")
+    return name
 
 
 def _validate_file_name(file_name: str | None) -> str | None:
@@ -243,6 +259,11 @@ class CreateDirectoryOp(BaseModel):
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return _validate_directory_name(v) or v
+
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
@@ -269,6 +290,11 @@ class EditDirectoryOp(BaseModel):
     description: SanitizedStr | None = Field(None, max_length=1000)
     tags: list[str] | None = None
     metadata: dict[str, object] | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str | None) -> str | None:
+        return _validate_directory_name(v)
 
     @field_validator("type")
     @classmethod
@@ -366,7 +392,7 @@ class PullRequestOut(BaseModel):
     reviewed_by: uuid.UUID | None
     virus_scan_result: VirusScanResult
     rejection_reason: str | None = None
-    author: UserOut | None
+    author: PublicUserBrief | None
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None = None
@@ -405,6 +431,6 @@ class PRCommentOut(BaseModel):
     parent_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
-    author: UserOut | None
+    author: PublicUserBrief | None
 
     model_config = {"from_attributes": True}

@@ -18,7 +18,7 @@ interface GenericViewerProps {
  */
 export function GenericViewer({ materialId, fileName, fileKey }: GenericViewerProps) {
     const t = useTranslations("Preview");
-    const { config } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
     const { downloadMaterial, isDownloading } = useDownload();
 
     return (

@@ -19,7 +19,7 @@ from app.models.user import User, UserRole
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -81,7 +81,7 @@ async def test_quota_check_falls_back_to_db_on_redis_failure(mock_redis: AsyncMo
     mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
     mock_session_ctx.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("app.core.database.async_session_factory", return_value=mock_session_ctx):
+    with patch("app.core.database.database.async_session_factory", return_value=mock_session_ctx):
         # Should not raise
         await _check_pending_cap(user_id, mock_redis, mock_db)
 
@@ -89,7 +89,7 @@ async def test_quota_check_falls_back_to_db_on_redis_failure(mock_redis: AsyncMo
 @pytest.mark.asyncio
 async def test_quota_check_db_fallback_enforces_cap(mock_redis: AsyncMock):
     """On Redis failure + DB shows cap exceeded, upload is rejected."""
-    from app.core.exceptions import BadRequestError
+    from app.core.common.exceptions import BadRequestError
     from app.routers.upload.helpers import MAX_PENDING_UPLOADS, _check_pending_cap
 
     user_id = str(uuid.uuid4())
@@ -102,7 +102,7 @@ async def test_quota_check_db_fallback_enforces_cap(mock_redis: AsyncMock):
     mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
     mock_session_ctx.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("app.core.database.async_session_factory", return_value=mock_session_ctx):
+    with patch("app.core.database.database.async_session_factory", return_value=mock_session_ctx):
         with pytest.raises(BadRequestError):
             await _check_pending_cap(user_id, mock_redis, mock_db)
 
@@ -124,25 +124,33 @@ def test_update_db_status_accepts_cas_fields():
 @pytest.mark.asyncio
 async def test_increment_cas_ref_returns_count():
     """_increment_cas_ref returns the new ref count (int)."""
-    from app.core.cas import increment_cas_ref as _increment_cas_ref
+    from app.core.security.cas import increment_cas_ref as _increment_cas_ref
 
     mock_redis = AsyncMock()
     mock_redis.eval = AsyncMock(return_value=1)
 
-    count = await _increment_cas_ref(mock_redis, "a" * 64)
+    count = await _increment_cas_ref(
+        mock_redis,
+        "a" * 64,
+        operation_id="test-increment-returns-count",
+    )
     assert count == 1
 
 
 @pytest.mark.asyncio
-async def test_increment_cas_ref_returns_0_on_error():
-    """_increment_cas_ref returns 0 on Redis error (fail-open)."""
-    from app.core.cas import increment_cas_ref as _increment_cas_ref
+async def test_increment_cas_ref_fails_closed_on_error():
+    """Reference tracking failure must not be reported as a valid count."""
+    from app.core.security.cas import CasReferenceError, increment_cas_ref
 
     mock_redis = AsyncMock()
     mock_redis.eval = AsyncMock(side_effect=ConnectionError("Redis down"))
 
-    count = await _increment_cas_ref(mock_redis, "a" * 64)
-    assert count == 0
+    with pytest.raises(CasReferenceError):
+        await increment_cas_ref(
+            mock_redis,
+            "a" * 64,
+            operation_id="test-increment-fails-closed",
+        )
 
 
 # ── 3.10: Webhook retry ───────────────────────────────────────────────────────
@@ -174,6 +182,7 @@ async def test_webhook_reenqueues_on_transient_failure():
             "upload_id",
             "status",
             "final_key",
+            "cas_ref_count",
             "sha256",
             "mime_type",
             "size_bytes",
@@ -183,6 +192,7 @@ async def test_webhook_reenqueues_on_transient_failure():
     row.upload_id = upload_id
     row.status = "clean"
     row.final_key = "cas/abc"
+    row.cas_ref_count = 1
     row.sha256 = "a" * 64
     row.mime_type = "application/pdf"
     row.size_bytes = 1024
@@ -201,15 +211,17 @@ async def test_webhook_reenqueues_on_transient_failure():
     mock_response.status_code = 503
 
     with (
-        patch("app.workers.webhook_dispatch.validate_webhook_url", return_value=True),
-        patch("httpx.AsyncClient") as mock_client_cls,
+        patch(
+            "app.workers.webhook_dispatch.resolve_safe_url_async",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.workers.webhook_dispatch.post_pinned_https",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
     ):
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client_cls.return_value = mock_client
-
         await dispatch_webhook(ctx, upload_id=upload_id, attempt=1)
 
     # Should have re-enqueued with attempt=2
@@ -237,6 +249,7 @@ async def test_webhook_inserts_dlq_after_max_attempts():
             "upload_id",
             "status",
             "final_key",
+            "cas_ref_count",
             "sha256",
             "mime_type",
             "size_bytes",
@@ -245,7 +258,8 @@ async def test_webhook_inserts_dlq_after_max_attempts():
     row.webhook_url = "https://example.com/webhook"
     row.upload_id = upload_id
     row.status = "clean"
-    row.final_key = None
+    row.final_key = "cas/webhook-dlq"
+    row.cas_ref_count = 1
     row.sha256 = None
     row.mime_type = None
     row.size_bytes = None
@@ -266,19 +280,21 @@ async def test_webhook_inserts_dlq_after_max_attempts():
     mock_response.status_code = 503
 
     with (
-        patch("app.workers.webhook_dispatch.validate_webhook_url", return_value=True),
-        patch("httpx.AsyncClient") as mock_client_cls,
+        patch(
+            "app.workers.webhook_dispatch.resolve_safe_url_async",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.workers.webhook_dispatch.post_pinned_https",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
         patch(
             "app.workers.upload.repository.UploadWorkerRepository.insert_dead_letter",
             mock_insert_dlq,
         ),
     ):
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client_cls.return_value = mock_client
-
         # Final attempt
         await dispatch_webhook(ctx, upload_id=upload_id, attempt=_MAX_ATTEMPTS)
 
@@ -311,7 +327,7 @@ async def test_edit_material_conflict_raises_on_version_lock_mismatch(
     db_session: AsyncSession,
 ):
     """_exec_edit_material raises ConflictError when version_lock mismatches."""
-    from app.core.exceptions import ConflictError
+    from app.core.common.exceptions import ConflictError
     from app.models.directory import Directory
     from app.models.material import Material, MaterialVersion
     from app.models.security import VirusScanResult

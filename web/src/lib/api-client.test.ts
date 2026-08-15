@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { apiRequest, apiFetchRetry, isRetriableError, getClientId, ApiError } from "./api-client";
+import { apiRequest, apiFetchRetry, isRetriableError, getClientId, getMaterialFileUrl, invalidateMaterialFileUrl, ApiError } from "./api-client";
 import { getAccessToken, setAccessToken, clearAccessToken } from "./auth-tokens";
 
 // Mock auth-tokens
@@ -150,6 +150,35 @@ describe("api-client", () => {
       expect(opts?.signal).toBeInstanceOf(AbortSignal);
     });
 
+    it("gives a 401 retry a fresh timeout signal", async () => {
+      vi.mocked(getAccessToken).mockReturnValue("old-token");
+
+      vi.mocked(fetch)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: "new-token" }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true }),
+        } as Response);
+
+      await apiRequest("/test", { timeoutMs: 5000 });
+
+      const initialSignal = vi.mocked(fetch).mock.calls[0][1]?.signal;
+      const retrySignal = vi.mocked(fetch).mock.calls[2][1]?.signal;
+
+      expect(initialSignal).toBeInstanceOf(AbortSignal);
+      expect(retrySignal).toBeInstanceOf(AbortSignal);
+      expect(retrySignal).not.toBe(initialSignal);
+    });
+
     it("does not attach a signal when neither timeoutMs nor signal is provided", async () => {
       vi.mocked(fetch).mockResolvedValue(jsonResponse(200, {}));
 
@@ -157,6 +186,41 @@ describe("api-client", () => {
 
       const opts = vi.mocked(fetch).mock.calls[0][1];
       expect(opts?.signal).toBeUndefined();
+    });
+
+    it("dispatches lectern-api-reachable on successful response", async () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(200, {}));
+
+      await apiRequest("/test");
+
+      expect(dispatchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "lectern-api-reachable" }),
+      );
+    });
+
+    it("dispatches lectern-api-unreachable on network failure", async () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      vi.mocked(fetch).mockRejectedValue(new TypeError("Failed to fetch"));
+
+      await expect(apiRequest("/test")).rejects.toThrow(TypeError);
+
+      expect(dispatchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "lectern-api-unreachable" }),
+      );
+    });
+
+    it("does not dispatch lectern-api-unreachable when request is aborted", async () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      const controller = new AbortController();
+      controller.abort();
+      vi.mocked(fetch).mockRejectedValue(new DOMException("The user aborted a request.", "AbortError"));
+
+      await expect(apiRequest("/test", { signal: controller.signal })).rejects.toThrow(DOMException);
+
+      expect(dispatchSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "lectern-api-unreachable" }),
+      );
     });
   });
 
@@ -247,6 +311,22 @@ describe("api-client", () => {
         apiFetchRetry("/x", { retries: 3, retryBaseDelayMs: 0, signal: controller.signal }),
       ).rejects.toThrow();
       expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("material file URL cache", () => {
+    it("reuses signed URLs until explicitly invalidated", async () => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(jsonResponse(200, { url: "https://cdn.test/first" }))
+        .mockResolvedValueOnce(jsonResponse(200, { url: "https://cdn.test/second" }));
+
+      await expect(getMaterialFileUrl("cache-test-material")).resolves.toBe("https://cdn.test/first");
+      await expect(getMaterialFileUrl("cache-test-material")).resolves.toBe("https://cdn.test/first");
+      expect(fetch).toHaveBeenCalledOnce();
+
+      invalidateMaterialFileUrl("cache-test-material");
+      await expect(getMaterialFileUrl("cache-test-material")).resolves.toBe("https://cdn.test/second");
+      expect(fetch).toHaveBeenCalledTimes(2);
     });
   });
 });

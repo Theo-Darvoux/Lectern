@@ -13,15 +13,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pikepdf
 import pytest
+from PIL import Image
 
-from app.config import settings
-from app.core.file_security import (
+from app.core.security.file_security import (
     CompressResultPath,
     SvgSecurityError,
-    _gzip_compress_path,
-    _recompress_zip_path,
     compress_file_path,
     strip_metadata_file,
+)
+from app.core.security.file_security._zip import (
+    _gzip_compress_path,
+    _recompress_zip_path,
+    get_uncompressed_size,
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -68,6 +71,23 @@ def _make_zip(tmp_path: Path, entries: dict[str, bytes]) -> Path:
     return p
 
 
+def _make_animated_gif(frame_count: int, size: tuple[int, int] = (64, 64)) -> bytes:
+    frames = [
+        Image.new("RGB", size, (index * 31 % 256, index * 47 % 256, index * 67 % 256))
+        for index in range(frame_count)
+    ]
+    output = BytesIO()
+    frames[0].save(
+        output,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=10,
+        optimize=False,
+    )
+    return output.getvalue()
+
+
 # ── strip_metadata_file dispatcher ───────────────────────────────────────────
 
 
@@ -82,7 +102,7 @@ class TestStripMetadataFile:
         clean_path = tmp_path / "clean.jpg"
         clean_path.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 80)
 
-        with patch("app.core.file_security.strip._strip_image_from_path") as m:
+        with patch("app.core.security.file_security.strip._strip_image_from_path") as m:
             m.return_value = clean_path
             result = await strip_metadata_file(img_path, "image/jpeg")
         assert result == clean_path
@@ -95,7 +115,7 @@ class TestStripMetadataFile:
         clean_path = tmp_path / "clean.pdf"
         clean_path.write_bytes(b"%PDF-1.4 stripped")
 
-        with patch("app.core.file_security.strip._strip_pdf_from_path") as m:
+        with patch("app.core.security.file_security.strip._strip_pdf_from_path") as m:
             m.return_value = clean_path
             result = await strip_metadata_file(pdf_path, "application/pdf")
         assert result == clean_path
@@ -109,7 +129,7 @@ class TestStripMetadataFile:
         clean_path.write_bytes(b"\x00\x00\x00\x08ftypisom" + b"\x00" * 15)
 
         with patch(
-            "app.core.file_security.strip._strip_video_from_path",
+            "app.core.security.file_security.strip._strip_video_from_path",
             new_callable=AsyncMock,
             return_value=clean_path,
         ):
@@ -124,7 +144,7 @@ class TestStripMetadataFile:
         clean_path = tmp_path / "clean.mp3"
         clean_path.write_bytes(b"ID3" + b"\x00" * 30)
 
-        with patch("app.core.file_security.strip._strip_audio_from_path") as m:
+        with patch("app.core.security.file_security.strip._strip_audio_from_path") as m:
             m.return_value = clean_path
             result = await strip_metadata_file(mp3_path, "audio/mpeg")
         assert result == clean_path
@@ -138,7 +158,7 @@ class TestStripMetadataFile:
         clean_path.write_bytes(b"\xd0\xcf\x11\xe0" + b"\x00" * 80)
 
         with patch(
-            "app.core.file_security.strip._strip_ole2_from_path",
+            "app.core.security.file_security.strip._strip_ole2_from_path",
             new_callable=AsyncMock,
             return_value=clean_path,
         ):
@@ -155,7 +175,7 @@ class TestStripMetadataFile:
         clean_path.write_bytes(b"PK\x03\x04" + b"\x00" * 80)
 
         with patch(
-            "app.core.file_security.strip._strip_ooxml_from_path",
+            "app.core.security.file_security.strip._strip_ooxml_from_path",
             new_callable=AsyncMock,
             return_value=clean_path,
         ):
@@ -179,12 +199,28 @@ class TestStripMetadataFile:
 
         with (
             patch(
-                "app.core.file_security.strip._strip_image_from_path",
+                "app.core.security.file_security.strip._strip_image_from_path",
                 side_effect=RuntimeError("Pillow crashed"),
             ),
             pytest.raises(ValueError, match="sanitize"),
         ):
             await strip_metadata_file(img_path, "image/png")
+
+    @pytest.mark.asyncio
+    async def test_office_runtime_error_fails_closed(self, tmp_path):
+        docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        docx_path = tmp_path / "broken.docx"
+        docx_path.write_bytes(b"PK\x03\x04")
+
+        with (
+            patch(
+                "app.core.security.file_security.strip._strip_ooxml_from_path",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("processor unavailable"),
+            ),
+            pytest.raises(ValueError, match="Failed to sanitize"),
+        ):
+            await strip_metadata_file(docx_path, docx_mime)
 
     @pytest.mark.asyncio
     async def test_value_error_propagates(self, tmp_path):
@@ -194,7 +230,7 @@ class TestStripMetadataFile:
 
         with (
             patch(
-                "app.core.file_security.strip._strip_ole2_from_path",
+                "app.core.security.file_security.strip._strip_ole2_from_path",
                 new_callable=AsyncMock,
                 side_effect=ValueError("Auto-exec macro"),
             ),
@@ -211,7 +247,7 @@ class TestStripPdfFromPath:
 
     def test_removes_open_action(self, tmp_path):
         """_strip_pdf_from_path removes /OpenAction from the catalog."""
-        from app.core.file_security import _strip_pdf_from_path
+        from app.core.security.file_security._pdf import _strip_pdf_from_path
 
         pdf_path = _make_minimal_pdf(tmp_path)
 
@@ -228,9 +264,36 @@ class TestStripPdfFromPath:
         with pikepdf.open(str(clean)) as pdf:
             assert "/OpenAction" not in pdf.Root
 
+    def test_removes_annotation_actions(self, tmp_path):
+        from app.core.security.file_security._pdf import _strip_pdf_from_path
+
+        pdf_path = _make_minimal_pdf(tmp_path)
+        with pikepdf.open(str(pdf_path), allow_overwriting_input=True) as pdf:
+            annotation = pikepdf.Dictionary(
+                Type=pikepdf.Name("/Annot"),
+                Subtype=pikepdf.Name("/Text"),
+                Rect=pikepdf.Array([0, 0, 10, 10]),
+                A=pikepdf.Dictionary(
+                    S=pikepdf.Name("/JavaScript"), JS=pikepdf.String("app.alert(1)")
+                ),
+                AA=pikepdf.Dictionary(
+                    E=pikepdf.Dictionary(
+                        S=pikepdf.Name("/JavaScript"), JS=pikepdf.String("app.alert(2)")
+                    )
+                ),
+            )
+            pdf.pages[0]["/Annots"] = pikepdf.Array([pdf.make_indirect(annotation)])
+            pdf.save(str(pdf_path))
+
+        clean = _strip_pdf_from_path(pdf_path)
+        with pikepdf.open(str(clean)) as pdf:
+            saved = pdf.pages[0]["/Annots"][0]
+            assert "/A" not in saved
+            assert "/AA" not in saved
+
     def test_removes_embedded_files(self, tmp_path):
         """_strip_pdf_from_path removes /EmbeddedFiles from Names tree."""
-        from app.core.file_security import _strip_pdf_from_path
+        from app.core.security.file_security._pdf import _strip_pdf_from_path
 
         pdf_path = _make_minimal_pdf(tmp_path)
 
@@ -250,21 +313,20 @@ class TestStripPdfFromPath:
 
     def test_clean_pdf_remains_valid(self, tmp_path):
         """_strip_pdf_from_path on a clean PDF produces a readable output."""
-        from app.core.file_security import _strip_pdf_from_path
+        from app.core.security.file_security._pdf import _strip_pdf_from_path
 
         pdf_path = _make_minimal_pdf(tmp_path)
         clean = _strip_pdf_from_path(pdf_path)
         with pikepdf.open(str(clean)) as pdf:
             assert len(pdf.pages) == 1
 
-    def test_corrupt_pdf_returns_original(self, tmp_path):
-        """_strip_pdf_from_path fails open on corrupt input."""
-        from app.core.file_security import _strip_pdf_from_path
+    def test_corrupt_pdf_fails_closed(self, tmp_path):
+        from app.core.security.file_security._pdf import _strip_pdf_from_path
 
         bad = tmp_path / "bad.pdf"
         bad.write_bytes(b"not a pdf at all")
-        result = _strip_pdf_from_path(bad)
-        assert result == bad  # returned original path unchanged
+        with pytest.raises(ValueError, match="sanitize"):
+            _strip_pdf_from_path(bad)
 
 
 # ── _gzip_compress_path ──────────────────────────────────────────────────────
@@ -297,12 +359,22 @@ class TestGzipCompressPath:
         assert result.exists()
 
     def test_cleanup_on_exception(self, tmp_path):
-        """Temp file is cleaned up when an exception occurs mid-compression."""
         src = tmp_path / "src.txt"
         src.write_bytes(b"data " * 100)
 
-        with patch("gzip.open", side_effect=OSError("disk full")), pytest.raises(OSError):
+        output = tmp_path / "partial.gz"
+
+        with (
+            patch(
+                "app.core.security.file_security._zip._make_temp_path",
+                return_value=output,
+            ),
+            patch("gzip.GzipFile", side_effect=OSError("disk full")),
+            pytest.raises(OSError),
+        ):
             _gzip_compress_path(src)
+
+        assert not output.exists()
 
 
 # ── _recompress_zip_path ─────────────────────────────────────────────────────
@@ -341,6 +413,8 @@ class TestRecompressZipPath:
         large_info = MagicMock()
         large_info.filename = "big.bin"
         large_info.file_size = 201 * 1024 * 1024
+        large_info.compress_size = 1
+        large_info.flag_bits = 0
         large_info.date_time = (2024, 1, 1, 0, 0, 0)
 
         with patch("zipfile.ZipFile.infolist", return_value=[large_info]):
@@ -363,6 +437,22 @@ class TestRecompressZipPath:
             with pytest.raises(ValueError, match="too large"):
                 _recompress_zip_path(src)
 
+    def test_excessive_entry_count_is_rejected(self, tmp_path):
+        src = _make_zip(tmp_path, {"dummy.txt": b"x"})
+
+        with patch("zipfile.ZipFile.infolist", return_value=[MagicMock()] * 10_001):
+            with pytest.raises(ValueError, match="too many entries"):
+                _recompress_zip_path(src)
+
+    def test_uncompressed_size_propagates_entry_count_violation(self, tmp_path):
+        src = _make_zip(tmp_path, {"one.txt": b"1", "two.txt": b"2"})
+
+        with (
+            patch("app.core.security.file_security._zip._ZIP_MAX_ENTRIES", 1),
+            pytest.raises(ValueError, match="too many entries"),
+        ):
+            get_uncompressed_size(src)
+
     def test_invalid_zip_raises(self, tmp_path):
         """Invalid ZIP input raises BadZipFile."""
         bad = tmp_path / "notazip.bin"
@@ -382,6 +472,29 @@ class TestRecompressZipPath:
         # Either original or recompressed - must not crash
         assert result.exists()
 
+    def test_embedded_animation_output_frame_count_is_capped(self):
+        from app.core.security.file_security._zip import _compress_zip_image_entry
+
+        source = _make_animated_gif(frame_count=8)
+
+        with patch("app.core.security.file_security._zip._GIF_MAX_FRAMES", 3):
+            compressed, _ = _compress_zip_image_entry(source, "word/media/animation.gif")
+
+        with Image.open(BytesIO(compressed)) as result:
+            assert result.n_frames <= 3
+
+    def test_embedded_animation_over_cumulative_pixel_budget_is_rejected(self):
+        from app.core.security.file_security._zip import _compress_zip_image_entry
+
+        source = _make_animated_gif(frame_count=3)
+
+        with (
+            patch("app.core.security.file_security._zip._GIF_MAX_FRAMES", 2),
+            patch("app.core.security.file_security._zip.MAX_GIF_TOTAL_PIXELS", 5_000),
+            pytest.raises(ValueError, match="cumulative pixel budget"),
+        ):
+            _compress_zip_image_entry(source, "word/media/animation.gif")
+
 
 # ── compress_file_path dispatcher ────────────────────────────────────────────
 
@@ -398,7 +511,7 @@ class TestCompressFilePath:
         smaller.write_bytes(b"%PDF-1.4 smaller")
 
         with patch(
-            "app.core.file_security.compress._compress_pdf_path",
+            "app.core.security.file_security.compress._compress_pdf_path",
             new_callable=AsyncMock,
             return_value=smaller,
         ):
@@ -418,7 +531,7 @@ class TestCompressFilePath:
         small.write_bytes(b"\x00\x00\x00\x08ftypisom" + b"\x00" * 30)
 
         with patch(
-            "app.core.file_security._compress_video_path",
+            "app.core.security.file_security.compress._compress_video_path",
             new_callable=AsyncMock,
             return_value=small,
         ):
@@ -428,7 +541,7 @@ class TestCompressFilePath:
 
     @pytest.mark.asyncio
     async def test_wav_dispatch_and_mime_change(self, tmp_path):
-        """Dispatches audio/wav to _convert_to_opus_path; mime_type updates to audio/webm."""
+        """Dispatches audio/wav to _convert_to_opus_path; MIME matches its Ogg container."""
         src = tmp_path / "audio.wav"
         # Create file larger than 10 KB compression threshold
         src.write_bytes(b"RIFF" + b"\x00" * (11 * 1024))
@@ -436,12 +549,12 @@ class TestCompressFilePath:
         opus.write_bytes(b"Opus" + b"\x00" * 30)
 
         with patch(
-            "app.core.file_security.compress._convert_to_opus_path",
+            "app.core.security.file_security.compress._convert_to_opus_path",
             new_callable=AsyncMock,
             return_value=opus,
         ):
             result = await compress_file_path(src, "audio/wav")
-        assert result.mime_type == "audio/webm"
+        assert result.mime_type == "audio/ogg"
 
     @pytest.mark.asyncio
     async def test_wav_no_conversion_keeps_mime(self, tmp_path):
@@ -451,7 +564,7 @@ class TestCompressFilePath:
         src.write_bytes(b"RIFF" + b"\x00" * (11 * 1024))
 
         with patch(
-            "app.core.file_security._convert_to_opus_path",
+            "app.core.security.file_security.compress._convert_to_opus_path",
             new_callable=AsyncMock,
             return_value=src,  # returns same path = no conversion
         ):
@@ -531,8 +644,8 @@ class TestCompressFilePath:
         small.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 50)
 
         with patch(
-            "app.core.file_security.compress._compress_image_path",
-            return_value=small,
+            "app.core.security.file_security.compress._compress_image_path",
+            return_value=(small, "image/webp"),
         ):
             result = await compress_file_path(src, "image/jpeg", "photo.jpg")
         assert result.path == small
@@ -546,7 +659,7 @@ class TestCompressFilePath:
         src.write_bytes(b"%PDF some content")
 
         with patch(
-            "app.core.file_security._compress_pdf_path",
+            "app.core.security.file_security.compress._compress_pdf_path",
             new_callable=AsyncMock,
             side_effect=RuntimeError("GS crashed"),
         ):
@@ -576,8 +689,8 @@ class TestScannerPathBased:
     @pytest.mark.asyncio
     async def test_scan_file_path_yara_threat_raises(self, tmp_path):
         """scan_file_path raises BadRequestError when YARA detects a threat."""
-        from app.core.exceptions import BadRequestError
-        from app.core.scanner import MalwareScanner
+        from app.core.common.exceptions import BadRequestError
+        from app.core.security.scanner import MalwareScanner
 
         scanner = MalwareScanner()
         scanner._scan_yara_path = AsyncMock(return_value="EICAR_test_file")  # type: ignore[method-assign]
@@ -586,32 +699,14 @@ class TestScannerPathBased:
         test_file = tmp_path / "malware.bin"
         test_file.write_bytes(b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR")
 
-        with patch.object(settings, "bazaar_async_enabled", False):
-            with pytest.raises(BadRequestError, match="ERR_MALWARE_DETECTED"):
-                await scanner.scan_file_path(test_file, "malware.bin")
-
-    @pytest.mark.asyncio
-    async def test_scan_file_path_bazaar_threat_raises(self, tmp_path):
-        """scan_file_path raises BadRequestError when MalwareBazaar returns a hit."""
-        from app.core.exceptions import BadRequestError
-        from app.core.scanner import MalwareScanner
-
-        scanner = MalwareScanner()
-        scanner._scan_yara_path = AsyncMock(return_value=None)  # type: ignore[method-assign]
-        scanner.check_malwarebazaar = AsyncMock(return_value="Emotet")  # type: ignore[method-assign]
-
-        test_file = tmp_path / "emotet.doc"
-        test_file.write_bytes(b"\xd0\xcf\x11\xe0" + b"\x00" * 50)
-
-        with patch.object(settings, "bazaar_async_enabled", False):
-            with pytest.raises(BadRequestError, match="ERR_MALWARE_DETECTED"):
-                await scanner.scan_file_path(test_file, "emotet.doc")
+        with pytest.raises(BadRequestError, match="ERR_MALWARE_DETECTED"):
+            await scanner.scan_file_path(test_file, "malware.bin")
 
     @pytest.mark.asyncio
     async def test_scan_file_path_yara_error_fails_closed(self, tmp_path):
         """scan_file_path raises ServiceUnavailableError when YARA scan fails."""
-        from app.core.exceptions import ServiceUnavailableError
-        from app.core.scanner import MalwareScanner
+        from app.core.common.exceptions import ServiceUnavailableError
+        from app.core.security.scanner import MalwareScanner
 
         scanner = MalwareScanner()
         scanner._scan_yara_path = AsyncMock(side_effect=RuntimeError("YARA crashed"))  # type: ignore[method-assign]
@@ -620,52 +715,13 @@ class TestScannerPathBased:
         test_file = tmp_path / "file.bin"
         test_file.write_bytes(b"content")
 
-        with patch.object(settings, "bazaar_async_enabled", False):
-            with pytest.raises(ServiceUnavailableError, match="fail-closed"):
-                await scanner.scan_file_path(test_file, "file.bin")
-
-    @pytest.mark.asyncio
-    async def test_scan_file_path_bazaar_error_fails_closed(self, tmp_path):
-        """scan_file_path raises ServiceUnavailableError when MalwareBazaar fails."""
-        from app.core.exceptions import ServiceUnavailableError
-        from app.core.scanner import MalwareScanner
-
-        scanner = MalwareScanner()
-        scanner._scan_yara_path = AsyncMock(return_value=None)  # type: ignore[method-assign]
-        scanner.check_malwarebazaar = AsyncMock(  # type: ignore[method-assign]
-            side_effect=ServiceUnavailableError("Bazaar down")
-        )
-
-        test_file = tmp_path / "file.bin"
-        test_file.write_bytes(b"content")
-
-        with patch.object(settings, "bazaar_async_enabled", False):
-            with pytest.raises(ServiceUnavailableError, match="fail-closed"):
-                await scanner.scan_file_path(test_file, "file.bin")
-
-    @pytest.mark.asyncio
-    async def test_scan_file_path_uses_provided_hash(self, tmp_path):
-        """scan_file_path uses the provided bazaar_hash and skips file hashing."""
-        from app.core.scanner import MalwareScanner
-
-        scanner = MalwareScanner()
-        scanner._scan_yara_path = AsyncMock(return_value=None)  # type: ignore[method-assign]
-        scanner.check_malwarebazaar = AsyncMock(return_value=None)  # type: ignore[method-assign]
-
-        test_file = tmp_path / "file.bin"
-        test_file.write_bytes(b"content")
-
-        precomputed_hash = "a" * 64
-        with patch.object(settings, "bazaar_async_enabled", False):
-            await scanner.scan_file_path(test_file, "file.bin", bazaar_hash=precomputed_hash)
-
-        # MalwareBazaar must have been called with the precomputed hash
-        scanner.check_malwarebazaar.assert_called_once_with(precomputed_hash, "file.bin")
+        with pytest.raises(ServiceUnavailableError, match="temporarily unavailable"):
+            await scanner.scan_file_path(test_file, "file.bin")
 
     @pytest.mark.asyncio
     async def test_yara_path_not_initialized_raises(self, tmp_path):
         """_scan_yara_path raises RuntimeError when rules are None."""
-        from app.core.scanner import MalwareScanner
+        from app.core.security.scanner import MalwareScanner
 
         scanner = MalwareScanner()
         # scanner.rules is None by default
@@ -684,38 +740,36 @@ class TestTempFileLeakProtection:
     """Tests to verify that temporary files are properly cleaned up on exceptions."""
 
     def test_strip_pdf_unlinks_temp_on_exception(self, tmp_path):
-        """_strip_pdf_from_path unlinks the temp file if saving fails."""
-        from app.core.file_security._pdf import _strip_pdf_from_path
+        from app.core.security.file_security._pdf import _strip_pdf_from_path
 
         pdf_path = _make_minimal_pdf(tmp_path)
+        output = tmp_path / "leaked_temp_pdf.pdf"
+        output.write_bytes(b"dummy pdf data")
 
-        # We patch pikepdf.Pdf.save to raise an exception, but let tempfile work
-        with patch("pikepdf.Pdf.save", side_effect=RuntimeError("Save failed")):
-            with patch("tempfile.NamedTemporaryFile") as mock_temp:
-                mock_file = MagicMock()
-                mock_file.name = str(tmp_path / "leaked_temp_pdf.pdf")
-                mock_temp.return_value.__enter__.return_value = mock_file
+        with (
+            patch("pikepdf.Pdf.save", side_effect=RuntimeError("Save failed")),
+            patch(
+                "app.core.security.file_security._pdf._make_temp_path",
+                return_value=output,
+            ),
+        ):
+            with pytest.raises(ValueError, match="sanitize"):
+                _strip_pdf_from_path(pdf_path)
 
-                # Make sure the file exists initially to check if it's unlinked
-                Path(mock_file.name).write_bytes(b"dummy pdf data")
-                assert Path(mock_file.name).exists()
-
-                result = _strip_pdf_from_path(pdf_path)
-                assert result == pdf_path
-                assert not Path(mock_file.name).exists()
+        assert not output.exists()
 
     def test_strip_image_unlinks_temp_on_exception(self, tmp_path):
         """_strip_image_from_path unlinks the temp file if saving fails."""
         from PIL import Image
 
-        from app.core.file_security._image import _strip_image_from_path
+        from app.core.security.file_security._image import _strip_image_from_path
 
         img_path = tmp_path / "test.png"
         img = Image.new("RGB", (10, 10))
         img.save(img_path, format="PNG")
 
         with patch(
-            "app.core.file_security._image._save_stripped_image",
+            "app.core.security.file_security._image._save_stripped_image",
             side_effect=RuntimeError("Save failed"),
         ):
             with patch("tempfile.NamedTemporaryFile") as mock_temp:
@@ -726,13 +780,13 @@ class TestTempFileLeakProtection:
                 Path(mock_file.name).write_bytes(b"dummy image data")
                 assert Path(mock_file.name).exists()
 
-                result = _strip_image_from_path(img_path)
-                assert result == img_path
+                with pytest.raises(ValueError, match="sanitize"):
+                    _strip_image_from_path(img_path)
                 assert not Path(mock_file.name).exists()
 
     def test_strip_audio_unlinks_temp_on_exception(self, tmp_path):
         """_strip_audio_from_path unlinks the temp file if mutagen save fails."""
-        from app.core.file_security._audio_video import _strip_audio_from_path
+        from app.core.security.file_security._audio_video import _strip_audio_from_path
 
         audio_path = tmp_path / "test.mp3"
         audio_path.write_bytes(b"ID3...")
@@ -752,16 +806,18 @@ class TestTempFileLeakProtection:
 
     def test_optimize_svg_unlinks_temp_on_exception(self, tmp_path):
         """_optimize_svg_to_path unlinks the temp file if safety check raises SvgSecurityError."""
-        from app.core.file_security.compress import _optimize_svg_to_path
+        from app.core.security.file_security.compress import _optimize_svg_to_path
 
         svg_path = tmp_path / "test.svg"
         svg_path.write_bytes(b"<svg></svg>")
 
-        with patch("app.core.file_security.compress.check_svg_safety") as mock_check:
+        with patch("app.core.security.file_security.compress.check_svg_safety") as mock_check:
             # First safety check succeeds, second fails on optimized version
             mock_check.side_effect = [None, SvgSecurityError("Malicious SVG")]
 
-            with patch("app.core.file_security.compress._optimize_svg", return_value=b"<svg/>"):
+            with patch(
+                "app.core.security.file_security.compress._optimize_svg", return_value=b"<svg/>"
+            ):
                 with patch("tempfile.NamedTemporaryFile") as mock_temp:
                     mock_file = MagicMock()
                     mock_file.name = str(tmp_path / "leaked_temp_svg.svg")
@@ -778,7 +834,7 @@ class TestTempFileLeakProtection:
     @pytest.mark.asyncio
     async def test_run_scan_and_strip_unlinks_temp_on_scan_failure(self, tmp_path):
         """run_scan_and_strip unlinks the stripped path if scan returns an exception."""
-        from app.core.processing import ProcessingFile
+        from app.core.events.processing import ProcessingFile
         from app.workers.upload.stages.scan_strip import run_scan_and_strip
 
         pf_path = tmp_path / "pf.bin"
@@ -814,7 +870,7 @@ class TestTempFileLeakProtection:
     @pytest.mark.asyncio
     async def test_run_strip_only_unlinks_temp_on_exception(self, tmp_path):
         """run_strip_only unlinks the clean file if an exception occurs during replace_with."""
-        from app.core.processing import ProcessingFile
+        from app.core.events.processing import ProcessingFile
         from app.workers.upload.stages.scan_strip import run_strip_only
 
         pf_path = tmp_path / "pf.bin"
@@ -825,7 +881,9 @@ class TestTempFileLeakProtection:
         strip_res_path.write_bytes(b"stripped data")
 
         # mock replace_with to fail
-        with patch.object(pf, "replace_with", side_effect=RuntimeError("Replace failed")):
+        with patch.object(
+            pf, "replace_with", new_callable=AsyncMock, side_effect=RuntimeError("Replace failed")
+        ):
             with patch(
                 "app.workers.upload.stages.scan_strip.strip_metadata_file", new_callable=AsyncMock
             ) as mock_strip:

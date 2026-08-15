@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator
+
+from app.services.avatar import is_safe_avatar_reference
 
 # OTP codes are 8 alphanumeric uppercase chars (alphabet excludes I, O, 1, 0)
 _OTP_PATTERN = r"^[A-Z2-9]{8}$"
@@ -58,6 +60,9 @@ class SetupIn(BaseModel):
     email: str = Field(..., max_length=254)
     password: str = Field(..., min_length=8, max_length=128)
     display_name: str | None = Field(default=None, max_length=100)
+    bootstrap_token: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9A-Fa-f]{64}$"
+    )
 
     @field_validator("email")
     @classmethod
@@ -92,5 +97,10 @@ class UserBrief(BaseModel):
     role: str
     onboarded: bool
     auto_approve: bool
+    completed_tutorials: list[str] = Field(default_factory=list)
+
+    @field_serializer("avatar_url")
+    def serialize_avatar_url(self, value: str | None) -> str | None:
+        return value if is_safe_avatar_reference(value, self.id) else None
 
     model_config = {"from_attributes": True}

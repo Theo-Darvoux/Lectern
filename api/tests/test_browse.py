@@ -3,7 +3,7 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
 from app.models.directory import Directory, DirectoryLike, DirectoryType
 from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
 from app.models.user import User, UserRole

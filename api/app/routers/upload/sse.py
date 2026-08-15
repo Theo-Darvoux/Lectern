@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from redis.asyncio import Redis
@@ -14,9 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.database import get_db
-from app.core.exceptions import ForbiddenError, RateLimitError
-from app.core.redis import get_redis
+from app.core.common.exceptions import ForbiddenError, RateLimitError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
 from app.dependencies.auth import CurrentUser
 from app.models.upload import Upload
 from app.routers.upload.helpers import _STATUS_CACHE_PREFIX
@@ -31,6 +31,7 @@ _SSE_KEEPALIVE = 15.0  # seconds between keepalive pings (issue 4.10)
 _SSE_MAX_PER_USER = 10  # max concurrent SSE streams per user (issue 1.14)
 _SSE_COUNTER_PREFIX = "upload:sse:active:"
 _SSE_COUNTER_TTL = 700  # slightly longer than _SSE_TIMEOUT as a safety net
+_SSE_HANDOFF_QUEUE_SIZE = 256
 
 
 @asynccontextmanager
@@ -48,6 +49,47 @@ async def sse_concurrency_guard(redis: Redis, user_id: str):  # type: ignore[no-
     finally:
         with suppress(Exception):
             await redis.decr(sse_counter_key)
+
+
+async def _load_event_log(
+    redis: Redis,  # type: ignore[type-arg]
+    event_log_key: str,
+    *,
+    start: int = 0,
+) -> list[str]:
+    """Load the bounded upload log from a best-effort SSE replay offset."""
+    raw_entries = await redis.lrange(event_log_key, max(0, start), -1)
+    return [raw.decode() if isinstance(raw, bytes) else str(raw) for raw in raw_entries]
+
+
+def _enqueue_pubsub_payload(
+    queue: asyncio.Queue[str | None],
+    payload: str,
+) -> bool:
+    """Offer a pub/sub event without allowing a slow client to grow memory."""
+    try:
+        queue.put_nowait(payload)
+        return True
+    except asyncio.QueueFull:
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        queue.put_nowait(None)
+        return False
+
+
+def _upload_sse_event(
+    payload: str,
+    *,
+    event_id: int | str | None = None,
+) -> dict[str, str]:
+    """Format an upload event; only durable replay entries receive an SSE cursor."""
+    event = {"event": "upload", "data": payload}
+    if event_id is not None:
+        event["id"] = str(event_id)
+    return event
 
 
 async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -> None:
@@ -70,6 +112,71 @@ async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -
     raise ForbiddenError("File does not belong to you")
 
 
+async def _load_authoritative_upload(
+    file_key: str, user_id: uuid.UUID, db: AsyncSession
+) -> Upload | None:
+    rows = list(
+        (
+            await db.scalars(
+                select(Upload)
+                .where(
+                    Upload.user_id == user_id,
+                    (Upload.final_key == file_key) | (Upload.quarantine_key == file_key),
+                )
+                .order_by(Upload.updated_at.desc())
+            )
+        ).all()
+    )
+    if not rows and "/" in file_key:
+        parts = file_key.split("/")
+        if len(parts) >= 3:
+            row = await db.scalar(
+                select(Upload).where(Upload.upload_id == parts[2], Upload.user_id == user_id)
+            )
+            if row is not None:
+                rows.append(row)
+    if not rows:
+        return None
+    applied = next((row for row in rows if row.status == "applied"), None)
+    if applied is not None:
+        return applied
+    return next(
+        (
+            row
+            for row in rows
+            if row.status == "clean"
+            and (not (row.final_key or "").startswith("cas/") or int(row.cas_ref_count or 0) > 0)
+        ),
+        rows[0],
+    )
+
+
+def _authoritative_terminal_payload(row: Upload, file_key: str) -> dict[str, Any] | None:
+    status = row.status
+    uses_cas = bool(row.final_key and row.final_key.startswith("cas/"))
+    has_active_owner = not uses_cas or int(row.cas_ref_count or 0) > 0
+    if status == "cancelled" or (status == "clean" and not has_active_owner):
+        status = "failed"
+    if status not in ("clean", "failed", "malicious", "applied"):
+        return None
+    has_result = status == "applied" or (status == "clean" and has_active_owner)
+    return {
+        "upload_id": row.upload_id,
+        "file_key": file_key,
+        "status": status,
+        "detail": row.error_detail or ("Success" if has_result else "Upload is no longer active"),
+        "result": {
+            "file_key": row.final_key or file_key,
+            "size": row.size_bytes,
+            "original_size": row.size_bytes,
+            "mime_type": row.mime_type,
+            "file_name": row.filename,
+        }
+        if has_result
+        else None,
+    }
+
+
 @router.get("/status/{file_key:path}", response_model=UploadStatusOut)
 async def upload_status(
     file_key: str,
@@ -77,51 +184,17 @@ async def upload_status(
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadStatusOut:
-    """Non-SSE status poll for upload processing.
-
-    Returns the cached status written by the background worker.
-    Returns PENDING if no status has been written yet.
-    """
+    """Return upload status with the database overriding stale terminal cache state."""
     await _check_file_ownership(file_key, str(user.id), db)
 
+    row = await _load_authoritative_upload(file_key, user.id, db)
+    authoritative = _authoritative_terminal_payload(row, file_key) if row else None
+    if authoritative is not None:
+        return UploadStatusOut(**authoritative)
+
     cached = await redis.get(f"{_STATUS_CACHE_PREFIX}{file_key}")
-
-    # ── Database Fallback (Issue 6) ──
-    if not cached:
-        # Try to find via file_key (final_key) or upload_id extracted from path
-        row = await db.scalar(
-            select(Upload).where(Upload.final_key == file_key, Upload.user_id == user.id)
-        )
-
-        if not row and "/" in file_key:
-            parts = file_key.split("/")
-            if len(parts) >= 3:
-                upload_id = parts[2]
-                row = await db.scalar(
-                    select(Upload).where(Upload.upload_id == upload_id, Upload.user_id == user.id)
-                )
-
-        if row and row.status in ("clean", "failed", "malicious"):
-            res_data = {
-                "upload_id": row.upload_id,
-                "file_key": file_key,
-                "status": row.status,
-                "detail": row.error_detail or ("Success" if row.status == "clean" else "Failed"),
-                "result": {
-                    "file_key": row.final_key or file_key,
-                    "size": row.size_bytes,
-                    "original_size": row.size_bytes,
-                    "mime_type": row.mime_type,
-                    "file_name": row.filename,
-                }
-                if row.status == "clean"
-                else None,
-            }
-            cached = json.dumps(res_data)
-
     if not cached:
         return UploadStatusOut(file_key=file_key, status=UploadStatus.PENDING)
-
     try:
         return UploadStatusOut(**json.loads(cached))
     except Exception:
@@ -139,7 +212,7 @@ async def upload_events(
     """SSE stream for upload processing status.
 
     Auth via Authorization: Bearer header (fetch-based SSE, not native EventSource).
-    Reconnect-safe: serves the cached terminal event immediately on reconnect.
+    Reconnect-safe: replays the bounded durable log at least once on reconnect.
 
     Events:
       - type=upload, data=UploadStatusOut JSON  (status updates from worker)
@@ -148,41 +221,20 @@ async def upload_events(
     user_id = str(user.id)
     await _check_file_ownership(file_key, user_id, db)
 
-    # Pre-compute values needed by the generator before it starts
     cached_status: str | None = await redis.get(f"{_STATUS_CACHE_PREFIX}{file_key}")
-
-    # ── Database Fallback (Issue 6) ──
-    if not cached_status:
-        # Try to find via file_key (final_key) or upload_id extracted from path
-        row = await db.scalar(
-            select(Upload).where(Upload.final_key == file_key, Upload.user_id == user.id)
+    row = await _load_authoritative_upload(file_key, user.id, db)
+    authoritative = _authoritative_terminal_payload(row, file_key) if row else None
+    authoritative_override = False
+    if authoritative is not None:
+        authoritative_json = json.dumps(authoritative)
+        try:
+            cached_data = json.loads(cached_status) if cached_status else None
+        except Exception:
+            cached_data = None
+        authoritative_override = not cached_data or (
+            cached_data.get("status") != authoritative.get("status")
         )
-
-        if not row and "/" in file_key:
-            parts = file_key.split("/")
-            if len(parts) >= 3:
-                upload_id = parts[2]
-                row = await db.scalar(
-                    select(Upload).where(Upload.upload_id == upload_id, Upload.user_id == user.id)
-                )
-
-        if row and row.status in ("clean", "failed", "malicious"):
-            res_data = {
-                "upload_id": row.upload_id,
-                "file_key": file_key,
-                "status": row.status,
-                "detail": row.error_detail or ("Success" if row.status == "clean" else "Failed"),
-                "result": {
-                    "file_key": row.final_key or file_key,
-                    "size": row.size_bytes,
-                    "original_size": row.size_bytes,
-                    "mime_type": row.mime_type,
-                    "file_name": row.filename,
-                }
-                if row.status == "clean"
-                else None,
-            }
-            cached_status = json.dumps(res_data)
+        cached_status = authoritative_json
 
     # Short-circuit if terminal status is cached.
     # Replay the full event log first so the client sees all intermediate stage
@@ -190,17 +242,18 @@ async def upload_events(
     if cached_status:
         try:
             data = json.loads(cached_status)
-            if data.get("status") in ("clean", "malicious", "failed"):
+            if data.get("status") in ("clean", "malicious", "failed", "applied"):
                 event_log_key = f"upload:eventlog:{file_key}"
-                log_entries: list[bytes] = await redis.lrange(event_log_key, 0, -1)  # type: ignore[misc]
+                log_entries = (
+                    [] if authoritative_override else await _load_event_log(redis, event_log_key)
+                )
                 events: list[dict[str, str]] = []
-                for i, raw in enumerate(log_entries):
-                    entry = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[redundant-expr]
-                    events.append({"event": "upload", "data": entry, "id": str(i + 1)})
+                for i, entry in enumerate(log_entries):
+                    events.append(_upload_sse_event(entry, event_id=i + 1))
                 # Ensure the terminal event is present (it should be the last log entry,
                 # but append cached_status as a safety net if the log is empty).
                 if not events:
-                    events.append({"event": "upload", "data": cached_status, "id": "final"})
+                    events.append(_upload_sse_event(cached_status))
                 return EventSourceResponse(
                     AsyncIteratorAdapter(events),  # type: ignore[no-untyped-call]
                     headers={"X-Accel-Buffering": "no"},
@@ -209,7 +262,7 @@ async def upload_events(
             pass
 
     try:
-        last_event_id = int(request.headers.get("Last-Event-ID", "0"))
+        last_event_id = max(0, int(request.headers.get("Last-Event-ID", "0")))
     except (ValueError, TypeError):
         last_event_id = 0
 
@@ -230,15 +283,25 @@ async def upload_events(
             pubsub = redis.pubsub()
             await pubsub.subscribe(f"upload:events:{file_key}")
 
-            queue: asyncio.Queue[str | None] = asyncio.Queue()
+            queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=_SSE_HANDOFF_QUEUE_SIZE)
 
             async def _pubsub_reader() -> None:
                 try:
                     async for message in pubsub.listen():
                         if message["type"] != "message":
                             continue
-                        payload: str = message["data"]
-                        await queue.put(payload)
+                        raw_payload = message["data"]
+                        payload = (
+                            raw_payload.decode()
+                            if isinstance(raw_payload, bytes)
+                            else str(raw_payload)
+                        )
+                        if not _enqueue_pubsub_payload(queue, payload):
+                            logger.warning(
+                                "Upload SSE handoff queue overflow for %s; closing for replay",
+                                file_key,
+                            )
+                            return
                         try:
                             if json.loads(payload).get("status") in (
                                 "clean",
@@ -255,20 +318,23 @@ async def upload_events(
 
             reader_task = asyncio.create_task(_pubsub_reader())
 
-            # Replay missed events from event log.
-            # Because subscribe() was called BEFORE lrange(), any event
-            # published between subscribe and the end of lrange will appear
-            # in BOTH the replay list and the pub/sub queue.  We track how
-            # many events we replayed so we can skip that many from pub/sub.
+            # Preserve the existing Last-Event-ID contract as a best-effort
+            # offset into the bounded Redis list. The list may be trimmed, so this
+            # is not an absolute sequence, but it remains useful for ordinary
+            # reconnects. Do not skip pub/sub messages based on the current log
+            # length: those messages can be genuinely new events.
             event_log_key = f"upload:eventlog:{file_key}"
-            replayed: list[str] = await redis.lrange(event_log_key, last_event_id, -1)  # type: ignore[misc]
+            replayed = await _load_event_log(
+                redis,
+                event_log_key,
+                start=last_event_id,
+            )
 
             yielded_count = last_event_id
 
-            for i, raw in enumerate(replayed):
-                payload_str = raw.decode() if isinstance(raw, bytes) else str(raw)  # type: ignore[ignore-without-code]
+            for i, payload_str in enumerate(replayed):
                 yielded_count = last_event_id + i + 1
-                yield {"event": "upload", "data": payload_str, "id": str(yielded_count)}
+                yield _upload_sse_event(payload_str, event_id=yielded_count)
                 try:
                     if json.loads(payload_str).get("status") in (
                         "clean",
@@ -279,12 +345,6 @@ async def upload_events(
                         return
                 except (json.JSONDecodeError, KeyError):
                     pass
-
-            # Snapshot the log length right after replay.  Pub/sub events
-            # whose log index falls within [0, replay_log_len) were already
-            # replayed above and must be skipped to avoid duplicates.
-            replay_log_len: int = await redis.llen(event_log_key)  # type: ignore[misc]
-            pubsub_seq = 0  # counts pub/sub messages received
 
             # Stream from Pub/Sub queue
             try:
@@ -306,32 +366,11 @@ async def upload_events(
                     if payload is None:
                         break
 
-                    pubsub_seq += 1
-
-                    # Skip events that were already sent during the replay
-                    # phase.  Because rpush happens before publish (in the
-                    # worker), each pub/sub message maps 1-to-1 to a log
-                    # entry.  The first `replay_log_len` pub/sub messages
-                    # are duplicates of what lrange already returned.
-                    if pubsub_seq <= replay_log_len:
-                        # Still check for terminal status so we don't hang
-                        try:
-                            if json.loads(payload).get("status") in (
-                                "clean",
-                                "malicious",
-                                "failed",
-                            ):
-                                break
-                        except (json.JSONDecodeError, KeyError):
-                            pass
-                        continue
-
-                    yielded_count += 1
-                    yield {
-                        "event": "upload",
-                        "data": payload,
-                        "id": str(yielded_count),
-                    }
+                    # Pub/sub can duplicate an event already observed during the
+                    # subscribe-before-replay window. Never advance Last-Event-ID
+                    # for live messages: reconnects replay from the last durable
+                    # Redis-list cursor, yielding harmless duplicates instead of gaps.
+                    yield _upload_sse_event(payload)
 
                     try:
                         if json.loads(payload).get("status") in (

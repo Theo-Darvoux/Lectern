@@ -1,22 +1,166 @@
 services:
+  release-image-policy:
+    image: docker.io/library/alpine@${POLICY_IMAGE_DIGEST:?POLICY_IMAGE_DIGEST must be set to an immutable alpine digest}
+    environment:
+      API_IMAGE: ${API_IMAGE:?API_IMAGE must be set to an approved release digest}
+      WORKER_IMAGE: ${WORKER_IMAGE:?WORKER_IMAGE must be set to an approved release digest}
+      WEB_IMAGE: ${WEB_IMAGE:?WEB_IMAGE must be set to an approved release digest}
+      REDIS_IMAGE: ${REDIS_IMAGE:?REDIS_IMAGE must be set to an immutable digest}
+      NGINX_IMAGE: ${NGINX_IMAGE:?NGINX_IMAGE must be set to an immutable digest}
+      MEILI_IMAGE: ${MEILI_IMAGE:?MEILI_IMAGE must be set to an immutable digest}
+      EUROOFFICE_IMAGE: ${EUROOFFICE_IMAGE:?EUROOFFICE_IMAGE must be set to an immutable digest}
+      POLICY_IMAGE_DIGEST: ${POLICY_IMAGE_DIGEST:?POLICY_IMAGE_DIGEST must be set to an immutable digest}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+          check() { printf '%s\n' "$$2" | grep -Eq "$$3" || { echo "$$1 is not an approved immutable image reference" >&2; exit 64; }; }
+          check API_IMAGE "$$API_IMAGE" '^ghcr\.io/theo-darvoux/lectern/api-release@sha256:[0-9a-f]{64}$$'
+          check WORKER_IMAGE "$$WORKER_IMAGE" '^ghcr\.io/theo-darvoux/lectern/worker-release@sha256:[0-9a-f]{64}$$'
+          check WEB_IMAGE "$$WEB_IMAGE" '^ghcr\.io/theo-darvoux/lectern/web-release@sha256:[0-9a-f]{64}$$'
+          check REDIS_IMAGE "$$REDIS_IMAGE" '^docker\.io/library/redis@sha256:[0-9a-f]{64}$$'
+          check NGINX_IMAGE "$$NGINX_IMAGE" '^docker\.io/library/nginx@sha256:[0-9a-f]{64}$$'
+          check MEILI_IMAGE "$$MEILI_IMAGE" '^docker\.io/getmeili/meilisearch@sha256:[0-9a-f]{64}$$'
+          check EUROOFFICE_IMAGE "$$EUROOFFICE_IMAGE" '^ghcr\.io/euro-office/documentserver@sha256:[0-9a-f]{64}$$'
+          check POLICY_IMAGE_DIGEST "$$POLICY_IMAGE_DIGEST" '^sha256:[0-9a-f]{64}$$'
+
+  postgres-image-policy:
+    profiles: [ postgres ]
+    image: docker.io/library/alpine@${POLICY_IMAGE_DIGEST:?POLICY_IMAGE_DIGEST must be set to an immutable alpine digest}
+    environment:
+      POSTGRES_IMAGE: ${POSTGRES_IMAGE:-}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+          printf '%s\n' "$$POSTGRES_IMAGE" | grep -Eq '^docker\.io/library/postgres@sha256:[0-9a-f]{64}$$' || { echo "POSTGRES_IMAGE is not an approved immutable postgres digest" >&2; exit 64; }
+
+  selfhost-worker-image-policy:
+    profiles: [ selfhost-worker ]
+    image: docker.io/library/alpine@${POLICY_IMAGE_DIGEST:?POLICY_IMAGE_DIGEST must be set to an immutable alpine digest}
+    environment:
+      SELFHOST_WORKER_IMAGE: ${SELFHOST_WORKER_IMAGE:-}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+          printf '%s\n' "$$SELFHOST_WORKER_IMAGE" | grep -Eq '^ghcr\.io/theo-darvoux/lectern/selfhost-worker-release@sha256:[0-9a-f]{64}$$' || { echo "SELFHOST_WORKER_IMAGE is not an approved selfhost-worker-release digest" >&2; exit 64; }
+
+  seaweedfs-image-policy:
+    profiles: [ seaweedfs-prod ]
+    image: docker.io/library/alpine@${POLICY_IMAGE_DIGEST:?POLICY_IMAGE_DIGEST must be set to an immutable alpine digest}
+    environment:
+      SEAWEEDFS_IMAGE: ${SEAWEEDFS_IMAGE:-}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+          printf '%s\n' "$$SEAWEEDFS_IMAGE" | grep -Eq '^docker\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}$$' || { echo "SEAWEEDFS_IMAGE is not an approved immutable SeaweedFS digest" >&2; exit 64; }
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-docker.io/library/postgres:unset}
+    depends_on:
+      postgres-image-policy:
+        condition: service_completed_successfully
+
+  redis:
+    image: ${REDIS_IMAGE}
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+
+  meilisearch:
+    image: ${MEILI_IMAGE}
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+
+  eurooffice:
+    image: ${EUROOFFICE_IMAGE}
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+
+  seaweedfs-master:
+    depends_on:
+      seaweedfs-image-policy:
+        condition: service_completed_successfully
+
   api:
+    image: ${API_IMAGE}
+    build: !reset null
+    environment:
+      ENVIRONMENT: production
     command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+
+  worker:
+    image: ${WORKER_IMAGE}
+    build: !reset null
+    environment:
+      ENVIRONMENT: production
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+
+  worker-fast:
+    image: ${WORKER_IMAGE}
+    build: !reset null
+    environment:
+      ENVIRONMENT: production
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+
+  worker-slow:
+    image: ${WORKER_IMAGE}
+    build: !reset null
+    environment:
+      ENVIRONMENT: production
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
 
   web:
-    # Use the production nginx static runner target
-    build:
-      target: runner
-    # The runner image sets CMD ["nginx", "-g", "daemon off;"] by default, so we just reset the command
-    # property here to null so it stops running the dev Next.js server override from compose.yaml
-    command: []
+    image: ${WEB_IMAGE}
+    build: !reset null
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+    # null restores the nginx runner image's inherited CMD. [] would clear it.
+    command: null
     deploy:
       resources:
         limits:
+          cpus: "0.5"
           memory: 64M
         reservations:
+          cpus: "0.1"
           memory: 32M
 
+  selfhost-worker:
+    image: ${SELFHOST_WORKER_IMAGE:-ghcr.io/theo-darvoux/lectern/selfhost-worker-release:unset}
+    build: !reset null
+    environment:
+      WORKER_ZIP_HMAC_SECRET: ${WORKER_ZIP_HMAC_SECRET:?WORKER_ZIP_HMAC_SECRET must be set}
+      S3_ENDPOINT: ${SELFHOST_WORKER_S3_ENDPOINT:-seaweedfs-s3:8333}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
+    depends_on:
+      selfhost-worker-image-policy:
+        condition: service_completed_successfully
+
   nginx:
+    image: ${NGINX_IMAGE}
+    depends_on:
+      release-image-policy:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+      web:
+        condition: service_started
     ports:
       # Expose on 9080 for production reverse proxy by default
       - "9080:80"

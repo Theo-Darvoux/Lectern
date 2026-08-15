@@ -1,0 +1,366 @@
+name: CI
+
+on:
+  workflow_call:
+    outputs:
+      tested_redis_image:
+        description: Exact immutable Redis image exercised by required Redis/CAS CI
+        value: ${{ jobs.production-policy.outputs.redis_image }}
+      tested_seaweedfs_image:
+        description: Exact immutable SeaweedFS image exercised by both required storage matrix shards
+        value: ${{ jobs.production-policy.outputs.seaweedfs_image }}
+  pull_request:
+  push:
+    branches-ignore: [main]
+    tags-ignore: ['**']
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      AUTH_ATOMICITY_REDIS_URL: redis://127.0.0.1:6379/15
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - name: Install sandbox runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          for key in \
+            kernel.apparmor_restrict_unprivileged_userns \
+            kernel.apparmor_restrict_unprivileged_unconfined; do
+            if sysctl -n "$key" >/dev/null 2>&1; then
+              sudo sysctl -w "$key=0"
+            fi
+          done
+          bwrap --version
+      - run: uv sync --frozen --extra dev
+      - name: Audit production Python dependencies
+        run: uv run pip-audit
+      - name: Smoke-test real sandbox runtime
+        run: |
+          uv run python - <<'PY'
+          from app.core.security.sandbox import sandboxed_run
+
+          result = sandboxed_run(["python3", "-c", "print('sandbox-ok')"], timeout=10)
+          assert result.returncode == 0, result.stderr.decode(errors="replace")
+          assert result.stdout == b"sandbox-ok\n"
+          PY
+      - name: Exercise real isolated parser operations
+        run: uv run pytest -m integration tests/integration/test_isolated_parser.py
+      - name: Build and smoke production parser containers
+        working-directory: api
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --target api --tag lectern-api-parser-smoke .
+          docker build --target worker --tag lectern-worker-parser-smoke .
+          for image in lectern-api-parser-smoke lectern-worker-parser-smoke; do
+            docker run --rm \
+              --entrypoint /venv/bin/python \
+              --security-opt no-new-privileges:true \
+              --security-opt seccomp=unconfined \
+              --security-opt apparmor=unconfined \
+              --cap-drop ALL \
+              --cap-add SETUID \
+              --cap-add SETGID \
+              --cap-add SETFCAP \
+              --env PROCESSING_ROOT=/var/lib/lectern/processing \
+              "$image" scripts/smoke_parser_container.py
+          done
+      - name: Lint
+        run: uv run ruff check .
+      - name: Type-check
+        run: uv run mypy app/
+      - name: Unit and hermetic tests
+        run: uv run pytest -m "not integration"
+      - name: Real Redis authentication lifecycle invariants and storage fencing
+        timeout-minutes: 3
+        run: >-
+          uv run pytest -vv -m integration
+          tests/integration/test_auth_redis_atomicity.py
+          tests/integration/test_storage_redis_atomicity.py
+
+  postgres-revert:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: docker.io/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: lectern
+          POSTGRES_PASSWORD: lectern
+          POSTGRES_DB: lectern_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lectern -d lectern_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
+      REVERT_TEST_DATABASE_URL: postgresql+asyncpg://lectern:lectern@127.0.0.1:5432/lectern_test
+      AUTH_ATOMICITY_REDIS_URL: redis://127.0.0.1:6379/15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - working-directory: api
+        run: uv sync --frozen --extra dev
+      - name: Apply every database migration
+        working-directory: api
+        run: uv run alembic upgrade head
+      - name: Exercise real PostgreSQL concurrency invariants
+        working-directory: api
+        run: >-
+          uv run pytest -m integration
+          tests/integration/database/test_revert_concurrency.py
+          tests/integration/database/test_upload_idempotency_concurrency.py
+          tests/integration/database/test_cas_storage_process_fence.py
+          tests/integration/database/test_bootstrap_admin_invariants.py
+          tests/integration/database/test_search_deindex_outbox.py
+          tests/integration/database/test_qcm_staging_quota_concurrency.py
+          tests/integration/database/test_like_toggle_concurrency.py
+
+  meilisearch:
+    runs-on: ubuntu-latest
+    services:
+      meilisearch:
+        image: docker.io/getmeili/meilisearch@sha256:c9fac23131cca4db95173d41cc50fd5639121ee381795528fdd7522d7978a7b8
+        env:
+          MEILI_MASTER_KEY: ci-meili-master-key-0123456789
+          MEILI_NO_ANALYTICS: "true"
+        ports:
+          - 7700:7700
+    env:
+      SEARCH_DEINDEX_MEILI_URL: http://127.0.0.1:7700
+      SEARCH_DEINDEX_MEILI_MASTER_KEY: ci-meili-master-key-0123456789
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - run: uv sync --frozen --extra dev
+      - name: Wait for live Meilisearch
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:7700/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Meilisearch did not become healthy" >&2
+          exit 1
+      - name: Exercise real Meilisearch mutation semantics
+        run: uv run pytest -m integration tests/integration/test_search_deindex_meili.py
+
+  production-policy:
+    runs-on: ubuntu-latest
+    outputs:
+      redis_image: ${{ steps.toolchain.outputs.redis_test_image }}
+      seaweedfs_image: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - working-directory: api
+        run: uv sync --frozen --extra dev
+      - name: Release and deployment policy regressions
+        working-directory: api
+        run: >-
+          uv run pytest
+          tests/test_production_hardening_policy.py
+          tests/test_production_release_manifest.py
+          tests/test_release_gate_dependency_compat.py
+          tests/test_release_hardening_regressions.py
+          tests/test_release_promotion_script.py
+          tests/test_release_supply_chain_hardening.py
+          tests/test_release_runtime_gate_policy.py
+          tests/test_storage_release_policy.py
+
+  seaweedfs:
+    services:
+      redis:
+        image: docker.io/library/redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      REDIS_URL: redis://127.0.0.1:6379/14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: storage-semantics
+            label: Live SeaweedFS S3/storage semantics
+            script: ./api/scripts/run-seaweedfs-integration-tests.sh
+            timeout: 25
+          - suite: production-topology
+            label: Production-topology persistence, replication and failover
+            script: ./api/scripts/run-seaweedfs-topology-tests.sh
+            timeout: 30
+    name: seaweedfs / ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load pinned release toolchain
+        id: toolchain
+        run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
+      - name: Select exact immutable SeaweedFS test image
+        shell: bash
+        env:
+          IMAGE: ${{ steps.toolchain.outputs.seaweedfs_test_image }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE" =~ ^docker\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}$ ]]
+          echo "SEAWEEDFS_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - name: Install sandbox runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          for key in \
+            kernel.apparmor_restrict_unprivileged_userns \
+            kernel.apparmor_restrict_unprivileged_unconfined; do
+            if sysctl -n "$key" >/dev/null 2>&1; then
+              sudo sysctl -w "$key=0"
+            fi
+          done
+      - working-directory: api
+        run: uv sync --frozen --extra dev
+      - name: ${{ matrix.label }}
+        run: ${{ matrix.script }}
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Audit production web dependencies
+        run: pnpm audit --prod --audit-level=low
+      - run: pnpm lint
+      - run: pnpm tsc --noEmit
+      - run: pnpm i18n:check
+      - run: pnpm test
+
+  delivery:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - name: Audit delivery runtime and build dependencies
+        run: npm audit --audit-level=low
+      - run: npm test
+      - run: npm run test:node
+      - run: npm run typecheck:node
+
+  required:
+    if: ${{ always() }}
+    needs:
+      - api
+      - postgres-revert
+      - meilisearch
+      - production-policy
+      - seaweedfs
+      - web
+      - delivery
+    runs-on: ubuntu-latest
+    env:
+      API_RESULT: ${{ needs.api.result }}
+      POSTGRES_RESULT: ${{ needs.postgres-revert.result }}
+      MEILI_RESULT: ${{ needs.meilisearch.result }}
+      POLICY_RESULT: ${{ needs.production-policy.result }}
+      SEAWEEDFS_RESULT: ${{ needs.seaweedfs.result }}
+      WEB_RESULT: ${{ needs.web.result }}
+      DELIVERY_RESULT: ${{ needs.delivery.result }}
+    steps:
+      - name: Require every premerge gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result in \
+            "$API_RESULT" \
+            "$POSTGRES_RESULT" \
+            "$MEILI_RESULT" \
+            "$POLICY_RESULT" \
+            "$SEAWEEDFS_RESULT" \
+            "$WEB_RESULT" \
+            "$DELIVERY_RESULT"; do
+            [[ "$result" == success ]]
+          done

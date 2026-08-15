@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo } from "react";
-import ReactMarkdown, { type Components, type Options } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkWikiLink from "remark-wiki-link";
 import remarkMark from "@/lib/remark-mark";
@@ -12,6 +12,7 @@ import { Mermaid } from "./mermaid";
 import { AsyncMaterialImage } from "./async-material-image";
 import { Callout, CalloutType } from "./callout";
 import { cn } from "@/lib/utils";
+import { useConfigStore } from "@/lib/stores";
 
 interface MarkdownRendererProps {
     content: string;
@@ -19,6 +20,8 @@ interface MarkdownRendererProps {
     material?: Record<string, unknown>;
     className?: string;
     previewMode?: boolean;
+    /** Resolve trusted image-only schemes before react-markdown sanitizes URLs. */
+    resolveImageUrl?: (url: string) => string | null;
 }
 
 const sanitizeSchema = {
@@ -30,6 +33,13 @@ const sanitizeSchema = {
         span: [...(defaultSchema.attributes?.span || []), "className"],
         img: [...(defaultSchema.attributes?.img || []), "className", "src", "alt", "loading"],
         mark: ["className"],
+    },
+    protocols: {
+        ...defaultSchema.protocols,
+        // Notebook attachments reach a caller-provided resolver after the AST
+        // is sanitized. Unresolved attachment URLs are still rejected by
+        // react-markdown's default URL transform.
+        src: [...(defaultSchema.protocols?.src || []), "attachment"],
     },
 };
 
@@ -55,7 +65,10 @@ function getTextFromChildren(children: React.ReactNode, depth = 0): string {
     return "";
 }
 
-export function MarkdownRenderer({ content, material, className, previewMode }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, material, className, previewMode, resolveImageUrl }: MarkdownRendererProps) {
+    const allowExternalLinks = useConfigStore(
+        (state) => state.config?.allow_external_document_links !== false,
+    );
     const components: Components = useMemo(() => ({
         img: (props) => {
             const { src, alt } = props;
@@ -70,8 +83,8 @@ export function MarkdownRenderer({ content, material, className, previewMode }: 
         },
         a: (props) => {
             const { href, children, ...rest } = props;
-            const isExternal = href?.startsWith("http");
-            if (previewMode) {
+            const isExternal = /^(?:https?:|mailto:|\/\/)/i.test(href || "");
+            if (previewMode || (isExternal && !allowExternalLinks)) {
                 return (
                     <span className="text-primary/80 underline decoration-dotted">
                         {children}
@@ -81,7 +94,7 @@ export function MarkdownRenderer({ content, material, className, previewMode }: 
             return (
                 <a
                     href={href}
-                    {...(isExternal
+                    {...(/^https?:\/\//i.test(href || "") || href?.startsWith("//")
                         ? { target: "_blank", rel: "noopener noreferrer" }
                         : {})}
                     {...rest}
@@ -234,7 +247,18 @@ export function MarkdownRenderer({ content, material, className, previewMode }: 
 
             return <blockquote className="border-l-4 border-border pl-4 italic my-4">{children}</blockquote>;
         },
-    }), [material, previewMode]);
+    }), [allowExternalLinks, material, previewMode]);
+
+    const urlTransform = useMemo<NonNullable<Options["urlTransform"]>>(
+        () => (url, key, node) => {
+            if (key === "src" && node.tagName === "img") {
+                const resolved = resolveImageUrl?.(url);
+                if (resolved) return resolved;
+            }
+            return defaultUrlTransform(url);
+        },
+        [resolveImageUrl],
+    );
 
     return (
         <div className={cn(className, previewMode && "prose-sm pointer-events-none select-none")}>
@@ -242,6 +266,7 @@ export function MarkdownRenderer({ content, material, className, previewMode }: 
                 remarkPlugins={remarkPlugins}
                 rehypePlugins={rehypePlugins}
                 components={components}
+                urlTransform={urlTransform}
             >
                 {content}
             </ReactMarkdown>

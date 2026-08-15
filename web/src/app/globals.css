@@ -574,3 +574,16 @@
 }
 
 
+
+/* Respect the user's OS-level reduced-motion preference across Tailwind and
+   custom animations without changing the normal-motion experience. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}

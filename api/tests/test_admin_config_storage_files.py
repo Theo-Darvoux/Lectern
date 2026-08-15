@@ -10,7 +10,7 @@ from app.models.user import UserRole
 
 # Helper to create auth headers
 def _auth(user_id: uuid.UUID, role: str, email: str) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user_id), role, email)
     return {"Authorization": f"Bearer {token}"}

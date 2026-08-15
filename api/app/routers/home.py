@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -11,17 +12,22 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.database import get_db
-from app.core.redis import get_redis, redis_lock
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis, redis_lock
 from app.dependencies.auth import CurrentUser
 from app.models.directory import Directory
 from app.models.featured import FeaturedItem
 from app.models.material import Material, MaterialFavourite, MaterialVersion
 from app.models.pull_request import PRStatus, PullRequest
+from app.models.user import UserRole
 from app.models.view_history import ViewHistory
 from app.schemas.directory import DirectoryOut
-from app.schemas.home import FeaturedItemOut, HomeResponse, HomeStats
-from app.schemas.material import MaterialDetail
+from app.schemas.home import FeaturedItemOut, HomeResponse, HomeStats, PublicHomeResponse
+from app.schemas.material import (
+    MaterialDetail,
+    MaterialDetailResponse,
+    project_material_detail,
+)
 from app.schemas.pull_request import PullRequestOut
 from app.services.directory import get_directory_paths, get_preview_material_ids
 from app.services.material import get_liked_favourited_sets, material_orm_to_dict
@@ -158,12 +164,12 @@ async def _build_featured_out(
     return out
 
 
-@router.get("/", response_model=HomeResponse)
+@router.get("/", response_model=HomeResponse | PublicHomeResponse)
 async def get_home(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
-) -> HomeResponse:
+) -> HomeResponse | PublicHomeResponse:
     """Aggregate home-page payload in a single request.
 
     Returns:
@@ -515,7 +521,7 @@ async def get_home(
         my_contributions=stats_row.my_pr_count or 0,
     )
 
-    return HomeResponse(
+    response = HomeResponse(
         featured=featured_out,
         popular_today=popular_today,
         popular_14d=popular_14d,
@@ -525,16 +531,21 @@ async def get_home(
         recently_added=recently_added,
         stats=stats,
     )
+    if user.role == UserRole.GUEST:
+        # Guest sessions are publicly mintable. Project the entire aggregate,
+        # including recent PR summaries, through the public read boundary.
+        return PublicHomeResponse.model_validate(response.model_dump())
+    return response
 
 
-@router.get("/popular", response_model=list[MaterialDetail])
+@router.get("/popular", response_model=list[MaterialDetailResponse])
 async def get_popular(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     period: Annotated[Literal["today", "14d"], Query(description="Time window")] = "today",
     limit: Annotated[int, Query(ge=1, le=50, description="Max results")] = 20,
     offset: Annotated[int, Query(ge=0, description="Pagination offset")] = 0,
-) -> list[MaterialDetail]:
+) -> Sequence[MaterialDetailResponse]:
     """Paginated popular materials for the 'see all' page.
 
     - **period=today** orders by ``views_today`` DESC
@@ -556,4 +567,7 @@ async def get_popular(
         .offset(offset)
         .limit(limit)
     )
-    return await _build_material_details(db, result.all(), user.id)
+    materials = await _build_material_details(db, result.all(), user.id)
+    if user.role != UserRole.GUEST:
+        return materials
+    return [project_material_detail(material.model_dump(), public=True) for material in materials]

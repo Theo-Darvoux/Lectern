@@ -5,6 +5,10 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database.post_commit import (
+    PostCommitKey,
+    rollback_transaction_callbacks,
+)
 from app.models.material import Material
 from app.models.pull_request import PRStatus, PullRequest, VirusScanResult
 from app.models.user import User, UserRole
@@ -84,3 +88,49 @@ async def test_apply_pr_idempotency(db_session: AsyncSession):
 
         # Check copy_object was only called once for the first application
         assert mock_copy.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_file_copy_is_removed_when_database_transaction_rolls_back(
+    db_session: AsyncSession,
+) -> None:
+    user = await _create_user(db_session, UserRole.BUREAU)
+    pr = PullRequest(
+        status=PRStatus.OPEN,
+        title="Rollback copy",
+        author_id=user.id,
+        payload=[
+            {
+                "op": "create_material",
+                "temp_id": "new-mat",
+                "title": "Rollback Mat",
+                "type": "document",
+                "directory_id": None,
+                "file_key": "uploads/user/rollback.pdf",
+            }
+        ],
+        type="batch",
+        summary_types=["create_material"],
+        virus_scan_result=VirusScanResult.CLEAN,
+    )
+    db_session.add(pr)
+    await db_session.commit()
+    db_session.info[PostCommitKey.MANAGED_TRANSACTION] = True
+
+    with (
+        patch(
+            "app.services.pr.get_object_info",
+            new=AsyncMock(return_value={"size": 100, "content_type": "application/pdf"}),
+        ),
+        patch("app.services.pr.copy_object", new_callable=AsyncMock),
+        patch("app.services.pr.delete_object", new_callable=AsyncMock) as delete_object,
+        patch(
+            "app.services.pr._unique_material_slug",
+            new=AsyncMock(return_value="rollback-mat"),
+        ),
+    ):
+        await apply_pr(db_session, pr)
+        await db_session.rollback()
+        await rollback_transaction_callbacks(db_session)
+
+    delete_object.assert_awaited_once_with("materials/user/rollback.pdf")

@@ -1,13 +1,12 @@
 "use client";
 
 import { memo, useState, useEffect, useRef } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
-import { Info, MessageSquare, Paperclip, File } from "lucide-react";
+import { BrowseLink } from "@/components/browse/browse-link";
+import { Paperclip, File } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
-import { useUIStore } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
 import { useTranslations } from "next-intl";
 import { TYPE_COLORS, TYPE_ICONS, EXT_ICONS } from "@/lib/material-icons";
@@ -17,15 +16,10 @@ import { cn } from "@/lib/utils";
 import type { MaterialDetail } from "@/components/home/types";
 import { useInView } from "@/hooks/use-in-view";
 
-// Lazy import to avoid loading pdf.js in the grid preview
-import { MaterialPreview } from "@/components/home/material-preview";
-
-// Frosted-glass circular action button — reads on any preview (light, dark or
-// colourful) without a scrim band behind it.
-const FLOATING_ACTION_BTN =
-  "flex items-center justify-center h-8 w-8 rounded-full bg-background/85 text-foreground/80 " +
-  "backdrop-blur-md ring-1 ring-border/60 shadow-md hover:bg-background hover:text-foreground " +
-  "active:scale-90 transition-all";
+const MaterialPreview = dynamic(
+  () => import("@/components/home/material-preview").then((module) => module.MaterialPreview),
+  { ssr: false },
+);
 
 // ---------------------------------------------------------------------------
 // Ghost preview: for staged "created" materials that have a file_key
@@ -148,8 +142,6 @@ function MaterialGridCardImpl({
 }: MaterialGridCardProps) {
   const t = useTranslations("Browse");
   const tTypes = useTranslations("MaterialTypes");
-  const openSidebar = useUIStore((s) => s.openSidebar);
-  const router = useRouter();
   const cardRef = useRef<HTMLAnchorElement>(null);
 
   const title = String(material.title ?? "");
@@ -220,8 +212,6 @@ function MaterialGridCardImpl({
           ? `text-${themeColor}-700 dark:text-${themeColor}-400`
           : "";
 
-  const isRestricted = !!staged || !!previewPrId;
-
   const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlePointerEnter = () => {
     if (!slug || staged === "deleted" || onNavigate) return;
@@ -229,7 +219,6 @@ function MaterialGridCardImpl({
     prefetchTimer.current = setTimeout(() => {
       const browsePath = `${pathBase}/${slug}`.replace(/^\/browse\/?/, "").replace(/\/$/, "");
       prefetchBrowsePath(browsePath);
-      router.prefetch(`${pathBase}/${slug}`);
     }, 100);
   };
   const handlePointerLeave = () => {
@@ -259,18 +248,6 @@ function MaterialGridCardImpl({
     // else: let Next.js Link handle client-side navigation
   };
 
-  const handleDetails = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    openSidebar("details", { type: "material", id, data: { ...material, __path: buildPath() } });
-  };
-
-  const handleChat = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    openSidebar("chat", { type: "material", id, data: material });
-  };
-
   // Whether to use the ghost preview (staged creation with a file_key)
   const useGhostPreview = staged === "created" && !!ghostFileKey;
 
@@ -280,7 +257,7 @@ function MaterialGridCardImpl({
       onAddAttachment={onAddAttachment ? () => onAddAttachment(id, title) : undefined}
       itemPath={buildPath()}
     >
-      <Link
+      <BrowseLink
         ref={cardRef}
         href={buildPath()}
         onClick={handleCardClick}
@@ -349,54 +326,13 @@ function MaterialGridCardImpl({
             </div>
           )}
 
-          {/* Floating action buttons — the kebab is always visible; the rest
-              reveal on hover / keyboard focus. No scrim band: each control is a
-              self-contained frosted-glass chip. The reveal animates transform +
-              opacity only, so it stays on the compositor thread during scroll. */}
           {!selectMode && (
             <div
               onClick={(e) => e.stopPropagation()}
-              className="absolute bottom-2 right-2 z-10 flex items-center gap-1.5"
+              className="absolute bottom-2 right-2 z-10"
             >
-              {/* Secondary actions — revealed on hover / focus, and only on
-                  hover-capable devices. On touch (no hover) they're removed
-                  entirely so they neither occupy tappable space nor get
-                  revealed by the card's focus when tapped — only the kebab
-                  stays. */}
-              <div className="hidden [@media(hover:hover)]:flex items-center gap-1.5 opacity-0 translate-x-1.5 pointer-events-none transition-all duration-200 ease-out group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-x-0 group-focus-within:pointer-events-auto">
-                {!isRestricted && (
-                  <button
-                    onClick={handleChat}
-                    className={FLOATING_ACTION_BTN}
-                    title={t("chat")}
-                    aria-label={t("chatAbout", { title })}
-                  >
-                    <MessageSquare className="h-4 w-4" />
-                  </button>
-                )}
-                <button
-                  onClick={handleDetails}
-                  className={FLOATING_ACTION_BTN}
-                  title={t("details")}
-                  aria-label={t("viewDetailsFor", { title })}
-                >
-                  <Info className="h-4 w-4" />
-                </button>
-                {staged === "created" && onAddAttachment && (
-                  <button
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); onAddAttachment(id, title); }}
-                    className={FLOATING_ACTION_BTN}
-                    title={t("addAttachment")}
-                  >
-                    <Paperclip className="h-4 w-4" />
-                  </button>
-                )}
-
-              </div>
-
-              {/* Always-visible kebab */}
               <ItemActionsDropdownTrigger
-                className="h-8 w-8 rounded-full bg-background/85 backdrop-blur-md ring-1 ring-border/60 shadow-lg hover:bg-background active:scale-90 transition-all"
+                className="h-8 w-8 rounded-full bg-background/90 ring-1 ring-border/60 shadow-sm hover:bg-background"
                 iconClassName="h-4 w-4 text-foreground"
               />
             </div>
@@ -420,7 +356,7 @@ function MaterialGridCardImpl({
             )}
           </div>
         </div>
-      </Link>
+      </BrowseLink>
     </ItemActionsMenu>
   );
 }

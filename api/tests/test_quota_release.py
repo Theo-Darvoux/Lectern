@@ -6,7 +6,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token
+from app.core.security.security import create_access_token
 from app.models.upload import Upload
 from app.models.user import User, UserRole
 from app.routers.upload.helpers import _QUOTA_KEY_PREFIX
@@ -30,7 +30,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 def mock_storage(mock_redis):
     with (
         patch("app.services.pr.object_exists", new_callable=AsyncMock) as m,
-        patch("app.core.redis.redis_client", mock_redis),
+        patch("app.core.database.redis.redis_client", mock_redis),
     ):
         m.return_value = True
         yield m
@@ -43,7 +43,11 @@ def _auth_headers(user: User) -> dict[str, str]:
 
 @pytest.mark.asyncio
 async def test_quota_released_on_pr_approval(
-    client: AsyncClient, db_session: AsyncSession, fake_redis_setup, mock_storage
+    client: AsyncClient,
+    db_session: AsyncSession,
+    fake_redis_setup,
+    mock_storage,
+    mock_arq_pool,
 ):
     user = await _create_user(db_session)
     admin = await _create_user(db_session, UserRole.BUREAU)
@@ -65,8 +69,12 @@ async def test_quota_released_on_pr_approval(
         final_key="cas/somehash",
         filename="test.pdf",
         mime_type="application/pdf",
+        size_bytes=100,
         status="clean",
+        content_sha256="a" * 64,
+        cas_ref_count=1,
     )
+
     db_session.add(up)
     await db_session.commit()
 
@@ -83,6 +91,7 @@ async def test_quota_released_on_pr_approval(
                     "type": "document",
                     "file_key": "cas/somehash",
                     "file_name": "test.pdf",
+                    "content_sha256": "a" * 64,
                 }
             ],
         },
@@ -98,17 +107,32 @@ async def test_quota_released_on_pr_approval(
     app_resp = await client.post(url, headers=_auth_headers(admin))
     assert app_resp.status_code == 200
 
-    # 5. Verify quota released
+    # 5. Run the durable post-commit cleanup accepted by the queue.
+    from app.workers.storage_ops import release_upload_quota
+
+    cleanup_call = next(
+        call
+        for call in mock_arq_pool.enqueue_job.await_args_list
+        if call.args[0] == "release_upload_quota"
+    )
+    await release_upload_quota({"redis": fake_redis_setup}, *cleanup_call.args[1:])
+
+    # 6. Verify quota released
     assert await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}") == 0
 
-    # 6. Verify Upload status updated to 'applied'
+    # 7. Verify Upload status updated to 'applied'
     await db_session.refresh(up)
     assert up.status == "applied"
+    assert up.cas_ref_count == 0
 
 
 @pytest.mark.asyncio
 async def test_quota_released_on_pr_rejection(
-    client: AsyncClient, db_session: AsyncSession, fake_redis_setup, mock_storage
+    client: AsyncClient,
+    db_session: AsyncSession,
+    fake_redis_setup,
+    mock_storage,
+    mock_arq_pool,
 ):
     user = await _create_user(db_session)
     admin = await _create_user(db_session, UserRole.BUREAU)
@@ -126,7 +150,10 @@ async def test_quota_released_on_pr_rejection(
         final_key="cas/somehash",
         filename="test.pdf",
         mime_type="application/pdf",
+        size_bytes=100,
+        content_sha256="e" * 64,
         status="clean",
+        cas_ref_count=1,
     )
     db_session.add(up)
     await db_session.commit()
@@ -157,5 +184,14 @@ async def test_quota_released_on_pr_rejection(
     )
     assert rej_resp.status_code == 200
 
-    # Verify quota released
+    from app.workers.storage_ops import release_upload_quota
+
+    cleanup_call = next(
+        call
+        for call in mock_arq_pool.enqueue_job.await_args_list
+        if call.args[0] == "release_upload_quota"
+    )
+    await release_upload_quota({"redis": fake_redis_setup}, *cleanup_call.args[1:])
+
+    # Verify quota released after the durable cleanup runs.
     assert await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}") == 0

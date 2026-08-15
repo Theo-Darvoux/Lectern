@@ -1,8 +1,8 @@
-"""Tests for app.core.polyglot — polyglot file detection."""
+"""Tests for app.core.security.polyglot — polyglot file detection."""
 
 import pytest
 
-from app.core.polyglot import check_polyglot
+from app.core.security.polyglot import check_polyglot
 
 
 def _write(tmp_path, name: str, data: bytes):

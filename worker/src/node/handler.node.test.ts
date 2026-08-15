@@ -11,9 +11,14 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { handleRequest, ObjectSource, StoredObject } from "../handler.js";
+import {
+  handleRequest,
+  ObjectSource,
+  RangeNotSatisfiableError,
+  StoredObject,
+} from "../handler.js";
 
-const SECRET = "node-test-secret";
+const SECRET = "node-test-secret-at-least-32-bytes";
 
 function signToken(payload: Record<string, unknown>, expOffsetSeconds = 3600): string {
   const full = { ...payload, exp: Math.floor(Date.now() / 1000) + expOffsetSeconds };
@@ -31,16 +36,30 @@ interface FakeObject {
 }
 
 class FakeSource implements ObjectSource {
+  readonly requestedRanges: Array<string | undefined> = [];
+
   constructor(private readonly objects: Map<string, FakeObject>) {}
 
-  async get(key: string): Promise<StoredObject | null> {
+  async get(key: string, rangeHeader?: string): Promise<StoredObject | null> {
+    this.requestedRanges.push(rangeHeader);
     const obj = this.objects.get(key);
     if (!obj) return null;
+    let bytes = obj.bytes;
+    let contentRange: string | undefined;
+    if (rangeHeader) {
+      const match = /^bytes=(\d+)-(\d+)$/.exec(rangeHeader);
+      if (!match) throw new Error(`unsupported fake range: ${rangeHeader}`);
+      const start = Number(match[1]);
+      const end = Math.min(Number(match[2]), bytes.byteLength - 1);
+      bytes = bytes.slice(start, end + 1);
+      contentRange = `bytes ${start}-${end}/${obj.bytes.byteLength}`;
+    }
     return {
-      body: new Response(obj.bytes).body!,
-      size: obj.bytes.byteLength,
+      body: new Response(bytes).body!,
+      size: bytes.byteLength,
       contentEncoding: obj.contentEncoding,
       etag: '"fake-etag"',
+      contentRange,
       writeHttpMetadata(headers: Headers) {
         if (obj.contentType) headers.set("Content-Type", obj.contentType);
         if (obj.contentEncoding) headers.set("Content-Encoding", obj.contentEncoding);
@@ -134,9 +153,22 @@ describe("self-hosted handler — /file", () => {
       secret: SECRET,
     });
     expect(res.status).toBe(200);
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=2592000");
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
     expect(res.headers.get("Content-Disposition")).toBe("inline");
     expect(await res.text()).toBe("hello");
+  });
+
+  it("rejects a valid token used with a different URL path", async () => {
+    const token = signToken({ r2_key: "allowed" });
+    const res = await handleRequest(req(`/file/protected?token=${token}`), {
+      source: source({
+        allowed: { bytes: utf8("allowed") },
+        protected: { bytes: utf8("protected") },
+      }),
+      secret: SECRET,
+    });
+    expect(res.status).toBe(403);
+    expect(await res.text()).not.toContain("protected");
   });
 
   it("sets RFC 5987 disposition for non-ASCII filenames", async () => {
@@ -150,6 +182,52 @@ describe("self-hosted handler — /file", () => {
     expect(disposition).toContain("filename*=UTF-8''Cours%20R%C3%A9seaux.pdf");
   });
 
+  it("serves a requested byte range without fetching the full representation", async () => {
+    const token = signToken({ r2_key: "media" });
+    const fake = new FakeSource(
+      new Map([["media", { bytes: utf8("0123456789"), contentType: "video/mp4" }]]),
+    );
+    const res = await handleRequest(
+      req(`/file/media?token=${token}`, { headers: { Range: "bytes=2-5" } }),
+      { source: fake, secret: SECRET },
+    );
+
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(res.headers.get("Content-Range")).toBe("bytes 2-5/10");
+    expect(res.headers.get("Content-Length")).toBe("4");
+    expect(await res.text()).toBe("2345");
+    expect(fake.requestedRanges).toEqual(["bytes=2-5"]);
+  });
+
+  it("rejects multiple ranges before accessing storage", async () => {
+    const token = signToken({ r2_key: "media" });
+    const fake = new FakeSource(new Map([["media", { bytes: utf8("0123456789") }]]));
+    const res = await handleRequest(
+      req(`/file/media?token=${token}`, { headers: { Range: "bytes=0-1,4-5" } }),
+      { source: fake, secret: SECRET },
+    );
+
+    expect(res.status).toBe(416);
+    expect(fake.requestedRanges).toEqual([]);
+  });
+
+  it("maps an unsatisfiable storage range to 416", async () => {
+    const token = signToken({ r2_key: "media" });
+    const rangeSource: ObjectSource = {
+      async get() {
+        throw new RangeNotSatisfiableError(10);
+      },
+    };
+    const res = await handleRequest(
+      req(`/file/media?token=${token}`, { headers: { Range: "bytes=50-60" } }),
+      { source: rangeSource, secret: SECRET },
+    );
+
+    expect(res.status).toBe(416);
+    expect(res.headers.get("Content-Range")).toBe("bytes */10");
+  });
+
   it("decompresses gzip and drops content-encoding", async () => {
     const original = "compressed payload";
     const token = signToken({ r2_key: "g" });
@@ -161,7 +239,26 @@ describe("self-hosted handler — /file", () => {
     });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-encoding")).toBeNull();
+    expect(res.headers.get("Accept-Ranges")).toBe("none");
     expect(await res.text()).toBe(original);
+  });
+
+  it("does not expose compressed-byte ranges as decompressed ranges", async () => {
+    const original = "compressed representation";
+    const token = signToken({ r2_key: "g" });
+    const fake = new FakeSource(
+      new Map([["g", { bytes: await gzip(original), contentEncoding: "gzip" }]]),
+    );
+    const res = await handleRequest(
+      req(`/file/g?token=${token}`, { headers: { Range: "bytes=0-4" } }),
+      { source: fake, secret: SECRET },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Range")).toBeNull();
+    expect(res.headers.get("Accept-Ranges")).toBe("none");
+    expect(await res.text()).toBe(original);
+    expect(fake.requestedRanges).toEqual(["bytes=0-4", undefined]);
   });
 });
 

@@ -21,7 +21,9 @@ interface PrintIframeOptions {
 }
 
 /**
- * Opens a hidden iframe, writes HTML content, triggers window.print(), then cleans up.
+ * Opens a hidden iframe, writes trusted HTML content, triggers window.print(), then cleans up.
+ * The title is assigned through the DOM after parsing so untrusted display
+ * strings can never become markup in the print document.
  */
 export function printInIframe(content: string, options: PrintIframeOptions = {}): void {
   const iframe = document.createElement("iframe");
@@ -49,7 +51,7 @@ export function printInIframe(content: string, options: PrintIframeOptions = {})
     <!DOCTYPE html>
     <html>
       <head>
-        <title>${options.title ?? "Print"}</title>
+        <title></title>
         <style>
           *, *::before, *::after { box-sizing: border-box; }
           body {
@@ -74,6 +76,7 @@ export function printInIframe(content: string, options: PrintIframeOptions = {})
     </html>
   `);
   doc.close();
+  doc.title = options.title ?? "Print";
 
   iframe.contentWindow?.addEventListener("afterprint", cleanup);
   setTimeout(() => {

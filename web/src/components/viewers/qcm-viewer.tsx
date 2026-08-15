@@ -467,7 +467,7 @@ function ResultsView({ qcm, questionStates, onRetry }: ResultsViewProps) {
 export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMViewerProps) {
   const t = useTranslations("QCM.viewer");
   const annotationsApi = useAnnotationsContext();
-  const { user } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
 
   const [qcm, setQcm] = useState<QCMFile | null>(null);
   const [loading, setLoading] = useState(true);

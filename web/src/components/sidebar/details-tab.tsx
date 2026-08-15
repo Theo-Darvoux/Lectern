@@ -169,7 +169,7 @@ function InteractionBar({
   const [likeCount, setLikeCount] = useState(effectiveLikeCount);
   const [isLiking, setIsLiking] = useState(false);
   const [isFavouriting, setIsFavouriting] = useState(false);
-  const { updateSidebarData } = useUIStore();
+  const updateSidebarData = useUIStore((state) => state.updateSidebarData);
   const { user } = useAuth();
   const t = useTranslations("Sidebar");
   const triggerBrowseRefresh = useBrowseRefreshStore(
@@ -291,7 +291,7 @@ function InteractionBar({
 function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations("Sidebar");
   const { user } = useAuth();
-  const { updateSidebarData } = useUIStore();
+  const updateSidebarData = useUIStore((state) => state.updateSidebarData);
   const setIconOverride = useDirectoryIconOverrides((s) => s.setIconOverride);
   const setColorOverride = useDirectoryColorOverrides((s) => s.setColorOverride);
 

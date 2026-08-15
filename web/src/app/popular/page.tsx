@@ -50,7 +50,7 @@ function SkeletonGrid() {
 // ─────────────────────────────────────────────
 function PopularContent() {
   const t = useTranslations("Popular");
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const searchParams = useSearchParams();
   const router = useRouter();
 

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.directory import Directory
 from app.models.material import Material
 from app.models.pull_request import PRStatus, PullRequest
+from app.models.upload import Upload
 from app.models.user import User, UserRole
 
 
@@ -27,7 +28,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 
 
 def _auth_headers(user: User) -> dict[str, str]:
-    from app.core.security import create_access_token
+    from app.core.security.security import create_access_token
 
     token, _ = create_access_token(str(user.id), user.role.value, user.email)
     return {"Authorization": f"Bearer {token}"}
@@ -59,10 +60,12 @@ async def test_upload_idempotency(
     with (
         patch("app.routers.upload.direct.get_s3_client") as mock_s3_cm,
         patch("app.dependencies.auth.is_token_blacklisted", new_callable=AsyncMock) as mock_bl,
+        patch("app.dependencies.auth.is_session_revoked", new_callable=AsyncMock) as mock_session,
     ):
         mock_s3 = AsyncMock()
         mock_s3_cm.return_value.__aenter__.return_value = mock_s3
         mock_bl.return_value = False
+        mock_session.return_value = False
 
         # 1. First upload — goes through the full pipeline
         resp1 = await client.post("/api/upload", files=files, headers=headers)
@@ -80,20 +83,32 @@ async def test_upload_idempotency(
 
 @pytest.mark.asyncio
 async def test_atomic_pr_application_copy_not_move(db_session: AsyncSession):
-    """Verify that apply_pr copies files and enqueues deletion."""
-    from app.services.pr import apply_pr
+    """Verify approval copies legacy files and couples deletion to reservation release."""
+    from app.services.pr import _cleanup_pr_resources, apply_pr
 
     student = await _create_user(db_session, UserRole.STUDENT)
     await _create_user(db_session, UserRole.BUREAU)
     d = await _create_directory(db_session, "Dir", user_id=student.id)
 
-    file_key = f"uploads/{student.id}/{uuid.uuid4()}/test.pdf"
+    upload_id = str(uuid.uuid4())
+    file_key = f"uploads/{student.id}/{upload_id}/test.pdf"
+    db_session.add(
+        Upload(
+            upload_id=upload_id,
+            user_id=student.id,
+            final_key=file_key,
+            status="clean",
+            filename="test.pdf",
+            mime_type="application/pdf",
+            size_bytes=100,
+        )
+    )
 
     # Create a PR in DB
     pr = PullRequest(
         id=uuid.uuid4(),
         title="Atomic Test",
-        status=PRStatus.OPEN,
+        status=PRStatus.APPROVED,
         author_id=student.id,
         payload=[
             {
@@ -118,8 +133,9 @@ async def test_atomic_pr_application_copy_not_move(db_session: AsyncSession):
     ):
         mock_info.return_value = {"size": 100, "content_type": "application/pdf"}
 
-        # Apply PR
+        # Production approval always applies the PR and then queues resource cleanup.
         await apply_pr(db_session, pr)
+        await _cleanup_pr_resources(db_session, pr, redis=AsyncMock())
 
         # Verify: copy_object was called (to destination)
         assert mock_copy.call_count == 1
@@ -127,9 +143,13 @@ async def test_atomic_pr_application_copy_not_move(db_session: AsyncSession):
         assert call_args[0] == file_key
         assert "materials/" in call_args[1]
 
-        # Verify: delete and index jobs were enqueued to session.info
+        # Verify: deletion is coupled to the upload reservation and fenced as a
+        # promoted legacy handoff, while indexing is still queued by apply_pr.
         jobs = db_session.info["post_commit_jobs"]
-        assert any(j[0] == "delete_storage_objects" and j[1] == [file_key] for j in jobs)
+        delete_job = next(j for j in jobs if j[0] == "delete_storage_objects")
+        assert delete_job[1] == [file_key]
+        assert delete_job[2] == [upload_id]
+        assert delete_job[3] is True
         assert any(j[0] == "index_material" for j in jobs)
 
 

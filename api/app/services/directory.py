@@ -7,10 +7,11 @@ from sqlalchemy import String, case, exists, func, literal, select, tuple_, upda
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
-from app.core.exceptions import NotFoundError
-from app.core.sorting import natural_sort_key
+from app.core.common.exceptions import NotFoundError
+from app.core.common.natural_sorting import natural_sort_key
 from app.models.directory import Directory, DirectoryFavourite, DirectoryLike
 from app.models.material import Material, MaterialVersion
+from app.services.reaction_lock import acquire_reaction_toggle_lock
 
 
 def slugify(text: str) -> str:
@@ -53,21 +54,20 @@ def directory_orm_to_dict(
     return out
 
 
+_PREVIEW_MAX_DEPTH = 32
+
+
 async def get_preview_material_ids(
     db: AsyncSession, dir_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, list[str]]:
-    """Return up to 4 preview material IDs per directory (latest version).
+    """Return up to four preview material IDs from each bounded subtree.
 
-    Walks each requested directory's whole subtree, so a folder that only
-    contains sub-folders still surfaces thumbnails "back-propagated" from
-    materials nested deeper. Direct children win: results are ordered by depth
-    first, so a directory's own materials fill the slots before descendants'.
+    Direct materials win over descendants. The recursive depth cap prevents a
+    corrupted directory cycle from running forever.
     """
     if not dir_ids:
         return {}
 
-    # Recursive CTE: map each requested root directory to every directory in its
-    # subtree (itself at depth 0).
     base = select(
         Directory.id.label("root_id"),
         Directory.id.label("dir_id"),
@@ -83,28 +83,42 @@ async def get_preview_material_ids(
         ).where(
             child.parent_id == subtree.c.dir_id,
             child.deleted_at.is_(None),
-            subtree.c.depth < 1,
+            subtree.c.depth < _PREVIEW_MAX_DEPTH,
         )
     )
 
-    rows = await db.execute(
-        select(subtree.c.root_id, subtree.c.depth, Material.id, Material.title)
+    ranked = (
+        select(
+            subtree.c.root_id,
+            Material.id.label("material_id"),
+            func.row_number()
+            .over(
+                partition_by=subtree.c.root_id,
+                order_by=(
+                    subtree.c.depth,
+                    func.lower(Material.title),
+                    Material.id,
+                ),
+            )
+            .label("preview_rank"),
+        )
         .join(Material, Material.directory_id == subtree.c.dir_id)
         .where(
             Material.parent_material_id.is_(None),
             Material.deleted_at.is_(None),
         )
+        .subquery()
     )
 
-    # Direct children win (depth first), then natural order by title. sorted() is
-    # stable, so per-root ordering is preserved when bucketing below.
-    ordered = sorted(rows.all(), key=lambda r: (r.depth, natural_sort_key(r.title)))
+    rows = await db.execute(
+        select(ranked.c.root_id, ranked.c.material_id)
+        .where(ranked.c.preview_rank <= 4)
+        .order_by(ranked.c.root_id, ranked.c.preview_rank)
+    )
 
     result: dict[uuid.UUID, list[str]] = {}
-    for row in ordered:
-        lst = result.setdefault(row.root_id, [])
-        if len(lst) < 4:
-            lst.append(str(row.id))
+    for root_id, material_id in rows:
+        result.setdefault(root_id, []).append(str(material_id))
     return result
 
 
@@ -516,6 +530,58 @@ async def get_directory_path(
     return [{"id": str(row.id), "name": row.name, "slug": row.slug} for row in result.all()]
 
 
+async def get_directory_breadcrumb_paths(
+    db: AsyncSession, directory_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, list[dict[str, typing.Any]]]:
+    """Resolve many root-to-directory breadcrumb paths with one recursive CTE."""
+    if not directory_ids:
+        return {}
+
+    base_case = (
+        select(
+            Directory.id,
+            Directory.name,
+            Directory.slug,
+            Directory.parent_id,
+            Directory.id.label("requested_id"),
+            literal(0).label("depth"),
+        )
+        .where(Directory.id.in_(directory_ids))
+        .cte(name="dir_paths_cte", recursive=True)
+    )
+
+    path_alias = aliased(base_case, name="p")
+    dir_alias = aliased(Directory, name="d")
+    recursive_case = select(
+        dir_alias.id,
+        dir_alias.name,
+        dir_alias.slug,
+        dir_alias.parent_id,
+        path_alias.c.requested_id,
+        (path_alias.c.depth + 1).label("depth"),
+    ).join(path_alias, dir_alias.id == path_alias.c.parent_id)
+
+    cte = base_case.union_all(recursive_case)
+    rows = (
+        await db.execute(
+            select(
+                cte.c.requested_id,
+                cte.c.id,
+                cte.c.name,
+                cte.c.slug,
+                cte.c.depth,
+            ).order_by(cte.c.requested_id, cte.c.depth.desc())
+        )
+    ).all()
+
+    paths: dict[uuid.UUID, list[dict[str, typing.Any]]] = {}
+    for row in rows:
+        paths.setdefault(row.requested_id, []).append(
+            {"id": str(row.id), "name": row.name, "slug": row.slug}
+        )
+    return paths
+
+
 async def resolve_browse_path(
     db: AsyncSession, path: str, current_user_id: uuid.UUID | None = None
 ) -> dict[str, typing.Any]:
@@ -628,40 +694,58 @@ async def resolve_browse_path(
 async def toggle_directory_like(
     db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID
 ) -> bool:
-    """Toggle a like for a directory. Returns True if liked, False if unliked."""
-    result = await db.execute(
+    """Toggle a like atomically for one user/directory pair."""
+    await acquire_reaction_toggle_lock(
+        db,
+        kind="directory-like",
+        user_id=user_id,
+        target_id=directory_id,
+    )
+
+    if await db.scalar(select(Directory.id).where(Directory.id == directory_id)) is None:
+        raise NotFoundError("Directory not found")
+
+    like = await db.scalar(
         select(DirectoryLike).where(
-            DirectoryLike.user_id == user_id, DirectoryLike.directory_id == directory_id
+            DirectoryLike.user_id == user_id,
+            DirectoryLike.directory_id == directory_id,
         )
     )
-    like = result.scalar_one_or_none()
 
-    if like:
+    if like is not None:
         await db.delete(like)
+        await db.flush()
         await db.execute(
             update(Directory)
-            .where(Directory.id == directory_id)
+            .where(Directory.id == directory_id, Directory.like_count > 0)
             .values(like_count=Directory.like_count - 1)
         )
-        liked = False
-    else:
-        new_like = DirectoryLike(id=uuid.uuid4(), user_id=user_id, directory_id=directory_id)
-        db.add(new_like)
-        await db.execute(
-            update(Directory)
-            .where(Directory.id == directory_id)
-            .values(like_count=Directory.like_count + 1)
-        )
-        liked = True
+        return False
 
+    db.add(DirectoryLike(id=uuid.uuid4(), user_id=user_id, directory_id=directory_id))
     await db.flush()
-    return liked
+    await db.execute(
+        update(Directory)
+        .where(Directory.id == directory_id)
+        .values(like_count=Directory.like_count + 1)
+    )
+    return True
 
 
 async def toggle_directory_favourite(
     db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID
 ) -> bool:
-    """Toggle a favourite for a directory. Returns True if favourited, False if removed."""
+    """Toggle a favourite atomically for one user/directory pair."""
+    await acquire_reaction_toggle_lock(
+        db,
+        kind="directory-favourite",
+        user_id=user_id,
+        target_id=directory_id,
+    )
+
+    if await db.scalar(select(Directory.id).where(Directory.id == directory_id)) is None:
+        raise NotFoundError("Directory not found")
+
     result = await db.execute(
         select(DirectoryFavourite).where(
             DirectoryFavourite.user_id == user_id, DirectoryFavourite.directory_id == directory_id
@@ -681,6 +765,23 @@ async def toggle_directory_favourite(
 
     await db.flush()
     return favourited
+
+
+def _validate_zip_arcname(arcname: str) -> str:
+    """Reject archive member names that can escape or change roots on extraction."""
+    if not arcname or "\x00" in arcname or "\\" in arcname or arcname.startswith("/"):
+        raise ValueError("Unsafe ZIP member path")
+
+    parts = arcname.split("/")
+    if any(not part for part in parts):
+        raise ValueError("Unsafe ZIP member path")
+
+    normalized_parts = [part.rstrip(" .") for part in parts]
+    if any(part in {"", ".", ".."} for part in normalized_parts):
+        raise ValueError("Unsafe ZIP member path")
+    if re.match(r"^[A-Za-z]:", normalized_parts[0]):
+        raise ValueError("Unsafe ZIP member drive prefix")
+    return arcname
 
 
 _DOWNLOAD_MAX_FILES = 500
@@ -784,6 +885,7 @@ async def _build_zip_entries(
     seen: set[str] = set()
 
     def _add_entry(arcname: str, file_key: str) -> None:
+        arcname = _validate_zip_arcname(arcname)
         original = arcname
         n = 1
         while arcname in seen:

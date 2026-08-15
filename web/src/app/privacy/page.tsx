@@ -5,7 +5,7 @@ import { useConfigStore } from "@/lib/stores";
 
 export default function PrivacyPage() {
     const t = useTranslations("Privacy");
-    const { config } = useConfigStore();
+    const config = useConfigStore((state) => state.config);
 
     if (!config) return null;
 

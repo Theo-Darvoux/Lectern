@@ -1,18 +1,19 @@
-"""Background ARQ worker: MalwareBazaar post-promotion check.
+"""Background ARQ worker: fail-open MalwareBazaar post-promotion check.
 
 This worker is enqueued fire-and-forget by the upload pipeline immediately after
-a file is promoted to ``cas/`` storage with status=CLEAN.  It performs the
+a file is promoted to ``cas/`` storage with status=CLEAN. It performs the
 MalwareBazaar hash lookup that was skipped in the hot path, then calls
 ``retroactive_quarantine`` if the file is flagged.
 
 Design invariants
 -----------------
 * Idempotent: a Redis tombstone (``bazaar:clean:{sha256}``) prevents duplicate
-  Bazaar calls for the same hash.  Re-uploads of the same file skip this worker
+  Bazaar calls for the same hash. Re-uploads of the same file skip this worker
   entirely.
-* Fail-closed/open: controlled by ``settings.malwarebazaar_fail_closed``.
-  True  → timeout/error re-raises, ARQ retries up to 3×.
-  False → timeout/error is logged and treated as "skip" (YARA remains the gate).
+* The scanner is always called in strict mode so an unavailable or malformed
+  Bazaar response can never be mistaken for an explicit clean result. This
+  worker applies the configured fail-open/fail-closed policy after catching the
+  strict-mode exception.
 * No hard dependency on the scanner pool: falls back to a one-shot scanner when
   the context scanner is unavailable (e.g. in integration tests).
 """
@@ -25,6 +26,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.core.common.exceptions import ServiceUnavailableError
 from app.workers.retroactive_quarantine import retroactive_quarantine
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.pipeline import _get_fallback_scanner
@@ -35,10 +37,10 @@ logger = logging.getLogger(__name__)
 _BAZAAR_CLEAN_PREFIX = "bazaar:clean:"
 _BAZAAR_SKIPPED_PREFIX = "bazaar:skipped:"
 
-# TTL for "known-clean" tombstones (7 days).  Balances false-negative risk (new
+# TTL for "known-clean" tombstones (7 days). Balances false-negative risk (new
 # Bazaar entries for the same hash) against redundant network calls.
 _CLEAN_TOMBSTONE_TTL = 7 * 24 * 3600  # seconds
-# TTL for "skipped due to error" tombstones (1 hour).  Short so the worker retries
+# TTL for "skipped due to error" tombstones (1 hour). Short so the worker retries
 # on the next upload of the same file if Bazaar recovers.
 _SKIPPED_TOMBSTONE_TTL = 3600  # seconds
 
@@ -79,8 +81,15 @@ async def check_bazaar(
         scanner = _get_fallback_scanner()
 
     try:
-        threat = await scanner.check_malwarebazaar(sha256, upload_id)
-    except (httpx.TimeoutException, httpx.HTTPError) as exc:
+        # Always request strict scanner behaviour. Otherwise fail-open scanner
+        # configuration returns None for both explicit clean results and service
+        # errors, which would incorrectly create a seven-day clean tombstone.
+        threat = await scanner.check_malwarebazaar(
+            sha256,
+            upload_id,
+            fail_closed=True,
+        )
+    except (httpx.TimeoutException, httpx.HTTPError, ServiceUnavailableError) as exc:
         if owns_scanner:
             await scanner.close()
         if settings.malwarebazaar_fail_closed:
@@ -110,8 +119,8 @@ async def check_bazaar(
 
     # ── Decision ─────────────────────────────────────────────────────────────
     if threat is None:
-        # File is clean.  Write tombstone so future uploads of the same file
-        # skip this worker entirely.
+        # File is explicitly absent from Bazaar. Write a tombstone so future
+        # uploads of the same file skip this worker entirely.
         await redis.set(f"{_BAZAAR_CLEAN_PREFIX}{sha256}", "1", ex=_CLEAN_TOMBSTONE_TTL)
         logger.info(
             "check_bazaar: upload %s (sha256=%.16s…) is clean per MalwareBazaar.",
@@ -120,7 +129,7 @@ async def check_bazaar(
         )
         return
 
-    # File is flagged.  Run retroactive quarantine.
+    # File is flagged. Run retroactive quarantine.
     logger.warning(
         "check_bazaar: MalwareBazaar flagged upload %s (sha256=%.16s…) as '%s'. "
         "Initiating retroactive quarantine.",

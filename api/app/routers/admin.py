@@ -13,15 +13,19 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database import get_db
-from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
-from app.core.redis import get_redis
+from app.core.common.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.core.database.database import get_db
+from app.core.database.redis import get_redis
 from app.dependencies.auth import require_role
 from app.models.auth_config import AllowedDomain
 from app.models.dead_letter import DeadLetterJob
 from app.models.user import User, UserRole
 from app.schemas.common import DetailedHealthResponse, ServiceStatus
-from app.services.auth import get_full_auth_config
+from app.services.auth import (
+    ensure_admin_removal_safe,
+    get_full_auth_config,
+    lock_admin_authority_change,
+)
 from app.services.notification import notify_user
 from app.services.user import hard_delete_user
 
@@ -110,9 +114,6 @@ async def admin_update_role(
     db: Annotated[AsyncSession, Depends(get_db)],
     role: str = Query(...),
 ) -> dict:  # type: ignore[type-arg]
-    target = await db.scalar(select(User).where(User.id == user_id))
-    if not target:
-        raise NotFoundError("User not found")
     try:
         new_role = UserRole(role)
     except ValueError:
@@ -121,7 +122,23 @@ async def admin_update_role(
         raise BadRequestError(
             "Cannot manually assign PENDING role; use the approve/reject endpoints"
         )
-    target.role = new_role
+
+    # Dependency authorization can become stale while this request waits for the
+    # shared authority lock. Revalidate the actor *inside* that boundary, then
+    # authoritatively load the target before applying any role transition.
+    _, target = await lock_admin_authority_change(
+        db,
+        _user.id,
+        user_id,
+        expected_auth_generation=_user.auth_generation,
+    )
+    if not target:
+        raise NotFoundError("User not found")
+    if target.is_admin and new_role not in ADMIN_ROLES:
+        await ensure_admin_removal_safe(db, target.id)
+    if target.role != new_role:
+        target.role = new_role
+        target.auth_generation += 1
     await db.flush()
     return {"status": "ok", "role": new_role.value}
 
@@ -132,11 +149,15 @@ async def admin_delete_user(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
-    target = await db.scalar(select(User).where(User.id == user_id))
+    _, target = await lock_admin_authority_change(
+        db,
+        _user.id,
+        user_id,
+        expected_auth_generation=_user.auth_generation,
+    )
     if not target:
         raise NotFoundError("User not found")
     await hard_delete_user(db, target)
-    await db.commit()
     return {"status": "ok"}
 
 
@@ -147,13 +168,19 @@ async def admin_approve_user(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
     """Approve a PENDING user — sets their role to STUDENT and notifies them."""
-    target = await db.scalar(select(User).where(User.id == user_id))
+    _, target = await lock_admin_authority_change(
+        db,
+        _user.id,
+        user_id,
+        expected_auth_generation=_user.auth_generation,
+    )
     if not target:
         raise NotFoundError("User not found")
     if target.role != UserRole.PENDING:
         raise BadRequestError("User is not pending approval")
 
     target.role = UserRole.STUDENT
+    target.auth_generation += 1
     await db.flush()
 
     await notify_user(
@@ -175,7 +202,15 @@ async def admin_reject_user(
     reason: Annotated[str | None, Query(max_length=500)] = None,
 ) -> dict:  # type: ignore[type-arg]
     """Reject and hard-delete a PENDING user."""
-    target = await db.scalar(select(User).where(User.id == user_id))
+    # Rejection is a PENDING-only state transition. Read that state only after
+    # entering the authority boundary so a concurrent approval/promotion cannot
+    # turn this into deletion of a no-longer-pending account.
+    _, target = await lock_admin_authority_change(
+        db,
+        _user.id,
+        user_id,
+        expected_auth_generation=_user.auth_generation,
+    )
     if not target:
         raise NotFoundError("User not found")
     if target.role != UserRole.PENDING:
@@ -233,19 +268,16 @@ async def retry_dead_letter_job(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
-    job = await db.scalar(select(DeadLetterJob).where(DeadLetterJob.id == job_id))
+    job = await db.scalar(select(DeadLetterJob).where(DeadLetterJob.id == job_id).with_for_update())
     if not job:
         raise NotFoundError("Dead letter job not found")
     if job.resolved_at is not None:
         raise BadRequestError("Job has already been resolved")
 
-    import app.core.redis as redis_core
-
-    if redis_core.arq_pool is None:
-        raise BadRequestError("Background job queue is unavailable")
+    from app.core.database.post_commit import add_post_commit_job, outbox_kwargs
 
     payload = job.payload or {}
-    await redis_core.arq_pool.enqueue_job(job.job_name, **payload)  # type: ignore[arg-type]
+    add_post_commit_job(db, (job.job_name, outbox_kwargs(**payload)))
 
     job.resolved_at = datetime.now(UTC)
     await db.flush()
@@ -258,7 +290,7 @@ async def dismiss_dead_letter_job(
     _user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:  # type: ignore[type-arg]
-    job = await db.scalar(select(DeadLetterJob).where(DeadLetterJob.id == job_id))
+    job = await db.scalar(select(DeadLetterJob).where(DeadLetterJob.id == job_id).with_for_update())
     if not job:
         raise NotFoundError("Dead letter job not found")
     if job.resolved_at is not None:
@@ -278,8 +310,8 @@ async def get_detailed_health(
 ) -> DetailedHealthResponse:
     from sqlalchemy import text
 
-    from app.core.meilisearch import meili_admin_client
-    from app.core.scanner import MalwareScanner
+    from app.core.events.meilisearch import meili_admin_client
+    from app.core.security.scanner import MalwareScanner
     from app.models.material import Material, MaterialVersion
 
     services: dict[str, ServiceStatus] = {}
@@ -305,7 +337,7 @@ async def get_detailed_health(
     # 3. S3 Check (Dynamic)
     start = time.perf_counter()
     try:
-        from app.core.storage import get_s3_client
+        from app.core.storage.facade import get_s3_client
 
         bucket = settings.s3_bucket
         endpoint = settings.s3_endpoint
@@ -336,6 +368,8 @@ async def get_detailed_health(
     try:
         import aiosmtplib
 
+        from app.core.events.email import get_smtp_tls_mode
+
         host = settings.smtp_host
         port = settings.smtp_port
 
@@ -343,13 +377,19 @@ async def get_detailed_health(
             # Quick ping to SMTP port
             # Use IP if provided, otherwise hostname
             connect_host = settings.smtp_ip or host
-            # Health check is a reachability probe only — disable cert validation
-            # so connecting via IP address doesn't trigger SSL hostname mismatch.
+            tls_mode = get_smtp_tls_mode()
+            if settings.smtp_ip and tls_mode == "implicit":
+                raise ValueError("SMTP_IP is incompatible with implicit TLS certificate SNI")
             smtp = aiosmtplib.SMTP(
-                hostname=connect_host, port=port, timeout=2, validate_certs=False
+                hostname=connect_host,
+                port=port,
+                timeout=2,
+                use_tls=tls_mode == "implicit",
+                start_tls=False,
             )
-            # connect() does not accept server_hostname — just open the connection
             await smtp.connect()
+            if tls_mode == "starttls":
+                await smtp.starttls(server_hostname=host if settings.smtp_ip else None)
             await smtp.quit()
             latency = (time.perf_counter() - start) * 1000
             services["email"] = ServiceStatus(
@@ -573,7 +613,7 @@ async def admin_test_email(
     body: Annotated[TestEmailIn, Body()],
     _user: AdminUser,
 ) -> dict:  # type: ignore[type-arg]
-    from app.core.email import send_email
+    from app.core.events.email import send_email
 
     sitename = settings.site_name
     subject = f"{sitename} - Test Email"

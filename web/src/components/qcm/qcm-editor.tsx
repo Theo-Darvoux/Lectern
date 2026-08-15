@@ -755,7 +755,7 @@ export function QCMEditor({
   isSavingDraft = false,
 }: QCMEditorProps) {
   const t = useTranslations("QCM.editor");
-  const { setHideFooter } = useUIStore();
+  const setHideFooter = useUIStore((state) => state.setHideFooter);
 
   useEffect(() => {
     setHideFooter(true);

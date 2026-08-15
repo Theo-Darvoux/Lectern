@@ -16,6 +16,7 @@ Covers:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -24,6 +25,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.installation import InstallationState
 from app.services.backup import (
     _RESTORE_MULTIPART_THRESHOLD,
     _TABLE_INSERT_ORDER,
@@ -42,31 +44,65 @@ def _make_zip(
     s3_entries: dict[str, bytes] | None = None,
     s3_metadata: dict | None = None,
     include_metadata_sidecar: bool = True,
+    omit_tables: set[str] | None = None,
 ) -> Path:
     dest = tmp_path / "backup.zip"
-    s3_entries = s3_entries or {}
+    s3_entries_dict = s3_entries or {}
+    s3_objects = {
+        key: {
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+        for key, data in s3_entries_dict.items()
+    }
     manifest = {
         "version": version,
         "created_at": "2026-06-05T00:00:00+00:00",
         "tables": _TABLE_INSERT_ORDER,
         "s3_prefixes": list(BACKUP_PREFIXES),
-        "s3_object_count": len(s3_entries),
+        "s3_object_count": len(s3_entries_dict),
+        "s3_objects": s3_objects,
         "db_row_counts": {},
     }
+
     with zipfile.ZipFile(dest, "w", allowZip64=True) as zf:
         zf.writestr("manifest.json", json.dumps(manifest))
         if include_metadata_sidecar and s3_metadata is not None:
             zf.writestr("s3_metadata.json", json.dumps(s3_metadata))
         for tbl in _TABLE_INSERT_ORDER:
-            zf.writestr(f"db/{tbl}.json", "[]")
-        for key, data in s3_entries.items():
+            if tbl not in (omit_tables or set()):
+                zf.writestr(f"db/{tbl}.json", "[]")
+        for key, data in s3_entries_dict.items():
             zf.writestr(f"s3/{key}", data)
+
     return dest
 
 
 async def _empty_gen(*_a, **_kw):
     if False:
         yield
+
+
+@pytest.mark.asyncio
+async def test_legacy_backup_restore_consumes_http_bootstrap(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """A pre-marker backup must never restore into remotely claimable setup state."""
+    zip_path = _make_zip(
+        tmp_path,
+        s3_metadata={},
+        omit_tables={"installation_state"},
+    )
+
+    with (
+        patch("app.services.backup.list_objects", side_effect=lambda p: _empty_gen()),
+        patch("app.services.backup.delete_object", new_callable=AsyncMock),
+        patch("app.services.backup.upload_file", new_callable=AsyncMock),
+    ):
+        await restore_from_zip_path(db_session, zip_path)
+
+    marker = await db_session.get(InstallationState, 1)
+    assert marker is not None
 
 
 # ── Metadata applied on upload ────────────────────────────────────────────────
@@ -354,6 +390,7 @@ async def test_branding_objects_wiped_on_restore(db_session: AsyncSession, tmp_p
     """Existing branding/ objects must be deleted before restore."""
     zip_path = _make_zip(tmp_path, s3_metadata={})
     delete_mock = AsyncMock()
+    copy_mock = AsyncMock()
 
     async def _fake_list(prefix: str):
         if prefix == "branding/":
@@ -361,12 +398,14 @@ async def test_branding_objects_wiped_on_restore(db_session: AsyncSession, tmp_p
 
     with (
         patch("app.services.backup.list_objects", side_effect=_fake_list),
+        patch("app.services.backup.copy_object", copy_mock),
         patch("app.services.backup.delete_object", delete_mock),
         patch("app.services.backup.upload_file", new_callable=AsyncMock),
     ):
         await restore_from_zip_path(db_session, zip_path)
 
     delete_mock.assert_any_call("branding/old_logo.png")
+    assert copy_mock.await_args_list[0].args[0] == "branding/old_logo.png"
 
 
 @pytest.mark.asyncio
@@ -402,10 +441,8 @@ async def test_branding_object_reuploaded_on_restore(
 
 
 @pytest.mark.asyncio
-async def test_truncate_failure_skipped_gracefully(
-    db_session: AsyncSession, tmp_path: Path
-) -> None:
-    """If a DELETE FROM fails for one table, restore continues."""
+async def test_truncate_failure_aborts_restore(db_session: AsyncSession, tmp_path: Path) -> None:
+    """A partial database wipe must abort before object storage is touched."""
     zip_path = _make_zip(tmp_path, s3_metadata={})
     original_execute = db_session.execute
 
@@ -425,8 +462,8 @@ async def test_truncate_failure_skipped_gracefully(
             patch("app.services.backup.delete_object", new_callable=AsyncMock),
             patch("app.services.backup.upload_file", new_callable=AsyncMock),
         ):
-            result = await restore_from_zip_path(db_session, zip_path)
-        assert result["version"] == BACKUP_VERSION
+            with pytest.raises(Exception, match="table missing"):
+                await restore_from_zip_path(db_session, zip_path)
     finally:
         db_session.execute = original_execute  # type: ignore[method-assign]
 

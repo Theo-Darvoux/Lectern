@@ -18,7 +18,7 @@ function FavouriteRow({ material }: { material: MaterialDetail }) {
       className="group flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
     >
       <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-md border bg-muted">
-        <MaterialPreview material={material} />
+        <MaterialPreview material={material} lazy />
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium leading-snug group-hover:underline">

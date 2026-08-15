@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import {
   ArrowLeft,
   Download,
@@ -29,7 +29,6 @@ import {
 } from "@/lib/file-utils";
 import { useUIStore, useAuthStore } from "@/lib/stores";
 import { isGuest } from "@/lib/guest";
-// useUIStore provides: sidebarOpen, openSidebar, closeSidebar
 import { apiFetch } from "@/lib/api-client";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import type { QCMFile } from "@/lib/qcm-types";
@@ -104,6 +103,17 @@ const CodeViewer = dynamic(
   },
 );
 
+const NotebookViewer = dynamic(
+  () =>
+    import("@/components/viewers/notebook-viewer").then(
+      (mod) => mod.NotebookViewer,
+    ),
+  {
+    loading: () => <Skeleton className="h-full w-full rounded-none" />,
+    ssr: false,
+  },
+);
+
 const CsvViewer = dynamic(
   () => import("@/components/viewers/csv-viewer").then((mod) => mod.CsvViewer),
   {
@@ -165,12 +175,14 @@ const QCMViewer = dynamic(
 import { SharedSidebar } from "@/components/sidebar/shared-sidebar";
 import { ViewerFab } from "@/components/browse/viewer-fab";
 import { Breadcrumbs } from "@/components/browse/breadcrumbs";
+import { navigateBrowse } from "@/components/browse/browse-link";
 import { AnnotationSelectionTooltip } from "@/components/annotations/annotation-selection-tooltip";
 import { useAnnotations, AnnotationsContext } from "@/hooks/use-annotations";
 import { ItemActionsMenu, ItemActionsDropdownTrigger, type ItemData } from "@/components/browse/item-actions-menu";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
 import { useTranslations } from "next-intl";
+import { useDropZoneStore } from "@/lib/drop-zone-store";
 
 interface MaterialViewerProps {
   material: Record<string, unknown>;
@@ -184,7 +196,6 @@ export function MaterialViewer({
   breadcrumbs = [],
 }: MaterialViewerProps) {
   const t = useTranslations("Browse");
-  const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
@@ -202,80 +213,28 @@ export function MaterialViewer({
   })();
   const isMobile = useIsMobile();
   const isDesktop = useIsDesktop();
-  const {
-    openSidebar,
-    setSidebarTarget,
-    closeSidebar,
-    sidebarOpen,
-    setHideFooter,
-    materialActionsOpen,
-    setMaterialActionsOpen,
-    setActiveViewerType,
-    navbarVisible,
-    setNavbarVisible,
-  } = useUIStore();
+  const openSidebar = useUIStore((state) => state.openSidebar);
+  const setSidebarTarget = useUIStore((state) => state.setSidebarTarget);
+  const closeSidebar = useUIStore((state) => state.closeSidebar);
+  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
+  const setHideFooter = useUIStore((state) => state.setHideFooter);
+  const materialActionsOpen = useUIStore((state) => state.materialActionsOpen);
+  const setMaterialActionsOpen = useUIStore((state) => state.setMaterialActionsOpen);
+  const setActiveViewerType = useUIStore((state) => state.setActiveViewerType);
+  const setBrowseContext = useDropZoneStore((state) => state.setBrowseContext);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const headerRef = useRef<HTMLDivElement>(null);
-  const [headerHeight, setHeaderHeight] = useState(0);
-  const headerHeightRef = useRef(0);
-  useEffect(() => { headerHeightRef.current = headerHeight; }, [headerHeight]);
-  const navbarVisibleRef = useRef(navbarVisible);
-  const hoveredOpen = useRef(false);
-  useEffect(() => { navbarVisibleRef.current = navbarVisible; }, [navbarVisible]);
 
-  // Hide footer, enter immersive mode, and prevent page scroll while viewer is active
+  // Keep the document workspace stable and prevent the page behind it from scrolling.
   useEffect(() => {
     setHideFooter(true);
-    setNavbarVisible(true);
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
     return () => {
       setHideFooter(false);
-      setNavbarVisible(true);
       document.body.style.overflow = "";
       document.documentElement.style.overflow = "";
     };
-  }, [setHideFooter, setNavbarVisible]);
-
-  // Measure the header height so the viewer can reserve exactly that space permanently.
-  // Using ResizeObserver means it stays accurate if fonts/content change.
-  useEffect(() => {
-    const el = headerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setHeaderHeight(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Show navbar on mouse proximity to top edge; hide again when mouse leaves (only if we opened it).
-  useEffect(() => {
-    if (isMobile) return;
-    const THRESHOLD = 20;
-    const onMouseMove = (e: MouseEvent) => {
-      if (e.clientY < THRESHOLD) {
-        if (!navbarVisibleRef.current) {
-          hoveredOpen.current = true;
-          setNavbarVisible(true);
-        }
-      } else if (hoveredOpen.current) {
-        // Use the header's actual viewport bottom so the threshold correctly
-        // accounts for the global navbar height that pushes the overlay header
-        // down when navbarVisible becomes true.
-        const el = headerRef.current;
-        const headerBottom = el
-          ? el.getBoundingClientRect().bottom
-          : (headerHeightRef.current || THRESHOLD);
-        if (e.clientY > headerBottom) {
-          hoveredOpen.current = false;
-          setNavbarVisible(false);
-        }
-      }
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    return () => window.removeEventListener("mousemove", onMouseMove);
-  }, [isMobile, setNavbarVisible]);
+  }, [setHideFooter]);
 
 
 
@@ -322,6 +281,20 @@ export function MaterialViewer({
     versionInfo?.file_mime_type ?? "application/octet-stream",
   );
   const fileKey = String(versionInfo?.file_key ?? "");
+
+  // A global drop while a document is open should follow the same mental
+  // model as the visible "Add attachment" action. Without this context the
+  // global drop zone resolves the material route as root and can stage files
+  // in the wrong location.
+  useEffect(() => {
+    if (!materialId || isRestricted) return;
+    setBrowseContext({
+      directoryId,
+      directoryName: title,
+      parentMaterialId: materialId,
+    });
+    return () => setBrowseContext(null);
+  }, [directoryId, isRestricted, materialId, setBrowseContext, title]);
 
   // Record view in background
   useEffect(() => {
@@ -398,23 +371,15 @@ export function MaterialViewer({
     <AnnotationsContext.Provider value={annotationsData}>
       <div className="flex h-full w-full overflow-hidden gap-0">
         <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
-          {/*
-           * Header — absolutely positioned so it overlays the viewer.
-           * Slides in/out via translateY (GPU composited, zero layout reflow).
-           * The viewer below has a permanent paddingTop equal to the measured
-           * header height, so it never resizes when the header shows/hides.
-           */}
           <div
-            ref={headerRef}
-            className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 p-2 sm:px-4 md:px-6 py-2 sm:py-3 bg-background/95 backdrop-blur-sm transition-transform duration-300 ease-in-out border-b"
-            style={{ transform: navbarVisible ? "translateY(0)" : "translateY(-110%)" }}
+            className="z-20 flex shrink-0 items-center justify-between gap-3 border-b bg-background/95 p-2 backdrop-blur-sm sm:px-4 sm:py-2.5 md:px-6"
           >
             <div className="flex items-center gap-2 min-w-0 flex-1">
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 shrink-0"
-                onClick={() => router.push(parentFolderHref)}
+                onClick={() => navigateBrowse(parentFolderHref)}
                 title={t("backToParentFolder")}
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -439,6 +404,7 @@ export function MaterialViewer({
               </Breadcrumbs>
             </div>
 
+            <div className="flex shrink-0 items-center gap-1.5">
             {isMobile ? (
               <Button
                 variant="ghost"
@@ -469,6 +435,7 @@ export function MaterialViewer({
                           onClick={() => print()}
                           disabled={isPrinting}
                           title={t("printDocument")}
+                          aria-label={t("printDocument")}
                         >
                           {isPrinting ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -486,6 +453,7 @@ export function MaterialViewer({
                               className="h-8 w-8 shrink-0"
                               disabled={isDownloading}
                               title={t("downloadDocument")}
+                              aria-label={t("downloadDocument")}
                             >
                               {isDownloading ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -513,6 +481,7 @@ export function MaterialViewer({
                           onClick={() => downloadMaterial(materialId)}
                           disabled={isDownloading}
                           title={t("downloadDocument")}
+                          aria-label={t("downloadDocument")}
                         >
                           {isDownloading ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -530,6 +499,7 @@ export function MaterialViewer({
                     size="icon"
                     className="h-8 w-8 shrink-0 relative"
                     title={t("attachments")}
+                    aria-label={t("attachments")}
                     onClick={() =>
                       openSidebar("details", {
                         type: "material",
@@ -552,6 +522,7 @@ export function MaterialViewer({
                   size="icon"
                   className="h-8 w-8 shrink-0"
                   title={sidebarOpen ? t("closeInspector") : t("openInspector")}
+                  aria-label={sidebarOpen ? t("closeInspector") : t("openInspector")}
                   onClick={() => {
                     if (sidebarOpen) {
                       closeSidebar();
@@ -568,16 +539,11 @@ export function MaterialViewer({
                 </Button>
               </div>
             )}
+            </div>
           </div>
 
-          {/*
-           * Viewer wrapper — paddingTop is dynamically adjusted based on header visibility.
-           * When the header is hidden, it transitions to standard padding (pt-2 / sm:pt-4 / md:pt-6)
-           * to match the sides, ensuring the viewer expands to use the empty top space.
-           */}
           <div
-            className="flex-1 min-h-0 overflow-hidden px-2 pt-2 pb-2 max-sm:pb-20 sm:px-4 sm:pt-4 sm:pb-4 md:px-6 md:pt-6 md:pb-6 transition-all duration-300 ease-in-out"
-            style={{ paddingTop: navbarVisible ? headerHeight : undefined }}
+            className="flex-1 min-h-0 overflow-hidden p-2 max-sm:pb-20 sm:p-4 md:p-5"
           >
           <div
             ref={viewerContainerRef}
@@ -628,6 +594,9 @@ export function MaterialViewer({
                 materialId={materialId}
                 fileName={fileName}
               />
+            )}
+            {viewerType === "notebook" && (
+              <NotebookViewer fileKey={fileKey} materialId={materialId} />
             )}
             {viewerType === "csv" && (
               <CsvViewer

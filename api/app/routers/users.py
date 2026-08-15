@@ -6,24 +6,28 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.exceptions import NotFoundError
-from app.core.storage import generate_presigned_get_url
+from app.core.common.exceptions import NotFoundError, UnauthorizedError
+from app.core.database.database import get_db
+from app.core.storage.facade import generate_presigned_get
 from app.dependencies.auth import CurrentUser, get_optional_user
 from app.dependencies.pagination import PaginationParams
 from app.models.material import Material, MaterialFavourite, MaterialVersion
-from app.models.user import User
-from app.schemas.annotation import AnnotationOut
+from app.models.user import User, UserRole
 from app.schemas.common import PaginatedResponse
-from app.schemas.material import MaterialDetail
-from app.schemas.pull_request import PullRequestOut
+from app.schemas.material import MaterialDetailResponse, project_material_detail
 from app.schemas.user import (
     OnboardIn,
+    PublicAnnotationContribution,
+    PublicMaterialContribution,
+    PublicPRContribution,
+    PublicUserOut,
+    PublicUserProfileOut,
     TutorialCompleteIn,
     UserOut,
     UserProfileOut,
     UserUpdateIn,
 )
+from app.services.avatar import is_owned_avatar_storage_key, is_trusted_external_avatar_url
 from app.services.directory import get_directory_paths
 from app.services.material import get_liked_favourited_sets, material_orm_to_dict
 from app.services.user import (
@@ -97,27 +101,31 @@ async def reset_my_tutorials(
     return UserOut.model_validate(updated)
 
 
-@router.get("/me/recently-viewed", response_model=list[MaterialDetail])
+@router.get("/me/recently-viewed", response_model=list[MaterialDetailResponse])
 async def recently_viewed(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[MaterialDetail]:
+) -> list[MaterialDetailResponse]:
     materials = await get_recently_viewed(db, str(user.id))
 
     dir_ids = {m["directory_id"] for m in materials}
     paths = await get_directory_paths(db, dir_ids)
 
+    public = user.role == UserRole.GUEST
     return [
-        MaterialDetail.model_validate({**m, "directory_path": paths.get(m["directory_id"])})
+        project_material_detail(
+            {**m, "directory_path": paths.get(m["directory_id"])},
+            public=public,
+        )
         for m in materials
     ]
 
 
-@router.get("/me/favourites", response_model=list[MaterialDetail])
+@router.get("/me/favourites", response_model=list[MaterialDetailResponse])
 async def get_my_favourites(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[MaterialDetail]:
+) -> list[MaterialDetailResponse]:
     stmt = (
         select(Material, MaterialVersion)
         .join(MaterialFavourite, MaterialFavourite.material_id == Material.id)
@@ -148,8 +156,12 @@ async def get_my_favourites(
     dir_ids = {m["directory_id"] for m in materials_out if m.get("directory_id") is not None}
     paths = await get_directory_paths(db, dir_ids)
 
+    public = user.role == UserRole.GUEST
     return [
-        MaterialDetail.model_validate({**m, "directory_path": paths.get(m["directory_id"])})
+        project_material_detail(
+            {**m, "directory_path": paths.get(m["directory_id"])},
+            public=public,
+        )
         for m in materials_out
     ]
 
@@ -169,20 +181,19 @@ async def delete_me(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     await hard_delete_user(db, user)
-    await db.commit()
 
 
-@router.get("/{user_id}", response_model=UserProfileOut)
+@router.get("/{user_id}", response_model=PublicUserProfileOut)
 async def get_user_profile(
     user_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> UserProfileOut:
+) -> PublicUserProfileOut:
     target = await get_user_by_id(db, user_id)
     if not target:
         raise NotFoundError("User not found")
     stats = await get_user_stats(db, user_id)
-    user_data = UserOut.model_validate(target).model_dump()
-    return UserProfileOut.model_validate({**user_data, **stats})
+    user_data = PublicUserOut.model_validate(target).model_dump()
+    return PublicUserProfileOut.model_validate({**user_data, **stats})
 
 
 @router.get("/{user_id}/avatar")
@@ -194,16 +205,25 @@ async def get_user_avatar(
     if not target or not target.avatar_url:
         raise NotFoundError("Avatar not found")
 
-    if target.avatar_url.startswith("quarantine/"):
-        # Unscanned avatar from a stuck/stale upload.
-        # Refuse to serve to avoid 500 error in generate_presigned_get_url.
-        raise NotFoundError("Avatar still processing or invalid")
+    if is_owned_avatar_storage_key(target.avatar_url, target.id):
+        url = await generate_presigned_get(target.avatar_url)
+        return RedirectResponse(url)
 
-    url = await generate_presigned_get_url(target.avatar_url)
-    return RedirectResponse(url)
+    if is_trusted_external_avatar_url(target.avatar_url):
+        return RedirectResponse(target.avatar_url)
+
+    # Fail closed for legacy or corrupted values. In particular, application
+    # storage namespaces (cas/, materials/, quarantine/) must never be presigned
+    # through the public avatar endpoint.
+    raise NotFoundError("Avatar reference is invalid")
 
 
-@router.get("/{user_id}/contributions")
+@router.get(
+    "/{user_id}/contributions",
+    response_model=PaginatedResponse[
+        PublicPRContribution | PublicMaterialContribution | PublicAnnotationContribution
+    ],
+)
 async def get_contributions(
     user_id: str,
     pagination: Annotated[PaginationParams, Depends()],
@@ -214,6 +234,10 @@ async def get_contributions(
     target = await get_user_by_id(db, user_id)
     if not target:
         raise NotFoundError("User not found")
+    if type == "annotations" and user is None:
+        # The canonical annotation reader requires an authenticated read principal.
+        # A public profile must not become an alternate anonymous path to bodies.
+        raise UnauthorizedError("Authentication required to read annotation contributions")
     items, total = await get_user_contributions(
         db,
         user_id,
@@ -229,19 +253,21 @@ async def get_contributions(
         dir_ids = {m["directory_id"] for m in materials_list if m.get("directory_id") is not None}
         directory_paths = await get_directory_paths(db, dir_ids)
 
-    serialized_items: list[PullRequestOut | MaterialDetail | AnnotationOut] = []
+    serialized_items: list[
+        PublicPRContribution | PublicMaterialContribution | PublicAnnotationContribution
+    ] = []
     for item in items:
         if type == "prs":
-            serialized_items.append(PullRequestOut.model_validate(item))
+            serialized_items.append(PublicPRContribution.model_validate(item))
         elif type == "materials":
             m_item = cast(dict[str, typing.Any], item)
             serialized_items.append(
-                MaterialDetail.model_validate(
+                PublicMaterialContribution.model_validate(
                     {**m_item, "directory_path": directory_paths.get(m_item["directory_id"])}
                 )
             )
         elif type == "annotations":
-            serialized_items.append(AnnotationOut.model_validate(item))
+            serialized_items.append(PublicAnnotationContribution.model_validate(item))
 
     return PaginatedResponse(
         items=serialized_items,

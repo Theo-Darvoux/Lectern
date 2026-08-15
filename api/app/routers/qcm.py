@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import uuid
+from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from typing import Annotated, Any
 from xml.etree.ElementTree import Element
@@ -22,15 +23,30 @@ from defusedxml import ElementTree
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cas import hmac_cas_key, increment_cas_ref
-from app.core.database import get_db
-from app.core.mimetypes import QCM_MIME_TYPE
-from app.core.redis import redis_client
-from app.core.storage import _get_s3_settings, get_s3_client
-from app.core.storage import upload_file as storage_upload_file
+from app.config import settings
+from app.core.common.exceptions import BadRequestError, ServiceUnavailableError
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.database.database import get_db
+from app.core.database.post_commit import register_transaction_callbacks
+from app.core.database.redis import redis_client
+from app.core.media.mimetypes import QCM_MIME_TYPE
+from app.core.security.cas import (
+    CasReferenceMissingError,
+    compensate_cas_increment,
+    hmac_cas_key,
+    increment_cas_ref,
+)
+from app.core.storage.capacity import release_storage_reservation, reserve_storage_limit
+from app.core.storage.facade import object_exists, read_full_object
+from app.core.storage.facade import upload_file as storage_upload_file
+from app.core.storage.liveness import acquire_storage_lifecycle_xact_lock
 from app.dependencies.auth import CurrentUser
+from app.dependencies.rate_limit import rate_limit_uploads
+from app.models.cas_staging_claim import CasStagingClaim
+from app.models.user import User
 from app.services.material import get_material_with_version
 
 logger = logging.getLogger(__name__)
@@ -46,6 +62,19 @@ QCM_MAX_ANSWERS_PER_QUESTION: int = int(os.environ.get("QCM_MAX_ANSWERS_PER_QUES
 # Embedded image limits (kept in sync with the web client's qcm-types constants).
 QCM_MAX_IMAGES: int = int(os.environ.get("QCM_MAX_IMAGES", "30"))
 QCM_MAX_IMAGE_CHARS: int = int(os.environ.get("QCM_MAX_IMAGE_CHARS", "500000"))
+QCM_MAX_BYTES = 20 * 1024 * 1024
+MOODLE_XML_MAX_BYTES = 10 * 1024 * 1024
+# Outstanding generated-CAS staging is deliberately much smaller than global
+# storage capacity. Values are deployment-tunable without weakening per-request
+# QCM_MAX_BYTES validation.
+QCM_MAX_OUTSTANDING_CLAIMS: int = int(os.environ.get("QCM_MAX_OUTSTANDING_CLAIMS", "50"))
+QCM_MAX_OUTSTANDING_BYTES: int = int(
+    os.environ.get("QCM_MAX_OUTSTANDING_BYTES", str(5 * QCM_MAX_BYTES))
+)
+_QCM_STORAGE_RESERVATION_TTL = max(
+    72 * 3600,
+    (settings.pr_expiry_days + 1) * 24 * 3600,
+)
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -157,6 +186,68 @@ def _validate_qcm_structure(data: dict[str, Any]) -> None:
         )
 
 
+async def _check_qcm_staging_quota(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    new_size_bytes: int,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Serialize and enforce per-user outstanding QCM staging capacity.
+
+    Every production claim admission takes the owning ``users`` row lock before
+    reading aggregate claim usage and keeps it until the request transaction
+    commits. That turns the otherwise racy COUNT/SUM -> INSERT sequence into a
+    per-user serial admission boundary without a global lock.
+
+    Legacy live claims whose byte size predates the size column fail closed.
+    Alembic cannot derive an authoritative S3 object size from PostgreSQL, so
+    treating those rows as zero would recreate the quota bypass during rollout.
+    """
+    if new_size_bytes < 0:
+        raise ValueError("new_size_bytes must be non-negative")
+    if QCM_MAX_OUTSTANDING_CLAIMS < 1 or QCM_MAX_OUTSTANDING_BYTES < 1:
+        raise RuntimeError("QCM outstanding staging limits must be positive")
+
+    locked_user_id = await db.scalar(select(User.id).where(User.id == user_id).with_for_update())
+    if locked_user_id is None:
+        raise ServiceUnavailableError("QCM staging account state is unavailable")
+
+    effective_now = now or datetime.now(UTC)
+    active_count, sized_count, active_bytes = (
+        await db.execute(
+            select(
+                func.count(CasStagingClaim.id),
+                func.count(CasStagingClaim.size_bytes),
+                func.coalesce(func.sum(CasStagingClaim.size_bytes), 0),
+            ).where(
+                CasStagingClaim.user_id == user_id,
+                CasStagingClaim.consumed_at.is_(None),
+                CasStagingClaim.expires_at > effective_now,
+            )
+        )
+    ).one()
+
+    if int(active_count) != int(sized_count):
+        raise ServiceUnavailableError(
+            "QCM staging quota is temporarily unavailable while legacy staging claims expire"
+        )
+
+    if int(active_count) >= QCM_MAX_OUTSTANDING_CLAIMS:
+        raise BadRequestError(
+            f"Too many outstanding staged QCM files ({QCM_MAX_OUTSTANDING_CLAIMS} max). "
+            "Submit a pull request or wait for existing staging claims to expire.",
+            code=UploadErrorCode.QUOTA_EXCEEDED,
+        )
+
+    if int(active_bytes) + new_size_bytes > QCM_MAX_OUTSTANDING_BYTES:
+        raise BadRequestError(
+            "Outstanding staged QCM data would exceed the per-user staging byte limit. "
+            "Submit a pull request or wait for existing staging claims to expire.",
+            code=UploadErrorCode.QUOTA_EXCEEDED,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
@@ -189,6 +280,8 @@ async def get_qcm_limits() -> dict[str, Any]:
 async def stage_qcm(
     body: QCMStageRequest,
     user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[None, Depends(rate_limit_uploads)] = None,
 ) -> QCMStageResponse:
     """Validate a QCM JSON structure, write it to the CAS, and return the file key.
 
@@ -203,11 +296,79 @@ async def stage_qcm(
     )
     sha256 = hashlib.sha256(data_bytes).hexdigest()
     file_size = len(data_bytes)
+    if file_size > QCM_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="QCM is too large (max 20 MiB)")
+
+    # This row lock is the per-user serialization boundary for the aggregate
+    # outstanding claim count/byte check and the claim INSERT below. Keep it for
+    # the whole request transaction so concurrent requests cannot oversubscribe.
+    await _check_qcm_staging_quota(db, user.id, file_size)
 
     # Derive the CAS S3 key from the HMAC
     cas_redis_key = hmac_cas_key(sha256)
     hmac_digest = cas_redis_key.split(":")[-1]
     file_key = f"cas/{hmac_digest}"
+
+    claim_id = uuid.uuid4()
+    increment_operation_id = f"qcm-stage:{claim_id}"
+    capacity_reservation_id = f"qcm-stage:{claim_id}:capacity"
+    reference_attempted = False
+    capacity_reserved = False
+    capacity_released = False
+
+    async def rollback_stage() -> None:
+        nonlocal capacity_released
+        if reference_attempted:
+            try:
+                await compensate_cas_increment(
+                    redis_client,
+                    sha256,
+                    operation_id=increment_operation_id,
+                )
+            except CasReferenceMissingError:
+                # A failed increment that never reached Redis has nothing to undo.
+                # Physical CAS deletion is deliberately left to safe GC because
+                # the same content key may be referenced by another request.
+                logger.info("QCM rollback found no CAS reference for claim %s", claim_id)
+
+        # If the write never reached object storage, release a capacity reservation
+        # that has no physical byte owner. Ambiguous or successful writes stay
+        # reserved until cleanup reconciles physical CAS usage.
+        if capacity_reserved and not capacity_released and not reference_attempted:
+            try:
+                if not await object_exists(file_key):
+                    await release_storage_reservation(capacity_reservation_id, redis_client)
+                    capacity_released = True
+            except Exception as exc:
+                logger.warning(
+                    "Could not safely release failed QCM capacity reservation %s: %s",
+                    capacity_reservation_id,
+                    exc,
+                )
+
+    async def finalize_stage() -> None:
+        return None
+
+    if not register_transaction_callbacks(
+        db,
+        on_rollback=rollback_stage,
+        on_commit=finalize_stage,
+    ):
+        raise RuntimeError("QCM staging requires a request-managed transaction")
+
+    await reserve_storage_limit(
+        file_size,
+        capacity_reservation_id,
+        redis_client,
+        db,
+        ttl_seconds=_QCM_STORAGE_RESERVATION_TTL,
+    )
+    capacity_reserved = True
+
+    # CAS ownership admission and garbage collection share a PostgreSQL advisory
+    # lock. The request transaction holds it until the claim commits, so GC cannot
+    # delete the object between the storage write and authoritative DB admission.
+    await acquire_storage_lifecycle_xact_lock(db, file_key)
 
     # Write to object storage (idempotent — same content → same key)
     await storage_upload_file(
@@ -218,6 +379,7 @@ async def stage_qcm(
     )
 
     # Increment CAS ref count so the PR workflow can track the blob
+    reference_attempted = True
     await increment_cas_ref(
         redis_client,
         sha256,
@@ -227,6 +389,23 @@ async def stage_qcm(
             "mime_type": QCM_MIME_TYPE,
             "file_name": "qcm.qcm",
         },
+        operation_id=increment_operation_id,
+    )
+
+    # The CAS increment now owns the physical bytes in usage accounting. Only
+    # after that durable handoff may the in-flight reservation be released.
+    await release_storage_reservation(capacity_reservation_id, redis_client)
+    capacity_released = True
+
+    db.add(
+        CasStagingClaim(
+            id=claim_id,
+            user_id=user.id,
+            file_key=file_key,
+            sha256=sha256,
+            size_bytes=file_size,
+            expires_at=datetime.now(UTC) + timedelta(hours=48),
+        )
     )
 
     logger.info(
@@ -464,14 +643,9 @@ async def export_moodle_xml(
         raise HTTPException(status_code=400, detail="Material is not a QCM")
 
     file_key = version["file_key"]
-    cfg = _get_s3_settings()
-    async with get_s3_client(cfg) as client:
-        response = await client.get_object(Bucket=cfg["bucket"], Key=file_key)  # type: ignore[call-arg]
-        body: Any = response["Body"]
-        try:
-            raw = await body.read()
-        finally:
-            body.close()
+    raw = await read_full_object(file_key)
+    if len(raw) > QCM_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Stored QCM is too large to export")
 
     qcm_data = json.loads(raw)
 
@@ -501,8 +675,8 @@ async def parse_moodle_xml(
     if not (file.filename or "").lower().endswith(".xml"):
         raise HTTPException(status_code=422, detail="File must be a .xml Moodle export")
 
-    content = await file.read()
-    if len(content) > 10 * 1024 * 1024:  # 10 MB hard cap
+    content = await file.read(MOODLE_XML_MAX_BYTES + 1)
+    if len(content) > MOODLE_XML_MAX_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
 
     return _parse_moodle_xml(content)

@@ -1,0 +1,20 @@
+rules:
+  - id: no-error-response-return-with-db
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @$ROUTER.$METHOD(...)
+              async def $FUNC(..., $DB: AsyncSession = Depends(get_db), ...):
+                  ...
+                  return Response(..., status_code=$CODE, ...)
+          - pattern: |
+              @$ROUTER.$METHOD(...)
+              async def $FUNC(..., $DB: AsyncSession = Depends(get_db), ...):
+                  ...
+                  return JSONResponse(..., status_code=$CODE, ...)
+      - metavariable-comparison:
+          metavariable: $CODE
+          comparison: int($CODE) >= 400
+    message: "Endpoints that inject get_db() must raise exceptions for 4xx/5xx errors (e.g. raise BadRequestError(...)) instead of returning Response objects directly, ensuring session.rollback() is invoked."
+    languages: [python]
+    severity: ERROR
