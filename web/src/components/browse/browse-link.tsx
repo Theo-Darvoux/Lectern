@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   forwardRef,
   type ComponentPropsWithoutRef,
@@ -50,11 +51,15 @@ type BrowseLinkProps = Omit<
  */
 export const BrowseLink = forwardRef<HTMLAnchorElement, BrowseLinkProps>(
   function BrowseLink({ href, onClick, target, ...props }, ref) {
+    const currentPathname = usePathname();
+    const isCurrentlyOnBrowse =
+      currentPathname === "/browse" || currentPathname?.startsWith("/browse/");
     const browseHref = isBrowseHref(href);
 
     const handleClick: MouseEventHandler<HTMLAnchorElement> = (event) => {
       onClick?.(event);
       if (
+        !isCurrentlyOnBrowse ||
         !browseHref ||
         event.defaultPrevented ||
         event.button !== 0 ||
@@ -78,9 +83,10 @@ export const BrowseLink = forwardRef<HTMLAnchorElement, BrowseLinkProps>(
         ref={ref}
         href={href}
         target={target}
-        prefetch={browseHref ? false : undefined}
+        prefetch={isCurrentlyOnBrowse && browseHref ? false : undefined}
         onClick={handleClick}
       />
     );
   },
 );
+

@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { BrowseLink, navigateBrowse } from "@/components/browse/browse-link";
 import {
   ArrowRight,
@@ -251,6 +251,9 @@ const TreeNode = memo(function TreeNode({
   onExpand,
   onActivate,
 }: TreeNodeProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const isOnBrowse = pathname === "/browse" || pathname?.startsWith("/browse/");
   const t = useTranslations("Browse");
   const isExpanded = expanded.has(node.id);
   const isLoading = loadingIds.has(node.id);
@@ -400,7 +403,12 @@ const TreeNode = memo(function TreeNode({
           onDoubleClick={() => {
             onExpand(node);
             onActivate(node.id);
-            navigateBrowse(buildDirHref(node.full_path));
+            const targetHref = buildDirHref(node.full_path);
+            if (isOnBrowse) {
+              navigateBrowse(targetHref);
+            } else {
+              router.push(targetHref);
+            }
           }}
           className="flex flex-1 items-center gap-1.5 min-w-0 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm text-left"
           title={node.name}

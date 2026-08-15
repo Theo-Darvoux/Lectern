@@ -6,6 +6,8 @@ const mockPush = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush, prefetch: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/browse/math",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 vi.mock("next/link", () => ({

@@ -282,6 +282,65 @@ async def test_cas_release_acknowledges_only_after_release_succeeds(
 
 
 @pytest.mark.asyncio
+async def test_cas_release_acknowledges_when_ref_already_missing(
+    db_session: AsyncSession,
+) -> None:
+    from app.core.security.cas import CasReferenceMissingError
+    from app.workers.storage_ops import release_cas_references
+
+    references = [
+        {"sha256": "c" * 64, "operation_id": "cleanup-op-1"},
+        {"sha256": "d" * 64, "operation_id": "cleanup-op-2"},
+    ]
+    outbox = OutboxJob(job_name="release_cas_references", args=[references])
+    db_session.add(outbox)
+    await db_session.commit()
+
+    with patch(
+        "app.core.security.cas.decrement_cas_ref",
+        new=AsyncMock(side_effect=CasReferenceMissingError("CAS reference is missing; refusing destructive cleanup")),
+    ):
+        await release_cas_references(
+            {"db_sessionmaker": db_core.async_session_factory, "redis": AsyncMock()},
+            references,
+            outbox_id=str(outbox.id),
+        )
+
+    await db_session.refresh(outbox)
+    assert outbox.completed_at is not None
+    assert outbox.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_cas_release_fails_and_records_failure_on_unexpected_error(
+    db_session: AsyncSession,
+) -> None:
+    from app.workers.storage_ops import release_cas_references
+
+    references = [{"sha256": "e" * 64, "operation_id": "cleanup-op-fail"}]
+    outbox = OutboxJob(job_name="release_cas_references", args=[references])
+    db_session.add(outbox)
+    await db_session.commit()
+
+    with patch(
+        "app.core.security.cas.decrement_cas_ref",
+        new=AsyncMock(side_effect=ConnectionError("Redis connection lost")),
+    ):
+        with pytest.raises(ExceptionGroup) as exc_info:
+            await release_cas_references(
+                {"db_sessionmaker": db_core.async_session_factory, "redis": AsyncMock()},
+                references,
+                outbox_id=str(outbox.id),
+            )
+        assert "One or more CAS references could not be released" in str(exc_info.value)
+
+    await db_session.refresh(outbox)
+    assert outbox.completed_at is None
+    assert outbox.last_error is not None
+    assert "One or more CAS references could not be released" in outbox.last_error
+
+
+@pytest.mark.asyncio
 async def test_obsolete_material_deindex_cannot_delete_restored_live_document(
     db_session: AsyncSession,
 ) -> None:
