@@ -354,3 +354,54 @@ async def test_material_detail_comment_and_annotation_counts(
     data2 = r2.json()
     assert data2["comment_count"] == 2
     assert data2["annotation_count"] == 3
+
+
+async def test_recalculate_thumbnail_permissions_and_enqueue(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from unittest.mock import AsyncMock, patch
+
+    student = await _create_user(db_session, role=UserRole.STUDENT)
+    moderator = await _create_user(db_session, role=UserRole.MODERATOR)
+    directory = await _create_directory(db_session, student)
+    material = await _create_material(db_session, directory, student)
+    version = await _create_version(db_session, material)
+    await db_session.commit()
+
+    # 1. Unauthenticated -> 401
+    resp = await client.post(f"/api/materials/{material.id}/recalculate-thumbnail")
+    assert resp.status_code == 401
+
+    # 2. Student (regular user) -> 403
+    resp = await client.post(
+        f"/api/materials/{material.id}/recalculate-thumbnail",
+        headers=_auth_headers(student),
+    )
+    assert resp.status_code == 403
+
+    # 3. Non-existent material -> 404
+    non_existent_id = uuid.uuid4()
+    resp = await client.post(
+        f"/api/materials/{non_existent_id}/recalculate-thumbnail",
+        headers=_auth_headers(moderator),
+    )
+    assert resp.status_code == 404
+
+    # 4. Moderator -> 200 + queued
+    mock_pool = AsyncMock()
+    mock_pool.enqueue_job = AsyncMock()
+
+    with patch("app.core.database.redis.arq_pool", mock_pool):
+        resp = await client.post(
+            f"/api/materials/{material.id}/recalculate-thumbnail",
+            headers=_auth_headers(moderator),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "queued"
+        assert data["material_id"] == str(material.id)
+        assert data["version_id"] == str(version.id)
+        mock_pool.enqueue_job.assert_awaited_once()
+        call_kwargs = mock_pool.enqueue_job.await_args.kwargs
+        assert call_kwargs["material_id"] == str(material.id)
+        assert call_kwargs["version_id"] == str(version.id)

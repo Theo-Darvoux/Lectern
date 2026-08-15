@@ -18,6 +18,7 @@ import {
   FileText,
   Code2,
   Paperclip,
+  RefreshCw,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -29,8 +30,10 @@ import { FlagButton } from "@/components/flags/flag-button";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
-import { useUIStore, useAuthStore, useLikeOverrides } from "@/lib/stores";
-import { isGuest } from "@/lib/guest";
+import { useUIStore, useAuthStore, useLikeOverrides, useBrowseRefreshStore } from "@/lib/stores";
+import { isGuest, isStaff } from "@/lib/guest";
+import { isThumbnailEligible } from "@/lib/file-utils";
+import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import { useStagingStore } from "@/lib/staging-store";
 import { apiFetch } from "@/lib/api-client";
@@ -152,7 +155,28 @@ export function ViewerFab({
   const openSidebar = useUIStore((state) => state.openSidebar);
   const updateSidebarData = useUIStore((state) => state.updateSidebarData);
   const sidebarTarget = useUIStore((state) => state.sidebarTarget);
-  const guest = isGuest(useAuthStore((s) => s.user));
+  const user = useAuthStore((s) => s.user);
+  const guest = isGuest(user);
+  const staff = isStaff(user);
+  const isEligible = isThumbnailEligible(mimeType, fileName || materialTitle);
+  const [isRecalculatingThumbnail, setIsRecalculatingThumbnail] = useState(false);
+  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
+
+  const handleRecalculateThumbnail = async () => {
+    if (isRecalculatingThumbnail || !materialId) return;
+    setIsRecalculatingThumbnail(true);
+    toast.loading(t("recalculatingThumbnail"), { id: `thumb-recalc-${materialId}` });
+    try {
+      await recalculateMaterialThumbnail(materialId);
+      toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${materialId}` });
+      triggerBrowseRefresh();
+    } catch {
+      toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${materialId}` });
+    } finally {
+      setIsRecalculatingThumbnail(false);
+    }
+  };
+
   const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
@@ -438,6 +462,25 @@ export function ViewerFab({
               tint={isLiked ? "primary" : "default"}
               disabled={isRestricted}
               onClick={handleLike}
+            />
+          )}
+
+          {/* ── Recalculate Thumbnail — only for staff & eligible files ── */}
+          {staff && isEligible && !isRestricted && (
+            <ActionCell
+              icon={
+                isRecalculatingThumbnail ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-5 w-5" />
+                )
+              }
+              label={t("recalculateThumbnail")}
+              disabled={isRecalculatingThumbnail}
+              onClick={() => {
+                close();
+                handleRecalculateThumbnail();
+              }}
             />
           )}
 

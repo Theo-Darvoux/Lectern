@@ -1,4 +1,4 @@
-import { apiFetchRetry } from "./api-client";
+import { apiFetch, apiFetchRetry } from "./api-client";
 
 export type ThumbnailType = "webp" | "fallback" | null;
 
@@ -94,3 +94,9 @@ export function clearMaterialPreviewCache(): void {
 export function invalidateMaterialThumbnail(materialId: string): void {
     cache.delete(materialId);
 }
+
+export async function recalculateMaterialThumbnail(materialId: string): Promise<void> {
+    await apiFetch(`/materials/${materialId}/recalculate-thumbnail`, { method: "POST" });
+    invalidateMaterialThumbnail(materialId);
+}
+

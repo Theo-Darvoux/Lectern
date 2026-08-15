@@ -17,8 +17,8 @@ class HTMLTextExtractor(HTMLParser):
         super().__init__()
         self.result: list[str] = []
         self.hide_depth = 0
-        self.hidden_tags = {"script", "style", "head", "title", "meta"}
-        self.block_tags = {"p", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li"}
+        self.hidden_tags = {"script", "style", "head", "title"}
+        self.block_tags = {"p", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr"}
 
     def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
         if tag in self.hidden_tags:

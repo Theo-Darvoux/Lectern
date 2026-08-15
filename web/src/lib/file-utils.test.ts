@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ACCEPTED_FILE_TYPES, formatFileSize, getFileExtension, getViewerType, guessFileMime, sniffFileType, MIME_TO_EXT, MIME_QCM } from "./file-utils";
+import { ACCEPTED_FILE_TYPES, formatFileSize, getFileExtension, getViewerType, guessFileMime, sniffFileType, MIME_TO_EXT, MIME_QCM, isThumbnailEligible } from "./file-utils";
 
 describe("file-utils", () => {
   describe("formatFileSize", () => {
@@ -118,6 +118,44 @@ describe("file-utils", () => {
       expect(await sniffFileType(fileOf([0x50, 0x4b, 0x03, 0x04]))).toBeNull(); // ZIP (docx/epub…)
       expect(await sniffFileType(fileOf([0x68, 0x65, 0x6c, 0x6c, 0x6f]))).toBeNull();
       expect(await sniffFileType(fileOf([]))).toBeNull();
+    });
+  });
+
+  describe("isThumbnailEligible", () => {
+    it("returns true for images", () => {
+      expect(isThumbnailEligible("image/png", "picture.png")).toBe(true);
+      expect(isThumbnailEligible("image/jpeg", "photo.jpg")).toBe(true);
+      expect(isThumbnailEligible("image/svg+xml", "icon.svg")).toBe(true);
+      expect(isThumbnailEligible("", "image.webp")).toBe(true);
+    });
+
+    it("returns true for videos", () => {
+      expect(isThumbnailEligible("video/mp4", "movie.mp4")).toBe(true);
+      expect(isThumbnailEligible("video/webm", "clip.webm")).toBe(true);
+      expect(isThumbnailEligible("", "recording.mkv")).toBe(true);
+    });
+
+    it("returns true for PDFs", () => {
+      expect(isThumbnailEligible("application/pdf", "document.pdf")).toBe(true);
+      expect(isThumbnailEligible("", "notes.pdf")).toBe(true);
+    });
+
+    it("returns true for Office documents, notebooks, markdown and code", () => {
+      expect(isThumbnailEligible("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "paper.docx")).toBe(true);
+      expect(isThumbnailEligible("application/x-ipynb+json", "lab.ipynb")).toBe(true);
+      expect(isThumbnailEligible("text/markdown", "readme.md")).toBe(true);
+      expect(isThumbnailEligible("text/plain", "script.py")).toBe(true);
+      expect(isThumbnailEligible("application/json", "config.json")).toBe(true);
+      expect(isThumbnailEligible("", "analysis.ipynb")).toBe(true);
+      expect(isThumbnailEligible("", "sheet.xlsx")).toBe(true);
+    });
+
+    it("returns false for unsupported binaries and audio", () => {
+      expect(isThumbnailEligible("audio/mpeg", "song.mp3")).toBe(false);
+      expect(isThumbnailEligible("audio/wav", "recording.wav")).toBe(false);
+      expect(isThumbnailEligible("application/octet-stream", "binary.bin")).toBe(false);
+      expect(isThumbnailEligible("application/zip", "archive.zip")).toBe(false);
+      expect(isThumbnailEligible("", "archive.tar.gz")).toBe(false);
     });
   });
 });

@@ -104,16 +104,17 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             }
         }
 
-        if (config.site_favicon_url) {
+        const faviconUrl = config.site_favicon_url || config.site_logo_url;
+        if (faviconUrl) {
             // Update all existing icon links (Next.js injects several rel variants)
             const iconLinks = document.querySelectorAll<HTMLLinkElement>("link[rel~='icon'], link[rel='shortcut icon']");
             if (iconLinks.length === 0) {
                 const link = document.createElement('link');
                 link.rel = 'icon';
-                link.href = config.site_favicon_url;
+                link.href = faviconUrl;
                 document.head.appendChild(link);
             } else {
-                iconLinks.forEach(l => { l.href = config.site_favicon_url!; });
+                iconLinks.forEach(l => { l.href = faviconUrl; });
             }
         }
 

@@ -1,9 +1,11 @@
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from PIL import Image, ImageDraw
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security.processing_paths import make_processing_temp_path
 from app.workers.upload.stages.thumbnail import _is_blank_thumbnail
@@ -116,11 +118,98 @@ def test_soffice_command_bootstraps_private_libraries_without_proc_self() -> Non
 def test_thumbnail_repair_cli_uses_sandbox_bindable_temp_directory() -> None:
     import inspect
 
-    from app.cli import _recalculate_thumbnails
+    from app.workers.recalculate_thumbnail import recalculate_thumbnail
 
-    source = inspect.getsource(_recalculate_thumbnails)
+    source = inspect.getsource(recalculate_thumbnail)
     assert "processing_temp_dir" in source
     assert "tempfile.mkdtemp" not in source
+
+
+@pytest.mark.asyncio
+async def test_recalculate_thumbnails_cli_dispatch(db_session: AsyncSession) -> None:
+    import uuid
+
+    from arq.jobs import JobStatus
+
+    from app.cli import _recalculate_thumbnails
+    from app.models.directory import Directory
+    from app.models.material import Material, MaterialVersion
+    from app.models.user import User, UserRole
+
+    user = User(
+        id=uuid.uuid4(),
+        email="cli_recalc@example.com",
+        display_name="CLI Tester",
+        role=UserRole.STUDENT,
+        onboarded=True,
+        gdpr_consent=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    directory = Directory(
+        id=uuid.uuid4(),
+        name="CLI Dir",
+        slug="cli-dir",
+        type="folder",
+        created_by=user.id,
+    )
+    db_session.add(directory)
+    await db_session.flush()
+
+    material = Material(
+        id=uuid.uuid4(),
+        directory_id=directory.id,
+        title="CLI Material",
+        slug="cli-material",
+        type="pdf",
+        author_id=user.id,
+        current_version=1,
+    )
+    db_session.add(material)
+    await db_session.flush()
+
+    version = MaterialVersion(
+        id=uuid.uuid4(),
+        material_id=material.id,
+        version_number=1,
+        file_key="uploads/test/cli.pdf",
+        file_name="cli.pdf",
+        file_size=2048,
+        file_mime_type="application/pdf",
+        thumbnail_status="failed",
+    )
+    db_session.add(version)
+    await db_session.commit()
+
+    mock_job = AsyncMock()
+    mock_job.job_id = "job-123"
+    mock_job.status = AsyncMock(return_value=JobStatus.complete)
+    mock_result_info = MagicMock()
+    mock_result_info.success = True
+    mock_result_info.result = True
+    mock_job.result_info = AsyncMock(return_value=mock_result_info)
+
+    mock_pool = AsyncMock()
+    mock_pool.enqueue_job = AsyncMock(return_value=mock_job)
+
+    with (
+        patch("app.core.database.redis.init_arq_pool", new_callable=AsyncMock),
+        patch("app.core.database.redis.close_arq_pool", new_callable=AsyncMock),
+        patch("app.core.database.redis.arq_pool", mock_pool),
+    ):
+        await _recalculate_thumbnails(
+            batch_size=10,
+            max_concurrency=5,
+            limit=None,
+            dry_run=False,
+            force=False,
+        )
+
+        mock_pool.enqueue_job.assert_awaited_once()
+        kwargs = mock_pool.enqueue_job.await_args.kwargs
+        assert kwargs["material_id"] == str(material.id)
+        assert kwargs["version_id"] == str(version.id)
 
 
 @pytest.mark.asyncio
@@ -1098,3 +1187,189 @@ async def test_run_thumbnail_stage_ipynb_e2e_renders_webp() -> None:
         result_path.unlink(missing_ok=True)
     finally:
         pf.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_recalculate_thumbnail_worker_success(db_session: AsyncSession) -> None:
+    import uuid
+    from contextlib import asynccontextmanager
+
+    from app.models.directory import Directory
+    from app.models.material import Material, MaterialVersion
+    from app.models.user import User, UserRole
+    from app.workers.recalculate_thumbnail import recalculate_thumbnail
+
+    user = User(
+        id=uuid.uuid4(),
+        email="recalc@example.com",
+        display_name="Recalc Tester",
+        role=UserRole.STUDENT,
+        onboarded=True,
+        gdpr_consent=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    directory = Directory(
+        id=uuid.uuid4(),
+        name="Dir",
+        slug="dir",
+        type="folder",
+        created_by=user.id,
+    )
+    db_session.add(directory)
+    await db_session.flush()
+
+    material = Material(
+        id=uuid.uuid4(),
+        directory_id=directory.id,
+        title="Recalc Material",
+        slug="recalc-material",
+        type="image",
+        author_id=user.id,
+        current_version=1,
+    )
+    db_session.add(material)
+    await db_session.flush()
+
+    version = MaterialVersion(
+        id=uuid.uuid4(),
+        material_id=material.id,
+        version_number=1,
+        file_key="uploads/test/image.png",
+        file_name="image.png",
+        file_size=1024,
+        file_mime_type="image/png",
+    )
+    db_session.add(version)
+    await db_session.commit()
+
+    @asynccontextmanager
+    async def mock_sessionmaker():
+        yield db_session
+
+    ctx = {"db_sessionmaker": mock_sessionmaker}
+
+    mock_thumb_file = make_processing_temp_path(suffix=".webp")
+    with Image.new("RGB", (100, 100), color="blue") as img:
+        img.save(mock_thumb_file, format="WEBP")
+
+    async def _fake_download(_key: str, dest_path: Path, **_kwargs: Any) -> None:
+        dest_path.write_bytes(b"dummy content")
+
+    with (
+        patch(
+            "app.workers.recalculate_thumbnail.download_file", side_effect=_fake_download
+        ) as mock_download,
+        patch(
+            "app.workers.recalculate_thumbnail.run_thumbnail_stage", new_callable=AsyncMock
+        ) as mock_stage,
+        patch(
+            "app.workers.recalculate_thumbnail.upload_file", new_callable=AsyncMock
+        ) as mock_upload,
+    ):
+        mock_stage.return_value = str(mock_thumb_file)
+        success = await recalculate_thumbnail(ctx, str(material.id))
+        assert success is True
+
+        assert mock_download.call_count == 1
+        mock_stage.assert_awaited_once()
+        mock_upload.assert_awaited_once()
+        assert mock_upload.await_args.args[1] == f"thumbnails/{version.id}.webp"
+        assert mock_upload.await_args.kwargs["content_type"] == "image/webp"
+
+    await db_session.refresh(version)
+    assert version.thumbnail_key == f"thumbnails/{version.id}.webp"
+    assert version.thumbnail_status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_recalculate_thumbnail_worker_skipped_and_failed(db_session: AsyncSession) -> None:
+    import uuid
+    from contextlib import asynccontextmanager
+
+    from app.models.directory import Directory
+    from app.models.material import Material, MaterialVersion
+    from app.models.user import User, UserRole
+    from app.workers.recalculate_thumbnail import recalculate_thumbnail
+
+    user = User(
+        id=uuid.uuid4(),
+        email="recalc2@example.com",
+        display_name="Recalc Tester 2",
+        role=UserRole.STUDENT,
+        onboarded=True,
+        gdpr_consent=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    directory = Directory(
+        id=uuid.uuid4(),
+        name="Dir 2",
+        slug="dir-2",
+        type="folder",
+        created_by=user.id,
+    )
+    db_session.add(directory)
+    await db_session.flush()
+
+    material = Material(
+        id=uuid.uuid4(),
+        directory_id=directory.id,
+        title="Binary Material",
+        slug="binary-material",
+        type="binary",
+        author_id=user.id,
+        current_version=1,
+    )
+    db_session.add(material)
+    await db_session.flush()
+
+    version = MaterialVersion(
+        id=uuid.uuid4(),
+        material_id=material.id,
+        version_number=1,
+        file_key="uploads/test/binary.bin",
+        file_name="binary.bin",
+        file_size=1024,
+        file_mime_type="application/octet-stream",
+    )
+    db_session.add(version)
+    await db_session.commit()
+
+    @asynccontextmanager
+    async def mock_sessionmaker():
+        yield db_session
+
+    ctx = {"db_sessionmaker": mock_sessionmaker}
+
+    async def _fake_download(_key: str, dest_path: Path, **_kwargs: Any) -> None:
+        dest_path.write_bytes(b"dummy binary")
+
+    # Case 1: run_thumbnail_stage returns None -> skipped
+    with (
+        patch("app.workers.recalculate_thumbnail.download_file", side_effect=_fake_download),
+        patch(
+            "app.workers.recalculate_thumbnail.run_thumbnail_stage", new_callable=AsyncMock
+        ) as mock_stage,
+    ):
+        mock_stage.return_value = None
+        success = await recalculate_thumbnail(ctx, str(material.id))
+        assert success is True
+
+    await db_session.refresh(version)
+    assert version.thumbnail_status == "skipped"
+
+    # Case 2: exception raised -> failed
+    with (
+        patch(
+            "app.workers.recalculate_thumbnail.download_file",
+            side_effect=RuntimeError("Storage error"),
+        ),
+    ):
+        success = await recalculate_thumbnail(ctx, str(material.id))
+        assert success is False
+
+    await db_session.refresh(version)
+    assert version.thumbnail_status == "failed"

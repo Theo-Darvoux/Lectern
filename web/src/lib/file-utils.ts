@@ -701,3 +701,48 @@ export function getViewerType(mimeType: string, fileName: string): string {
 
     return "generic";
 }
+
+const THUMBNAIL_IMAGE_EXTENSIONS = new Set([
+    "svg", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "ico", "avif", "jxl", "heic",
+]);
+
+const THUMBNAIL_VIDEO_EXTENSIONS = new Set([
+    "mp4", "webm", "avi", "mkv", "mov", "flv", "wmv", "m4v", "ogv",
+]);
+
+const THUMBNAIL_DOCUMENT_EXTENSIONS = new Set([
+    "pdf",
+    "docx", "xlsx", "pptx", "doc", "xls", "ppt", "odt", "ods", "odp", "rtf",
+    "ipynb",
+    "md", "markdown",
+    "txt", "tex", "py", "js", "ts", "json", "html", "css", "sh", "yaml", "yml", "ini", "conf", "sql",
+]);
+
+/**
+ * Checks whether a file is eligible for thumbnail generation.
+ */
+export function isThumbnailEligible(mimeType?: string | null, fileName?: string | null): boolean {
+    const mime = (mimeType || "").toLowerCase();
+    const ext = getFileExtension(fileName || "").toLowerCase();
+
+    if (mime.startsWith("image/") || THUMBNAIL_IMAGE_EXTENSIONS.has(ext)) return true;
+    if (mime.startsWith("video/") || THUMBNAIL_VIDEO_EXTENSIONS.has(ext)) return true;
+    if (mime === "application/pdf" || ext === "pdf") return true;
+    if (
+        mime.startsWith("text/") ||
+        mime.includes("officedocument") ||
+        mime.includes("msword") ||
+        mime.includes("ms-excel") ||
+        mime.includes("ms-powerpoint") ||
+        mime.includes("opendocument") ||
+        mime === "application/json" ||
+        mime === "application/javascript" ||
+        mime === "application/typescript" ||
+        mime === "application/x-yaml" ||
+        mime === "application/x-sh" ||
+        mime === "application/sql" ||
+        mime === "application/x-ipynb+json"
+    ) return true;
+    if (THUMBNAIL_DOCUMENT_EXTENSIONS.has(ext)) return true;
+    return false;
+}
