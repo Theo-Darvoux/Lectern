@@ -2,7 +2,6 @@
 
 import { useState, useEffect, type FormEvent, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
 import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -206,19 +205,6 @@ export default function LoginPage() {
                 
                 {/* Header: 90s 3D Chrome Shader Title (Fills top space inside card) */}
                 <div className="text-center -mt-2 -mb-1">
-                    {config?.site_logo_url && (
-                        <div className="flex justify-center mb-1">
-                            <Image
-                                src={config.site_logo_url}
-                                alt={config?.site_name || "Logo"}
-                                width={40}
-                                height={40}
-                                className="h-10 w-auto object-contain"
-                                unoptimized
-                            />
-                        </div>
-                    )}
-
                     <ShaderText
                         text={config?.site_name || t("title") || "Lectern"}
                         className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"

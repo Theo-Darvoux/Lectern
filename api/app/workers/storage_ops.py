@@ -72,13 +72,20 @@ async def release_cas_references(
             from app.core.database.redis import redis_client
 
             redis = redis_client
-        from app.core.security.cas import decrement_cas_ref
+        from app.core.security.cas import CasReferenceMissingError, decrement_cas_ref
 
         errors: list[Exception] = []
         for reference in references:
             sha256 = str(reference["sha256"])
             try:
                 await decrement_cas_ref(redis, sha256, operation_id=str(reference["operation_id"]))
+            except CasReferenceMissingError:
+                # Redis CAS refs are an evictable coordination cache. If the key is
+                # absent, there is no live ref to leak and destructive cleanup was already avoided.
+                logger.warning(
+                    "CAS reference %.16s… already absent during release; skipping decrement",
+                    sha256,
+                )
             except Exception as exc:
                 logger.error("Failed to release CAS reference %.16s…: %s", sha256, exc)
                 errors.append(exc)

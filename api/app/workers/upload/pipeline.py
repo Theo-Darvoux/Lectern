@@ -21,7 +21,11 @@ from app.core.observability.metrics import (
     upload_pipeline_total,
 )
 from app.core.observability.telemetry import get_tracer
-from app.core.security.cas import decrement_cas_ref, hmac_cas_key
+from app.core.security.cas import (
+    CasReferenceMissingError,
+    decrement_cas_ref,
+    hmac_cas_key,
+)
 from app.core.security.processing_paths import make_processing_temp_path
 from app.core.security.scanner import MalwareScanner
 from app.core.storage.capacity import release_storage_reservation
@@ -394,11 +398,14 @@ class UploadPipeline:
             if not published:
                 # Cancellation committed first. Release the CAS reference acquired by
                 # finalization using an idempotent operation ID.
-                await decrement_cas_ref(
-                    self.redis,
-                    final_res.content_sha256,
-                    operation_id=f"upload-finalize:{self.upload_id}:cancel-compensation",
-                )
+                try:
+                    await decrement_cas_ref(
+                        self.redis,
+                        final_res.content_sha256,
+                        operation_id=f"upload-finalize:{self.upload_id}:cancel-compensation",
+                    )
+                except CasReferenceMissingError:
+                    pass
                 await self.redis.zrem(
                     f"quota:uploads:{self.user_id}",
                     f"staging:{self.user_id}:{self.upload_id}",
