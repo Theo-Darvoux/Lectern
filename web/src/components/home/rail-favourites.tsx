@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Bookmark, Eye, ThumbsUp } from "lucide-react";
+import { ArrowRight, Bookmark, Eye, ThumbsUp } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MaterialPreview } from "./material-preview";
 import { getMaterialBrowsePath } from "./file-type-display";
@@ -62,7 +63,38 @@ export function RailFavourites({
   isLoading?: boolean;
 }) {
   const t = useTranslations("Home");
-  if (!isLoading && materials.length === 0) return null;
+
+  if (!isLoading && materials.length === 0) {
+    return (
+      <section aria-label={t("yourFavourites")}>
+        <SectionHeader
+          title={t("yourFavourites")}
+          icon={<Bookmark className="h-4 w-4" />}
+          seeAllHref="/saved"
+          seeAllLabel={t("viewAll")}
+        />
+        <div className="mt-3 flex flex-col items-center justify-center rounded-xl border bg-card p-5 text-center shadow-xs">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary mb-2.5">
+            <Bookmark className="h-5 w-5" />
+          </div>
+          <p className="text-xs text-muted-foreground mb-3 max-w-[200px]">
+            {t("continueSubtitle")}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            asChild
+            className="w-full justify-center gap-1.5 rounded-lg text-xs font-semibold"
+          >
+            <Link href="/saved">
+              <Bookmark className="h-3.5 w-3.5 text-primary" />
+              {t("openSaved")}
+            </Link>
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   const visible = materials.slice(0, MAX_ITEMS);
 
@@ -86,6 +118,23 @@ export function RailFavourites({
               </div>
             ))
           : visible.map((m) => <FavouriteRow key={m.id} material={m} />)}
+
+        {!isLoading && visible.length > 0 && (
+          <div className="mt-1 border-t pt-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              asChild
+              className="w-full justify-center gap-1.5 text-xs font-semibold text-primary hover:text-primary hover:bg-primary/5 rounded-lg h-8"
+            >
+              <Link href="/saved">
+                <Bookmark className="h-3.5 w-3.5" />
+                {t("openSaved")}
+                <ArrowRight className="h-3.5 w-3.5 ml-0.5" />
+              </Link>
+            </Button>
+          </div>
+        )}
       </div>
     </section>
   );

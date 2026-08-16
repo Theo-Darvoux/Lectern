@@ -362,7 +362,7 @@ function MaterialGridCardImpl({
             {title}
           </p>
           <div className="flex items-center gap-1.5 flex-wrap">
-            <ContentStatusBadge status={status} />
+            <ContentStatusBadge materialId={id} status={status} />
             <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium", badgeColor)}>
               {badgeLabel}
             </span>

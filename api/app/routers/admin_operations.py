@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.common.exceptions import BadRequestError
 from app.core.database.database import get_db
 from app.core.database.post_commit import add_post_commit_job
-from app.dependencies.auth import require_role
+from app.dependencies.auth import require_moderator, require_role
 from app.models.content_status import ContentStatus
 from app.models.dead_letter import DeadLetterJob
+from app.models.directory import Directory
 from app.models.flag import Flag, FlagStatus
 from app.models.material import Material
 from app.models.pull_request import PRStatus, PullRequest
@@ -27,6 +28,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 ADMIN_ROLES = (UserRole.BUREAU, UserRole.VIEUX)
 AdminUser = Annotated[User, Depends(require_role(UserRole.BUREAU, UserRole.VIEUX))]
+StaffUser = Annotated[User, Depends(require_moderator)]
 
 
 class BulkUserActionIn(BaseModel):
@@ -36,7 +38,8 @@ class BulkUserActionIn(BaseModel):
 
 
 class ContentStatusUpdateIn(BaseModel):
-    material_ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+    material_ids: list[uuid.UUID] = Field(default_factory=list, max_length=200)
+    directory_ids: list[uuid.UUID] = Field(default_factory=list, max_length=200)
     status: ContentStatus
 
 
@@ -54,13 +57,41 @@ def _browse_path(material: Material, directory_paths: dict[uuid.UUID, str]) -> s
 
 @router.get("/overview")
 async def admin_operational_overview(
-    _user: AdminUser,
+    _user: Annotated[User, Depends(require_moderator())],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, object]:
-    pending_users = (
-        await db.scalar(select(func.count()).select_from(User).where(User.role == UserRole.PENDING))
-        or 0
-    )
+    is_admin = _user.role in ADMIN_ROLES
+
+    pending_users = 0
+    failed_jobs = 0
+    recent_pending: list[User] = []
+
+    if is_admin:
+        pending_users = (
+            await db.scalar(
+                select(func.count()).select_from(User).where(User.role == UserRole.PENDING)
+            )
+            or 0
+        )
+        failed_jobs = (
+            await db.scalar(
+                select(func.count())
+                .select_from(DeadLetterJob)
+                .where(DeadLetterJob.resolved_at.is_(None))
+            )
+            or 0
+        )
+        recent_pending = list(
+            (
+                await db.scalars(
+                    select(User)
+                    .where(User.role == UserRole.PENDING)
+                    .order_by(User.created_at.desc())
+                    .limit(5)
+                )
+            ).all()
+        )
+
     open_prs = (
         await db.scalar(
             select(func.count()).select_from(PullRequest).where(PullRequest.status == PRStatus.OPEN)
@@ -75,14 +106,6 @@ async def admin_operational_overview(
         )
         or 0
     )
-    failed_jobs = (
-        await db.scalar(
-            select(func.count())
-            .select_from(DeadLetterJob)
-            .where(DeadLetterJob.resolved_at.is_(None))
-        )
-        or 0
-    )
 
     status_rows = await db.execute(
         select(Material.status, func.count())
@@ -94,16 +117,6 @@ async def admin_operational_overview(
         if status in content_counts:
             content_counts[status] = int(count)
 
-    recent_pending = list(
-        (
-            await db.scalars(
-                select(User)
-                .where(User.role == UserRole.PENDING)
-                .order_by(User.created_at.desc())
-                .limit(5)
-            )
-        ).all()
-    )
     recent_prs = list(
         (
             await db.scalars(
@@ -244,7 +257,7 @@ async def admin_bulk_users(
 
 @router.get("/content")
 async def admin_list_content(
-    _user: AdminUser,
+    _user: StaffUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     status: Annotated[str | None, Query()] = None,
     search: Annotated[str | None, Query(max_length=200)] = None,
@@ -300,23 +313,43 @@ async def admin_list_content(
 @router.patch("/content/status")
 async def admin_update_content_status(
     body: Annotated[ContentStatusUpdateIn, Body()],
-    _user: AdminUser,
+    _user: StaffUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, object]:
-    requested_ids = _dedupe_ids(body.material_ids)
-    materials = list(
-        (
-            await db.scalars(
-                select(Material)
-                .where(Material.id.in_(requested_ids), Material.deleted_at.is_(None))
-                .with_for_update()
-            )
-        ).all()
-    )
-    found_ids = {material.id for material in materials}
+    requested_mat_ids = _dedupe_ids(body.material_ids)
+    requested_dir_ids = _dedupe_ids(body.directory_ids)
 
-    for material in materials:
-        material.status = body.status.value
+    if not requested_mat_ids and not requested_dir_ids:
+        raise BadRequestError("Either material_ids or directory_ids must be provided")
+
+    materials: list[Material] = []
+    if requested_mat_ids:
+        materials = list(
+            (
+                await db.scalars(
+                    select(Material)
+                    .where(Material.id.in_(requested_mat_ids), Material.deleted_at.is_(None))
+                    .with_for_update()
+                )
+            ).all()
+        )
+        for material in materials:
+            material.status = body.status.value
+
+    directories: list[Directory] = []
+    if requested_dir_ids:
+        directories = list(
+            (
+                await db.scalars(
+                    select(Directory)
+                    .where(Directory.id.in_(requested_dir_ids), Directory.deleted_at.is_(None))
+                    .with_for_update()
+                )
+            ).all()
+        )
+        for directory in directories:
+            directory.status = body.status.value
+
     await db.flush()
 
     if materials:
@@ -328,8 +361,12 @@ async def admin_update_content_status(
     return {
         "status": body.status.value,
         "updated": [str(material.id) for material in materials],
-        "updated_count": len(materials),
+        "updated_directories": [str(directory.id) for directory in directories],
+        "updated_count": len(materials) + len(directories),
         "missing": [
-            str(material_id) for material_id in requested_ids if material_id not in found_ids
+            str(mat_id) for mat_id in requested_mat_ids if mat_id not in {m.id for m in materials}
+        ]
+        + [
+            str(dir_id) for dir_id in requested_dir_ids if dir_id not in {d.id for d in directories}
         ],
     }

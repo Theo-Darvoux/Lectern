@@ -430,7 +430,10 @@ export function MaterialViewer({
                 previewPrId={searchParams.get("preview_pr") || undefined}
               >
                 <div className="flex items-center gap-1.5 ml-1.5 shrink-0">
-                  <ContentStatusBadge status={displayMaterial.status} />
+                  <ContentStatusBadge
+                    materialId={materialId}
+                    status={displayMaterial.status}
+                  />
                   <span
                     className={`inline-block shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium leading-none ${getFileBadgeColor(fileName)}`}
                   >

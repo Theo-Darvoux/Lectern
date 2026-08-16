@@ -21,6 +21,7 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("next-intl", () => ({
+  useLocale: () => "fr",
   useTranslations: () => {
     const t = (key: string, params?: Record<string, unknown>) => {
       if (key === "itemsCount") return `${params?.count ?? 0} éléments`;

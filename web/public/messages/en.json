@@ -224,7 +224,6 @@
     "noNewNotifications": "No new notifications",
     "goToNotifications": "Go to Notifications",
     "profile": "Profile",
-    "saved": "Saved",
     "settings": "Settings",
     "logout": "Log out",
     "login": "Login",
@@ -287,6 +286,8 @@
     "statOpenPrs": "Open PRs",
     "statMyContributions": "Your contributions",
     "quickBrowse": "Browse",
+    "quickSaved": "Saved",
+    "openSaved": "Open saved library",
     "quickFeatured": "Featured",
     "quickNotifications": "Notifications"
   },
@@ -1315,6 +1316,127 @@
     },
     "updateFailed": "Update failed"
   },
+  "Staff": {
+    "title": "Staff Center",
+    "noPermission": "You do not have permission to access the staff area.",
+    "role": {
+      "moderator": "Moderator",
+      "admin": "Administrator"
+    },
+    "nav": {
+      "dashboard": "Dashboard",
+      "pullRequests": "Contributions",
+      "flags": "Flags",
+      "featured": "Featured",
+      "directories": "Directories",
+      "content": "Content",
+      "users": "Users",
+      "dlq": "Dead Letter Queue",
+      "backup": "Backups",
+      "system": "System",
+      "tools": "Tools"
+    },
+    "dashboard": {
+      "title": "Staff Dashboard",
+      "description": "Essential workflows, moderation queues, and system status at a glance.",
+      "refresh": "Refresh",
+      "updated": "Staff dashboard refreshed",
+      "failed": "Could not load staff dashboard",
+      "attention": "Action Required",
+      "healthy": "All Clear",
+      "healthyDesc": "No urgent moderation or administration tasks waiting.",
+      "pendingUsers": "Pending Accounts",
+      "openPrs": "Contributions to Review",
+      "openFlags": "Open Reports",
+      "failedJobs": "Failed Jobs",
+      "metrics": {
+        "title": "Key Metrics",
+        "totalUsers": "Total Users",
+        "totalMaterials": "Materials",
+        "openPrs": "Open PRs",
+        "openFlags": "Open Reports",
+        "pendingJobs": "Pending Jobs",
+        "systemStatus": "System Health"
+      },
+      "recent": {
+        "title": "Active Queues",
+        "registrations": "Account Requests",
+        "reviews": "Recent Contributions",
+        "reports": "Recent Reports",
+        "empty": "No items waiting",
+        "openQueue": "View Queue"
+      },
+      "quickActions": {
+        "title": "Quick Actions",
+        "pullRequests": {
+          "title": "Review Contributions",
+          "description": "Review and merge community submissions and revisions."
+        },
+        "flags": {
+          "title": "Moderation Reports",
+          "description": "Investigate flagged content and user reports."
+        },
+        "featured": {
+          "title": "Featured Boosts",
+          "description": "Highlight key study resources on the front page."
+        },
+        "directories": {
+          "title": "Directory Tree",
+          "description": "Explore the structural hierarchy of courses and modules."
+        },
+        "users": {
+          "title": "User Administration",
+          "description": "Manage user accounts, roles, and pending approvals."
+        },
+        "content": {
+          "title": "Content Lifecycle",
+          "description": "Mark content as essential, current, deprecated, or archived."
+        },
+        "system": {
+          "title": "System Health",
+          "description": "Monitor services, worker pools, and run storage integrity checks."
+        },
+        "tools": {
+          "title": "Staff Utilities",
+          "description": "Brand wordmark styling builder and SMTP email testing."
+        },
+        "backup": {
+          "title": "Backup & Restore",
+          "description": "Create snapshots, download archives, and restore server data."
+        },
+        "dlq": {
+          "title": "Dead Letter Queue",
+          "description": "Inspect and retry failed background processing jobs."
+        }
+      },
+      "systemGlance": {
+        "title": "System Health",
+        "viewSystem": "Full System Status",
+        "allHealthy": "All core services operational"
+      }
+    },
+    "tools": {
+      "title": "Staff Utilities",
+      "description": "Interactive utilities for branding design and communication verification.",
+      "tabs": {
+        "wordmark": "Wordmark Builder",
+        "emailTest": "Email Test"
+      },
+      "wordmark": {
+        "title": "Brand Wordmark Builder",
+        "description": "Design custom multi-color or stylized wordmarks. Copy the generated style configuration into your environment configuration."
+      },
+      "emailTest": {
+        "title": "SMTP Delivery Test",
+        "description": "Send a real test email through your configured SMTP service to verify delivery settings and template formatting.",
+        "placeholder": "admin@example.com",
+        "send": "Send Test Email",
+        "sending": "Sending...",
+        "success": "Test email successfully sent to {email}",
+        "error": "Failed to deliver test email. Check your SMTP configuration."
+      }
+    }
+  },
   "Admin": {
     "Config": {
       "Branding": {
@@ -2264,62 +2386,5 @@
         }
       }
     }
-  },
-  "Saved": {
-    "title": "Saved",
-    "subtitle": "Your bookmarks and custom collections in one organized library",
-    "allSaved": "All Saved",
-    "collections": "Collections",
-    "allTypes": "All types",
-    "materials": "Materials",
-    "folders": "Folders",
-    "searchSavedPlaceholder": "Search saved items...",
-    "noSavedItems": "No saved items yet",
-    "noSavedItemsDesc": "Save materials and folders across the catalog to build your reference library.",
-    "exploreBrowse": "Browse catalog",
-    "newCollection": "New collection",
-    "createCollection": "Create Collection",
-    "editCollection": "Edit Collection",
-    "deleteCollection": "Delete Collection",
-    "deleteCollectionConfirm": "Are you sure you want to delete the collection \"{title}\"? The items inside will remain in the catalog.",
-    "collectionTitle": "Title",
-    "collectionTitlePlaceholder": "e.g. Algorithms final, Must read, Exam revision",
-    "collectionDesc": "Description (optional)",
-    "collectionDescPlaceholder": "Add context or goals for this collection...",
-    "isPublic": "Make collection public / shareable",
-    "isPublicDesc": "Anyone with the link can view this curated reading list.",
-    "private": "Private",
-    "public": "Public",
-    "shared": "Shared",
-    "save": "Save",
-    "saving": "Saving...",
-    "cancel": "Cancel",
-    "delete": "Delete",
-    "itemsCount": "{count, plural, =0 {0 items} =1 {1 item} other {# items}}",
-    "materialsCount": "{count, plural, =0 {0 materials} =1 {1 material} other {# materials}}",
-    "foldersCount": "{count, plural, =0 {0 folders} =1 {1 folder} other {# folders}}",
-    "updated": "Updated",
-    "created": "Created",
-    "curatedBy": "Curated by",
-    "shareCollection": "Share Collection",
-    "shareLinkCopied": "Collection link copied to clipboard!",
-    "copyShareLink": "Copy share link",
-    "emptyCollection": "This collection is empty",
-    "emptyCollectionDesc": "Add materials and folders from anywhere in WikINT to populate this collection.",
-    "addToCollection": "Add to collection",
-    "addToCollections": "Add to collections",
-    "manageCollections": "Manage collections",
-    "removeFromCollection": "Remove from collection",
-    "removedFromCollection": "Item removed from collection",
-    "addedToCollection": "Added to collection",
-    "collectionCreated": "Collection created successfully",
-    "collectionUpdated": "Collection updated successfully",
-    "collectionDeleted": "Collection deleted",
-    "failedToLoad": "Failed to load saved items",
-    "failedToSave": "Failed to save collection",
-    "viewCollection": "View collection",
-    "backToSaved": "Back to Saved",
-    "noCollectionsYet": "No collections yet",
-    "noCollectionsDesc": "Group materials and folders into focused study guides, reading lists, or exam revision collections."
   }
 }

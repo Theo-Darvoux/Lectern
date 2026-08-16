@@ -19,9 +19,17 @@ import {
   Info,
   MessageSquare,
   RefreshCw,
+  BookOpenCheck,
 } from "lucide-react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
+import {
+  CONTENT_STATUSES,
+  CONTENT_STATUS_ICONS,
+  CONTENT_STATUS_LABELS,
+  normalizeContentStatus,
+  type ContentStatus,
+} from "@/components/content-status-badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -323,6 +331,9 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
   const guest = isGuest(user);
   const staff = isStaff(user);
   const openSidebar = useUIStore((s) => s.openSidebar);
+  const locale = useLocale();
+  const fr = locale.toLowerCase().startsWith("fr");
+  const lang = fr ? "fr" : "en";
   if (!context) return null;
   const { item, actions } = context;
   const { t } = actions;
@@ -335,6 +346,32 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
   const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading, print, isPrinting, canPrint } = actions;
 
   const isCreated = item.staged === "created";
+
+  const handleUpdateStatus = async (nextStatus: ContentStatus) => {
+    try {
+      const payload = item.type === "directory"
+        ? { directory_ids: [item.id], status: nextStatus }
+        : { material_ids: [item.id], status: nextStatus };
+
+      await apiFetch("/admin/content/status", {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      useUIStore.getState().updateSidebarData({ status: nextStatus });
+      useBrowseRefreshStore.getState().triggerBrowseRefresh();
+      toast.success(
+        fr
+          ? `Statut mis à jour : ${CONTENT_STATUS_LABELS.fr[nextStatus]}`
+          : `Status updated to ${CONTENT_STATUS_LABELS.en[nextStatus]}`,
+      );
+    } catch {
+      toast.error(
+        fr
+          ? "Impossible de modifier le statut"
+          : "Failed to update status",
+      );
+    }
+  };
 
   const handleDetailsClick = () => {
     openSidebar("details", {
@@ -475,6 +512,83 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
               )}
               <span>{t("recalculateThumbnail")}</span>
             </Item>
+          )}
+          {staff && !isCreated && (
+            isContextMenu ? (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger className="cursor-pointer">
+                  <BookOpenCheck className="mr-2 h-4 w-4" />
+                  <span>
+                    {fr
+                      ? item.type === "directory"
+                        ? "Statut du dossier"
+                        : "Statut du document"
+                      : item.type === "directory"
+                        ? "Folder status"
+                        : "Document status"}
+                  </span>
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="w-48">
+                  {CONTENT_STATUSES.map((st) => {
+                    const StIcon = CONTENT_STATUS_ICONS[st];
+                    const isSelected = normalizeContentStatus(item.data.status) === st;
+                    return (
+                      <ContextMenuItem
+                        key={st}
+                        onClick={() => handleUpdateStatus(st)}
+                        className={cn(
+                          "cursor-pointer flex items-center justify-between",
+                          isSelected && "font-semibold text-primary bg-primary/10",
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <StIcon className="h-3.5 w-3.5" />
+                          <span>{CONTENT_STATUS_LABELS[lang][st]}</span>
+                        </div>
+                        {isSelected && <span className="text-xs text-primary font-bold">✓</span>}
+                      </ContextMenuItem>
+                    );
+                  })}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            ) : (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className="cursor-pointer">
+                  <BookOpenCheck className="mr-2 h-4 w-4" />
+                  <span>
+                    {fr
+                      ? item.type === "directory"
+                        ? "Statut du dossier"
+                        : "Statut du document"
+                      : item.type === "directory"
+                        ? "Folder status"
+                        : "Document status"}
+                  </span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-48">
+                  {CONTENT_STATUSES.map((st) => {
+                    const StIcon = CONTENT_STATUS_ICONS[st];
+                    const isSelected = normalizeContentStatus(item.data.status) === st;
+                    return (
+                      <DropdownMenuItem
+                        key={st}
+                        onClick={() => handleUpdateStatus(st)}
+                        className={cn(
+                          "cursor-pointer flex items-center justify-between",
+                          isSelected && "font-semibold text-primary bg-primary/10",
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <StIcon className="h-3.5 w-3.5" />
+                          <span>{CONTENT_STATUS_LABELS[lang][st]}</span>
+                        </div>
+                        {isSelected && <span className="text-xs text-primary font-bold">✓</span>}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )
           )}
           {!actions.isMaterial && (
             <Item

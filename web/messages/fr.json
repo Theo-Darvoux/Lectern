@@ -286,6 +286,8 @@
     "statOpenPrs": "PR ouvertes",
     "statMyContributions": "Vos contributions",
     "quickBrowse": "Explorer",
+    "quickSaved": "Enregistrés",
+    "openSaved": "Ouvrir les enregistrés",
     "quickFeatured": "Mettre en avant",
     "quickNotifications": "Notifications"
   },
@@ -1313,6 +1315,127 @@
       "description": "Informations légales et version de l'application."
     },
     "updateFailed": "Échec de la mise à jour"
+  },
+  "Staff": {
+    "title": "Espace Équipe",
+    "noPermission": "Vous n'avez pas la permission d'accéder à cet espace.",
+    "role": {
+      "moderator": "Modérateur",
+      "admin": "Administrateur"
+    },
+    "nav": {
+      "dashboard": "Tableau de bord",
+      "pullRequests": "Contributions",
+      "flags": "Signalements",
+      "featured": "En vedette",
+      "directories": "Répertoires",
+      "content": "Contenu",
+      "users": "Utilisateurs",
+      "dlq": "Tâches en échec",
+      "backup": "Sauvegardes",
+      "system": "Système",
+      "tools": "Outils"
+    },
+    "dashboard": {
+      "title": "Tableau de bord équipe",
+      "description": "Actions prioritaires, files de modération et état du système en un coup d'œil.",
+      "refresh": "Actualiser",
+      "updated": "Tableau de bord actualisé",
+      "failed": "Impossible de charger le tableau de bord",
+      "attention": "Actions prioritaires",
+      "healthy": "Tout est à jour",
+      "healthyDesc": "Aucune tâche urgente en attente de modération ou d'administration.",
+      "pendingUsers": "Comptes en attente",
+      "openPrs": "Contributions à relire",
+      "openFlags": "Signalements ouverts",
+      "failedJobs": "Tâches en échec",
+      "metrics": {
+        "title": "Métriques clés",
+        "totalUsers": "Total utilisateurs",
+        "totalMaterials": "Documents",
+        "openPrs": "PRs ouvertes",
+        "openFlags": "Signalements ouverts",
+        "pendingJobs": "Tâches en attente",
+        "systemStatus": "État système"
+      },
+      "recent": {
+        "title": "Files d'attente",
+        "registrations": "Demandes d'accès",
+        "reviews": "Dernières contributions",
+        "reports": "Derniers signalements",
+        "empty": "Rien en attente",
+        "openQueue": "Ouvrir la file"
+      },
+      "quickActions": {
+        "title": "Actions rapides",
+        "pullRequests": {
+          "title": "Relire les contributions",
+          "description": "Examiner et valider les propositions et modifications de cours."
+        },
+        "flags": {
+          "title": "Modérer les signalements",
+          "description": "Traiter les signalements de contenu ou de commentaires."
+        },
+        "featured": {
+          "title": "Documents en vedette",
+          "description": "Mettre en avant des ressources clés sur la page d'accueil."
+        },
+        "directories": {
+          "title": "Arborescence",
+          "description": "Consulter l'organisation hiérarchique des cours et matières."
+        },
+        "users": {
+          "title": "Gestion des utilisateurs",
+          "description": "Gérer les comptes, rôles et approbations en attente."
+        },
+        "content": {
+          "title": "Cycle de vie du contenu",
+          "description": "Définir les statuts : important, actuel, obsolète ou archivé."
+        },
+        "system": {
+          "title": "Santé du système",
+          "description": "Surveiller les services et exécuter la vérification du stockage."
+        },
+        "tools": {
+          "title": "Utilitaires équipe",
+          "description": "Concepteur de logo textuel et test d'envoi d'e-mails SMTP."
+        },
+        "backup": {
+          "title": "Sauvegardes & Restauration",
+          "description": "Créer des instantanés, exporter des archives et restaurer."
+        },
+        "dlq": {
+          "title": "File des échecs (DLQ)",
+          "description": "Inspecter et relancer les tâches de fond ayant échoué."
+        }
+      },
+      "systemGlance": {
+        "title": "Santé du système",
+        "viewSystem": "Détails système",
+        "allHealthy": "Tous les services sont opérationnels"
+      }
+    },
+    "tools": {
+      "title": "Utilitaires équipe",
+      "description": "Outils interactifs pour l'identité visuelle et les tests de messagerie.",
+      "tabs": {
+        "wordmark": "Concepteur de wordmark",
+        "emailTest": "Test SMTP"
+      },
+      "wordmark": {
+        "title": "Concepteur de wordmark",
+        "description": "Créez une typographie personnalisée pour le nom du site et exportez la configuration pour le fichier .env."
+      },
+      "emailTest": {
+        "title": "Test d'envoi SMTP",
+        "description": "Envoyez un e-mail réel pour vérifier le bon fonctionnement de votre relais SMTP et des gabarits.",
+        "placeholder": "admin@example.com",
+        "send": "Envoyer l'e-mail test",
+        "sending": "Envoi en cours...",
+        "success": "E-mail test envoyé avec succès à {email}",
+        "error": "Échec de l'envoi de l'e-mail test. Vérifiez votre configuration SMTP."
+      }
+    }
   },
   "Admin": {
     "Config": {

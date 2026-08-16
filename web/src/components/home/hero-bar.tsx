@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { FolderTree, Star } from "lucide-react";
+import { Bookmark, FolderTree, Star } from "lucide-react";
 import { SearchInline } from "@/components/search/search-inline";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -44,6 +44,13 @@ export function HeroBar({
       href: "/browse",
       label: t("quickBrowse"),
       icon: <FolderTree className="h-4 w-4" />,
+      className:
+        "bg-primary/10 text-primary hover:bg-primary/15 ring-primary/20",
+    },
+    {
+      href: "/saved",
+      label: t("quickSaved"),
+      icon: <Bookmark className="h-4 w-4" />,
       className:
         "bg-primary/10 text-primary hover:bg-primary/15 ring-primary/20",
     },

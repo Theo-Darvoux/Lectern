@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -21,6 +22,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDMixin
+from app.models.material import ContentStatus
 
 if TYPE_CHECKING:
     from app.models.material import Material
@@ -51,6 +53,11 @@ class Directory(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
             sqlite_where=text("parent_id IS NULL AND deleted_at IS NULL"),
         ),
         Index("ix_directories_parent_id", "parent_id"),
+        Index("ix_directories_status", "status"),
+        CheckConstraint(
+            "status IN ('important', 'current', 'deprecated', 'archived')",
+            name="ck_directories_status",
+        ),
     )
 
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -63,6 +70,12 @@ class Directory(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         nullable=False,
     )
     description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=ContentStatus.CURRENT.value,
+        server_default=ContentStatus.CURRENT.value,
+    )
     metadata_: Mapped[dict[str, object]] = mapped_column(
         "metadata", JSONB, default=dict, server_default="{}"
     )

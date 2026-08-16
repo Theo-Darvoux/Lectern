@@ -1,9 +1,5 @@
-"use client";
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { redirect } from "next/navigation";
 
-export default function AdminPRsRedirect() {
-    const router = useRouter();
-    useEffect(() => { router.replace("/moderator/pull-requests"); }, [router]);
-    return null;
+export default function AdminPullRequestsRedirect() {
+  redirect("/staff/pull-requests");
 }

@@ -5,7 +5,7 @@ value ("Chapitre 2" < "Chapitre 10") rather than lexicographically. It mirrors
 the frontend's compareNatural comparator.
 """
 
-from app.core.common.natural_sorting import natural_sort_key
+from app.core.common.natural_sorting import content_status_sort_key, natural_sort_key
 
 
 def test_numbered_names_sort_by_value() -> None:
@@ -49,3 +49,13 @@ def test_cached_sort_key_is_immutable() -> None:
     key = natural_sort_key("Chapter 12")
 
     assert isinstance(key, tuple)
+
+
+def test_content_status_sort_key_order() -> None:
+    statuses = ["archived", "important", "deprecated", "current", None, "invalid"]
+    # expected rank: important (0), current (1), None->current (1), invalid->current (1), deprecated (2), archived (3)
+    sorted_statuses = sorted(statuses, key=content_status_sort_key)
+    assert sorted_statuses[0] == "important"
+    assert set(sorted_statuses[1:4]) == {"current", None, "invalid"}
+    assert sorted_statuses[4] == "deprecated"
+    assert sorted_statuses[5] == "archived"

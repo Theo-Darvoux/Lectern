@@ -5,6 +5,7 @@ import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
+import { ContentStatusBadge } from "@/components/content-status-badge";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { getDirectoryIcon } from "@/lib/directory-icons";
@@ -276,13 +277,16 @@ function DirectoryGridCardImpl({
         </div>
 
         {/* Footer */}
-        <div className="px-1 flex flex-col gap-0.5 min-w-0">
+        <div className="px-1 flex flex-col gap-1 min-w-0">
           <p className={cn("text-sm font-medium leading-snug line-clamp-2", textColor || "text-foreground")}>
             {name}
           </p>
-          <p className={cn("text-[11px]", staged ? `text-${themeColor}-600/70` : "text-muted-foreground")}>
-            {t("itemsCount", { count: totalCount })}
-          </p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <ContentStatusBadge directoryId={id} status={directory.status} hideIfCurrent />
+            <p className={cn("text-[11px]", staged ? `text-${themeColor}-600/70` : "text-muted-foreground")}>
+              {t("itemsCount", { count: totalCount })}
+            </p>
+          </div>
         </div>
       </BrowseLink>
     </ItemActionsMenu>

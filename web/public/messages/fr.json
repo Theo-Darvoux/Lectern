@@ -224,7 +224,6 @@
     "noNewNotifications": "Aucune nouvelle notification",
     "goToNotifications": "Aller aux notifications",
     "profile": "Profil",
-    "saved": "Enregistrés",
     "settings": "Paramètres",
     "logout": "Se déconnecter",
     "login": "Se connecter",
@@ -287,6 +286,8 @@
     "statOpenPrs": "PR ouvertes",
     "statMyContributions": "Vos contributions",
     "quickBrowse": "Explorer",
+    "quickSaved": "Enregistrés",
+    "openSaved": "Ouvrir les enregistrés",
     "quickFeatured": "Mettre en avant",
     "quickNotifications": "Notifications"
   },
@@ -1315,6 +1316,127 @@
     },
     "updateFailed": "Échec de la mise à jour"
   },
+  "Staff": {
+    "title": "Espace Équipe",
+    "noPermission": "Vous n'avez pas la permission d'accéder à cet espace.",
+    "role": {
+      "moderator": "Modérateur",
+      "admin": "Administrateur"
+    },
+    "nav": {
+      "dashboard": "Tableau de bord",
+      "pullRequests": "Contributions",
+      "flags": "Signalements",
+      "featured": "En vedette",
+      "directories": "Répertoires",
+      "content": "Contenu",
+      "users": "Utilisateurs",
+      "dlq": "Tâches en échec",
+      "backup": "Sauvegardes",
+      "system": "Système",
+      "tools": "Outils"
+    },
+    "dashboard": {
+      "title": "Tableau de bord équipe",
+      "description": "Actions prioritaires, files de modération et état du système en un coup d'œil.",
+      "refresh": "Actualiser",
+      "updated": "Tableau de bord actualisé",
+      "failed": "Impossible de charger le tableau de bord",
+      "attention": "Actions prioritaires",
+      "healthy": "Tout est à jour",
+      "healthyDesc": "Aucune tâche urgente en attente de modération ou d'administration.",
+      "pendingUsers": "Comptes en attente",
+      "openPrs": "Contributions à relire",
+      "openFlags": "Signalements ouverts",
+      "failedJobs": "Tâches en échec",
+      "metrics": {
+        "title": "Métriques clés",
+        "totalUsers": "Total utilisateurs",
+        "totalMaterials": "Documents",
+        "openPrs": "PRs ouvertes",
+        "openFlags": "Signalements ouverts",
+        "pendingJobs": "Tâches en attente",
+        "systemStatus": "État système"
+      },
+      "recent": {
+        "title": "Files d'attente",
+        "registrations": "Demandes d'accès",
+        "reviews": "Dernières contributions",
+        "reports": "Derniers signalements",
+        "empty": "Rien en attente",
+        "openQueue": "Ouvrir la file"
+      },
+      "quickActions": {
+        "title": "Actions rapides",
+        "pullRequests": {
+          "title": "Relire les contributions",
+          "description": "Examiner et valider les propositions et modifications de cours."
+        },
+        "flags": {
+          "title": "Modérer les signalements",
+          "description": "Traiter les signalements de contenu ou de commentaires."
+        },
+        "featured": {
+          "title": "Documents en vedette",
+          "description": "Mettre en avant des ressources clés sur la page d'accueil."
+        },
+        "directories": {
+          "title": "Arborescence",
+          "description": "Consulter l'organisation hiérarchique des cours et matières."
+        },
+        "users": {
+          "title": "Gestion des utilisateurs",
+          "description": "Gérer les comptes, rôles et approbations en attente."
+        },
+        "content": {
+          "title": "Cycle de vie du contenu",
+          "description": "Définir les statuts : important, actuel, obsolète ou archivé."
+        },
+        "system": {
+          "title": "Santé du système",
+          "description": "Surveiller les services et exécuter la vérification du stockage."
+        },
+        "tools": {
+          "title": "Utilitaires équipe",
+          "description": "Concepteur de logo textuel et test d'envoi d'e-mails SMTP."
+        },
+        "backup": {
+          "title": "Sauvegardes & Restauration",
+          "description": "Créer des instantanés, exporter des archives et restaurer."
+        },
+        "dlq": {
+          "title": "File des échecs (DLQ)",
+          "description": "Inspecter et relancer les tâches de fond ayant échoué."
+        }
+      },
+      "systemGlance": {
+        "title": "Santé du système",
+        "viewSystem": "Détails système",
+        "allHealthy": "Tous les services sont opérationnels"
+      }
+    },
+    "tools": {
+      "title": "Utilitaires équipe",
+      "description": "Outils interactifs pour l'identité visuelle et les tests de messagerie.",
+      "tabs": {
+        "wordmark": "Concepteur de wordmark",
+        "emailTest": "Test SMTP"
+      },
+      "wordmark": {
+        "title": "Concepteur de wordmark",
+        "description": "Créez une typographie personnalisée pour le nom du site et exportez la configuration pour le fichier .env."
+      },
+      "emailTest": {
+        "title": "Test d'envoi SMTP",
+        "description": "Envoyez un e-mail réel pour vérifier le bon fonctionnement de votre relais SMTP et des gabarits.",
+        "placeholder": "admin@example.com",
+        "send": "Envoyer l'e-mail test",
+        "sending": "Envoi en cours...",
+        "success": "E-mail test envoyé avec succès à {email}",
+        "error": "Échec de l'envoi de l'e-mail test. Vérifiez votre configuration SMTP."
+      }
+    }
+  },
   "Admin": {
     "Config": {
       "Branding": {
@@ -2264,62 +2386,5 @@
         }
       }
     }
-  },
-  "Saved": {
-    "title": "Enregistrés",
-    "subtitle": "Vos favoris et vos collections personnalisées réunis dans une bibliothèque organisée",
-    "allSaved": "Tous les favoris",
-    "collections": "Collections",
-    "allTypes": "Tous les types",
-    "materials": "Documents",
-    "folders": "Dossiers",
-    "searchSavedPlaceholder": "Rechercher dans les enregistrements...",
-    "noSavedItems": "Aucun élément enregistré pour le moment",
-    "noSavedItemsDesc": "Enregistrez des documents et des dossiers dans le catalogue pour construire votre bibliothèque de référence.",
-    "exploreBrowse": "Parcourir le catalogue",
-    "newCollection": "Nouvelle collection",
-    "createCollection": "Créer une collection",
-    "editCollection": "Modifier la collection",
-    "deleteCollection": "Supprimer la collection",
-    "deleteCollectionConfirm": "Voulez-vous vraiment supprimer la collection \"{title}\" ? Les éléments qu'elle contient resteront disponibles dans le catalogue.",
-    "collectionTitle": "Titre",
-    "collectionTitlePlaceholder": "ex. Révisions partiels, À lire absolument, Fiches mémo",
-    "collectionDesc": "Description (facultative)",
-    "collectionDescPlaceholder": "Ajoutez des précisions ou des objectifs pour cette collection...",
-    "isPublic": "Rendre la collection publique / partageable",
-    "isPublicDesc": "Toute personne disposant du lien pourra consulter cette liste de lecture.",
-    "private": "Privée",
-    "public": "Publique",
-    "shared": "Partagée",
-    "save": "Enregistrer",
-    "saving": "Enregistrement...",
-    "cancel": "Annuler",
-    "delete": "Supprimer",
-    "itemsCount": "{count, plural, =0 {0 élément} =1 {1 élément} other {# éléments}}",
-    "materialsCount": "{count, plural, =0 {0 document} =1 {1 document} other {# documents}}",
-    "foldersCount": "{count, plural, =0 {0 dossier} =1 {1 dossier} other {# dossiers}}",
-    "updated": "Mis à jour",
-    "created": "Créé",
-    "curatedBy": "Créé par",
-    "shareCollection": "Partager la collection",
-    "shareLinkCopied": "Lien de la collection copié dans le presse-papiers !",
-    "copyShareLink": "Copier le lien",
-    "emptyCollection": "Cette collection est vide",
-    "emptyCollectionDesc": "Ajoutez des documents et des dossiers depuis n'importe où sur WikINT pour garnir cette collection.",
-    "addToCollection": "Ajouter à une collection",
-    "addToCollections": "Ajouter aux collections",
-    "manageCollections": "Gérer les collections",
-    "removeFromCollection": "Retirer de la collection",
-    "removedFromCollection": "Élément retiré de la collection",
-    "addedToCollection": "Ajouté à la collection",
-    "collectionCreated": "Collection créée avec succès",
-    "collectionUpdated": "Collection mise à jour avec succès",
-    "collectionDeleted": "Collection supprimée",
-    "failedToLoad": "Échec du chargement des enregistrements",
-    "failedToSave": "Échec de l'enregistrement de la collection",
-    "viewCollection": "Voir la collection",
-    "backToSaved": "Retour aux enregistrements",
-    "noCollectionsYet": "Aucune collection",
-    "noCollectionsDesc": "Regroupez des documents et dossiers dans des listes de révision ou guides d'étude ciblés."
   }
 }

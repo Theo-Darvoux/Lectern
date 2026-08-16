@@ -33,7 +33,7 @@ async def add_flag(
         db,
         "new_flag",
         f"New flag: {data.reason} on {data.target_type}",
-        link="/moderator/flags",
+        link="/staff/flags",
     )
     return FlagOut.model_validate(flag)
 

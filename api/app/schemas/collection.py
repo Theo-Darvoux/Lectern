@@ -15,6 +15,13 @@ class SavedItemOut(BaseModel):
     description: str | None = None
     href: str
     added_at: datetime
+    metadata: dict[str, object] | None = None
+    status: str | None = None
+    like_count: int | None = 0
+    total_views: int | None = 0
+    download_count: int | None = 0
+    slug: str | None = None
+    current_version_info: dict[str, object] | None = None
 
 
 class SavedLibraryOut(BaseModel):

@@ -11,6 +11,7 @@ class DirectoryOut(BaseModel):
     slug: str
     type: str
     description: str | None
+    status: str = "current"
     metadata: dict[str, object] = Field(validation_alias=AliasChoices("metadata_", "metadata"))
     sort_order: int
     tags: list[str] = []
