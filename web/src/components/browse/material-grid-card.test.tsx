@@ -26,6 +26,7 @@ vi.mock("next-intl", () => ({
     (t as unknown as { has: () => boolean }).has = () => false;
     return t;
   },
+  useLocale: () => "fr",
 }));
 
 vi.mock("@/lib/browse-prefetch", () => ({ prefetchBrowsePath: vi.fn() }));

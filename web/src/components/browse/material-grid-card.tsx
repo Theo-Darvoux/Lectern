@@ -1,5 +1,7 @@
 "use client";
 
+
+import { ContentStatusBadge, normalizeContentStatus } from "@/components/content-status-badge";
 import { memo, useState, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
@@ -150,6 +152,7 @@ function MaterialGridCardImpl({
   const slug = String(material.slug ?? "");
   const id = String(material.id ?? "");
   const type = String(material.type ?? "other");
+  const status = normalizeContentStatus(material.status);
   const attachmentCount = draftAttachmentCount ?? Number(material.attachment_count ?? 0);
 
   let fileName = "";
@@ -281,6 +284,8 @@ function MaterialGridCardImpl({
           "group relative rounded-xl border bg-card shadow-sm overflow-hidden cursor-pointer",
           "ring-1 ring-border/50 hover:ring-primary/30",
           stagedRing,
+          status === "important" && !staged ? "ring-2 ring-red-400/60" : "",
+          status === "archived" ? "opacity-75" : "",
           selectMode && selected ? "bg-primary/5 dark:bg-primary/10 ring-primary" : "",
           focused ? "ring-2 ring-primary/40" : "",
         )}
@@ -357,6 +362,7 @@ function MaterialGridCardImpl({
             {title}
           </p>
           <div className="flex items-center gap-1.5 flex-wrap">
+            <ContentStatusBadge status={status} />
             <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium", badgeColor)}>
               {badgeLabel}
             </span>

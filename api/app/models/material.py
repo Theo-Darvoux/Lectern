@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -20,6 +21,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDMixin
+from app.models.content_status import ContentStatus
 from app.models.security import VirusScanResult
 
 if TYPE_CHECKING:
@@ -52,6 +54,11 @@ class Material(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("ix_materials_views_today", text("views_today DESC")),
         Index("ix_materials_views_14d", text("views_14d DESC")),
         Index("ix_materials_author_id", "author_id"),
+        Index("ix_materials_status", "status"),
+        CheckConstraint(
+            "status IN ('important', 'current', 'deprecated', 'archived')",
+            name="ck_materials_content_status",
+        ),
     )
 
     directory_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -61,6 +68,12 @@ class Material(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     slug: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     type: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=ContentStatus.CURRENT.value,
+        server_default=ContentStatus.CURRENT.value,
+    )
     current_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     parent_material_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("materials.id", ondelete="CASCADE")

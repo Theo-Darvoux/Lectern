@@ -10,6 +10,7 @@ export interface SearchResult {
     tags?: string[];
     module?: string;
     type?: string;
+    status?: "important" | "current" | "deprecated" | "archived";
     browse_path: string;
     total_views?: number;
     views_today?: number;
