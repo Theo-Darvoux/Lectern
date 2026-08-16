@@ -10,10 +10,10 @@ import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 
 interface LinkViewerProps {
-    material: {
-        id: string;
-        title: string;
-        type: string;
+    material: Record<string, unknown> & {
+        id?: string;
+        title?: string;
+        type?: string;
         description?: string | null;
         tags?: string[] | null;
         metadata?: Record<string, unknown> | null;

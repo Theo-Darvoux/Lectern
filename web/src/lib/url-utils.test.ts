@@ -6,17 +6,24 @@ describe("url-utils", () => {
 
     beforeEach(() => {
         // Mock window.location
-        delete (window as unknown as { location?: unknown }).location;
-        window.location = {
-            origin: "https://wikint.example.com",
-            host: "wikint.example.com",
-            hostname: "wikint.example.com",
-            href: "https://wikint.example.com/browse",
-        } as unknown as Location;
+        Object.defineProperty(window, "location", {
+            writable: true,
+            configurable: true,
+            value: {
+                origin: "https://wikint.example.com",
+                host: "wikint.example.com",
+                hostname: "wikint.example.com",
+                href: "https://wikint.example.com/browse",
+            },
+        });
     });
 
     afterEach(() => {
-        window.location = originalLocation;
+        Object.defineProperty(window, "location", {
+            writable: true,
+            configurable: true,
+            value: originalLocation,
+        });
     });
 
     describe("isExternalUrl", () => {

@@ -32,13 +32,13 @@ const mockApiFetchRetry = vi.fn();
 const mockApiFetch = vi.fn();
 
 vi.mock("@/lib/api-client", () => ({
-  apiFetchRetry: (...args: unknown[]) => mockApiFetchRetry(...args),
-  apiFetch: (...args: unknown[]) => mockApiFetch(...args),
+  apiFetchRetry: (...args: any[]) => mockApiFetchRetry(...args),
+  apiFetch: (...args: any[]) => mockApiFetch(...args),
 }));
 
-const mockSubscribeToSSE = vi.fn(() => ({ close: vi.fn() }));
+const mockSubscribeToSSE = vi.fn((..._args: any[]) => ({ close: vi.fn() }));
 vi.mock("@/lib/sse-client", () => ({
-  subscribeToSSE: (...args: unknown[]) => mockSubscribeToSSE(...args),
+  subscribeToSSE: (...args: any[]) => mockSubscribeToSSE(...args),
 }));
 
 import { DirectoryTreeSidebar } from "./directory-tree-sidebar";

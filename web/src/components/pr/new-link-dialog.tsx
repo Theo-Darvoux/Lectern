@@ -211,7 +211,6 @@ export function NewLinkDialog({
                             tags={tags}
                             onChange={setTags}
                             placeholder={t("tagsPlaceholder")}
-                            disabled={submitting}
                         />
                     </div>
                 </div>
