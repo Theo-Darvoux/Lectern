@@ -9,12 +9,17 @@ from app.models.pull_request import PRComment, PullRequest
 from app.models.user import User, UserRole
 
 
-async def _create_user(db: AsyncSession, *, name: str) -> User:
+async def _create_user(
+    db: AsyncSession,
+    *,
+    name: str,
+    role: UserRole = UserRole.STUDENT,
+) -> User:
     user = User(
         id=uuid.uuid4(),
         email=f"{uuid.uuid4().hex[:8]}@example.com",
         display_name=name,
-        role=UserRole.STUDENT,
+        role=role,
         onboarded=True,
         gdpr_consent=True,
         academic_year="2A",
