@@ -1,4 +1,4 @@
-import { FileText, Image as ImageIcon, Video, Music, Code2, File, ExternalLink, ListChecks } from "lucide-react";
+import { FileText, Image as ImageIcon, Video, Music, Code2, File, ExternalLink, Link2, ListChecks } from "lucide-react";
 import type { ElementType } from "react";
 import { getFileExtension, MIME_QCM } from "@/lib/file-utils";
 
@@ -36,6 +36,11 @@ export function getFileTypeStyle(
     mimeType: string | null,
     materialType?: string | null,
 ): FileTypeStyle {
+    // Internal link
+    if (materialType === "internal_link") {
+        return { gradient: "from-sky-600 to-indigo-700", iconColorClass: "text-white", Icon: Link2 };
+    }
+
     // External link
     if (materialType === "link") {
         return { gradient: "from-sky-500 to-blue-600", iconColorClass: "text-white", Icon: ExternalLink };

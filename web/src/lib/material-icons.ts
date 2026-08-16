@@ -10,6 +10,7 @@ import {
     FileText,
     FileVideo,
     Lightbulb,
+    Link2,
     ListChecks,
     MessageSquare,
     Video,
@@ -25,6 +26,7 @@ export const TYPE_COLORS: Record<string, string> = {
     video: "bg-red-100 text-red-800",
     qcm: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
     link: "bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300",
+    internal_link: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300",
     other: "bg-gray-100 text-gray-800",
 };
 
@@ -38,6 +40,7 @@ export const TYPE_ICONS: Record<string, React.ElementType> = {
     video: Video,
     qcm: ListChecks,
     link: ExternalLink,
+    internal_link: Link2,
     other: File,
     document: FileText,
 };

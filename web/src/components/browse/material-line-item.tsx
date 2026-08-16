@@ -6,6 +6,7 @@ import { BrowseLink } from "@/components/browse/browse-link";
 import {
     File,
     FileText,
+    Link2,
     ListChecks,
     Paperclip,
     ThumbsUp,
@@ -15,6 +16,7 @@ import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu
 import { useLikeOverrides } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension, MIME_QCM } from "@/lib/file-utils";
 import { EXT_ICONS, TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
+import { isExternalUrl } from "@/lib/url-utils";
 import { useExternalLinkStore } from "@/lib/external-link-store";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -37,13 +39,13 @@ interface MaterialLineItemProps {
     /** Special override for clicking on ghost materials (creations) */
     onNavigate?: () => void;
     /** Request attachment upload for this material (draft only) */
-    onAddAttachment?: (id: string, title: string) => void;
+    onAddAttachment?: (materialId: string, materialTitle: string) => void;
     /** Cached attachment count for drafts */
     draftAttachmentCount?: number;
     /** Current pathname base (without trailing slash), hoisted from parent to avoid per-item usePathname subscription */
     pathBase: string;
     /** Hoisted from parent to avoid per-item useIsMobile subscription */
-    isMobile: boolean;
+    isMobile?: boolean;
 }
 
 function MaterialLineItemImpl({
@@ -70,6 +72,9 @@ function MaterialLineItemImpl({
     const slug = String(material.slug ?? "");
     const id = String(material.id ?? "");
     const type = String(material.type ?? "other");
+    const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
+    const isLink = type === "link" || !!targetUrl;
+    const isInternalLink = isLink && !isExternalUrl(targetUrl);
     const status = normalizeContentStatus(material.status);
     const attachmentCount = draftAttachmentCount ?? Number(material.attachment_count ?? 0);
     const likeOverride = useLikeOverrides((s) => s.materialOverrides[id]);
@@ -94,10 +99,15 @@ function MaterialLineItemImpl({
         return previewPrId ? `${matPath}?preview_pr=${previewPrId}` : matPath;
     };
 
-    let badgeColor = TYPE_COLORS[type] ?? TYPE_COLORS.other;
+    const effectiveType = isInternalLink ? "internal_link" : type;
+    let badgeColor = TYPE_COLORS[effectiveType] ?? TYPE_COLORS[type] ?? TYPE_COLORS.other;
 
-    let badgeLabel = tTypes.has(type as any) ? tTypes(type as any) : type;
-    let Icon = TYPE_ICONS[type] ?? File;
+    let badgeLabel = tTypes.has(effectiveType as any)
+        ? tTypes(effectiveType as any)
+        : tTypes.has(type as any)
+            ? tTypes(type as any)
+            : type;
+    let Icon = isInternalLink ? Link2 : (TYPE_ICONS[type] ?? File);
 
     if (type === "document") {
         const fallbackLabel = getFileBadgeLabel(fileName, mimeType);
@@ -149,8 +159,6 @@ function MaterialLineItemImpl({
 
     const router = useRouter();
     const openLink = useExternalLinkStore((s) => s.openLink);
-    const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
-    const isLink = type === "link" || !!targetUrl;
 
     const handleCardClick = (e: React.MouseEvent) => {
         if (staged === "deleted") {

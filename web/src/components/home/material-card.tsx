@@ -12,6 +12,7 @@ import { getMaterialBrowsePath } from "./file-type-display";
 import { MaterialPreview } from "./material-preview";
 import type { MaterialDetail } from "./types";
 import { useExternalLinkStore } from "@/lib/external-link-store";
+import { isExternalUrl } from "@/lib/url-utils";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 
@@ -22,18 +23,28 @@ interface MaterialCardProps {
 
 export function MaterialCard({ material, className }: MaterialCardProps) {
   const t = useTranslations("Home");
+  const tTypes = useTranslations("MaterialTypes");
   const router = useRouter();
   const openLink = useExternalLinkStore((s) => s.openLink);
   const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
   const isLink = material.type === "link" || !!targetUrl;
+  const isInternal = isLink && !isExternalUrl(targetUrl);
 
   const versionInfo = material.current_version_info;
   const fileName = versionInfo?.file_name ?? null;
   const mimeType = versionInfo?.file_mime_type ?? null;
   const fileSize = versionInfo?.file_size ?? null;
 
-  const badgeColor = getFileBadgeColor(fileName ?? "", mimeType ?? undefined);
-  const badgeLabel = getFileBadgeLabel(fileName ?? "", mimeType ?? undefined);
+  let badgeColor = getFileBadgeColor(fileName ?? "", mimeType ?? undefined);
+  let badgeLabel = getFileBadgeLabel(fileName ?? "", mimeType ?? undefined);
+  if (isLink) {
+    badgeLabel = isInternal
+      ? (tTypes.has("internal_link" as any) ? tTypes("internal_link" as any) : "Internal Link")
+      : (tTypes.has("link" as any) ? tTypes("link" as any) : "External Link");
+    badgeColor = isInternal
+      ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300"
+      : "bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300";
+  }
   const browsePath = getMaterialBrowsePath(material);
 
   const handleClick = (e: React.MouseEvent) => {

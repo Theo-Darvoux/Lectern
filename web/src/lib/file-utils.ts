@@ -402,6 +402,7 @@ export const MATERIAL_TYPE_ICON_COLORS: Record<string, string> = {
     video: "text-red-600 dark:text-red-400",
     qcm: "text-violet-600 dark:text-violet-400",
     link: "text-sky-600 dark:text-sky-400",
+    internal_link: "text-indigo-600 dark:text-indigo-400",
     other: "text-muted-foreground",
     document: "text-muted-foreground",
 };

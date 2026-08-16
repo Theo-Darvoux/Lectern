@@ -213,6 +213,7 @@ export default function LoginPage() {
                 <div className="text-center -mt-2 -mb-1">
                     <ShaderText
                         text={siteName}
+                        style={config?.site_name_style}
                         className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"
                     />
 

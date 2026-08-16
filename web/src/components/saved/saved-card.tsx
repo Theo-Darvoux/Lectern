@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ContentStatusBadge, normalizeContentStatus } from "@/components/content-status-badge";
 import { useExternalLinkStore } from "@/lib/external-link-store";
+import { isExternalUrl } from "@/lib/url-utils";
 import { getDirectoryIcon } from "@/lib/directory-icons";
 import { getDirectoryColor } from "@/lib/directory-colors";
 import { EXT_BADGE_COLORS, getFileBadgeLabel } from "@/lib/file-utils";
@@ -82,7 +83,8 @@ export const SavedCard = memo(function SavedCard({
   const metadata = (item.metadata ?? {}) as Record<string, unknown>;
   const rawStatus = typeof item.status === "string" ? normalizeContentStatus(item.status) : null;
   const targetUrl = String(metadata?.url ?? "").trim();
-  const isExternalLink = item.item_type === "link" || !!targetUrl;
+  const isLink = item.item_type === "link" || !!targetUrl;
+  const isInternalLink = isLink && !isExternalUrl(targetUrl);
 
   // Directory visual styling
   const dirIconId = metadata.thumbnail_icon ? String(metadata.thumbnail_icon) : null;
@@ -156,10 +158,14 @@ export const SavedCard = memo(function SavedCard({
     ? item.item_type === "module"
       ? "Module"
       : "Folder"
-    : getFileBadgeLabel(
-        (materialPreviewData?.current_version_info?.file_name as string) || item.title,
-        typeof metadata?.mime_type === "string" ? metadata.mime_type : undefined,
-      ) || item.item_type;
+    : isLink
+      ? isInternalLink
+        ? "Internal Link"
+        : "External Link"
+      : getFileBadgeLabel(
+          (materialPreviewData?.current_version_info?.file_name as string) || item.title,
+          typeof metadata?.mime_type === "string" ? metadata.mime_type : undefined,
+        ) || item.item_type;
 
   // Time added
   const addedDate = new Date(item.added_at);
@@ -177,7 +183,7 @@ export const SavedCard = memo(function SavedCard({
       return;
     }
 
-    if (isExternalLink && targetUrl) {
+    if (isLink && targetUrl) {
       e.preventDefault();
       openExternalLink(targetUrl, (path) => router.push(path));
     }
