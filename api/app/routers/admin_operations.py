@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 ADMIN_ROLES = (UserRole.BUREAU, UserRole.VIEUX)
 AdminUser = Annotated[User, Depends(require_role(UserRole.BUREAU, UserRole.VIEUX))]
-StaffUser = Annotated[User, Depends(require_moderator)]
+StaffUser = Annotated[User, Depends(require_moderator())]
 
 
 class BulkUserActionIn(BaseModel):
