@@ -12,7 +12,7 @@ from app.core.common.exceptions import BadRequestError, ForbiddenError, RateLimi
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis
 from app.core.security.security import BROWSER_READ_COOKIE, decode_token
-from app.dependencies.auth import CurrentUser, get_optional_user
+from app.dependencies.auth import CurrentUser
 from app.models.user import User, UserRole
 from app.services.audit import flag_user_account
 
@@ -259,18 +259,13 @@ async def rate_limit_views(
 
 async def rate_limit_search(
     request: Request,
+    user: CurrentUser,
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    user: Annotated[User | None, Depends(get_optional_user)] = None,
 ) -> None:
-    """Rate limit for the public search endpoint: 30/min anonymous, 120/min authenticated."""
-    if user is not None:
-        subjects = _rate_limit_subjects(request, user)
-        keys = [f"ratelimit:search:user:{subject}:min" for subject in subjects]
-        minute_limit = 300 if settings.is_dev else 120
-    else:
-        ip = (request.client.host if request.client else None) or "unknown"
-        keys = [f"ratelimit:search:ip:{ip}:min"]
-        minute_limit = 300 if settings.is_dev else 30
+    """Rate limit for the authenticated search endpoint: 120/min (300 in dev)."""
+    subjects = _rate_limit_subjects(request, user)
+    keys = [f"ratelimit:search:user:{subject}:min" for subject in subjects]
+    minute_limit = 300 if settings.is_dev else 120
 
     async with redis.pipeline(transaction=True) as pipe:
         for key in keys:

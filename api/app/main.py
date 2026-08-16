@@ -5,8 +5,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
 from slowapi.errors import RateLimitExceeded
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.config import settings
@@ -14,6 +15,7 @@ from app.core.common.exceptions import AppError
 from app.core.events.limiter import limiter
 from app.core.http.body_limit import RequestBodyLimitMiddleware
 from app.core.observability.telemetry import instrument_fastapi, setup_telemetry
+from app.dependencies.auth import ReadUser
 from app.routers.admin import router as admin_router
 from app.routers.admin_backup import router as admin_backup_router
 from app.routers.admin_operations import router as admin_operations_router
@@ -129,8 +131,9 @@ app = FastAPI(
     title=f"{settings.site_name} API",
     description="Collaborative course materials platform",
     version="0.1.0",
-    docs_url="/api/docs" if settings.is_dev else None,
-    openapi_url="/api/openapi.json" if settings.is_dev else None,
+    docs_url=None,
+    openapi_url=None,
+    redoc_url=None,
     lifespan=lifespan,
 )
 
@@ -322,6 +325,22 @@ async def metrics(request: Request) -> Response:
 
     data = generate_latest(REGISTRY)
     return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/api/openapi.json", include_in_schema=False)
+async def get_openapi(user: ReadUser) -> JSONResponse:
+    return JSONResponse(app.openapi())
+
+
+@app.get("/api/docs", include_in_schema=False)
+async def get_swagger_ui(user: ReadUser) -> HTMLResponse:
+    return get_swagger_ui_html(
+        openapi_url="/api/openapi.json",
+        title=f"{app.title} - Swagger UI",
+        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+        swagger_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
+    )
 
 
 app.include_router(admin_router)

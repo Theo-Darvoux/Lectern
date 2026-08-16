@@ -100,7 +100,9 @@ async def _create_version(
 
 
 async def test_browse_root_empty(client: AsyncClient, db_session: AsyncSession) -> None:
-    response = await client.get("/api/browse")
+    user = await _create_user(db_session)
+    await db_session.commit()
+    response = await client.get("/api/browse", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "directory_listing"
@@ -115,7 +117,7 @@ async def test_browse_root_with_directories(client: AsyncClient, db_session: Asy
     await _create_directory(db_session, user, name="Beta", slug="beta", sort_order=0)
     await db_session.commit()
 
-    response = await client.get("/api/browse")
+    response = await client.get("/api/browse", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "directory_listing"
@@ -133,7 +135,7 @@ async def test_browse_path_directory(client: AsyncClient, db_session: AsyncSessi
     await _create_material(db_session, child, user, title="Note", slug="note")
     await db_session.commit()
 
-    response = await client.get("/api/browse/parent/child")
+    response = await client.get("/api/browse/parent/child", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "directory_listing"
@@ -149,7 +151,7 @@ async def test_browse_path_material(client: AsyncClient, db_session: AsyncSessio
     await _create_version(db_session, material)
     await db_session.commit()
 
-    response = await client.get("/api/browse/cours/lecture")
+    response = await client.get("/api/browse/cours/lecture", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "material"
@@ -165,7 +167,7 @@ async def test_browse_path_material_no_version(
     await _create_material(db_session, dir_, user, title="Draft", slug="draft")
     await db_session.commit()
 
-    response = await client.get("/api/browse/cours/draft")
+    response = await client.get("/api/browse/cours/draft", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "material"
@@ -180,12 +182,14 @@ async def test_browse_path_attachments_returns_404(
     await _create_material(db_session, dir_, user, title="Main", slug="main")
     await db_session.commit()
 
-    response = await client.get("/api/browse/cours/main/attachments")
+    response = await client.get("/api/browse/cours/main/attachments", headers=_auth_headers(user))
     assert response.status_code == 404
 
 
 async def test_browse_path_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
-    response = await client.get("/api/browse/nonexistent")
+    user = await _create_user(db_session)
+    await db_session.commit()
+    response = await client.get("/api/browse/nonexistent", headers=_auth_headers(user))
     assert response.status_code == 404
 
 
@@ -194,7 +198,7 @@ async def test_browse_path_nested_not_found(client: AsyncClient, db_session: Asy
     await _create_directory(db_session, user, name="Existing", slug="existing")
     await db_session.commit()
 
-    response = await client.get("/api/browse/existing/missing")
+    response = await client.get("/api/browse/existing/missing", headers=_auth_headers(user))
     assert response.status_code == 404
 
 
@@ -203,16 +207,18 @@ async def test_get_directory_by_id(client: AsyncClient, db_session: AsyncSession
     directory = await _create_directory(db_session, user, name="Course", slug="course")
     await db_session.commit()
 
-    response = await client.get(f"/api/directories/{directory.id}")
+    response = await client.get(f"/api/directories/{directory.id}", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "Course"
     assert data["slug"] == "course"
 
 
-async def test_get_directory_not_found(client: AsyncClient) -> None:
+async def test_get_directory_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
+    user = await _create_user(db_session)
+    await db_session.commit()
     fake_id = str(uuid.uuid4())
-    response = await client.get(f"/api/directories/{fake_id}")
+    response = await client.get(f"/api/directories/{fake_id}", headers=_auth_headers(user))
     assert response.status_code == 404
 
 
@@ -223,7 +229,7 @@ async def test_get_directory_children(client: AsyncClient, db_session: AsyncSess
     await _create_material(db_session, parent, user, title="File", slug="file")
     await db_session.commit()
 
-    response = await client.get(f"/api/directories/{parent.id}/children")
+    response = await client.get(f"/api/directories/{parent.id}/children", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert len(data["directories"]) == 1
@@ -237,7 +243,7 @@ async def test_get_directory_children_empty(client: AsyncClient, db_session: Asy
     directory = await _create_directory(db_session, user, name="Empty", slug="empty")
     await db_session.commit()
 
-    response = await client.get(f"/api/directories/{directory.id}/children")
+    response = await client.get(f"/api/directories/{directory.id}/children", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["directories"] == []
@@ -253,7 +259,7 @@ async def test_get_directory_path(client: AsyncClient, db_session: AsyncSession)
     )
     await db_session.commit()
 
-    response = await client.get(f"/api/directories/{grandchild.id}/path")
+    response = await client.get(f"/api/directories/{grandchild.id}/path", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 3
@@ -272,7 +278,7 @@ async def test_browse_root_shows_child_counts(
     await _create_material(db_session, parent, user, title="M2", slug="m2")
     await db_session.commit()
 
-    response = await client.get("/api/browse")
+    response = await client.get("/api/browse", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     root_dir = data["directories"][0]
@@ -291,7 +297,7 @@ async def test_browse_deep_path_resolution_and_breadcrumbs(
     await _create_material(db_session, d, user, title="Deep", slug="deep")
     await db_session.commit()
 
-    response = await client.get("/api/browse/a/b/c/d")
+    response = await client.get("/api/browse/a/b/c/d", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "directory_listing"
@@ -320,8 +326,8 @@ async def test_browse_same_slug_under_different_parents(
     await _create_material(db_session, shared2, user, title="In Two", slug="in-two")
     await db_session.commit()
 
-    resp1 = await client.get("/api/browse/p1/shared")
-    resp2 = await client.get("/api/browse/p2/shared")
+    resp1 = await client.get("/api/browse/p1/shared", headers=_auth_headers(user))
+    resp2 = await client.get("/api/browse/p2/shared", headers=_auth_headers(user))
     assert resp1.status_code == 200
     assert resp2.status_code == 200
     data1 = resp1.json()
@@ -384,20 +390,15 @@ async def test_browse_listing_likes_isolated_per_user(
     assert data["materials"][0]["is_liked"] is False
 
 
-async def test_browse_listing_anonymous_has_no_likes(
+async def test_browse_listing_unauthenticated_returns_401(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     user = await _create_user(db_session)
     parent = await _create_directory(db_session, user, name="Parent", slug="parent")
-    mat = await _create_material(db_session, parent, user, title="Mat", slug="mat")
-    db_session.add(MaterialLike(id=uuid.uuid4(), user_id=user.id, material_id=mat.id))
     await db_session.commit()
 
     response = await client.get("/api/browse/parent")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["materials"][0]["is_liked"] is False
-    assert data["materials"][0]["is_favourited"] is False
+    assert response.status_code == 401
 
 
 async def test_material_attachments_endpoint(client: AsyncClient, db_session: AsyncSession) -> None:
