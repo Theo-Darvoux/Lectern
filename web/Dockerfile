@@ -36,7 +36,7 @@ ENV NEXT_PUBLIC_COMMIT_SHA=$NEXT_PUBLIC_COMMIT_SHA \
     SITE_FAVICON_URL=$SITE_FAVICON_URL
 RUN pnpm build
 
-FROM nginx:alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa AS runner
+FROM nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752 AS runner
 # The reviewed nginx base is digest-pinned. Security updates arrive by an
 # explicit reviewed digest refresh rather than an open-ended package upgrade.
 COPY --from=builder /app/out /usr/share/nginx/html
