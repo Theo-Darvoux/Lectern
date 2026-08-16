@@ -57,6 +57,14 @@ production_env=(
   -e S3_USE_SSL=false
 )
 
+# Python startup is substantially slower when an arm64 image is executed via
+# QEMU on an x86_64 hosted runner. Keep native smoke tests strict while giving
+# emulated API/worker startup enough time to complete their full lifespans.
+python_startup_attempts=90
+if [[ "$platform" == linux/arm64 && "$(uname -m)" == x86_64 ]]; then
+  python_startup_attempts=180
+fi
+
 case "$component" in
   api)
     name="wikint-api-smoke-${RANDOM}-${RANDOM}"
@@ -74,7 +82,7 @@ case "$component" in
       "$candidate_ref" >/dev/null
 
     healthy=0
-    for _ in $(seq 1 90); do
+    for _ in $(seq 1 "$python_startup_attempts"); do
       if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -qx true; then
         echo "api candidate exited before completing production startup" >&2
         exit 1
@@ -117,7 +125,7 @@ case "$component" in
       "$candidate_ref" >/dev/null
 
     started=0
-    for _ in $(seq 1 90); do
+    for _ in $(seq 1 "$python_startup_attempts"); do
       if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -qx true; then
         echo "worker candidate exited before completing production startup" >&2
         exit 1
@@ -177,7 +185,7 @@ case "$component" in
     }
     trap cleanup EXIT
     docker run -d --platform "$platform" --name "$name" \
-      -e WORKER_ZIP_HMAC_SECRET=runtime-smoke-only \
+      -e WORKER_ZIP_HMAC_SECRET=runtime-smoke-selfhost-worker-hmac-secret \
       -e S3_ENDPOINT=127.0.0.1:1 \
       "$candidate_ref" >/dev/null
     for _ in $(seq 1 45); do
