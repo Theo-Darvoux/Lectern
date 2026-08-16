@@ -136,7 +136,7 @@ export function getInternalBrowsePath(targetUrl?: string | null): string | null 
         const normalized = trimmed.startsWith("//") ? `https:${trimmed}` : trimmed;
         const parsed = new URL(normalized, currentOrigin);
 
-        let pathname = parsed.pathname;
+        const pathname = parsed.pathname;
         if (pathname === "/browse" || pathname === "/browse/") {
             return "";
         }
