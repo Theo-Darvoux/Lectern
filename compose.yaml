@@ -318,6 +318,8 @@ services:
       API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
       NEXT_PUBLIC_EUROOFFICE_URL: ${NEXT_PUBLIC_EUROOFFICE_URL:-http://localhost/eurooffice}
       NEXT_PUBLIC_REPO_URL: ${NEXT_PUBLIC_REPO_URL:-}
+      NEXT_PUBLIC_SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
+      SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
       NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=3584}
       WATCHPACK_POLLING: ${WATCHPACK_POLLING:-true}
     env_file: ${RUNTIME_ENV_FILE:-.env}

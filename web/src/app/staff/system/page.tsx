@@ -81,7 +81,7 @@ interface ReconciliationData {
   };
 }
 
-export function StorageReconciliationModal() {
+function StorageReconciliationModal() {
   const t = useTranslations("Admin.Dashboard.reconciliation");
   const [reconciling, setReconciling] = useState(false);
   const [data, setData] = useState<ReconciliationData | null>(null);

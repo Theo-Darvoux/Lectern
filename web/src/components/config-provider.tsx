@@ -104,20 +104,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             }
         }
 
-        const faviconUrl = config.site_favicon_url || config.site_logo_url;
-        if (faviconUrl) {
-            // Update all existing icon links (Next.js injects several rel variants)
-            const iconLinks = document.querySelectorAll<HTMLLinkElement>("link[rel~='icon'], link[rel='shortcut icon']");
-            if (iconLinks.length === 0) {
-                const link = document.createElement('link');
-                link.rel = 'icon';
-                link.href = faviconUrl;
-                document.head.appendChild(link);
-            } else {
-                iconLinks.forEach(l => { l.href = faviconUrl; });
-            }
-        }
-
         // Inject primary color if needed (custom CSS variable)
         if (config.primary_color) {
             document.documentElement.style.setProperty('--primary-custom', config.primary_color);
