@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useMemo } from "react";
-import { parseSegments, buildFontsUrlForNames, type NameSegment } from "@/lib/fonts";
+import { parseSegments, type NameSegment } from "@/lib/fonts";
 import { SiteName } from "@/components/site-name";
 import { useConfigStore } from "@/lib/stores";
 
@@ -211,26 +211,6 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
     }, [segments, text]);
 
     useEffect(() => {
-        if (typeof document === "undefined") return;
-        const usedFonts = [...new Set(segments.map((s) => s.font).filter(Boolean))];
-        if (usedFonts.length > 0) {
-            const url = buildFontsUrlForNames(usedFonts);
-            if (url) {
-                const existing = document.querySelector<HTMLLinkElement>("link[data-lectern-fonts]");
-                if (!existing) {
-                    const link = document.createElement("link");
-                    link.rel = "stylesheet";
-                    link.href = url;
-                    link.setAttribute("data-lectern-fonts", "1");
-                    document.head.appendChild(link);
-                } else if (!existing.href.includes(url)) {
-                    existing.href = url;
-                }
-            }
-        }
-    }, [segments]);
-
-    useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
@@ -305,14 +285,8 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
             return;
         }
 
-        const getFontStr = (seg: NameSegment, size: number) => {
-            const fontName = seg.font
-                ? `'${seg.font}', 'Cinzel', 'Arial Black', 'Impact', 'Trebuchet MS', system-ui, sans-serif`
-                : "'Cinzel', 'Arial Black', 'Impact', 'Trebuchet MS', system-ui, sans-serif";
-            const weight = seg.bold ? "900" : "400";
-            const fontStyle = seg.italic ? "italic" : "normal";
-            return `${fontStyle} ${weight} ${size}px ${fontName}`;
-        };
+        // Default 90s chrome shader typography
+        const fontName = "'Cinzel', 'Arial Black', 'Impact', 'Trebuchet MS', system-ui, sans-serif";
 
         const drawCanvases = () => {
             textCtx.clearRect(0, 0, texW, texH);
@@ -326,36 +300,28 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
             colorCtx.textAlign = "left";
             colorCtx.textBaseline = "middle";
 
-            // 1. Calculate optimal font size to fit inside targetWidth
-            const baseFontSize = 210 * scale;
-            let totalBaseWidth = 0;
-            for (const seg of segments) {
-                textCtx.font = getFontStr(seg, baseFontSize);
-                totalBaseWidth += textCtx.measureText(seg.text).width;
+            // 1. Calculate optimal font size with default font to fill ~88% width
+            let fontSize = 210 * scale;
+            textCtx.font = `italic 900 ${fontSize}px ${fontName}`;
+            const metrics = textCtx.measureText(displayText);
+            const targetWidth = texW * 0.88;
+            if (metrics.width > 0) {
+                fontSize = Math.min(fontSize * (targetWidth / metrics.width), 230 * scale);
             }
 
-            let fontSize = baseFontSize;
-            const targetWidth = texW * 0.88;
-            if (totalBaseWidth > 0) {
-                fontSize = Math.min(baseFontSize * (targetWidth / totalBaseWidth), 230 * scale);
-            }
+            const fontStr = `italic 900 ${fontSize}px ${fontName}`;
+            textCtx.font = fontStr;
+            colorCtx.font = fontStr;
 
             // 2. Measure segments and compute absolute X layout positions
-            const segmentLayouts: { seg: NameSegment; fontStr: string; width: number; x: number }[] = [];
-            let totalWidth = 0;
-            for (const seg of segments) {
-                const fontStr = getFontStr(seg, fontSize);
-                textCtx.font = fontStr;
-                const width = textCtx.measureText(seg.text).width;
-                segmentLayouts.push({ seg, fontStr, width, x: 0 });
-                totalWidth += width;
-            }
-
+            let totalWidth = textCtx.measureText(displayText).width;
             let currentX = centerX - totalWidth * 0.5;
-            for (const item of segmentLayouts) {
-                item.x = currentX;
-                currentX += item.width;
-            }
+            const segmentLayouts = segments.map((seg) => {
+                const width = textCtx.measureText(seg.text).width;
+                const x = currentX;
+                currentX += width;
+                return { seg, width, x };
+            });
 
             const depthX = 14 * scale;
             const depthY = 16 * scale;
@@ -368,10 +334,7 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
             textCtx.shadowBlur = 14 * scale;
             textCtx.shadowOffsetX = depthX + 4 * scale;
             textCtx.shadowOffsetY = depthY + 6 * scale;
-            for (const item of segmentLayouts) {
-                textCtx.font = item.fontStr;
-                textCtx.fillText(item.seg.text, item.x, centerY);
-            }
+            textCtx.fillText(displayText, centerX - totalWidth * 0.5, centerY);
             textCtx.restore();
 
             // 4. Continuous 3D Extrusion (Back to Front)
@@ -385,18 +348,15 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
                 textCtx.fillStyle = `rgb(${rVal}, 0, ${bVal})`;
                 textCtx.shadowColor = "transparent";
                 textCtx.shadowBlur = 0;
+                textCtx.fillText(displayText, centerX - totalWidth * 0.5 + offX, centerY + offY);
 
                 for (const item of segmentLayouts) {
-                    textCtx.font = item.fontStr;
-                    textCtx.fillText(item.seg.text, item.x + offX, centerY + offY);
-
                     const rgb = parseColorToRgb(item.seg.color);
                     if (rgb) {
                         colorCtx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1.0)`;
                     } else {
                         colorCtx.fillStyle = "rgba(255, 255, 255, 0.0)";
                     }
-                    colorCtx.font = item.fontStr;
                     colorCtx.fillText(item.seg.text, item.x + offX, centerY + offY);
                 }
             }
@@ -405,10 +365,7 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
             textCtx.save();
             textCtx.lineWidth = 6 * scale;
             textCtx.strokeStyle = "rgb(160, 0, 240)";
-            for (const item of segmentLayouts) {
-                textCtx.font = item.fontStr;
-                textCtx.strokeText(item.seg.text, item.x, centerY);
-            }
+            textCtx.strokeText(displayText, centerX - totalWidth * 0.5, centerY);
             textCtx.restore();
 
             colorCtx.save();
@@ -420,24 +377,21 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
                 } else {
                     colorCtx.strokeStyle = "rgba(255, 255, 255, 0.0)";
                 }
-                colorCtx.font = item.fontStr;
                 colorCtx.strokeText(item.seg.text, item.x, centerY);
             }
             colorCtx.restore();
 
             // 6. Front Face Fill: R = 255, G = 255, B = 255
             textCtx.fillStyle = "rgb(255, 255, 255)";
-            for (const item of segmentLayouts) {
-                textCtx.font = item.fontStr;
-                textCtx.fillText(item.seg.text, item.x, centerY);
+            textCtx.fillText(displayText, centerX - totalWidth * 0.5, centerY);
 
+            for (const item of segmentLayouts) {
                 const rgb = parseColorToRgb(item.seg.color);
                 if (rgb) {
                     colorCtx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1.0)`;
                 } else {
                     colorCtx.fillStyle = "rgba(255, 255, 255, 0.0)";
                 }
-                colorCtx.font = item.fontStr;
                 colorCtx.fillText(item.seg.text, item.x, centerY);
             }
         };
@@ -479,11 +433,8 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, colorCanvas);
         };
 
-        let handleFontLoadingDone: (() => void) | null = null;
         if (typeof document !== "undefined" && document.fonts) {
             document.fonts.ready.then(() => updateTextures());
-            handleFontLoadingDone = () => updateTextures();
-            document.fonts.addEventListener?.("loadingdone", handleFontLoadingDone);
         }
 
         // Setup Quad Geometry
@@ -574,9 +525,6 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
         return () => {
             cancelAnimationFrame(animationFrameId);
             resizeObserver.disconnect();
-            if (handleFontLoadingDone && typeof document !== "undefined" && document.fonts) {
-                document.fonts.removeEventListener?.("loadingdone", handleFontLoadingDone);
-            }
             if (gl) {
                 gl.deleteTexture(textTexture);
                 gl.deleteTexture(colorTexture);
@@ -587,7 +535,7 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
                 gl.deleteShader(fragShader);
             }
         };
-    }, [segments]);
+    }, [segments, displayText]);
 
     if (!webglSupported) {
         return (
