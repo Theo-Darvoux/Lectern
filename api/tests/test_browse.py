@@ -229,7 +229,9 @@ async def test_get_directory_children(client: AsyncClient, db_session: AsyncSess
     await _create_material(db_session, parent, user, title="File", slug="file")
     await db_session.commit()
 
-    response = await client.get(f"/api/directories/{parent.id}/children", headers=_auth_headers(user))
+    response = await client.get(
+        f"/api/directories/{parent.id}/children", headers=_auth_headers(user)
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data["directories"]) == 1
@@ -243,7 +245,9 @@ async def test_get_directory_children_empty(client: AsyncClient, db_session: Asy
     directory = await _create_directory(db_session, user, name="Empty", slug="empty")
     await db_session.commit()
 
-    response = await client.get(f"/api/directories/{directory.id}/children", headers=_auth_headers(user))
+    response = await client.get(
+        f"/api/directories/{directory.id}/children", headers=_auth_headers(user)
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["directories"] == []
@@ -259,7 +263,9 @@ async def test_get_directory_path(client: AsyncClient, db_session: AsyncSession)
     )
     await db_session.commit()
 
-    response = await client.get(f"/api/directories/{grandchild.id}/path", headers=_auth_headers(user))
+    response = await client.get(
+        f"/api/directories/{grandchild.id}/path", headers=_auth_headers(user)
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 3

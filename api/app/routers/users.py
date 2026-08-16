@@ -6,13 +6,13 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common.exceptions import NotFoundError, UnauthorizedError
+from app.core.common.exceptions import NotFoundError
 from app.core.database.database import get_db
 from app.core.storage.facade import generate_presigned_get
 from app.dependencies.auth import CurrentUser, ReadUser
 from app.dependencies.pagination import PaginationParams
 from app.models.material import Material, MaterialFavourite, MaterialVersion
-from app.models.user import User, UserRole
+from app.models.user import UserRole
 from app.schemas.collection import SavedLibraryOut
 from app.schemas.common import PaginatedResponse
 from app.schemas.material import MaterialDetailResponse, project_material_detail

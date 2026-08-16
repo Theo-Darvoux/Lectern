@@ -23,9 +23,7 @@ router = APIRouter(prefix="/api", tags=["browse"])
 def _serialize_browse_material(material: object, user: User) -> dict[str, typing.Any]:
     # Guest identities are public read surfaces. Keep storage,
     # moderation, scan, and optimistic-lock metadata on authenticated member views only.
-    schema = (
-        MaterialDetail if user.role != UserRole.GUEST else PublicMaterialDetail
-    )
+    schema = MaterialDetail if user.role != UserRole.GUEST else PublicMaterialDetail
     return schema.model_validate(material).model_dump()
 
 
@@ -101,9 +99,7 @@ async def get_children(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: CurrentUser,
 ) -> dict[str, typing.Any]:
-    children = await get_directory_children(
-        db, directory_id, current_user_id=user.id
-    )
+    children = await get_directory_children(db, directory_id, current_user_id=user.id)
     materials = [_serialize_browse_material(m, user) for m in children["materials"]]
     return {"directories": children["directories"], "materials": materials}
 

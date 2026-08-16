@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security.security import create_access_token, create_browser_read_token
 from app.dependencies.auth import BROWSER_READ_COOKIE
 from app.models.directory import Directory
-from app.models.material import Material
 from app.models.user import User, UserRole
 
 
@@ -33,7 +32,9 @@ async def _create_test_user(
     return user
 
 
-async def _create_test_directory(db: AsyncSession, user: User, *, name: str = "Test Folder") -> Directory:
+async def _create_test_directory(
+    db: AsyncSession, user: User, *, name: str = "Test Folder"
+) -> Directory:
     unique_suffix = uuid.uuid4().hex[:8]
     directory = Directory(
         id=uuid.uuid4(),
@@ -130,9 +131,7 @@ async def test_comments_unauthenticated_returns_401(
     directory = await _create_test_directory(db_session, user)
     await db_session.commit()
 
-    response = await client.get(
-        f"/api/comments?targetType=directory&targetId={directory.id}"
-    )
+    response = await client.get(f"/api/comments?targetType=directory&targetId={directory.id}")
     assert response.status_code == 401
 
 
@@ -191,9 +190,7 @@ async def test_browse_path_authenticated_succeeds(
     directory = await _create_test_directory(db_session, user, name="Course")
     await db_session.commit()
 
-    response = await client.get(
-        f"/api/browse/{directory.slug}", headers=_auth_headers(user)
-    )
+    response = await client.get(f"/api/browse/{directory.slug}", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "directory_listing"
@@ -218,9 +215,7 @@ async def test_directory_by_id_authenticated_succeeds(
     directory = await _create_test_directory(db_session, user)
     await db_session.commit()
 
-    response = await client.get(
-        f"/api/directories/{directory.id}", headers=_auth_headers(user)
-    )
+    response = await client.get(f"/api/directories/{directory.id}", headers=_auth_headers(user))
     assert response.status_code == 200
     assert response.json()["id"] == str(directory.id)
 

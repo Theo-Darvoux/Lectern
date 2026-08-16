@@ -386,7 +386,9 @@ async def test_avatar_endpoint_fails_closed_for_unsafe_legacy_reference(
     await db_session.commit()
 
     with patch("app.routers.users.generate_presigned_get", new_callable=AsyncMock) as presign:
-        response = await client.get(f"/api/users/{test_user.id}/avatar", headers=auth_headers(test_user))
+        response = await client.get(
+            f"/api/users/{test_user.id}/avatar", headers=auth_headers(test_user)
+        )
 
     assert response.status_code == 404
     presign.assert_not_awaited()
@@ -407,7 +409,11 @@ async def test_avatar_endpoint_presigns_only_own_avatar_namespace(
         new_callable=AsyncMock,
         return_value="https://storage.example/signed",
     ) as presign:
-        response = await client.get(f"/api/users/{test_user.id}/avatar", headers=auth_headers(test_user), follow_redirects=False)
+        response = await client.get(
+            f"/api/users/{test_user.id}/avatar",
+            headers=auth_headers(test_user),
+            follow_redirects=False,
+        )
 
     assert response.status_code in (302, 307)
     assert response.headers["location"] == "https://storage.example/signed"
@@ -425,7 +431,11 @@ async def test_avatar_endpoint_redirects_only_trusted_google_avatar(
     await db_session.commit()
 
     with patch("app.routers.users.generate_presigned_get", new_callable=AsyncMock) as presign:
-        response = await client.get(f"/api/users/{test_user.id}/avatar", headers=auth_headers(test_user), follow_redirects=False)
+        response = await client.get(
+            f"/api/users/{test_user.id}/avatar",
+            headers=auth_headers(test_user),
+            follow_redirects=False,
+        )
 
     assert response.status_code in (302, 307)
     assert response.headers["location"] == google_avatar

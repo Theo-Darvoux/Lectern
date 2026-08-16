@@ -87,7 +87,9 @@ async def test_public_pr_contribution_author_is_minimal(
     db_session.add(pr)
     await db_session.commit()
 
-    response = await client.get(f"/api/users/{user.id}/contributions?type=prs", headers=_auth_headers(user))
+    response = await client.get(
+        f"/api/users/{user.id}/contributions?type=prs", headers=_auth_headers(user)
+    )
     assert response.status_code == 200
     item = response.json()["items"][0]
     author = item["author"]

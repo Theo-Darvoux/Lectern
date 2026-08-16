@@ -727,8 +727,6 @@ async def test_search_client_replaced_after_setup_meilisearch():
 # ---------------------------------------------------------------------------
 
 
-
-
 @pytest.mark.asyncio
 async def test_rate_limit_search_authenticated_higher_limit(mock_redis):
     """Authenticated users have 120/min limit."""
