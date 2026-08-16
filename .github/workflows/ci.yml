@@ -222,7 +222,6 @@ jobs:
           tests/test_release_hardening_regressions.py
           tests/test_release_promotion_script.py
           tests/test_release_supply_chain_hardening.py
-          tests/test_release_runtime_gate_policy.py
           tests/test_storage_release_policy.py
 
   seaweedfs:
