@@ -175,6 +175,15 @@ const QCMViewer = dynamic(
   },
 );
 
+const LinkViewer = dynamic(
+  () =>
+    import("@/components/viewers/link-viewer").then((mod) => mod.LinkViewer),
+  {
+    loading: () => <Skeleton className="h-full w-full rounded-none" />,
+    ssr: false,
+  },
+);
+
 
 import { SharedSidebar } from "@/components/sidebar/shared-sidebar";
 import { ViewerFab } from "@/components/browse/viewer-fab";
@@ -308,7 +317,13 @@ export function MaterialViewer({
     });
   }, [materialId]);
 
-  const viewerType = getViewerType(mimeType, fileName);
+  const isLink =
+    displayMaterial.type === "link" ||
+    material.type === "link" ||
+    !!(displayMaterial.metadata as Record<string, unknown> | undefined)?.url ||
+    !!(material.metadata as Record<string, unknown> | undefined)?.url;
+
+  const viewerType = isLink ? "link" : getViewerType(mimeType, fileName);
 
   useEffect(() => {
     setActiveViewerType(viewerType);
@@ -496,7 +511,7 @@ export function MaterialViewer({
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
-                      ) : (
+                      ) : viewerType !== "link" ? (
                         <Button
                           variant="outline"
                           size="icon"
@@ -512,7 +527,7 @@ export function MaterialViewer({
                             <Download className="h-4 w-4" />
                           )}
                         </Button>
-                      )}
+                      ) : null}
                       {isStaff(user) && isEligible && !isRestricted && (
                         <Button
                           variant="outline"
@@ -660,6 +675,9 @@ export function MaterialViewer({
             )}
             {viewerType === "qcm" && (
               <QCMViewer fileKey={fileKey} materialId={materialId} initialData={stagedQcmDraft as QCMFile ?? undefined} />
+            )}
+            {viewerType === "link" && (
+              <LinkViewer material={displayMaterial} />
             )}
             {viewerType === "generic" && (
               <GenericViewer

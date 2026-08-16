@@ -1,6 +1,6 @@
-import { FileText, Image as ImageIcon, Video, Music, Code2, File } from "lucide-react";
+import { FileText, Image as ImageIcon, Video, Music, Code2, File, ExternalLink, ListChecks } from "lucide-react";
 import type { ElementType } from "react";
-import { getFileExtension } from "@/lib/file-utils";
+import { getFileExtension, MIME_QCM } from "@/lib/file-utils";
 
 export interface FileTypeStyle {
     /** Tailwind gradient classes, e.g. "from-red-400 to-rose-600" */
@@ -29,12 +29,23 @@ const EBOOK_EXTENSIONS = new Set(["epub", "djvu", "djv"]);
 
 /**
  * Derives a consistent visual style (gradient + icon) for a file based on its
- * extension or MIME type. Falls back gracefully to a neutral gray style.
+ * extension, MIME type, or material type. Falls back gracefully to a neutral gray style.
  */
 export function getFileTypeStyle(
     fileName: string | null,
     mimeType: string | null,
+    materialType?: string | null,
 ): FileTypeStyle {
+    // External link
+    if (materialType === "link") {
+        return { gradient: "from-sky-500 to-blue-600", iconColorClass: "text-white", Icon: ExternalLink };
+    }
+
+    // QCM
+    if (materialType === "qcm" || mimeType === MIME_QCM) {
+        return { gradient: "from-violet-500 to-purple-600", iconColorClass: "text-white", Icon: ListChecks };
+    }
+
     const ext = fileName ? getFileExtension(fileName) : "";
 
     // PDF

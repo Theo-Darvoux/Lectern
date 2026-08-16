@@ -153,6 +153,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const fileName = versionInfo?.file_name ?? "";
   const mimeType = versionInfo?.file_mime_type ?? "";
 
+  const isLink = material.type === "link" || !!(material.metadata as Record<string, unknown> | undefined)?.url;
   const isImage = mimeType.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
   const isVideo = mimeType.startsWith("video/") || /\.(mp4|webm|avi|mkv|mov)$/i.test(fileName);
   const isMarkdown = mimeType === "text/markdown" || /\.(md|markdown)$/i.test(fileName);
@@ -176,7 +177,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
 
   useEffect(() => {
     // In lazy mode, wait until the card is near the viewport before fetching.
-    if (!shouldLoad) return;
+    if (!shouldLoad || isLink) return;
 
     let mounted = true;
     const controller = new AbortController();
@@ -299,7 +300,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     return finalUrl;
   })();
 
-  const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName, mimeType);
+  const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName, mimeType, isLink ? "link" : material.type);
 
   const handleVideoLoaded = () => {
     if (videoRef.current) {

@@ -11,6 +11,8 @@ import {
 import { getMaterialBrowsePath } from "./file-type-display";
 import { MaterialPreview } from "./material-preview";
 import type { MaterialDetail } from "./types";
+import { useExternalLinkStore } from "@/lib/external-link-store";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 
 interface MaterialCardProps {
@@ -20,6 +22,11 @@ interface MaterialCardProps {
 
 export function MaterialCard({ material, className }: MaterialCardProps) {
   const t = useTranslations("Home");
+  const router = useRouter();
+  const openLink = useExternalLinkStore((s) => s.openLink);
+  const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
+  const isLink = material.type === "link" || !!targetUrl;
+
   const versionInfo = material.current_version_info;
   const fileName = versionInfo?.file_name ?? null;
   const mimeType = versionInfo?.file_mime_type ?? null;
@@ -29,9 +36,17 @@ export function MaterialCard({ material, className }: MaterialCardProps) {
   const badgeLabel = getFileBadgeLabel(fileName ?? "", mimeType ?? undefined);
   const browsePath = getMaterialBrowsePath(material);
 
+  const handleClick = (e: React.MouseEvent) => {
+    if (isLink && targetUrl) {
+      e.preventDefault();
+      openLink(targetUrl, (path) => router.push(path));
+    }
+  };
+
   return (
     <Link
       href={browsePath}
+      onClick={handleClick}
       className={cn(
         "block w-full group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl",
         className,

@@ -19,8 +19,9 @@ import { formatFileSize, MIME_QCM } from "@/lib/file-utils";
 import { uploadFile, logicalFileSize } from "@/lib/upload-client";
 import type { Operation } from "@/lib/staging-store";
 import { useTranslations } from "next-intl";
-import { Loader2, CheckCircle2, UploadCloud, X, FileIcon } from "lucide-react";
+import { Loader2, CheckCircle2, UploadCloud, X, FileIcon, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { normalizeTargetUrl } from "@/lib/url-utils";
 
 interface StagedItemEditDialogProps {
     /** The index in the staging operations array, or null if closed */
@@ -39,10 +40,12 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
     const t = useTranslations("Staging");
     const tWizard = useTranslations("PRWizard");
     const tCommon = useTranslations("Common");
+    const tLink = useTranslations("NewLink");
     const operations = useStagingStore((s) => s.operations);
     const updateOperation = useStagingStore((s) => s.updateOperation);
 
     const [title, setTitle] = useState("");
+    const [url, setUrl] = useState("");
     const [description, setDescription] = useState("");
     const [tags, setTags] = useState<string[]>([]);
 
@@ -59,6 +62,10 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
     const staged = index !== null ? operations[index] : null;
     const op = staged ? unwrapOp(staged) : null;
 
+    const isLink =
+        (op?.op === "create_material" && (op.type === "link" || !!op.metadata?.url)) ||
+        (op?.op === "edit_material" && (op.type === "link" || !!op.metadata?.url));
+
     const [prevOp, setPrevOp] = useState<Operation | null>(null);
     if (op !== prevOp) {
         setPrevOp(op);
@@ -72,22 +79,27 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
         if (op) {
             if (op.op === "create_material") {
                 setTitle(op.title);
+                setUrl(String(op.metadata?.url ?? op.metadata?.link ?? ""));
                 setDescription(op.description || "");
                 setTags(op.tags || []);
             } else if (op.op === "create_directory") {
                 setTitle(op.name);
+                setUrl("");
                 setDescription(op.description || "");
                 setTags(op.tags || []);
             } else if (op.op === "edit_material") {
                 setTitle(op.title || "");
+                setUrl(String(op.metadata?.url ?? op.metadata?.link ?? ""));
                 setDescription(op.description || "");
                 setTags(op.tags || []);
             } else if (op.op === "edit_directory") {
                 setTitle(op.name || "");
+                setUrl("");
                 setDescription(op.description || "");
                 setTags(op.tags || []);
             } else {
                 setTitle("");
+                setUrl("");
                 setDescription("");
                 setTags([]);
             }
@@ -157,6 +169,12 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
             if (op.op === "create_material" && !newOp.title) {
                 newOp.title = t("untitled");
             }
+            if (isLink) {
+                newOp.metadata = {
+                    ...((op.metadata as Record<string, unknown>) || {}),
+                    url: normalizeTargetUrl(url.trim()),
+                };
+            }
             // Apply file replacement if a new file was uploaded
             if (replacedFile) {
                 newOp.file_key = replacedFile.fileKey;
@@ -209,6 +227,21 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
                             {title.length}/{NAME_MAX}
                         </p>
                     </div>
+
+                    {isLink && (
+                        <div className="min-w-0 space-y-1.5">
+                            <label className="text-sm font-medium">{tLink("targetUrl")}</label>
+                            <div className="relative">
+                                <Input
+                                    placeholder={tLink("urlPlaceholder")}
+                                    value={url}
+                                    onChange={(e) => setUrl(e.target.value)}
+                                    className="font-mono text-xs pl-8"
+                                />
+                                <ExternalLink className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                            </div>
+                        </div>
+                    )}
 
                     <div className="min-w-0 space-y-1.5">
                         <label className="text-sm font-medium">{tWizard("description")}</label>

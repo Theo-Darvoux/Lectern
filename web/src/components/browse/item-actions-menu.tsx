@@ -573,7 +573,7 @@ function ArmedMenuBody({ item, onAddAttachment, itemPath, actionsRef, onReady }:
                 }
               </DialogDescription>
             </DialogHeader>
-            <DialogFooter className="gap-2 sm:gap-0 mt-6">
+            <DialogFooter className="gap-2 sm:gap-2 mt-6">
               <Button variant="ghost" onClick={() => actions.setDeleteDialogOpen(false)} disabled={actions.deleting} className="sm:mr-auto">
                 {actions.t("cancel")}
               </Button>

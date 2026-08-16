@@ -24,6 +24,7 @@ import {
     Lightbulb,
     ClipboardCheck,
     Video,
+    ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -78,6 +79,7 @@ const MATERIAL_TYPES: Record<string, Omit<ItemVisuals, "label"> & { labelKey: st
     review:     { icon: ClipboardCheck, color: "text-purple-600 dark:text-purple-400", bg: "bg-purple-100 dark:bg-purple-950/50", labelKey: "review" },
     discussion: { icon: MessageSquare,  color: "text-pink-600 dark:text-pink-400",    bg: "bg-pink-100 dark:bg-pink-950/50",    labelKey: "discussion" },
     video:      { icon: Video,          color: "text-red-600 dark:text-red-400",      bg: "bg-red-100 dark:bg-red-950/50",      labelKey: "video" },
+    link:       { icon: ExternalLink,   color: "text-sky-600 dark:text-sky-400",      bg: "bg-sky-100 dark:bg-sky-950/50",      labelKey: "link" },
 };
 
 const EXT_VISUALS: Record<string, ItemVisuals> = {

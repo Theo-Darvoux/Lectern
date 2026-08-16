@@ -117,6 +117,9 @@ const OP_ICONS: Record<string, React.ElementType> = {
     create_material: FilePlus,
     edit_material: FilePenLine,
     delete_material: FileX,
+    create_link: ExternalLink,
+    edit_link: ExternalLink,
+    delete_link: ExternalLink,
     create_directory: FolderPlus,
     edit_directory: FolderPen,
     delete_directory: FolderX,
@@ -125,8 +128,11 @@ const OP_ICONS: Record<string, React.ElementType> = {
 
 const OP_COLORS: Record<string, string> = {
     create_material: "text-green-600 bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800",
+    create_link: "text-sky-600 bg-sky-50 border-sky-200 dark:bg-sky-950/30 dark:border-sky-800",
     edit_material: "text-blue-600 bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-800",
+    edit_link: "text-sky-600 bg-sky-50 border-sky-200 dark:bg-sky-950/30 dark:border-sky-800",
     delete_material: "text-red-600 bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",
+    delete_link: "text-red-600 bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",
     create_directory: "text-green-600 bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800",
     edit_directory: "text-blue-600 bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-800",
     delete_directory: "text-red-600 bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",
@@ -135,8 +141,11 @@ const OP_COLORS: Record<string, string> = {
 
 const OP_LABELS_KEYS: Record<string, string> = {
     create_material: "labels.create_material",
+    create_link: "labels.create_link",
     edit_material: "labels.edit_material",
+    edit_link: "labels.edit_link",
     delete_material: "labels.delete_material",
+    delete_link: "labels.delete_link",
     create_directory: "labels.create_directory",
     edit_directory: "labels.edit_directory",
     delete_directory: "labels.delete_directory",
@@ -190,13 +199,29 @@ interface ResolvedItemDetails {
 
 /* ── Helpers ─────────────────────────────────────────── */
 
+function getEffectiveOpKey(rawOp: Record<string, unknown>): string {
+    const baseOp = String(rawOp.op ?? rawOp.pr_type ?? "unknown");
+    const targetUrl = String((rawOp.metadata as Record<string, unknown> | undefined)?.url || rawOp.url || "").trim();
+    const isLink = rawOp.type === "link" || rawOp.material_type === "link" || Boolean(targetUrl);
+    if (isLink && baseOp.includes("material")) {
+        return baseOp.replace("material", "link");
+    }
+    return baseOp;
+}
+
 function opSummary(op: PullRequestOperation, t: (key: any, values?: any) => string): string {
     const rawOp = op as unknown as Record<string, unknown>;
-    const opType = String(rawOp.op || rawOp.pr_type || "unknown");
+    const opType = getEffectiveOpKey(rawOp);
     const name = (rawOp.title || rawOp.name) as string | undefined;
-    const finalName = name || (opType.includes("directory") ? t("labels.create_directory") : t("labels.create_material"));
+    const finalName = name || (opType.includes("directory") ? t("labels.create_directory") : opType.includes("link") ? t("labels.create_link") : t("labels.create_material"));
 
     switch (opType) {
+        case "create_link":
+            return t("summary.create_link", { name: finalName });
+        case "edit_link":
+            return t("summary.edit_link", { name: finalName });
+        case "delete_link":
+            return t("summary.delete_link", { name: finalName });
         case "create_material":
             return t("summary.create_material", { name: finalName });
         case "edit_material":
@@ -218,6 +243,7 @@ function opSummary(op: PullRequestOperation, t: (key: any, values?: any) => stri
 }
 
 function formatValue(value: unknown, mt: (key: any) => string): React.ReactNode {
+    if (value === null || value === undefined) return <span className="text-muted-foreground">—</span>;
     if (Array.isArray(value)) {
         if (value.length === 0) return <span className="text-muted-foreground">—</span>;
         return (
@@ -230,6 +256,20 @@ function formatValue(value: unknown, mt: (key: any) => string): React.ReactNode 
                     >
                         {String(v)}
                     </Badge>
+                ))}
+            </div>
+        );
+    }
+    if (typeof value === "object") {
+        const entries = Object.entries(value as Record<string, unknown>);
+        if (entries.length === 0) return <span className="text-muted-foreground">—</span>;
+        return (
+            <div className="space-y-0.5 font-mono text-xs">
+                {entries.map(([k, v]) => (
+                    <div key={k} className="flex items-center gap-1.5 break-all">
+                        <span className="text-muted-foreground">{k}:</span>
+                        <span>{String(v)}</span>
+                    </div>
                 ))}
             </div>
         );
@@ -282,9 +322,14 @@ function OperationRow({
     const [existingPreview, setExistingPreview] = useState<{ url: string; mimeType?: string; fileName?: string } | null>(null);
     const [previewLoading, setPreviewLoading] = useState(false);
 
-    const opType = String(rawOp.op || rawOp.pr_type || "unknown");
-    const Icon = OP_ICONS[opType] ?? FilePlus;
-    const colorClass = OP_COLORS[opType] ?? "";
+    const baseOpType = String(rawOp.op || rawOp.pr_type || "unknown");
+    const targetUrl = String((rawOp.metadata as Record<string, unknown> | undefined)?.url || rawOp.url || "").trim();
+    const isLink = rawOp.type === "link" || rawOp.material_type === "link" || Boolean(targetUrl);
+    const opType = isLink && baseOpType.includes("material")
+        ? baseOpType.replace("material", "link")
+        : baseOpType;
+    const Icon = OP_ICONS[opType] ?? (isLink ? ExternalLink : OP_ICONS[baseOpType] ?? FilePlus);
+    const colorClass = OP_COLORS[opType] ?? OP_COLORS[baseOpType] ?? "";
     const hasFile = Boolean(rawOp.file_key);
     const isApproved = prStatus === "approved";
 
@@ -517,9 +562,12 @@ function OperationRow({
     const displaySummary = (() => {
         const name = itemDetails?.itemName;
         const opName = (rawOp.title || rawOp.name) as string | undefined;
-        const finalName = name || opName || (opType.includes("directory") ? t("labels.create_directory") : t("labels.create_material"));
+        const finalName = name || opName || (opType.includes("directory") ? t("labels.create_directory") : isLink ? t("labels.create_link") : t("labels.create_material"));
 
         switch (opType) {
+            case "create_link": return t("summary.create_link", { name: finalName });
+            case "edit_link": return t("summary.edit_link", { name: finalName });
+            case "delete_link": return t("summary.delete_link", { name: finalName });
             case "delete_material": return t("summary.delete_material", { name: finalName });
             case "delete_directory": return t("summary.delete_directory", { name: finalName });
             case "edit_material": return t("summary.edit_material", { name: finalName });
@@ -532,7 +580,7 @@ function OperationRow({
     })();
 
     const entries = Object.entries(op).filter(
-        ([k, v]) => VISIBLE_FIELDS.has(k) && v !== null && v !== undefined,
+        ([k, v]) => VISIBLE_FIELDS.has(k) && k !== "url" && k !== "metadata" && v !== null && v !== undefined,
     );
 
     const diffSummary = "diff_summary" in op ? (op as unknown as Record<string, unknown>).diff_summary : null;
@@ -567,6 +615,12 @@ function OperationRow({
                             <p className="truncate text-sm font-medium">
                                 {displaySummary}
                             </p>
+                            {targetUrl && (
+                                <p className="text-[11px] text-muted-foreground truncate font-mono mt-0.5 max-w-sm sm:max-w-md flex items-center gap-1">
+                                    <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                                    <span className="truncate">{targetUrl}</span>
+                                </p>
+                            )}
                             <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5 flex-wrap">
                                 {(opType === "move_item" || opType.includes("delete")) ? null : (
                                     <span className={colorClass.split(" ")[0]}>{t(OP_LABELS_KEYS[opType] as any) ?? opType}</span>
@@ -595,7 +649,7 @@ function OperationRow({
                                 {opType === "move_item" && itemDetails && (
                                     <>
                                         {itemDetails.sourcePath && (
-                                            <div className="flex items-center gap-1 shrink-0">
+                                             <div className="flex items-center gap-1 shrink-0">
                                                 <MapPin className="h-3 w-3 shrink-0 opacity-60" />
                                                 <span className="truncate max-w-[120px]">{itemDetails.sourcePath}</span>
                                             </div>
@@ -649,7 +703,7 @@ function OperationRow({
 
                         {!isApproved && !opType.includes("delete") && (
                             <>
-                                {hasFile ? (
+                                {hasFile || isLink ? (
                                     <Button
                                         variant="ghost"
                                         size="sm"
@@ -680,10 +734,29 @@ function OperationRow({
                     </div>
                 </AccordionPrimitive.Header>
 
-                {(entries.length > 0 || hasDiff) && (
+                {(entries.length > 0 || hasDiff || Boolean(targetUrl)) && (
                     <AccordionContent className="px-4 pb-4">
-                        {entries.length > 0 && (
+                        {(entries.length > 0 || Boolean(targetUrl)) && (
                             <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
+                                {targetUrl && (
+                                    <div className="contents">
+                                        <dt className="py-0.5 capitalize text-muted-foreground flex items-center gap-1.5">
+                                            <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                                            {t("fields.url")}
+                                        </dt>
+                                        <dd className="py-0.5 min-w-0">
+                                            <a
+                                                href={targetUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="inline-flex items-center gap-1.5 font-mono text-xs text-primary hover:underline break-all"
+                                            >
+                                                <span>{targetUrl}</span>
+                                                <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                                            </a>
+                                        </dd>
+                                    </div>
+                                )}
                                 {entries.map(([k, v]) => (
                                     <div key={k} className="contents">
                                         <dt className="py-0.5 capitalize text-muted-foreground">
@@ -705,7 +778,7 @@ function OperationRow({
                             </dl>
                         )}
                         {hasDiff && (
-                            <div className={entries.length > 0 ? "mt-4 pt-4 border-t" : ""}>
+                            <div className={(entries.length > 0 || Boolean(targetUrl)) ? "mt-4 pt-4 border-t" : ""}>
                                 <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-2">
                                     <Clock className="h-3 w-3" />
                                     {t("changes")}
@@ -883,7 +956,7 @@ function PRDetailContent() {
     const typeCounts: Record<string, number> = {};
     for (const op of operations) {
         const rawOp = op as unknown as Record<string, unknown>;
-        const t = String(rawOp.op ?? rawOp.pr_type ?? "unknown");
+        const t = getEffectiveOpKey(rawOp);
         typeCounts[t] = (typeCounts[t] || 0) + 1;
     }
 

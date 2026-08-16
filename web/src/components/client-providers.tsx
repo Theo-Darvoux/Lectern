@@ -8,6 +8,7 @@ import { LocaleProvider } from "@/components/locale-provider";
 import { AuthBootstrap } from "@/components/auth-bootstrap";
 import { RuntimeRouter } from "@/components/runtime-router";
 import { CookieBanner } from "@/components/cookie-banner";
+import { ExternalLinkDialog } from "@/components/external-link-dialog";
 import type { AbstractIntlMessages } from "next-intl";
 import {
   DEFAULT_LOCALE,
@@ -56,6 +57,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
           <AuthBootstrap />
           <RuntimeRouter>{children}</RuntimeRouter>
         </ConfigProvider>
+        <ExternalLinkDialog />
         <CookieBanner />
         <Toaster position="bottom-left" expand richColors />
       </ThemeProvider>

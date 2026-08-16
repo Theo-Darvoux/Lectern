@@ -39,6 +39,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslations } from "next-intl";
+import { useExternalLinkStore } from "@/lib/external-link-store";
 import {
   pendingCreatesForParent,
   pendingOperations,
@@ -71,6 +72,7 @@ interface MaterialNode {
   file_name?: string;
   file_mime_type?: string;
   pending?: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 interface ChildrenPayload {
@@ -91,6 +93,7 @@ function normalizeMaterials(raw: unknown[]): MaterialNode[] {
       type: String(r.type ?? "other"),
       file_name: ver.file_name ? String(ver.file_name) : undefined,
       file_mime_type: ver.file_mime_type ? String(ver.file_mime_type) : undefined,
+      metadata: r.metadata as Record<string, unknown> | undefined,
     });
   }
   return out;
@@ -162,6 +165,8 @@ const MaterialLeaf = memo(function MaterialLeaf({
   onActivate,
 }: MaterialLeafProps) {
   const t = useTranslations("Browse");
+  const router = useRouter();
+  const openLink = useExternalLinkStore((s) => s.openLink);
   const isActive = activeId === material.id;
   const title = material.title || "Untitled";
 
@@ -181,11 +186,22 @@ const MaterialLeaf = memo(function MaterialLeaf({
     );
   }
 
+  const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
+  const isLink = material.type === "link" || !!targetUrl;
+
+  const handleClick = (e: React.MouseEvent) => {
+    onActivate(material.id);
+    if (isLink && targetUrl) {
+      e.preventDefault();
+      openLink(targetUrl, (path) => router.push(path));
+    }
+  };
+
   return (
     <li>
       <BrowseLink
         href={buildMaterialHref(parentPath, material.slug)}
-        onClick={() => onActivate(material.id)}
+        onClick={handleClick}
         className={cn(
           "group/leaf flex items-center gap-1.5 rounded-md pr-1 min-w-0",
           "text-[13px] leading-tight transition-colors py-1.5",
@@ -602,6 +618,7 @@ export function DirectoryTreeSidebar() {
   }, [childrenMap, pendingNodesFor, submittedOperations]);
 
   const refreshRef = useRef(refreshCount);
+  const lastAutoExpandedPathRef = useRef<string | null>(null);
 
   const fetchRoots = useCallback(async () => {
     const requestGeneration = ++rootRequestGeneration;
@@ -790,18 +807,25 @@ export function DirectoryTreeSidebar() {
     }
   }, []);
 
+  // Reconcile anything we may have missed while the tree was closed.
+  const wasSidebarOpenRef = useRef(treeSidebarOpen);
+  useEffect(() => {
+    const wasOpen = wasSidebarOpenRef.current;
+    wasSidebarOpenRef.current = treeSidebarOpen;
+    if (treeSidebarOpen && !wasOpen) {
+      void refetchRootSilent();
+      const visibleBranches = new Set(expandedRef.current);
+      if (activeDirectoryId) visibleBranches.add(activeDirectoryId);
+      for (const id of visibleBranches) {
+        void refetchChildSilent(id);
+      }
+    }
+  }, [treeSidebarOpen, activeDirectoryId, refetchRootSilent, refetchChildSilent]);
+
   // Subscribe to each visible logical branch. These all share the single
   // per-user transport, so expanding the tree does not create more sockets.
   useEffect(() => {
     if (!treeSidebarOpen) return;
-
-    // Reconcile anything we may have missed while the tree was closed.
-    void refetchRootSilent();
-    const visibleBranches = new Set(expandedRef.current);
-    if (activeDirectoryId) visibleBranches.add(activeDirectoryId);
-    for (const id of visibleBranches) {
-      void refetchChildSilent(id);
-    }
 
     const handleRootChange = () => {
       void refetchRootSilent();
@@ -938,6 +962,7 @@ export function DirectoryTreeSidebar() {
       return;
     }
     if (currentSlugs.length === 0) {
+      lastAutoExpandedPathRef.current = "";
       setActiveId(null);
       setActiveDirectoryId(null);
       return;
@@ -1016,7 +1041,8 @@ export function DirectoryTreeSidebar() {
         });
       }
 
-      if (toExpand.length > 0) {
+      const shouldAutoExpand = lastAutoExpandedPathRef.current !== pathKey;
+      if (shouldAutoExpand && toExpand.length > 0) {
         setExpanded((s) => {
           const n = new Set(s);
           let mutated = false;
@@ -1029,6 +1055,7 @@ export function DirectoryTreeSidebar() {
           return mutated ? n : s;
         });
       }
+      lastAutoExpandedPathRef.current = pathKey;
       setActiveId(lastId);
       setActiveDirectoryId(currentDirectoryId);
     })();

@@ -13,11 +13,13 @@ import {
 } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { useTranslations } from "next-intl";
+import { useExternalLinkStore } from "@/lib/external-link-store";
 import { cn } from "@/lib/utils";
 
 export function SearchInline({ className }: { className?: string } = {}) {
     const t = useTranslations("Search");
     const router = useRouter();
+    const openLink = useExternalLinkStore((s) => s.openLink);
     const [open, setOpen] = React.useState(false);
     const [query, setQuery] = React.useState("");
     const { results, loading } = useSearch(query);
@@ -27,9 +29,16 @@ export function SearchInline({ className }: { className?: string } = {}) {
         browse_path?: string;
         search_type?: string;
         id?: string;
+        type?: string;
+        metadata?: Record<string, unknown>;
     }) => {
         setOpen(false);
         setQuery("");
+        const targetUrl = String((result.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
+        if ((result.type === "link" || !!targetUrl) && targetUrl) {
+            openLink(targetUrl, (path) => router.push(path));
+            return;
+        }
         if (result.browse_path) {
             router.push(result.browse_path);
         } else {

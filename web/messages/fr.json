@@ -302,6 +302,7 @@
     "moreActions": "Plus d'actions sur le dossier",
     "paste": "Coller (",
     "newFolder": "Nouveau dossier",
+    "newLink": "Nouveau lien",
     "cut": "Couper",
     "delete": "Supprimer",
     "exit": "Quitter",
@@ -499,6 +500,7 @@
     "syllabus": "Syllabus",
     "examFormat": "Format d'examen",
     "tags": "Mots-clés",
+    "targetUrl": "URL de destination",
     "author": "Auteur",
     "size": "Taille",
     "downloads": "Téléchargements",
@@ -726,6 +728,7 @@
     "video": "Vidéo",
     "other": "Autre",
     "qcm": "QCM",
+    "link": "Lien externe",
     "folder": "Dossier",
     "file": "Fichier",
     "statusOpen": "statusOpen",
@@ -741,8 +744,11 @@
   "PRDetails": {
     "summary": {
       "create_material": "Ajout de « {name} »",
+      "create_link": "Ajout du lien « {name} »",
       "edit_material": "Modification de « {name} »",
+      "edit_link": "Modification du lien « {name} »",
       "delete_material": "Suppression de « {name} »",
+      "delete_link": "Suppression du lien « {name} »",
       "create_directory": "Création du dossier « {name} »",
       "edit_directory": "Renommage du dossier « {name} »",
       "delete_directory": "Suppression du dossier « {name} »",
@@ -751,8 +757,11 @@
     },
     "labels": {
       "create_material": "Document ajouté",
+      "create_link": "Lien ajouté",
       "edit_material": "Document modifié",
+      "edit_link": "Lien modifié",
       "delete_material": "Document supprimé",
+      "delete_link": "Lien supprimé",
       "create_directory": "Dossier créé",
       "edit_directory": "Dossier renommé",
       "delete_directory": "Dossier supprimé",
@@ -820,7 +829,8 @@
     "fields": {
       "type": "Type",
       "tags": "Mots-clés",
-      "description": "Description"
+      "description": "Description",
+      "url": "URL de destination"
     }
   },
   "Roles": {
@@ -962,6 +972,44 @@
     "draft": "Brouillon",
     "createDirectly": "Créer directement",
     "addedToDraft": "Ajouté au brouillon : Dossier \"{name}\""
+  },
+  "NewLink": {
+    "title": "Nouveau lien",
+    "descBase": "Ajout d'un lien",
+    "descIn": " dans {name}",
+    "descRoot": " à la racine",
+    "titleLabel": "Titre",
+    "titlePlaceholder": "ex. Diapositives du cours, Documentation",
+    "urlLabel": "URL de destination",
+    "urlPlaceholder": "https://example.com ou /browse/...",
+    "description": "Description",
+    "descriptionPlaceholder": "À quoi mène ce lien ?",
+    "optional": "(optionnel)",
+    "tags": "Tags",
+    "tagsPlaceholder": "lien, externe...",
+    "cancel": "Annuler",
+    "draft": "Brouillon",
+    "createDirectly": "Créer directement",
+    "addedToDraft": "Lien « {name} » ajouté au brouillon",
+    "invalidUrl": "Veuillez saisir une URL valide",
+    "targetUrl": "URL de destination"
+  },
+  "ExternalLinkDialog": {
+    "title": "Attention ! Vous quittez WikINT",
+    "description": "Ce lien vous redirige vers un site web externe.",
+    "disclaimer": "WikINT ne contrôle pas les sites externes. Assurez-vous d'avoir confiance en ce lien avant de continuer.",
+    "trustDomain": "Ne plus m'avertir pour {domain}",
+    "cancel": "Annuler",
+    "visitSite": "Visiter le site"
+  },
+  "LinkViewer": {
+    "targetUrl": "URL de destination",
+    "openLink": "Ouvrir le lien",
+    "copyLink": "Copier l'URL",
+    "linkCopied": "URL copiée dans le presse-papiers",
+    "noUrl": "Aucune URL de destination configurée pour ce lien.",
+    "externalSite": "Site externe",
+    "internalLink": "Lien interne"
   },
   "Staging": {
     "title": "Vérifier les modifications",

@@ -17,6 +17,7 @@ export interface SearchResult {
     like_count?: number;
     file_name?: string;
     file_mime_type?: string;
+    metadata?: Record<string, unknown>;
 }
 
 export interface SearchResponse {

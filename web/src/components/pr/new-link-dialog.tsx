@@ -12,66 +12,80 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { FolderPlus, Plus, Send, Loader2 } from "lucide-react";
+import { ExternalLink, Plus, Send, Loader2, Link as LinkIcon } from "lucide-react";
 import { toast } from "sonner";
-import { useStagingStore, type Operation } from "@/lib/staging-store";
+import { useStagingStore, type Operation, type CreateMaterialOp } from "@/lib/staging-store";
 import { TagInput } from "@/components/ui/tag-input";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { useAuthStore } from "@/lib/stores";
 import { isStaff } from "@/lib/guest";
 import { sanitizeNameInput } from "@/lib/utils";
+import { normalizeTargetUrl } from "@/lib/url-utils";
 import { useTranslations } from "next-intl";
 
-interface NewFolderDialogProps {
+interface NewLinkDialogProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     /** UUID of the parent directory (null for root) */
-    parentId: string | null;
+    directoryId: string | null;
     parentName?: string;
+    parentMaterialId?: string | null;
 }
 
-export function NewFolderDialog({
+export function NewLinkDialog({
     open,
     onOpenChange,
-    parentId,
+    directoryId,
     parentName,
-}: NewFolderDialogProps) {
-    const t = useTranslations("NewFolder");
+    parentMaterialId,
+}: NewLinkDialogProps) {
+    const t = useTranslations("NewLink");
     const tAuto = useTranslations("AutoTitle");
     const addOperation = useStagingStore((s) => s.addOperation);
     const nextTempId = useStagingStore((s) => s.nextTempId);
-    const [name, setName] = useState("");
+
+    const [title, setTitle] = useState("");
+    const [url, setUrl] = useState("");
     const [description, setDescription] = useState("");
     const [tags, setTags] = useState<string[]>([]);
     const [submitting, setSubmitting] = useState(false);
 
     const staff = isStaff(useAuthStore((s) => s.user));
     const NAME_MAX = 128;
-    const canSubmit = name.trim().length >= 1 && name.length <= NAME_MAX && !submitting;
-    const isDraftParent = parentId?.startsWith("$") ?? false;
-    // Only staff may bypass drafting and create a folder directly. Regular users
-    // always draft, so a batch of changes can be reviewed and submitted together.
+    const isDraftParent = directoryId?.startsWith("$") ?? false;
     const canCreateDirectly = staff && !isDraftParent;
 
-    const buildOp = (): Operation => {
-        const tempId = nextTempId("dir");
+    const trimmedTitle = title.trim();
+    const trimmedUrl = url.trim();
+    const canSubmit =
+        trimmedTitle.length >= 1 &&
+        trimmedTitle.length <= NAME_MAX &&
+        trimmedUrl.length >= 1 &&
+        !submitting;
+
+    const buildOp = (): CreateMaterialOp => {
+        const tempId = nextTempId("mat");
+        const normalizedUrl = normalizeTargetUrl(trimmedUrl);
         return {
-            op: "create_directory",
+            op: "create_material",
             temp_id: tempId,
-            parent_id: parentId,
-            name: name.trim(),
+            directory_id: directoryId,
+            parent_material_id: parentMaterialId ?? undefined,
+            title: trimmedTitle,
+            type: "link",
             description: description.trim() || undefined,
             tags: tags.length > 0 ? tags : undefined,
+            metadata: {
+                url: normalizedUrl,
+            },
         };
     };
 
     const handleDraft = () => {
         if (!canSubmit) return;
         addOperation(buildOp());
-        toast.success(t("addedToDraft", { name: name.trim() }));
-        setName("");
-        setDescription("");
-        setTags([]);
+        toast.success(t("addedToDraft", { name: trimmedTitle }));
+        resetForm();
         onOpenChange(false);
     };
 
@@ -81,14 +95,19 @@ export function NewFolderDialog({
         const result = await submitDirectOperations([buildOp()], undefined, undefined, tAuto);
         setSubmitting(false);
         if (!result) return;
-        setName("");
-        setDescription("");
-        setTags([]);
+        resetForm();
         onOpenChange(false);
     };
 
+    const resetForm = () => {
+        setTitle("");
+        setUrl("");
+        setDescription("");
+        setTags([]);
+    };
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === "Enter" && !e.shiftKey && canSubmit) {
+        if (e.key === "Enter" && !e.shiftKey && canSubmit && e.target instanceof HTMLInputElement) {
             e.preventDefault();
             if (canCreateDirectly) {
                 handleDirectSubmit();
@@ -99,67 +118,95 @@ export function NewFolderDialog({
     };
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
+        <Dialog
+            open={open}
+            onOpenChange={(next) => {
+                if (!next) resetForm();
+                onOpenChange(next);
+            }}
+        >
             <DialogContent className="sm:max-w-md">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
-                        <FolderPlus className="h-5 w-5 text-green-600" />
+                        <LinkIcon className="h-5 w-5 text-sky-600 dark:text-sky-400" />
                         {t("title")}
                     </DialogTitle>
                     <DialogDescription>
                         {t("descBase")}
-                        {parentName ? (
-                            t("descIn", { name: parentName })
-                        ) : (
-                            t("descRoot")
-                        )}
-                        .
+                        {parentName ? t("descIn", { name: parentName }) : t("descRoot")}.
                     </DialogDescription>
                 </DialogHeader>
 
                 <div className="space-y-4 py-2" onKeyDown={handleKeyDown}>
+                    {/* Title */}
                     <div className="space-y-1.5">
-                        <label
-                            htmlFor="folder-name"
-                            className="text-sm font-medium"
-                        >
-                            {t("folderName")}
+                        <label htmlFor="link-title" className="text-sm font-medium">
+                            {t("titleLabel")}
                         </label>
                         <Input
-                            id="folder-name"
-                            value={name}
-                            onChange={(e) => setName(sanitizeNameInput(e.target.value))}
-                            placeholder={t("folderNamePlaceholder")}
+                            id="link-title"
+                            value={title}
+                            onChange={(e) => setTitle(sanitizeNameInput(e.target.value))}
+                            placeholder={t("titlePlaceholder")}
                             maxLength={NAME_MAX}
                             disabled={submitting}
                             autoFocus
                         />
-                        <p className={`text-[11px] text-right ${name.length >= NAME_MAX ? "text-destructive font-semibold" : "text-muted-foreground"}`}>
-                            {name.length}/{NAME_MAX}
+                        <p
+                            className={`text-[11px] text-right ${
+                                title.length >= NAME_MAX
+                                    ? "text-destructive font-semibold"
+                                    : "text-muted-foreground"
+                            }`}
+                        >
+                            {title.length}/{NAME_MAX}
                         </p>
                     </div>
+
+                    {/* Destination URL */}
                     <div className="space-y-1.5">
-                        <label
-                            htmlFor="folder-desc"
-                            className="text-sm font-medium"
-                        >
+                        <label htmlFor="link-url" className="text-sm font-medium">
+                            {t("urlLabel")}
+                        </label>
+                        <div className="relative">
+                            <Input
+                                id="link-url"
+                                value={url}
+                                onChange={(e) => setUrl(e.target.value)}
+                                placeholder={t("urlPlaceholder")}
+                                disabled={submitting}
+                                className="font-mono text-xs pl-8"
+                            />
+                            <ExternalLink className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                        </div>
+                    </div>
+
+                    {/* Description */}
+                    <div className="space-y-1.5">
+                        <label htmlFor="link-desc" className="text-sm font-medium">
                             {t("description")}{" "}
-                            <span className="text-muted-foreground">
+                            <span className="text-xs text-muted-foreground font-normal">
                                 {t("optional")}
                             </span>
                         </label>
                         <Textarea
-                            id="folder-desc"
+                            id="link-desc"
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
                             placeholder={t("descriptionPlaceholder")}
-                            maxLength={500}
-                            disabled={submitting}
                             rows={2}
+                            disabled={submitting}
                         />
                     </div>
+
+                    {/* Tags */}
                     <div className="space-y-1.5">
-                        <label className="text-sm font-medium">{t("tags")}</label>
+                        <label className="text-sm font-medium">
+                            {t("tags")}{" "}
+                            <span className="text-xs text-muted-foreground font-normal">
+                                {t("optional")}
+                            </span>
+                        </label>
                         <TagInput
                             tags={tags}
                             onChange={setTags}
@@ -171,7 +218,10 @@ export function NewFolderDialog({
                 <DialogFooter className="gap-2 sm:gap-2 mt-2">
                     <Button
                         variant="ghost"
-                        onClick={() => onOpenChange(false)}
+                        onClick={() => {
+                            resetForm();
+                            onOpenChange(false);
+                        }}
                         disabled={submitting}
                         className="sm:mr-auto"
                     >

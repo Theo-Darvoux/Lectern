@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useExternalLinkStore } from "@/lib/external-link-store";
 import {
   Folder,
   FileText,
@@ -613,10 +614,15 @@ function AuthorName({ authorId }: { authorId: string | null }) {
 
 function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations("Sidebar");
+  const router = useRouter();
+  const openLink = useExternalLinkStore((s) => s.openLink);
+  const metadata = (data.metadata ?? {}) as Record<string, unknown>;
+  const targetUrl = String(metadata.url ?? metadata.link ?? "").trim();
   const id = String(data.id ?? "");
   const title = String(data.title ?? "");
   const description = data.description ? String(data.description) : null;
   const type = String(data.type ?? "other");
+  const isLink = type === "link" || !!targetUrl;
   const authorId = data.author_id ? String(data.author_id) : null;
   const downloadCount = Number(data.download_count ?? 0);
   const createdAt = data.created_at ? new Date(String(data.created_at)) : null;
@@ -764,6 +770,23 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
             icon={Calendar}
             label={t("created")}
             value={createdAt.toLocaleDateString()}
+          />
+        )}
+        {isLink && targetUrl && (
+          <MetaRow
+            icon={ExternalLink}
+            label={t("targetUrl")}
+            value={
+              <button
+                type="button"
+                onClick={() => openLink(targetUrl, (path) => router.push(path))}
+                className="truncate max-w-[150px] font-mono text-xs text-primary hover:underline flex items-center gap-1 justify-end"
+                title={targetUrl}
+              >
+                <span className="truncate">{targetUrl}</span>
+                <ExternalLink className="h-3 w-3 shrink-0" />
+              </button>
+            }
           />
         )}
       </SidebarSection>

@@ -38,6 +38,18 @@ const QCMViewerPreview = dynamic(
     },
 );
 
+const LinkViewerPreview = dynamic(
+    () => import("@/components/viewers/link-viewer").then((m) => m.LinkViewer),
+    {
+        ssr: false,
+        loading: () => (
+            <div className="flex h-full items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+        ),
+    },
+);
+
 function TextPreview({ url, type }: { url: string; type: "markdown" | "code" | "csv" | "notebook" }) {
     const t = useTranslations("Preview");
     const [content, setContent] = useState("");
@@ -115,12 +127,12 @@ function GenericFallback({ url, fileName, mimeType }: { url: string; fileName: s
 
 const VIEWER_ICONS: Record<string, React.ElementType> = {
     pdf: FileText, image: ImageIcon, video: VideoIcon, audio: Music,
-    markdown: Code2, code: Code2, csv: Code2, notebook: Code2, qcm: ListChecks, generic: Eye,
+    markdown: Code2, code: Code2, csv: Code2, notebook: Code2, qcm: ListChecks, link: ExternalLink, generic: Eye,
 };
 const VIEWER_ICON_COLORS: Record<string, string> = {
     pdf: "text-red-500", image: "text-blue-500", video: "text-purple-500",
     audio: "text-pink-500", markdown: "text-green-600", code: "text-amber-500",
-    csv: "text-teal-500", notebook: "text-orange-500", qcm: "text-violet-500", generic: "text-muted-foreground",
+    csv: "text-teal-500", notebook: "text-orange-500", qcm: "text-violet-500", link: "text-sky-600 dark:text-sky-400", generic: "text-muted-foreground",
 };
 
 export function PRPreviewPageContent() {
@@ -144,20 +156,31 @@ export function PRPreviewPageContent() {
 
         async function load() {
             try {
-                const [pr, preview] = await Promise.all([
-                    apiFetch<{ title: string; payload: Record<string, unknown>[] }>(`/pull-requests/${prId}`),
-                    apiFetch<{ url: string; file_name?: string; file_mime_type?: string }>(`/pull-requests/${prId}/preview?opIndex=${opIndex}`),
-                ]);
-
+                const pr = await apiFetch<{ title: string; payload: Record<string, unknown>[] }>(`/pull-requests/${prId}`);
                 if (cancelled) return;
 
                 const op = pr.payload?.[opIndex] ?? {};
-                if (preview) {
-                    setFileName(String(preview.file_name ?? op.file_name ?? "File"));
-                    setMimeType(String(preview.file_mime_type ?? op.file_mime_type ?? ""));
-                    setPresignedUrl(preview.url);
-                }
+                const targetUrl = String((op.metadata as Record<string, unknown> | undefined)?.url || op.url || "").trim();
+                const isLink = op.type === "link" || op.material_type === "link" || Boolean(targetUrl);
+
                 setPrTitle(pr.title);
+                setFileName(String(op.title || op.name || "Link"));
+
+                if (isLink && targetUrl) {
+                    setPresignedUrl(targetUrl);
+                    setMimeType("application/x-external-link");
+                } else {
+                    try {
+                        const preview = await apiFetch<{ url: string; file_name?: string; file_mime_type?: string }>(`/pull-requests/${prId}/preview?opIndex=${opIndex}`);
+                        if (!cancelled && preview) {
+                            setFileName(String(preview.file_name ?? op.file_name ?? "File"));
+                            setMimeType(String(preview.file_mime_type ?? op.file_mime_type ?? ""));
+                            setPresignedUrl(preview.url);
+                        }
+                    } catch (err) {
+                        if (!cancelled) setError(err instanceof Error ? err.message : t("failedToLoadPreview"));
+                    }
+                }
             } catch (e: unknown) {
                 if (!cancelled) setError(e instanceof Error ? e.message : t("failedToLoadPreview"));
             } finally {
@@ -167,9 +190,10 @@ export function PRPreviewPageContent() {
 
         load();
         return () => { cancelled = true; };
-    }, [prId, opIndex]);
+    }, [prId, opIndex, t]);
 
-    const viewerType = presignedUrl ? getContributionPreviewViewerType(mimeType, fileName) : "generic";
+    const isLinkViewer = mimeType === "application/x-external-link";
+    const viewerType = isLinkViewer ? "link" : presignedUrl ? getContributionPreviewViewerType(mimeType, fileName) : "generic";
     const Icon = VIEWER_ICONS[viewerType] ?? Eye;
     const iconColor = VIEWER_ICON_COLORS[viewerType] ?? "";
 
@@ -189,9 +213,14 @@ export function PRPreviewPageContent() {
                 <div className="flex min-w-0 flex-1 items-center gap-2.5">
                     <Icon className={`h-4 w-4 shrink-0 ${iconColor}`} />
                     <span className="truncate text-sm font-medium">{fileName || t("titleDefault")}</span>
-                    {fileName && (
+                    {fileName && !isLinkViewer && (
                         <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${getFileBadgeColor(fileName)}`}>
                             {getFileBadgeLabel(fileName, mimeType)}
+                        </span>
+                    )}
+                    {isLinkViewer && (
+                        <span className="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300">
+                            Link
                         </span>
                     )}
                 </div>
@@ -233,6 +262,9 @@ export function PRPreviewPageContent() {
 
                 {!loading && !error && presignedUrl && (
                     <>
+                        {viewerType === "link" && (
+                            <LinkViewerPreview material={{ id: prId, title: fileName, type: "link", metadata: { url: presignedUrl } }} />
+                        )}
                         {viewerType === "pdf" && (
                             <PdfPreview key={presignedUrl} url={presignedUrl} />
                         )}

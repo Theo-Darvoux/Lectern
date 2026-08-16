@@ -10,6 +10,7 @@ import { navigateBrowse } from "@/components/browse/browse-link";
 import { EmptyDirectory } from "@/components/browse/empty-directory";
 import { UploadDrawer } from "@/components/pr/upload-drawer";
 import { NewFolderDialog } from "@/components/pr/new-folder-dialog";
+import { NewLinkDialog } from "@/components/pr/new-link-dialog";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import { DirectoryOpenPRs } from "@/components/browse/directory-open-prs";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,7 @@ import {
   Download,
   FolderPen,
   MoreHorizontal,
+  ExternalLink,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -99,6 +101,7 @@ export function DirectoryListing({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadParentMat, setUploadParentMat] = useState<{ id: string; name: string } | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newLinkOpen, setNewLinkOpen] = useState(false);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const tutorialCreateOpen = useTutorialMenuOpen("create-menu");
   const [editFolderOpen, setEditFolderOpen] = useState(false);
@@ -666,6 +669,10 @@ export function DirectoryListing({
                       <LayoutList className="w-4 h-4 mr-2" />
                       {tQCM("createQCM")}
                     </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setNewLinkOpen(true)}>
+                      <ExternalLink className="w-4 h-4 mr-2" />
+                      {t("newLink")}
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
                 )}
@@ -1150,6 +1157,12 @@ export function DirectoryListing({
         parentId={dirId || null}
         parentName={dirName}
       />
+      <NewLinkDialog
+        open={newLinkOpen}
+        onOpenChange={setNewLinkOpen}
+        directoryId={dirId || null}
+        parentName={dirName}
+      />
       {directory && editFolderOpen && (
         <FileEditDialog
           open={editFolderOpen}
@@ -1175,7 +1188,7 @@ export function DirectoryListing({
               {t("deleteItemsConfirm")}
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="gap-2 sm:gap-0 mt-4">
+          <DialogFooter className="gap-2 sm:gap-2 mt-4">
             <Button
               variant="ghost"
               onClick={() => setBatchDeleteOps(null)}
@@ -1239,7 +1252,7 @@ export function DirectoryListing({
               {t("moveItemsConfirm")}
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="gap-2 sm:gap-0 mt-4">
+          <DialogFooter className="gap-2 sm:gap-2 mt-4">
             <Button
               variant="ghost"
               onClick={() => setBatchPasteOps(null)}
