@@ -337,7 +337,14 @@ jobs:
             [[ -n "$profile" ]] && profile_args+=(--profile "$profile")
           done
 
-          clean_env=(env -i "PATH=$PATH" "RUNTIME_ENV_FILE=$runtime_env")
+          # Required only for Compose interpolation while certifying the image map.
+          # No service is started and this is not a deployment secret.
+          clean_env=(
+            env -i
+            "PATH=$PATH"
+            "RUNTIME_ENV_FILE=$runtime_env"
+            "WORKER_ZIP_HMAC_SECRET=compose-validation-only-not-a-secret"
+          )
           [[ -n ${HOME:-} ]] && clean_env+=("HOME=$HOME")
           [[ -n ${DOCKER_CONFIG:-} ]] && clean_env+=("DOCKER_CONFIG=$DOCKER_CONFIG")
           [[ -n ${XDG_RUNTIME_DIR:-} ]] && clean_env+=("XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR")
