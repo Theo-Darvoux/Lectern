@@ -249,6 +249,7 @@ def test_table_order_covers_every_application_table() -> None:
         "notifications",
         "uploads",
         "cas_staging_claims",
+        "collections",
         "materials",
         "directory_tags",
         "directory_likes",
@@ -257,6 +258,7 @@ def test_table_order_covers_every_application_table() -> None:
         "material_tags",
         "material_likes",
         "material_favourites",
+        "collection_items",
         "featured_items",
         "flags",
         "view_history",
@@ -269,7 +271,7 @@ def test_table_order_covers_every_application_table() -> None:
     }
     assert set(_TABLE_INSERT_ORDER) == expected
     assert set(_TABLE_INSERT_ORDER) == set(Base.metadata.tables)
-    assert len(_TABLE_INSERT_ORDER) == 28  # no duplicates
+    assert len(_TABLE_INSERT_ORDER) == 30  # no duplicates
 
 
 def test_table_order_no_duplicates() -> None:
@@ -282,7 +284,11 @@ def test_parent_tables_precede_children() -> None:
     assert order["users"] < order["materials"]
     assert order["users"] < order["notifications"]
     assert order["users"] < order["cas_staging_claims"]
+    assert order["users"] < order["collections"]
     assert order["directories"] < order["materials"]
+    assert order["collections"] < order["collection_items"]
+    assert order["directories"] < order["collection_items"]
+    assert order["materials"] < order["collection_items"]
     assert order["materials"] < order["material_versions"]
     assert order["pull_requests"] < order["material_versions"]
     assert order["material_versions"] < order["annotations"]

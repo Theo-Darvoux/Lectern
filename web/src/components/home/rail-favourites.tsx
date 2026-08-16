@@ -71,7 +71,7 @@ export function RailFavourites({
       <SectionHeader
         title={t("yourFavourites")}
         icon={<Bookmark className="h-4 w-4" />}
-        seeAllHref="/profile"
+        seeAllHref="/saved"
         seeAllLabel={t("viewAll")}
       />
       <div className="mt-3 rounded-xl border bg-card p-1.5 shadow-sm">

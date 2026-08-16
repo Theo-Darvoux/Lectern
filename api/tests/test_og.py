@@ -99,7 +99,11 @@ async def test_og_custom_env_overrides(client: AsyncClient) -> None:
     ):
         resp = await client.get(
             "/api/og",
-            headers={"X-Original-Path": "/", "Host": "intellect.clubcode.fr", "X-Forwarded-Proto": "https"},
+            headers={
+                "X-Original-Path": "/",
+                "Host": "intellect.clubcode.fr",
+                "X-Forwarded-Proto": "https",
+            },
         )
     assert resp.status_code == 200
     body = resp.text
@@ -107,7 +111,10 @@ async def test_og_custom_env_overrides(client: AsyncClient) -> None:
     assert '<meta name="theme-color" content="#8b5cf6">' in body
     assert '<meta property="og:site_name" content="INTellect Club Code">' in body
     assert '<meta property="og:title" content="INTellect — Cours &amp; Annales">' in body
-    assert '<meta property="og:description" content="Plateforme collaborative de cours et annales">' in body
+    assert (
+        '<meta property="og:description" content="Plateforme collaborative de cours et annales">'
+        in body
+    )
     assert '<meta property="og:locale" content="fr_FR">' in body
     assert '<meta name="twitter:site" content="@ClubCode">' in body
     assert '<meta name="twitter:creator" content="@ClubCodeDev">' in body
@@ -160,10 +167,16 @@ async def test_og_qcm_and_user_profile_resources(
     resp_user = await client.get("/api/og", headers={"X-Original-Path": f"/profile/{user_id}"})
     assert resp_user.status_code == 200
     assert "Alice Dupont" in resp_user.text
-    assert "Étudiante passionnée d&#x27;informatique" in resp_user.text or "Étudiante passionnée d'informatique" in resp_user.text
+    assert (
+        "Étudiante passionnée d&#x27;informatique" in resp_user.text
+        or "Étudiante passionnée d'informatique" in resp_user.text
+    )
 
     # QCM OG
     resp_qcm = await client.get("/api/og", headers={"X-Original-Path": f"/qcm/{qcm_id}"})
     assert resp_qcm.status_code == 200
     assert "QCM Réseaux S2" in resp_qcm.text
-    assert "Quiz d&#x27;entraînement sur les protocoles TCP/IP" in resp_qcm.text or "Quiz d'entraînement sur les protocoles TCP/IP" in resp_qcm.text
+    assert (
+        "Quiz d&#x27;entraînement sur les protocoles TCP/IP" in resp_qcm.text
+        or "Quiz d'entraînement sur les protocoles TCP/IP" in resp_qcm.text
+    )

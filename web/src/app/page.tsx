@@ -80,6 +80,7 @@ export default function HomePage() {
             displayName={displayName}
             subtitle={t("whatsHappening", { siteName: config?.site_name || "" })}
             isLoading={isLoading && !data}
+            onFeaturedSuccess={retry}
           />
 
           {/* ── Error banner ──────────────────────────────────── */}
