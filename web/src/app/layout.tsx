@@ -21,6 +21,11 @@ const ogImageUrl = process.env.OG_IMAGE_URL || "/api/og/image";
 const themeColor = process.env.OG_THEME_COLOR || process.env.PRIMARY_COLOR || "#3b82f6";
 const locale = process.env.OG_LOCALE || "fr_FR";
 
+const faviconUrl =
+  process.env.NEXT_PUBLIC_SITE_FAVICON_URL ||
+  process.env.SITE_FAVICON_URL ||
+  "/favicon.ico";
+
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
@@ -32,7 +37,7 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: ogTitle,
   description: ogDescription,
-  icons: { icon: process.env.SITE_FAVICON_URL || "/favicon.ico" },
+  icons: { icon: faviconUrl },
   openGraph: {
     title: ogTitle,
     description: ogDescription,

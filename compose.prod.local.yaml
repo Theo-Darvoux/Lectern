@@ -44,6 +44,7 @@ services:
         SITE_NAME: ${SITE_NAME:-Intellect}
         SITE_DESCRIPTION: ${SITE_DESCRIPTION:-Collaborative course materials platform}
         SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
+        NEXT_PUBLIC_SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
     command: null
     deploy:
       resources:

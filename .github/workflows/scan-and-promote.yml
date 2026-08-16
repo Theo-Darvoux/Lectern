@@ -82,6 +82,7 @@ jobs:
           format: sarif
           output: trivy-${{ inputs.component }}-${{ matrix.slug }}.sarif
           severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
           ignore-unfixed: true
           exit-code: '1'
       - name: Upload ${{ matrix.platform }} scan

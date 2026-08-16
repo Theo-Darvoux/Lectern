@@ -49,7 +49,7 @@ export default function LoginPage() {
         }
     }, [isAuthenticated, user, router]);
 
-    const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || t("title") || "Lectern";
+    const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || "Lectern";
 
     useEffect(() => {
         document.title = `${t("signIn")} • ${siteName}`;

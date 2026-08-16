@@ -1,6 +1,6 @@
 [project]
 name = "lectern-api"
-version = "0.1.0"
+version = "2.0.0"
 description = "API — Course materials platform backend"
 requires-python = ">=3.12, <3.13"
 dependencies = [

@@ -42,6 +42,11 @@ export default function HomePage() {
   const [reloadToken, setReloadToken] = useState(0);
 
   const retry = useCallback(() => setReloadToken((token) => token + 1), []);
+  const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || "Lectern";
+
+  useEffect(() => {
+    document.title = `${t("home")} • ${siteName}`;
+  }, [siteName, t]);
 
   useEffect(() => {
     const controller = new AbortController();
