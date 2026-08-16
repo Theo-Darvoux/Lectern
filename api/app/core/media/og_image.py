@@ -196,7 +196,7 @@ def generate_og_image(
     brand_text = site_name.upper()
     try:
         b_bbox = font_brand.getbbox(brand_text)  # type: ignore[union-attr]
-        b_w = b_bbox[2] - b_bbox[0]
+        b_w = int(b_bbox[2] - b_bbox[0])
     except Exception:
         b_w = len(brand_text) * 12
     brand_pill_w = b_w + 48
@@ -218,7 +218,7 @@ def generate_og_image(
         badge_text = badge.upper()
         try:
             bd_bbox = font_badge.getbbox(badge_text)  # type: ignore[union-attr]
-            bd_w = bd_bbox[2] - bd_bbox[0]
+            bd_w = int(bd_bbox[2] - bd_bbox[0])
         except Exception:
             bd_w = len(badge_text) * 10
         badge_pill_w = bd_w + 32
@@ -283,7 +283,7 @@ def generate_og_image(
     for feat in feature_pills:
         try:
             ft_bbox = font_footer.getbbox(feat)  # type: ignore[union-attr]
-            ft_w = ft_bbox[2] - ft_bbox[0]
+            ft_w = int(ft_bbox[2] - ft_bbox[0])
         except Exception:
             ft_w = len(feat) * 9
         p_w = ft_w + 34
@@ -304,10 +304,10 @@ def generate_og_image(
         h_clean = host.split(":")[0]
         try:
             h_bbox = font_footer_bold.getbbox(h_clean)  # type: ignore[union-attr]
-            h_w = h_bbox[2] - h_bbox[0]
+            h_w = int(h_bbox[2] - h_bbox[0])
         except Exception:
             h_w = len(h_clean) * 9
-        hx = card_margin_x + card_w - 45 - h_w
+        hx = int(card_margin_x + card_w - 45 - h_w)
         ui_draw.text((hx, footer_y + 6), h_clean, font=font_footer_bold, fill=(148, 163, 184, 255))
 
     img = Image.alpha_composite(img, ui_layer)
