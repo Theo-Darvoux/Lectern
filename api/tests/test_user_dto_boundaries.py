@@ -9,12 +9,17 @@ from app.models.pull_request import PRComment, PullRequest
 from app.models.user import User, UserRole
 
 
-async def _create_user(db: AsyncSession, *, name: str) -> User:
+async def _create_user(
+    db: AsyncSession,
+    *,
+    name: str,
+    role: UserRole = UserRole.STUDENT,
+) -> User:
     user = User(
         id=uuid.uuid4(),
         email=f"{uuid.uuid4().hex[:8]}@example.com",
         display_name=name,
-        role=UserRole.STUDENT,
+        role=role,
         onboarded=True,
         gdpr_consent=True,
         academic_year="2A",
@@ -56,9 +61,7 @@ async def test_public_profile_excludes_private_account_state(
     user = await _create_user(db_session, name="Public User")
     await db_session.commit()
 
-    # This route is intentionally unauthenticated. The response must be built
-    # from the public DTO rather than filtering a private DTO after the fact.
-    response = await client.get(f"/api/users/{user.id}")
+    response = await client.get(f"/api/users/{user.id}", headers=_auth_headers(user))
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == str(user.id)
@@ -89,7 +92,9 @@ async def test_public_pr_contribution_author_is_minimal(
     db_session.add(pr)
     await db_session.commit()
 
-    response = await client.get(f"/api/users/{user.id}/contributions?type=prs")
+    response = await client.get(
+        f"/api/users/{user.id}/contributions?type=prs", headers=_auth_headers(user)
+    )
     assert response.status_code == 200
     item = response.json()["items"][0]
     author = item["author"]
@@ -140,7 +145,9 @@ async def test_public_material_contribution_does_not_expose_version_storage_meta
     db_session.add(version)
     await db_session.commit()
 
-    response = await client.get(f"/api/users/{author.id}/contributions?type=materials")
+    response = await client.get(
+        f"/api/users/{author.id}/contributions?type=materials", headers=_auth_headers(author)
+    )
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["id"] == str(material.id)
@@ -199,10 +206,11 @@ async def test_annotation_contributions_require_auth_and_hide_deleted_parent(
     assert hidden.json()["total"] == 0
 
 
-async def test_anonymous_browse_projects_public_version_metadata(
+async def test_guest_browse_projects_public_version_metadata(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     author = await _create_user(db_session, name="Browse Author")
+    guest = await _create_user(db_session, name="Guest User", role=UserRole.GUEST)
     material = Material(
         title="Browse public projection",
         slug=f"browse-public-{uuid.uuid4().hex}",
@@ -224,10 +232,10 @@ async def test_anonymous_browse_projects_public_version_metadata(
     db_session.add(version)
     await db_session.commit()
 
-    anonymous = await client.get("/api/browse")
-    assert anonymous.status_code == 200
+    guest_resp = await client.get("/api/browse", headers=_auth_headers(guest))
+    assert guest_resp.status_code == 200
     public_item = next(
-        item for item in anonymous.json()["materials"] if item["id"] == str(material.id)
+        item for item in guest_resp.json()["materials"] if item["id"] == str(material.id)
     )
     public_version = public_item["current_version_info"]
     assert public_version["file_name"] == "visible.pdf"

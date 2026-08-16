@@ -25,6 +25,7 @@ async def list_comments(
     target_type: Annotated[str, Query(alias="targetType")],
     target_id: Annotated[str, Query(alias="targetId")],
     pagination: Annotated[PaginationParams, Depends()],
+    user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> PaginatedResponse[CommentOut]:
     comments, total = await get_comments(

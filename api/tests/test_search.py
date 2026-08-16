@@ -381,19 +381,12 @@ async def test_search_is_liked_false_for_other_material(
 
 
 @pytest.mark.asyncio
-async def test_search_no_like_query_for_anonymous(
+async def test_search_unauthenticated_returns_401(
     client: AsyncClient, db_session: AsyncSession, mock_meili_client: AsyncMock
 ):
-    """Anonymous search — no DB like queries executed."""
-    await db_session.commit()
-    mock_meili_client.multi_search = AsyncMock(
-        return_value=_meili_response(mat_hits=[{"id": str(uuid.uuid4()), "title": "Paper"}])
-    )
-    with patch("app.services.search.select") as mock_select:
-        response = await client.get("/api/search?query=test")
-        assert response.status_code == 200
-        # select should not be called for likes when no user
-        mock_select.assert_not_called()
+    """Unauthenticated search is rejected with 401 Unauthorized."""
+    response = await client.get("/api/search?query=test")
+    assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -735,32 +728,6 @@ async def test_search_client_replaced_after_setup_meilisearch():
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_search_anonymous_enforced(mock_redis):
-    """Anonymous users are blocked after 30 requests (prod) / pass in dev."""
-    from app.config import settings
-    from app.core.common.exceptions import RateLimitError
-    from app.dependencies.rate_limit import rate_limit_search
-
-    if settings.is_dev:
-        pytest.skip("Rate limit disabled in dev")
-
-    request = MagicMock()
-    request.client.host = "1.2.3.4"
-
-    # Simulate counter already at 31
-    pipe = AsyncMock()
-    pipe.__aenter__ = AsyncMock(return_value=pipe)
-    pipe.__aexit__ = AsyncMock(return_value=None)
-    pipe.incr = AsyncMock(return_value=pipe)
-    pipe.expire = AsyncMock(return_value=pipe)
-    pipe.execute = AsyncMock(return_value=[31, True])
-    mock_redis.pipeline = MagicMock(return_value=pipe)
-
-    with pytest.raises(RateLimitError):
-        await rate_limit_search(request=request, redis=mock_redis, user=None)
-
-
-@pytest.mark.asyncio
 async def test_rate_limit_search_authenticated_higher_limit(mock_redis):
     """Authenticated users have 120/min limit."""
     from app.config import settings
@@ -771,6 +738,7 @@ async def test_rate_limit_search_authenticated_higher_limit(mock_redis):
 
     user = MagicMock()
     user.id = uuid.uuid4()
+    user.role = UserRole.STUDENT
 
     request = MagicMock()
     request.client.host = "1.2.3.4"
@@ -800,6 +768,7 @@ async def test_rate_limit_search_authenticated_blocked_at_121(mock_redis):
 
     user = MagicMock()
     user.id = uuid.uuid4()
+    user.role = UserRole.STUDENT
 
     request = MagicMock()
     request.client.host = "1.2.3.4"

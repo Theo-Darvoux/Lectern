@@ -292,7 +292,7 @@ async def test_public_profile_serializes_unsafe_legacy_avatar_as_null(
     test_user.avatar_url = unsafe_ref
     await db_session.commit()
 
-    response = await client.get(f"/api/users/{test_user.id}")
+    response = await client.get(f"/api/users/{test_user.id}", headers=auth_headers(test_user))
 
     assert response.status_code == 200
     assert response.json()["avatar_url"] is None
@@ -308,7 +308,7 @@ async def test_public_profile_preserves_safe_owned_avatar_reference(
     test_user.avatar_url = avatar_key
     await db_session.commit()
 
-    response = await client.get(f"/api/users/{test_user.id}")
+    response = await client.get(f"/api/users/{test_user.id}", headers=auth_headers(test_user))
 
     assert response.status_code == 200
     assert response.json()["avatar_url"] == avatar_key
@@ -386,7 +386,9 @@ async def test_avatar_endpoint_fails_closed_for_unsafe_legacy_reference(
     await db_session.commit()
 
     with patch("app.routers.users.generate_presigned_get", new_callable=AsyncMock) as presign:
-        response = await client.get(f"/api/users/{test_user.id}/avatar")
+        response = await client.get(
+            f"/api/users/{test_user.id}/avatar", headers=auth_headers(test_user)
+        )
 
     assert response.status_code == 404
     presign.assert_not_awaited()
@@ -407,7 +409,11 @@ async def test_avatar_endpoint_presigns_only_own_avatar_namespace(
         new_callable=AsyncMock,
         return_value="https://storage.example/signed",
     ) as presign:
-        response = await client.get(f"/api/users/{test_user.id}/avatar", follow_redirects=False)
+        response = await client.get(
+            f"/api/users/{test_user.id}/avatar",
+            headers=auth_headers(test_user),
+            follow_redirects=False,
+        )
 
     assert response.status_code in (302, 307)
     assert response.headers["location"] == "https://storage.example/signed"
@@ -425,7 +431,11 @@ async def test_avatar_endpoint_redirects_only_trusted_google_avatar(
     await db_session.commit()
 
     with patch("app.routers.users.generate_presigned_get", new_callable=AsyncMock) as presign:
-        response = await client.get(f"/api/users/{test_user.id}/avatar", follow_redirects=False)
+        response = await client.get(
+            f"/api/users/{test_user.id}/avatar",
+            headers=auth_headers(test_user),
+            follow_redirects=False,
+        )
 
     assert response.status_code in (302, 307)
     assert response.headers["location"] == google_avatar

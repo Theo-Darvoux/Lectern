@@ -6,13 +6,13 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common.exceptions import NotFoundError, UnauthorizedError
+from app.core.common.exceptions import NotFoundError
 from app.core.database.database import get_db
 from app.core.storage.facade import generate_presigned_get
-from app.dependencies.auth import CurrentUser, get_optional_user
+from app.dependencies.auth import CurrentUser, ReadUser
 from app.dependencies.pagination import PaginationParams
 from app.models.material import Material, MaterialFavourite, MaterialVersion
-from app.models.user import User, UserRole
+from app.models.user import UserRole
 from app.schemas.collection import SavedLibraryOut
 from app.schemas.common import PaginatedResponse
 from app.schemas.material import MaterialDetailResponse, project_material_detail
@@ -198,6 +198,7 @@ async def delete_me(
 async def get_user_profile(
     user_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: CurrentUser,
 ) -> PublicUserProfileOut:
     target = await get_user_by_id(db, user_id)
     if not target:
@@ -211,6 +212,7 @@ async def get_user_profile(
 async def get_user_avatar(
     user_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: ReadUser,
 ) -> RedirectResponse:
     target = await get_user_by_id(db, user_id)
     if not target or not target.avatar_url:
@@ -239,23 +241,19 @@ async def get_contributions(
     user_id: str,
     pagination: Annotated[PaginationParams, Depends()],
     db: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User | None, Depends(get_optional_user)] = None,
+    user: CurrentUser,
     type: Annotated[str, Query()] = "prs",
 ) -> PaginatedResponse[typing.Any]:
     target = await get_user_by_id(db, user_id)
     if not target:
         raise NotFoundError("User not found")
-    if type == "annotations" and user is None:
-        # The canonical annotation reader requires an authenticated read principal.
-        # A public profile must not become an alternate anonymous path to bodies.
-        raise UnauthorizedError("Authentication required to read annotation contributions")
     items, total = await get_user_contributions(
         db,
         user_id,
         contribution_type=type,
         limit=pagination.limit,
         offset=pagination.offset,
-        current_user_id=user.id if user else None,
+        current_user_id=user.id,
     )
 
     directory_paths = {}
