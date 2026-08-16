@@ -37,6 +37,7 @@ import {
     Clock,
     Eye,
     ListChecks,
+    ExternalLink,
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -114,6 +115,8 @@ function OperationCard({
     });
 
     const isQcm = (op as any).file_mime_type === MIME_QCM;
+    const isLink = (op as any).type === "link" || !!(op as any).metadata?.url;
+    const linkUrl = (op as any).metadata?.url as string | undefined;
     const hasQcmDraft = isQcm && !!(op as any).metadata?.qcm_draft;
     const qcmEditHref = isQcm && op.op === "edit_material"
         ? `/qcm/${op.material_id}/edit?draftIndex=${index}`
@@ -124,13 +127,18 @@ function OperationCard({
     return (
         <div className={`rounded-lg border transition-colors ${expired ? "border-red-300 bg-red-50/50 dark:border-red-800 dark:bg-red-950/20" : expiringSoon ? "border-amber-300 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20" : ""}`}>
             <div className="flex items-center gap-3 p-3">
-                <div className={`shrink-0 ${expired ? "text-red-400" : isQcm ? "text-violet-500" : color}`}>
-                    {isQcm ? <ListChecks className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                <div className={`shrink-0 ${expired ? "text-red-400" : isQcm ? "text-violet-500" : isLink ? "text-sky-600 dark:text-sky-400" : color}`}>
+                    {isQcm ? <ListChecks className="h-4 w-4" /> : isLink ? <ExternalLink className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
                 </div>
                 <div className="min-w-0 flex-1">
                     <p className={`text-sm font-medium leading-tight ${expired ? "line-through text-muted-foreground" : ""}`}>
                         {label}
                     </p>
+                    {isLink && linkUrl && (
+                        <p className="text-[11px] text-muted-foreground truncate font-mono mt-0.5 max-w-[200px] sm:max-w-xs">
+                            {linkUrl}
+                        </p>
+                    )}
                     {expired && hasFileKey(op) && (
                         <p className="text-[11px] text-red-500 flex items-center gap-1 mt-0.5">
                             <AlertTriangle className="h-3 w-3" />
@@ -615,7 +623,7 @@ export function ReviewDrawer() {
                             {t("discardDraftDescription", { count: operations.length })}
                         </DialogDescription>
                     </DialogHeader>
-                    <DialogFooter className="gap-2 sm:gap-0 mt-2">
+                    <DialogFooter className="gap-2 sm:gap-2 mt-2">
                         <Button
                             variant="ghost"
                             onClick={() => setShowDiscardConfirm(false)}

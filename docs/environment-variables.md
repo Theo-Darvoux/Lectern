@@ -186,7 +186,15 @@ edited live in the admin dashboard.
 | `REPO_URL` | *(unset)* | Source-repository URL for the footer/About links (can also be set as `NEXT_PUBLIC_REPO_URL`). Hidden when empty. |
 | `SITE_LOGO_URL` | *(unset)* | Logo image URL. |
 | `SITE_FAVICON_URL` | *(unset)* | Favicon URL. |
-| `OG_IMAGE_URL` | *(unset)* | Open Graph preview image. |
+| `OG_IMAGE_URL` | *(unset)* | Custom Open Graph preview image. When unset, a dynamic 1200x630 branded card is generated automatically via `/api/og/image`. |
+| `OG_TITLE` | *(unset)* | Open Graph title override for site / homepage (falls back to `SITE_NAME`). |
+| `OG_DESCRIPTION` | *(unset)* | Open Graph description override for site / homepage (falls back to `SITE_DESCRIPTION`). |
+| `OG_THEME_COLOR` | *(unset)* | Embed accent / theme color (hex format, e.g. `#8b5cf6`). Sets Discord embed left border accent. Falls back to `PRIMARY_COLOR`. |
+| `OG_TAGLINE` | `Partage collaboratif de cours & annales` | Tagline shown as subtitle/badge on dynamic OG image cards. |
+| `OG_SITE_NAME` | *(unset)* | Site name override in Open Graph metadata (falls back to `SITE_NAME`). |
+| `OG_LOCALE` | `fr_FR` | Open Graph locale tag. |
+| `OG_TWITTER_SITE` | *(unset)* | Twitter / X site handle (e.g. `@ClubCode`). |
+| `OG_TWITTER_CREATOR` | *(unset)* | Twitter / X creator handle (e.g. `@ClubCodeDev`). |
 | `FOOTER_LOGO_URL` | *(unset)* | Logo shown in the footer. |
 | `BG_WATERMARK_URL` | *(unset)* | Background watermark image. |
 | `BG_WATERMARK_OPACITY_LIGHT` | *(unset)* | Watermark opacity in light mode (0–1). |

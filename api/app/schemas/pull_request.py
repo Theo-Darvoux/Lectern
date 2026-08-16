@@ -25,6 +25,7 @@ ALLOWED_MATERIAL_TYPES = {
     "document",
     "other",
     "qcm",
+    "link",
 }
 ALLOWED_DIRECTORY_TYPES = {member.value for member in DirectoryType}
 MAX_TAGS = 20

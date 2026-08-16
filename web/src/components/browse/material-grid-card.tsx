@@ -12,6 +12,8 @@ import { useTranslations } from "next-intl";
 import { TYPE_COLORS, TYPE_ICONS, EXT_ICONS } from "@/lib/material-icons";
 import { getFileTypeStyle } from "@/components/home/file-type-display";
 import { apiFetch } from "@/lib/api-client";
+import { useExternalLinkStore } from "@/lib/external-link-store";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import type { MaterialDetail } from "@/components/home/types";
 import { useInView } from "@/hooks/use-in-view";
@@ -228,6 +230,11 @@ function MaterialGridCardImpl({
     }
   };
 
+  const router = useRouter();
+  const openLink = useExternalLinkStore((s) => s.openLink);
+  const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
+  const isLink = type === "link" || !!targetUrl;
+
   const handleCardClick = (e: React.MouseEvent) => {
     if (staged === "deleted") {
       e.preventDefault();
@@ -236,6 +243,11 @@ function MaterialGridCardImpl({
     if (selectMode && onToggleSelect) {
       e.preventDefault();
       onToggleSelect(navIndex ?? 0, e);
+      return;
+    }
+    if (isLink && targetUrl && !onNavigate) {
+      e.preventDefault();
+      openLink(targetUrl, (path) => router.push(path));
       return;
     }
     if (e.ctrlKey || e.metaKey) {

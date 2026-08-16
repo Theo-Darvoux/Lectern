@@ -27,6 +27,7 @@ import {
     AlertCircle,
     FileCode2,
     RefreshCw,
+    ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useStagingStore, type Operation } from "@/lib/staging-store";
@@ -36,6 +37,7 @@ import { apiRequest } from "@/lib/api-client";
 import { uploadFile, logicalFileSize } from "@/lib/upload-client";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
+import { normalizeTargetUrl } from "@/lib/url-utils";
 import type { Monaco } from "@monaco-editor/react";
 import { useTranslations } from "next-intl";
 
@@ -395,6 +397,7 @@ export function FileEditDialog({
     const tWizard = useTranslations("PRWizard");
     const tAuto = useTranslations("AutoTitle");
     const tUpload = useTranslations("Upload");
+    const tLink = useTranslations("NewLink");
 
     const addOperation = useStagingStore((s) => s.addOperation);
     const { resolvedTheme } = useTheme();
@@ -412,6 +415,10 @@ export function FileEditDialog({
         ? rawTags.map(String).filter(Boolean)
         : [];
 
+    const currentMetadata = (target.data.metadata ?? {}) as Record<string, unknown>;
+    const currentUrl = String(currentMetadata.url ?? currentMetadata.link ?? "");
+    const isLink = isMaterial && (target.data.type === "link" || !!currentMetadata.url);
+
     const versionInfo = target.data.current_version_info as Record<
         string,
         unknown
@@ -419,18 +426,19 @@ export function FileEditDialog({
     const currentMime = String(versionInfo?.file_mime_type ?? "");
     const currentFileName = String(versionInfo?.file_name ?? "");
     const currentVersionLock = versionInfo?.version_lock as number | undefined;
-    const canEditText = isMaterial && isTextEditable(currentMime, currentFileName);
+    const canEditText = isMaterial && !isLink && isTextEditable(currentMime, currentFileName);
     const logicalFileName = currentFileName.endsWith(".gz")
         ? currentFileName.slice(0, -3)
         : currentFileName;
 
     // ── Tab state ─────────────────────────────────────────────────────────
     const [activeTab, setActiveTab] = useState<"metadata" | "content">(
-        isMaterial ? "content" : "metadata",
+        isMaterial && !isLink ? "content" : "metadata",
     );
 
     // ── Metadata form state ───────────────────────────────────────────────
     const [title, setTitle] = useState(currentTitle);
+    const [url, setUrl] = useState(currentUrl);
     const [description, setDescription] = useState(currentDescription);
     const [tags, setTags] = useState<string[]>(currentTags);
 
@@ -457,9 +465,10 @@ export function FileEditDialog({
     const handleOpenChange = (next: boolean) => {
         if (next) {
             setTitle(currentTitle);
+            setUrl(currentUrl);
             setDescription(currentDescription);
             setTags(currentTags);
-            setActiveTab(isMaterial ? "content" : "metadata");
+            setActiveTab(isMaterial && !isLink ? "content" : "metadata");
             setEditorText("");
             setLoadError("");
             setDiffSummary("");
@@ -494,7 +503,8 @@ export function FileEditDialog({
     const metadataChanged =
         title !== currentTitle ||
         description !== currentDescription ||
-        hasTagsChanged();
+        hasTagsChanged() ||
+        (isLink && url.trim() !== currentUrl.trim());
 
     // ── Content dirty check ───────────────────────────────────────────────
     const textChanged =
@@ -520,6 +530,9 @@ export function FileEditDialog({
                     ? { description: description.trim() || null }
                     : {}),
                 ...(hasTagsChanged() ? { tags } : {}),
+                ...(isLink && url.trim() !== currentUrl.trim()
+                    ? { metadata: { ...currentMetadata, url: normalizeTargetUrl(url.trim()) } }
+                    : {}),
                 version_lock: currentVersionLock,
             };
         } else {
@@ -700,7 +713,7 @@ export function FileEditDialog({
                     className="flex min-h-0 flex-1 flex-col"
                 >
                     <TabsList className="shrink-0 self-start">
-                        {isMaterial && (
+                        {isMaterial && !isLink && (
                             <TabsTrigger value="content" className="gap-1.5">
                                 <FileCode2 className="h-3.5 w-3.5" />
                                 {canEditText ? t("editText") : t("replaceFile")}
@@ -727,6 +740,27 @@ export function FileEditDialog({
                                 autoFocus
                             />
                         </div>
+                        {isLink && (
+                            <div className="space-y-1.5">
+                                <label
+                                    htmlFor="edit-url"
+                                    className="text-sm font-medium"
+                                >
+                                    {tLink("targetUrl")}
+                                </label>
+                                <div className="relative">
+                                    <Input
+                                        id="edit-url"
+                                        value={url}
+                                        onChange={(e) => setUrl(e.target.value)}
+                                        placeholder={tLink("urlPlaceholder")}
+                                        disabled={isLoading}
+                                        className="font-mono text-xs pl-8"
+                                    />
+                                    <ExternalLink className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                                </div>
+                            </div>
+                        )}
                         <div className="space-y-1.5">
                             <label
                                 htmlFor="edit-desc"

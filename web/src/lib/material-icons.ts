@@ -1,5 +1,6 @@
 import {
     ClipboardCheck,
+    ExternalLink,
     File,
     FileArchive,
     FileAudio,
@@ -23,6 +24,7 @@ export const TYPE_COLORS: Record<string, string> = {
     discussion: "bg-pink-100 text-pink-800",
     video: "bg-red-100 text-red-800",
     qcm: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
+    link: "bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300",
     other: "bg-gray-100 text-gray-800",
 };
 
@@ -35,6 +37,7 @@ export const TYPE_ICONS: Record<string, React.ElementType> = {
     discussion: MessageSquare,
     video: Video,
     qcm: ListChecks,
+    link: ExternalLink,
     other: File,
     document: FileText,
 };

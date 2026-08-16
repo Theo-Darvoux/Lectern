@@ -7,14 +7,29 @@ import { MaterialPreview } from "./material-preview";
 import { getMaterialBrowsePath } from "./file-type-display";
 import { SectionHeader } from "./section-header";
 import type { MaterialDetail } from "./types";
+import { useExternalLinkStore } from "@/lib/external-link-store";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 
 const MAX_ITEMS = 6;
 
 function FavouriteRow({ material }: { material: MaterialDetail }) {
+  const router = useRouter();
+  const openLink = useExternalLinkStore((s) => s.openLink);
+  const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
+  const isLink = material.type === "link" || !!targetUrl;
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (isLink && targetUrl) {
+      e.preventDefault();
+      openLink(targetUrl, (path) => router.push(path));
+    }
+  };
+
   return (
     <Link
       href={getMaterialBrowsePath(material)}
+      onClick={handleClick}
       className="group flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
     >
       <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-md border bg-muted">

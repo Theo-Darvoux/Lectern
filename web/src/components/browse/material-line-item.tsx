@@ -15,6 +15,8 @@ import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu
 import { useLikeOverrides } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension, MIME_QCM } from "@/lib/file-utils";
 import { EXT_ICONS, TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
+import { useExternalLinkStore } from "@/lib/external-link-store";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 
 
@@ -143,6 +145,11 @@ function MaterialLineItemImpl({
         if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
     };
 
+    const router = useRouter();
+    const openLink = useExternalLinkStore((s) => s.openLink);
+    const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
+    const isLink = type === "link" || !!targetUrl;
+
     const handleCardClick = (e: React.MouseEvent) => {
         if (staged === "deleted") {
             e.preventDefault();
@@ -151,6 +158,11 @@ function MaterialLineItemImpl({
         if (selectMode && onToggleSelect) {
             e.preventDefault();
             onToggleSelect(navIndex ?? 0, e);
+            return;
+        }
+        if (isLink && targetUrl && !onNavigate) {
+            e.preventDefault();
+            openLink(targetUrl, (path) => router.push(path));
             return;
         }
         if (e.ctrlKey || e.metaKey) {

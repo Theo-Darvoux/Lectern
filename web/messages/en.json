@@ -302,6 +302,7 @@
     "moreActions": "More folder actions",
     "paste": "Paste (",
     "newFolder": "New Folder",
+    "newLink": "New link",
     "cut": "Cut",
     "delete": "Delete",
     "exit": "Exit",
@@ -499,6 +500,7 @@
     "syllabus": "Syllabus",
     "examFormat": "Exam Format",
     "tags": "Tags",
+    "targetUrl": "Destination URL",
     "author": "Author",
     "size": "Size",
     "downloads": "Downloads",
@@ -726,6 +728,7 @@
     "video": "Video",
     "other": "Other",
     "qcm": "QCM",
+    "link": "External Link",
     "folder": "Folder",
     "file": "File",
     "statusOpen": "statusOpen",
@@ -741,8 +744,11 @@
   "PRDetails": {
     "summary": {
       "create_material": "Added « {name} »",
+      "create_link": "Added link « {name} »",
       "edit_material": "Edited « {name} »",
+      "edit_link": "Edited link « {name} »",
       "delete_material": "Deleted « {name} »",
+      "delete_link": "Deleted link « {name} »",
       "create_directory": "Created folder « {name} »",
       "edit_directory": "Renamed folder « {name} »",
       "delete_directory": "Deleted folder « {name} »",
@@ -751,8 +757,11 @@
     },
     "labels": {
       "create_material": "Added document",
+      "create_link": "Added link",
       "edit_material": "Edited document",
+      "edit_link": "Edited link",
       "delete_material": "Deleted document",
+      "delete_link": "Deleted link",
       "create_directory": "Created folder",
       "edit_directory": "Renamed folder",
       "delete_directory": "Deleted folder",
@@ -820,7 +829,8 @@
     "fields": {
       "type": "Type",
       "tags": "Tags",
-      "description": "Description"
+      "description": "Description",
+      "url": "Destination URL"
     }
   },
   "Roles": {
@@ -962,6 +972,44 @@
     "draft": "Draft",
     "createDirectly": "Create directly",
     "addedToDraft": "Added to draft: Folder \"{name}\""
+  },
+  "NewLink": {
+    "title": "New link",
+    "descBase": "Adding a link",
+    "descIn": " in {name}",
+    "descRoot": " at the root",
+    "titleLabel": "Title",
+    "titlePlaceholder": "e.g. Course Slides, Official Documentation",
+    "urlLabel": "Destination URL",
+    "urlPlaceholder": "https://example.com or /browse/...",
+    "description": "Description",
+    "descriptionPlaceholder": "What does this link lead to?",
+    "optional": "(optional)",
+    "tags": "Tags",
+    "tagsPlaceholder": "link, external...",
+    "cancel": "Cancel",
+    "draft": "Draft",
+    "createDirectly": "Create directly",
+    "addedToDraft": "Added link \"{name}\" to draft",
+    "invalidUrl": "Please enter a valid URL",
+    "targetUrl": "Destination URL"
+  },
+  "ExternalLinkDialog": {
+    "title": "Hold on! You're leaving WikINT",
+    "description": "This link is taking you to an external website.",
+    "disclaimer": "WikINT does not control external websites. Make sure you trust this link before continuing.",
+    "trustDomain": "Don't warn me again for {domain}",
+    "cancel": "Cancel",
+    "visitSite": "Visit Site"
+  },
+  "LinkViewer": {
+    "targetUrl": "Destination URL",
+    "openLink": "Open Link",
+    "copyLink": "Copy URL",
+    "linkCopied": "URL copied to clipboard",
+    "noUrl": "No destination URL configured for this link.",
+    "externalSite": "External Website",
+    "internalLink": "Internal Link"
   },
   "Staging": {
     "title": "Review Changes",

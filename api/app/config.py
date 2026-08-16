@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     site_logo_url: str | None = None
     site_favicon_url: str | None = None
     og_image_url: str | None = None
+    og_title: str | None = None
+    og_description: str | None = None
+    og_theme_color: str | None = None
+    og_tagline: str | None = None
+    og_site_name: str | None = None
+    og_locale: str = "fr_FR"
+    og_twitter_site: str | None = None
+    og_twitter_creator: str | None = None
     bg_watermark_url: str | None = None
     bg_watermark_opacity_light: float | None = None
     bg_watermark_opacity_dark: float | None = None

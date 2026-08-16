@@ -158,13 +158,17 @@ SITE_DESCRIPTION=Lecture notes and past exams
 PRIMARY_COLOR=#7c3aed
 SITE_LOGO_URL=https://cdn.example.com/logo.svg
 SITE_FAVICON_URL=https://cdn.example.com/favicon.ico
-OG_IMAGE_URL=https://cdn.example.com/og.png
+# OG_IMAGE_URL is optional: when unset, a dynamic 1200x630 branded card is auto-generated!
+# OG_IMAGE_URL=https://cdn.example.com/og.png
+OG_TITLE=My Course Wiki — Notes & Exams
+OG_THEME_COLOR=#7c3aed
+OG_TAGLINE=Collaborative notes and exams platform
 FOOTER_TEXT=© 2026 My School
 ORGANIZATION_URL=https://www.myschool.edu
 ```
 
 There's also a background watermark (`BG_WATERMARK_URL` + the two opacity
-values) and an advanced multi-color wordmark (`SITE_NAME_STYLE`).
+values), dynamic social share cards (`/api/og/image` with `OG_THEME_COLOR`, `OG_TITLE`, `OG_TAGLINE`), and an advanced multi-color wordmark (`SITE_NAME_STYLE`).
 
 ### Designing the wordmark (`SITE_NAME_STYLE`)
 
