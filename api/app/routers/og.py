@@ -27,9 +27,7 @@ from app.services.user import get_user_by_id
 router = APIRouter(prefix="/api", tags=["og"])
 
 
-async def _resolve_resource(
-    db: AsyncSession, path: str
-) -> tuple[str, str | None, str, str] | None:
+async def _resolve_resource(db: AsyncSession, path: str) -> tuple[str, str | None, str, str] | None:
     """Best-effort per-resource (title, description, badge, footer_tags) for a known route.
 
     Resolved as an anonymous viewer would see it, so private resources simply
@@ -51,7 +49,12 @@ async def _resolve_resource(
                 material = result.get("material") or {}
                 title = material.get("title")
                 if title:
-                    return title, material.get("description"), "Document", "Document|Téléchargement|Partage"
+                    return (
+                        title,
+                        material.get("description"),
+                        "Document",
+                        "Document|Téléchargement|Partage",
+                    )
             elif result.get("type") == "directory_listing":
                 directory = result.get("directory") or {}
                 name = directory.get("name")
@@ -67,7 +70,12 @@ async def _resolve_resource(
         if root_seg == "qcm" and len(segments) >= 2 and segments[1] not in {"new", "preview"}:
             material = await get_material_by_id(db, segments[1])
             if material is not None and material.title:
-                return material.title, material.description, "QCM & Quiz", "QCM Interactif|Auto-évaluation|Révisions"
+                return (
+                    material.title,
+                    material.description,
+                    "QCM & Quiz",
+                    "QCM Interactif|Auto-évaluation|Révisions",
+                )
     except Exception:
         return None
 
@@ -91,7 +99,13 @@ async def render_og_image(
     """Generate a dynamic 1200x630 Open Graph preview image (PNG)."""
     site_name = settings.og_site_name or settings.site_name or "Lectern"
     final_title = title or settings.og_title or site_name
-    final_subtitle = subtitle or settings.og_description or settings.site_description or settings.og_tagline or "Plateforme collaborative de cours & annales"
+    final_subtitle = (
+        subtitle
+        or settings.og_description
+        or settings.site_description
+        or settings.og_tagline
+        or "Plateforme collaborative de cours & annales"
+    )
     final_badge = badge or settings.og_tagline or "Plateforme Académique"
     final_theme = theme or settings.og_theme_color or settings.primary_color or "#6366f1"
     final_tags = tags or "Cours & Annales|Partage Collaboratif|QCM & Quiz"

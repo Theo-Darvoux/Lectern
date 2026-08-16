@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
+from app.models.content_status import ContentStatus
 from app.models.security import VirusScanResult
 
 
@@ -52,6 +53,7 @@ class MaterialOut(BaseModel):
     slug: str
     description: str | None
     type: str
+    status: ContentStatus = ContentStatus.CURRENT
     current_version: int
     parent_material_id: uuid.UUID | None
     author_id: uuid.UUID | None

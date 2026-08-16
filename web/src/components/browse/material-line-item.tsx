@@ -18,6 +18,7 @@ import { EXT_ICONS, TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
 import { useExternalLinkStore } from "@/lib/external-link-store";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { ContentStatusBadge, normalizeContentStatus } from "@/components/content-status-badge";
 
 
 interface MaterialLineItemProps {
@@ -69,6 +70,7 @@ function MaterialLineItemImpl({
     const slug = String(material.slug ?? "");
     const id = String(material.id ?? "");
     const type = String(material.type ?? "other");
+    const status = normalizeContentStatus(material.status);
     const attachmentCount = draftAttachmentCount ?? Number(material.attachment_count ?? 0);
     const likeOverride = useLikeOverrides((s) => s.materialOverrides[id]);
     const likeCount = likeOverride !== undefined ? likeOverride.likeCount : Number(material.like_count ?? 0);
@@ -261,7 +263,8 @@ function MaterialLineItemImpl({
                             </span>
                         )}
                     </div>
-                    <div className="flex items-center gap-1.5 mt-0.5">
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <ContentStatusBadge status={status} />
                         <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${badgeColor}`}>
                             {badgeLabel}
                         </span>

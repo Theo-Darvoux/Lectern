@@ -1,7 +1,9 @@
 "use client";
 
+
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Trash2, Search, CheckCircle, XCircle } from "lucide-react";
+import {Trash2, Search, CheckCircle, XCircle, UsersRound} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -17,7 +19,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useTranslations } from "next-intl";
+import {useTranslations, useLocale} from "next-intl";
 
 interface AdminUser {
     id: string;
@@ -46,6 +48,8 @@ const ROLE_BADGE: Record<string, string> = {
 
 export default function AdminUsersPage() {
     const t = useTranslations("Admin.Users");
+    const locale = useLocale();
+    const fr = locale.toLowerCase().startsWith("fr");
     const { user } = useAuth();
     const canManageRoles = user?.role === "bureau" || user?.role === "vieux";
     const { show } = useConfirmDialog();
@@ -219,6 +223,12 @@ export default function AdminUsersPage() {
                         <SelectItem value="guest">{t("roleLabels.guest")}</SelectItem>
                     </SelectContent>
                 </Select>
+                <Button asChild variant="outline" className="gap-2 whitespace-nowrap">
+                    <Link href="/admin/users/bulk">
+                        <UsersRound className="h-4 w-4" />
+                        {fr ? "Gestion en masse" : "Bulk manage"}
+                    </Link>
+                </Button>
                 <span className="text-sm text-muted-foreground whitespace-nowrap">
                     {t("userCount", { count: total })}
                 </span>

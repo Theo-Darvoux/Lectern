@@ -45,7 +45,9 @@ def _get_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | Imag
     return ImageFont.load_default()
 
 
-def hex_to_rgb(hex_str: str | None, default: tuple[int, int, int] = (124, 58, 237)) -> tuple[int, int, int]:
+def hex_to_rgb(
+    hex_str: str | None, default: tuple[int, int, int] = (124, 58, 237)
+) -> tuple[int, int, int]:
     """Parse a hex color string (#rgb, #rrggbb, #rrggbbaa) into an (R, G, B) tuple."""
     if not hex_str:
         return default
@@ -210,8 +212,12 @@ def generate_og_image(
         width=1,
     )
     # Glowing status dot
-    ui_draw.ellipse((brand_pill_x + 14, pill_y + 13, brand_pill_x + 24, pill_y + 23), fill=(*theme_rgb, 255))
-    ui_draw.text((brand_pill_x + 32, pill_y + 8), brand_text, font=font_brand, fill=(255, 255, 255, 255))
+    ui_draw.ellipse(
+        (brand_pill_x + 14, pill_y + 13, brand_pill_x + 24, pill_y + 23), fill=(*theme_rgb, 255)
+    )
+    ui_draw.text(
+        (brand_pill_x + 32, pill_y + 8), brand_text, font=font_brand, fill=(255, 255, 255, 255)
+    )
 
     # Header: Right Category Badge
     if badge:
@@ -231,7 +237,9 @@ def generate_og_image(
             outline=(*theme_rgb, 140),
             width=1,
         )
-        ui_draw.text((badge_pill_x + 16, pill_y + 10), badge_text, font=font_badge, fill=(255, 255, 255, 255))
+        ui_draw.text(
+            (badge_pill_x + 16, pill_y + 10), badge_text, font=font_badge, fill=(255, 255, 255, 255)
+        )
 
     # Main Content Area
     content_x = card_margin_x + 45
@@ -258,7 +266,9 @@ def generate_og_image(
     if subtitle and subtitle.strip():
         sub_lines = wrap_text(subtitle.strip(), font_sub, content_max_w, max_lines=2)
 
-    total_text_h = (len(title_lines) * line_spacing) + (len(sub_lines) * 34) + (20 if sub_lines else 0)
+    total_text_h = (
+        (len(title_lines) * line_spacing) + (len(sub_lines) * 34) + (20 if sub_lines else 0)
+    )
     avail_h = card_h - 180
     start_y = card_margin_y + 110 + max(0, (avail_h - total_text_h) // 2)
 
@@ -295,7 +305,9 @@ def generate_og_image(
             width=1,
         )
         # Small accent dot inside pill
-        ui_draw.ellipse((cur_fx + 10, footer_y + 11, cur_fx + 18, footer_y + 19), fill=(*theme_rgb, 200))
+        ui_draw.ellipse(
+            (cur_fx + 10, footer_y + 11, cur_fx + 18, footer_y + 19), fill=(*theme_rgb, 200)
+        )
         ui_draw.text((cur_fx + 24, footer_y + 6), feat, font=font_footer, fill=(203, 213, 225, 255))
         cur_fx += p_w + 12
 

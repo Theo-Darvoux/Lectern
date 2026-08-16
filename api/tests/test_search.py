@@ -533,7 +533,7 @@ async def test_settings_idempotency_no_update_when_unchanged():
             "ancestor_path",
             "extra_searchable",
         ],
-        filterable_attributes=["type", "directory_id"],
+        filterable_attributes=["type", "directory_id", "status"],
         sortable_attributes=["like_count", "total_views", "created_at"],
         ranking_rules=_MATERIALS_RANKING_RULES,
         typo_tolerance=TypoTolerance(

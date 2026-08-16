@@ -1,5 +1,7 @@
 "use client";
 
+
+import { OperationalCommandCenter } from "@/components/admin/operational-command-center";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
@@ -9,8 +11,10 @@ import {
   Users,
   AlertTriangle,
   Settings,
+  BookOpenCheck,
+  ServerCog,
 } from "lucide-react";
-import { useTranslations } from "next-intl";
+import {useTranslations, useLocale} from "next-intl";
 
 export default function AdminLayout({
   children,
@@ -18,6 +22,8 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   const t = useTranslations("Admin.Layout");
+  const locale = useLocale();
+  const fr = locale.toLowerCase().startsWith("fr");
   const { user, isAuthenticated } = useAuth();
   const pathname = usePathname();
 
@@ -31,11 +37,13 @@ export default function AdminLayout({
   }
 
   const navItems = [
-    { href: "/admin", label: t("nav.health"), icon: Activity },
+    { href: "/admin", label: fr ? "Opérations" : "Operations", icon: Activity },
+    { href: "/admin/content", label: fr ? "Contenu" : "Content", icon: BookOpenCheck },
     { href: "/admin/users", label: t("nav.users"), icon: Users },
     { href: "/admin/dlq", label: t("nav.dlq"), icon: AlertTriangle },
     { href: "/admin/config", label: t("nav.config"), icon: Settings },
     { href: "/admin/backup", label: t("nav.backup"), icon: Archive },
+    { href: "/admin/system", label: fr ? "Système" : "System", icon: ServerCog },
   ];
 
   return (
@@ -65,7 +73,7 @@ export default function AdminLayout({
         })}
       </div>
       <main className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-        {children}
+        {pathname === "/admin" ? <OperationalCommandCenter /> : children}
       </main>
     </div>
   );

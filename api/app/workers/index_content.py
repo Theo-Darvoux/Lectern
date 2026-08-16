@@ -53,6 +53,7 @@ def _build_material_doc(
         "slug": material.slug,
         "description": material.description or "",
         "type": material.type,
+        "status": material.status,
         "tags": [t.name for t in material.tags] if material.tags else [],
         "authorName": material.author.display_name if material.author else None,
         "directory_id": str(material.directory_id) if material.directory_id else None,

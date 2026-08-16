@@ -1,5 +1,7 @@
 "use client";
 
+
+import { ContentStatusBadge } from "@/components/content-status-badge";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { FolderIcon, FileTextIcon, Loader2, ThumbsUp } from "lucide-react";
@@ -84,6 +86,7 @@ export function SearchList({
                                     )}
                                 </div>
                                 <div className="text-xs text-muted-foreground flex items-center gap-2">
+                                    {!isDir && <ContentStatusBadge status={result.status} />}
                                     {badgeLabel && (
                                         <Badge variant="secondary" className={`${badgeColor} border-none text-[10px] px-1.5 h-4.5 font-bold uppercase tracking-tighter`}>
                                             {badgeLabel}

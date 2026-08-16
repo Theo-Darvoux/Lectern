@@ -16,6 +16,7 @@ from app.core.http.body_limit import RequestBodyLimitMiddleware
 from app.core.observability.telemetry import instrument_fastapi, setup_telemetry
 from app.routers.admin import router as admin_router
 from app.routers.admin_backup import router as admin_backup_router
+from app.routers.admin_operations import router as admin_operations_router
 from app.routers.admin_storage import router as admin_storage_router
 from app.routers.annotations import (
     annotations_router,
@@ -324,6 +325,7 @@ async def metrics(request: Request) -> Response:
 
 app.include_router(admin_router)
 app.include_router(admin_backup_router)
+app.include_router(admin_operations_router)
 app.include_router(admin_storage_router)
 app.include_router(moderator_router)
 app.include_router(annotations_router)

@@ -66,6 +66,7 @@ def material_orm_to_dict(
         "slug": m.slug,
         "description": m.description,
         "type": m.type,
+        "status": m.status,
         "current_version": m.current_version,
         "parent_material_id": m.parent_material_id,
         "author_id": m.author_id,
