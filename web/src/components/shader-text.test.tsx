@@ -15,7 +15,7 @@ describe("ShaderText Component", () => {
         container = document.createElement("div");
         document.body.appendChild(container);
         root = createRoot(container);
-        useConfigStore.setState({ config: null, isLoaded: true, isError: false });
+        useConfigStore.setState({ config: null });
     });
 
     afterEach(() => {
@@ -75,8 +75,6 @@ describe("ShaderText Component", () => {
                 site_name: "INTellect",
                 site_name_style: style,
             } as any,
-            isLoaded: true,
-            isError: false,
         });
 
         await act(async () => {
