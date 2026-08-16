@@ -11,6 +11,7 @@ import { apiFetch } from "@/lib/api-client";
 import { useConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
 import Link from "next/link";
+import { cn } from "@/lib/utils";
 import type { FeaturedItem } from "@/components/home/types";
 import { AddFeaturedDialog } from "@/components/moderator/add-featured-dialog";
 
