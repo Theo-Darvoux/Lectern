@@ -1,5 +1,5 @@
 # ── Stage 1: build the virtualenv ────────────────────────────────────────────
-ARG DEBIAN_SNAPSHOT=20260801T000000Z
+ARG DEBIAN_SNAPSHOT=20260816T204800Z
 FROM python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
 ARG DEBIAN_SNAPSHOT
 
@@ -46,7 +46,9 @@ RUN printf '%s\n' \
     > /etc/apt/sources.list.d/debian-snapshot.list && \
     rm -f /etc/apt/sources.list.d/debian.sources
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
     libyara10 \
     bubblewrap \
     util-linux \
