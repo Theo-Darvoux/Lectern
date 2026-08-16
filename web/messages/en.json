@@ -286,6 +286,7 @@
     "statOpenPrs": "Open PRs",
     "statMyContributions": "Your contributions",
     "quickBrowse": "Browse",
+    "quickFeatured": "Featured",
     "quickNotifications": "Notifications"
   },
   "PendingApproval": {
@@ -380,7 +381,7 @@
     "loadFailedTitle": "This location could not be loaded",
     "backToBrowse": "Back to library",
     "home": "Home",
-    "courseMaterials": "Lectern",
+    "courseMaterials": "Course Materials",
     "contributionPreview": "Contribution preview",
     "exitPreview": "Exit preview",
     "selectAll": "Select All",

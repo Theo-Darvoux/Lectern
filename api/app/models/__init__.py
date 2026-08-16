@@ -2,6 +2,7 @@ from app.models.annotation import Annotation
 from app.models.auth_config import AllowedDomain
 from app.models.base import Base
 from app.models.cas_staging_claim import CasStagingClaim
+from app.models.collection import Collection, CollectionItem
 from app.models.comment import Comment
 from app.models.dead_letter import DeadLetterJob
 from app.models.directory import Directory
@@ -25,6 +26,8 @@ __all__ = [
     "Base",
     "CasStagingClaim",
     "Comment",
+    "Collection",
+    "CollectionItem",
     "DeadLetterJob",
     "Directory",
     "DownloadAudit",

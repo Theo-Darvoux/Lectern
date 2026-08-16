@@ -12,7 +12,7 @@ ZIP layout (v2):
 
 Version history:
   1.0  – original: 10 tables, 3 prefixes, no metadata sidecar, gzip decompressed
-  2.0  – lossless:  24 tables, 4 prefixes, metadata sidecar, raw bytes preserved
+  2.0  – lossless: all current application tables, 4 prefixes, metadata sidecar, raw bytes preserved
 """
 
 from __future__ import annotations
@@ -71,6 +71,7 @@ _TABLE_INSERT_ORDER = [
     "notifications",  # FK: users
     "uploads",  # FK: none (standalone tracking table)
     "cas_staging_claims",  # FK: users
+    "collections",  # FK: users
     # ── depend on directories (and optionally users) ─────────────────────────
     "materials",  # FK: directories, users; self-ref: parent_material_id
     "directory_tags",  # FK: directories, tags
@@ -81,6 +82,7 @@ _TABLE_INSERT_ORDER = [
     "material_tags",  # FK: materials, tags
     "material_likes",  # FK: users, materials
     "material_favourites",  # FK: users, materials
+    "collection_items",  # FK: collections + exactly one material/directory target
     "featured_items",  # FK: materials, directories, users
     "flags",  # FK: users (target_id is a polymorphic UUID, no FK constraint)
     "view_history",  # FK: users, materials

@@ -45,6 +45,7 @@ import { useDownload } from "@/hooks/use-download";
 import { AttachmentPreviewDialog } from "@/components/sidebar/attachment-preview-dialog";
 import { UploadDrawer } from "@/components/pr/upload-drawer";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
+import { CollectionPicker } from "@/components/saved/collection-picker";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
@@ -237,7 +238,8 @@ function InteractionBar({
   };
 
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2">
       <button
         onClick={handleLike}
         disabled={isLiking || disabled}
@@ -284,6 +286,13 @@ function InteractionBar({
         )}
         <span>{isFavourited ? t("saved") : t("save")}</span>
       </button>
+      </div>
+      <CollectionPicker
+        targetType={targetType}
+        targetId={targetId}
+        disabled={disabled}
+        className="h-9 rounded-xl"
+      />
     </div>
   );
 }

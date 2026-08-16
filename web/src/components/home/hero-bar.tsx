@@ -1,14 +1,19 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { FolderTree } from "lucide-react";
+import { FolderTree, Star } from "lucide-react";
 import { SearchInline } from "@/components/search/search-inline";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
+import { useAuth } from "@/hooks/use-auth";
+import { isStaff } from "@/lib/guest";
+import { AddFeaturedDialog } from "@/components/moderator/add-featured-dialog";
 
 interface QuickAction {
-  href: string;
+  href?: string;
+  onClick?: () => void;
   label: string;
   icon: React.ReactNode;
   className: string;
@@ -19,6 +24,7 @@ interface HeroBarProps {
   displayName: string;
   subtitle: string;
   isLoading?: boolean;
+  onFeaturedSuccess?: () => void;
 }
 
 export function HeroBar({
@@ -26,8 +32,12 @@ export function HeroBar({
   displayName,
   subtitle,
   isLoading = false,
+  onFeaturedSuccess,
 }: HeroBarProps) {
   const t = useTranslations("Home");
+  const { user } = useAuth();
+  const staff = isStaff(user);
+  const [featuredDialogOpen, setFeaturedDialogOpen] = useState(false);
 
   const actions: QuickAction[] = [
     {
@@ -37,6 +47,17 @@ export function HeroBar({
       className:
         "bg-primary/10 text-primary hover:bg-primary/15 ring-primary/20",
     },
+    ...(staff
+      ? [
+          {
+            onClick: () => setFeaturedDialogOpen(true),
+            label: t("quickFeatured"),
+            icon: <Star className="h-4 w-4" />,
+            className:
+              "bg-primary/10 text-primary hover:bg-primary/15 ring-primary/20 cursor-pointer",
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -72,20 +93,45 @@ export function HeroBar({
 
       {/* Quick actions */}
       <div className="mt-5 flex flex-wrap gap-2">
-        {actions.map((a) => (
-          <Link
-            key={a.href}
-            href={a.href}
-            className={cn(
-              "inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium ring-1 transition-colors focus-visible:outline-none focus-visible:ring-2",
-              a.className,
-            )}
-          >
-            {a.icon}
-            {a.label}
-          </Link>
-        ))}
+        {actions.map((a, i) =>
+          a.href ? (
+            <Link
+              key={a.href}
+              href={a.href}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium ring-1 transition-colors focus-visible:outline-none focus-visible:ring-2",
+                a.className,
+              )}
+            >
+              {a.icon}
+              {a.label}
+            </Link>
+          ) : (
+            <button
+              key={i}
+              type="button"
+              onClick={a.onClick}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium ring-1 transition-colors focus-visible:outline-none focus-visible:ring-2",
+                a.className,
+              )}
+            >
+              {a.icon}
+              {a.label}
+            </button>
+          ),
+        )}
       </div>
+
+      {staff && (
+        <AddFeaturedDialog
+          open={featuredDialogOpen}
+          onOpenChange={setFeaturedDialogOpen}
+          onSuccess={() => {
+            onFeaturedSuccess?.();
+          }}
+        />
+      )}
     </div>
   );
 }

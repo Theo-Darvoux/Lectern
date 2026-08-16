@@ -16,7 +16,9 @@ from app.core.security.isolated_parser import process_avatar_isolated
 from app.core.security.processing_paths import processing_temp_dir
 from app.core.storage.facade import delete_object, download_file_raw, upload_file
 from app.models.annotation import Annotation
+from app.models.collection import Collection, CollectionItem
 from app.models.comment import Comment
+from app.models.directory import DirectoryFavourite
 from app.models.flag import Flag
 from app.models.material import Material
 from app.models.notification import Notification
@@ -372,6 +374,20 @@ async def export_user_data(db: AsyncSession, user: User) -> dict[str, typing.Any
         select(MaterialFavourite).where(MaterialFavourite.user_id == uid)
     )
     favourites = favourites_result.scalars().all()
+    directory_favourites = (
+        await db.scalars(select(DirectoryFavourite).where(DirectoryFavourite.user_id == uid))
+    ).all()
+    collections = (await db.scalars(select(Collection).where(Collection.user_id == uid))).all()
+    collection_items = (
+        await db.scalars(
+            select(CollectionItem)
+            .join(Collection, Collection.id == CollectionItem.collection_id)
+            .where(Collection.user_id == uid)
+        )
+    ).all()
+    items_by_collection: dict[uuid.UUID, list[CollectionItem]] = {}
+    for item in collection_items:
+        items_by_collection.setdefault(item.collection_id, []).append(item)
 
     return {
         "profile": {
@@ -434,6 +450,32 @@ async def export_user_data(db: AsyncSession, user: User) -> dict[str, typing.Any
                 "created_at": fav.created_at.isoformat(),
             }
             for fav in favourites
+        ],
+        "directory_favourites": [
+            {
+                "id": str(fav.id),
+                "directory_id": str(fav.directory_id),
+                "created_at": fav.created_at.isoformat(),
+            }
+            for fav in directory_favourites
+        ],
+        "collections": [
+            {
+                "id": str(collection.id),
+                "name": collection.name,
+                "created_at": collection.created_at.isoformat(),
+                "updated_at": collection.updated_at.isoformat(),
+                "items": [
+                    {
+                        "id": str(item.id),
+                        "target_type": item.target_type,
+                        "target_id": str(item.target_id),
+                        "created_at": item.created_at.isoformat(),
+                    }
+                    for item in items_by_collection.get(collection.id, [])
+                ],
+            }
+            for collection in collections
         ],
     }
 
