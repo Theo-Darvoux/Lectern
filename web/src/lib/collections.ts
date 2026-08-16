@@ -10,6 +10,13 @@ export interface SavedItem {
   description: string | null;
   href: string;
   added_at: string;
+  metadata?: Record<string, unknown> | null;
+  status?: string | null;
+  like_count?: number | null;
+  total_views?: number | null;
+  download_count?: number | null;
+  slug?: string | null;
+  current_version_info?: Record<string, unknown> | null;
 }
 
 export interface SavedLibrary {

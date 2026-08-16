@@ -19,6 +19,7 @@ import {
   Code2,
   Paperclip,
   RefreshCw,
+  BookOpenCheck,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -45,7 +46,7 @@ import {
   DrawerClose,
 } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 
 // ─── Action cell ──────────────────────────────────────────────────────────────
 
@@ -145,6 +146,8 @@ export function ViewerFab({
   onOpenChange,
 }: ViewerFabProps) {
   const t = useTranslations("Browse");
+  const locale = useLocale();
+  const fr = locale.toLowerCase().startsWith("fr");
   const pathname = usePathname();
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const searchParams = useSearchParams();
@@ -480,6 +483,22 @@ export function ViewerFab({
               onClick={() => {
                 close();
                 handleRecalculateThumbnail();
+              }}
+            />
+          )}
+
+          {/* ── Document Status — only for staff ── */}
+          {staff && !isRestricted && (
+            <ActionCell
+              icon={<BookOpenCheck className="h-5 w-5" />}
+              label={fr ? "Statut" : "Status"}
+              onClick={() => {
+                close();
+                openSidebar("details", {
+                  type: "material",
+                  id: materialId,
+                  data: { ...(material ?? {}), id: materialId, title: materialTitle },
+                });
               }}
             />
           )}

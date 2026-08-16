@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
 from app.core.common.exceptions import NotFoundError
-from app.core.common.natural_sorting import natural_sort_key
+from app.core.common.natural_sorting import content_status_sort_key, natural_sort_key
 from app.models.directory import Directory, DirectoryFavourite, DirectoryLike
 from app.models.material import Material, MaterialVersion
 from app.services.reaction_lock import acquire_reaction_toggle_lock
@@ -37,6 +37,7 @@ def directory_orm_to_dict(
         "slug": d.slug,
         "type": d.type.value if hasattr(d.type, "value") else d.type,
         "description": d.description,
+        "status": getattr(d, "status", "current") or "current",
         "metadata": d.metadata_,
         "sort_order": d.sort_order,
         "tags": [t.name for t in d.tags],
@@ -96,6 +97,13 @@ async def get_preview_material_ids(
                 partition_by=subtree.c.root_id,
                 order_by=(
                     subtree.c.depth,
+                    case(
+                        (Material.status == "important", 0),
+                        (Material.status == "current", 1),
+                        (Material.status == "deprecated", 2),
+                        (Material.status == "archived", 3),
+                        else_=1,
+                    ),
                     func.lower(Material.title),
                     Material.id,
                 ),
@@ -257,7 +265,11 @@ async def get_root_directories(
     # before "Chapitre 10"). Natural sort has no portable SQL form, so order here.
     directories = sorted(
         result.scalars().all(),
-        key=lambda d: (d.sort_order, natural_sort_key(d.name)),
+        key=lambda d: (
+            content_status_sort_key(getattr(d, "status", "current")),
+            d.sort_order,
+            natural_sort_key(d.name),
+        ),
     )
 
     dir_ids = [d.id for d in directories]
@@ -321,7 +333,10 @@ async def get_root_directories(
         .where(Material.directory_id.is_(None), Material.parent_material_id.is_(None))
     )
     mat_result = await db.execute(mat_stmt)
-    root_materials = sorted(mat_result.scalars().all(), key=lambda m: natural_sort_key(m.title))
+    root_materials = sorted(
+        mat_result.scalars().all(),
+        key=lambda m: (content_status_sort_key(m.status), natural_sort_key(m.title)),
+    )
 
     materials_out = await _attach_version_and_counts(db, root_materials, current_user_id, "")
     return {"directories": items, "materials": materials_out}
@@ -425,7 +440,11 @@ async def get_directory_children(
     dir_result = await db.execute(dir_stmt)
     child_dirs = sorted(
         dir_result.scalars().all(),
-        key=lambda d: (d.sort_order, natural_sort_key(d.name)),
+        key=lambda d: (
+            content_status_sort_key(getattr(d, "status", "current")),
+            d.sort_order,
+            natural_sort_key(d.name),
+        ),
     )
 
     child_dir_ids = [d.id for d in child_dirs]
@@ -487,7 +506,10 @@ async def get_directory_children(
         .where(Material.directory_id == directory.id, Material.parent_material_id.is_(None))
     )
     mat_result = await db.execute(mat_stmt)
-    sorted_mats = sorted(mat_result.scalars().all(), key=lambda m: natural_sort_key(m.title))
+    sorted_mats = sorted(
+        mat_result.scalars().all(),
+        key=lambda m: (content_status_sort_key(m.status), natural_sort_key(m.title)),
+    )
     materials_out = await _attach_version_and_counts(
         db, sorted_mats, current_user_id, parent_full_path
     )

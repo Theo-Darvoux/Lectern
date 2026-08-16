@@ -18,6 +18,7 @@ import {
   Check,
   CheckCheck,
   HelpCircle,
+  Shield,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { SearchModal } from "@/components/search/search-modal";
@@ -58,6 +59,7 @@ export function Navbar() {
   const t = useTranslations("Navigation");
   const tCommon = useTranslations("Common");
   const tSaved = useTranslations("Sidebar");
+  const tStaff = useTranslations("Staff");
   const tHelp = useTranslations("Tutorials.helpCenter");
   const { user, isAuthenticated, logout } = useAuth();
   const guest = isGuest(user);
@@ -472,6 +474,14 @@ export function Navbar() {
                       <Link href="/help">
                         <HelpCircle className="mr-2 h-4 w-4" />
                         <span>{tHelp("open")}</span>
+                      </Link>
+                    </DropdownMenuItem>
+                  )}
+                  {(user.role === "moderator" || user.role === "bureau" || user.role === "vieux") && (
+                    <DropdownMenuItem asChild className="cursor-pointer">
+                      <Link href="/staff">
+                        <Shield className="mr-2 h-4 w-4 text-purple-600 dark:text-purple-400" />
+                        <span>{tStaff("title")}</span>
                       </Link>
                     </DropdownMenuItem>
                   )}

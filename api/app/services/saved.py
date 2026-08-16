@@ -12,6 +12,7 @@ from app.models.directory import Directory, DirectoryFavourite
 from app.models.material import Material, MaterialFavourite
 from app.schemas.collection import SavedItemOut
 from app.services.directory import get_directory_paths
+from app.services.material import version_orm_to_dict
 
 
 async def _serialize_targets(
@@ -33,15 +34,30 @@ async def _serialize_targets(
             if directory_path
             else f"/browse/{material.slug}"
         )
+        current_version = None
+        if "versions" in material.__dict__ and material.versions:
+            current_version = next(
+                (v for v in material.versions if v.version_number == material.current_version),
+                material.versions[-1] if material.versions else None,
+            )
+        version_info = version_orm_to_dict(current_version) if current_version else None
+
         items.append(
             SavedItemOut(
                 target_type="material",
                 target_id=material.id,
                 title=material.title,
+                slug=material.slug,
                 item_type=material.type,
                 description=material.description,
                 href=href,
                 added_at=added_at,
+                metadata=material.metadata_,
+                status=material.status,
+                like_count=material.like_count,
+                total_views=material.total_views,
+                download_count=material.download_count,
+                current_version_info=version_info,
             )
         )
 
@@ -52,6 +68,7 @@ async def _serialize_targets(
                 target_type="directory",
                 target_id=directory.id,
                 title=directory.name,
+                slug=directory.slug,
                 item_type=(
                     directory.type.value
                     if hasattr(directory.type, "value")
@@ -60,6 +77,8 @@ async def _serialize_targets(
                 description=directory.description,
                 href=f"/browse/{path}",
                 added_at=added_at,
+                metadata=directory.metadata_,
+                status=directory.status,
             )
         )
 
@@ -70,6 +89,7 @@ async def _serialize_targets(
 async def get_favourite_items(db: AsyncSession, user_id: uuid.UUID) -> list[SavedItemOut]:
     material_result = await db.execute(
         select(Material, MaterialFavourite.created_at)
+        .options(selectinload(Material.versions))
         .join(MaterialFavourite, MaterialFavourite.material_id == Material.id)
         .where(
             MaterialFavourite.user_id == user_id,
@@ -97,7 +117,7 @@ async def get_collection_items(db: AsyncSession, collection_id: uuid.UUID) -> li
     result = await db.execute(
         select(CollectionItem)
         .options(
-            selectinload(CollectionItem.material),
+            selectinload(CollectionItem.material).selectinload(Material.versions),
             selectinload(CollectionItem.directory),
         )
         .where(CollectionItem.collection_id == collection_id)

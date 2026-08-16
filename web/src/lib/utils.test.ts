@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { compareNatural, normalizePathname } from "./utils";
+import { compareMaterialStatus, getContentStatusRank } from "@/components/content-status-badge";
 
 describe("compareNatural", () => {
   it("orders numbered names by value, not lexicographically", () => {
@@ -24,6 +25,26 @@ describe("compareNatural", () => {
   it("ignores case and diacritics", () => {
     expect(compareNatural("élève", "ELEVE")).toBe(0);
     expect(compareNatural("a", "B")).toBeLessThan(0);
+  });
+});
+
+describe("compareMaterialStatus", () => {
+  it("orders important < current < deprecated < archived", () => {
+    const statuses = ["archived", "important", "deprecated", "current"];
+    expect([...statuses].sort(compareMaterialStatus)).toEqual([
+      "important",
+      "current",
+      "deprecated",
+      "archived",
+    ]);
+  });
+
+  it("defaults unrecognized or null status to current rank", () => {
+    expect(getContentStatusRank(null)).toBe(1);
+    expect(getContentStatusRank(undefined)).toBe(1);
+    expect(getContentStatusRank("unknown")).toBe(1);
+    expect(compareMaterialStatus("important", "unknown")).toBeLessThan(0);
+    expect(compareMaterialStatus("unknown", "deprecated")).toBeLessThan(0);
   });
 });
 

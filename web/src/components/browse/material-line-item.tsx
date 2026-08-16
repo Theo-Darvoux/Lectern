@@ -264,7 +264,7 @@ function MaterialLineItemImpl({
                         )}
                     </div>
                     <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                        <ContentStatusBadge status={status} />
+                        <ContentStatusBadge materialId={id} status={status} />
                         <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${badgeColor}`}>
                             {badgeLabel}
                         </span>

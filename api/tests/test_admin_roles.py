@@ -355,3 +355,46 @@ async def test_pending_approval_rotates_target_auth_generation(db_session: Async
     assert target.role == UserRole.STUDENT
     assert target.auth_generation == 1
     assert token_matches_auth_generation(stale_payload, target) is False
+
+
+async def test_admin_overview_moderator_allowed_with_filtered_fields(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    mod = await _make_user(db_session, UserRole.MODERATOR)
+    r = await client.get("/api/admin/overview", headers=_auth(mod))
+    assert r.status_code == 200
+    data = r.json()
+    assert "attention" in data
+    assert data["attention"]["pending_users"] == 0
+    assert data["attention"]["failed_jobs"] == 0
+    assert data["recent"]["pending_users"] == []
+
+
+async def test_admin_overview_bureau_allowed_full_fields(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    bureau = await _make_user(db_session, UserRole.BUREAU)
+    r = await client.get("/api/admin/overview", headers=_auth(bureau))
+    assert r.status_code == 200
+    data = r.json()
+    assert "attention" in data
+    assert "content" in data
+    assert "recent" in data
+
+
+@pytest.mark.parametrize("role", [UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX])
+async def test_admin_content_staff_allowed(
+    client: AsyncClient, db_session: AsyncSession, role: UserRole
+) -> None:
+    staff = await _make_user(db_session, role)
+    r = await client.get("/api/admin/content", headers=_auth(staff))
+    assert r.status_code == 200
+    assert "items" in r.json()
+
+
+async def test_admin_content_student_forbidden(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    student = await _make_user(db_session, UserRole.STUDENT)
+    r = await client.get("/api/admin/content", headers=_auth(student))
+    assert r.status_code == 403

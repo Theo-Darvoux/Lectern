@@ -179,7 +179,7 @@ async def notify_admins_pending_user(db: AsyncSession, user: User) -> None:
             type="pending_user",
             title="New user pending approval",
             body=f"{user.email} is requesting access.",
-            link="/admin/users?role=pending",
+            link="/staff/users?role=pending",
         )
         for aid in admin_ids
     ]

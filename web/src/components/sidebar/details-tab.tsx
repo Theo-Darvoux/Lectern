@@ -34,6 +34,14 @@ import {
   getFileBadgeLabel,
   isThumbnailEligible,
 } from "@/lib/file-utils";
+import {
+  ContentStatusBadge,
+  CONTENT_STATUSES,
+  CONTENT_STATUS_ICONS,
+  CONTENT_STATUS_LABELS,
+  normalizeContentStatus,
+  type ContentStatus,
+} from "@/components/content-status-badge";
 import { apiFetch } from "@/lib/api-client";
 import { ExpandableText } from "@/components/ui/expandable-text";
 import { useUIStore, useBrowseRefreshStore, useLikeOverrides, useDirectoryIconOverrides, useDirectoryColorOverrides } from "@/lib/stores";
@@ -49,7 +57,7 @@ import { CollectionPicker } from "@/components/saved/collection-picker";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { isRestrictedTarget } from "@/lib/utils";
 
@@ -303,6 +311,9 @@ function InteractionBar({
 
 function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations("Sidebar");
+  const locale = useLocale();
+  const fr = locale.toLowerCase().startsWith("fr");
+  const lang: "fr" | "en" = fr ? "fr" : "en";
   const { user } = useAuth();
   const updateSidebarData = useUIStore((state) => state.updateSidebarData);
   const setIconOverride = useDirectoryIconOverrides((s) => s.setIconOverride);
@@ -341,6 +352,7 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
   const [iconUpdating, setIconUpdating] = useState(false);
   const [colorUpdating, setColorUpdating] = useState(false);
   const dirId = String(data.id ?? "");
+  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const handleSetIcon = async (iconId: string | null) => {
     if (iconUpdating) return;
@@ -399,9 +411,12 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
               {code}
             </p>
           )}
-          <Badge variant="outline" className="mt-1.5 text-xs capitalize">
-            {isModule ? t("module") : t("folder")}
-          </Badge>
+          <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+            <ContentStatusBadge directoryId={dirId} status={data.status} />
+            <Badge variant="outline" className="text-xs capitalize">
+              {isModule ? t("module") : t("folder")}
+            </Badge>
+          </div>
         </div>
       </div>
 
@@ -559,6 +574,72 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
           </div>
         </SidebarSection>
       )}
+
+      {/* Staff Actions */}
+      {isStaff(user) && !isRestricted && (
+        <SidebarSection className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              {t("staffActions")}
+            </span>
+            <span className="text-[10px] text-muted-foreground font-medium">
+              {fr ? "Statut du dossier" : "Folder status"}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-1.5">
+            {CONTENT_STATUSES.map((st) => {
+              const StIcon = CONTENT_STATUS_ICONS[st];
+              const isSelected = normalizeContentStatus(data.status) === st;
+              return (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={async () => {
+                    if (isSelected) return;
+                    try {
+                      await apiFetch("/admin/content/status", {
+                        method: "PATCH",
+                        body: JSON.stringify({ directory_ids: [dirId], status: st }),
+                      });
+                      updateSidebarData({ status: st });
+                      triggerBrowseRefresh();
+                      toast.success(
+                        fr
+                          ? `Statut mis à jour : ${CONTENT_STATUS_LABELS.fr[st]}`
+                          : `Status updated to ${CONTENT_STATUS_LABELS.en[st]}`,
+                      );
+                    } catch {
+                      toast.error(
+                        fr
+                          ? "Impossible de modifier le statut"
+                          : "Failed to update status",
+                      );
+                    }
+                  }}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition-all text-left",
+                    isSelected
+                      ? "border-primary/50 bg-primary/10 font-bold text-foreground shadow-2xs"
+                      : "border-border/60 bg-muted/20 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  )}
+                >
+                  <StIcon
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0",
+                      st === "important" && "text-amber-500",
+                      st === "current" && "text-emerald-500",
+                      st === "deprecated" && "text-stone-500",
+                      st === "archived" && "text-slate-400",
+                    )}
+                  />
+                  <span className="truncate">{CONTENT_STATUS_LABELS[lang][st]}</span>
+                </button>
+              );
+            })}
+          </div>
+        </SidebarSection>
+      )}
     </div>
   );
 }
@@ -623,6 +704,10 @@ function AuthorName({ authorId }: { authorId: string | null }) {
 
 function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations("Sidebar");
+  const locale = useLocale();
+  const fr = locale.toLowerCase().startsWith("fr");
+  const lang: "fr" | "en" = fr ? "fr" : "en";
+  const updateSidebarData = useUIStore((state) => state.updateSidebarData);
   const router = useRouter();
   const openLink = useExternalLinkStore((s) => s.openLink);
   const metadata = (data.metadata ?? {}) as Record<string, unknown>;
@@ -713,13 +798,16 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
         </div>
         <div className="min-w-0 flex-1">
           <h3 className="font-semibold leading-tight break-all">{title}</h3>
-          <span
-            className={`mt-1.5 inline-block rounded px-1.5 py-0.5 text-xs font-medium ${fileName || fileMimeType ? getFileBadgeColor(fileName, fileMimeType) : "bg-gray-100 text-gray-800 dark:bg-gray-800/40 dark:text-gray-300"}`}
-          >
-            {fileName || fileMimeType
-              ? getFileBadgeLabel(fileName, fileMimeType)
-              : type}
-          </span>
+          <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+            <ContentStatusBadge materialId={id} status={data.status} />
+            <span
+              className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${fileName || fileMimeType ? getFileBadgeColor(fileName, fileMimeType) : "bg-gray-100 text-gray-800 dark:bg-gray-800/40 dark:text-gray-300"}`}
+            >
+              {fileName || fileMimeType
+                ? getFileBadgeLabel(fileName, fileMimeType)
+                : type}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -818,23 +906,83 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
       )}
 
       {/* Staff Actions */}
-      {isStaff(user) && !isRestricted && isThumbnailEligible(fileMimeType, fileName || title) && (
-        <SidebarSection className="space-y-2">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            {t("staffActions")}
-          </span>
-          <button
-            onClick={handleRecalculateThumbnail}
-            disabled={isRecalculatingThumbnail}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
-          >
-            {isRecalculatingThumbnail ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            <span>{t("recalculateThumbnail")}</span>
-          </button>
+      {isStaff(user) && !isRestricted && (
+        <SidebarSection className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              {t("staffActions")}
+            </span>
+            <span className="text-[10px] text-muted-foreground font-medium">
+              {fr ? "Statut du document" : "Document status"}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-1.5">
+            {CONTENT_STATUSES.map((st) => {
+              const StIcon = CONTENT_STATUS_ICONS[st];
+              const isSelected = normalizeContentStatus(data.status) === st;
+              return (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={async () => {
+                    if (isSelected) return;
+                    try {
+                      await apiFetch("/admin/content/status", {
+                        method: "PATCH",
+                        body: JSON.stringify({ material_ids: [id], status: st }),
+                      });
+                      updateSidebarData({ status: st });
+                      triggerBrowseRefresh();
+                      toast.success(
+                        fr
+                          ? `Statut mis à jour : ${CONTENT_STATUS_LABELS.fr[st]}`
+                          : `Status updated to ${CONTENT_STATUS_LABELS.en[st]}`,
+                      );
+                    } catch {
+                      toast.error(
+                        fr
+                          ? "Impossible de modifier le statut"
+                          : "Failed to update status",
+                      );
+                    }
+                  }}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition-all text-left",
+                    isSelected
+                      ? "border-primary/50 bg-primary/10 font-bold text-foreground shadow-2xs"
+                      : "border-border/60 bg-muted/20 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  )}
+                >
+                  <StIcon
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0",
+                      st === "important" && "text-amber-500",
+                      st === "current" && "text-emerald-500",
+                      st === "deprecated" && "text-stone-500",
+                      st === "archived" && "text-slate-400",
+                    )}
+                  />
+                  <span className="truncate">{CONTENT_STATUS_LABELS[lang][st]}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {isThumbnailEligible(fileMimeType, fileName || title) && (
+            <button
+              onClick={handleRecalculateThumbnail}
+              disabled={isRecalculatingThumbnail}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              {isRecalculatingThumbnail ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              <span>{t("recalculateThumbnail")}</span>
+            </button>
+          )}
         </SidebarSection>
       )}
 

@@ -4,7 +4,20 @@ import re
 import unicodedata
 from functools import lru_cache
 
-__all__ = ["natural_sort_key"]
+__all__ = ["natural_sort_key", "content_status_sort_key"]
+
+_STATUS_SORT_ORDER: dict[str, int] = {
+    "important": 0,
+    "current": 1,
+    "deprecated": 2,
+    "archived": 3,
+}
+
+
+def content_status_sort_key(status: str | None) -> int:
+    """Return numeric sort rank for material status: important (0) < current (1) < deprecated (2) < archived (3)."""
+    return _STATUS_SORT_ORDER.get(str(status).lower() if status else "current", 1)
+
 
 # Regular expression to match consecutive digits.
 _NUM_CHUNK = re.compile(r"(\d+)")

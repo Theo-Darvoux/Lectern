@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { compareNatural } from "@/lib/utils";
+import { compareMaterialStatus } from "@/components/content-status-badge";
 import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import type {
   CreateMaterialOp,
@@ -168,15 +169,19 @@ export function useAugmentedListing({
   );
 
   const sortedDirs = useMemo(() => {
-    return [...effectiveDirs].sort((a, b) =>
-      compareNatural(String(a.name ?? ""), String(b.name ?? "")),
-    );
+    return [...effectiveDirs].sort((a, b) => {
+      const statusDiff = compareMaterialStatus(a.status, b.status);
+      if (statusDiff !== 0) return statusDiff;
+      return compareNatural(String(a.name ?? ""), String(b.name ?? ""));
+    });
   }, [effectiveDirs]);
 
   const sortedMats = useMemo(() => {
-    return [...effectiveMats].sort((a, b) =>
-      compareNatural(String(a.title ?? ""), String(b.title ?? "")),
-    );
+    return [...effectiveMats].sort((a, b) => {
+      const statusDiff = compareMaterialStatus(a.status, b.status);
+      if (statusDiff !== 0) return statusDiff;
+      return compareNatural(String(a.title ?? ""), String(b.title ?? ""));
+    });
   }, [effectiveMats]);
 
   const isEmpty =

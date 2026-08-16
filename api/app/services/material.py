@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.common.exceptions import NotFoundError
-from app.core.common.natural_sorting import natural_sort_key
+from app.core.common.natural_sorting import content_status_sort_key, natural_sort_key
 from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
 from app.models.view_history import ViewHistory
 from app.services.reaction_lock import acquire_reaction_toggle_lock
@@ -332,7 +332,10 @@ async def get_material_attachments(
         .where(Material.parent_material_id == material_id)
     )
 
-    rows = sorted(result.all(), key=lambda row: natural_sort_key(row[0].title))
+    rows = sorted(
+        result.all(),
+        key=lambda row: (content_status_sort_key(row[0].status), natural_sort_key(row[0].title)),
+    )
     liked_ids, favourited_ids = await get_liked_favourited_sets(
         db, current_user_id, [material.id for material, _ in rows]
     )

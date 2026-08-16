@@ -6,6 +6,7 @@ import { BrowseLink } from "@/components/browse/browse-link";
 import { ThumbsUp } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
+import { ContentStatusBadge } from "@/components/content-status-badge";
 import {
     selectDirectoryColorOverride,
     selectDirectoryIconOverride,
@@ -200,9 +201,12 @@ function DirectoryLineItemImpl({
                             </span>
                         )}
                     </div>
-                    <span className={`text-sm ${staged ? `text-${themeColor}-600/70` : "text-muted-foreground"}`}>
-                        {t("itemsCount", { count: totalCount })}
-                    </span>
+                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <ContentStatusBadge directoryId={id} status={directory.status} hideIfCurrent />
+                        <span className={`text-xs ${staged ? `text-${themeColor}-600/70` : "text-muted-foreground"}`}>
+                            {t("itemsCount", { count: totalCount })}
+                        </span>
+                    </div>
                 </div>
 
                 {!isMobile && likeCount > 0 && (

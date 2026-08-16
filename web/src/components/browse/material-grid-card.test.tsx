@@ -33,8 +33,11 @@ vi.mock("@/lib/browse-prefetch", () => ({ prefetchBrowsePath: vi.fn() }));
 vi.mock("@/lib/api-client", () => ({ apiFetch: vi.fn() }));
 vi.mock("@/hooks/use-in-view", () => ({ useInView: () => false }));
 vi.mock("@/lib/stores", () => ({
-  useUIStore: (selector: (s: { openSidebar: () => void }) => unknown) =>
-    selector({ openSidebar: vi.fn() }),
+  useUIStore: (selector: (s: { openSidebar: () => void; updateSidebarData: () => void }) => unknown) =>
+    selector ? selector({ openSidebar: vi.fn(), updateSidebarData: vi.fn() }) : { openSidebar: vi.fn(), updateSidebarData: vi.fn() },
+  useAuthStore: (selector?: (s: { user: null; isAuthenticated: boolean; isLoading: boolean }) => unknown) =>
+    selector ? selector({ user: null, isAuthenticated: false, isLoading: false }) : { user: null, isAuthenticated: false, isLoading: false },
+  useBrowseRefreshStore: () => ({ triggerBrowseRefresh: vi.fn() }),
 }));
 vi.mock("@/components/home/material-preview", () => ({ MaterialPreview: () => null }));
 vi.mock("./item-actions-menu", () => ({
