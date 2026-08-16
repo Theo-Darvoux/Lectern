@@ -24,6 +24,7 @@ from app.routers.annotations import (
 )
 from app.routers.auth import router as auth_router
 from app.routers.browse import router as browse_router
+from app.routers.collections import router as collections_router
 from app.routers.comments import router as comments_router
 from app.routers.directories import router as directories_router
 from app.routers.eurooffice import router as eurooffice_router
@@ -332,6 +333,7 @@ app.include_router(annotations_router)
 app.include_router(auth_router)
 app.include_router(browse_router)
 app.include_router(comments_router)
+app.include_router(collections_router)
 app.include_router(directories_router)
 app.include_router(flags_router)
 app.include_router(material_annotations_router)

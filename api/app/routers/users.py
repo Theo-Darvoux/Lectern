@@ -13,6 +13,7 @@ from app.dependencies.auth import CurrentUser, get_optional_user
 from app.dependencies.pagination import PaginationParams
 from app.models.material import Material, MaterialFavourite, MaterialVersion
 from app.models.user import User, UserRole
+from app.schemas.collection import SavedLibraryOut
 from app.schemas.common import PaginatedResponse
 from app.schemas.material import MaterialDetailResponse, project_material_detail
 from app.schemas.user import (
@@ -30,6 +31,7 @@ from app.schemas.user import (
 from app.services.avatar import is_owned_avatar_storage_key, is_trusted_external_avatar_url
 from app.services.directory import get_directory_paths
 from app.services.material import get_liked_favourited_sets, material_orm_to_dict
+from app.services.saved import get_favourite_items
 from app.services.user import (
     export_user_data,
     get_recently_viewed,
@@ -119,6 +121,15 @@ async def recently_viewed(
         )
         for m in materials
     ]
+
+
+@router.get("/me/saved", response_model=SavedLibraryOut)
+async def get_my_saved_library(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SavedLibraryOut:
+    items = await get_favourite_items(db, user.id)
+    return SavedLibraryOut(items=items)
 
 
 @router.get("/me/favourites", response_model=list[MaterialDetailResponse])

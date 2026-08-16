@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import {
   Bell,
+  Bookmark,
   Inbox,
   Search,
   User,
@@ -56,6 +57,7 @@ import { useTranslations } from "next-intl";
 export function Navbar() {
   const t = useTranslations("Navigation");
   const tCommon = useTranslations("Common");
+  const tSaved = useTranslations("Sidebar");
   const tHelp = useTranslations("Tutorials.helpCenter");
   const { user, isAuthenticated, logout } = useAuth();
   const guest = isGuest(user);
@@ -451,6 +453,12 @@ export function Navbar() {
                     <Link href="/profile">
                       <User className="mr-2 h-4 w-4" />
                       <span>{t("profile")}</span>
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild className="cursor-pointer">
+                    <Link href="/saved">
+                      <Bookmark className="mr-2 h-4 w-4" />
+                      <span>{tSaved("saved")}</span>
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild className="cursor-pointer">

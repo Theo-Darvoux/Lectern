@@ -1,7 +1,7 @@
 """add material content status
 
 Revision ID: add_material_content_status
-Revises: add_cas_staging_claim_size
+Revises: add_saved_collections
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "add_material_content_status"
-down_revision: str | None = "add_cas_staging_claim_size"
+down_revision: str | None = "add_saved_collections"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

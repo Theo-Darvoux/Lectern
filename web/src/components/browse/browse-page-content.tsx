@@ -312,11 +312,11 @@ function BrowseContent() {
     if (data) {
       const siteName = config?.site_name || "";
       if (data.type === "material" && data.material) {
-        document.title = `${data.material.title} • ${siteName}`;
+        document.title = siteName ? `${data.material.title} • ${siteName}` : (data.material.title as string);
       } else if (data.directory) {
-        document.title = `${data.directory.name as string} • ${siteName}`;
+        document.title = siteName ? `${data.directory.name as string} • ${siteName}` : (data.directory.name as string);
       } else if (path === "") {
-        document.title = `${t("courseMaterials")} • ${siteName}`;
+        document.title = siteName;
       }
     }
   }, [data, path, config]);
