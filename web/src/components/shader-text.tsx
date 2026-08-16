@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
+import { parseSegments, buildFontsUrlForNames, type NameSegment } from "@/lib/fonts";
+import { SiteName } from "@/components/site-name";
+import { useConfigStore } from "@/lib/stores";
 
 const VERTEX_SHADER = `
 attribute vec2 aPosition;
@@ -20,6 +23,7 @@ precision mediump float;
 #endif
 
 uniform sampler2D tText;
+uniform sampler2D tColor;
 uniform float uTime;
 uniform vec2 uResolution;
 varying vec2 vUv;
@@ -47,6 +51,10 @@ void main() {
   if (alpha < 0.005) {
     discard;
   }
+
+  vec4 colData = texture2D(tColor, uv);
+  vec3 segColor = colData.rgb;
+  float hasColor = colData.a;
 
   // Smooth multi-channel decoding
   // R: Heightfield (smooth bevel slope)
@@ -91,6 +99,9 @@ void main() {
   float horizonGlint = exp(-pow(refY, 2.0) * 140.0) * 0.75;
   chromeColor += vec3(1.0, 1.0, 1.0) * horizonGlint;
 
+  // Apply custom color tint to chrome reflection if defined in SITE_NAME_STYLE
+  vec3 tintedChrome = mix(chromeColor, chromeColor * segColor * 1.45 + segColor * 0.22, hasColor);
+
   // --- 90s SPECULAR LIGHTING & BEVEL CHISEL HIGHLIGHTS ---
   vec3 light1Pos = normalize(vec3(sin(uTime * 0.65) * 0.6 + 0.2, 0.75, 0.75));
   vec3 H1 = normalize(light1Pos + V);
@@ -106,13 +117,15 @@ void main() {
   vec3 rainbow = 0.5 + 0.5 * cos(vec3(0.0, 2.0, 4.0) + (N.x * 2.0 + N.y * 3.0 + uTime * 0.3) * 3.1415);
   float rainbowFactor = rim * 0.22;
 
-  vec3 faceColor = chromeColor + (spec1 + spec2) * vec3(1.0, 0.98, 0.95) + rim * vec3(0.95, 0.98, 1.0) * 0.5;
+  vec3 specTint = mix(vec3(1.0, 0.98, 0.95), mix(vec3(1.0), segColor * 1.3, 0.35), hasColor);
+  vec3 faceColor = tintedChrome + (spec1 + spec2) * specTint + rim * vec3(0.95, 0.98, 1.0) * 0.5;
   faceColor += rainbow * rainbowFactor;
 
   // --- 3D EXTRUDED SIDE WALLS ---
   vec3 sideGrad = mix(vec3(0.20, 0.22, 0.30), vec3(0.62, 0.65, 0.76), depthProgress);
+  vec3 sideBase = mix(sideGrad, sideGrad * segColor * 1.5 + segColor * 0.15, hasColor);
   float sideLight = max(dot(N, normalize(vec3(-0.6, 0.75, 0.5))), 0.0) * 0.45 + 0.55;
-  vec3 sideColor = sideGrad * sideLight;
+  vec3 sideColor = sideBase * sideLight;
   sideColor *= 1.0 + sin(depthProgress * 40.0) * 0.05; // Smooth machining groove hint
 
   vec3 finalColor = mix(sideColor, faceColor, isFace);
@@ -122,7 +135,8 @@ void main() {
   float sweepX = sweepCycle * 2.6 - 0.8;
   float sweepLine = (uv.x * 1.15 + uv.y * 0.35) - sweepX;
   float sweepGlow = exp(-sweepLine * sweepLine * 70.0) * 0.75 * isFace;
-  finalColor += vec3(0.95, 0.98, 1.0) * sweepGlow;
+  vec3 sweepTint = mix(vec3(0.95, 0.98, 1.0), mix(vec3(1.0), segColor * 1.4, 0.4), hasColor);
+  finalColor += sweepTint * sweepGlow;
 
   // --- 90s 4-POINT STARBURST SPARKLES ---
   float star1Phase = fract(uTime * 0.15);
@@ -147,14 +161,74 @@ void main() {
 }
 `;
 
+function parseColorToRgb(color: string | null | undefined): [number, number, number] | null {
+    if (!color) return null;
+    const trimmed = color.trim();
+    if (trimmed.startsWith("#")) {
+        const hex = trimmed.slice(1);
+        if (hex.length === 3) {
+            const r = parseInt(hex[0] + hex[0], 16);
+            const g = parseInt(hex[1] + hex[1], 16);
+            const b = parseInt(hex[2] + hex[2], 16);
+            if (!isNaN(r) && !isNaN(g) && !isNaN(b)) return [r, g, b];
+        } else if (hex.length === 6 || hex.length === 8) {
+            const r = parseInt(hex.substring(0, 2), 16);
+            const g = parseInt(hex.substring(2, 4), 16);
+            const b = parseInt(hex.substring(4, 6), 16);
+            if (!isNaN(r) && !isNaN(g) && !isNaN(b)) return [r, g, b];
+        }
+    }
+    const rgbMatch = trimmed.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    if (rgbMatch) {
+        return [parseInt(rgbMatch[1], 10), parseInt(rgbMatch[2], 10), parseInt(rgbMatch[3], 10)];
+    }
+    return null;
+}
+
 interface ShaderTextProps {
     text: string;
+    style?: string | null;
+    segments?: NameSegment[] | null;
     className?: string;
 }
 
-export function ShaderText({ text, className }: ShaderTextProps) {
+export function ShaderText({ text, style, segments: propSegments, className }: ShaderTextProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [webglSupported, setWebglSupported] = useState(true);
+
+    const configStyle = useConfigStore((state) => state.config?.site_name_style);
+    const activeStyle = style !== undefined ? style : (configStyle || (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SITE_NAME_STYLE : null) || null);
+
+    const segments: NameSegment[] = useMemo(() => {
+        if (propSegments && propSegments.length > 0) return propSegments;
+        const parsed = parseSegments(activeStyle);
+        if (parsed && parsed.length > 0) return parsed;
+        return [{ text, font: "", color: null, bold: true, italic: true }];
+    }, [propSegments, activeStyle, text]);
+
+    const displayText = useMemo(() => {
+        return segments.map((s) => s.text).join("") || text;
+    }, [segments, text]);
+
+    useEffect(() => {
+        if (typeof document === "undefined") return;
+        const usedFonts = [...new Set(segments.map((s) => s.font).filter(Boolean))];
+        if (usedFonts.length > 0) {
+            const url = buildFontsUrlForNames(usedFonts);
+            if (url) {
+                const existing = document.querySelector<HTMLLinkElement>("link[data-lectern-fonts]");
+                if (!existing) {
+                    const link = document.createElement("link");
+                    link.rel = "stylesheet";
+                    link.href = url;
+                    link.setAttribute("data-lectern-fonts", "1");
+                    document.head.appendChild(link);
+                } else if (!existing.href.includes(url)) {
+                    existing.href = url;
+                }
+            }
+        }
+    }, [segments]);
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -213,85 +287,167 @@ export function ShaderText({ text, className }: ShaderTextProps) {
 
         // High-definition 2D canvas generation for smooth 3D extruded title
         const scale = 2;
-        const textCanvas = document.createElement("canvas");
         const texW = 1400 * scale;
         const texH = 420 * scale;
+
+        const textCanvas = document.createElement("canvas");
         textCanvas.width = texW;
         textCanvas.height = texH;
+        const textCtx = textCanvas.getContext("2d");
 
-        const ctx = textCanvas.getContext("2d");
-        if (!ctx) {
+        const colorCanvas = document.createElement("canvas");
+        colorCanvas.width = texW;
+        colorCanvas.height = texH;
+        const colorCtx = colorCanvas.getContext("2d");
+
+        if (!textCtx || !colorCtx) {
             setWebglSupported(false);
             return;
         }
 
-        const drawText = () => {
-            ctx.clearRect(0, 0, texW, texH);
+        const getFontStr = (seg: NameSegment, size: number) => {
+            const fontName = seg.font
+                ? `'${seg.font}', 'Cinzel', 'Arial Black', 'Impact', 'Trebuchet MS', system-ui, sans-serif`
+                : "'Cinzel', 'Arial Black', 'Impact', 'Trebuchet MS', system-ui, sans-serif";
+            const weight = seg.bold ? "900" : "400";
+            const fontStyle = seg.italic ? "italic" : "normal";
+            return `${fontStyle} ${weight} ${size}px ${fontName}`;
+        };
 
-            const fontName = "'Cinzel', 'Arial Black', 'Impact', 'Trebuchet MS', system-ui, sans-serif";
+        const drawCanvases = () => {
+            textCtx.clearRect(0, 0, texW, texH);
+            colorCtx.clearRect(0, 0, texW, texH);
+
             const centerX = texW * 0.5;
             const centerY = texH * 0.52;
 
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
+            textCtx.textAlign = "left";
+            textCtx.textBaseline = "middle";
+            colorCtx.textAlign = "left";
+            colorCtx.textBaseline = "middle";
 
-            // Auto-fit font size to fill ~88% of texture width for maximal presence inside card
-            let fontSize = 210 * scale;
-            ctx.font = `italic 900 ${fontSize}px ${fontName}`;
-            const metrics = ctx.measureText(text);
-            const targetWidth = texW * 0.88;
-            if (metrics.width > 0) {
-                fontSize = Math.min(fontSize * (targetWidth / metrics.width), 230 * scale);
+            // 1. Calculate optimal font size to fit inside targetWidth
+            const baseFontSize = 210 * scale;
+            let totalBaseWidth = 0;
+            for (const seg of segments) {
+                textCtx.font = getFontStr(seg, baseFontSize);
+                totalBaseWidth += textCtx.measureText(seg.text).width;
             }
-            const fontStr = `italic 900 ${fontSize}px ${fontName}`;
-            ctx.font = fontStr;
+
+            let fontSize = baseFontSize;
+            const targetWidth = texW * 0.88;
+            if (totalBaseWidth > 0) {
+                fontSize = Math.min(baseFontSize * (targetWidth / totalBaseWidth), 230 * scale);
+            }
+
+            // 2. Measure segments and compute absolute X layout positions
+            const segmentLayouts: { seg: NameSegment; fontStr: string; width: number; x: number }[] = [];
+            let totalWidth = 0;
+            for (const seg of segments) {
+                const fontStr = getFontStr(seg, fontSize);
+                textCtx.font = fontStr;
+                const width = textCtx.measureText(seg.text).width;
+                segmentLayouts.push({ seg, fontStr, width, x: 0 });
+                totalWidth += width;
+            }
+
+            let currentX = centerX - totalWidth * 0.5;
+            for (const item of segmentLayouts) {
+                item.x = currentX;
+                currentX += item.width;
+            }
 
             const depthX = 14 * scale;
             const depthY = 16 * scale;
-            // High-density subpixel stepping to eliminate any stepping gaps
             const steps = Math.ceil(Math.hypot(depthX, depthY) * 2);
 
-            // 1. Soft Drop Shadow
-            ctx.save();
-            ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
-            ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
-            ctx.shadowBlur = 14 * scale;
-            ctx.shadowOffsetX = depthX + 4 * scale;
-            ctx.shadowOffsetY = depthY + 6 * scale;
-            ctx.fillText(text, centerX, centerY);
-            ctx.restore();
+            // 3. Draw Soft Drop Shadow (textCanvas only)
+            textCtx.save();
+            textCtx.fillStyle = "rgba(0, 0, 0, 0.65)";
+            textCtx.shadowColor = "rgba(0, 0, 0, 0.9)";
+            textCtx.shadowBlur = 14 * scale;
+            textCtx.shadowOffsetX = depthX + 4 * scale;
+            textCtx.shadowOffsetY = depthY + 6 * scale;
+            for (const item of segmentLayouts) {
+                textCtx.font = item.fontStr;
+                textCtx.fillText(item.seg.text, item.x, centerY);
+            }
+            textCtx.restore();
 
-            // 2. Continuous 3D Extrusion (Back to Front)
-            // Encoded channels: R = Height (moderate), G = 0 (side wall), B = depth progress (0 -> 220)
+            // 4. Continuous 3D Extrusion (Back to Front)
             for (let i = steps; i >= 1; i--) {
                 const progress = 1.0 - (i / steps);
                 const offX = (1.0 - progress) * depthX;
                 const offY = (1.0 - progress) * depthY;
                 const bVal = Math.round(50 + progress * 160);
                 const rVal = Math.round(70 + progress * 40);
-                ctx.fillStyle = `rgb(${rVal}, 0, ${bVal})`;
-                ctx.shadowColor = "transparent";
-                ctx.shadowBlur = 0;
-                ctx.fillText(text, centerX + offX, centerY + offY);
+
+                textCtx.fillStyle = `rgb(${rVal}, 0, ${bVal})`;
+                textCtx.shadowColor = "transparent";
+                textCtx.shadowBlur = 0;
+
+                for (const item of segmentLayouts) {
+                    textCtx.font = item.fontStr;
+                    textCtx.fillText(item.seg.text, item.x + offX, centerY + offY);
+
+                    const rgb = parseColorToRgb(item.seg.color);
+                    if (rgb) {
+                        colorCtx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1.0)`;
+                    } else {
+                        colorCtx.fillStyle = "rgba(255, 255, 255, 0.0)";
+                    }
+                    colorCtx.font = item.fontStr;
+                    colorCtx.fillText(item.seg.text, item.x + offX, centerY + offY);
+                }
             }
 
-            // 3. Bevel Edge Chamfer Stroke: R = 160 (Bevel slope), G = 0, B = 240
-            ctx.save();
-            ctx.lineWidth = 6 * scale;
-            ctx.strokeStyle = "rgb(160, 0, 240)";
-            ctx.strokeText(text, centerX, centerY);
-            ctx.restore();
+            // 5. Bevel Edge Chamfer Stroke: R = 160, G = 0, B = 240
+            textCtx.save();
+            textCtx.lineWidth = 6 * scale;
+            textCtx.strokeStyle = "rgb(160, 0, 240)";
+            for (const item of segmentLayouts) {
+                textCtx.font = item.fontStr;
+                textCtx.strokeText(item.seg.text, item.x, centerY);
+            }
+            textCtx.restore();
 
-            // 4. Pure White Front Face: R = 255 (Max height), G = 255 (Full face mask), B = 255 (Top depth)
-            ctx.fillStyle = "rgb(255, 255, 255)";
-            ctx.fillText(text, centerX, centerY);
+            colorCtx.save();
+            colorCtx.lineWidth = 6 * scale;
+            for (const item of segmentLayouts) {
+                const rgb = parseColorToRgb(item.seg.color);
+                if (rgb) {
+                    colorCtx.strokeStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1.0)`;
+                } else {
+                    colorCtx.strokeStyle = "rgba(255, 255, 255, 0.0)";
+                }
+                colorCtx.font = item.fontStr;
+                colorCtx.strokeText(item.seg.text, item.x, centerY);
+            }
+            colorCtx.restore();
+
+            // 6. Front Face Fill: R = 255, G = 255, B = 255
+            textCtx.fillStyle = "rgb(255, 255, 255)";
+            for (const item of segmentLayouts) {
+                textCtx.font = item.fontStr;
+                textCtx.fillText(item.seg.text, item.x, centerY);
+
+                const rgb = parseColorToRgb(item.seg.color);
+                if (rgb) {
+                    colorCtx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1.0)`;
+                } else {
+                    colorCtx.fillStyle = "rgba(255, 255, 255, 0.0)";
+                }
+                colorCtx.font = item.fontStr;
+                colorCtx.fillText(item.seg.text, item.x, centerY);
+            }
         };
 
-        drawText();
+        drawCanvases();
 
-        // Texture Upload
-        const texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, texture);
+        // Texture Unit 0: tText (3D height/mask/extrusion)
+        const textTexture = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, textTexture);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -299,15 +455,35 @@ export function ShaderText({ text, className }: ShaderTextProps) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-        const updateTexture = () => {
-            if (!gl || !texture) return;
-            drawText();
-            gl.bindTexture(gl.TEXTURE_2D, texture);
+        // Texture Unit 1: tColor (Per-segment base color & custom color mask)
+        const colorTexture = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, colorTexture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, colorCanvas);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+        const updateTextures = () => {
+            if (!gl || !textTexture || !colorTexture) return;
+            drawCanvases();
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, textTexture);
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
+
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, colorTexture);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, colorCanvas);
         };
 
-        if (document.fonts) {
-            document.fonts.ready.then(() => updateTexture());
+        let handleFontLoadingDone: (() => void) | null = null;
+        if (typeof document !== "undefined" && document.fonts) {
+            document.fonts.ready.then(() => updateTextures());
+            handleFontLoadingDone = () => updateTextures();
+            document.fonts.addEventListener?.("loadingdone", handleFontLoadingDone);
         }
 
         // Setup Quad Geometry
@@ -352,8 +528,10 @@ export function ShaderText({ text, className }: ShaderTextProps) {
         const uTimeLoc = gl.getUniformLocation(program, "uTime");
         const uResolutionLoc = gl.getUniformLocation(program, "uResolution");
         const tTextLoc = gl.getUniformLocation(program, "tText");
+        const tColorLoc = gl.getUniformLocation(program, "tColor");
 
         gl.uniform1i(tTextLoc, 0);
+        gl.uniform1i(tColorLoc, 1);
 
         const updateCanvasSize = () => {
             if (!canvas || !gl) return;
@@ -396,8 +574,12 @@ export function ShaderText({ text, className }: ShaderTextProps) {
         return () => {
             cancelAnimationFrame(animationFrameId);
             resizeObserver.disconnect();
+            if (handleFontLoadingDone && typeof document !== "undefined" && document.fonts) {
+                document.fonts.removeEventListener?.("loadingdone", handleFontLoadingDone);
+            }
             if (gl) {
-                gl.deleteTexture(texture);
+                gl.deleteTexture(textTexture);
+                gl.deleteTexture(colorTexture);
                 gl.deleteBuffer(posBuffer);
                 gl.deleteBuffer(uvBuffer);
                 gl.deleteProgram(program);
@@ -405,13 +587,15 @@ export function ShaderText({ text, className }: ShaderTextProps) {
                 gl.deleteShader(fragShader);
             }
         };
-    }, [text]);
+    }, [segments]);
 
     if (!webglSupported) {
         return (
-            <span className={className}>
-                {text}
-            </span>
+            <SiteName
+                name={text}
+                style={activeStyle}
+                gradientClassName={className}
+            />
         );
     }
 
@@ -422,7 +606,7 @@ export function ShaderText({ text, className }: ShaderTextProps) {
                 className="w-full max-w-[390px] h-[130px] sm:h-[150px] object-contain block mx-auto pointer-events-none select-none"
                 aria-hidden="true"
             />
-            <span className="sr-only">{text}</span>
+            <span className="sr-only">{displayText}</span>
         </div>
     );
 }

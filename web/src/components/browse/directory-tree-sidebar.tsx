@@ -14,10 +14,12 @@ import { BrowseLink, navigateBrowse } from "@/components/browse/browse-link";
 import {
   ArrowRight,
   ChevronRight,
+  ExternalLink,
   File,
   Folder,
   FolderOpen,
   Home,
+  Link2,
   ListChecks,
   Loader2,
   Clock3,
@@ -40,6 +42,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslations } from "next-intl";
 import { useExternalLinkStore } from "@/lib/external-link-store";
+import { isExternalUrl } from "@/lib/url-utils";
 import {
   pendingCreatesForParent,
   pendingOperations,
@@ -100,6 +103,11 @@ function normalizeMaterials(raw: unknown[]): MaterialNode[] {
 }
 
 function pickMaterialIcon(mat: MaterialNode): React.ElementType {
+  const targetUrl = String(mat.metadata?.url ?? "").trim();
+  const isLink = mat.type === "link" || !!targetUrl;
+  if (isLink) {
+    return isExternalUrl(targetUrl) ? ExternalLink : Link2;
+  }
   if (mat.type === "document") {
     const ext = mat.file_name ? getFileExtension(mat.file_name) : "";
     if (ext && EXT_ICONS[ext]) return EXT_ICONS[ext];
@@ -109,6 +117,13 @@ function pickMaterialIcon(mat: MaterialNode): React.ElementType {
 }
 
 function pickMaterialIconColor(mat: MaterialNode): string {
+  const targetUrl = String(mat.metadata?.url ?? "").trim();
+  const isLink = mat.type === "link" || !!targetUrl;
+  if (isLink) {
+    return isExternalUrl(targetUrl)
+      ? (MATERIAL_TYPE_ICON_COLORS["link"] ?? "text-sky-600 dark:text-sky-400")
+      : (MATERIAL_TYPE_ICON_COLORS["internal_link"] ?? "text-indigo-600 dark:text-indigo-400");
+  }
   if (mat.type === "document") {
     return getFileIconColor(mat.file_name ?? "", mat.file_mime_type);
   }

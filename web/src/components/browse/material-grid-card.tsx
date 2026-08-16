@@ -10,6 +10,7 @@ import { Paperclip, File } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
+import { isExternalUrl } from "@/lib/url-utils";
 import { useTranslations } from "next-intl";
 import { TYPE_COLORS, TYPE_ICONS, EXT_ICONS } from "@/lib/material-icons";
 import { getFileTypeStyle } from "@/components/home/file-type-display";
@@ -77,7 +78,7 @@ function GhostMaterialPreview({
     >
       <Icon
         className={cn(
-          "h-10 w-10 z-10",
+          "h-12 w-12 z-10",
           iconColorClass,
           imgUrl ? "opacity-0" : "opacity-80",
         )}
@@ -86,7 +87,7 @@ function GhostMaterialPreview({
         /* eslint-disable-next-line @next/next/no-img-element */
         <img
           src={imgUrl}
-          alt=""
+          alt={fileName ?? "Staged file preview"}
           className="absolute inset-0 h-full w-full object-cover animate-in fade-in duration-300"
           loading="lazy"
           decoding="async"
@@ -152,6 +153,9 @@ function MaterialGridCardImpl({
   const slug = String(material.slug ?? "");
   const id = String(material.id ?? "");
   const type = String(material.type ?? "other");
+  const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
+  const isLink = type === "link" || !!targetUrl;
+  const isInternalLink = isLink && !isExternalUrl(targetUrl);
   const status = normalizeContentStatus(material.status);
   const attachmentCount = draftAttachmentCount ?? Number(material.attachment_count ?? 0);
 
@@ -172,8 +176,13 @@ function MaterialGridCardImpl({
   };
 
   // Badge
-  let badgeColor = TYPE_COLORS[type] ?? TYPE_COLORS.other;
-  let badgeLabel = tTypes.has(type as Parameters<typeof tTypes>[0]) ? tTypes(type as Parameters<typeof tTypes>[0]) : type;
+  const effectiveType = isInternalLink ? "internal_link" : type;
+  let badgeColor = TYPE_COLORS[effectiveType] ?? TYPE_COLORS[type] ?? TYPE_COLORS.other;
+  let badgeLabel = tTypes.has(effectiveType as Parameters<typeof tTypes>[0])
+    ? tTypes(effectiveType as Parameters<typeof tTypes>[0])
+    : tTypes.has(type as Parameters<typeof tTypes>[0])
+      ? tTypes(type as Parameters<typeof tTypes>[0])
+      : type;
 
   if (type === "document") {
     const fallbackLabel = getFileBadgeLabel(fileName, mimeType);
@@ -235,8 +244,6 @@ function MaterialGridCardImpl({
 
   const router = useRouter();
   const openLink = useExternalLinkStore((s) => s.openLink);
-  const targetUrl = String((material.metadata as Record<string, unknown> | undefined)?.url ?? "").trim();
-  const isLink = type === "link" || !!targetUrl;
 
   const handleCardClick = (e: React.MouseEvent) => {
     if (staged === "deleted") {

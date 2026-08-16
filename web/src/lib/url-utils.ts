@@ -107,3 +107,54 @@ export function normalizeTargetUrl(rawUrl: string): string {
     }
     return `https://${trimmed}`;
 }
+
+/**
+ * Extracts the internal browse path (the segment after /browse/) from a URL if it
+ * points to an internal browse route.
+ *
+ * Returns null if the URL is external or not a /browse route.
+ * Examples:
+ * - "/browse/math/analysis" -> "math/analysis"
+ * - "https://current-domain/browse/math/analysis" -> "math/analysis"
+ * - "/browse" -> ""
+ * - "/browse/" -> ""
+ * - "https://external.com/browse/math" -> null
+ * - "/settings" -> null
+ */
+export function getInternalBrowsePath(targetUrl?: string | null): string | null {
+    if (!targetUrl || typeof targetUrl !== "string") return null;
+    const trimmed = targetUrl.trim();
+    if (!trimmed) return null;
+    if (isExternalUrl(trimmed)) return null;
+
+    try {
+        const currentOrigin =
+            typeof window !== "undefined" && window.location?.origin
+                ? window.location.origin
+                : "http://localhost";
+
+        const normalized = trimmed.startsWith("//") ? `https:${trimmed}` : trimmed;
+        const parsed = new URL(normalized, currentOrigin);
+
+        let pathname = parsed.pathname;
+        if (pathname === "/browse" || pathname === "/browse/") {
+            return "";
+        }
+        if (pathname.startsWith("/browse/")) {
+            const rawPath = pathname.slice("/browse/".length).replace(/\/+$/, "");
+            return decodeURIComponent(rawPath);
+        }
+
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Checks if a URL is an internal link that points to a /browse route.
+ */
+export function isInternalBrowseUrl(targetUrl?: string | null): boolean {
+    return getInternalBrowsePath(targetUrl) !== null;
+}
+

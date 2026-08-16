@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { isExternalUrl, getDomainFromUrl, normalizeTargetUrl } from "./url-utils";
+import { isExternalUrl, getDomainFromUrl, normalizeTargetUrl, getInternalBrowsePath, isInternalBrowseUrl } from "./url-utils";
 
 describe("url-utils", () => {
     const originalLocation = window.location;
@@ -89,4 +89,47 @@ describe("url-utils", () => {
             expect(normalizeTargetUrl("github.com")).toBe("https://github.com");
         });
     });
+
+    describe("getInternalBrowsePath and isInternalBrowseUrl", () => {
+        it("extracts browse path from relative URLs", () => {
+            expect(getInternalBrowsePath("/browse/math/analysis")).toBe("math/analysis");
+            expect(getInternalBrowsePath("/browse/math/analysis/")).toBe("math/analysis");
+            expect(getInternalBrowsePath("/browse/algorithms")).toBe("algorithms");
+            expect(getInternalBrowsePath("/browse")).toBe("");
+            expect(getInternalBrowsePath("/browse/")).toBe("");
+        });
+
+        it("extracts browse path from same-origin absolute URLs", () => {
+            expect(getInternalBrowsePath("https://wikint.example.com/browse/math/analysis")).toBe("math/analysis");
+            expect(getInternalBrowsePath("https://wikint.example.com/browse")).toBe("");
+        });
+
+        it("handles query strings and hashes cleanly", () => {
+            expect(getInternalBrowsePath("/browse/math/analysis?preview=true#details")).toBe("math/analysis");
+            expect(getInternalBrowsePath("https://wikint.example.com/browse/algo?page=1#head")).toBe("algo");
+        });
+
+        it("decodes URL-encoded path segments", () => {
+            expect(getInternalBrowsePath("/browse/math%20course/intro%20algo")).toBe("math course/intro algo");
+        });
+
+        it("returns null for external URLs and non-browse routes", () => {
+            expect(getInternalBrowsePath("https://github.com/clubcode/wikint")).toBeNull();
+            expect(getInternalBrowsePath("https://other-domain.com/browse/math")).toBeNull();
+            expect(getInternalBrowsePath("/settings")).toBeNull();
+            expect(getInternalBrowsePath("/pull-requests/123")).toBeNull();
+            expect(getInternalBrowsePath("")).toBeNull();
+            expect(getInternalBrowsePath(null)).toBeNull();
+            expect(getInternalBrowsePath(undefined)).toBeNull();
+        });
+
+        it("isInternalBrowseUrl correctly returns boolean", () => {
+            expect(isInternalBrowseUrl("/browse/math/analysis")).toBe(true);
+            expect(isInternalBrowseUrl("https://wikint.example.com/browse/cs")).toBe(true);
+            expect(isInternalBrowseUrl("/settings")).toBe(false);
+            expect(isInternalBrowseUrl("https://github.com")).toBe(false);
+            expect(isInternalBrowseUrl(null)).toBe(false);
+        });
+    });
 });
+

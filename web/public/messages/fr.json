@@ -732,6 +732,7 @@
     "other": "Autre",
     "qcm": "QCM",
     "link": "Lien externe",
+    "internal_link": "Lien interne",
     "folder": "Dossier",
     "file": "Fichier",
     "statusOpen": "statusOpen",
@@ -939,7 +940,9 @@
       "readyTimeout": "Euro-Office met trop de temps à ouvrir ce document. Veuillez réessayer."
     },
     "retry": "Réessayer",
-    "imageLoadFailed": "Cette image n'a pas pu être affichée. Elle n'a peut-être pas été téléchargée entièrement."
+    "imageLoadFailed": "Cette image n'a pas pu être affichée. Elle n'a peut-être pas été téléchargée entièrement.",
+    "rotateCcw": "Pivoter de -90°",
+    "rotateCw": "Pivoter de +90°"
   },
   "MissingImage": {
     "title": "Télécharger l'image manquante",

@@ -21,6 +21,7 @@ import {
     X,
     Eye,
     ExternalLink,
+    Link2,
     ChevronDown,
     Clock,
     ChevronsDownUp,
@@ -35,6 +36,7 @@ import {
     Undo2,
     ShieldAlert,
 } from "lucide-react";
+import { isExternalUrl } from "@/lib/url-utils";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -325,10 +327,13 @@ function OperationRow({
     const baseOpType = String(rawOp.op || rawOp.pr_type || "unknown");
     const targetUrl = String((rawOp.metadata as Record<string, unknown> | undefined)?.url || rawOp.url || "").trim();
     const isLink = rawOp.type === "link" || rawOp.material_type === "link" || Boolean(targetUrl);
+    const isInternalLink = isLink && !isExternalUrl(targetUrl);
     const opType = isLink && baseOpType.includes("material")
         ? baseOpType.replace("material", "link")
         : baseOpType;
-    const Icon = OP_ICONS[opType] ?? (isLink ? ExternalLink : OP_ICONS[baseOpType] ?? FilePlus);
+    const Icon = isLink
+        ? (isInternalLink ? Link2 : ExternalLink)
+        : (OP_ICONS[opType] ?? OP_ICONS[baseOpType] ?? FilePlus);
     const colorClass = OP_COLORS[opType] ?? OP_COLORS[baseOpType] ?? "";
     const hasFile = Boolean(rawOp.file_key);
     const isApproved = prStatus === "approved";
@@ -617,7 +622,11 @@ function OperationRow({
                             </p>
                             {targetUrl && (
                                 <p className="text-[11px] text-muted-foreground truncate font-mono mt-0.5 max-w-sm sm:max-w-md flex items-center gap-1">
-                                    <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                                    {isInternalLink ? (
+                                        <Link2 className="h-3 w-3 shrink-0 opacity-70" />
+                                    ) : (
+                                        <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                                    )}
                                     <span className="truncate">{targetUrl}</span>
                                 </p>
                             )}
@@ -741,7 +750,11 @@ function OperationRow({
                                 {targetUrl && (
                                     <div className="contents">
                                         <dt className="py-0.5 capitalize text-muted-foreground flex items-center gap-1.5">
-                                            <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                                            {isInternalLink ? (
+                                                <Link2 className="h-3.5 w-3.5 shrink-0" />
+                                            ) : (
+                                                <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                                            )}
                                             {t("fields.url")}
                                         </dt>
                                         <dd className="py-0.5 min-w-0">
@@ -752,7 +765,11 @@ function OperationRow({
                                                 className="inline-flex items-center gap-1.5 font-mono text-xs text-primary hover:underline break-all"
                                             >
                                                 <span>{targetUrl}</span>
-                                                <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                                                {isInternalLink ? (
+                                                    <Link2 className="h-3 w-3 shrink-0 opacity-70" />
+                                                ) : (
+                                                    <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                                                )}
                                             </a>
                                         </dd>
                                     </div>

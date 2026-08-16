@@ -38,6 +38,7 @@ import {
     Eye,
     ListChecks,
     ExternalLink,
+    Link2,
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -60,6 +61,7 @@ import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { MIME_QCM } from "@/lib/file-utils";
+import { isExternalUrl } from "@/lib/url-utils";
 
 const OP_ICONS: Record<string, React.ElementType> = {
     create_material: FilePlus,
@@ -117,6 +119,7 @@ function OperationCard({
     const isQcm = (op as any).file_mime_type === MIME_QCM;
     const isLink = (op as any).type === "link" || !!(op as any).metadata?.url;
     const linkUrl = (op as any).metadata?.url as string | undefined;
+    const isInternalLink = isLink && !isExternalUrl(linkUrl);
     const hasQcmDraft = isQcm && !!(op as any).metadata?.qcm_draft;
     const qcmEditHref = isQcm && op.op === "edit_material"
         ? `/qcm/${op.material_id}/edit?draftIndex=${index}`
@@ -127,8 +130,18 @@ function OperationCard({
     return (
         <div className={`rounded-lg border transition-colors ${expired ? "border-red-300 bg-red-50/50 dark:border-red-800 dark:bg-red-950/20" : expiringSoon ? "border-amber-300 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20" : ""}`}>
             <div className="flex items-center gap-3 p-3">
-                <div className={`shrink-0 ${expired ? "text-red-400" : isQcm ? "text-violet-500" : isLink ? "text-sky-600 dark:text-sky-400" : color}`}>
-                    {isQcm ? <ListChecks className="h-4 w-4" /> : isLink ? <ExternalLink className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                <div className={`shrink-0 ${expired ? "text-red-400" : isQcm ? "text-violet-500" : isLink ? (isInternalLink ? "text-indigo-600 dark:text-indigo-400" : "text-sky-600 dark:text-sky-400") : color}`}>
+                    {isQcm ? (
+                        <ListChecks className="h-4 w-4" />
+                    ) : isLink ? (
+                        isInternalLink ? (
+                            <Link2 className="h-4 w-4" />
+                        ) : (
+                            <ExternalLink className="h-4 w-4" />
+                        )
+                    ) : (
+                        <Icon className="h-4 w-4" />
+                    )}
                 </div>
                 <div className="min-w-0 flex-1">
                     <p className={`text-sm font-medium leading-tight ${expired ? "line-through text-muted-foreground" : ""}`}>

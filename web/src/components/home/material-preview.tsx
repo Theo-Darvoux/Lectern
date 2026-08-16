@@ -16,6 +16,9 @@ import {
   type ThumbnailType,
 } from "@/lib/material-preview-source";
 
+import { isExternalUrl, getInternalBrowsePath } from "@/lib/url-utils";
+import { fetchBrowsePath } from "@/lib/browse-prefetch";
+
 const MarkdownRenderer = dynamic(
   () => import("../viewers/markdown-renderer").then((module) => module.MarkdownRenderer),
   { ssr: false },
@@ -126,6 +129,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const handlePdfError = useCallback(() => setPdfReady(false), []);
   const [imgBust, setImgBust] = useState(0);
   const [cacheBust, setCacheBust] = useState(0);
+  const [resolvedTargetMat, setResolvedTargetMat] = useState<MaterialDetail | null>(null);
   const imgAttemptRef = useRef(0);
   const imgRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -133,12 +137,21 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
+    setUrl(null);
+    setThumbnailType(null);
+    setTextPreview(null);
+    setResolvedTargetMat(null);
+    setVideoLoaded(false);
+    setPdfReady(false);
+  }, [material.id]);
+
+  useEffect(() => {
     return subscribeMaterialThumbnail((id, ts) => {
-      if (id === String(material.id)) {
+      if (id === String(material.id) || (resolvedTargetMat && id === String(resolvedTargetMat.id))) {
         setCacheBust(ts || Date.now());
       }
     });
-  }, [material.id]);
+  }, [material.id, resolvedTargetMat?.id]);
 
   const inView = useInView(containerRef);
   // In lazy mode, gate loading on viewport intersection. In non-lazy mode we
@@ -149,11 +162,23 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   // opacity-0 ("renders then disappears").
   const shouldLoad = lazy ? inView : true;
 
-  const versionInfo = material.current_version_info;
+  const targetUrl = String(
+    (material.metadata as Record<string, unknown> | undefined)?.url ??
+    (material.metadata as Record<string, unknown> | undefined)?.link ??
+    ""
+  ).trim();
+
+  const isLink = material.type === "link" || !!targetUrl;
+  const isExternal = isExternalUrl(targetUrl);
+  const isInternal = isLink && !isExternal;
+  const internalBrowsePath = isInternal ? getInternalBrowsePath(targetUrl) : null;
+  const isLinkWithoutBrowsePath = isLink && !internalBrowsePath;
+
+  const effectiveMat = resolvedTargetMat || material;
+  const versionInfo = effectiveMat.current_version_info;
   const fileName = versionInfo?.file_name ?? "";
   const mimeType = versionInfo?.file_mime_type ?? "";
 
-  const isLink = material.type === "link" || !!(material.metadata as Record<string, unknown> | undefined)?.url;
   const isImage = mimeType.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
   const isVideo = mimeType.startsWith("video/") || /\.(mp4|webm|avi|mkv|mov)$/i.test(fileName);
   const isMarkdown = mimeType === "text/markdown" || /\.(md|markdown)$/i.test(fileName);
@@ -166,7 +191,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   useEffect(() => {
     if (!isPDF || lazy) return;
     const el = containerRef.current;
-    if (!el) return;
+    if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(([entry]) => {
       if (entry) setContainerWidth(entry.contentRect.width || 300);
     });
@@ -177,7 +202,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
 
   useEffect(() => {
     // In lazy mode, wait until the card is near the viewport before fetching.
-    if (!shouldLoad || isLink) return;
+    if (!shouldLoad || isLinkWithoutBrowsePath) return;
 
     let mounted = true;
     const controller = new AbortController();
@@ -186,10 +211,43 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
 
     async function fetchPreview() {
       try {
+        let activeMaterialId = String(material.id);
+        let activeMat: MaterialDetail | Record<string, unknown> = material;
+
+        // If this is an internal link pointing to a browse path, resolve target material first
+        if (isLink && internalBrowsePath !== null) {
+          try {
+            const browseRes = (await fetchBrowsePath(internalBrowsePath)) as {
+              type?: string;
+              material?: MaterialDetail;
+            } | null;
+            if (!mounted) return;
+            if (browseRes && browseRes.type === "material" && browseRes.material) {
+              activeMat = browseRes.material;
+              activeMaterialId = String(activeMat.id);
+              setResolvedTargetMat(browseRes.material);
+            } else {
+              setLoading(false);
+              return;
+            }
+          } catch {
+            if (mounted) setLoading(false);
+            return;
+          }
+        }
+
+        const activeVer = (activeMat as MaterialDetail).current_version_info;
+        const activeFileName = String(activeVer?.file_name ?? "");
+        const activeMime = String(activeVer?.file_mime_type ?? "");
+        const activeIsImage = activeMime.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(activeFileName);
+        const activeIsVideo = activeMime.startsWith("video/") || /\.(mp4|webm|avi|mkv|mov)$/i.test(activeFileName);
+        const activeIsMarkdown = activeMime === "text/markdown" || /\.(md|markdown)$/i.test(activeFileName);
+        const activeIsText = (activeMime.startsWith("text/") || /\.(txt|py|js|ts|json)$/i.test(activeFileName)) && !activeIsMarkdown;
+
         // 1. Try the /thumbnail endpoint first.
         //    It returns { url, thumbnail_type: "webp" | "fallback" }.
         try {
-          const thumbData = await getMaterialThumbnail(String(material.id));
+          const thumbData = await getMaterialThumbnail(activeMaterialId);
           if (mounted && thumbData && thumbData.url) {
             setUrl(thumbData.url);
             setThumbnailType(thumbData.thumbnailType ?? "webp");
@@ -204,13 +262,13 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         if (!mounted) return;
 
         // 2. Fallback: fetch direct inline URL for native client-side rendering
-        const isMediaOrText = isImage || isVideo || isText || isMarkdown;
+        const isMediaOrText = activeIsImage || activeIsVideo || activeIsText || activeIsMarkdown;
         if (!isMediaOrText) {
           setLoading(false);
           return;
         }
 
-        const inlineUrl = await getMaterialFileUrl(String(material.id), controller.signal);
+        const inlineUrl = await getMaterialFileUrl(activeMaterialId, controller.signal);
         if (!mounted) return;
 
         if (inlineUrl) {
@@ -218,39 +276,39 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
           setThumbnailType(null);  // plain inline URL
 
           // Fetch text snippet for text/markdown files
-          if (isText || isMarkdown) {
-          try {
-            const res = await fetch(inlineUrl, { signal: controller.signal });
-            const contentEncoding = res.headers.get("Content-Encoding");
-            let text = "";
-            if (contentEncoding === "gzip" || contentEncoding?.includes("gzip")) {
-              if (res.body && typeof DecompressionStream !== "undefined") {
-                const decompressedStream = res.body.pipeThrough(new DecompressionStream("gzip"));
-                const decompressedResponse = new Response(decompressedStream);
-                text = await decompressedResponse.text();
+          if (activeIsText || activeIsMarkdown) {
+            try {
+              const res = await fetch(inlineUrl, { signal: controller.signal });
+              const contentEncoding = res.headers.get("Content-Encoding");
+              let text = "";
+              if (contentEncoding === "gzip" || contentEncoding?.includes("gzip")) {
+                if (res.body && typeof DecompressionStream !== "undefined") {
+                  const decompressedStream = res.body.pipeThrough(new DecompressionStream("gzip"));
+                  const decompressedResponse = new Response(decompressedStream);
+                  text = await decompressedResponse.text();
+                } else {
+                  text = await res.text();
+                }
               } else {
-                text = await res.text();
+                const blob = await res.blob();
+                const buffer = await blob.arrayBuffer();
+                const arr = new Uint8Array(buffer);
+                if (arr.length >= 2 && arr[0] === 0x1f && arr[1] === 0x8b && typeof DecompressionStream !== "undefined") {
+                  const stream = new Blob([buffer]).stream();
+                  const decompressedStream = stream.pipeThrough(new DecompressionStream("gzip"));
+                  const decompressedResponse = new Response(decompressedStream);
+                  text = await decompressedResponse.text();
+                } else {
+                  text = new TextDecoder().decode(buffer);
+                }
               }
-            } else {
-              const blob = await res.blob();
-              const buffer = await blob.arrayBuffer();
-              const arr = new Uint8Array(buffer);
-              if (arr.length >= 2 && arr[0] === 0x1f && arr[1] === 0x8b && typeof DecompressionStream !== "undefined") {
-                const stream = new Blob([buffer]).stream();
-                const decompressedStream = stream.pipeThrough(new DecompressionStream("gzip"));
-                const decompressedResponse = new Response(decompressedStream);
-                text = await decompressedResponse.text();
-              } else {
-                text = new TextDecoder().decode(buffer);
-              }
+              if (mounted) setTextPreview(text.slice(0, 1000));
+            } catch {
+              // ignore
             }
-            if (mounted) setTextPreview(text.slice(0, 1000));
-          } catch {
-            // ignore
           }
         }
-      }
-    } catch {
+      } catch {
         // ignore
       } finally {
         if (mounted) setLoading(false);
@@ -263,7 +321,19 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
       controller.abort();
       clearTimeout(timer);
     };
-  }, [material.id, isText, isImage, isVideo, isMarkdown, isPDF, shouldLoad, cacheBust]);
+  }, [
+    material.id,
+    isText,
+    isImage,
+    isVideo,
+    isMarkdown,
+    isPDF,
+    shouldLoad,
+    cacheBust,
+    isLink,
+    internalBrowsePath,
+    isLinkWithoutBrowsePath,
+  ]);
 
   // Reset the image-retry counter whenever the source URL changes, and clear any
   // pending retry timer on unmount.
@@ -300,7 +370,17 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     return finalUrl;
   })();
 
-  const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName, mimeType, isLink ? "link" : material.type);
+  const effectiveType = resolvedTargetMat
+    ? resolvedTargetMat.type
+    : isLink
+      ? (isInternal ? "internal_link" : "link")
+      : material.type;
+
+  const { gradient, iconColorClass, Icon } = getFileTypeStyle(
+    resolvedTargetMat ? fileName : (isLink ? null : fileName),
+    resolvedTargetMat ? mimeType : (isLink ? null : mimeType),
+    effectiveType,
+  );
 
   const handleVideoLoaded = () => {
     if (videoRef.current) {

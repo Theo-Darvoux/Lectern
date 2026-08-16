@@ -100,6 +100,7 @@ function MagicLinkVerifier() {
                 <div className="text-center -mt-2 -mb-1">
                     <ShaderText
                         text={siteName}
+                        style={config?.site_name_style}
                         className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"
                     />
                     <p className="text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mt-1">
@@ -189,6 +190,7 @@ export default function MagicLinkPage() {
                         <div className="text-center -mt-2 -mb-1">
                             <ShaderText
                                 text={siteName}
+                                style={config?.site_name_style}
                                 className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"
                             />
                             <p className="text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mt-1">

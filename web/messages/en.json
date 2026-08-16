@@ -732,6 +732,7 @@
     "other": "Other",
     "qcm": "QCM",
     "link": "External Link",
+    "internal_link": "Internal Link",
     "folder": "Folder",
     "file": "File",
     "statusOpen": "statusOpen",
@@ -939,7 +940,9 @@
       "readyTimeout": "Euro-Office took too long to open this document. Please try again."
     },
     "retry": "Retry",
-    "imageLoadFailed": "This image could not be displayed. It may not have downloaded fully."
+    "imageLoadFailed": "This image could not be displayed. It may not have downloaded fully.",
+    "rotateCcw": "Rotate -90°",
+    "rotateCw": "Rotate +90°"
   },
   "MissingImage": {
     "title": "Upload missing image",

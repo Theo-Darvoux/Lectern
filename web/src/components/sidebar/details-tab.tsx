@@ -11,6 +11,7 @@ import {
   Calendar,
   User,
   ExternalLink,
+  Link2,
   Paperclip,
   Tag,
   HardDrive,
@@ -60,6 +61,7 @@ import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
 import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { isRestrictedTarget } from "@/lib/utils";
+import { isExternalUrl } from "@/lib/url-utils";
 
 /* -------------------------------------------------------------------------- */
 /*  Reusable primitives for a card-sectioned sidebar                          */
@@ -704,6 +706,7 @@ function AuthorName({ authorId }: { authorId: string | null }) {
 
 function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations("Sidebar");
+  const tTypes = useTranslations("MaterialTypes");
   const locale = useLocale();
   const fr = locale.toLowerCase().startsWith("fr");
   const lang: "fr" | "en" = fr ? "fr" : "en";
@@ -717,6 +720,7 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const description = data.description ? String(data.description) : null;
   const type = String(data.type ?? "other");
   const isLink = type === "link" || !!targetUrl;
+  const isInternalLink = isLink && !isExternalUrl(targetUrl);
   const authorId = data.author_id ? String(data.author_id) : null;
   const downloadCount = Number(data.download_count ?? 0);
   const createdAt = data.created_at ? new Date(String(data.created_at)) : null;
@@ -794,18 +798,38 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
       {/* Header */}
       <div className="flex items-start gap-3 min-w-0">
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-muted">
-          <FileText className="h-6 w-6 text-muted-foreground" />
+          {isLink ? (
+            isInternalLink ? (
+              <Link2 className="h-6 w-6 text-indigo-600 dark:text-indigo-400" />
+            ) : (
+              <ExternalLink className="h-6 w-6 text-sky-600 dark:text-sky-400" />
+            )
+          ) : (
+            <FileText className="h-6 w-6 text-muted-foreground" />
+          )}
         </div>
         <div className="min-w-0 flex-1">
           <h3 className="font-semibold leading-tight break-all">{title}</h3>
           <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
             <ContentStatusBadge materialId={id} status={data.status} />
             <span
-              className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${fileName || fileMimeType ? getFileBadgeColor(fileName, fileMimeType) : "bg-gray-100 text-gray-800 dark:bg-gray-800/40 dark:text-gray-300"}`}
+              className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${
+                fileName || fileMimeType
+                  ? getFileBadgeColor(fileName, fileMimeType)
+                  : isInternalLink
+                    ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
+                    : isLink
+                      ? "bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
+                      : "bg-gray-100 text-gray-800 dark:bg-gray-800/40 dark:text-gray-300"
+              }`}
             >
               {fileName || fileMimeType
                 ? getFileBadgeLabel(fileName, fileMimeType)
-                : type}
+                : isInternalLink
+                  ? (tTypes.has("internal_link" as any) ? tTypes("internal_link" as any) : "Internal Link")
+                  : isLink
+                    ? (tTypes.has("link" as any) ? tTypes("link" as any) : "External Link")
+                    : (tTypes.has(type as any) ? tTypes(type as any) : type)}
             </span>
           </div>
         </div>
@@ -871,8 +895,8 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
         )}
         {isLink && targetUrl && (
           <MetaRow
-            icon={ExternalLink}
-            label={t("targetUrl")}
+            icon={isInternalLink ? Link2 : ExternalLink}
+            label={isInternalLink ? (tTypes.has("internal_link" as any) ? tTypes("internal_link" as any) : "Internal Link") : t("targetUrl")}
             value={
               <button
                 type="button"
@@ -881,7 +905,11 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
                 title={targetUrl}
               >
                 <span className="truncate">{targetUrl}</span>
-                <ExternalLink className="h-3 w-3 shrink-0" />
+                {isInternalLink ? (
+                  <Link2 className="h-3 w-3 shrink-0" />
+                ) : (
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                )}
               </button>
             }
           />
