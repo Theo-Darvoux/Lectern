@@ -314,7 +314,7 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
             colorCtx.font = fontStr;
 
             // 2. Measure segments and compute absolute X layout positions
-            let totalWidth = textCtx.measureText(displayText).width;
+            const totalWidth = textCtx.measureText(displayText).width;
             let currentX = centerX - totalWidth * 0.5;
             const segmentLayouts = segments.map((seg) => {
                 const width = textCtx.measureText(seg.text).width;
