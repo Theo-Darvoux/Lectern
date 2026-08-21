@@ -160,25 +160,7 @@
     }
 }
 
-/* ─── Profile page keyframes & custom properties ─── */
-
 :root {
-    --pf-gold-shimmer: linear-gradient(
-        110deg,
-        #92400e 20%,
-        #f59e0b 40%,
-        #fde68a 50%,
-        #f59e0b 60%,
-        #92400e 80%
-    );
-    --pf-purple-shimmer: linear-gradient(
-        110deg,
-        #6d28d9 20%,
-        #a855f7 40%,
-        #e9d5ff 50%,
-        #a855f7 60%,
-        #6d28d9 80%
-    );
     --zimbra-glow-1: rgba(240, 92, 40, 0.2);
     --zimbra-glow-2: rgba(240, 92, 40, 0.15);
     --zimbra-glow-3: rgba(27, 134, 194, 0.1);
@@ -191,22 +173,6 @@
 }
 
 .dark {
-    --pf-gold-shimmer: linear-gradient(
-        110deg,
-        #d97706 20%,
-        #fbbf24 40%,
-        #fef3c7 50%,
-        #fbbf24 60%,
-        #d97706 80%
-    );
-    --pf-purple-shimmer: linear-gradient(
-        110deg,
-        #a855f7 20%,
-        #d8b4fe 40%,
-        #faf5ff 50%,
-        #d8b4fe 60%,
-        #a855f7 80%
-    );
     --zimbra-glow-1: rgba(240, 92, 40, 0.15);
     --zimbra-glow-2: rgba(240, 92, 40, 0.1);
     --zimbra-glow-3: rgba(27, 134, 194, 0.05);
@@ -226,83 +192,6 @@
     to {
         opacity: 1;
         transform: translateY(0);
-    }
-}
-
-@keyframes pf-float {
-    0% {
-        transform: translateY(0) translateX(0) scale(0);
-        opacity: 0;
-    }
-    12% {
-        transform: translateY(-10px) translateX(0) scale(1);
-        opacity: 0.8;
-    }
-    100% {
-        transform: translateY(-220px) translateX(var(--pf-drift, 0px))
-            scale(0.15);
-        opacity: 0;
-    }
-}
-
-@keyframes pf-banner-flow {
-    0%,
-    100% {
-        background-position: 0% 50%;
-    }
-    50% {
-        background-position: 100% 50%;
-    }
-}
-
-@keyframes pf-shimmer {
-    from {
-        background-position: -200% center;
-    }
-    to {
-        background-position: 200% center;
-    }
-}
-
-@keyframes pf-ring-gold {
-    0%,
-    100% {
-        box-shadow:
-            0 10px 15px -3px rgba(0, 0, 0, 0.1),
-            0 4px 6px -4px rgba(0, 0, 0, 0.1);
-    }
-    50% {
-        box-shadow:
-            0 10px 15px -3px rgba(0, 0, 0, 0.1),
-            0 4px 6px -4px rgba(0, 0, 0, 0.1),
-            0 0 30px 8px rgba(245, 158, 11, 0.45);
-    }
-}
-
-@keyframes pf-ring-purple {
-    0%,
-    100% {
-        box-shadow:
-            0 10px 15px -3px rgba(0, 0, 0, 0.1),
-            0 4px 6px -4px rgba(0, 0, 0, 0.1);
-    }
-    50% {
-        box-shadow:
-            0 10px 15px -3px rgba(0, 0, 0, 0.1),
-            0 4px 6px -4px rgba(0, 0, 0, 0.1),
-            0 0 30px 8px rgba(168, 85, 247, 0.45);
-    }
-}
-
-@keyframes pf-glow-breathe {
-    0%,
-    100% {
-        opacity: 0.6;
-        transform: translateX(-50%) scale(1);
-    }
-    50% {
-        opacity: 1;
-        transform: translateX(-50%) scale(1.04);
     }
 }
 

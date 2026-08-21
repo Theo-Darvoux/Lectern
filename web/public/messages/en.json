@@ -441,6 +441,24 @@
     "annotations": "Annotations",
     "comments": "Comments",
     "editProfile": "Edit profile",
+    "editProfileDescription": "Update the details people see when you contribute or join a discussion.",
+    "yourProfile": "Your learning profile",
+    "communityProfile": "Community member",
+    "profileOverview": "Profile overview",
+    "settings": "Settings",
+    "changeAvatar": "Change profile picture",
+    "noBio": "This member has not added a bio yet.",
+    "communityImpact": "Community impact",
+    "reputationPoints": "reputation points",
+    "approvedShare": "Approved share",
+    "openContributions": "Open contributions",
+    "profileCompletion": "Profile completion",
+    "profileComplete": "Your profile is ready for the community.",
+    "profileCompletionHint": "Add your name, photo, year and bio to complete your profile.",
+    "contributionSnapshot": "Contribution snapshot",
+    "activityTitle": "Activity and contributions",
+    "activityDescriptionOwn": "Your shared resources, proposals, notes and recent study history.",
+    "activityDescription": "Resources, proposals and notes this member has shared with the community.",
     "displayName": "Display name",
     "bio": "Bio",
     "bioPlaceholder": "Tell us about yourself...",
@@ -1277,23 +1295,49 @@
     "allResultsSeen": "You've seen all {count} results."
   },
   "Settings": {
-    "title": "Privacy & Settings",
+    "title": "Settings",
+    "eyebrow": "Your account",
+    "description": "Tune your workspace, contribution preferences and data controls from one place.",
+    "viewProfile": "View profile",
+    "navigation": {
+      "label": "Settings sections",
+      "general": "General",
+      "contributions": "Contributions",
+      "privacy": "Privacy & data",
+      "about": "About",
+      "danger": "Danger zone"
+    },
     "appearance": {
       "title": "Appearance",
       "description": "Choose your preferred theme or follow system settings.",
+      "theme": "Theme",
       "light": "Light",
+      "lightDesc": "A bright canvas for daytime study.",
       "dark": "Dark",
+      "darkDesc": "Softer contrast for late sessions.",
       "system": "System",
+      "systemDesc": "Match this device automatically.",
       "language": "Language",
       "languageDesc": "Select your preferred interface language."
+    },
+    "guidance": {
+      "title": "Guided tours",
+      "description": "Replay walkthroughs or get a quick answer about the workspace.",
+      "button": "Open help center"
     },
     "contributions": {
       "title": "Contributions",
       "description": "Manage how your modifications are published on the platform.",
       "autoApprove": "Auto-approval",
       "autoApproveDesc": "Your modifications are published immediately without going through a pending contribution (PR).",
+      "staffOnly": "Staff",
       "autoApproveEnabled": "Auto-approval enabled",
       "autoApproveDisabled": "Auto-approval disabled"
+    },
+    "privacy": {
+      "title": "Privacy & data",
+      "description": "Review what belongs to your account and take a portable copy with you.",
+      "exportNote": "Your account archive is downloaded as a portable JSON file."
     },
     "export": {
       "title": "Export your data",

@@ -1,47 +1,44 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import {
-  Camera,
+  BookOpen,
   Calendar,
-  GraduationCap,
-  Star,
-  GitPullRequest,
+  Camera,
   CheckCircle2,
-  MessageSquare,
+  CircleGauge,
+  Crown,
+  GitPullRequest,
+  GraduationCap,
   Highlighter,
+  History,
+  Loader2,
+  MessageSquare,
   Pencil,
   Save,
-  X,
-  Crown,
+  Settings,
   Sparkles,
-  Loader2,
+  Star,
+  TrendingUp,
+  X,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useLocale, useTranslations } from "next-intl";
+import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { ContributionList } from "@/components/profile/contribution-list";
 import { RecentlyViewed } from "@/components/profile/recently-viewed";
+import { getApprovedShare, getProfileCompletion } from "@/components/profile/profile-metrics";
 import { apiFetch, API_BASE } from "@/lib/api-client";
-import { toast } from "sonner";
-import { useTranslations, useLocale } from "next-intl";
-
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Types                                                                     */
-/* ────────────────────────────────────────────────────────────────────────── */
+import { cn } from "@/lib/utils";
 
 export interface UserProfile {
   id: string;
@@ -60,10 +57,6 @@ export interface UserProfile {
   reputation: number;
 }
 
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Animated counter                                                          */
-/* ────────────────────────────────────────────────────────────────────────── */
-
 function AnimatedCounter({ value }: { value: number }) {
   const [display, setDisplay] = useState(value === 0 ? 0 : value);
 
@@ -72,222 +65,87 @@ function AnimatedCounter({ value }: { value: number }) {
       queueMicrotask(() => setDisplay(0));
       return;
     }
-    let raf: number;
-    const dur = 900;
-    const t0 = performance.now();
+    let frame: number;
+    const startedAt = performance.now();
     const tick = (now: number) => {
-      const p = Math.min((now - t0) / dur, 1);
-      setDisplay(Math.round((1 - (1 - p) ** 3) * value));
-      if (p < 1) raf = requestAnimationFrame(tick);
+      const progress = Math.min((now - startedAt) / 700, 1);
+      setDisplay(Math.round((1 - (1 - progress) ** 3) * value));
+      if (progress < 1) frame = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
   }, [value]);
 
   return <>{display}</>;
 }
 
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Floating particles                                                        */
-/* ────────────────────────────────────────────────────────────────────────── */
-
-function FloatingParticles({ variant }: { variant: "bureau" | "vieux" }) {
-  const [particles, setParticles] = useState<
-    Array<{
-      id: number;
-      left: number;
-      delay: number;
-      dur: number;
-      size: number;
-      drift: number;
-    }>
-  >([]);
-
-  useEffect(() => {
-    const n = variant === "bureau" ? 32 : 24;
-    const pts = Array.from({ length: n }, (_, i) => ({
-      id: i,
-      left: Math.random() * 100,
-      delay: Math.random() * 8,
-      dur: 3 + Math.random() * 6,
-      size:
-        variant === "bureau"
-          ? 2 + Math.random() * 4
-          : 2.5 + Math.random() * 4.5,
-      drift: -40 + Math.random() * 80,
-    }));
-    queueMicrotask(() => setParticles(pts));
-  }, [variant]);
-
-  return (
-    <div
-      className="pointer-events-none absolute inset-0 overflow-hidden"
-      aria-hidden="true"
-    >
-      {particles.map((p) => (
-        <div
-          key={p.id}
-          className={
-            variant === "bureau"
-              ? "absolute rounded-full bg-yellow-100/90 shadow-[0_0_10px_3px_rgba(253,224,71,0.5)] dark:bg-amber-200/90 dark:shadow-[0_0_10px_3px_rgba(251,191,36,0.5)]"
-              : "absolute rounded-[2px] rotate-45 bg-fuchsia-100/90 shadow-[0_0_10px_3px_rgba(232,121,249,0.5)] dark:bg-purple-200/90 dark:shadow-[0_0_10px_3px_rgba(192,132,252,0.5)]"
-          }
-          style={{
-            left: `${p.left}%`,
-            bottom: "-5%",
-            width: p.size,
-            height: p.size,
-            animation: `pf-float ${p.dur}s ${p.delay}s infinite ease-out`,
-            ["--pf-drift" as string]: `${p.drift}px`,
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Inline style helpers (avoids Tailwind v4 class stripping)                 */
-/* ────────────────────────────────────────────────────────────────────────── */
-
-/** Animated flowing gradient for the banner */
-function getBannerAnimStyle(role: string): React.CSSProperties | undefined {
-  if (role === "bureau" || role === "vieux") {
-    return {
-      backgroundSize: "400% 400%",
-      animation: `pf-banner-flow ${role === "bureau" ? 12 : 15}s ease infinite alternate`,
-    };
-  }
-  return undefined;
-}
-
-/** Pulsing ring glow on avatar */
-function getRingAnimStyle(role: string): React.CSSProperties | undefined {
-  if (role === "bureau")
-    return { animation: "pf-ring-gold 3s ease-in-out infinite" };
-  if (role === "vieux")
-    return { animation: "pf-ring-purple 3s ease-in-out infinite" };
-  return undefined;
-}
-
-/** Shimmering gradient text via CSS custom property */
-function getShimmerStyle(role: string): React.CSSProperties | undefined {
-  if (role === "bureau")
-    return {
-      backgroundImage: "var(--pf-gold-shimmer)",
-      backgroundSize: "200% auto",
-      WebkitBackgroundClip: "text",
-      backgroundClip: "text",
-      WebkitTextFillColor: "transparent",
-      animation: "pf-shimmer 3s linear infinite",
-    };
-  if (role === "vieux")
-    return {
-      backgroundImage: "var(--pf-purple-shimmer)",
-      backgroundSize: "200% auto",
-      WebkitBackgroundClip: "text",
-      backgroundClip: "text",
-      WebkitTextFillColor: "transparent",
-      animation: "pf-shimmer 3.5s linear infinite",
-    };
-  return undefined;
-}
-
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Stat cards                                                                */
-/* ────────────────────────────────────────────────────────────────────────── */
-
 const STATS = [
   {
     key: "prs_approved",
-    label: "Approved",
+    labelKey: "approved",
     icon: CheckCircle2,
-    color: "text-emerald-500",
-    bg: "bg-emerald-500/10",
-    bar: "bg-emerald-500",
+    color: "text-emerald-600 dark:text-emerald-400",
+    iconBg: "bg-emerald-500/10",
   },
   {
     key: "prs_total",
-    label: "Total PRs",
+    labelKey: "totalPrs",
     icon: GitPullRequest,
-    color: "text-blue-500",
-    bg: "bg-blue-500/10",
-    bar: "bg-blue-500",
+    color: "text-sky-600 dark:text-sky-400",
+    iconBg: "bg-sky-500/10",
   },
   {
     key: "annotations_count",
-    label: "Annotations",
+    labelKey: "annotations",
     icon: Highlighter,
-    color: "text-amber-500",
-    bg: "bg-amber-500/10",
-    bar: "bg-amber-500",
+    color: "text-amber-600 dark:text-amber-400",
+    iconBg: "bg-amber-500/10",
   },
   {
     key: "comments_count",
-    label: "Comments",
+    labelKey: "comments",
     icon: MessageSquare,
-    color: "text-violet-500",
-    bg: "bg-violet-500/10",
-    bar: "bg-violet-500",
+    color: "text-violet-600 dark:text-violet-400",
+    iconBg: "bg-violet-500/10",
   },
 ] as const;
 
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  color,
-  bg,
-  bar,
-  delay,
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: number;
-  color: string;
-  bg: string;
-  bar: string;
-  delay: number;
-}) {
-  return (
-    <div
-      className="group relative overflow-hidden rounded-xl border bg-background/80 backdrop-blur-sm p-4 transition-all duration-300 hover:shadow-md hover:-translate-y-0.5 dark:bg-card/60"
-      style={{ animation: `pf-fade-up 0.5s ${delay}s both ease-out` }}
-    >
-      <div
-        className={`absolute inset-x-0 top-0 h-px ${bar} opacity-40 transition-opacity group-hover:opacity-100`}
-      />
-      <div className={`mb-3 inline-flex rounded-lg p-2.5 ${bg} ${color}`}>
-        <Icon className="h-4 w-4" />
-      </div>
-      <p className="text-3xl font-extrabold tracking-tight tabular-nums text-foreground/90">
-        <AnimatedCounter value={value} />
-      </p>
-      <p className="mt-1 text-xs font-medium text-muted-foreground">{label}</p>
-    </div>
-  );
-}
-
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Role badge                                                                */
-/* ────────────────────────────────────────────────────────────────────────── */
-
-function getRoleBadgeClasses(role: string): string {
-  switch (role) {
-    case "bureau":
-      return "border-amber-400/50 bg-gradient-to-r from-amber-100 to-yellow-50 text-amber-800 font-semibold dark:border-amber-600/50 dark:from-amber-950/60 dark:to-yellow-950/40 dark:text-amber-200";
-    case "vieux":
-      return "border-purple-400/50 bg-gradient-to-r from-purple-100 to-fuchsia-50 text-purple-800 font-semibold dark:border-purple-600/50 dark:from-purple-950/60 dark:to-fuchsia-950/40 dark:text-purple-200";
-    case "moderator":
-      return "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-300";
-    default:
-      return "";
+function roleStyles(role: string) {
+  if (role === "bureau") {
+    return {
+      accent: "bg-amber-500",
+      wash: "from-amber-500/14 via-orange-500/5 to-transparent",
+      avatar: "from-amber-500 to-orange-600",
+      badge: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+      icon: Crown,
+    };
   }
+  if (role === "vieux") {
+    return {
+      accent: "bg-violet-500",
+      wash: "from-violet-500/14 via-fuchsia-500/5 to-transparent",
+      avatar: "from-violet-500 to-fuchsia-600",
+      badge: "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300",
+      icon: Sparkles,
+    };
+  }
+  if (role === "moderator") {
+    return {
+      accent: "bg-sky-500",
+      wash: "from-sky-500/12 via-cyan-500/5 to-transparent",
+      avatar: "from-sky-500 to-cyan-600",
+      badge: "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+      icon: null,
+    };
+  }
+  return {
+    accent: "bg-primary",
+    wash: "from-primary/12 via-primary/5 to-transparent",
+    avatar: "from-primary to-primary/70",
+    badge: "border-border bg-muted/70 text-muted-foreground",
+    icon: null,
+  };
 }
-
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Edit form                                                                 */
-/* ────────────────────────────────────────────────────────────────────────── */
 
 function EditProfileForm({
   profile,
@@ -304,15 +162,15 @@ function EditProfileForm({
   const [year, setYear] = useState(profile.academic_year ?? "");
   const [saving, setSaving] = useState(false);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setSaving(true);
     try {
       const updated = await apiFetch<UserProfile>("/users/me", {
         method: "PATCH",
         body: JSON.stringify({
           display_name: name || undefined,
-          bio: bio,
+          bio,
           academic_year: year || undefined,
         }),
       });
@@ -326,106 +184,89 @@ function EditProfileForm({
   };
 
   return (
-    <form
-      onSubmit={submit}
-      className="space-y-4 rounded-xl border bg-background/60 p-5 backdrop-blur-sm"
-      style={{ animation: "pf-fade-up 0.35s ease-out" }}
-    >
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold">{t("editProfile")}</h3>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onCancel}
-          className="h-8 w-8"
-        >
+    <form onSubmit={submit} className="overflow-hidden rounded-2xl border bg-card shadow-sm">
+      <div className="flex items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
+        <div>
+          <h2 className="font-semibold">{t("editProfile")}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t("editProfileDescription")}</p>
+        </div>
+        <Button type="button" variant="ghost" size="icon" onClick={onCancel} aria-label={t("cancel")}>
           <X className="h-4 w-4" />
         </Button>
       </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="displayName">{t("displayName")}</Label>
-        <Input
-          id="displayName"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+
+      <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
+        <div className="space-y-2">
+          <Label htmlFor="displayName">{t("displayName")}</Label>
+          <Input id="displayName" value={name} onChange={(event) => setName(event.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="academicYear">{t("academicYear")}</Label>
+          <Select value={year} onValueChange={setYear}>
+            <SelectTrigger id="academicYear">
+              <SelectValue placeholder={t("selectYear")} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1A">1A</SelectItem>
+              <SelectItem value="2A">2A</SelectItem>
+              <SelectItem value="3A+">3A+</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2 sm:col-span-2">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="bio">{t("bio")}</Label>
+            <span className="text-xs tabular-nums text-muted-foreground">{bio.length}/500</span>
+          </div>
+          <Textarea
+            id="bio"
+            value={bio}
+            onChange={(event) => setBio(event.target.value.slice(0, 500))}
+            className="min-h-28 resize-none"
+            placeholder={t("bioPlaceholder")}
+          />
+        </div>
       </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="bio">{t("bio")}</Label>
-        <Textarea
-          id="bio"
-          value={bio}
-          onChange={(e) => setBio(e.target.value.slice(0, 500))}
-          className="min-h-[80px] resize-none"
-          placeholder={t("bioPlaceholder")}
-        />
-        <p className="text-right text-[10px] text-muted-foreground">
-          {bio.length}/500
-        </p>
-      </div>
-      <div className="space-y-1.5">
-        <Label>{t("academicYear")}</Label>
-        <Select value={year} onValueChange={setYear}>
-          <SelectTrigger>
-            <SelectValue placeholder={t("selectYear")} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="1A">1A</SelectItem>
-            <SelectItem value="2A">2A</SelectItem>
-            <SelectItem value="3A+">3A+</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="flex gap-2 pt-1">
-        <Button type="submit" size="sm" disabled={saving}>
-          <Save className="mr-1.5 h-3.5 w-3.5" />
+
+      <div className="flex justify-end gap-2 border-t bg-muted/20 px-5 py-4 sm:px-6">
+        <Button type="button" variant="ghost" onClick={onCancel}>{t("cancel")}</Button>
+        <Button type="submit" disabled={saving}>
+          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
           {saving ? t("saving") : t("save")}
-        </Button>
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-          {t("cancel")}
         </Button>
       </div>
     </form>
   );
 }
 
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Skeleton                                                                  */
-/* ────────────────────────────────────────────────────────────────────────── */
-
 export function ProfileSkeleton() {
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
-      <div className="relative overflow-hidden rounded-2xl border">
-        <Skeleton className="h-36 rounded-none" />
-        <div className="relative px-6 pb-6">
-          <Skeleton className="-mt-14 h-28 w-28 rounded-full border-4 border-background" />
-          <div className="mt-4 space-y-2.5">
-            <Skeleton className="h-8 w-56" />
-            <Skeleton className="h-4 w-40" />
+    <div className="mx-auto w-full max-w-6xl space-y-5 p-4 pb-24 sm:p-6 lg:p-8">
+      <div className="grid overflow-hidden rounded-2xl border lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="space-y-5 p-6 sm:p-8">
+          <div className="flex gap-5">
+            <Skeleton className="h-24 w-24 shrink-0 rounded-2xl" />
+            <div className="flex-1 space-y-3 pt-2">
+              <Skeleton className="h-8 w-56" />
+              <Skeleton className="h-4 w-40" />
+            </div>
           </div>
+          <Skeleton className="h-16 w-full" />
         </div>
+        <Skeleton className="min-h-64 rounded-none" />
       </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {Array.from({ length: 4 }, (_, i) => (
-          <Skeleton key={i} className="h-[108px] rounded-xl" />
-        ))}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-28 rounded-xl" />)}
       </div>
-      <Skeleton className="h-10 w-72" />
-      <Skeleton className="h-48 w-full rounded-xl" />
+      <Skeleton className="h-96 rounded-2xl" />
     </div>
   );
 }
 
-/* ────────────────────────────────────────────────────────────────────────── */
-/*  Main profile view                                                         */
-/* ────────────────────────────────────────────────────────────────────────── */
-
 interface ProfileViewProps {
   profile: UserProfile;
   isOwn: boolean;
-  onAvatarUpload?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onAvatarUpload?: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onProfileUpdated?: (updated: UserProfile) => void;
   showRecentlyViewed?: boolean;
   isUploadingAvatar?: boolean;
@@ -447,231 +288,147 @@ export function ProfileView({
 
   const initials = (profile.display_name ?? profile.email ?? "?")
     .split(" ")
-    .map((w) => w[0])
+    .map((word) => word[0])
     .join("")
     .slice(0, 2)
     .toUpperCase();
+  const joined = new Date(profile.created_at).toLocaleDateString(locale, {
+    month: "short",
+    year: "numeric",
+  });
+  const styles = roleStyles(profile.role);
+  const RoleIcon = styles.icon;
+  const completion = getProfileCompletion(profile);
+  const approvedShare = getApprovedShare(profile.prs_approved, profile.prs_total);
 
-  const joinDate = new Date(profile.created_at);
-  const isBureau = profile.role === "bureau";
-  const isVieux = profile.role === "vieux";
-  const special = isBureau || isVieux;
-
-  /* Premium banner gradients */
-  const bannerGradient = isBureau
-    ? "bg-gradient-to-tr from-yellow-300 via-amber-500 to-orange-600 dark:from-yellow-800 dark:via-amber-700 dark:to-orange-950"
-    : isVieux
-      ? "bg-gradient-to-tr from-fuchsia-400 via-purple-600 to-indigo-700 dark:from-fuchsia-900 dark:via-purple-800 dark:to-indigo-950"
-      : "bg-gradient-to-br from-slate-200/80 via-blue-100/60 to-violet-100/60 dark:from-zinc-800/80 dark:via-blue-950/30 dark:to-violet-950/20";
-
-  /* Avatar: special roles get larger + no shadow class (handled by animation keyframe) */
-  const avatarSize = special ? "h-32 w-32" : "h-24 w-24";
-  const avatarOffset = special ? "-mt-16" : "-mt-12";
-  const avatarBorder = special
-    ? "border-4 border-background"
-    : "border-4 border-background shadow-lg";
-
-  const RoleIcon = isBureau ? Crown : isVieux ? Sparkles : null;
-  const roleIconClass = isBureau
-    ? "h-7 w-7 text-amber-500 dark:text-amber-400 drop-shadow-sm"
-    : "h-7 w-7 text-purple-500 dark:text-purple-400 drop-shadow-sm";
-
-  const tabTrigger = [
-    "rounded-lg px-3.5 py-2 text-sm font-medium transition-all shrink-0",
-    isBureau
-      ? "data-[state=active]:bg-amber-50 data-[state=active]:text-amber-800 dark:data-[state=active]:bg-amber-950/40 dark:data-[state=active]:text-amber-200"
-      : isVieux
-        ? "data-[state=active]:bg-purple-50 data-[state=active]:text-purple-800 dark:data-[state=active]:bg-purple-950/40 dark:data-[state=active]:text-purple-200"
-        : "",
-  ].join(" ");
+  const tabs = [
+    { value: "prs", label: t("contributions"), icon: GitPullRequest },
+    { value: "materials", label: t("materials"), icon: BookOpen },
+    { value: "annotations", label: t("annotations"), icon: Highlighter },
+    ...(showRecentlyViewed ? [{ value: "recent", label: t("recentlyViewed"), icon: History }] : []),
+  ];
 
   return (
-    <div className="w-full h-full bg-slate-50/50 dark:bg-zinc-950/40">
-      {/* ── Ambient background glow ── */}
-      {special && (
-        <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-          <div
-            className={`absolute -top-40 left-1/2 h-[700px] w-[900px] -translate-x-1/2 rounded-[100%] blur-[140px] ${
-              isBureau
-                ? "bg-amber-400/20 dark:bg-amber-500/10"
-                : "bg-purple-400/20 dark:bg-purple-500/10"
-            }`}
-            style={{ animation: "pf-glow-breathe 6s ease-in-out infinite" }}
-          />
-        </div>
-      )}
-
-      <div className="relative z-10 mx-auto w-full max-w-3xl space-y-6 p-4 pb-20 md:p-6 md:pb-6">
-        {/* ── Hero card ── */}
-        <div
-          className={`relative overflow-hidden rounded-2xl border bg-background transition-shadow ${
-            special ? "shadow-xl" : "shadow-sm dark:shadow-none"
-          }`}
-          style={{ animation: "pf-fade-up 0.5s ease-out" }}
-        >
-          {/* Premium Gradient Banner */}
-          <div
-            className={`relative overflow-hidden ${special ? "h-48" : "h-32"} ${bannerGradient}`}
-            style={getBannerAnimStyle(profile.role)}
-          >
-            {/* Premium overlays */}
-            {special && (
-              <>
-                <div className="absolute inset-0 bg-gradient-to-b from-white/30 to-transparent dark:from-white/10 mix-blend-overlay pointer-events-none" />
-                <div className="absolute inset-0 bg-gradient-to-t from-background via-background/40 to-transparent pointer-events-none z-0" />
-                <div
-                  className="absolute inset-0 opacity-[0.04] dark:opacity-[0.06] pointer-events-none mix-blend-overlay"
-                  style={{
-                    backgroundImage:
-                      "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E\")",
-                  }}
-                />
-              </>
-            )}
-            {isBureau && <FloatingParticles variant="bureau" />}
-            {isVieux && <FloatingParticles variant="vieux" />}
+    <div className="min-h-full w-full bg-muted/20">
+      <div className="mx-auto w-full max-w-6xl space-y-5 p-4 pb-24 sm:p-6 md:pb-8 lg:p-8">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{isOwn ? t("yourProfile") : t("communityProfile")}</p>
+            <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">{t("profileOverview")}</h1>
           </div>
-
-          {/* Profile content */}
-          <div className="relative px-6 pb-6">
-            {/* Avatar with pulsing ring (inline animation) */}
-            <div
-              className={`group relative ${avatarOffset} mb-4 w-fit ml-1 z-10`}
-            >
-              <Avatar
-                className={`${avatarSize} ${avatarBorder}`}
-                style={getRingAnimStyle(profile.role)}
-              >
-                <AvatarImage
-                  src={
-                    profile.avatar_url
-                      ? `${API_BASE}/users/${profile.id}/avatar?v=${encodeURIComponent(profile.avatar_url)}`
-                      : undefined
-                  }
-                />
-                {isUploadingAvatar && (
-                  <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 backdrop-blur-[1px]">
-                    <Loader2 className="h-6 w-6 animate-spin text-white/70" />
-                  </div>
-                )}
-                <AvatarFallback
-                  className={`font-semibold text-white ${special ? "text-2xl" : "text-xl"} ${
-                    isBureau
-                      ? "bg-gradient-to-br from-amber-500 to-orange-600"
-                      : isVieux
-                        ? "bg-gradient-to-br from-purple-500 to-fuchsia-600"
-                        : "bg-gradient-to-br from-blue-500 to-violet-500"
-                  }`}
-                >
-                  {initials}
-                </AvatarFallback>
-              </Avatar>
-              {isOwn && onAvatarUpload && (
-                <label className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
-                  <Camera className="h-5 w-5 text-white" />
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={onAvatarUpload}
-                  />
-                </label>
+          {isOwn && (
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/settings"><Settings className="mr-2 h-4 w-4" />{t("settings")}</Link>
+              </Button>
+              {!editing && (
+                <Button size="sm" onClick={() => setEditing(true)}>
+                  <Pencil className="mr-2 h-4 w-4" />{t("editProfile")}
+                </Button>
               )}
             </div>
+          )}
+        </div>
 
-            {/* Name + role badge + reputation */}
-            <div className="flex flex-wrap items-center gap-2.5 mb-1">
-              <h1
-                className={`flex items-center gap-2 tracking-tight ${
-                  special
-                    ? "text-3xl font-black"
-                    : "text-2xl font-bold text-foreground"
-                }`}
-                style={getShimmerStyle(profile.role)}
-              >
-                {profile.display_name ?? profile.email ?? "?"}
-                {RoleIcon && (
-                  <RoleIcon
-                    className={roleIconClass}
-                    style={{ animation: "pf-fade-up 0.6s 0.2s both ease-out" }}
-                  />
-                )}
-              </h1>
-              <Badge
-                variant="outline"
-                className={`capitalize text-xs ${getRoleBadgeClasses(profile.role)}`}
-              >
-                {tRoles(profile.role as any)}
-              </Badge>
-              <div
-                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-sm font-semibold ${
-                  isBureau
-                    ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                    : isVieux
-                      ? "bg-purple-500/10 text-purple-700 dark:text-purple-300"
-                      : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                }`}
-              >
-                <Star className="h-3.5 w-3.5 fill-current" />
-                {profile.reputation}
+        <section className="relative overflow-hidden rounded-2xl border bg-card shadow-sm">
+          <div className={cn("absolute inset-x-0 top-0 h-1", styles.accent)} />
+          <div className={cn("pointer-events-none absolute inset-0 bg-gradient-to-br", styles.wash)} />
+          <div className="relative grid lg:grid-cols-[minmax(0,1fr)_20rem]">
+            <div className="p-5 sm:p-8">
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+                <div className="group relative w-fit shrink-0">
+                  <Avatar className="h-24 w-24 rounded-2xl border-4 border-background shadow-lg sm:h-28 sm:w-28">
+                    <AvatarImage
+                      src={profile.avatar_url ? `${API_BASE}/users/${profile.id}/avatar?v=${encodeURIComponent(profile.avatar_url)}` : undefined}
+                      alt={profile.display_name ?? ""}
+                    />
+                    <AvatarFallback className={cn("rounded-xl bg-gradient-to-br text-2xl font-bold text-white", styles.avatar)}>{initials}</AvatarFallback>
+                    {isUploadingAvatar && (
+                      <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-black/50">
+                        <Loader2 className="h-6 w-6 animate-spin text-white" />
+                      </div>
+                    )}
+                  </Avatar>
+                  {isOwn && onAvatarUpload && (
+                    <label className="absolute inset-1 flex cursor-pointer items-center justify-center rounded-xl bg-black/55 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+                      <Camera className="h-5 w-5 text-white" />
+                      <span className="sr-only">{t("changeAvatar")}</span>
+                      <input type="file" accept="image/*" className="sr-only" onChange={onAvatarUpload} />
+                    </label>
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="truncate text-2xl font-bold tracking-tight sm:text-3xl">{profile.display_name ?? profile.email ?? "?"}</h2>
+                    {RoleIcon && <RoleIcon className="h-5 w-5 text-current opacity-60" aria-hidden="true" />}
+                    <Badge variant="outline" className={cn("capitalize", styles.badge)}>{tRoles(profile.role as never)}</Badge>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
+                    {profile.academic_year && (
+                      <span className="inline-flex items-center gap-1.5"><GraduationCap className="h-4 w-4" />{t("year", { year: profile.academic_year })}</span>
+                    )}
+                    <span className="inline-flex items-center gap-1.5"><Calendar className="h-4 w-4" />{t("joined", { date: joined })}</span>
+                    {isOwn && profile.email && <span className="truncate">{profile.email}</span>}
+                  </div>
+                  {profile.bio ? (
+                    <p className="mt-5 max-w-2xl whitespace-pre-wrap text-sm leading-6 text-foreground/80">{profile.bio}</p>
+                  ) : isOwn ? (
+                    <button onClick={() => setEditing(true)} className="mt-5 text-left text-sm text-muted-foreground underline decoration-dashed underline-offset-4 hover:text-foreground">
+                      {t("addBio")}
+                    </button>
+                  ) : (
+                    <p className="mt-5 text-sm text-muted-foreground">{t("noBio")}</p>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Bio */}
-            {profile.bio ? (
-              <p className="mt-2 text-sm text-foreground/80 leading-relaxed max-w-lg whitespace-pre-wrap">
-                {profile.bio}
-              </p>
-            ) : (
-              isOwn &&
-              !editing && (
-                <button
-                  onClick={() => setEditing(true)}
-                  className="mt-2 text-sm text-muted-foreground/80 italic hover:text-foreground transition-colors border-b border-dashed border-transparent hover:border-muted-foreground/50 pb-0.5"
-                >
-                  {t("addBio")}
-                </button>
-              )
-            )}
+            <aside className="border-t bg-background/55 p-5 backdrop-blur-sm sm:p-6 lg:border-l lg:border-t-0">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("communityImpact")}</p>
+                  <div className="mt-2 flex items-baseline gap-2">
+                    <span className="text-4xl font-bold tracking-tight tabular-nums">{profile.reputation}</span>
+                    <span className="text-sm text-muted-foreground">{t("reputationPoints")}</span>
+                  </div>
+                </div>
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                  <Star className="h-5 w-5 fill-current" />
+                </div>
+              </div>
 
-            {/* Meta info */}
-            <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground font-medium">
-              {isOwn && profile.email && (
-                <span className="flex items-center gap-1">{profile.email}</span>
-              )}
-              {profile.academic_year && (
-                <span className="flex items-center gap-1 text-foreground/80">
-                  <GraduationCap className="h-4 w-4" />
-                  {t("year", { year: profile.academic_year })}
-                </span>
-              )}
-              <span className="flex items-center gap-1 text-foreground/80">
-                <Calendar className="h-4 w-4" />
-                {t("joined", { 
-                  date: joinDate.toLocaleDateString(locale, {
-                    month: "short",
-                    year: "numeric",
-                  }) 
-                })}
-              </span>
-            </div>
+              <div className={cn("mt-6 grid gap-3", profile.open_pr_count !== undefined && "grid-cols-2")}>
+                <div className="rounded-xl border bg-background/70 p-3">
+                  <TrendingUp className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                  <p className="mt-3 text-xl font-bold tabular-nums">{profile.prs_total > 0 ? `${approvedShare}%` : "—"}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{t("approvedShare")}</p>
+                </div>
+                {profile.open_pr_count !== undefined && (
+                  <div className="rounded-xl border bg-background/70 p-3">
+                    <CircleGauge className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                    <p className="mt-3 text-xl font-bold tabular-nums">{profile.open_pr_count}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{t("openContributions")}</p>
+                  </div>
+                )}
+              </div>
 
-            {/* Edit button */}
-            {isOwn && !editing && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-4"
-                onClick={() => setEditing(true)}
-              >
-                <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                {t("editProfile")}
-              </Button>
-            )}
+              {isOwn && (
+                <div className="mt-5 border-t pt-5">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">{t("profileCompletion")}</span>
+                    <span className="font-semibold tabular-nums">{completion}%</span>
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div className={cn("h-full rounded-full transition-all", styles.accent)} style={{ width: `${completion}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">{completion === 100 ? t("profileComplete") : t("profileCompletionHint")}</p>
+                </div>
+              )}
+            </aside>
           </div>
-        </div>
+        </section>
 
-        {/* ── Edit form ── */}
         {editing && (
           <EditProfileForm
             profile={profile}
@@ -683,82 +440,47 @@ export function ProfileView({
           />
         )}
 
-        {/* ── Stats ── */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {STATS.map((s, i) => {
-            const statKeys: Record<string, string> = {
-              prs_approved: "approved",
-              prs_total: "totalPrs",
-              annotations_count: "annotations",
-              comments_count: "comments",
-            };
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label={t("contributionSnapshot")}>
+          {STATS.map((stat) => {
+            const Icon = stat.icon;
             return (
-            <StatCard
-              key={s.key}
-              icon={s.icon}
-              label={t(statKeys[s.key] as any)}
-              value={profile[s.key]}
-              color={s.color}
-              bg={s.bg}
-              bar={s.bar}
-              delay={0.3 + i * 0.07}
-            />
-          )})}
-        </div>
+              <div key={stat.key} className="group rounded-xl border bg-card p-4 shadow-sm transition-colors hover:border-primary/25">
+                <div className="flex items-start gap-3">
+                  <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg", stat.iconBg, stat.color)}>
+                    <Icon className="h-4 w-4" />
+                  </div>
+                </div>
+                <p className="mt-5 text-2xl font-bold tracking-tight tabular-nums sm:text-3xl"><AnimatedCounter value={profile[stat.key]} /></p>
+                <p className="mt-1 text-xs font-medium text-muted-foreground">{t(stat.labelKey)}</p>
+              </div>
+            );
+          })}
+        </section>
 
-        {/* ── Activity tabs ── */}
-        <div style={{ animation: "pf-fade-up 0.5s 0.6s both ease-out" }}>
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="flex w-full flex-wrap gap-1 rounded-xl p-1.5 !h-auto min-h-fit bg-muted/60 dark:bg-muted/30 sm:flex-nowrap sm:justify-start sm:gap-0 sm:overflow-x-auto sm:h-9">
-              <TabsTrigger value="prs" className={cn(tabTrigger, "w-[calc(50%-2px)] sm:w-auto min-h-9")}>
-                {t("contributions")}
-              </TabsTrigger>
-              <TabsTrigger value="materials" className={cn(tabTrigger, "w-[calc(50%-2px)] sm:w-auto min-h-9")}>
-                {t("materials")}
-              </TabsTrigger>
-              <TabsTrigger value="annotations" className={cn(tabTrigger, "w-[calc(50%-2px)] sm:w-auto min-h-9")}>
-                {t("annotations")}
-              </TabsTrigger>
-              {showRecentlyViewed && (
-                <TabsTrigger value="recent" className={cn(tabTrigger, "w-[calc(50%-2px)] sm:w-auto min-h-9")}>
-                  {t("recentlyViewed")}
-                </TabsTrigger>
-              )}
+        <section className="overflow-hidden rounded-2xl border bg-card shadow-sm">
+          <div className="border-b px-5 py-5 sm:px-6">
+            <h2 className="text-lg font-semibold">{t("activityTitle")}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{isOwn ? t("activityDescriptionOwn") : t("activityDescription")}</p>
+          </div>
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="p-3 sm:p-5">
+            <TabsList className="flex h-auto w-full justify-start gap-1 overflow-x-auto rounded-xl bg-muted/60 p-1">
+              {tabs.map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <TabsTrigger key={tab.value} value={tab.value} className="min-h-9 shrink-0 gap-2 rounded-lg px-3 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                    <Icon className="h-3.5 w-3.5" />{tab.label}
+                  </TabsTrigger>
+                );
+              })}
             </TabsList>
-            <TabsContent
-              value="prs"
-              className="mt-4 min-h-[400px] sm:min-h-[600px]"
-            >
-              {activeTab === "prs" && (
-                <ContributionList userId={profile.id} type="prs" />
-              )}
-            </TabsContent>
-            <TabsContent
-              value="materials"
-              className="mt-4 min-h-[400px] sm:min-h-[600px]"
-            >
-              {activeTab === "materials" && (
-                <ContributionList userId={profile.id} type="materials" />
-              )}
-            </TabsContent>
-            <TabsContent
-              value="annotations"
-              className="mt-4 min-h-[400px] sm:min-h-[600px]"
-            >
-              {activeTab === "annotations" && (
-                <ContributionList userId={profile.id} type="annotations" />
-              )}
-            </TabsContent>
+            <TabsContent value="prs" className="mt-4 min-h-72">{activeTab === "prs" && <ContributionList userId={profile.id} type="prs" />}</TabsContent>
+            <TabsContent value="materials" className="mt-4 min-h-72">{activeTab === "materials" && <ContributionList userId={profile.id} type="materials" />}</TabsContent>
+            <TabsContent value="annotations" className="mt-4 min-h-72">{activeTab === "annotations" && <ContributionList userId={profile.id} type="annotations" />}</TabsContent>
             {showRecentlyViewed && (
-              <TabsContent
-                value="recent"
-                className="mt-4 min-h-[400px] sm:min-h-[600px]"
-              >
-                {activeTab === "recent" && <RecentlyViewed />}
-              </TabsContent>
+              <TabsContent value="recent" className="mt-4 min-h-72">{activeTab === "recent" && <RecentlyViewed />}</TabsContent>
             )}
           </Tabs>
-        </div>
+        </section>
       </div>
     </div>
   );
