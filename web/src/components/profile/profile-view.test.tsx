@@ -22,6 +22,9 @@ vi.mock("@/components/profile/contribution-list", () => ({
 vi.mock("@/components/profile/recently-viewed", () => ({
   RecentlyViewed: () => <div>recently-viewed</div>,
 }));
+vi.mock("@/components/leaderboard/profile-leaderboard-rank", () => ({
+  ProfileLeaderboardRank: () => <a href="/leaderboard" data-profile-leaderboard>leaderboard</a>,
+}));
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -96,6 +99,7 @@ describe("ProfileView layout", () => {
 
   it("exposes the saved library as a profile action", () => {
     expect(container.querySelector('a[href="/saved"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/leaderboard"]')).not.toBeNull();
   });
 
   it("integrates contribution snapshot metrics inside the profile card", () => {

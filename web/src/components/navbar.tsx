@@ -19,6 +19,7 @@ import {
   CheckCheck,
   HelpCircle,
   Shield,
+  Trophy,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { SearchModal } from "@/components/search/search-modal";
@@ -461,6 +462,12 @@ export function Navbar() {
                     <Link href="/saved">
                       <Bookmark className="mr-2 h-4 w-4" />
                       <span>{tSaved("saved")}</span>
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild className="cursor-pointer">
+                    <Link href="/leaderboard">
+                      <Trophy className="mr-2 h-4 w-4" />
+                      <span>{t("leaderboard")}</span>
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild className="cursor-pointer">

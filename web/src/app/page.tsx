@@ -12,6 +12,7 @@ import { MaterialGridSection } from "@/components/home/material-grid-section";
 import { HeroBar } from "@/components/home/hero-bar";
 import { RailFavourites } from "@/components/home/rail-favourites";
 import { StatsCard } from "@/components/home/stats-card";
+import { LeaderboardPreview } from "@/components/leaderboard/leaderboard-preview";
 import { useConfigStore } from "@/lib/stores";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, History, Sparkles, Clock, RefreshCw } from "lucide-react";
@@ -158,6 +159,7 @@ export default function HomePage() {
                   isLoading={isLoading}
                 />
               )}
+              <LeaderboardPreview />
               <RecentPRsSection prs={data?.recent_prs ?? []} isLoading={isLoading} />
               <StatsCard stats={data?.stats} isLoading={isLoading} />
             </aside>

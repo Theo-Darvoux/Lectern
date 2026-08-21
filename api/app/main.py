@@ -33,6 +33,7 @@ from app.routers.eurooffice import router as eurooffice_router
 from app.routers.events import router as events_router
 from app.routers.flags import router as flags_router
 from app.routers.home import router as home_router
+from app.routers.leaderboard import router as leaderboard_router
 from app.routers.materials import router as materials_router
 from app.routers.moderator import router as moderator_router
 from app.routers.notifications import router as notifications_router
@@ -367,6 +368,7 @@ app.include_router(events_router)
 app.include_router(tus_router)
 app.include_router(upload_api_router)
 app.include_router(home_router)
+app.include_router(leaderboard_router)
 app.include_router(qcm_router)
 app.include_router(users_router)
 

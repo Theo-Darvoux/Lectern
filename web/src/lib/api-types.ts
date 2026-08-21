@@ -2165,6 +2165,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/leaderboard/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Leaderboard */
+        get: operations["leaderboard_api_leaderboard__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/qcm/limits": {
         parameters: {
             query?: never;
@@ -3130,6 +3147,47 @@ export interface components {
             open_prs: number;
             /** My Contributions */
             my_contributions: number;
+        };
+        /** LeaderboardEntry */
+        LeaderboardEntry: {
+            /** Rank */
+            rank: number;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /** Display Name */
+            display_name: string | null;
+            /** Avatar Url */
+            avatar_url: string | null;
+            /** Academic Year */
+            academic_year: string | null;
+            /** Approved Contributions */
+            approved_contributions: number;
+            /** Annotations */
+            annotations: number;
+            /** Score */
+            score: number;
+        };
+        /** LeaderboardResponse */
+        LeaderboardResponse: {
+            /** Items */
+            items: components["schemas"]["LeaderboardEntry"][];
+            current_user: components["schemas"]["LeaderboardEntry"] | null;
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Pages */
+            pages: number;
+            /**
+             * Period
+             * @enum {string}
+             */
+            period: "month" | "semester" | "all_time";
+            /** Academic Year */
+            academic_year: string | null;
         };
         /** IconUpdateBody */
         IconUpdateBody: {
@@ -7966,6 +8024,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MaterialDetail"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    leaderboard_api_leaderboard__get: {
+        parameters: {
+            query?: {
+                period?: "month" | "semester" | "all_time";
+                academic_year?: ("1A" | "2A" | "3A+") | null;
+                page?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaderboardResponse"];
                 };
             };
             /** @description Validation Error */

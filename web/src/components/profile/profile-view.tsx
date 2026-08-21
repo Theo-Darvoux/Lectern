@@ -37,6 +37,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ContributionList } from "@/components/profile/contribution-list";
 import { RecentlyViewed } from "@/components/profile/recently-viewed";
+import { ProfileLeaderboardRank } from "@/components/leaderboard/profile-leaderboard-rank";
 import { getApprovedShare, getProfileCompletion } from "@/components/profile/profile-metrics";
 import { apiFetch, API_BASE } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
@@ -464,6 +465,8 @@ export function ProfileView({
                   </div>
                 )}
               </div>
+
+              {isOwn && <ProfileLeaderboardRank />}
 
               {isOwn && (
                 <div className="mt-5 border-t pt-5">
