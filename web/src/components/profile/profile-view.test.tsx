@@ -91,4 +91,20 @@ describe("ProfileView layout", () => {
     expect(form).not.toBeNull();
     expect(profileCard?.contains(form)).toBe(true);
   });
+
+  it("exposes the saved library as a profile action", () => {
+    expect(container.querySelector('a[href="/saved"]')).not.toBeNull();
+  });
+
+  it("keeps every profile region responsive at narrow and wide breakpoints", () => {
+    expect(container.querySelector<HTMLElement>("[data-profile-actions]")?.className).toContain("flex-wrap");
+    expect(container.querySelector<HTMLElement>("[data-profile-summary-layout]")?.className).toContain("lg:grid-cols-");
+    expect(container.querySelector<HTMLElement>("[data-profile-impact]")?.className).toContain("lg:border-l");
+    expect(container.querySelector<HTMLElement>("[data-profile-tabs]")?.className).toContain("overflow-x-auto");
+
+    const materialsTab = [...container.querySelectorAll<HTMLElement>('[role="tab"]')].find(
+      (tab) => tab.textContent === "materials",
+    );
+    expect(materialsTab?.getAttribute("data-state")).toBe("active");
+  });
 });

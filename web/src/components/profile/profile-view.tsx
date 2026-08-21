@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   BookOpen,
+  Bookmark,
   Calendar,
   Camera,
   CheckCircle2,
@@ -284,7 +285,7 @@ export function ProfileView({
   const tRoles = useTranslations("Roles");
   const locale = useLocale();
   const [editing, setEditing] = useState(false);
-  const [activeTab, setActiveTab] = useState("prs");
+  const [activeTab, setActiveTab] = useState("materials");
 
   const initials = (profile.display_name ?? profile.email ?? "?")
     .split(" ")
@@ -302,8 +303,8 @@ export function ProfileView({
   const approvedShare = getApprovedShare(profile.prs_approved, profile.prs_total);
 
   const tabs = [
-    { value: "prs", label: t("contributions"), icon: GitPullRequest },
     { value: "materials", label: t("materials"), icon: BookOpen },
+    { value: "prs", label: t("contributions"), icon: GitPullRequest },
     { value: "annotations", label: t("annotations"), icon: Highlighter },
     ...(showRecentlyViewed ? [{ value: "recent", label: t("recentlyViewed"), icon: History }] : []),
   ];
@@ -317,7 +318,10 @@ export function ProfileView({
             <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">{t("profileOverview")}</h1>
           </div>
           {isOwn && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2" data-profile-actions>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/saved"><Bookmark className="mr-2 h-4 w-4" />{t("saved")}</Link>
+              </Button>
               <Button variant="outline" size="sm" asChild>
                 <Link href="/settings"><Settings className="mr-2 h-4 w-4" />{t("settings")}</Link>
               </Button>
@@ -333,7 +337,7 @@ export function ProfileView({
         <section className="relative overflow-hidden rounded-2xl border bg-card shadow-sm" data-profile-card>
           <div className={cn("absolute inset-x-0 top-0 h-1", styles.accent)} />
           <div className={cn("pointer-events-none absolute inset-0 bg-gradient-to-br", styles.wash)} />
-          <div className="relative grid lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="relative grid lg:grid-cols-[minmax(0,1fr)_20rem]" data-profile-summary-layout>
             <div className="p-5 sm:p-8">
               <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
                 <div className="group relative w-fit shrink-0">
@@ -398,7 +402,7 @@ export function ProfileView({
               </div>
             </div>
 
-            <aside className="border-t bg-background/55 p-5 backdrop-blur-sm sm:p-6 lg:border-l lg:border-t-0">
+            <aside className="border-t bg-background/55 p-5 backdrop-blur-sm sm:p-6 lg:border-l lg:border-t-0" data-profile-impact>
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("communityImpact")}</p>
@@ -466,7 +470,7 @@ export function ProfileView({
             <p className="mt-1 text-sm text-muted-foreground">{isOwn ? t("activityDescriptionOwn") : t("activityDescription")}</p>
           </div>
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList variant="line" className="max-w-full justify-start gap-4 overflow-x-auto px-1 sm:gap-6">
+            <TabsList variant="line" className="max-w-full justify-start gap-4 overflow-x-auto px-1 sm:gap-6" data-profile-tabs>
               {tabs.map((tab) => {
                 const Icon = tab.icon;
                 return (
