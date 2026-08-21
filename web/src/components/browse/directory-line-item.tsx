@@ -155,7 +155,7 @@ function DirectoryLineItemImpl({
                 onPointerEnter={handlePointerEnter}
                 onPointerLeave={handlePointerLeave}
                 data-nav-index={navIndex}
-                style={{ contentVisibility: "auto", containIntrinsicSize: "0 68px" }}
+                style={{ contentVisibility: "auto", containIntrinsicSize: "0 72px" }}
                 className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 cursor-pointer ${stagedBorder} ${selectMode && selected ? "bg-primary/5 dark:bg-primary/10" : ""} ${focused ? "bg-muted ring-2 ring-inset ring-primary/40" : ""}`}
             >
                 {selectMode && (
@@ -170,6 +170,8 @@ function DirectoryLineItemImpl({
                         className="shrink-0"
                     />
                 )}
+
+                {/* ── Directory Icon ── */}
                 <DirectoryIcon className={`h-6 w-6 shrink-0 ${iconColor}`} />
 
                 <div className="min-w-0 flex-1">

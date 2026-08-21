@@ -1,27 +1,102 @@
 "use client";
 
-import { memo, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
 import {
-    File,
-    FileText,
-    Link2,
-    ListChecks,
     Paperclip,
     ThumbsUp,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { useLikeOverrides } from "@/lib/stores";
-import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension, MIME_QCM } from "@/lib/file-utils";
-import { EXT_ICONS, TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
+import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
+import { TYPE_COLORS } from "@/lib/material-icons";
+import { getFileTypeStyle } from "@/components/home/file-type-display";
 import { isExternalUrl } from "@/lib/url-utils";
 import { useExternalLinkStore } from "@/lib/external-link-store";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { ContentStatusBadge, normalizeContentStatus } from "@/components/content-status-badge";
+import { apiFetch } from "@/lib/api-client";
+import { useInView } from "@/hooks/use-in-view";
+import { cn } from "@/lib/utils";
+import type { MaterialDetail } from "@/components/home/types";
 
+const MaterialPreview = dynamic(
+  () => import("@/components/home/material-preview").then((module) => module.MaterialPreview),
+  { ssr: false },
+);
+
+// ---------------------------------------------------------------------------
+// Ghost preview: for staged "created" materials that have a file_key
+// ---------------------------------------------------------------------------
+
+function GhostMaterialPreview({
+  fileKey,
+  fileName,
+  mimeType,
+  containerRef,
+}: {
+  fileKey: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  containerRef: React.RefObject<Element | null>;
+}) {
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
+  const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName ?? null, mimeType ?? null);
+  const inView = useInView(containerRef);
+
+  const isImage =
+    (mimeType?.startsWith("image/") ?? false) ||
+    /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName ?? "");
+
+  useEffect(() => {
+    if (!inView || !fileKey || !isImage) return;
+    let cancelled = false;
+    const schedule =
+      typeof window !== "undefined" && "requestIdleCallback" in window
+        ? (cb: () => void) => (window as unknown as { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(cb)
+        : (cb: () => void) => window.setTimeout(cb, 200);
+    schedule(() => {
+      if (cancelled) return;
+      apiFetch<{ url: string }>(`/upload/preview?file_key=${encodeURIComponent(fileKey)}`)
+        .then((res) => {
+          if (!cancelled && res && res.url) setImgUrl(res.url);
+        })
+        .catch(() => {});
+    });
+    return () => { cancelled = true; };
+  }, [inView, fileKey, isImage]);
+
+  return (
+    <div
+      className={cn(
+        "relative w-full h-full flex items-center justify-center overflow-hidden bg-linear-to-br",
+        gradient,
+      )}
+    >
+      <Icon
+        className={cn(
+          "h-6 w-6 z-10",
+          iconColorClass,
+          imgUrl ? "opacity-0" : "opacity-80",
+        )}
+      />
+      {imgUrl && (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img
+          src={imgUrl}
+          alt={fileName ?? "Staged file preview"}
+          className="absolute inset-0 h-full w-full object-cover animate-in fade-in duration-300"
+          loading="lazy"
+          decoding="async"
+        />
+      )}
+    </div>
+  );
+}
 
 interface MaterialLineItemProps {
     material: Record<string, unknown>;
@@ -42,6 +117,10 @@ interface MaterialLineItemProps {
     onAddAttachment?: (materialId: string, materialTitle: string) => void;
     /** Cached attachment count for drafts */
     draftAttachmentCount?: number;
+    /** For ghost "created" materials: the staged file key */
+    ghostFileKey?: string | null;
+    /** For ghost "created" materials: the staged file MIME type */
+    ghostFileMimeType?: string | null;
     /** Current pathname base (without trailing slash), hoisted from parent to avoid per-item usePathname subscription */
     pathBase: string;
     /** Hoisted from parent to avoid per-item useIsMobile subscription */
@@ -62,11 +141,14 @@ function MaterialLineItemImpl({
     onNavigate,
     onAddAttachment,
     draftAttachmentCount,
+    ghostFileKey,
+    ghostFileMimeType,
     pathBase,
     isMobile,
 }: MaterialLineItemProps) {
     const t = useTranslations("Browse");
     const tTypes = useTranslations("MaterialTypes");
+    const itemRef = useRef<HTMLAnchorElement>(null);
 
     const title = String(material.title ?? "");
     const slug = String(material.slug ?? "");
@@ -107,7 +189,6 @@ function MaterialLineItemImpl({
         : tTypes.has(type as any)
             ? tTypes(type as any)
             : type;
-    let Icon = isInternalLink ? Link2 : (TYPE_ICONS[type] ?? File);
 
     if (type === "document") {
         const fallbackLabel = getFileBadgeLabel(fileName, mimeType);
@@ -116,15 +197,6 @@ function MaterialLineItemImpl({
         }
 
         const ext = getFileExtension(fileName);
-        if (ext && EXT_ICONS[ext]) {
-            Icon = EXT_ICONS[ext];
-        } else if (mimeType === MIME_QCM) {
-            Icon = ListChecks;
-        } else if (mimeType && mimeType.includes("pdf")) {
-            Icon = FileText;
-        }
-
-        // Try to get a meaningful color
         let newColor = badgeColor;
         if (ext && EXT_BADGE_COLORS[ext]) {
             newColor = EXT_BADGE_COLORS[ext];
@@ -200,10 +272,6 @@ function MaterialLineItemImpl({
         ? `border-l-2 ${borderStyle} border-l-${themeColor}-400 bg-${themeColor}-50/50 dark:bg-${themeColor}-950/20`
         : "";
 
-    const iconColorClass = staged
-        ? `text-${themeColor}-500`
-        : badgeColor.split(" ").find(c => c.startsWith("text-")) || "text-muted-foreground";
-
     const textColor =
         staged === "deleted"
             ? "line-through text-red-700 dark:text-red-400"
@@ -213,19 +281,22 @@ function MaterialLineItemImpl({
                     ? `text-${themeColor}-700 dark:text-${themeColor}-400`
                     : "";
 
-        return (
+    const useGhostPreview = staged === "created" && !!ghostFileKey;
+
+    return (
         <ItemActionsMenu
             item={{ id, type: "material", data: material, staged, isExternal }}
             onAddAttachment={onAddAttachment ? () => onAddAttachment(id, title) : undefined}
             itemPath={buildPath()}
         >
             <BrowseLink
+                ref={itemRef}
                 href={buildPath()}
                 onClick={handleCardClick}
                 onPointerEnter={handlePointerEnter}
                 onPointerLeave={handlePointerLeave}
                 data-nav-index={navIndex}
-                style={{ contentVisibility: "auto", containIntrinsicSize: "0 68px" }}
+                style={{ contentVisibility: "auto", containIntrinsicSize: "0 72px" }}
                 className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 cursor-pointer ${stagedBorder} ${selectMode && selected ? "bg-primary/5 dark:bg-primary/10" : ""} ${focused ? "bg-muted ring-2 ring-inset ring-primary/40" : ""}`}
             >
                 {selectMode && (
@@ -240,7 +311,24 @@ function MaterialLineItemImpl({
                         className="shrink-0"
                     />
                 )}
-                <Icon className={`h-6 w-6 shrink-0 ${iconColorClass}`} />
+
+                {/* ── Visual Thumbnail / Preview ── */}
+                <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted/50 transition-transform group-hover:scale-105">
+                    {useGhostPreview ? (
+                        <GhostMaterialPreview
+                            fileKey={ghostFileKey!}
+                            fileName={fileName || undefined}
+                            mimeType={ghostFileMimeType || mimeType || undefined}
+                            containerRef={itemRef}
+                        />
+                    ) : (
+                        <MaterialPreview
+                            material={material as unknown as MaterialDetail}
+                            lazy
+                            className="h-full w-full"
+                        />
+                    )}
+                </div>
 
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
