@@ -16,7 +16,10 @@ import {
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { MaterialCard } from "@/components/home/material-card";
-import type { MaterialDetail } from "@/components/home/types";
+import {
+  PROFILE_MATERIAL_GRID,
+  toProfileMaterialDetail,
+} from "@/components/profile/profile-material";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api-client";
@@ -54,36 +57,6 @@ interface PaginatedContributions {
 interface ContributionListProps {
   userId: string;
   type: "prs" | "materials" | "annotations";
-}
-
-const GRID = "grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4";
-
-function toMaterialDetail(item: ContributionItem): MaterialDetail {
-  const createdAt = item.created_at ?? new Date(0).toISOString();
-  return {
-    id: item.id,
-    directory_id: item.directory_id ?? null,
-    directory_path: item.directory_path ?? null,
-    title: item.title ?? item.id,
-    slug: item.slug ?? item.id,
-    description: item.description ?? null,
-    type: item.type ?? "document",
-    current_version: 0,
-    parent_material_id: null,
-    author_id: item.author?.id ?? null,
-    metadata: item.metadata ?? {},
-    download_count: item.download_count ?? 0,
-    total_views: item.total_views ?? 0,
-    views_today: 0,
-    like_count: item.like_count ?? 0,
-    is_liked: item.is_liked ?? false,
-    is_favourited: item.is_favourited ?? false,
-    attachment_count: 0,
-    tags: [],
-    created_at: createdAt,
-    updated_at: item.updated_at ?? createdAt,
-    current_version_info: null,
-  };
 }
 
 function getPRVisuals(status: string | undefined) {
@@ -236,7 +209,7 @@ export function ContributionList({ userId, type }: ContributionListProps) {
 
   if (loading && items.length === 0) {
     return (
-      <div className={GRID} data-contribution-grid>
+      <div className={PROFILE_MATERIAL_GRID} data-contribution-grid>
         {Array.from({ length: 8 }, (_, index) => <SkeletonCard key={index} />)}
       </div>
     );
@@ -267,10 +240,10 @@ export function ContributionList({ userId, type }: ContributionListProps) {
 
   return (
     <div>
-      <div className={cn(GRID, loading && "opacity-60")} data-contribution-grid aria-busy={loading}>
+      <div className={cn(PROFILE_MATERIAL_GRID, loading && "opacity-60")} data-contribution-grid aria-busy={loading}>
         {items.map((item) => {
           if (type === "materials") {
-            return <MaterialCard key={item.id} material={toMaterialDetail(item)} />;
+            return <MaterialCard key={item.id} material={toProfileMaterialDetail(item)} />;
           }
           if (type === "annotations") {
             return <AnnotationCard key={item.id} item={item} />;

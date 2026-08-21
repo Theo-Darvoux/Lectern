@@ -65,6 +65,8 @@ describe("ProfileView layout", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+    vi.restoreAllMocks();
   });
 
   it("keeps profile editing and activity surfaces visually continuous", async () => {
@@ -106,5 +108,28 @@ describe("ProfileView layout", () => {
       (tab) => tab.textContent === "materials",
     );
     expect(materialsTab?.getAttribute("data-state")).toBe("active");
+  });
+
+  it("preserves the page position when switching activity categories", async () => {
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 640 });
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(Number.MAX_SAFE_INTEGER);
+        return 1;
+      });
+    const recentTab = [...container.querySelectorAll<HTMLElement>('[role="tab"]')].find(
+      (tab) => tab.textContent === "recentlyViewed",
+    );
+
+    await act(async () => {
+      recentTab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    });
+
+    expect(recentTab?.getAttribute("data-state")).toBe("active");
+    expect(scrollTo).toHaveBeenCalledWith({ left: 0, top: 640, behavior: "auto" });
+    requestAnimationFrame.mockRestore();
+    scrollTo.mockRestore();
   });
 });

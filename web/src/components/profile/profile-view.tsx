@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   BookOpen,
@@ -286,6 +286,20 @@ export function ProfileView({
   const locale = useLocale();
   const [editing, setEditing] = useState(false);
   const [activeTab, setActiveTab] = useState("materials");
+  const tabScrollPosition = useRef<{ left: number; top: number } | null>(null);
+
+  const rememberTabScrollPosition = () => {
+    tabScrollPosition.current = { left: window.scrollX, top: window.scrollY };
+  };
+
+  const handleTabChange = (value: string) => {
+    const position = tabScrollPosition.current ?? { left: window.scrollX, top: window.scrollY };
+    setActiveTab(value);
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ ...position, behavior: "auto" });
+      tabScrollPosition.current = null;
+    });
+  };
 
   const initials = (profile.display_name ?? profile.email ?? "?")
     .split(" ")
@@ -469,8 +483,14 @@ export function ProfileView({
             <h2 className="text-lg font-semibold">{t("activityTitle")}</h2>
             <p className="mt-1 text-sm text-muted-foreground">{isOwn ? t("activityDescriptionOwn") : t("activityDescription")}</p>
           </div>
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList variant="line" className="max-w-full justify-start gap-4 overflow-x-auto px-1 sm:gap-6" data-profile-tabs>
+          <Tabs value={activeTab} onValueChange={handleTabChange}>
+            <TabsList
+              variant="line"
+              className="max-w-full justify-start gap-4 overflow-x-auto px-1 sm:gap-6"
+              data-profile-tabs
+              onMouseDownCapture={rememberTabScrollPosition}
+              onKeyDownCapture={rememberTabScrollPosition}
+            >
               {tabs.map((tab) => {
                 const Icon = tab.icon;
                 return (
