@@ -184,8 +184,8 @@ function EditProfileForm({
   };
 
   return (
-    <form onSubmit={submit} className="overflow-hidden rounded-2xl border bg-card shadow-sm">
-      <div className="flex items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
+    <form onSubmit={submit} className="min-w-0 flex-1" data-profile-edit-form>
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="font-semibold">{t("editProfile")}</h2>
           <p className="mt-1 text-sm text-muted-foreground">{t("editProfileDescription")}</p>
@@ -195,7 +195,7 @@ function EditProfileForm({
         </Button>
       </div>
 
-      <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="displayName">{t("displayName")}</Label>
           <Input id="displayName" value={name} onChange={(event) => setName(event.target.value)} />
@@ -222,13 +222,13 @@ function EditProfileForm({
             id="bio"
             value={bio}
             onChange={(event) => setBio(event.target.value.slice(0, 500))}
-            className="min-h-28 resize-none"
+            className="min-h-24 resize-none"
             placeholder={t("bioPlaceholder")}
           />
         </div>
       </div>
 
-      <div className="flex justify-end gap-2 border-t bg-muted/20 px-5 py-4 sm:px-6">
+      <div className="mt-5 flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onCancel}>{t("cancel")}</Button>
         <Button type="submit" disabled={saving}>
           {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
@@ -309,7 +309,7 @@ export function ProfileView({
   ];
 
   return (
-    <div className="min-h-full w-full bg-muted/20">
+    <div className="min-h-full w-full bg-background" data-profile-page>
       <div className="mx-auto w-full max-w-6xl space-y-5 p-4 pb-24 sm:p-6 md:pb-8 lg:p-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -330,7 +330,7 @@ export function ProfileView({
           )}
         </div>
 
-        <section className="relative overflow-hidden rounded-2xl border bg-card shadow-sm">
+        <section className="relative overflow-hidden rounded-2xl border bg-card shadow-sm" data-profile-card>
           <div className={cn("absolute inset-x-0 top-0 h-1", styles.accent)} />
           <div className={cn("pointer-events-none absolute inset-0 bg-gradient-to-br", styles.wash)} />
           <div className="relative grid lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -350,37 +350,51 @@ export function ProfileView({
                     )}
                   </Avatar>
                   {isOwn && onAvatarUpload && (
-                    <label className="absolute inset-1 flex cursor-pointer items-center justify-center rounded-xl bg-black/55 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-                      <Camera className="h-5 w-5 text-white" />
+                    <label
+                      className="absolute -bottom-2 -right-2 flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border bg-background text-foreground shadow-md transition-colors hover:bg-accent"
+                      data-avatar-upload-control
+                    >
+                      <Camera className="h-4 w-4" />
                       <span className="sr-only">{t("changeAvatar")}</span>
                       <input type="file" accept="image/*" className="sr-only" onChange={onAvatarUpload} />
                     </label>
                   )}
                 </div>
 
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="truncate text-2xl font-bold tracking-tight sm:text-3xl">{profile.display_name ?? profile.email ?? "?"}</h2>
-                    {RoleIcon && <RoleIcon className="h-5 w-5 text-current opacity-60" aria-hidden="true" />}
-                    <Badge variant="outline" className={cn("capitalize", styles.badge)}>{tRoles(profile.role as never)}</Badge>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
-                    {profile.academic_year && (
-                      <span className="inline-flex items-center gap-1.5"><GraduationCap className="h-4 w-4" />{t("year", { year: profile.academic_year })}</span>
+                {editing ? (
+                  <EditProfileForm
+                    profile={profile}
+                    onSave={(updated) => {
+                      setEditing(false);
+                      onProfileUpdated?.(updated);
+                    }}
+                    onCancel={() => setEditing(false)}
+                  />
+                ) : (
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="truncate text-2xl font-bold tracking-tight sm:text-3xl">{profile.display_name ?? profile.email ?? "?"}</h2>
+                      {RoleIcon && <RoleIcon className="h-5 w-5 text-current opacity-60" aria-hidden="true" />}
+                      <Badge variant="outline" className={cn("capitalize", styles.badge)}>{tRoles(profile.role as never)}</Badge>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
+                      {profile.academic_year && (
+                        <span className="inline-flex items-center gap-1.5"><GraduationCap className="h-4 w-4" />{t("year", { year: profile.academic_year })}</span>
+                      )}
+                      <span className="inline-flex items-center gap-1.5"><Calendar className="h-4 w-4" />{t("joined", { date: joined })}</span>
+                      {isOwn && profile.email && <span className="truncate">{profile.email}</span>}
+                    </div>
+                    {profile.bio ? (
+                      <p className="mt-5 max-w-2xl whitespace-pre-wrap text-sm leading-6 text-foreground/80">{profile.bio}</p>
+                    ) : isOwn ? (
+                      <button onClick={() => setEditing(true)} className="mt-5 text-left text-sm text-muted-foreground underline decoration-dashed underline-offset-4 hover:text-foreground">
+                        {t("addBio")}
+                      </button>
+                    ) : (
+                      <p className="mt-5 text-sm text-muted-foreground">{t("noBio")}</p>
                     )}
-                    <span className="inline-flex items-center gap-1.5"><Calendar className="h-4 w-4" />{t("joined", { date: joined })}</span>
-                    {isOwn && profile.email && <span className="truncate">{profile.email}</span>}
                   </div>
-                  {profile.bio ? (
-                    <p className="mt-5 max-w-2xl whitespace-pre-wrap text-sm leading-6 text-foreground/80">{profile.bio}</p>
-                  ) : isOwn ? (
-                    <button onClick={() => setEditing(true)} className="mt-5 text-left text-sm text-muted-foreground underline decoration-dashed underline-offset-4 hover:text-foreground">
-                      {t("addBio")}
-                    </button>
-                  ) : (
-                    <p className="mt-5 text-sm text-muted-foreground">{t("noBio")}</p>
-                  )}
-                </div>
+                )}
               </div>
             </div>
 
@@ -429,17 +443,6 @@ export function ProfileView({
           </div>
         </section>
 
-        {editing && (
-          <EditProfileForm
-            profile={profile}
-            onSave={(updated) => {
-              setEditing(false);
-              onProfileUpdated?.(updated);
-            }}
-            onCancel={() => setEditing(false)}
-          />
-        )}
-
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label={t("contributionSnapshot")}>
           {STATS.map((stat) => {
             const Icon = stat.icon;
@@ -457,27 +460,27 @@ export function ProfileView({
           })}
         </section>
 
-        <section className="overflow-hidden rounded-2xl border bg-card shadow-sm">
-          <div className="border-b px-5 py-5 sm:px-6">
+        <section className="space-y-4 pt-2" data-profile-activity>
+          <div className="px-1">
             <h2 className="text-lg font-semibold">{t("activityTitle")}</h2>
             <p className="mt-1 text-sm text-muted-foreground">{isOwn ? t("activityDescriptionOwn") : t("activityDescription")}</p>
           </div>
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="p-3 sm:p-5">
-            <TabsList className="flex h-auto w-full justify-start gap-1 overflow-x-auto rounded-xl bg-muted/60 p-1">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList variant="line" className="max-w-full justify-start gap-4 overflow-x-auto px-1 sm:gap-6">
               {tabs.map((tab) => {
                 const Icon = tab.icon;
                 return (
-                  <TabsTrigger key={tab.value} value={tab.value} className="min-h-9 shrink-0 gap-2 rounded-lg px-3 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                  <TabsTrigger key={tab.value} value={tab.value} className="min-h-9 shrink-0 gap-2 px-0">
                     <Icon className="h-3.5 w-3.5" />{tab.label}
                   </TabsTrigger>
                 );
               })}
             </TabsList>
-            <TabsContent value="prs" className="mt-4 min-h-72">{activeTab === "prs" && <ContributionList userId={profile.id} type="prs" />}</TabsContent>
-            <TabsContent value="materials" className="mt-4 min-h-72">{activeTab === "materials" && <ContributionList userId={profile.id} type="materials" />}</TabsContent>
-            <TabsContent value="annotations" className="mt-4 min-h-72">{activeTab === "annotations" && <ContributionList userId={profile.id} type="annotations" />}</TabsContent>
+            <TabsContent value="prs" className="mt-2 min-h-72">{activeTab === "prs" && <ContributionList userId={profile.id} type="prs" />}</TabsContent>
+            <TabsContent value="materials" className="mt-2 min-h-72">{activeTab === "materials" && <ContributionList userId={profile.id} type="materials" />}</TabsContent>
+            <TabsContent value="annotations" className="mt-2 min-h-72">{activeTab === "annotations" && <ContributionList userId={profile.id} type="annotations" />}</TabsContent>
             {showRecentlyViewed && (
-              <TabsContent value="recent" className="mt-4 min-h-72">{activeTab === "recent" && <RecentlyViewed />}</TabsContent>
+              <TabsContent value="recent" className="mt-2 min-h-72">{activeTab === "recent" && <RecentlyViewed />}</TabsContent>
             )}
           </Tabs>
         </section>

@@ -1,0 +1,94 @@
+import React, { act } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRoot, type Root } from "react-dom/client";
+import { ProfileView, type UserProfile } from "./profile-view";
+
+vi.mock("next/link", () => ({
+  default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={String(href)} {...props}>{children}</a>
+  ),
+}));
+
+vi.mock("next-intl", () => ({
+  useLocale: () => "en",
+  useTranslations: () => (key: string) => key,
+}));
+
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/lib/api-client", () => ({ API_BASE: "http://api.test", apiFetch: vi.fn() }));
+vi.mock("@/components/profile/contribution-list", () => ({
+  ContributionList: () => <div>contribution-list</div>,
+}));
+vi.mock("@/components/profile/recently-viewed", () => ({
+  RecentlyViewed: () => <div>recently-viewed</div>,
+}));
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const profile: UserProfile = {
+  id: "user-1",
+  email: "ada@example.com",
+  display_name: "Ada",
+  avatar_url: null,
+  role: "student",
+  bio: null,
+  academic_year: null,
+  created_at: "2026-01-01T00:00:00Z",
+  prs_approved: 7,
+  prs_total: 8,
+  annotations_count: 2,
+  comments_count: 3,
+  open_pr_count: 1,
+  reputation: 42,
+};
+
+describe("ProfileView layout", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <ProfileView
+          profile={profile}
+          isOwn
+          showRecentlyViewed
+          onAvatarUpload={vi.fn()}
+        />,
+      );
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("keeps profile editing and activity surfaces visually continuous", async () => {
+    const page = container.querySelector<HTMLElement>("[data-profile-page]");
+    const profileCard = container.querySelector<HTMLElement>("[data-profile-card]");
+    const activity = container.querySelector<HTMLElement>("[data-profile-activity]");
+    const avatarControl = container.querySelector<HTMLElement>("[data-avatar-upload-control]");
+
+    expect(page?.className).toContain("bg-background");
+    expect(avatarControl?.className).toContain("rounded-full");
+    expect(avatarControl?.className).not.toContain("inset-1");
+    expect(activity?.className).not.toContain("bg-card");
+
+    const addBio = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "addBio",
+    );
+    expect(addBio).toBeDefined();
+
+    await act(async () => {
+      addBio?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const form = container.querySelector("form");
+    expect(form).not.toBeNull();
+    expect(profileCard?.contains(form)).toBe(true);
+  });
+});
