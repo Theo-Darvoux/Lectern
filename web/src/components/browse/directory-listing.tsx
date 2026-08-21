@@ -904,6 +904,8 @@ export function DirectoryListing({
                 const isExternal = op.isExternal;
                 const title = op.op === "create_material" ? op.title : op.target_title;
                 const tempId = op.op === "create_material" ? op.temp_id : op.target_id;
+                const ghostFileKey = op.op === "create_material" ? (op.file_key ?? null) : null;
+                const ghostFileMimeType = op.op === "create_material" ? (op.file_mime_type ?? null) : null;
                 const draftAttachmentCount =
                   op.op === "create_material" && op.temp_id
                     ? allOps.filter(
@@ -916,7 +918,10 @@ export function DirectoryListing({
                   id: tempId || `ghost-mat-${i}`,
                   title: title || "Unnamed",
                   type: op.op === "create_material" ? op.type : op.target_material_type,
-                  current_version_info: op.op === "create_material" ? { file_name: op.file_name } : undefined,
+                  current_version_info:
+                    op.op === "create_material"
+                      ? { file_name: op.file_name, file_mime_type: op.file_mime_type }
+                      : undefined,
                 };
 
                 return (
@@ -931,6 +936,8 @@ export function DirectoryListing({
                     navIndex={ghostMatNavIndex}
                     focused={focusedIndex === ghostMatNavIndex}
                     previewOpIndex={op._previewIdx}
+                    ghostFileKey={ghostFileKey}
+                    ghostFileMimeType={ghostFileMimeType}
                     onNavigate={() => {
                       if (isExternal) {
                         if (previewPrId && op._previewIdx !== undefined) {

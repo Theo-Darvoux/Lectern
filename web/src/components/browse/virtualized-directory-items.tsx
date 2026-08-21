@@ -18,7 +18,7 @@ import {
 } from "react-window";
 
 const VIRTUALIZATION_THRESHOLD = 60;
-const LIST_ROW_HEIGHT = 68;
+const LIST_ROW_HEIGHT = 72;
 const MAX_VIEWPORT_HEIGHT = 720;
 const OVERSCAN_ROWS = 3;
 

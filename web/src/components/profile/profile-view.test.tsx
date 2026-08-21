@@ -98,11 +98,19 @@ describe("ProfileView layout", () => {
     expect(container.querySelector('a[href="/saved"]')).not.toBeNull();
   });
 
+  it("integrates contribution snapshot metrics inside the profile card", () => {
+    const profileCard = container.querySelector<HTMLElement>("[data-profile-card]");
+    const snapshot = container.querySelector<HTMLElement>('[aria-label="contributionSnapshot"]');
+    expect(snapshot).not.toBeNull();
+    expect(profileCard?.contains(snapshot)).toBe(true);
+  });
+
   it("keeps every profile region responsive at narrow and wide breakpoints", () => {
     expect(container.querySelector<HTMLElement>("[data-profile-actions]")?.className).toContain("flex-wrap");
     expect(container.querySelector<HTMLElement>("[data-profile-summary-layout]")?.className).toContain("lg:grid-cols-");
     expect(container.querySelector<HTMLElement>("[data-profile-impact]")?.className).toContain("lg:border-l");
     expect(container.querySelector<HTMLElement>("[data-profile-tabs]")?.className).toContain("overflow-x-auto");
+    expect(container.querySelector<HTMLElement>("[data-profile-tabs]")?.className).toContain("overflow-y-hidden");
 
     const materialsTab = [...container.querySelectorAll<HTMLElement>('[role="tab"]')].find(
       (tab) => tab.textContent === "materials",

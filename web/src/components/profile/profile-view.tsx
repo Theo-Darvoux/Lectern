@@ -244,7 +244,7 @@ export function ProfileSkeleton() {
   return (
     <div className="mx-auto w-full max-w-6xl space-y-5 p-4 pb-24 sm:p-6 lg:p-8">
       <div className="grid overflow-hidden rounded-2xl border lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="space-y-5 p-6 sm:p-8">
+        <div className="flex flex-col justify-between p-6 sm:p-8">
           <div className="flex gap-5">
             <Skeleton className="h-24 w-24 shrink-0 rounded-2xl" />
             <div className="flex-1 space-y-3 pt-2">
@@ -252,12 +252,11 @@ export function ProfileSkeleton() {
               <Skeleton className="h-4 w-40" />
             </div>
           </div>
-          <Skeleton className="h-16 w-full" />
+          <div className="mt-6 grid grid-cols-2 gap-3 border-t pt-5 sm:grid-cols-4">
+            {Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-20 rounded-xl" />)}
+          </div>
         </div>
         <Skeleton className="min-h-64 rounded-none" />
-      </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-28 rounded-xl" />)}
       </div>
       <Skeleton className="h-96 rounded-2xl" />
     </div>
@@ -352,7 +351,7 @@ export function ProfileView({
           <div className={cn("absolute inset-x-0 top-0 h-1", styles.accent)} />
           <div className={cn("pointer-events-none absolute inset-0 bg-gradient-to-br", styles.wash)} />
           <div className="relative grid lg:grid-cols-[minmax(0,1fr)_20rem]" data-profile-summary-layout>
-            <div className="p-5 sm:p-8">
+            <div className="flex flex-col justify-between p-5 sm:p-8">
               <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
                 <div className="group relative w-fit shrink-0">
                   <Avatar className="h-24 w-24 rounded-2xl border-4 border-background shadow-lg sm:h-28 sm:w-28">
@@ -403,17 +402,38 @@ export function ProfileView({
                       {isOwn && profile.email && <span className="truncate">{profile.email}</span>}
                     </div>
                     {profile.bio ? (
-                      <p className="mt-5 max-w-2xl whitespace-pre-wrap text-sm leading-6 text-foreground/80">{profile.bio}</p>
+                      <p className="mt-4 max-w-2xl whitespace-pre-wrap text-sm leading-6 text-foreground/80">{profile.bio}</p>
                     ) : isOwn ? (
-                      <button onClick={() => setEditing(true)} className="mt-5 text-left text-sm text-muted-foreground underline decoration-dashed underline-offset-4 hover:text-foreground">
+                      <button onClick={() => setEditing(true)} className="mt-4 text-left text-sm text-muted-foreground underline decoration-dashed underline-offset-4 hover:text-foreground">
                         {t("addBio")}
                       </button>
                     ) : (
-                      <p className="mt-5 text-sm text-muted-foreground">{t("noBio")}</p>
+                      <p className="mt-4 text-sm text-muted-foreground">{t("noBio")}</p>
                     )}
                   </div>
                 )}
               </div>
+
+              {!editing && (
+                <div className="mt-6 border-t border-border/50 pt-5" aria-label={t("contributionSnapshot")}>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {STATS.map((stat) => {
+                      const Icon = stat.icon;
+                      return (
+                        <div key={stat.key} className="rounded-xl border bg-background/60 p-3 shadow-xs transition-colors hover:border-primary/25">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="truncate text-xs font-medium text-muted-foreground">{t(stat.labelKey)}</span>
+                            <div className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-md", stat.iconBg, stat.color)}>
+                              <Icon className="h-3.5 w-3.5" />
+                            </div>
+                          </div>
+                          <p className="mt-2 text-xl font-bold tracking-tight tabular-nums sm:text-2xl"><AnimatedCounter value={profile[stat.key]} /></p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             <aside className="border-t bg-background/55 p-5 backdrop-blur-sm sm:p-6 lg:border-l lg:border-t-0" data-profile-impact>
@@ -461,23 +481,6 @@ export function ProfileView({
           </div>
         </section>
 
-        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label={t("contributionSnapshot")}>
-          {STATS.map((stat) => {
-            const Icon = stat.icon;
-            return (
-              <div key={stat.key} className="group rounded-xl border bg-card p-4 shadow-sm transition-colors hover:border-primary/25">
-                <div className="flex items-start gap-3">
-                  <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg", stat.iconBg, stat.color)}>
-                    <Icon className="h-4 w-4" />
-                  </div>
-                </div>
-                <p className="mt-5 text-2xl font-bold tracking-tight tabular-nums sm:text-3xl"><AnimatedCounter value={profile[stat.key]} /></p>
-                <p className="mt-1 text-xs font-medium text-muted-foreground">{t(stat.labelKey)}</p>
-              </div>
-            );
-          })}
-        </section>
-
         <section className="space-y-4 pt-2" data-profile-activity>
           <div className="px-1">
             <h2 className="text-lg font-semibold">{t("activityTitle")}</h2>
@@ -486,7 +489,7 @@ export function ProfileView({
           <Tabs value={activeTab} onValueChange={handleTabChange}>
             <TabsList
               variant="line"
-              className="max-w-full justify-start gap-4 overflow-x-auto px-1 sm:gap-6"
+              className="max-w-full justify-start gap-4 overflow-x-auto overflow-y-hidden px-1 sm:gap-6"
               data-profile-tabs
               onMouseDownCapture={rememberTabScrollPosition}
               onKeyDownCapture={rememberTabScrollPosition}
@@ -494,7 +497,7 @@ export function ProfileView({
               {tabs.map((tab) => {
                 const Icon = tab.icon;
                 return (
-                  <TabsTrigger key={tab.value} value={tab.value} className="min-h-9 shrink-0 gap-2 px-0">
+                  <TabsTrigger key={tab.value} value={tab.value} className="min-h-9 shrink-0 gap-2 px-0 pb-2">
                     <Icon className="h-3.5 w-3.5" />{tab.label}
                   </TabsTrigger>
                 );
