@@ -10,10 +10,10 @@ import google.auth.transport.requests
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from google.oauth2 import id_token
 from redis.asyncio import Redis
-from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.core.database.redis as redis_core
 from app.config import settings
 from app.core.common.exceptions import (
     BadRequestError,
@@ -23,6 +23,7 @@ from app.core.common.exceptions import (
 )
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis
+from app.core.events.limiter import limiter
 from app.core.security.security import (
     BROWSER_READ_COOKIE,
     create_browser_read_token,
@@ -47,7 +48,7 @@ from app.schemas.auth import (
 from app.schemas.pull_request import MAX_PR_DESCRIPTION_LENGTH
 from app.services import auth as auth_service
 from app.services.avatar import is_safe_avatar_reference, is_trusted_external_avatar_url
-from app.services.email import send_password_reset_email, send_verification_email
+from app.services.email import send_verification_email
 from app.services.notification import notify_admins_pending_user
 from app.services.user import get_user_by_id
 
@@ -65,9 +66,6 @@ def get_client_id(request: Request) -> str:
     # X-Client-ID is client-controlled and can be rotated trivially. The proxy
     # middleware has already limited forwarding headers to trusted peers.
     return get_remote_address(request)
-
-
-limiter = Limiter(key_func=get_client_id, enabled=not settings.is_dev)
 
 
 def _set_refresh_cookie(response: Response, token: str, expire_days: int | None = None) -> None:
@@ -511,7 +509,6 @@ _PASSWORD_RESET_RESPONSE = {"message": "If an account exists, a password reset l
 async def request_password_reset(
     request: Request,
     data: PasswordResetRequestIn,
-    background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
 ) -> dict[str, str]:
@@ -522,26 +519,22 @@ async def request_password_reset(
     ):
         return _PASSWORD_RESET_RESPONSE
 
-    user = await auth_service.get_password_reset_account(db, data.email)
-    if user is None or user.role == UserRole.GUEST:
+    if redis_core.arq_pool is None:
+        logger.error("Password reset email was not queued because the ARQ pool is unavailable")
         return _PASSWORD_RESET_RESPONSE
 
-    token = auth_service.generate_magic_token()
-    await auth_service.store_password_reset_token(
-        redis,
-        user.email,
-        token,
-        auth_generation=user.auth_generation,
-    )
-    reset_link = f"{settings.frontend_url.rstrip('/')}/login/reset-password#token={token}"
+    delivery = await auth_service.prepare_password_reset(db, redis, data.email)
+    if delivery is None:
+        return _PASSWORD_RESET_RESPONSE
 
-    async def _send_safe(email: str, link: str) -> None:
-        try:
-            await send_password_reset_email(email, link)
-        except Exception as exc:
-            logger.error("Failed to send password reset email: %s", exc, exc_info=True)
-
-    background_tasks.add_task(_send_safe, user.email, reset_link)
+    try:
+        await redis_core.arq_pool.enqueue_job(
+            "send_password_reset_email",
+            email=delivery.email,
+            reset_link=delivery.reset_link,
+        )
+    except Exception as exc:
+        logger.error("Failed to queue password reset email: %s", exc, exc_info=True)
     return _PASSWORD_RESET_RESPONSE
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -37,6 +38,13 @@ CLASSIC_LOGIN_TTL_SECONDS = 15 * 60
 PASSWORD_RESET_SOURCE_MAX = 10
 PASSWORD_RESET_ACCOUNT_MAX = 3
 PASSWORD_RESET_TTL_SECONDS = 15 * 60
+
+
+@dataclass(frozen=True)
+class PasswordResetDelivery:
+    email: str
+    reset_link: str
+
 
 # Redis scripts are deliberately small and self-identifying. Challenge issuance
 # and compare/delete decisions happen server-side so concurrent requests cannot
@@ -742,6 +750,27 @@ async def create_password(db: AsyncSession, user_id: object, password: str) -> U
 
 async def get_password_reset_account(db: AsyncSession, email: str) -> User | None:
     return await db.scalar(select(User).where(User.email == email))
+
+
+async def prepare_password_reset(
+    db: AsyncSession,
+    redis: Redis,  # type: ignore[type-arg]
+    email: str,
+) -> PasswordResetDelivery | None:
+    """Issue a reset capability for an eligible account without disclosing eligibility."""
+    user = await get_password_reset_account(db, email)
+    if user is None or user.role == UserRole.GUEST:
+        return None
+
+    token = generate_magic_token()
+    await store_password_reset_token(
+        redis,
+        user.email,
+        token,
+        auth_generation=user.auth_generation,
+    )
+    reset_link = f"{settings.frontend_url.rstrip('/')}/login/reset-password#token={token}"
+    return PasswordResetDelivery(email=user.email, reset_link=reset_link)
 
 
 async def reset_password(

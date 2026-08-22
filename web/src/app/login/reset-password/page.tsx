@@ -9,7 +9,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ShaderText } from "@/components/shader-text";
 import { apiFetch } from "@/lib/api-client";
+import type { components } from "@/lib/api-types";
 import { useConfigStore } from "@/lib/stores";
+
+type PasswordResetRequest = components["schemas"]["PasswordResetRequestIn"];
+type PasswordResetConfirm = components["schemas"]["PasswordResetConfirmIn"];
 
 export default function ResetPasswordPage() {
     const t = useTranslations("Login");
@@ -51,9 +55,10 @@ export default function ResetPasswordPage() {
         setLoading(true);
         setError(null);
         try {
-            await apiFetch("/auth/password-reset/request", {
+            const payload: PasswordResetRequest = { email: email.trim() };
+            await apiFetch<Record<string, string>>("/auth/password-reset/request", {
                 method: "POST",
-                body: JSON.stringify({ email: email.trim() }),
+                body: JSON.stringify(payload),
                 skipAuth: true,
             });
             setRequestSent(true);
@@ -82,9 +87,10 @@ export default function ResetPasswordPage() {
 
         setLoading(true);
         try {
-            await apiFetch("/auth/password-reset/confirm", {
+            const payload: PasswordResetConfirm = { token, password };
+            await apiFetch<Record<string, string>>("/auth/password-reset/confirm", {
                 method: "POST",
-                body: JSON.stringify({ token, password }),
+                body: JSON.stringify(payload),
                 skipAuth: true,
             });
             setResetComplete(true);

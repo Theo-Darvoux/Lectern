@@ -35,11 +35,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useConfirmDialog } from "@/components/confirm-dialog";
 import { useChangeLocale } from "@/hooks/use-change-locale";
 import { apiFetch } from "@/lib/api-client";
+import type { components } from "@/lib/api-types";
 import { performLogout } from "@/lib/auth-sync";
 import { useAuthStore, useConfigStore } from "@/lib/stores";
 import { cn } from "@/lib/utils";
 
 const commitSha = process.env.NEXT_PUBLIC_COMMIT_SHA;
+type SetPasswordRequest = components["schemas"]["SetPasswordIn"];
 
 function SettingsSection({
   id,
@@ -158,9 +160,10 @@ export default function SettingsPage() {
 
     setCreatingPassword(true);
     try {
-      await apiFetch("/auth/password", {
+      const payload: SetPasswordRequest = { password };
+      await apiFetch<Record<string, string>>("/auth/password", {
         method: "POST",
-        body: JSON.stringify({ password }),
+        body: JSON.stringify(payload),
       });
       setUser({ ...user, has_password: true });
       setPassword("");
