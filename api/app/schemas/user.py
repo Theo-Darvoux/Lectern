@@ -111,6 +111,9 @@ class PublicPRContribution(BaseModel):
 class PublicAnnotationContribution(BaseModel):
     id: uuid.UUID
     material_id: uuid.UUID
+    material_title: str | None = None
+    material_slug: str | None = None
+    directory_path: str | None = None
     body: str
     author: PublicUserBrief | None
     created_at: datetime

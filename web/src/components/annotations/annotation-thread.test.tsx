@@ -278,6 +278,34 @@ describe("AnnotationThread", () => {
         expect(fallback?.textContent).toBe("?");
         cleanup(root, container);
     });
+
+    it("renders id and data-annotation-id on root and reply items", () => {
+        const thread = makeThread({
+            replies: [makeAnnotation({ id: "reply-1", reply_to_id: "ann-1", body: "Reply body" })],
+        });
+        const { container, root } = renderIntoDiv(
+            <AnnotationThread {...defaultProps} thread={thread} />,
+        );
+        const rootEl = container.querySelector("#annotation-ann-1");
+        const replyEl = container.querySelector("#annotation-reply-1");
+        expect(rootEl).not.toBeNull();
+        expect(replyEl).not.toBeNull();
+        expect(rootEl?.getAttribute("data-annotation-id")).toBe("ann-1");
+        expect(replyEl?.getAttribute("data-annotation-id")).toBe("reply-1");
+        cleanup(root, container);
+    });
+
+    it("applies targeted styling when targetAnnotationId matches root or reply", () => {
+        const thread = makeThread({
+            replies: [makeAnnotation({ id: "reply-1", reply_to_id: "ann-1", body: "Reply body" })],
+        });
+        const { container, root } = renderIntoDiv(
+            <AnnotationThread {...defaultProps} thread={thread} targetAnnotationId="reply-1" />,
+        );
+        const replyEl = container.querySelector("#annotation-reply-1");
+        expect(replyEl?.className).toContain("ring-primary");
+        cleanup(root, container);
+    });
 });
 
 // ── AnnotationForm ────────────────────────────────────────────────────────────
@@ -363,8 +391,6 @@ describe("AnnotationForm", () => {
             // expected
         }
 
-        // The form's handleSubmit catches errors and calls toast.error
-        // — we verify the mock is wired correctly
         expect(toast.error).not.toHaveBeenCalled(); // only called when submit fires inside component
         cleanup(root, container);
     });

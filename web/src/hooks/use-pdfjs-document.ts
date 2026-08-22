@@ -52,6 +52,8 @@ export type PdfStatus = "loading" | "ready" | "error";
 interface UsePdfjsDocumentOptions {
     /** Object/blob URL of the PDF. `null` while the upstream fetch is in flight. */
     url: string | null;
+    /** Optional initial page number to navigate to upon loading */
+    initialPage?: number;
     /** Enable ctrl/⌘+wheel and two-finger pinch zoom on the container. Default true. */
     enableGestures?: boolean;
     /** Called whenever a page's text layer (re)renders — used to (re)paint annotation overlays. */
@@ -92,6 +94,7 @@ interface TextLayerRenderedEvent {
  */
 export function usePdfjsDocument({
     url,
+    initialPage,
     enableGestures = true,
     onTextLayerRendered,
 }: UsePdfjsDocumentOptions): UsePdfjsDocumentReturn {
@@ -113,9 +116,11 @@ export function usePdfjsDocument({
     const workerRef = useRef<Worker | null>(null);
     const pdfWorkerRef = useRef<PdfJsWorker | null>(null);
 
-    // Keep the latest callback without re-running the init effect.
+    // Keep the latest callbacks and initialPage without re-running the init effect.
     const onTextLayerRef = useRef(onTextLayerRendered);
     useEffect(() => { onTextLayerRef.current = onTextLayerRendered; });
+    const initialPageRef = useRef(initialPage);
+    useEffect(() => { initialPageRef.current = initialPage; });
 
     const [modulesReady, setModulesReady] = useState(false);
     const [status, setStatus] = useState<PdfStatus>("loading");
@@ -178,6 +183,9 @@ export function usePdfjsDocument({
                 // Fit to width by default; pdf.js keeps re-fitting on resize while
                 // the scale value stays a preset (see the resize observer below).
                 viewer.currentScaleValue = "page-width";
+                if (typeof initialPageRef.current === "number" && initialPageRef.current > 1) {
+                    viewer.currentPageNumber = initialPageRef.current;
+                }
             });
             eventBus.on("pagechanging", (e: { pageNumber: number }) => {
                 setCurrentPage(e.pageNumber);
@@ -381,7 +389,16 @@ export function usePdfjsDocument({
     }, []);
     const goToPage = useCallback((pageNumber: number) => {
         const viewer = viewerRef.current;
-        if (viewer) viewer.currentPageNumber = pageNumber;
+        if (!viewer) return;
+        try {
+            viewer.currentPageNumber = pageNumber;
+            const pageEl = viewerElRef.current?.querySelector<HTMLElement>(`.page[data-page-number="${pageNumber}"]`);
+            if (pageEl) {
+                pageEl.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+        } catch {
+            // ignore
+        }
     }, []);
     const setSpread = useCallback((spread: PdfSpread) => {
         const viewer = viewerRef.current;

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { MessageCircle, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +29,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps) {
   const t = useTranslations("Sidebar");
+  const searchParams = useSearchParams();
+  const targetAnnotationId =
+    (target?.data?.__targetAnnotationId as string | undefined) ||
+    searchParams.get("annotation") ||
+    null;
   const user = useAuthStore((state) => state.user);
   // Guests are read-only: treat them as anonymous so reply/edit/delete
   // affordances (which require a current user id) never render.
@@ -36,6 +42,37 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
+  const scrolledTargetRef = useRef<string | null>(null);
+  const threads = ctx?.threads ?? [];
+
+  useEffect(() => {
+    if (!ctx || !target || target.type !== "material") return;
+    if (!targetAnnotationId || threads.length === 0) return;
+    if (scrolledTargetRef.current === targetAnnotationId) return;
+
+    const tryScroll = () => {
+      const el =
+        document.getElementById(`annotation-${targetAnnotationId}`) ||
+        document.getElementById(`annotation-thread-${targetAnnotationId}`);
+      if (el) {
+        scrolledTargetRef.current = targetAnnotationId;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        return true;
+      }
+      return false;
+    };
+
+    if (!tryScroll()) {
+      let attempts = 0;
+      const interval = setInterval(() => {
+        attempts++;
+        if (tryScroll() || attempts >= 10) {
+          clearInterval(interval);
+        }
+      }, 100);
+      return () => clearInterval(interval);
+    }
+  }, [ctx, target, targetAnnotationId, threads]);
 
   if (!ctx || !target || target.type !== "material") {
     return (
@@ -48,7 +85,6 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
   }
 
   const {
-    threads,
     loading,
     error,
     hasMore,
@@ -157,6 +193,7 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
                 onEditBodyChange={setEditBody}
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={handleCancelEdit}
+                targetAnnotationId={targetAnnotationId}
               />
               {replyingTo &&
                 (thread.root.id === replyingTo ||

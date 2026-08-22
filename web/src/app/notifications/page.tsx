@@ -281,6 +281,10 @@ export default function NotificationsPage() {
     return groups;
   }, [filteredNotifications, t]);
 
+  const isAllSelected =
+    filteredNotifications.length > 0 &&
+    selectedIds.size === filteredNotifications.length;
+
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -294,7 +298,7 @@ export default function NotificationsPage() {
   }, []);
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === filteredNotifications.length && filteredNotifications.length > 0) {
+    if (isAllSelected) {
       setSelectedIds(new Set());
       setSelectionMode(false);
     } else {
@@ -501,24 +505,22 @@ export default function NotificationsPage() {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {/* Multi-selection mode toggle */}
+              {/* Multi-selection / Select All toggle */}
               {filteredNotifications.length > 0 && (
                 <Button
-                  variant={selectionMode ? "secondary" : "outline"}
+                  variant={isAllSelected ? "secondary" : "outline"}
                   size="sm"
-                  onClick={() => {
-                    if (selectionMode) {
-                      setSelectionMode(false);
-                      setSelectedIds(new Set());
-                    } else {
-                      setSelectionMode(true);
-                    }
-                  }}
+                  onClick={toggleSelectAll}
                   className="h-9 gap-1.5 text-xs rounded-xl"
+                  title={isAllSelected ? t("deselectAll") : t("selectAll")}
                 >
-                  <CheckSquare className="h-3.5 w-3.5" />
+                  {isAllSelected ? (
+                    <CheckSquare className="h-3.5 w-3.5 text-primary" />
+                  ) : (
+                    <Square className="h-3.5 w-3.5" />
+                  )}
                   <span className="hidden sm:inline">
-                    {selectionMode ? t("deselectAll") : t("selectAll")}
+                    {isAllSelected ? t("deselectAll") : t("selectAll")}
                   </span>
                 </Button>
               )}
@@ -550,25 +552,8 @@ export default function NotificationsPage() {
         {/* ── Selection Batch Bar (when items are selected) ─────────── */}
         {selectedIds.size > 0 && (
           <div className="sticky top-16 z-30 flex items-center justify-between rounded-2xl border bg-card/95 px-4 py-3 shadow-md backdrop-blur-md animate-in fade-in slide-in-from-top-2">
-            <div className="flex items-center gap-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={toggleSelectAll}
-                className="h-7 gap-1.5 text-xs rounded-lg"
-              >
-                {selectedIds.size === filteredNotifications.length ? (
-                  <CheckSquare className="h-3.5 w-3.5 text-primary" />
-                ) : (
-                  <Square className="h-3.5 w-3.5 text-muted-foreground" />
-                )}
-                <span>
-                  {selectedIds.size === filteredNotifications.length
-                    ? t("deselectAll")
-                    : t("selectAll")}
-                </span>
-              </Button>
-              <Badge variant="secondary" className="text-xs font-semibold px-2 py-0.5">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="text-xs font-semibold px-2.5 py-1">
                 {t("selectedCount", { count: selectedIds.size })}
               </Badge>
             </div>
@@ -592,6 +577,8 @@ export default function NotificationsPage() {
                   setSelectionMode(false);
                 }}
                 className="h-8 w-8 rounded-xl text-muted-foreground hover:text-foreground"
+                title={t("deselectAll")}
+                aria-label={t("deselectAll")}
               >
                 <X className="h-4 w-4" />
               </Button>
@@ -671,7 +658,7 @@ export default function NotificationsPage() {
                     <NotificationItemCard
                       key={n.id}
                       notification={n}
-                      selectable={selectionMode}
+                      selectable={selectionMode || selectedIds.size > 0}
                       isSelected={selectedIds.has(n.id)}
                       onToggleSelect={toggleSelect}
                       onMarkRead={markRead}

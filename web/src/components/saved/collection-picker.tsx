@@ -132,10 +132,11 @@ export function CollectionPicker({
           variant="outline"
           size="sm"
           disabled={disabled}
-          className={cn("w-full justify-center gap-2", className)}
+          title={t("addToCollection")}
+          className={cn("w-full justify-center gap-1.5 min-w-0 overflow-hidden", className)}
         >
-          <FolderPlus className="h-4 w-4" />
-          {t("addToCollection")}
+          <FolderPlus className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{t("addToCollection")}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 p-0">

@@ -93,4 +93,35 @@ describe("ContributionList cards", () => {
     );
     expect(container.textContent).toContain("Graphs");
   });
+
+  it("renders annotation cards as clickable links to the annotated material", async () => {
+    mockedApiFetch.mockResolvedValueOnce({
+      items: [
+        {
+          id: "ann-123",
+          material_id: "mat-456",
+          material_title: "Calculus Notes",
+          material_slug: "calculus-notes",
+          directory_path: "math/analysis",
+          body: "Crucial derivative rule to remember",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      total: 1,
+      page: 1,
+      pages: 1,
+    });
+
+    await act(async () => {
+      root.render(<ContributionList userId="user-1" type="annotations" />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const link = container.querySelector<HTMLAnchorElement>("a[data-annotation-card]");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("/browse/math/analysis/calculus-notes?annotation=ann-123");
+    expect(container.textContent).toContain("Crucial derivative rule to remember");
+    expect(container.textContent).toContain("Calculus Notes");
+  });
 });

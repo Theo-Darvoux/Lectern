@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import type { AnnotationData, ThreadData } from "@/hooks/use-annotations";
 import { API_BASE } from "@/lib/api-client";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
 
 function getInitials(name: string | null): string {
     if (!name) return "?";
@@ -39,6 +40,7 @@ function AnnotationItem({
     onEditBodyChange,
     onSaveEdit,
     onCancelEdit,
+    isTargeted,
 }: {
     annotation: AnnotationData;
     currentUserId: string | null;
@@ -52,6 +54,7 @@ function AnnotationItem({
     onEditBodyChange: (v: string) => void;
     onSaveEdit: () => Promise<void>;
     onCancelEdit: () => void;
+    isTargeted?: boolean;
 }) {
     const isAuthor = !!currentUserId && annotation.author_id === currentUserId;
     const isModerator =
@@ -70,7 +73,14 @@ function AnnotationItem({
     const isEdited = annotation.updated_at !== annotation.created_at;
 
     return (
-        <div className="group flex gap-2 py-3">
+        <div
+            id={`annotation-${annotation.id}`}
+            data-annotation-id={annotation.id}
+            className={cn(
+                "group flex gap-2 py-3 rounded-md px-2 -mx-2 transition-all duration-300",
+                isTargeted && "bg-primary/10 ring-2 ring-primary/40",
+            )}
+        >
             {annotation.author_id ? (
                 <Link href={`/profile/${annotation.author_id}`} className="shrink-0 mt-0.5">
                     <Avatar className="h-6 w-6 shrink-0 transition-opacity hover:opacity-80">
@@ -204,6 +214,7 @@ interface AnnotationThreadProps {
     onEditBodyChange: (v: string) => void;
     onSaveEdit: () => Promise<void>;
     onCancelEdit: () => void;
+    targetAnnotationId?: string | null;
 }
 
 export function AnnotationThread({
@@ -218,15 +229,25 @@ export function AnnotationThread({
     onEditBodyChange,
     onSaveEdit,
     onCancelEdit,
+    targetAnnotationId,
 }: AnnotationThreadProps) {
     const t = useTranslations("Annotations");
     const allAnnotations = [thread.root, ...thread.replies];
     const annotationMap = new Map(allAnnotations.map((a) => [a.id, a]));
 
     const editProps = { editingId, editBody, onEditBodyChange, onSaveEdit, onCancelEdit };
+    const isRootTargeted = targetAnnotationId === thread.root.id;
+    const isThreadTargeted = isRootTargeted || thread.replies.some((r) => r.id === targetAnnotationId);
 
     return (
-        <div className="rounded-lg border bg-muted/10 p-3 shadow-sm hover:border-primary/20 transition-colors">
+        <div
+            id={`annotation-thread-${thread.root.id}`}
+            data-thread-id={thread.root.id}
+            className={cn(
+                "rounded-lg border bg-muted/10 p-3 shadow-sm hover:border-primary/20 transition-all duration-300",
+                isThreadTargeted && "border-primary/50 shadow-md ring-1 ring-primary/20",
+            )}
+        >
             {thread.root.selection_text && (
                 <div className="mb-2.5 border-l-2 border-yellow-400 bg-yellow-400/5 px-2 py-1 rounded-r-md">
                     <span className="block text-[9px] font-bold text-yellow-600 uppercase tracking-tight mb-0.5">{t("selection")}</span>
@@ -245,6 +266,7 @@ export function AnnotationThread({
                 onReply={onReply}
                 onEdit={onEdit}
                 onDelete={onDelete}
+                isTargeted={isRootTargeted}
                 {...editProps}
             />
             {thread.replies.length > 0 && (
@@ -258,6 +280,7 @@ export function AnnotationThread({
                             onReply={onReply}
                             onEdit={onEdit}
                             onDelete={onDelete}
+                            isTargeted={targetAnnotationId === reply.id}
                             replyToAnnotation={
                                 reply.reply_to_id
                                     ? annotationMap.get(reply.reply_to_id)

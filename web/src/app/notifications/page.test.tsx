@@ -226,4 +226,98 @@ describe("NotificationsPage", () => {
     expect(container.textContent).not.toContain("Your contribution was approved");
     expect(container.textContent).toContain("New comment on algebra notes");
   });
+
+  it("selects and deselects all notifications via toolbar button without duplicate select-all buttons", async () => {
+    const notif2: NotificationItem = {
+      id: "notification-2",
+      type: "material_comment",
+      title: "New comment on algebra notes",
+      body: "Check out this solution",
+      link: null,
+      read: false,
+      created_at: "2026-08-22T00:00:00Z",
+    };
+
+    vi.mocked(fetchNotifications).mockResolvedValueOnce({
+      items: [notification, notif2],
+      total: 2,
+      page: 1,
+      pages: 1,
+    });
+
+    await act(async () => {
+      root.render(<NotificationsPage />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // Find toolbar select all button
+    const selectAllBtn = Array.from(container.querySelectorAll("button"))
+      .find((b) => b.textContent?.includes("selectAll") || b.getAttribute("title") === "selectAll");
+    expect(selectAllBtn).toBeDefined();
+
+    // Click select all
+    await act(async () => {
+      selectAllBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // Verify all items selected count shown in batch bar
+    expect(container.textContent).toContain("selectedCount");
+
+    // Verify there is only ONE deselectAll / selectAll button in the DOM (the toolbar button)
+    const deselectButtons = Array.from(container.querySelectorAll("button"))
+      .filter((b) => b.textContent?.includes("deselectAll") || b.textContent?.includes("selectAll"));
+    expect(deselectButtons.length).toBe(1);
+
+    // Click deselect all on toolbar button
+    await act(async () => {
+      deselectButtons[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // Batch bar should disappear
+    expect(container.textContent).not.toContain("selectedCount");
+  });
+
+  it("marks selected notifications as read via batch action", async () => {
+    const notif2: NotificationItem = {
+      id: "notification-2",
+      type: "material_comment",
+      title: "New comment on algebra notes",
+      body: "Check out this solution",
+      link: null,
+      read: false,
+      created_at: "2026-08-22T00:00:00Z",
+    };
+
+    vi.mocked(fetchNotifications).mockResolvedValueOnce({
+      items: [notification, notif2],
+      total: 2,
+      page: 1,
+      pages: 1,
+    });
+
+    await act(async () => {
+      root.render(<NotificationsPage />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // Select all
+    const selectAllBtn = Array.from(container.querySelectorAll("button"))
+      .find((b) => b.textContent?.includes("selectAll"));
+    await act(async () => {
+      selectAllBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // Click batch mark as read
+    const markSelectedBtn = Array.from(container.querySelectorAll("button"))
+      .find((b) => b.textContent?.includes("markSelectedRead"));
+    expect(markSelectedBtn).toBeDefined();
+
+    await act(async () => {
+      markSelectedBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(markNotificationRead).toHaveBeenCalledWith("notification-1");
+    expect(markNotificationRead).toHaveBeenCalledWith("notification-2");
+  });
 });
+

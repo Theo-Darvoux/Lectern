@@ -134,6 +134,7 @@ export function paintPageHighlights(
         // Visual highlight (non-interactive).
         const hl = document.createElement("div");
         hl.className = `${OVERLAY_CLASS} annotation-highlight rounded-sm`;
+        hl.setAttribute("data-thread-id", b.threadId);
         Object.assign(hl.style, {
             position: "absolute",
             left: `${b.x}px`,
@@ -149,6 +150,7 @@ export function paintPageHighlights(
         if (onAnnotationClick) {
             const hit = document.createElement("div");
             hit.className = OVERLAY_CLASS;
+            hit.setAttribute("data-thread-id", b.threadId);
             Object.assign(hit.style, {
                 position: "absolute",
                 left: `${b.x}px`,

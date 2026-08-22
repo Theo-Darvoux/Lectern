@@ -103,6 +103,7 @@ interface QCMViewerProps {
   directUrl?: string;
   /** Skip all fetching and render from this pre-loaded data directly. */
   initialData?: QCMFile;
+  targetAnnotationId?: string | null;
 }
 
 interface QuestionState {
@@ -265,7 +266,11 @@ function QuestionCard({
   const { selected, revealed } = state;
 
   return (
-    <div className="rounded-lg border bg-card p-4 space-y-3">
+    <div
+      id={`qcm-question-${question.id}`}
+      data-question-id={question.id}
+      className="rounded-lg border bg-card p-4 space-y-3 transition-all duration-300"
+    >
       <div className="flex items-start gap-2">
         <span className="text-xs font-semibold text-muted-foreground shrink-0 mt-1">
           Q{questionNumber}
@@ -464,7 +469,13 @@ function ResultsView({ qcm, questionStates, onRetry }: ResultsViewProps) {
 // Main viewer
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMViewerProps) {
+export function QCMViewer({
+  fileKey,
+  materialId,
+  directUrl,
+  initialData,
+  targetAnnotationId,
+}: QCMViewerProps) {
   const t = useTranslations("QCM.viewer");
   const annotationsApi = useAnnotationsContext();
   const user = useAuthStore((state) => state.user);
@@ -478,14 +489,61 @@ export function QCMViewer({ fileKey, materialId, directUrl, initialData }: QCMVi
   const [page, setPage] = useState(0);
   const [finished, setFinished] = useState(false);
   const questionsScrollRef = useRef<HTMLDivElement>(null);
+  const scrolledQcmTargetRef = useRef<string | null>(null);
   useScrollHide(questionsScrollRef, { onlyShowAtTop: true });
 
   // Prevent external initialData changes from wiping in-progress user state.
   const hasStartedRef = useRef(false);
 
   useEffect(() => {
+    if (targetAnnotationId && scrolledQcmTargetRef.current !== targetAnnotationId) {
+      return;
+    }
     questionsScrollRef.current?.scrollTo({ top: 0 });
-  }, [page]);
+  }, [page, targetAnnotationId]);
+
+  useEffect(() => {
+    if (!targetAnnotationId || !qcm || !annotationsApi) return;
+    if (scrolledQcmTargetRef.current === targetAnnotationId) return;
+
+    const targetThread = annotationsApi.threads.find(
+      (t) => t.root.id === targetAnnotationId || t.replies.some((r) => r.id === targetAnnotationId),
+    );
+    if (!targetThread) return;
+
+    const targetQuestionId = targetThread.root.position_data?.question_id as string | undefined;
+    if (!targetQuestionId) return;
+
+    // Find which chapter has this question
+    const chapterIdx = qcm.chapters.findIndex((ch) =>
+      ch.questions.some((q) => q.id === targetQuestionId),
+    );
+    if (chapterIdx !== -1 && chapterIdx !== page) {
+      setPage(chapterIdx);
+    }
+
+    const tryScroll = () => {
+      const el = document.getElementById(`qcm-question-${targetQuestionId}`);
+      if (el) {
+        scrolledQcmTargetRef.current = targetAnnotationId;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-2", "ring-primary", "ring-offset-2");
+        return true;
+      }
+      return false;
+    };
+
+    if (!tryScroll()) {
+      let attempts = 0;
+      const interval = setInterval(() => {
+        attempts++;
+        if (tryScroll() || attempts >= 10) {
+          clearInterval(interval);
+        }
+      }, 100);
+      return () => clearInterval(interval);
+    }
+  }, [targetAnnotationId, qcm, annotationsApi, page]);
 
   useEffect(() => {
     if (initialData) {
