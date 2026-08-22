@@ -7,10 +7,12 @@ import { SectionHeader } from "./section-header";
 import { formatDistanceToNow } from "date-fns/formatDistanceToNow";
 import type { PullRequestOut } from "./types";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
 
 interface RecentPRsSectionProps {
     prs: PullRequestOut[];
     isLoading?: boolean;
+    hasLoaded?: boolean;
 }
 
 function PRRowSkeleton() {
@@ -74,13 +76,14 @@ function PRRow({ pr }: { pr: PullRequestOut }) {
     );
 }
 
-export function RecentPRsSection({ prs, isLoading = false }: RecentPRsSectionProps) {
+export function RecentPRsSection({ prs, isLoading = false, hasLoaded }: RecentPRsSectionProps) {
     const t = useTranslations("Home");
+    const loaded = hasLoaded ?? (prs.length > 0 || !isLoading);
     // Don't render an empty section once data is loaded
-    if (!isLoading && prs.length === 0) return null;
+    if (loaded && prs.length === 0) return null;
 
     return (
-        <section aria-label={t("recentContributions")}>
+        <section aria-label={t("recentContributions")} aria-busy={isLoading}>
             <SectionHeader
                 title={t("recentContributions")}
                 icon={<GitPullRequest className="h-4 w-4" />}
@@ -89,7 +92,7 @@ export function RecentPRsSection({ prs, isLoading = false }: RecentPRsSectionPro
             />
 
             <div className="mt-4 rounded-xl border bg-card shadow-sm overflow-hidden">
-                {isLoading ? (
+                {isLoading && !loaded ? (
                     <>
                         <PRRowSkeleton />
                         <PRRowSkeleton />
@@ -103,7 +106,12 @@ export function RecentPRsSection({ prs, isLoading = false }: RecentPRsSectionPro
                         </p>
                     </div>
                 ) : (
-                    prs.map((pr) => <PRRow key={pr.id} pr={pr} />)
+                    <div
+                        className={cn(isLoading && "opacity-60 transition-opacity")}
+                        aria-busy={isLoading}
+                    >
+                        {prs.map((pr) => <PRRow key={pr.id} pr={pr} />)}
+                    </div>
                 )}
             </div>
         </section>

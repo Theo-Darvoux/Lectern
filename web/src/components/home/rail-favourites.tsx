@@ -11,6 +11,7 @@ import type { MaterialDetail } from "./types";
 import { useExternalLinkStore } from "@/lib/external-link-store";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
 
 const MAX_ITEMS = 6;
 
@@ -58,13 +59,16 @@ function FavouriteRow({ material }: { material: MaterialDetail }) {
 export function RailFavourites({
   materials,
   isLoading = false,
+  hasLoaded,
 }: {
   materials: MaterialDetail[];
   isLoading?: boolean;
+  hasLoaded?: boolean;
 }) {
   const t = useTranslations("Home");
+  const loaded = hasLoaded ?? (materials.length > 0 || !isLoading);
 
-  if (!isLoading && materials.length === 0) {
+  if (loaded && materials.length === 0) {
     return (
       <section aria-label={t("yourFavourites")}>
         <SectionHeader
@@ -106,8 +110,14 @@ export function RailFavourites({
         seeAllHref="/saved"
         seeAllLabel={t("viewAll")}
       />
-      <div className="mt-3 rounded-xl border bg-card p-1.5 shadow-sm">
-        {isLoading
+      <div
+        className={cn(
+          "mt-3 rounded-xl border bg-card p-1.5 shadow-sm",
+          isLoading && visible.length > 0 && "opacity-60 transition-opacity",
+        )}
+        aria-busy={isLoading}
+      >
+        {isLoading && !loaded
           ? Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="flex items-center gap-3 p-2">
                 <Skeleton className="h-12 w-12 shrink-0 rounded-md" />
@@ -119,7 +129,7 @@ export function RailFavourites({
             ))
           : visible.map((m) => <FavouriteRow key={m.id} material={m} />)}
 
-        {!isLoading && visible.length > 0 && (
+        {visible.length > 0 && (
           <div className="mt-1 border-t pt-1">
             <Button
               variant="ghost"

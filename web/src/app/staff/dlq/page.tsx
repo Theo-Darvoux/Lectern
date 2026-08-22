@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RotateCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -37,34 +37,46 @@ export default function StaffDLQPage() {
   const { show } = useConfirmDialog();
 
   const [jobs, setJobs] = useState<FailedJob[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [showResolved, setShowResolved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const loadRequestRef = useRef(0);
 
   const fetchJobs = async (p = page) => {
     if (!isAdmin) return;
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({ page: String(p), limit: "50" });
       if (showResolved) params.append("resolved", "true");
 
       const data = await apiFetch<PaginatedJobs>(`/admin/dlq?${params}`);
+      if (requestId !== loadRequestRef.current) return;
       setJobs(data.items);
+      setHasLoaded(true);
       setPage(data.page);
       setPages(data.pages);
       setTotal(data.total);
     } catch {
+      if (requestId !== loadRequestRef.current) return;
       toast.error(t("errors.load"));
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchJobs(1);
   }, [showResolved]);
+
+  const changeShowResolved = (value: boolean) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setShowResolved(value);
+  };
 
   if (!isAdmin) {
     return (
@@ -128,7 +140,7 @@ export default function StaffDLQPage() {
           <Switch
             id="show-resolved"
             checked={showResolved}
-            onCheckedChange={setShowResolved}
+            onCheckedChange={changeShowResolved}
           />
         </div>
       </div>
@@ -145,15 +157,15 @@ export default function StaffDLQPage() {
                 <th className="p-4 font-medium text-right">{t("table.actions")}</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
-              {loading && jobs.length === 0 && (
+            <tbody className="divide-y" aria-busy={loading}>
+              {loading && !hasLoaded && (
                 <tr>
                   <td colSpan={5} className="p-8 text-center text-muted-foreground">
                     {t("state.loading")}
                   </td>
                 </tr>
               )}
-              {!loading && jobs.length === 0 && (
+              {hasLoaded && jobs.length === 0 && (
                 <tr>
                   <td colSpan={5} className="p-8 text-center text-muted-foreground">
                     {showResolved ? t("state.noFound") : t("state.empty")}

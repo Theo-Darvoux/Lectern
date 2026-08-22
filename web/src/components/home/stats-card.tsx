@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SectionHeader } from "./section-header";
 import type { HomeStats } from "./types";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
 
 interface StatTileProps {
   icon: React.ReactNode;
@@ -34,11 +35,14 @@ function StatTile({ icon, value, label, href }: StatTileProps) {
 export function StatsCard({
   stats,
   isLoading = false,
+  hasLoaded,
 }: {
   stats: HomeStats | undefined;
   isLoading?: boolean;
+  hasLoaded?: boolean;
 }) {
   const t = useTranslations("Home");
+  const loaded = hasLoaded ?? (Boolean(stats) || !isLoading);
 
   return (
     <section aria-label={t("yourStats")}>
@@ -46,8 +50,11 @@ export function StatsCard({
         title={t("yourStats")}
         icon={<Sparkles className="h-4 w-4" />}
       />
-      <div className="mt-3 grid grid-cols-2 gap-3">
-        {isLoading || !stats ? (
+      <div
+        className={cn("mt-3 grid grid-cols-2 gap-3", isLoading && stats && "opacity-60 transition-opacity")}
+        aria-busy={isLoading}
+      >
+        {!loaded || !stats ? (
           Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-[88px] rounded-xl" />
           ))

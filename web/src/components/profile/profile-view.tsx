@@ -22,6 +22,7 @@ import {
   Sparkles,
   Star,
   TrendingUp,
+  RefreshCw,
   X,
 } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
@@ -33,7 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ContributionList } from "@/components/profile/contribution-list";
 import { RecentlyViewed } from "@/components/profile/recently-viewed";
@@ -286,6 +287,13 @@ export function ProfileView({
   const locale = useLocale();
   const [editing, setEditing] = useState(false);
   const [activeTab, setActiveTab] = useState("materials");
+  const [displayedTab, setDisplayedTab] = useState("materials");
+  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(
+    () => new Set(["materials"]),
+  );
+  const [readyTabs, setReadyTabs] = useState<Set<string>>(new Set());
+  const [failedTabs, setFailedTabs] = useState<Set<string>>(new Set());
+  const [tabAttempts, setTabAttempts] = useState<Record<string, number>>({});
   const tabScrollPosition = useRef<{ left: number; top: number } | null>(null);
 
   const rememberTabScrollPosition = () => {
@@ -294,11 +302,48 @@ export function ProfileView({
 
   const handleTabChange = (value: string) => {
     const position = tabScrollPosition.current ?? { left: window.scrollX, top: window.scrollY };
+    setVisitedTabs((current) => {
+      if (current.has(value)) return current;
+      const next = new Set(current);
+      next.add(value);
+      return next;
+    });
+    if (readyTabs.has(value)) setDisplayedTab(value);
     setActiveTab(value);
     window.requestAnimationFrame(() => {
       window.scrollTo({ ...position, behavior: "auto" });
       tabScrollPosition.current = null;
     });
+  };
+
+  const markTabReady = (value: string) => {
+    setReadyTabs((current) => {
+      if (current.has(value)) return current;
+      const next = new Set(current);
+      next.add(value);
+      return next;
+    });
+    setFailedTabs((current) => {
+      if (!current.has(value)) return current;
+      const next = new Set(current);
+      next.delete(value);
+      return next;
+    });
+    if (activeTab === value) setDisplayedTab(value);
+  };
+
+  const markTabError = (value: string) => {
+    if (readyTabs.has(value)) return;
+    setFailedTabs((current) => new Set(current).add(value));
+  };
+
+  const retryTab = (value: string) => {
+    setFailedTabs((current) => {
+      const next = new Set(current);
+      next.delete(value);
+      return next;
+    });
+    setTabAttempts((current) => ({ ...current, [value]: (current[value] ?? 0) + 1 }));
   };
 
   const initials = (profile.display_name ?? profile.email ?? "?")
@@ -500,19 +545,25 @@ export function ProfileView({
               {tabs.map((tab) => {
                 const Icon = tab.icon;
                 return (
-                  <TabsTrigger key={tab.value} value={tab.value} className="min-h-9 shrink-0 gap-2 px-0 pb-2">
+                  <TabsTrigger key={tab.value} value={tab.value} id={`profile-tab-${tab.value}`} aria-controls={`profile-panel-${tab.value}`} className="min-h-9 shrink-0 gap-2 px-0 pb-2">
                     <Icon className="h-3.5 w-3.5" />{tab.label}
                   </TabsTrigger>
                 );
               })}
             </TabsList>
-            <TabsContent value="prs" className="mt-2 min-h-72">{activeTab === "prs" && <ContributionList userId={profile.id} type="prs" />}</TabsContent>
-            <TabsContent value="materials" className="mt-2 min-h-72">{activeTab === "materials" && <ContributionList userId={profile.id} type="materials" />}</TabsContent>
-            <TabsContent value="annotations" className="mt-2 min-h-72">{activeTab === "annotations" && <ContributionList userId={profile.id} type="annotations" />}</TabsContent>
-            {showRecentlyViewed && (
-              <TabsContent value="recent" className="mt-2 min-h-72">{activeTab === "recent" && <RecentlyViewed />}</TabsContent>
-            )}
           </Tabs>
+          {failedTabs.has(activeTab) && (
+            <div className="mt-3 flex flex-col gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive sm:flex-row sm:items-center" role="alert">
+              <p className="min-w-0 flex-1">{t("activityLoadError")}</p>
+              <Button variant="outline" size="sm" className="shrink-0 gap-2" onClick={() => retryTab(activeTab)}><RefreshCw className="h-3.5 w-3.5" />{t("retry")}</Button>
+            </div>
+          )}
+          {visitedTabs.has("prs") && <div id="profile-panel-prs" aria-labelledby="profile-tab-prs" role="tabpanel" hidden={displayedTab !== "prs"} className="mt-2 min-h-72"><ContributionList key={tabAttempts.prs ?? 0} userId={profile.id} type="prs" onReady={() => markTabReady("prs")} onError={() => markTabError("prs")} /></div>}
+          {visitedTabs.has("materials") && <div id="profile-panel-materials" aria-labelledby="profile-tab-materials" role="tabpanel" hidden={displayedTab !== "materials"} className="mt-2 min-h-72"><ContributionList key={tabAttempts.materials ?? 0} userId={profile.id} type="materials" onReady={() => markTabReady("materials")} onError={() => markTabError("materials")} /></div>}
+          {visitedTabs.has("annotations") && <div id="profile-panel-annotations" aria-labelledby="profile-tab-annotations" role="tabpanel" hidden={displayedTab !== "annotations"} className="mt-2 min-h-72"><ContributionList key={tabAttempts.annotations ?? 0} userId={profile.id} type="annotations" onReady={() => markTabReady("annotations")} onError={() => markTabError("annotations")} /></div>}
+          {showRecentlyViewed && visitedTabs.has("recent") && (
+            <div id="profile-panel-recent" aria-labelledby="profile-tab-recent" role="tabpanel" hidden={displayedTab !== "recent"} className="mt-2 min-h-72"><RecentlyViewed key={tabAttempts.recent ?? 0} onReady={() => markTabReady("recent")} onError={() => markTabError("recent")} /></div>
+          )}
         </section>
       </div>
     </div>

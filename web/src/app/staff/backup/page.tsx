@@ -15,6 +15,7 @@ import { apiFetch, apiFetchBlob, apiRequest } from "@/lib/api-client";
 import { useConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
 
 interface BackupEntry {
   id: string;
@@ -56,6 +57,7 @@ export default function StaffBackupPage() {
   const { show } = useConfirmDialog();
 
   const [backups, setBackups] = useState<BackupEntry[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -68,6 +70,7 @@ export default function StaffBackupPage() {
     try {
       const data = await apiFetch<BackupEntry[]>("/admin/backup");
       setBackups(data.slice().reverse()); // newest first in UI
+      setHasLoaded(true);
     } catch {
       toast.error(t("errors.load"));
     } finally {
@@ -267,15 +270,27 @@ export default function StaffBackupPage() {
       <div className="space-y-3">
         <h3 className="font-medium">{t("list.title")}</h3>
 
-        {loading ? (
+        {loading && !hasLoaded ? (
           <p className="text-sm text-muted-foreground">{t("list.loading")}</p>
         ) : backups.length === 0 ? (
-          <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+          <div
+            className={cn(
+              "rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground",
+              loading && "opacity-60 transition-opacity",
+            )}
+            aria-busy={loading}
+          >
             <Archive className="mx-auto mb-3 h-8 w-8 opacity-40" />
             {t("list.empty")}
           </div>
         ) : (
-          <div className="divide-y rounded-lg border bg-card/40">
+          <div
+            className={cn(
+              "divide-y rounded-lg border bg-card/40",
+              loading && "opacity-60 transition-opacity",
+            )}
+            aria-busy={loading}
+          >
             {backups.map((backup) => (
               <div
                 key={backup.id}

@@ -503,6 +503,8 @@
     "activityTitle": "Activité et contributions",
     "activityDescriptionOwn": "Vos ressources, propositions, notes et historique d'étude récent.",
     "activityDescription": "Les ressources, propositions et notes partagées par ce membre avec la communauté.",
+    "activityLoadError": "Impossible de charger cette activité. La vue actuelle reste affichée.",
+    "retry": "Réessayer",
     "displayName": "Nom d'affichage",
     "bio": "Bio",
     "bioPlaceholder": "Parlez-nous de vous...",
@@ -771,6 +773,8 @@
     "newer": "Plus récent",
     "older": "Plus ancien",
     "page": "Page {page}",
+    "loadError": "Impossible d’actualiser les contributions. Les derniers résultats chargés restent affichés.",
+    "retry": "Réessayer",
     "reverted": "Rétabli",
     "revert": "Rétablir",
     "operations": {

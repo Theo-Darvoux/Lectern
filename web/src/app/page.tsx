@@ -73,7 +73,7 @@ export default function HomePage() {
     user?.display_name ?? user?.email?.split("@")[0] ?? t("guest");
 
   const showContinue =
-    isLoading || (data?.recently_viewed && data.recently_viewed.length > 0);
+    (isLoading && !data) || (data?.recently_viewed && data.recently_viewed.length > 0);
 
   return (
     <div className="flex h-full w-full overflow-hidden">
@@ -111,6 +111,7 @@ export default function HomePage() {
               icon={<History className="h-4 w-4" />}
               materials={data?.recently_viewed ?? []}
               isLoading={isLoading}
+              hasLoaded={data !== null}
               emptyText={t("nothingHereYet")}
               emptyIcon={<History className="h-8 w-8 text-muted-foreground/30" />}
               maxCards={4}
@@ -136,6 +137,7 @@ export default function HomePage() {
                 today={data?.popular_today ?? []}
                 fortnight={data?.popular_14d ?? []}
                 isLoading={isLoading}
+                hasLoaded={data !== null}
               />
 
               <MaterialGridSection
@@ -144,6 +146,7 @@ export default function HomePage() {
                 icon={<Clock className="h-4 w-4" />}
                 materials={data?.recently_added ?? []}
                 isLoading={isLoading}
+                hasLoaded={data !== null}
                 seeAllHref="/browse"
                 emptyText={t("nothingHereYet")}
                 emptyIcon={<Sparkles className="h-8 w-8 text-muted-foreground/30" />}
@@ -157,11 +160,12 @@ export default function HomePage() {
                 <RailFavourites
                   materials={data?.recent_favourites ?? []}
                   isLoading={isLoading}
+                  hasLoaded={data !== null}
                 />
               )}
               <LeaderboardPreview />
-              <RecentPRsSection prs={data?.recent_prs ?? []} isLoading={isLoading} />
-              <StatsCard stats={data?.stats} isLoading={isLoading} />
+              <RecentPRsSection prs={data?.recent_prs ?? []} isLoading={isLoading} hasLoaded={data !== null} />
+              <StatsCard stats={data?.stats} isLoading={isLoading} hasLoaded={data !== null} />
             </aside>
           </div>}
         </div>

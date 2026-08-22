@@ -14,9 +14,12 @@ import {
   Ban,
   ChevronLeft,
   ChevronRight,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
 
 type StatusFilter = "open" | "approved" | "rejected" | "cancelled" | null;
 const PAGE_SIZE = 20;
@@ -33,7 +36,9 @@ export function PRList() {
     ];
 
   const [prs, setPrs] = useState<PullRequestOut[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [page, setPage] = useState(1);
   const [filterStatus, setFilterStatus] = useState<StatusFilter>("open");
   const [totalCount, setTotalCount] = useState<number | null>(null);
@@ -80,7 +85,10 @@ export function PRList() {
   useEffect(() => {
     let active = true;
     Promise.resolve().then(() => {
-      if (active) setLoading(true);
+      if (active) {
+        setLoading(true);
+        setError(false);
+      }
     });
 
     const params = new URLSearchParams();
@@ -92,11 +100,12 @@ export function PRList() {
       .then(({ data, response }) => {
         if (!active) return;
         setPrs(data);
+        setHasLoaded(true);
         const total = response.headers.get("X-Total-Count");
         setTotalCount(total ? parseInt(total, 10) : null);
       })
       .catch(() => {
-        if (active) { setPrs([]); setTotalCount(null); }
+        if (active) setError(true);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -122,8 +131,23 @@ export function PRList() {
   }, []);
 
   const switchTab = (status: StatusFilter) => {
+    if (status === filterStatus) return;
+    setLoading(true);
+    setError(false);
     setFilterStatus(status);
     setPage(1);
+  };
+
+  const changePage = (nextPage: number) => {
+    setLoading(true);
+    setError(false);
+    setPage(nextPage);
+  };
+
+  const retry = () => {
+    setLoading(true);
+    setError(false);
+    setRefreshKey((key) => key + 1);
   };
 
   const emptyMessage = filterStatus
@@ -213,12 +237,34 @@ export function PRList() {
       </div>
 
       {/* Content */}
-      {loading ? (
+      {error && (
+        <div className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive sm:flex-row sm:items-center">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <p className="min-w-0 flex-1">{t("loadError")}</p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 gap-2"
+            onClick={retry}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {t("retry")}
+          </Button>
+        </div>
+      )}
+
+      {loading && !hasLoaded ? (
         <div className="flex justify-center py-16">
           <Loader2 className="animate-spin h-5 w-5 text-muted-foreground" />
         </div>
-      ) : prs.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+      ) : error && !hasLoaded ? null : prs.length === 0 ? (
+        <div
+          className={cn(
+            "flex flex-col items-center justify-center py-16 text-muted-foreground",
+            loading && "opacity-60 transition-opacity",
+          )}
+          aria-busy={loading}
+        >
           <EmptyIcon className="h-10 w-10 mb-3 opacity-30" />
           <p className="text-sm font-medium">{emptyMessage}</p>
           <p className="text-xs mt-1 opacity-70">
@@ -228,7 +274,13 @@ export function PRList() {
           </p>
         </div>
       ) : (
-        <div className="flex flex-col gap-px rounded-lg border overflow-hidden">
+        <div
+          className={cn(
+            "flex flex-col gap-px rounded-lg border overflow-hidden",
+            loading && "opacity-60 transition-opacity",
+          )}
+          aria-busy={loading}
+        >
           {prs.map((pr) => (
             <PRCard key={pr.id} pr={pr} />
           ))}
@@ -236,14 +288,14 @@ export function PRList() {
       )}
 
       {/* Pagination */}
-      {!loading && prs.length > 0 && (
+      {prs.length > 0 && (
         <div className="flex items-center justify-between pt-1">
           <Button
             variant="ghost"
             size="sm"
             className="gap-1 text-muted-foreground"
-            disabled={page === 1}
-            onClick={() => setPage((p) => p - 1)}
+            disabled={page === 1 || loading}
+            onClick={() => changePage(page - 1)}
           >
             <ChevronLeft className="h-4 w-4" />
             {t("newer")}
@@ -255,8 +307,8 @@ export function PRList() {
             variant="ghost"
             size="sm"
             className="gap-1 text-muted-foreground"
-            disabled={totalCount !== null ? page * PAGE_SIZE >= totalCount : prs.length < PAGE_SIZE}
-            onClick={() => setPage((p) => p + 1)}
+            disabled={loading || (totalCount !== null ? page * PAGE_SIZE >= totalCount : prs.length < PAGE_SIZE)}
+            onClick={() => changePage(page + 1)}
           >
             {t("older")}
             <ChevronRight className="h-4 w-4" />

@@ -503,6 +503,8 @@
     "activityTitle": "Activity and contributions",
     "activityDescriptionOwn": "Your shared resources, proposals, notes and recent study history.",
     "activityDescription": "Resources, proposals and notes this member has shared with the community.",
+    "activityLoadError": "This activity could not be loaded. Your current view is still shown.",
+    "retry": "Retry",
     "displayName": "Display name",
     "bio": "Bio",
     "bioPlaceholder": "Tell us about yourself...",
@@ -771,6 +773,8 @@
     "newer": "Newer",
     "older": "Older",
     "page": "Page {page}",
+    "loadError": "Contributions could not be refreshed. The last loaded results are still shown.",
+    "retry": "Retry",
     "reverted": "Reverted",
     "revert": "Revert",
     "operations": {

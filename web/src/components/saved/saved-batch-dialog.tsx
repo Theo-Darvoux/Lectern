@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, FolderPlus, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 
@@ -39,29 +39,37 @@ export function SavedBatchDialog({
 }: SavedBatchDialogProps) {
   const t = useSavedTranslations();
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [saving, setSaving] = useState(false);
+  const loadRequestRef = useRef(0);
 
   useEffect(() => {
-    if (!open) return;
+    const requestId = ++loadRequestRef.current;
+    if (!open) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     fetchCollections()
       .then((data) => {
+        if (requestId !== loadRequestRef.current) return;
         setCollections(data);
+        setHasLoaded(true);
+        setIsCreatingNew(data.length === 0);
         if (data.length > 0) {
           setSelectedCollectionId(data[0].id);
-        } else {
-          setIsCreatingNew(true);
         }
       })
       .catch(() => {
+        if (requestId !== loadRequestRef.current) return;
         toast.error(t("errors.loadCollections"));
       })
       .finally(() => {
-        setLoading(false);
+        if (requestId === loadRequestRef.current) setLoading(false);
       });
   }, [open, t]);
 
@@ -123,8 +131,14 @@ export function SavedBatchDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="py-4 space-y-3">
-            {loading ? (
+          <div
+            className={cn(
+              "py-4 space-y-3",
+              loading && hasLoaded && "opacity-60 transition-opacity",
+            )}
+            aria-busy={loading}
+          >
+            {loading && !hasLoaded ? (
               <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {t("loading")}

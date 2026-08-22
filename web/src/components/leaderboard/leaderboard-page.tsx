@@ -29,7 +29,6 @@ export function LeaderboardPage() {
   const load = useCallback((signal: AbortSignal) => {
     setLoading(true);
     setError(false);
-    setData(null);
     const params = new URLSearchParams({
       period,
       page: String(page),
@@ -58,13 +57,31 @@ export function LeaderboardPage() {
   }, [t]);
 
   const changePeriod = (next: LeaderboardPeriod) => {
+    if (next === period) return;
+    setLoading(true);
+    setError(false);
     setPeriod(next);
     setPage(1);
   };
 
   const changeYear = (next: string) => {
+    if (next === academicYear) return;
+    setLoading(true);
+    setError(false);
     setAcademicYear(next);
     setPage(1);
+  };
+
+  const changePage = (next: number) => {
+    setLoading(true);
+    setError(false);
+    setPage(next);
+  };
+
+  const retry = () => {
+    setLoading(true);
+    setError(false);
+    setReloadToken((value) => value + 1);
   };
 
   return (
@@ -82,7 +99,13 @@ export function LeaderboardPage() {
               <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">{t("description")}</p>
             </div>
 
-            <div className="rounded-2xl border bg-background/75 p-4 backdrop-blur-sm">
+            <div
+              className={cn(
+                "rounded-2xl border bg-background/75 p-4 backdrop-blur-sm",
+                loading && data && "opacity-60 transition-opacity",
+              )}
+              aria-busy={loading}
+            >
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("yourStanding")}</p>
               {loading && !data ? (
                 <div className="mt-4 space-y-2"><Skeleton className="h-10 w-24" /><Skeleton className="h-4 w-36" /></div>
@@ -92,7 +115,7 @@ export function LeaderboardPage() {
                     <span className="text-4xl font-bold tracking-tight tabular-nums">#{data.current_user.rank}</span>
                     <span className="inline-flex items-center gap-1 text-xl font-bold text-primary tabular-nums"><Sparkles className="h-4 w-4" />{data.current_user.score}</span>
                   </div>
-                  <p className="mt-2 text-xs text-muted-foreground">{t("periodStanding", { period: t(`periods.${period}`) })}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">{t("periodStanding", { period: t(`periods.${data.period}`) })}</p>
                 </>
               ) : (
                 <p className="mt-3 text-sm leading-6 text-muted-foreground">{t("notRanked")}</p>
@@ -112,7 +135,7 @@ export function LeaderboardPage() {
           </div>
         </section>
 
-        <section className="space-y-4">
+        <section className="space-y-4" aria-busy={loading}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="flex items-center gap-2 text-xl font-semibold"><Award className="h-5 w-5 text-primary" />{t("rankings")}</h2>
@@ -145,10 +168,17 @@ export function LeaderboardPage() {
             ))}
           </div>
 
+          {error && data && (
+            <div className="flex flex-col gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive sm:flex-row sm:items-center" role="alert">
+              <p className="min-w-0 flex-1">{t("loadError")}</p>
+              <Button variant="outline" size="sm" className="shrink-0 gap-2" onClick={retry}><RefreshCw className="h-4 w-4" />{t("retry")}</Button>
+            </div>
+          )}
+
           {error && !data ? (
             <div className="flex flex-col items-center rounded-2xl border border-dashed py-16 text-center">
               <p className="text-sm font-medium">{t("loadError")}</p>
-              <Button variant="outline" size="sm" className="mt-4 gap-2" onClick={() => setReloadToken((value) => value + 1)}><RefreshCw className="h-4 w-4" />{t("retry")}</Button>
+              <Button variant="outline" size="sm" className="mt-4 gap-2" onClick={retry}><RefreshCw className="h-4 w-4" />{t("retry")}</Button>
             </div>
           ) : loading && !data ? (
             <div className="space-y-3">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} className="h-28 rounded-2xl sm:h-24" />)}</div>
@@ -159,9 +189,9 @@ export function LeaderboardPage() {
                 <p className="text-xs text-muted-foreground">{t("contributorsCount", { count: data.total })}</p>
                 {data.pages > 1 && (
                   <div className="flex items-center gap-2 self-end sm:self-auto">
-                    <Button variant="outline" size="icon" className="h-9 w-9" disabled={page <= 1 || loading} onClick={() => setPage((value) => value - 1)} aria-label={t("previousPage")}><ChevronLeft className="h-4 w-4" /></Button>
-                    <span className="min-w-16 text-center text-xs font-medium tabular-nums text-muted-foreground">{page} / {data.pages}</span>
-                    <Button variant="outline" size="icon" className="h-9 w-9" disabled={page >= data.pages || loading} onClick={() => setPage((value) => value + 1)} aria-label={t("nextPage")}><ChevronRight className="h-4 w-4" /></Button>
+                    <Button variant="outline" size="icon" className="h-9 w-9" disabled={page <= 1 || loading} onClick={() => changePage(page - 1)} aria-label={t("previousPage")}><ChevronLeft className="h-4 w-4" /></Button>
+                    <span className="min-w-16 text-center text-xs font-medium tabular-nums text-muted-foreground">{data.page} / {data.pages}</span>
+                    <Button variant="outline" size="icon" className="h-9 w-9" disabled={page >= data.pages || loading} onClick={() => changePage(page + 1)} aria-label={t("nextPage")}><ChevronRight className="h-4 w-4" /></Button>
                   </div>
                 )}
               </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns/formatDistanceToNow";
 import { Check } from "lucide-react";
@@ -16,6 +16,7 @@ import {
 } from "@/lib/notifications";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 30;
 
@@ -25,42 +26,48 @@ export default function NotificationsPage() {
   const t = useTranslations("Notifications");
   const tCommon = useTranslations("Common");
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
+  const refreshRequestRef = useRef(0);
   const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
   const decrement = useNotificationStore((state) => state.decrement);
 
   const loadPage = useCallback(
     async (targetPage: number, currentFilter: Filter) => {
-      const data = await fetchNotifications({
+      return fetchNotifications({
         page: targetPage,
         limit: PAGE_SIZE,
         read: currentFilter === "unread" ? false : undefined,
       });
-      setHasMore(targetPage < data.pages);
-      setPage(targetPage);
-      return data.items;
     },
     [],
   );
 
   const refresh = useCallback(
     async (currentFilter: Filter) => {
+      const requestId = ++refreshRequestRef.current;
       setLoading(true);
+      setLoadingMore(false);
       try {
-        const [items, count] = await Promise.all([
+        const [data, count] = await Promise.all([
           loadPage(1, currentFilter),
           fetchUnreadCount(),
         ]);
-        setNotifications(items);
+        if (requestId !== refreshRequestRef.current) return;
+        setNotifications(data.items);
+        setHasLoaded(true);
+        setHasMore(data.page < data.pages);
+        setPage(data.page);
         setUnreadCount(count);
       } catch {
+        if (requestId !== refreshRequestRef.current) return;
         toast.error(t("loadError"));
       } finally {
-        setLoading(false);
+        if (requestId === refreshRequestRef.current) setLoading(false);
       }
     },
     [loadPage, setUnreadCount, t],
@@ -71,14 +78,19 @@ export default function NotificationsPage() {
   }, [refresh, filter]);
 
   const loadMore = async () => {
+    const requestId = refreshRequestRef.current;
     setLoadingMore(true);
     try {
-      const items = await loadPage(page + 1, filter);
-      setNotifications((prev) => [...prev, ...items]);
+      const data = await loadPage(page + 1, filter);
+      if (requestId !== refreshRequestRef.current) return;
+      setNotifications((prev) => [...prev, ...data.items]);
+      setHasMore(data.page < data.pages);
+      setPage(data.page);
     } catch {
+      if (requestId !== refreshRequestRef.current) return;
       toast.error(t("loadError"));
     } finally {
-      setLoadingMore(false);
+      if (requestId === refreshRequestRef.current) setLoadingMore(false);
     }
   };
 
@@ -136,19 +148,31 @@ export default function NotificationsPage() {
             variant={filter === f ? "secondary" : "ghost"}
             size="sm"
             className="h-7"
-            onClick={() => setFilter(f)}
+            onClick={() => {
+              if (f === filter) return;
+              refreshRequestRef.current += 1;
+              setLoadingMore(false);
+              setLoading(true);
+              setFilter(f);
+            }}
           >
             {f === "all" ? t("filterAll") : t("filterUnread")}
           </Button>
         ))}
       </div>
 
-      {loading ? (
+      {loading && !hasLoaded ? (
         <div className="p-6 text-center text-muted-foreground">
           {tCommon("loading")}
         </div>
       ) : notifications.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
+        <div
+          className={cn(
+            "rounded-lg border border-dashed p-8 text-center text-muted-foreground",
+            loading && "opacity-60 transition-opacity",
+          )}
+          aria-busy={loading}
+        >
           <p>
             {filter === "unread"
               ? t("noUnreadNotifications")
@@ -156,7 +180,7 @@ export default function NotificationsPage() {
           </p>
         </div>
       ) : (
-        <>
+        <div aria-busy={loading} className={cn("space-y-4", loading && "opacity-60 transition-opacity")}>
           <div className="divide-y rounded-lg border">
             {notifications.map((n) => {
               const Icon = notificationIcon(n.type);
@@ -222,13 +246,13 @@ export default function NotificationsPage() {
                 variant="outline"
                 size="sm"
                 onClick={loadMore}
-                disabled={loadingMore}
+                disabled={loading || loadingMore}
               >
                 {loadingMore ? tCommon("loading") : t("loadMore")}
               </Button>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

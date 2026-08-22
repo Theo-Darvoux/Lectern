@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { ProfileView, type UserProfile } from "./profile-view";
 
+const contributionControls = new Map<
+  string,
+  { onReady?: () => void; onError?: () => void }
+>();
+
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={String(href)} {...props}>{children}</a>
@@ -17,7 +22,10 @@ vi.mock("next-intl", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/lib/api-client", () => ({ API_BASE: "http://api.test", apiFetch: vi.fn() }));
 vi.mock("@/components/profile/contribution-list", () => ({
-  ContributionList: () => <div>contribution-list</div>,
+  ContributionList: ({ type, onReady, onError }: { type: string; onReady?: () => void; onError?: () => void }) => {
+    contributionControls.set(type, { onReady, onError });
+    return <input data-contribution-state={type} defaultValue={`${type}-state`} />;
+  },
 }));
 vi.mock("@/components/profile/recently-viewed", () => ({
   RecentlyViewed: () => <div>recently-viewed</div>,
@@ -50,6 +58,7 @@ describe("ProfileView layout", () => {
   let root: Root;
 
   beforeEach(async () => {
+    contributionControls.clear();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -143,5 +152,68 @@ describe("ProfileView layout", () => {
     expect(scrollTo).toHaveBeenCalledWith({ left: 0, top: 640, behavior: "auto" });
     requestAnimationFrame.mockRestore();
     scrollTo.mockRestore();
+  });
+
+  it("keeps visited activity categories mounted when switching tabs", async () => {
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(Number.MAX_SAFE_INTEGER);
+        return 1;
+      });
+    const materialsInput = container.querySelector<HTMLInputElement>('[data-contribution-state="materials"]');
+    expect(materialsInput).not.toBeNull();
+    if (materialsInput) materialsInput.value = "preserved state";
+    await act(async () => contributionControls.get("materials")?.onReady?.());
+
+    const contributionsTab = [...container.querySelectorAll<HTMLElement>('[role="tab"]')].find(
+      (tab) => tab.textContent === "contributions",
+    );
+    await act(async () => {
+      contributionsTab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      contributionsTab?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(materialsInput?.closest('[role="tabpanel"]')?.hasAttribute("hidden")).toBe(false);
+    expect(
+      container.querySelector('[data-contribution-state="prs"]')?.closest('[role="tabpanel"]')?.hasAttribute("hidden"),
+    ).toBe(true);
+    await act(async () => contributionControls.get("prs")?.onError?.());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("activityLoadError");
+    expect(materialsInput?.closest('[role="tabpanel"]')?.hasAttribute("hidden")).toBe(false);
+
+    const retry = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("retry"));
+    await act(async () => {
+      retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await act(async () => contributionControls.get("prs")?.onReady?.());
+    expect(container.querySelector('[data-contribution-state="prs"]')?.closest('[role="tabpanel"]')?.hasAttribute("hidden"))
+      .toBe(false);
+
+    const materialsTab = [...container.querySelectorAll<HTMLElement>('[role="tab"]')].find(
+      (tab) => tab.textContent === "materials",
+    );
+    await act(async () => {
+      materialsTab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      materialsTab?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container.querySelector<HTMLInputElement>('[data-contribution-state="materials"]')?.value)
+      .toBe("preserved state");
+    expect(contributionsTab?.getAttribute("aria-controls")).toBe("profile-panel-prs");
+    expect(container.querySelector("#profile-panel-prs")?.getAttribute("aria-labelledby"))
+      .toBe("profile-tab-prs");
+    requestAnimationFrame.mockRestore();
+    scrollTo.mockRestore();
+  });
+
+  it("offers a retry when the initial activity category fails", async () => {
+    await act(async () => contributionControls.get("materials")?.onError?.());
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("activityLoadError");
+    expect(
+      Array.from(container.querySelectorAll("button")).some((button) => button.textContent?.includes("retry")),
+    ).toBe(true);
   });
 });

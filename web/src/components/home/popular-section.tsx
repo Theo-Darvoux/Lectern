@@ -8,6 +8,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MaterialCard } from "./material-card";
 import type { MaterialDetail } from "./types";
 import { useTranslations } from "next-intl";
+import { cn } from "@/lib/utils";
 
 type Period = "today" | "14d";
 
@@ -15,6 +16,7 @@ interface PopularSectionProps {
   today: MaterialDetail[];
   fortnight: MaterialDetail[];
   isLoading?: boolean;
+  hasLoaded?: boolean;
 }
 
 const MAX_CARDS = 8;
@@ -38,6 +40,7 @@ export function PopularSection({
   today,
   fortnight,
   isLoading = false,
+  hasLoaded,
 }: PopularSectionProps) {
   const t = useTranslations("Home");
   const [period, setPeriod] = useState<Period>("today");
@@ -45,9 +48,11 @@ export function PopularSection({
   const materials = period === "today" ? today : fortnight;
   const visible = materials.slice(0, MAX_CARDS);
   const seeAllHref = `/popular?period=${period}`;
+  const loaded = hasLoaded ?? (visible.length > 0 || !isLoading);
+  const isInitialLoading = isLoading && !loaded;
 
   return (
-    <section aria-label={t("popularTitle")}>
+    <section aria-label={t("popularTitle")} aria-busy={isLoading}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 text-lg font-semibold leading-tight tracking-tight sm:text-xl">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-orange-500/10 text-orange-500">
@@ -79,7 +84,7 @@ export function PopularSection({
       </div>
 
       <div className="mt-4">
-        {isLoading ? (
+        {isInitialLoading ? (
           <div className={GRID}>
             {Array.from({ length: 4 }).map((_, i) => (
               <SkeletonCard key={i} />
@@ -91,7 +96,10 @@ export function PopularSection({
             <p className="text-sm text-muted-foreground">{t("nothingHereYet")}</p>
           </div>
         ) : (
-          <div className={GRID}>
+          <div
+            className={cn(GRID, isLoading && "opacity-60 transition-opacity")}
+            aria-busy={isLoading}
+          >
             {visible.map((material) => (
               <MaterialCard key={material.id} material={material} />
             ))}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Clock } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { MaterialCard } from "@/components/home/material-card";
@@ -34,17 +34,29 @@ function SkeletonCard() {
   );
 }
 
-export function RecentlyViewed() {
+export function RecentlyViewed({ onReady, onError }: { onReady?: () => void; onError?: () => void } = {}) {
   const t = useTranslations("Profile");
   const [materials, setMaterials] = useState<RecentMaterial[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const onReadyRef = useRef(onReady);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => {
+    onReadyRef.current = onReady;
+    onErrorRef.current = onError;
+  }, [onError, onReady]);
 
   useEffect(() => {
     apiFetch<RecentMaterial[]>("/users/me/recently-viewed")
-      .then(setMaterials)
-      .catch(() => setMaterials([]))
-      .finally(() => setLoading(false));
+      .then((data) => {
+        setMaterials(data);
+        onReadyRef.current?.();
+      })
+      .catch(() => onErrorRef.current?.())
+      .finally(() => {
+        setLoading(false);
+      });
   }, []);
 
   const pages = Math.max(1, Math.ceil(materials.length / PAGE_SIZE));

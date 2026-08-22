@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { MaterialCard } from "./material-card";
 import { SectionHeader } from "./section-header";
 import type { MaterialDetail } from "./types";
+import { cn } from "@/lib/utils";
 
 interface MaterialGridSectionProps {
   title: string;
@@ -12,6 +13,7 @@ interface MaterialGridSectionProps {
   icon?: ReactNode;
   materials: MaterialDetail[];
   isLoading?: boolean;
+  hasLoaded?: boolean;
   seeAllHref?: string;
   seeAllLabel?: string;
   emptyText: string;
@@ -46,6 +48,7 @@ export function MaterialGridSection({
   icon,
   materials,
   isLoading = false,
+  hasLoaded,
   seeAllHref,
   seeAllLabel,
   emptyText,
@@ -54,9 +57,11 @@ export function MaterialGridSection({
   skeletonCount = 4,
 }: MaterialGridSectionProps) {
   const visible = materials.slice(0, maxCards);
+  const loaded = hasLoaded ?? (visible.length > 0 || !isLoading);
+  const isInitialLoading = isLoading && !loaded;
 
   return (
-    <section aria-label={title}>
+    <section aria-label={title} aria-busy={isLoading}>
       <SectionHeader
         title={title}
         subtitle={subtitle}
@@ -66,7 +71,7 @@ export function MaterialGridSection({
       />
 
       <div className="mt-4">
-        {isLoading ? (
+        {isInitialLoading ? (
           <div className={GRID}>
             {Array.from({ length: skeletonCount }).map((_, i) => (
               <SkeletonCard key={i} />
@@ -78,7 +83,10 @@ export function MaterialGridSection({
             <p className="text-sm text-muted-foreground">{emptyText}</p>
           </div>
         ) : (
-          <div className={GRID}>
+          <div
+            className={cn(GRID, isLoading && "opacity-60 transition-opacity")}
+            aria-busy={isLoading}
+          >
             {visible.map((material) => (
               <MaterialCard key={material.id} material={material} />
             ))}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -164,6 +164,7 @@ function ContentLifecycleTab({
       };
 
   const [rows, setRows] = useState<ContentRow[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const [page, setPage] = useState(1);
@@ -176,22 +177,27 @@ function ContentLifecycleTab({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
+  const loadRequestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
     try {
       const query = new URLSearchParams({ page: String(page), limit: "50" });
       if (search.trim()) query.set("search", search.trim());
       if (status !== "all") query.set("status", status);
       const data = await apiFetch<ContentResponse>(`/admin/content?${query}`);
+      if (requestId !== loadRequestRef.current) return;
       setRows(data.items);
+      setHasLoaded(true);
       setTotal(data.total);
       setPages(data.pages);
       setSelected(new Set());
     } catch {
+      if (requestId !== loadRequestRef.current) return;
       toast.error(copy.loadFailed);
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }, [copy.loadFailed, page, search, status]);
 
@@ -200,7 +206,25 @@ function ContentLifecycleTab({
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  useEffect(() => setPage(1), [search, status]);
+  const changeSearch = (value: string) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setPage(1);
+    setSearch(value);
+  };
+
+  const changeStatus = (value: string) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setPage(1);
+    setStatus(value);
+  };
+
+  const changePage = (value: number) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setPage(value);
+  };
 
   const allSelected =
     rows.length > 0 && rows.every((row) => selected.has(row.id));
@@ -251,12 +275,12 @@ function ContentLifecycleTab({
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => changeSearch(event.target.value)}
             placeholder={copy.search}
             className="pl-9"
           />
         </div>
-        <Select value={status} onValueChange={setStatus}>
+        <Select value={status} onValueChange={changeStatus}>
           <SelectTrigger className="w-full lg:w-52">
             <SelectValue />
           </SelectTrigger>
@@ -326,7 +350,7 @@ function ContentLifecycleTab({
                 <th className="p-3 font-medium">{copy.signals}</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y" aria-busy={loading}>
               {rows.map((row) => (
                 <tr
                   key={row.id}
@@ -387,14 +411,14 @@ function ContentLifecycleTab({
                   </td>
                 </tr>
               ))}
-              {!loading && rows.length === 0 && (
+              {hasLoaded && rows.length === 0 && (
                 <tr>
                   <td colSpan={6} className="p-10 text-center text-muted-foreground">
                     {copy.empty}
                   </td>
                 </tr>
               )}
-              {loading && rows.length === 0 && (
+              {loading && !hasLoaded && (
                 <tr>
                   <td colSpan={6} className="p-10 text-center text-muted-foreground">
                     …
@@ -411,7 +435,7 @@ function ContentLifecycleTab({
           variant="outline"
           size="sm"
           disabled={page <= 1 || loading}
-          onClick={() => setPage((value) => Math.max(1, value - 1))}
+          onClick={() => changePage(Math.max(1, page - 1))}
         >
           {copy.previous}
         </Button>
@@ -422,7 +446,7 @@ function ContentLifecycleTab({
           variant="outline"
           size="sm"
           disabled={page >= pages || loading}
-          onClick={() => setPage((value) => value + 1)}
+          onClick={() => changePage(page + 1)}
         >
           {copy.next}
         </Button>
@@ -520,6 +544,7 @@ function ContentFeaturedTab() {
   const locale = useLocale();
   const fr = locale.toLowerCase().startsWith("fr");
   const [items, setItems] = useState<FeaturedItem[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editItem, setEditItem] = useState<FeaturedItem | null>(null);
@@ -541,6 +566,7 @@ function ContentFeaturedTab() {
         return b.priority - a.priority;
       });
       setItems(data);
+      setHasLoaded(true);
     } catch {
       toast.error(t("errors.loadFailed"));
     } finally {
@@ -624,15 +650,15 @@ function ContentFeaturedTab() {
                 <th className="p-4 font-medium text-right">{t("table.actions")}</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
-              {loading && items.length === 0 && (
+            <tbody className="divide-y" aria-busy={loading}>
+              {loading && !hasLoaded && (
                 <tr>
                   <td colSpan={6} className="p-10 text-center text-muted-foreground">
                     {t("loading")}
                   </td>
                 </tr>
               )}
-              {!loading && items.length === 0 && (
+              {hasLoaded && items.length === 0 && (
                 <tr>
                   <td colSpan={6} className="p-10 text-center">
                     <Star className="mx-auto mb-3 h-9 w-9 text-muted-foreground/20" />
