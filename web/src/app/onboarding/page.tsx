@@ -76,7 +76,7 @@ export default function OnboardingPage() {
     };
 
     return (
-        <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-primary/10 via-background to-background px-4">
+        <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-primary/10 via-background to-background px-4 py-8 pb-36 sm:py-12 sm:pb-12">
             <div className="absolute inset-0 bg-[url('/grid.svg')] bg-center [mask-image:linear-gradient(180deg,white,rgba(255,255,255,0))] pointer-events-none" />
             
             <Card className="relative w-full max-w-md border-primary/10 bg-background/60 backdrop-blur-xl shadow-2xl overflow-hidden">
@@ -198,6 +198,7 @@ export default function OnboardingPage() {
                     </form>
                 </CardContent>
             </Card>
+            <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
         </div>
     );
 }

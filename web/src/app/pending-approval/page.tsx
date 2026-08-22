@@ -30,7 +30,7 @@ export default function PendingApprovalPage() {
     };
 
     return (
-        <div className="flex min-h-screen flex-col items-center justify-center p-4">
+        <div className="flex min-h-screen flex-col items-center justify-center p-4 pb-36 sm:pb-4">
             <div className="w-full max-w-md space-y-8 text-center">
                 {/* Icon */}
                 <div className="flex justify-center">
@@ -74,6 +74,7 @@ export default function PendingApprovalPage() {
                         {t("signOut")}
                     </Button>
                 </div>
+                <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
             </div>
         </div>
     );

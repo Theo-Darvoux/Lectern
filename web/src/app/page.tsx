@@ -79,7 +79,7 @@ export default function HomePage() {
     <div className="flex h-full w-full overflow-hidden">
       <DirectoryTreeSidebar />
       <div className="flex-1 min-w-0 overflow-y-auto">
-        <div className="w-full space-y-8 px-4 py-6 pb-24 sm:px-6 sm:pb-10 lg:px-8 2xl:px-10">
+        <div className="w-full space-y-8 px-4 py-6 pb-36 sm:px-6 sm:pb-10 lg:px-8 2xl:px-10">
           {/* ── Hero bar ──────────────────────────────────────── */}
           <HeroBar
             greeting={greeting}
@@ -169,6 +169,7 @@ export default function HomePage() {
               <StatsCard stats={data?.stats} isLoading={isLoading} hasLoaded={data !== null} />
             </aside>
           </div>}
+          <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
         </div>
       </div>
     </div>

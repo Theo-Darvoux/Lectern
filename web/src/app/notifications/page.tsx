@@ -317,7 +317,7 @@ export default function NotificationsPage() {
   const hasActiveFilters = searchQuery !== "" || categoryFilter !== "all";
 
   return (
-    <main className="min-h-full px-4 py-6 pb-24 sm:px-6 sm:py-8 sm:pb-12 lg:px-8">
+    <div className="w-full px-4 py-6 pb-12 sm:px-6 sm:py-8 lg:px-8">
       <div className="mx-auto w-full max-w-4xl space-y-6">
         {/* ── Hero Header ───────────────────────────────────────────── */}
         <section className="relative overflow-hidden rounded-3xl border bg-card p-5 shadow-xs sm:p-8">
@@ -691,7 +691,8 @@ export default function NotificationsPage() {
             )}
           </div>
         )}
+        <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
       </div>
-    </main>
+    </div>
   );
 }

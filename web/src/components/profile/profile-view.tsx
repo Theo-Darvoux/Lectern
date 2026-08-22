@@ -370,7 +370,7 @@ export function ProfileView({
 
   return (
     <div className="min-h-full w-full" data-profile-page>
-      <div className="mx-auto w-full max-w-6xl space-y-5 p-4 pb-24 sm:p-6 md:pb-8 lg:p-8">
+      <div className="mx-auto w-full max-w-6xl space-y-5 p-4 pb-36 sm:p-6 md:pb-8 lg:p-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{isOwn ? t("yourProfile") : t("communityProfile")}</p>
@@ -565,6 +565,7 @@ export function ProfileView({
             <div id="profile-panel-recent" aria-labelledby="profile-tab-recent" role="tabpanel" hidden={displayedTab !== "recent"} className="mt-2 min-h-72"><RecentlyViewed key={tabAttempts.recent ?? 0} onReady={() => markTabReady("recent")} onError={() => markTabError("recent")} /></div>
           )}
         </section>
+        <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
       </div>
     </div>
   );

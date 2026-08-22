@@ -25,7 +25,7 @@ export function CookieBanner() {
     if (!show) return null;
 
     return (
-        <div className="fixed bottom-16 sm:bottom-4 right-4 z-[100] max-w-sm rounded-lg border bg-background p-4 shadow-lg animate-in slide-in-from-bottom-2">
+        <div className="fixed bottom-20 sm:bottom-4 right-4 z-[100] max-w-sm rounded-lg border bg-background p-4 shadow-lg animate-in slide-in-from-bottom-2">
             <h3 className="text-sm font-semibold mb-2">{t("cookieConsentTitle")}</h3>
             <p className="text-xs text-muted-foreground mb-4">
                 {t("cookieConsentMessage")}
