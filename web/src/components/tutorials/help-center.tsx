@@ -52,7 +52,7 @@ export function HelpCenter() {
     };
 
     return (
-        <div className="mx-auto w-full max-w-3xl space-y-6 p-4 pb-24 sm:p-6 sm:pb-8">
+        <div className="mx-auto w-full max-w-3xl space-y-6 p-4 pb-36 sm:p-6 sm:pb-8">
             <div className="rounded-2xl border border-primary/15 bg-card p-5 sm:p-6">
                 <h1 className="text-2xl font-bold tracking-tight">{th("title")}</h1>
                 <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{th("description")}</p>
@@ -179,6 +179,7 @@ export function HelpCenter() {
                     </Button>
                 </div>
             )}
+            <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
         </div>
     );
 }

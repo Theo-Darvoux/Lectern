@@ -110,7 +110,7 @@ export default function StaffLayout({
   }
 
   return (
-    <div className="w-full mx-auto max-w-6xl space-y-6 p-4 sm:p-6 pb-20 sm:pb-6">
+    <div className="w-full mx-auto max-w-6xl space-y-6 p-4 sm:p-6 pb-36 sm:pb-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-3xl font-bold tracking-tight">{t("title")}</h1>
@@ -163,7 +163,8 @@ export default function StaffLayout({
         })}
       </div>
 
-      <main className="animate-in fade-in duration-300">{children}</main>
+      <div className="animate-in fade-in duration-300">{children}</div>
+      <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
     </div>
   );
 }

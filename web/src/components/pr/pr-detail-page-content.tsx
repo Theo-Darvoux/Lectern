@@ -1390,7 +1390,7 @@ function PRDetailContent() {
         : (previewPath ? `${previewPath}?preview_pr=${id}` : `/browse?preview_pr=${id}`);
 
     return (
-        <div className="container mx-auto max-w-5xl space-y-6 px-4 py-6 pb-24 sm:px-6 sm:py-8 sm:pb-12 lg:px-8">
+        <div className="container mx-auto max-w-5xl space-y-6 px-4 py-6 pb-36 sm:px-6 sm:py-8 sm:pb-12 lg:px-8">
             <Link
                 href="/pull-requests"
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors bg-muted/50 hover:bg-muted px-3 py-1.5 rounded-xl w-fit"
@@ -1867,6 +1867,7 @@ function PRDetailContent() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+            <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
         </div>
     );
 }

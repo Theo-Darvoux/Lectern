@@ -21,7 +21,7 @@ export default function PrivacyPage() {
     };
 
     return (
-        <div className="w-full mx-auto max-w-3xl space-y-8 py-12 px-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="w-full mx-auto max-w-3xl space-y-8 py-12 pb-36 sm:pb-12 px-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <header className="space-y-2 border-b pb-6">
                 <h1 className="text-3xl font-bold tracking-tight">{t("title", configValues)}</h1>
                 <p className="text-sm text-muted-foreground">
@@ -115,6 +115,7 @@ export default function PrivacyPage() {
                 </p>
                 <p className="mt-1">{configValues.legalAddress}</p>
             </footer>
+            <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
         </div>
     );
 }

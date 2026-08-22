@@ -417,7 +417,7 @@ export default function SavedPage() {
   const isCurrentViewLoading = loading || (selectedId !== null && detailLoading);
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-6 pb-28 sm:px-6 sm:py-8 lg:px-8">
+    <div className="mx-auto w-full max-w-7xl px-4 py-6 pb-36 sm:px-6 sm:py-8 lg:px-8">
       {/* ── Page Hero Header ────────────────────────────────────────────── */}
       <div className="mb-8 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
         <div className="flex items-start gap-4">
@@ -1057,6 +1057,7 @@ export default function SavedPage() {
           </form>
         </DialogContent>
       </Dialog>
+      <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
     </div>
   );
 }

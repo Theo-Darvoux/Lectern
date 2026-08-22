@@ -128,7 +128,7 @@ function PopularContent() {
       : t("last14DaysSubtitle");
 
   return (
-    <div className="w-full mx-auto max-w-7xl px-4 py-8 pb-24 sm:px-6 sm:pb-10 lg:px-8">
+    <div className="w-full mx-auto max-w-7xl px-4 py-8 pb-36 sm:px-6 sm:pb-10 lg:px-8">
       {/* ── Page header ─────────────────────────────── */}
       <div className="mb-6">
         <SectionHeader
@@ -217,6 +217,7 @@ function PopularContent() {
           )}
         </div>
       )}
+      <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
     </div>
   );
 }

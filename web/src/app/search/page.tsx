@@ -194,7 +194,7 @@ function SearchPageContent() {
     Boolean(state.directoryId);
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-3.5 py-6 pb-24 sm:px-6 sm:py-8 sm:pb-12 lg:px-8">
+    <div className="mx-auto w-full max-w-5xl px-3.5 py-6 pb-36 sm:px-6 sm:py-8 sm:pb-12 lg:px-8">
       {/* ── Page Header ────────────────────────────────────────── */}
       <header className="mb-6 space-y-2">
         <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
@@ -641,6 +641,7 @@ function SearchPageContent() {
           </>
         )}
       </section>
+      <div className="h-28 sm:hidden shrink-0 pointer-events-none" aria-hidden="true" />
     </div>
   );
 }

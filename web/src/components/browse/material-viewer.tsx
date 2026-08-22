@@ -626,7 +626,7 @@ export function MaterialViewer({
           </div>
 
           <div
-            className="flex-1 min-h-0 overflow-hidden p-2 max-sm:pb-20 sm:p-4 md:p-5"
+            className="flex-1 min-h-0 overflow-hidden p-2 max-sm:pb-36 sm:p-4 md:p-5"
           >
           <div
             ref={viewerContainerRef}

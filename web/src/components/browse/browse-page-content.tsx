@@ -36,7 +36,7 @@ function BrowseSkeleton({ isMaterial = false }: { isMaterial?: boolean }) {
 
   if (isMaterial) {
     return (
-      <div className="flex flex-1 w-full gap-0 px-4 py-6 pb-20 md:pb-6">
+      <div className="flex flex-1 w-full gap-0 px-4 py-6 pb-36 md:pb-6">
         <div className="flex-1 space-y-4 pr-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -77,7 +77,7 @@ function BrowseSkeleton({ isMaterial = false }: { isMaterial?: boolean }) {
   }
 
   return (
-    <div className="w-full space-y-4 px-4 py-6 pb-20 md:pb-6">
+    <div className="w-full space-y-4 px-4 py-6 pb-36 md:pb-6">
       {/* Breadcrumb row */}
       <div className="flex items-center gap-2">
         <Skeleton className="h-4 w-16" />
@@ -369,7 +369,7 @@ function BrowseContent() {
         className={`flex h-full w-full overflow-hidden gap-0 transition-opacity duration-200 ${isFetching ? "opacity-50 pointer-events-none" : "opacity-100"}`}
       >
         <div
-          className={`flex-1 min-h-0 overflow-y-auto px-4 py-6 pb-20 md:pb-6 ${isDesktop && sidebarOpen ? "min-w-0" : ""}`}
+          className={`flex-1 min-h-0 overflow-y-auto px-4 py-6 pb-36 md:pb-6 ${isDesktop && sidebarOpen ? "min-w-0" : ""}`}
         >
           {previewPr && (
             <div className="mb-6 flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 dark:border-blue-800/40 dark:bg-blue-950/20">
@@ -410,6 +410,7 @@ function BrowseContent() {
               previewPrId={previewPr?.id}
             />
           )}
+          <div className="h-28 md:hidden shrink-0 pointer-events-none" aria-hidden="true" />
         </div>
         {!isDesktop && <SharedSidebar />}
         {isDesktop && isDirectoryView && <SharedSidebar />}

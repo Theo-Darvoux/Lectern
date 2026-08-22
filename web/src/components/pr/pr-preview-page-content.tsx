@@ -283,7 +283,7 @@ export function PRPreviewPageContent() {
                 </div>
             </div>
 
-            <div className="relative flex-1 min-h-0 overflow-hidden">
+            <div className="relative flex-1 min-h-0 overflow-hidden max-sm:pb-36">
                 {loading && (
                     <div className="flex h-full items-center justify-center">
                         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
