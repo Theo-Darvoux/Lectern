@@ -42,6 +42,7 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
+  const scrolledTargetRef = useRef<string | null>(null);
   const threads = ctx?.threads ?? [];
 
   useEffect(() => {
