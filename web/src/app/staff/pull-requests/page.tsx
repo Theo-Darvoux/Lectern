@@ -25,6 +25,7 @@ interface PRItem {
 export default function StaffPRQueuePage() {
   const t = useTranslations("Moderator.pullRequests");
   const [prs, setPrs] = useState<PRItem[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
@@ -33,6 +34,7 @@ export default function StaffPRQueuePage() {
     try {
       const data = await apiFetch<PRItem[]>("/pull-requests?status=open&limit=50");
       setPrs(data ?? []);
+      setHasLoaded(true);
     } catch {
       toast.error(t("loadError"));
     } finally {
@@ -70,15 +72,15 @@ export default function StaffPRQueuePage() {
               <th className="p-4 font-medium text-right">{t("columnAction")}</th>
             </tr>
           </thead>
-          <tbody className="divide-y relative">
-            {loading && prs.length === 0 && (
+          <tbody className="divide-y relative" aria-busy={loading}>
+            {loading && !hasLoaded && (
               <tr>
                 <td colSpan={5} className="p-8 text-center text-muted-foreground">
                   {t("loading")}
                 </td>
               </tr>
             )}
-            {!loading && filtered.length === 0 && (
+            {hasLoaded && filtered.length === 0 && (
               <tr>
                 <td colSpan={5} className="p-8 text-center text-muted-foreground">
                   {t("empty")}

@@ -11,26 +11,35 @@ from app.config import settings
 
 
 class HTMLTextExtractor(HTMLParser):
-    """Safely extracts plain text from HTML, ignoring scripts and styles."""
+    """Safely extracts plain text from HTML, preserving links and ignoring scripts/styles."""
 
     def __init__(self) -> None:
         super().__init__()
         self.result: list[str] = []
         self.hide_depth = 0
         self.hidden_tags = {"script", "style", "head", "title"}
-        self.block_tags = {"p", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr"}
+        self.block_tags = {"p", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr", "hr"}
+        self._current_href: str | None = None
 
-    def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in self.hidden_tags:
             self.hide_depth += 1
         elif tag in self.block_tags:
             self.result.append("\n")
+        elif tag == "a":
+            href_map = dict(attrs)
+            href = href_map.get("href")
+            if href and not href.startswith("mailto:") and not href.startswith("#"):
+                self._current_href = href
 
     def handle_endtag(self, tag: str) -> None:
         if tag in self.hidden_tags and self.hide_depth > 0:
             self.hide_depth -= 1
         elif tag in self.block_tags:
             self.result.append("\n")
+        elif tag == "a" and self._current_href:
+            self.result.append(f" ({self._current_href}) ")
+            self._current_href = None
 
     def handle_data(self, data: str) -> None:
         if self.hide_depth == 0:
@@ -61,6 +70,7 @@ async def send_email(
     to: str,
     subject: str,
     body: str,
+    plain_text: str | None = None,
 ) -> None:
     host = settings.smtp_host
     ip = settings.smtp_ip
@@ -73,7 +83,10 @@ async def send_email(
 
     html_body = body.strip()
     if not re.search(r"<html[\s>]", html_body, re.IGNORECASE):
-        html_body = f"<html><body>{html_body}</body></html>"
+        html_body = (
+            f"<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{subject}</title></head>"
+            f"<body>{html_body}</body></html>"
+        )
 
     message = EmailMessage()
     message["From"] = (
@@ -82,11 +95,22 @@ async def send_email(
     message["To"] = to
     message["Subject"] = subject
 
-    message["Date"] = formatdate(localtime=False)
-    message["Message-Id"] = make_msgid(domain=host or "localhost")
+    # Date header: RFC 5322 formatted with local/GMT timezone
+    message["Date"] = formatdate(localtime=True)
 
-    message.set_content(_html_to_plain(html_body))
-    message.add_alternative(html_body, subtype="html")
+    # Align Message-ID domain with From domain if available
+    msg_domain = None
+    if from_email and "@" in from_email:
+        msg_domain = from_email.split("@", 1)[1].strip()
+    message["Message-Id"] = make_msgid(domain=msg_domain or host or "localhost")
+
+    # Transactional & automated delivery headers to prevent spam false positives
+    message["Auto-Submitted"] = "auto-generated"
+    message["X-Auto-Response-Suppress"] = "All"
+
+    plain_content = plain_text if plain_text is not None else _html_to_plain(html_body)
+    message.set_content(plain_content, subtype="plain", charset="utf-8")
+    message.add_alternative(html_body, subtype="html", charset="utf-8")
 
     use_implicit_tls = tls_mode == "implicit"
     use_starttls = tls_mode == "starttls"

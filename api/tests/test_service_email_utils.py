@@ -89,3 +89,22 @@ def test_render_site_name_html_font_with_spaces_encodes_plus() -> None:
     style = '[{"text": "Sample", "font": "Open Sans"}]'
     _, fonts_url = _render_site_name_html("Sample", style)
     assert "Open+Sans" in fonts_url
+
+
+def test_render_code_box_html_contains_code_and_bgcolor() -> None:
+    from app.services.email import _render_code_box_html
+
+    html = _render_code_box_html("ABCD1234")
+    assert "ABCD1234" in html
+    assert 'bgcolor="#161826"' in html
+    assert "#ffffff" in html
+
+
+def test_html_to_plain_preserves_links() -> None:
+    from app.core.events.email import _html_to_plain
+
+    html = '<p>Click <a href="https://intellect.clubcode.fr/verify">here</a> to sign in.</p>'
+    plain = _html_to_plain(html)
+    assert "https://intellect.clubcode.fr/verify" in plain
+    assert "Click here" in plain
+

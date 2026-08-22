@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Trash2, Search, CheckCircle, XCircle, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,15 +54,18 @@ export default function StaffUsersPage() {
   const { show } = useConfirmDialog();
 
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [total, setTotal] = useState(0);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
   const [loading, setLoading] = useState(true);
+  const loadRequestRef = useRef(0);
 
   const fetchUsers = async (cursor: string | null = null) => {
     if (!canManageRoles) return;
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({ limit: "50" });
@@ -71,13 +74,16 @@ export default function StaffUsersPage() {
       if (roleFilter !== "all") params.append("role", roleFilter);
 
       const data = await apiFetch<PaginatedUsers>(`/admin/users?${params}`);
+      if (requestId !== loadRequestRef.current) return;
       setUsers(data.items);
+      setHasLoaded(true);
       setTotal(data.total);
       setNextCursor(data.next_cursor);
     } catch {
+      if (requestId !== loadRequestRef.current) return;
       toast.error(t("state.loadError"));
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   };
 
@@ -87,6 +93,18 @@ export default function StaffUsersPage() {
     const timer = setTimeout(() => fetchUsers(null), 300);
     return () => clearTimeout(timer);
   }, [search, roleFilter]);
+
+  const changeSearch = (value: string) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setSearch(value);
+  };
+
+  const changeRoleFilter = (value: string) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setRoleFilter(value);
+  };
 
   if (!canManageRoles) {
     return (
@@ -203,7 +221,7 @@ export default function StaffUsersPage() {
           </span>
           {roleFilter !== "pending" && (
             <button
-              onClick={() => setRoleFilter("pending")}
+              onClick={() => changeRoleFilter("pending")}
               className="ml-auto text-xs underline underline-offset-2 hover:no-underline"
             >
               {t("showOnlyPending")}
@@ -219,10 +237,10 @@ export default function StaffUsersPage() {
             placeholder={t("searchPlaceholder")}
             className="pl-9"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => changeSearch(e.target.value)}
           />
         </div>
-        <Select value={roleFilter} onValueChange={setRoleFilter}>
+        <Select value={roleFilter} onValueChange={changeRoleFilter}>
           <SelectTrigger className="w-full sm:w-[180px]">
             <SelectValue placeholder={t("allRoles")} />
           </SelectTrigger>
@@ -258,7 +276,7 @@ export default function StaffUsersPage() {
                 <th className="p-4 font-medium text-right">{t("table.actions")}</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+          <tbody className="divide-y" aria-busy={loading}>
               {users.map((u) => (
                 <tr
                   key={u.id}
@@ -357,14 +375,14 @@ export default function StaffUsersPage() {
                   </td>
                 </tr>
               ))}
-              {loading && users.length === 0 && (
+              {loading && !hasLoaded && (
                 <tr>
                   <td colSpan={4} className="p-8 text-center text-muted-foreground">
                     {t("state.loading")}
                   </td>
                 </tr>
               )}
-              {!loading && users.length === 0 && (
+              {hasLoaded && users.length === 0 && (
                 <tr>
                   <td colSpan={4} className="p-8 text-center text-muted-foreground">
                     {t("state.empty")}

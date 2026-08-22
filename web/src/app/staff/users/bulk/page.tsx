@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -135,6 +135,7 @@ export default function StaffBulkUsersPage() {
       };
 
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [total, setTotal] = useState(0);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
@@ -143,10 +144,12 @@ export default function StaffBulkUsersPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
+  const loadRequestRef = useRef(0);
 
   const fetchUsers = useCallback(
     async (cursor: string | null = null) => {
       if (!isAdmin) return;
+      const requestId = ++loadRequestRef.current;
       setLoading(true);
       try {
         const query = new URLSearchParams({ limit: "100" });
@@ -154,14 +157,17 @@ export default function StaffBulkUsersPage() {
         if (search.trim()) query.set("search", search.trim());
         if (role !== "all") query.set("role", role);
         const result = await apiFetch<PaginatedUsers>(`/admin/users?${query}`);
+        if (requestId !== loadRequestRef.current) return;
         setUsers(result.items);
+        setHasLoaded(true);
         setTotal(result.total);
         setNextCursor(result.next_cursor);
         setSelected(new Set());
       } catch {
+        if (requestId !== loadRequestRef.current) return;
         toast.error(copy.loadError);
       } finally {
-        setLoading(false);
+        if (requestId === loadRequestRef.current) setLoading(false);
       }
     },
     [copy.loadError, isAdmin, role, search],
@@ -174,6 +180,20 @@ export default function StaffBulkUsersPage() {
     }, 250);
     return () => window.clearTimeout(timer);
   }, [fetchUsers]);
+
+  const changeSearch = (value: string) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setCursorStack([]);
+    setSearch(value);
+  };
+
+  const changeRole = (value: string) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setCursorStack([]);
+    setRole(value);
+  };
 
   if (!isAdmin) {
     return (
@@ -316,12 +336,12 @@ export default function StaffBulkUsersPage() {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => changeSearch(event.target.value)}
             placeholder={copy.search}
             className="pl-9"
           />
         </div>
-        <Select value={role} onValueChange={setRole}>
+        <Select value={role} onValueChange={changeRole}>
           <SelectTrigger className="w-full lg:w-48">
             <SelectValue />
           </SelectTrigger>
@@ -429,7 +449,7 @@ export default function StaffBulkUsersPage() {
                 <th className="p-3 font-medium">{copy.joined}</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y" aria-busy={loading}>
               {users.map((candidate) => {
                 const isSelf = candidate.id === actor?.id;
                 return (
@@ -481,14 +501,14 @@ export default function StaffBulkUsersPage() {
                   </tr>
                 );
               })}
-              {!loading && users.length === 0 && (
+              {hasLoaded && users.length === 0 && (
                 <tr>
                   <td colSpan={5} className="p-10 text-center text-muted-foreground">
                     {copy.empty}
                   </td>
                 </tr>
               )}
-              {loading && users.length === 0 && (
+              {loading && !hasLoaded && (
                 <tr>
                   <td colSpan={5} className="p-10 text-center text-muted-foreground">
                     …

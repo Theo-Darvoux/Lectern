@@ -43,25 +43,25 @@ export function HeroBar({
     {
       href: "/browse",
       label: t("quickBrowse"),
-      icon: <FolderTree className="h-4 w-4" />,
+      icon: <FolderTree className="h-4 w-4 shrink-0" />,
       className:
-        "bg-primary/10 text-primary hover:bg-primary/15 ring-primary/20",
+        "bg-primary text-primary-foreground font-semibold shadow-sm shadow-primary/20 hover:bg-primary/90 hover:shadow-md hover:shadow-primary/25 active:scale-[0.98]",
     },
     {
       href: "/saved",
       label: t("quickSaved"),
-      icon: <Bookmark className="h-4 w-4" />,
+      icon: <Bookmark className="h-4 w-4 shrink-0" />,
       className:
-        "bg-primary/10 text-primary hover:bg-primary/15 ring-primary/20",
+        "bg-secondary/70 text-secondary-foreground hover:bg-secondary ring-1 ring-border/50",
     },
     ...(staff
       ? [
           {
             onClick: () => setFeaturedDialogOpen(true),
             label: t("quickFeatured"),
-            icon: <Star className="h-4 w-4" />,
+            icon: <Star className="h-4 w-4 shrink-0" />,
             className:
-              "bg-primary/10 text-primary hover:bg-primary/15 ring-primary/20 cursor-pointer",
+              "bg-secondary/70 text-secondary-foreground hover:bg-secondary ring-1 ring-border/50 cursor-pointer",
           },
         ]
       : []),
@@ -99,35 +99,34 @@ export function HeroBar({
       </div>
 
       {/* Quick actions */}
-      <div className="mt-5 flex flex-wrap gap-2">
-        {actions.map((a, i) =>
-          a.href ? (
+      <div className="mt-5 flex flex-wrap items-center gap-2 sm:gap-2.5">
+        {actions.map((a, i) => {
+          const buttonClass = cn(
+            "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+            a.className,
+          );
+
+          return a.href ? (
             <Link
               key={a.href}
               href={a.href}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium ring-1 transition-colors focus-visible:outline-none focus-visible:ring-2",
-                a.className,
-              )}
+              className={buttonClass}
             >
               {a.icon}
-              {a.label}
+              <span>{a.label}</span>
             </Link>
           ) : (
             <button
               key={i}
               type="button"
               onClick={a.onClick}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium ring-1 transition-colors focus-visible:outline-none focus-visible:ring-2",
-                a.className,
-              )}
+              className={buttonClass}
             >
               {a.icon}
-              {a.label}
+              <span>{a.label}</span>
             </button>
-          ),
-        )}
+          );
+        })}
       </div>
 
       {staff && (

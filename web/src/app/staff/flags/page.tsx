@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, X, Shield, ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -58,14 +58,17 @@ export default function StaffFlagsPage() {
   const tFlags = useTranslations("Flags");
   const tCommon = useTranslations("Common");
   const [flags, setFlags] = useState<FlagData[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [statusFilter, setStatusFilter] = useState("open");
   const [targetTypeFilter, setTargetTypeFilter] = useState("all");
   const [loading, setLoading] = useState(false);
+  const loadRequestRef = useRef(0);
 
   const fetchFlags = useCallback(
     async (p: number) => {
+      const requestId = ++loadRequestRef.current;
       setLoading(true);
       try {
         const params = new URLSearchParams({ page: String(p), limit: "20" });
@@ -75,13 +78,16 @@ export default function StaffFlagsPage() {
           params.set("targetType", targetTypeFilter);
 
         const data = await apiFetch<PaginatedFlags>(`/flags?${params}`);
+        if (requestId !== loadRequestRef.current) return;
         setFlags(data.items);
+        setHasLoaded(true);
         setPage(data.page);
         setPages(data.pages);
       } catch {
+        if (requestId !== loadRequestRef.current) return;
         toast.error(t("loadError"));
       } finally {
-        setLoading(false);
+        if (requestId === loadRequestRef.current) setLoading(false);
       }
     },
     [statusFilter, targetTypeFilter, t],
@@ -90,6 +96,18 @@ export default function StaffFlagsPage() {
   useEffect(() => {
     fetchFlags(1);
   }, [fetchFlags]);
+
+  const changeStatusFilter = (value: string) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setStatusFilter(value);
+  };
+
+  const changeTargetTypeFilter = (value: string) => {
+    loadRequestRef.current += 1;
+    setLoading(true);
+    setTargetTypeFilter(value);
+  };
 
   const handleAction = async (
     flagId: string,
@@ -110,7 +128,7 @@ export default function StaffFlagsPage() {
   return (
     <div className="space-y-6">
       <div className="flex gap-3">
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select value={statusFilter} onValueChange={changeStatusFilter}>
           <SelectTrigger className="w-40">
             <SelectValue placeholder={t("placeholderStatus")} />
           </SelectTrigger>
@@ -123,7 +141,7 @@ export default function StaffFlagsPage() {
           </SelectContent>
         </Select>
 
-        <Select value={targetTypeFilter} onValueChange={setTargetTypeFilter}>
+        <Select value={targetTypeFilter} onValueChange={changeTargetTypeFilter}>
           <SelectTrigger className="w-40">
             <SelectValue placeholder={t("placeholderType")} />
           </SelectTrigger>
@@ -138,11 +156,11 @@ export default function StaffFlagsPage() {
         </Select>
       </div>
 
-      {loading && flags.length === 0 && (
+      {loading && !hasLoaded && (
         <p className="text-sm text-muted-foreground">{tCommon("loading")}</p>
       )}
 
-      {!loading && flags.length === 0 && (
+      {hasLoaded && flags.length === 0 && (
         <Card>
           <CardContent className="py-12 text-center">
             <Shield className="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" />
@@ -151,7 +169,7 @@ export default function StaffFlagsPage() {
         </Card>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-3" aria-busy={loading}>
         {flags.map((flag) => (
           <Card key={flag.id}>
             <CardHeader className="pb-2">

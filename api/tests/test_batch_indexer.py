@@ -510,7 +510,7 @@ def test_coalesce_complex_sequence():
 
 
 def test_split_identifiers_alphanumeric():
-    from app.workers.index_content import split_identifiers
+    from app.services.search_documents import split_identifiers
 
     assert split_identifiers("CS101") == "CS 101"
     assert split_identifiers("101CS") == "101 CS"
@@ -518,13 +518,13 @@ def test_split_identifiers_alphanumeric():
 
 
 def test_split_identifiers_empty():
-    from app.workers.index_content import split_identifiers
+    from app.services.search_documents import split_identifiers
 
     assert split_identifiers("") == ""
 
 
 def test_split_identifiers_no_change():
-    from app.workers.index_content import split_identifiers
+    from app.services.search_documents import split_identifiers
 
     assert split_identifiers("algebra") == "algebra"
     assert split_identifiers("linear algebra") == "linear algebra"
@@ -532,7 +532,7 @@ def test_split_identifiers_no_change():
 
 def test_split_identifiers_module_scope():
     """Compiled patterns live at module scope — not re-created on each call."""
-    import app.workers.index_content as mod
+    import app.services.search_documents as mod
 
     assert hasattr(mod, "_ALPHA_NUM")
     assert hasattr(mod, "_NUM_ALPHA")

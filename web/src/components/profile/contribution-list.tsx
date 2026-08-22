@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -57,6 +57,8 @@ interface PaginatedContributions {
 interface ContributionListProps {
   userId: string;
   type: "prs" | "materials" | "annotations";
+  onReady?: () => void;
+  onError?: () => void;
 }
 
 function getPRVisuals(status: string | undefined) {
@@ -173,13 +175,21 @@ function SkeletonCard() {
   );
 }
 
-export function ContributionList({ userId, type }: ContributionListProps) {
+export function ContributionList({ userId, type, onReady, onError }: ContributionListProps) {
   const t = useTranslations("Profile");
   const [items, setItems] = useState<ContributionItem[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const onReadyRef = useRef(onReady);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => {
+    onReadyRef.current = onReady;
+    onErrorRef.current = onError;
+  }, [onError, onReady]);
 
   const fetchContributions = useCallback(async (requestedPage: number) => {
     setLoading(true);
@@ -193,11 +203,14 @@ export function ContributionList({ userId, type }: ContributionListProps) {
         `/users/${userId}/contributions?${params}`,
       );
       setItems(data.items);
+      setHasLoaded(true);
       setPage(data.page);
       setPages(data.pages);
       setTotal(data.total);
+      onReadyRef.current?.();
     } catch {
-      setItems([]);
+      // Keep the last successful page visible when a refresh fails.
+      onErrorRef.current?.();
     } finally {
       setLoading(false);
     }
@@ -207,7 +220,7 @@ export function ContributionList({ userId, type }: ContributionListProps) {
     void fetchContributions(1);
   }, [fetchContributions]);
 
-  if (loading && items.length === 0) {
+  if (loading && !hasLoaded) {
     return (
       <div className={PROFILE_MATERIAL_GRID} data-contribution-grid>
         {Array.from({ length: 8 }, (_, index) => <SkeletonCard key={index} />)}

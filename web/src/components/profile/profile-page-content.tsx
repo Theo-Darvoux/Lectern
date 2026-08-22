@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { ProfileView, ProfileSkeleton, type UserProfile } from "@/components/profile/profile-view";
 import { apiFetch } from "@/lib/api-client";
@@ -14,21 +14,24 @@ export function ProfilePageContent() {
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [notFound, setNotFound] = useState(false);
 
-    const fetchProfile = useCallback(async () => {
-        try {
-            const data = await apiFetch<UserProfile>(`/users/${id}`);
-            setProfile(data);
-        } catch {
-            queueMicrotask(() => {
-                setNotFound(true);
-                toast.error(t("notFound"));
-            });
-        }
-    }, [id, t]);
-
     useEffect(() => {
-        setTimeout(fetchProfile, 0);
-    }, [fetchProfile]);
+        const controller = new AbortController();
+        setProfile(null);
+        setNotFound(false);
+        const timer = window.setTimeout(() => {
+            apiFetch<UserProfile>(`/users/${id}`, { signal: controller.signal })
+                .then((data) => setProfile(data))
+                .catch(() => {
+                    if (controller.signal.aborted) return;
+                    setNotFound(true);
+                    toast.error(t("notFound"));
+                });
+        }, 0);
+        return () => {
+            window.clearTimeout(timer);
+            controller.abort();
+        };
+    }, [id, t]);
 
     if (notFound) {
         return (
@@ -43,5 +46,5 @@ export function ProfilePageContent() {
 
     if (!profile) return <ProfileSkeleton />;
 
-    return <ProfileView profile={profile} isOwn={false} />;
+    return <ProfileView key={profile.id} profile={profile} isOwn={false} />;
 }

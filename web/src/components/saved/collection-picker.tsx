@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, FolderPlus, Loader2, Plus, Settings2 } from "lucide-react";
 import { useSavedTranslations } from "@/lib/saved-i18n";
@@ -45,16 +45,25 @@ export function CollectionPicker({
   const [changingId, setChangingId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [loadedTargetKey, setLoadedTargetKey] = useState<string | null>(null);
+  const loadRequestRef = useRef(0);
+  const targetKey = `${targetType}:${targetId}`;
+  const hasLoadedCurrent = loadedTargetKey === targetKey;
+  const visibleCollections = hasLoadedCurrent ? collections : [];
 
   const loadCollections = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
     try {
       const data = await fetchCollections({ targetType, targetId });
+      if (requestId !== loadRequestRef.current) return;
       setCollections(data);
+      setLoadedTargetKey(`${targetType}:${targetId}`);
     } catch {
+      if (requestId !== loadRequestRef.current) return;
       toast.error(t("errors.loadCollections"));
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }, [targetId, targetType, t]);
 
@@ -137,18 +146,24 @@ export function CollectionPicker({
           </p>
         </div>
 
-        <div className="max-h-56 overflow-y-auto p-1.5">
-          {loading ? (
+        <div
+          className={cn(
+            "max-h-56 overflow-y-auto p-1.5",
+            loading && hasLoadedCurrent && "opacity-60 transition-opacity",
+          )}
+          aria-busy={loading || !hasLoadedCurrent}
+        >
+          {!hasLoadedCurrent ? (
             <div className="flex items-center justify-center gap-2 p-5 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               {t("loading")}
             </div>
-          ) : collections.length === 0 ? (
+          ) : visibleCollections.length === 0 ? (
             <p className="p-4 text-center text-sm text-muted-foreground">
               {t("noCollectionsYet")}
             </p>
           ) : (
-            collections.map((collection) => (
+            visibleCollections.map((collection) => (
               <button
                 key={collection.id}
                 type="button"

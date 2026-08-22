@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, Suspense } from "react";
+import { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Loader2, LayoutGrid, TrendingUp } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { useTranslations } from "next-intl";
 import { useConfigStore } from "@/lib/stores";
 import type { MaterialDetail } from "@/components/home/types";
+import { cn } from "@/lib/utils";
 
 type Period = "today" | "14d";
 
@@ -58,13 +59,16 @@ function PopularContent() {
     () => (searchParams.get("period") as Period | null) ?? "today",
   );
   const [materials, setMaterials] = useState<MaterialDetail[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const replaceRequestRef = useRef(0);
 
   const fetchMaterials = useCallback(
     async (p: Period, off: number, replace: boolean) => {
+      const requestId = replace ? ++replaceRequestRef.current : replaceRequestRef.current;
       if (off === 0) {
         setIsLoading(true);
       } else {
@@ -75,9 +79,11 @@ function PopularContent() {
         const data = await apiFetch<MaterialDetail[]>(
           `/home/popular?period=${p}&limit=${LIMIT}&offset=${off}`,
         );
+        if (requestId !== replaceRequestRef.current) return;
 
         if (replace) {
           setMaterials(data);
+          setHasLoaded(true);
         } else {
           setMaterials((prev) => [...prev, ...data]);
         }
@@ -85,10 +91,13 @@ function PopularContent() {
         setHasMore(data.length === LIMIT);
         setOffset(off + data.length);
       } catch {
+        if (requestId !== replaceRequestRef.current) return;
         toast.error(t("loadError"));
       } finally {
-        setIsLoading(false);
-        setIsLoadingMore(false);
+        if (requestId === replaceRequestRef.current) {
+          setIsLoading(false);
+          setIsLoadingMore(false);
+        }
       }
     },
     [],
@@ -96,14 +105,15 @@ function PopularContent() {
 
   // Refetch from scratch whenever period changes
   useEffect(() => {
-    setMaterials([]);
-    setOffset(0);
-    setHasMore(false);
-    fetchMaterials(period, 0, true);
+    void fetchMaterials(period, 0, true);
   }, [period, fetchMaterials]);
 
   const handlePeriodChange = (value: string) => {
     const newPeriod = value as Period;
+    if (newPeriod === period) return;
+    replaceRequestRef.current += 1;
+    setIsLoadingMore(false);
+    setIsLoading(true);
     setPeriod(newPeriod);
     router.replace(`/popular?period=${newPeriod}`, { scroll: false });
   };
@@ -145,10 +155,16 @@ function PopularContent() {
       <p className="mt-4 mb-6 text-sm text-muted-foreground">{subtitle}</p>
 
       {/* ── Content ──────────────────────────────────── */}
-      {isLoading ? (
+      {isLoading && !hasLoaded ? (
         <SkeletonGrid />
       ) : materials.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
+        <div
+          className={cn(
+            "flex flex-col items-center justify-center gap-3 py-20 text-center",
+            isLoading && "opacity-60 transition-opacity",
+          )}
+          aria-busy={isLoading}
+        >
           <TrendingUp className="h-10 w-10 text-muted-foreground/30" />
           <div>
             <p className="font-medium text-muted-foreground">
@@ -160,7 +176,7 @@ function PopularContent() {
           </div>
         </div>
       ) : (
-        <>
+        <div aria-busy={isLoading} className={cn(isLoading && "opacity-60 transition-opacity")}>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {materials.map((material) => (
               <MaterialCard
@@ -172,7 +188,7 @@ function PopularContent() {
           </div>
 
           {/* ── Load more ──────────────────────────── */}
-          {(hasMore || isLoadingMore) && (
+          {!isLoading && (hasMore || isLoadingMore) && (
             <div className="mt-10 flex justify-center">
               <Button
                 variant="outline"
@@ -194,12 +210,12 @@ function PopularContent() {
           )}
 
           {/* ── End of results ─────────────────────── */}
-          {!hasMore && materials.length > 0 && (
+          {!isLoading && !hasMore && materials.length > 0 && (
             <p className="mt-10 text-center text-sm text-muted-foreground">
               {t("allResultsSeen", { count: materials.length })}
             </p>
           )}
-        </>
+        </div>
       )}
     </div>
   );

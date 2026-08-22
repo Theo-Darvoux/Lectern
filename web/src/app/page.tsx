@@ -12,6 +12,7 @@ import { MaterialGridSection } from "@/components/home/material-grid-section";
 import { HeroBar } from "@/components/home/hero-bar";
 import { RailFavourites } from "@/components/home/rail-favourites";
 import { StatsCard } from "@/components/home/stats-card";
+import { LeaderboardPreview } from "@/components/leaderboard/leaderboard-preview";
 import { useConfigStore } from "@/lib/stores";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, History, Sparkles, Clock, RefreshCw } from "lucide-react";
@@ -72,7 +73,7 @@ export default function HomePage() {
     user?.display_name ?? user?.email?.split("@")[0] ?? t("guest");
 
   const showContinue =
-    isLoading || (data?.recently_viewed && data.recently_viewed.length > 0);
+    (isLoading && !data) || (data?.recently_viewed && data.recently_viewed.length > 0);
 
   return (
     <div className="flex h-full w-full overflow-hidden">
@@ -103,20 +104,7 @@ export default function HomePage() {
             </div>
           )}
 
-          {showContinue && (
-            <MaterialGridSection
-              title={t("continueTitle")}
-              subtitle={t("continueSubtitle")}
-              icon={<History className="h-4 w-4" />}
-              materials={data?.recently_viewed ?? []}
-              isLoading={isLoading}
-              emptyText={t("nothingHereYet")}
-              emptyIcon={<History className="h-8 w-8 text-muted-foreground/30" />}
-              maxCards={4}
-            />
-          )}
-
-          {/* ── Discovery ─────────────────────────────────────── */}
+          {/* ── Discovery / Featured ─────────────────────────── */}
           {isLoading && !data ? (
             <div>
               <Skeleton className="mb-4 h-6 w-32" />
@@ -127,6 +115,21 @@ export default function HomePage() {
             data.featured.length > 0 && <FeaturedSection items={data.featured} />
           )}
 
+          {/* ── Continue / Recently Viewed ─────────────────────── */}
+          {showContinue && (
+            <MaterialGridSection
+              title={t("continueTitle")}
+              subtitle={t("continueSubtitle")}
+              icon={<History className="h-4 w-4" />}
+              materials={data?.recently_viewed ?? []}
+              isLoading={isLoading}
+              hasLoaded={data !== null}
+              emptyText={t("nothingHereYet")}
+              emptyIcon={<History className="h-8 w-8 text-muted-foreground/30" />}
+              maxCards={4}
+            />
+          )}
+
           {/* ── Dashboard grid ────────────────────────────────── */}
           {(data || isLoading) && <div className="grid grid-cols-1 gap-8 xl:grid-cols-3">
             {/* Main column */}
@@ -135,6 +138,7 @@ export default function HomePage() {
                 today={data?.popular_today ?? []}
                 fortnight={data?.popular_14d ?? []}
                 isLoading={isLoading}
+                hasLoaded={data !== null}
               />
 
               <MaterialGridSection
@@ -143,6 +147,7 @@ export default function HomePage() {
                 icon={<Clock className="h-4 w-4" />}
                 materials={data?.recently_added ?? []}
                 isLoading={isLoading}
+                hasLoaded={data !== null}
                 seeAllHref="/browse"
                 emptyText={t("nothingHereYet")}
                 emptyIcon={<Sparkles className="h-8 w-8 text-muted-foreground/30" />}
@@ -156,10 +161,12 @@ export default function HomePage() {
                 <RailFavourites
                   materials={data?.recent_favourites ?? []}
                   isLoading={isLoading}
+                  hasLoaded={data !== null}
                 />
               )}
-              <RecentPRsSection prs={data?.recent_prs ?? []} isLoading={isLoading} />
-              <StatsCard stats={data?.stats} isLoading={isLoading} />
+              <LeaderboardPreview />
+              <RecentPRsSection prs={data?.recent_prs ?? []} isLoading={isLoading} hasLoaded={data !== null} />
+              <StatsCard stats={data?.stats} isLoading={isLoading} hasLoaded={data !== null} />
             </aside>
           </div>}
         </div>
