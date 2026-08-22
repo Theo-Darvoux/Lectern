@@ -97,13 +97,13 @@ function MagicLinkVerifier() {
             {/* Auth Card - Matching /login */}
             <div className="login-card-wrapper relative z-10 w-full max-w-[420px] p-6 sm:p-8 space-y-5">
                 {/* Header: 90s 3D Chrome Shader Title */}
-                <div className="text-center -mt-2 -mb-1">
+                <div className="text-center -mt-2">
                     <ShaderText
                         text={siteName}
                         style={config?.site_name_style}
                         className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"
                     />
-                    <p className="text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mt-1">
+                    <p className="-mt-4 sm:-mt-5 text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mb-1">
                         {t("verifySignIn")}
                     </p>
                 </div>
@@ -187,13 +187,13 @@ export default function MagicLinkPage() {
                     <div className="login-grain" aria-hidden="true" />
                     <div className="login-dots" aria-hidden="true" />
                     <div className="login-card-wrapper relative z-10 w-full max-w-[420px] p-6 sm:p-8 space-y-5">
-                        <div className="text-center -mt-2 -mb-1">
+                        <div className="text-center -mt-2">
                             <ShaderText
                                 text={siteName}
                                 style={config?.site_name_style}
                                 className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"
                             />
-                            <p className="text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mt-1">
+                            <p className="-mt-4 sm:-mt-5 text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mb-1">
                                 {t("loading")}
                             </p>
                         </div>

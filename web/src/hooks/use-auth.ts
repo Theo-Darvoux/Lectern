@@ -191,6 +191,24 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
+    const registerWithPassword = useCallback(async (email: string, code: string, password: string, displayName?: string) => {
+        const data = await apiFetch<{
+            access_token: string;
+            user: UserBrief;
+            is_new_user: boolean;
+        }>("/auth/register", {
+            method: "POST",
+            body: JSON.stringify({ email, code, password, display_name: displayName || null }),
+            skipAuth: true,
+        });
+
+        setAccessToken(data.access_token);
+        setUser(data.user);
+        scheduleRefreshTimer(data.access_token);
+        broadcastTokenAcquired(data.access_token);
+        return data;
+    }, [setUser]);
+
     const setup = useCallback(async (
         email: string,
         password: string,
@@ -219,5 +237,5 @@ export function useAuth() {
         return data;
     }, [setUser]);
 
-    return { user, isAuthenticated, isLoading, bootstrapError, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, setup, continueAsGuest, logout, fetchMe, bootstrapAuth };
+    return { user, isAuthenticated, isLoading, bootstrapError, requestCode, verifyCode, verifyMagicLink, verifyGoogleOAuth, loginWithPassword, registerWithPassword, setup, continueAsGuest, logout, fetchMe, bootstrapAuth };
 }
