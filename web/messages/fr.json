@@ -1053,6 +1053,9 @@
     "locationInTree": "Emplacement dans l'arbre du wiki",
     "originLocation": "Emplacement d'origine",
     "destinationLocation": "Emplacement de destination",
+    "fieldTitle": "Titre",
+    "deletedItemDetails": "Détails de l'élément à supprimer",
+    "deletedAttachmentsCount": "{count, plural, one {# fichier joint sera également définitivement supprimé} other {# fichiers joints seront également définitivement supprimés}}",
     "modifications": "Modifications"
   },
   "Roles": {

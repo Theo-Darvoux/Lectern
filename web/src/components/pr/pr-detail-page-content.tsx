@@ -300,6 +300,16 @@ interface ResolvedItemState {
     tags?: string[];
     description?: string;
     metadata?: Record<string, unknown>;
+    targetUrl?: string;
+    attachmentCount?: number;
+    attachments?: Array<{
+        title: string;
+        type: string;
+        file_name?: string | null;
+        file_size?: number | null;
+        file_mime_type?: string | null;
+        material_id?: string;
+    }>;
     // Tree locations
     sourcePath?: string;
     sourceUrl?: string;
@@ -335,8 +345,8 @@ function OperationRow({
     const [previewLoading, setPreviewLoading] = useState(false);
 
     const baseOpType = String(rawOp.op || rawOp.pr_type || "unknown");
-    const targetUrl = String((rawOp.metadata as Record<string, unknown> | undefined)?.url || rawOp.url || "").trim();
-    const isLink = rawOp.type === "link" || rawOp.material_type === "link" || Boolean(targetUrl);
+    const targetUrl = String((rawOp.metadata as Record<string, unknown> | undefined)?.url || rawOp.url || itemDetails?.targetUrl || (itemDetails?.metadata as Record<string, unknown> | undefined)?.url || "").trim();
+    const isLink = rawOp.type === "link" || rawOp.material_type === "link" || itemDetails?.itemType === "link" || Boolean(targetUrl);
     const isInternalLink = isLink && !isExternalUrl(targetUrl);
     const isDirectoryOp = baseOpType.includes("directory") || rawOp.target_type === "directory";
 
@@ -398,34 +408,61 @@ function OperationRow({
                 if (opType === "edit_material" || opType === "delete_material" || opType === "edit_link" || opType === "delete_link") {
                     const matId = String(rawOp.material_id ?? "");
                     if (matId && !matId.startsWith("$")) {
-                        const mat = await apiFetch<{
-                            title: string;
-                            type: string;
-                            directory_id: string | null;
-                            description: string | null;
-                            tags: string[];
-                            metadata: Record<string, unknown>;
-                            current_version_info?: { file_mime_type?: string; file_name?: string; file_size?: number } | null;
-                        }>(`/materials/${matId}`);
-                        if (cancelled) return;
+                        try {
+                            const [mat, matAttachments] = await Promise.all([
+                                apiFetch<{
+                                    title: string;
+                                    type: string;
+                                    directory_id: string | null;
+                                    description: string | null;
+                                    tags: string[];
+                                    metadata: Record<string, unknown>;
+                                    attachment_count?: number;
+                                    current_version_info?: { file_mime_type?: string; file_name?: string; file_size?: number } | null;
+                                }>(`/materials/${matId}`).catch(() => null),
+                                apiFetch<Array<{
+                                    id: string;
+                                    title: string;
+                                    type: string;
+                                    current_version_info?: { file_mime_type?: string; file_name?: string; file_size?: number } | null;
+                                }>>(`/materials/${matId}/attachments`).catch(() => []),
+                            ]);
+                            if (cancelled) return;
 
-                        const srcInfo = await resolveDirectoryPath(mat.directory_id, allOperations, t("root"));
-                        if (cancelled) return;
+                            if (mat) {
+                                const srcInfo = await resolveDirectoryPath(mat.directory_id, allOperations, t("root"));
+                                if (cancelled) return;
 
-                        setItemDetails({
-                            itemName: mat.title,
-                            itemType: mat.type,
-                            materialId: matId,
-                            fileName: mat.current_version_info?.file_name ?? undefined,
-                            fileSize: typeof mat.current_version_info?.file_size === "number" ? mat.current_version_info.file_size : undefined,
-                            mimeType: mat.current_version_info?.file_mime_type ?? undefined,
-                            tags: mat.tags,
-                            description: mat.description ?? undefined,
-                            metadata: mat.metadata,
-                            sourcePath: srcInfo.label,
-                            sourceUrl: srcInfo.url,
-                            sourceSegments: srcInfo.segments,
-                        });
+                                const matTargetUrl = String((mat.metadata as Record<string, unknown> | undefined)?.url || "").trim();
+
+                                setItemDetails({
+                                    itemName: mat.title,
+                                    itemType: mat.type,
+                                    materialId: matId,
+                                    fileName: mat.current_version_info?.file_name ?? undefined,
+                                    fileSize: typeof mat.current_version_info?.file_size === "number" ? mat.current_version_info.file_size : undefined,
+                                    mimeType: mat.current_version_info?.file_mime_type ?? undefined,
+                                    tags: mat.tags,
+                                    description: mat.description ?? undefined,
+                                    metadata: mat.metadata,
+                                    targetUrl: matTargetUrl,
+                                    attachmentCount: mat.attachment_count || (matAttachments?.length ?? 0),
+                                    attachments: matAttachments?.map((a) => ({
+                                        title: a.title,
+                                        type: a.type,
+                                        file_name: a.current_version_info?.file_name,
+                                        file_size: a.current_version_info?.file_size,
+                                        file_mime_type: a.current_version_info?.file_mime_type,
+                                        material_id: a.id,
+                                    })) ?? [],
+                                    sourcePath: srcInfo.label,
+                                    sourceUrl: srcInfo.url,
+                                    sourceSegments: srcInfo.segments,
+                                });
+                            }
+                        } catch (e) {
+                            console.error("Failed to load material details for PR", e);
+                        }
                     }
                     return;
                 }
@@ -648,13 +685,13 @@ function OperationRow({
     // Primary effective name
     const effectiveName = isRename
         ? newTitle
-        : (itemDetails?.itemName || String(rawOp.title || rawOp.name || rawOp.target_title || rawOp.target_name || (isDirectoryOp ? t("labels.create_directory") : isLink ? t("labels.create_link") : t("labels.create_material"))));
+        : (itemDetails?.itemName || String(rawOp.title || rawOp.name || rawOp.target_title || rawOp.target_name || (isDirectoryOp ? (opType.includes("delete") ? t("labels.delete_directory") : t("labels.create_directory")) : isLink ? (opType.includes("delete") ? t("labels.delete_link") : t("labels.create_link")) : (opType.includes("delete") ? t("labels.delete_material") : t("labels.create_material")))));
 
     // File metadata
-    const activeFileName = newFileName || oldFileName || (rawOp.file_name ? String(rawOp.file_name) : undefined);
-    const activeFileSize = typeof newFileSize === "number" ? newFileSize : (typeof oldFileSize === "number" ? oldFileSize : (typeof rawOp.file_size === "number" ? rawOp.file_size : undefined));
+    const activeFileName = newFileName || oldFileName || itemDetails?.fileName || (rawOp.file_name ? String(rawOp.file_name) : undefined);
+    const activeFileSize = typeof newFileSize === "number" ? newFileSize : (typeof oldFileSize === "number" ? oldFileSize : (typeof itemDetails?.fileSize === "number" ? itemDetails.fileSize : (typeof rawOp.file_size === "number" ? rawOp.file_size : undefined)));
     const activeMimeType = rawOp.file_mime_type ? String(rawOp.file_mime_type) : itemDetails?.mimeType;
-    const activeMaterialType = newType || oldType || (rawOp.type ? String(rawOp.type) : undefined);
+    const activeMaterialType = newType || oldType || itemDetails?.itemType || (rawOp.type ? String(rawOp.type) : undefined);
 
     const hasPreview = Boolean(
         rawOp.file_key ||
@@ -663,7 +700,9 @@ function OperationRow({
         rawOp.target_type === "material",
     );
 
-    const attachments = Array.isArray(rawOp.attachments) ? rawOp.attachments : [];
+    const attachments = (Array.isArray(rawOp.attachments) && rawOp.attachments.length > 0)
+        ? rawOp.attachments
+        : (itemDetails?.attachments || []);
     const diffSummary = "diff_summary" in op ? (rawOp.diff_summary as string | null) : null;
 
     return (
@@ -872,14 +911,19 @@ function OperationRow({
                                 />
 
                                 <div className="space-y-1.5 min-w-0 flex-1 text-xs">
+                                    <div>
+                                        <span className="text-muted-foreground block text-[10px] uppercase font-semibold">{t("fieldTitle")}</span>
+                                        <p className="font-semibold text-xs text-foreground truncate" title={effectiveName}>{effectiveName}</p>
+                                    </div>
+
                                     {activeFileName && !isDirectoryOp && !isLink && (
                                         <div>
                                             <span className="text-muted-foreground block text-[10px]">{t("fieldFileName")}</span>
-                                            <p className="font-mono text-xs break-all font-medium">{activeFileName}</p>
+                                            <p className="font-mono text-xs break-all font-medium text-muted-foreground">{activeFileName}</p>
                                         </div>
                                     )}
 
-                                    <div className="flex items-center gap-2 flex-wrap">
+                                    <div className="flex items-center gap-2 flex-wrap pt-0.5">
                                         {activeFileName && !isDirectoryOp && !isLink && (
                                             <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase ${getFileBadgeColor(activeFileName)}`}>
                                                 {getFileBadgeLabel(activeFileName, activeMimeType ?? undefined)}
@@ -939,18 +983,16 @@ function OperationRow({
                                         {t("quickPreview")}
                                     </Button>
 
-                                    {!opType.includes("delete") && (
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            className="h-7 text-xs px-2"
-                                            asChild
-                                        >
-                                            <Link href={`/pull-requests/${prId}/preview/${index}`} title={t("openFullPreview")}>
-                                                <ExternalLink className="h-3.5 w-3.5" />
-                                            </Link>
-                                        </Button>
-                                    )}
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-7 text-xs px-2"
+                                        asChild
+                                    >
+                                        <Link href={`/pull-requests/${prId}/preview/${index}`} title={t("openFullPreview")}>
+                                            <ExternalLink className="h-3.5 w-3.5" />
+                                        </Link>
+                                    </Button>
                                 </div>
                             )}
                         </div>
@@ -987,83 +1029,124 @@ function OperationRow({
                                 </div>
                             )}
 
-                            {/* Modifications / Renames / Field Changes */}
-                            <div className="pt-2 border-t border-border/50 space-y-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                                    {t("modifications")}
-                                </span>
+                            {/* Deletion details or Modifications */}
+                            {opType.includes("delete") ? (
+                                <div className="pt-2 border-t border-border/50 space-y-2">
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                        {t("deletedItemDetails")}
+                                    </span>
 
-                                {/* Rename diff */}
-                                {isRename && (
-                                    <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
-                                        <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("rename")}:</span>
-                                        <span className="line-through text-red-600/80 dark:text-red-400/80 font-mono">{oldTitle}</span>
-                                        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
-                                        <span className="text-green-600 dark:text-green-400 font-mono font-semibold">{newTitle}</span>
-                                    </div>
-                                )}
+                                    {/* Description */}
+                                    {Boolean(itemDetails?.description || rawOp.description) && (
+                                        <div className="text-xs space-y-0.5">
+                                            <span className="text-[10px] text-muted-foreground uppercase font-semibold block">
+                                                {t("fieldDescription")}
+                                            </span>
+                                            <ExpandableText text={String(itemDetails?.description || rawOp.description)} clampedLines={2} className="text-xs text-muted-foreground" />
+                                        </div>
+                                    )}
 
-                                {/* File replacement diff */}
-                                {isFileReplaced && (
-                                    <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
-                                        <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("fileReplaced")}:</span>
-                                        <span className="line-through text-red-600/80 dark:text-red-400/80 font-mono">
-                                            {oldFileName} {typeof oldFileSize === "number" && `(${formatFileSize(oldFileSize)})`}
-                                        </span>
-                                        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
-                                        <span className="text-green-600 dark:text-green-400 font-mono font-semibold">
-                                            {newFileName} {typeof newFileSize === "number" && `(${formatFileSize(newFileSize)})`}
-                                        </span>
-                                    </div>
-                                )}
+                                    {/* Tags */}
+                                    {Boolean((itemDetails?.tags && itemDetails.tags.length > 0) || (Array.isArray(rawOp.tags) && rawOp.tags.length > 0)) && (
+                                        <div className="flex items-center gap-1.5 flex-wrap text-xs pt-0.5">
+                                            <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
+                                            <span className="text-muted-foreground text-[11px]">{t("fieldTags")}:</span>
+                                            {((itemDetails?.tags && itemDetails.tags.length > 0 ? itemDetails.tags : (rawOp.tags as string[])) || []).map((tag) => (
+                                                <Badge key={tag} variant="secondary" className="text-[10px] font-normal">
+                                                    {tag}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    )}
 
-                                {/* Type adjustment diff */}
-                                {isTypeChanged && (
-                                    <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
-                                        <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("fieldType")}:</span>
-                                        <Badge variant="outline" className="line-through opacity-70 text-xs">
-                                            {oldType ? String(mt.has?.(oldType as any) ? mt(oldType as any) : oldType) : "—"}
-                                        </Badge>
-                                        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
-                                        <Badge variant="secondary" className="text-xs font-semibold">
-                                            {newType ? String(mt.has?.(newType as any) ? mt(newType as any) : newType) : "—"}
-                                        </Badge>
-                                    </div>
-                                )}
+                                    {/* Cascade attachments note */}
+                                    {Boolean(itemDetails?.attachmentCount && itemDetails.attachmentCount > 0) && (
+                                        <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 p-2 rounded-md border border-amber-500/20">
+                                            <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                                            <span>
+                                                {t("deletedAttachmentsCount", { count: itemDetails?.attachmentCount || 0 })}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="pt-2 border-t border-border/50 space-y-2">
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                        {t("modifications")}
+                                    </span>
 
-                                {/* Tags changes */}
-                                {(tagsAdded.length > 0 || tagsRemoved.length > 0 || (newTags && newTags.length > 0)) && (
-                                    <div className="flex items-center gap-1.5 flex-wrap text-xs pt-1">
-                                        <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
-                                        <span className="text-muted-foreground text-[11px]">{t("fieldTags")}:</span>
-                                        {tagsAdded.map((tag) => (
-                                            <Badge key={tag} className="bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 text-[10px] font-normal">
-                                                +{tag}
+                                    {/* Rename diff */}
+                                    {isRename && (
+                                        <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
+                                            <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("rename")}:</span>
+                                            <span className="line-through text-red-600/80 dark:text-red-400/80 font-mono">{oldTitle}</span>
+                                            <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                            <span className="text-green-600 dark:text-green-400 font-mono font-semibold">{newTitle}</span>
+                                        </div>
+                                    )}
+
+                                    {/* File replacement diff */}
+                                    {isFileReplaced && (
+                                        <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
+                                            <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("fileReplaced")}:</span>
+                                            <span className="line-through text-red-600/80 dark:text-red-400/80 font-mono">
+                                                {oldFileName} {typeof oldFileSize === "number" && `(${formatFileSize(oldFileSize)})`}
+                                            </span>
+                                            <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                            <span className="text-green-600 dark:text-green-400 font-mono font-semibold">
+                                                {newFileName} {typeof newFileSize === "number" && `(${formatFileSize(newFileSize)})`}
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {/* Type adjustment diff */}
+                                    {isTypeChanged && (
+                                        <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
+                                            <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("fieldType")}:</span>
+                                            <Badge variant="outline" className="line-through opacity-70 text-xs">
+                                                {oldType ? String(mt.has?.(oldType as any) ? mt(oldType as any) : oldType) : "—"}
                                             </Badge>
-                                        ))}
-                                        {tagsRemoved.map((tag) => (
-                                            <Badge key={tag} variant="outline" className="line-through text-red-600 border-red-200 text-[10px] font-normal">
-                                                -{tag}
+                                            <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                            <Badge variant="secondary" className="text-xs font-semibold">
+                                                {newType ? String(mt.has?.(newType as any) ? mt(newType as any) : newType) : "—"}
                                             </Badge>
-                                        ))}
-                                        {tagsAdded.length === 0 && tagsRemoved.length === 0 && newTags?.map((tag) => (
-                                            <Badge key={tag} variant="secondary" className="text-[10px] font-normal">
-                                                {tag}
-                                            </Badge>
-                                        ))}
-                                    </div>
-                                )}
+                                        </div>
+                                    )}
 
-                                {/* Description */}
-                                {Boolean(rawOp.description) && (
-                                    <div className="pt-1 text-xs">
-                                        <span className="text-[10px] text-muted-foreground uppercase font-semibold block mb-0.5">
-                                            {t("fieldDescription")}
-                                        </span>
-                                        <ExpandableText text={String(rawOp.description)} clampedLines={2} className="text-xs text-muted-foreground" />
-                                    </div>
-                                )}
-                            </div>
+                                    {/* Tags changes */}
+                                    {(tagsAdded.length > 0 || tagsRemoved.length > 0 || (newTags && newTags.length > 0)) && (
+                                        <div className="flex items-center gap-1.5 flex-wrap text-xs pt-1">
+                                            <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
+                                            <span className="text-muted-foreground text-[11px]">{t("fieldTags")}:</span>
+                                            {tagsAdded.map((tag) => (
+                                                <Badge key={tag} className="bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 text-[10px] font-normal">
+                                                    +{tag}
+                                                </Badge>
+                                            ))}
+                                            {tagsRemoved.map((tag) => (
+                                                <Badge key={tag} variant="outline" className="line-through text-red-600 border-red-200 text-[10px] font-normal">
+                                                    -{tag}
+                                                </Badge>
+                                            ))}
+                                            {tagsAdded.length === 0 && tagsRemoved.length === 0 && newTags?.map((tag) => (
+                                                <Badge key={tag} variant="secondary" className="text-[10px] font-normal">
+                                                    {tag}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* Description */}
+                                    {Boolean(rawOp.description) && (
+                                        <div className="pt-1 text-xs">
+                                            <span className="text-[10px] text-muted-foreground uppercase font-semibold block mb-0.5">
+                                                {t("fieldDescription")}
+                                            </span>
+                                            <ExpandableText text={String(rawOp.description)} clampedLines={2} className="text-xs text-muted-foreground" />
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -1086,6 +1169,7 @@ function OperationRow({
                                             mimeType={att.file_mime_type}
                                             materialType={att.type}
                                             stagedFileKey={att.file_key}
+                                            materialId={att.material_id}
                                         />
                                         <div className="min-w-0 flex-1">
                                             <p className="font-medium truncate">{att.title}</p>
