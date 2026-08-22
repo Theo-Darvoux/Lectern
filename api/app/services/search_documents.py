@@ -55,6 +55,7 @@ def build_material_search_document(
         "file_name": file_name,
         "file_mime_type": file_mime_type,
         "url": str((material.metadata_ or {}).get("url") or ""),
+        "metadata": material.metadata_ or {},
     }
 
 
@@ -90,4 +91,5 @@ def build_directory_search_document(
         "extra_searchable": extra,
         "browse_path": browse_path,
         "like_count": directory.like_count,
+        "metadata": metadata,
     }

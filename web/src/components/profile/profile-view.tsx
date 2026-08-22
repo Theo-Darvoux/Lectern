@@ -369,7 +369,7 @@ export function ProfileView({
   ];
 
   return (
-    <div className="min-h-full w-full bg-background" data-profile-page>
+    <div className="min-h-full w-full" data-profile-page>
       <div className="mx-auto w-full max-w-6xl space-y-5 p-4 pb-24 sm:p-6 md:pb-8 lg:p-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>

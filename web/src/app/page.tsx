@@ -104,6 +104,18 @@ export default function HomePage() {
             </div>
           )}
 
+          {/* ── Discovery / Featured ─────────────────────────── */}
+          {isLoading && !data ? (
+            <div>
+              <Skeleton className="mb-4 h-6 w-32" />
+              <Skeleton className="h-48 w-full rounded-xl sm:h-56" />
+            </div>
+          ) : (
+            data?.featured &&
+            data.featured.length > 0 && <FeaturedSection items={data.featured} />
+          )}
+
+          {/* ── Continue / Recently Viewed ─────────────────────── */}
           {showContinue && (
             <MaterialGridSection
               title={t("continueTitle")}
@@ -116,17 +128,6 @@ export default function HomePage() {
               emptyIcon={<History className="h-8 w-8 text-muted-foreground/30" />}
               maxCards={4}
             />
-          )}
-
-          {/* ── Discovery ─────────────────────────────────────── */}
-          {isLoading && !data ? (
-            <div>
-              <Skeleton className="mb-4 h-6 w-32" />
-              <Skeleton className="h-48 w-full rounded-xl sm:h-56" />
-            </div>
-          ) : (
-            data?.featured &&
-            data.featured.length > 0 && <FeaturedSection items={data.featured} />
           )}
 
           {/* ── Dashboard grid ────────────────────────────────── */}

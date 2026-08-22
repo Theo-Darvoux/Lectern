@@ -7,6 +7,7 @@ import {
   buildSearchPath,
   getSearchErrorMessageKey,
   useSearch,
+  type SearchOptions,
   type SearchResponse,
 } from "./use-search";
 
@@ -45,25 +46,25 @@ function response(title: string): SearchResponse {
   };
 }
 
-function renderSearch(initialQuery = "") {
+function renderSearch(initialQuery = "", initialOptions: SearchOptions = {}) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root: Root = createRoot(container);
   let latest: ReturnType<typeof useSearch> | undefined;
 
-  function Harness({ query }: { query: string }) {
-    const value = useSearch(query);
+  function Harness({ query, options }: { query: string; options?: SearchOptions }) {
+    const value = useSearch(query, options);
     React.useEffect(() => {
       latest = value;
     }, [value]);
     return null;
   }
 
-  const render = (query: string) => {
-    act(() => root.render(<Harness query={query} />));
+  const render = (query: string, options?: SearchOptions) => {
+    act(() => root.render(<Harness query={query} options={options} />));
   };
 
-  render(initialQuery);
+  render(initialQuery, initialOptions);
   return {
     get current() {
       if (!latest) throw new Error("Search hook did not render");
@@ -217,5 +218,39 @@ describe("useSearch", () => {
     expect(getSearchErrorMessageKey(new Error("offline"))).toBe(
       "searchUnavailableDescription",
     );
+  });
+
+  it("preserves previous results while fetching updated filters or pages to prevent flickering", async () => {
+    vi.mocked(apiFetch).mockResolvedValueOnce(response("Algebra 1"));
+    const hook = renderSearch("algebra", { kind: "material" });
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(hook.current.results[0]?.title).toBe("Algebra 1");
+
+    const deferredSecond = deferred<SearchResponse>();
+    vi.mocked(apiFetch).mockReturnValueOnce(deferredSecond.promise);
+
+    // Update filter from 'material' to 'directory'
+    hook.render("algebra", { kind: "directory" });
+
+    // Existing results should still be present while loading the new filter request
+    expect(hook.current.status).toBe("loading");
+    expect(hook.current.results.length).toBe(1);
+    expect(hook.current.results[0]?.title).toBe("Algebra 1");
+
+    // Once resolved, results are updated to new data
+    await act(async () => {
+      deferredSecond.resolve(response("Algebra Folder"));
+      await deferredSecond.promise;
+    });
+
+    expect(hook.current.status).toBe("success");
+    expect(hook.current.results[0]?.title).toBe("Algebra Folder");
+    hook.cleanup();
   });
 });

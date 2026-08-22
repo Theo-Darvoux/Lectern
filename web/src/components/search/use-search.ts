@@ -23,6 +23,8 @@ export interface SearchResult {
     matched_field?: "file_name" | "tag" | "author" | "description" | "path" | "code";
     url?: string;
     metadata?: Record<string, unknown>;
+    directory_id?: string | null;
+    slug?: string;
 }
 
 export interface SearchResponse {
@@ -135,8 +137,6 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
         let isMounted = true;
         const controller = new AbortController();
         requestControllerRef.current = controller;
-        setResults([]);
-        setTotal(0);
         setError(null);
         setStatus("loading");
 

@@ -85,7 +85,7 @@ export function LeaderboardPage() {
   };
 
   return (
-    <main className="min-h-full bg-background px-4 py-6 pb-24 sm:px-6 sm:py-8 sm:pb-10 lg:px-8">
+    <main className="min-h-full px-4 py-6 pb-24 sm:px-6 sm:py-8 sm:pb-10 lg:px-8">
       <div className="mx-auto w-full max-w-5xl space-y-6">
         <section className="relative overflow-hidden rounded-3xl border bg-card p-5 shadow-sm sm:p-8">
           <div className="pointer-events-none absolute inset-0 bg-linear-to-br from-amber-500/14 via-transparent to-violet-500/8" />

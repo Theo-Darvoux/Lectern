@@ -150,7 +150,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="min-h-full w-full bg-background">
+    <div className="min-h-full w-full">
       <div className="mx-auto w-full max-w-6xl p-4 pb-24 sm:p-6 md:pb-8 lg:p-8">
         <header className="flex flex-col gap-5 border-b pb-6 sm:flex-row sm:items-end sm:justify-between">
           <div>

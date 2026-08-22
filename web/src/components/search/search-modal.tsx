@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import {
   AlertCircle,
   ArrowRight,
   FileTextIcon,
-  FolderIcon,
   Loader2,
   SearchIcon,
 } from "lucide-react";
@@ -24,10 +24,18 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { useExternalLinkStore } from "@/lib/external-link-store";
-import { getFileBadgeColor, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
-import { EXT_ICONS, TYPE_ICONS } from "@/lib/material-icons";
+import { getFileBadgeLabel } from "@/lib/file-utils";
+import { getDirectoryIcon } from "@/lib/directory-icons";
+import { getDirectoryColor } from "@/lib/directory-colors";
 import { cn } from "@/lib/utils";
-import { useUIStore } from "@/lib/stores";
+import {
+  selectDirectoryColorOverride,
+  selectDirectoryIconOverride,
+  useDirectoryColorOverrides,
+  useDirectoryIconOverrides,
+  useUIStore,
+} from "@/lib/stores";
+import type { MaterialDetail } from "@/components/home/types";
 import {
   getSearchErrorMessageKey,
   useSearch,
@@ -36,16 +44,102 @@ import {
 } from "./use-search";
 import { SearchKindControls, type SearchKindFilter } from "./search-kind-controls";
 
+const MaterialPreview = dynamic(
+  () => import("@/components/home/material-preview").then((module) => module.MaterialPreview),
+  { ssr: false },
+);
+
+export function SearchResultThumbnail({ result }: { result: SearchResult }) {
+  const isDirectory = result.search_type === "directory";
+
+  const iconOverride = useDirectoryIconOverrides(selectDirectoryIconOverride(result.id));
+  const colorOverride = useDirectoryColorOverrides(selectDirectoryColorOverride(result.id));
+  const rawIconId = result.metadata?.thumbnail_icon ? String(result.metadata.thumbnail_icon) : null;
+  const rawColorId = result.metadata?.thumbnail_color ? String(result.metadata.thumbnail_color) : null;
+  const thumbnailIconId = iconOverride !== undefined ? iconOverride : rawIconId;
+  const thumbnailColorId = colorOverride !== undefined ? colorOverride : rawColorId;
+  const { Icon: DirThumbnailIcon } = getDirectoryIcon(thumbnailIconId);
+  const dirColor = getDirectoryColor(thumbnailColorId);
+
+  const materialPreviewData = React.useMemo((): MaterialDetail | null => {
+    if (isDirectory) return null;
+    return {
+      id: result.id,
+      directory_id: result.directory_id ?? null,
+      directory_path: null,
+      title: result.title || result.file_name || result.name || "",
+      slug: result.slug || "",
+      description: result.description || null,
+      type: result.type || "document",
+      current_version: 1,
+      parent_material_id: null,
+      author_id: null,
+      metadata: {
+        url: result.url || (result.metadata?.url as string | undefined),
+        link: (result.metadata?.link as string | undefined),
+        ...(result.metadata || {}),
+      },
+      download_count: 0,
+      total_views: result.total_views || 0,
+      views_today: result.views_today || 0,
+      like_count: result.like_count || 0,
+      is_liked: !!result.is_liked,
+      is_favourited: false,
+      attachment_count: 0,
+      tags: result.tags || [],
+      created_at: "",
+      updated_at: "",
+      current_version_info: {
+        id: "",
+        material_id: result.id,
+        version_number: 1,
+        file_key: null,
+        file_name: result.file_name || result.title || null,
+        file_size: null,
+        file_mime_type: result.file_mime_type || null,
+        diff_summary: null,
+        author_id: null,
+        pr_id: null,
+        virus_scan_result: "clean",
+        created_at: "",
+      },
+    };
+  }, [isDirectory, result]);
+
+  if (isDirectory) {
+    return (
+      <div className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/50">
+        <div
+          className={cn(
+            "flex h-full w-full items-center justify-center bg-linear-to-br",
+            dirColor.gradient,
+          )}
+        >
+          <DirThumbnailIcon className={cn("size-5", dirColor.iconClass)} />
+        </div>
+      </div>
+    );
+  }
+
+  if (materialPreviewData) {
+    return (
+      <div className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/50">
+        <MaterialPreview material={materialPreviewData} lazy className="h-full w-full" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/50">
+      <FileTextIcon className="size-5 text-muted-foreground/70" />
+    </div>
+  );
+}
+
 export function SearchResultRow({ result }: { result: SearchResult }) {
   const t = useTranslations("Search");
   const isDirectory = result.search_type === "directory";
   const title = result.title || result.name || result.file_name || t("untitled");
-  const extension = getFileExtension(result.file_name || title);
-  let Icon: React.ElementType = isDirectory ? FolderIcon : FileTextIcon;
-  if (!isDirectory) {
-    if (result.type && TYPE_ICONS[result.type]) Icon = TYPE_ICONS[result.type];
-    else if (extension && EXT_ICONS[extension]) Icon = EXT_ICONS[extension];
-  }
   const fileBadge = isDirectory
     ? null
     : getFileBadgeLabel(result.file_name || title, result.file_mime_type);
@@ -53,16 +147,7 @@ export function SearchResultRow({ result }: { result: SearchResult }) {
 
   return (
     <>
-      <div
-        className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-lg",
-          isDirectory
-            ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-            : "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-        )}
-      >
-        <Icon className="size-4" />
-      </div>
+      <SearchResultThumbnail result={result} />
       <div className="min-w-0 flex-1 py-0.5">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate font-medium">{title}</span>

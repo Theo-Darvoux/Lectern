@@ -61,7 +61,7 @@ export function FeaturedItemSearch({
   };
 
   return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
+    <Popover modal={true} open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"

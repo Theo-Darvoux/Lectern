@@ -118,7 +118,7 @@ function SidebarContent() {
             value="details"
             className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
           >
-            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar">
               <DetailsTab target={sidebarTarget} />
             </div>
           </TabsContent>
@@ -134,16 +134,14 @@ function SidebarContent() {
             value="annotations"
             className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
           >
-            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-              <AnnotationsTab target={sidebarTarget} disabled={isRestricted} />
-            </div>
+            <AnnotationsTab target={sidebarTarget} disabled={isRestricted} />
           </TabsContent>
 
           <TabsContent
             value="edits"
             className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden"
           >
-            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar">
               <EditsTab target={sidebarTarget} />
             </div>
           </TabsContent>
@@ -188,11 +186,9 @@ export function SharedSidebar() {
   // Mobile: Drawer for native feel and swipe-to-dismiss
   return (
     <Drawer open={sidebarOpen} onOpenChange={(o) => !o && closeSidebar()}>
-      <DrawerContent className="h-[90dvh] pb-0 outline-none overflow-hidden">
+      <DrawerContent className="h-[90dvh] max-h-[90dvh] pb-0 outline-none overflow-hidden">
         <DrawerTitle className="sr-only">{t("itemInspector")}</DrawerTitle>
-        <div className="flex-1 overflow-hidden">
-          <SidebarContent />
-        </div>
+        <SidebarContent />
       </DrawerContent>
     </Drawer>
   );

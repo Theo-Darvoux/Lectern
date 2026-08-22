@@ -87,7 +87,8 @@ describe("ProfileView layout", () => {
     const activity = container.querySelector<HTMLElement>("[data-profile-activity]");
     const avatarControl = container.querySelector<HTMLElement>("[data-avatar-upload-control]");
 
-    expect(page?.className).toContain("bg-background");
+    expect(page).not.toBeNull();
+    expect(page?.className).not.toContain("bg-background");
     expect(avatarControl?.className).toContain("rounded-full");
     expect(avatarControl?.className).not.toContain("inset-1");
     expect(activity?.className).not.toContain("bg-card");
