@@ -7,7 +7,10 @@ import type { PullRequestOut } from "@/components/home/types";
 
 vi.mock("next-intl", () => {
   const translate = (key: string) => key;
-  return { useTranslations: () => translate };
+  return {
+    useTranslations: () => translate,
+    useLocale: () => "en",
+  };
 });
 vi.mock("@/lib/api-client", () => ({ apiFetchWithResponse: vi.fn() }));
 vi.mock("@/lib/sse-client", () => ({
@@ -15,6 +18,10 @@ vi.mock("@/lib/sse-client", () => ({
 }));
 vi.mock("@/lib/stores", () => ({
   usePRStore: { getState: () => ({ setOpenPRCount: vi.fn() }) },
+  useAuthStore: (selector: (state: { user: null; isAuthenticated: boolean }) => unknown) =>
+    typeof selector === "function"
+      ? selector({ user: null, isAuthenticated: false })
+      : { user: null, isAuthenticated: false },
 }));
 vi.mock("./pr-card", () => ({
   PRCard: ({ pr }: { pr: PullRequestOut }) => <article>{pr.title}</article>,
@@ -22,7 +29,7 @@ vi.mock("./pr-card", () => ({
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const pr = (title: string) => ({ id: title, title }) as PullRequestOut;
+const pr = (title: string, id = title) => ({ id, title, type: "create_material", created_at: new Date().toISOString() }) as PullRequestOut;
 const result = (data: PullRequestOut[], total = data.length) => ({
   data,
   response: new Response(null, { headers: { "X-Total-Count": String(total) } }),
@@ -76,5 +83,43 @@ describe("PRList", () => {
       await approved;
     });
     expect(container.textContent).toContain("Approved contribution");
+  });
+
+  it("filters contributions by search query", async () => {
+    vi.mocked(apiFetchWithResponse).mockImplementation((url) => {
+      const path = String(url);
+      if (path.includes("limit=1")) return Promise.resolve(result([])) as never;
+      return Promise.resolve(
+        result([
+          pr("Mathematics Exam 2024", "pr-1"),
+          pr("Physics Lecture Notes", "pr-2"),
+        ]),
+      ) as never;
+    });
+
+    await act(async () => {
+      root.render(<PRList />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.textContent).toContain("Mathematics Exam 2024");
+    expect(container.textContent).toContain("Physics Lecture Notes");
+
+    const searchInput = container.querySelector("input[type='text']") as HTMLInputElement;
+    expect(searchInput).not.toBeNull();
+
+    await act(async () => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      nativeSetter?.call(searchInput, "Physics");
+      searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+      searchInput.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.textContent).toContain("Physics Lecture Notes");
+    expect(container.textContent).not.toContain("Mathematics Exam 2024");
   });
 });

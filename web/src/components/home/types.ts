@@ -73,6 +73,8 @@ export interface PullRequestOut {
     description: string | null;
     author: { id: string; display_name: string | null; avatar_url: string | null } | null;
     created_at: string;
+    updated_at?: string;
+    approved_at?: string | null;
     summary_types?: string[];
     virus_scan_result?: string;
     reverted_by_pr_id?: string | null;
