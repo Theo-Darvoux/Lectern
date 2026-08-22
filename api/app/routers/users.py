@@ -268,7 +268,7 @@ async def get_contributions(
         dir_ids = {
             ann.material.directory_id
             for ann in annotations_list
-            if ann.material and ann.material.directory_id is not None
+            if ann.material is not None and ann.material.directory_id is not None
         }
         directory_paths = await get_directory_paths(db, dir_ids)
 
@@ -288,16 +288,20 @@ async def get_contributions(
         elif type == "annotations":
             ann = cast(Annotation, item)
             mat = ann.material
-            dir_path = directory_paths.get(mat.directory_id) if mat and mat.directory_id else None
+            dir_path = (
+                directory_paths.get(mat.directory_id)
+                if mat is not None and mat.directory_id is not None
+                else None
+            )
             serialized_items.append(
                 PublicAnnotationContribution(
                     id=ann.id,
                     material_id=ann.material_id,
-                    material_title=mat.title if mat else None,
-                    material_slug=mat.slug if mat else None,
+                    material_title=mat.title if mat is not None else None,
+                    material_slug=mat.slug if mat is not None else None,
                     directory_path=dir_path,
                     body=ann.body,
-                    author=PublicUserBrief.model_validate(ann.author) if ann.author else None,
+                    author=PublicUserBrief.model_validate(ann.author) if ann.author is not None else None,
                     created_at=ann.created_at,
                     updated_at=ann.updated_at,
                 )
