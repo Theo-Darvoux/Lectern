@@ -1,29 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, ChevronsUpDown, Loader2, Folder, FileText } from "lucide-react";
-import { TYPE_ICONS, EXT_ICONS } from "@/lib/material-icons";
-import { getFileExtension } from "@/lib/file-utils";
+import { ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import {
   Command,
-  CommandEmpty,
-  CommandGroup,
   CommandInput,
-  CommandItem,
-  CommandList,
 } from "@/components/ui/command";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
-import { useSearch } from "@/components/search/use-search";
+import { useSearch, type SearchKind } from "@/components/search/use-search";
+import { SearchList } from "@/components/search/search-modal";
+import { SearchKindControls } from "@/components/search/search-kind-controls";
 import {
   Dialog,
   DialogContent,
@@ -43,31 +37,41 @@ function toLocalDateInput(isoString?: string | Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function ItemSearch({
+export function FeaturedItemSearch({
   onSelect,
-  selectedId,
   selectedTitle,
 }: {
   onSelect: (id: string, title: string, type: "material" | "directory", path: string) => void;
-  selectedId: string;
   selectedTitle: string;
 }) {
-  const t = useTranslations("Moderator.featured");
+  const searchT = useTranslations("Search");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const { results, loading } = useSearch(query);
+  const [kind, setKind] = useState<SearchKind | "all">("all");
+  const { results, total, status, error, retry } = useSearch(query, {
+    kind: kind === "all" ? undefined : kind,
+  });
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      setQuery("");
+      setKind("all");
+    }
+  };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
+          id="featured-item-search"
           role="combobox"
           aria-expanded={open}
           className="w-full justify-between font-normal h-10 px-3"
         >
           <span className="truncate">
-            {selectedTitle || <span className="text-muted-foreground">{t("dialog.searchPlaceholder")}</span>}
+            {selectedTitle || <span className="text-muted-foreground">{searchT("searchMaterialsDirs")}</span>}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
@@ -75,67 +79,30 @@ function ItemSearch({
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 overflow-hidden flex flex-col" align="start">
         <Command shouldFilter={false} className="flex flex-col">
           <CommandInput
-            placeholder={t("dialog.searchPlaceholder")}
+            placeholder={searchT("searchMaterialsDirs")}
             value={query}
             onValueChange={setQuery}
+            maxLength={200}
           />
-          <CommandList className="max-h-[240px] overflow-y-auto" onWheel={(e) => e.stopPropagation()}>
-            {loading && (
-              <div className="flex items-center justify-center py-6">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                <span className="ml-2 text-sm text-muted-foreground">{t("dialog.searchPlaceholder")}</span>
-              </div>
-            )}
-            {!loading && results.length === 0 && query.length > 0 && <CommandEmpty>{t("dialog.noResults")}</CommandEmpty>}
-            {!loading && results.length === 0 && query.length === 0 && <CommandEmpty className="py-6 text-muted-foreground">{t("dialog.startTyping")}</CommandEmpty>}
-            <CommandGroup>
-              {results.map((result) => {
-                const title = result.title || result.name || result.file_name || "Untitled";
-                const isDir = result.search_type === "directory";
-                const extension = getFileExtension(title) || (result.browse_path ? getFileExtension(result.browse_path) : "");
-
-                let Icon: React.ElementType = isDir ? Folder : FileText;
-                if (!isDir) {
-                  if (result.type && TYPE_ICONS[result.type]) {
-                    Icon = TYPE_ICONS[result.type];
-                  } else if (extension && EXT_ICONS[extension]) {
-                    Icon = EXT_ICONS[extension];
-                  }
-                }
-
-                const pathDisplay = result.browse_path ? result.browse_path.replace(/^\/browse/, "") || "/" : "/";
-
-                return (
-                  <CommandItem
-                    key={result.id}
-                    value={result.id}
-                    onSelect={() => {
-                      onSelect(result.id, title, result.search_type, pathDisplay);
-                      setOpen(false);
-                    }}
-                    className="flex items-center gap-2 cursor-pointer"
-                  >
-                    <Check
-                      className={cn(
-                        "mr-2 h-4 w-4 shrink-0",
-                        selectedId === result.id ? "opacity-100" : "opacity-0"
-                      )}
-                    />
-                    <Icon className={cn("h-4 w-4 shrink-0", isDir ? "text-primary" : "text-blue-500")} />
-                    <div className="flex flex-col overflow-hidden flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-medium truncate">{title}</span>
-                        <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
-                          {isDir ? "Folder" : "File"}
-                        </Badge>
-                      </div>
-                      <span className="text-[10px] text-muted-foreground font-mono truncate">{pathDisplay}</span>
-                    </div>
-                  </CommandItem>
-                );
-              })}
-            </CommandGroup>
-          </CommandList>
+          <SearchKindControls
+            value={kind}
+            onValueChange={setKind}
+            className="border-b px-3 py-2"
+          />
+          <SearchList
+            query={query}
+            status={status}
+            error={error}
+            retry={retry}
+            results={results}
+            total={total}
+            onSelect={(result) => {
+              const title = result.title || result.name || result.file_name || searchT("untitled");
+              const path = result.browse_path?.replace(/^\/browse/, "") || "/";
+              onSelect(result.id, title, result.search_type, path);
+              handleOpenChange(false);
+            }}
+          />
         </Command>
       </PopoverContent>
     </Popover>
@@ -277,8 +244,7 @@ export function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: A
         <div className="space-y-4 flex-1 overflow-y-auto min-h-0 pr-1 py-1">
           <div className="space-y-1.5">
             <Label htmlFor="item-search">Search file or folder <span className="text-destructive" aria-hidden>*</span></Label>
-            <ItemSearch
-              selectedId={itemId}
+            <FeaturedItemSearch
               selectedTitle={selectedTitle}
               onSelect={(id, title, type, path) => {
                 setItemId(id);

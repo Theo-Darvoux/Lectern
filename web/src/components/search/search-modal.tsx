@@ -31,12 +31,10 @@ import { useUIStore } from "@/lib/stores";
 import {
   getSearchErrorMessageKey,
   useSearch,
-  type SearchKind,
   type SearchResult,
   type SearchStatus,
 } from "./use-search";
-
-type KindFilter = SearchKind | "all";
+import { SearchKindControls, type SearchKindFilter } from "./search-kind-controls";
 
 export function SearchResultRow({ result }: { result: SearchResult }) {
   const t = useTranslations("Search");
@@ -177,7 +175,7 @@ export function SearchModal({
   const openLink = useExternalLinkStore((state) => state.openLink);
   const sidebarTarget = useUIStore((state) => state.sidebarTarget);
   const [query, setQuery] = React.useState("");
-  const [kind, setKind] = React.useState<KindFilter>("all");
+  const [kind, setKind] = React.useState<SearchKindFilter>("all");
   const [scope, setScope] = React.useState<"everywhere" | "current">("everywhere");
   const currentDirectory =
     pathname.startsWith("/browse") &&
@@ -251,20 +249,7 @@ export function SearchModal({
         maxLength={200}
       />
       <div className="flex items-center gap-1 border-b px-3 py-2">
-        <div className="flex items-center gap-1" role="group" aria-label={t("filterByKind")}>
-          {(["all", "material", "directory"] as const).map((value) => (
-            <Button
-              key={value}
-              type="button"
-              size="xs"
-              variant={kind === value ? "secondary" : "ghost"}
-              aria-pressed={kind === value}
-              onClick={() => setKind(value)}
-            >
-              {t(`kinds.${value}`)}
-            </Button>
-          ))}
-        </div>
+        <SearchKindControls value={kind} onValueChange={setKind} />
         {currentDirectory && (
           <div
             className="ml-auto flex items-center gap-1 border-l pl-2"
