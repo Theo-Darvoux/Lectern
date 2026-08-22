@@ -1,7 +1,5 @@
 "use client";
 
-
-
 import { useEffect, useState, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { apiFetch } from "@/lib/api-client";
@@ -27,14 +25,17 @@ import {
     ChevronsDownUp,
     ChevronsUpDown,
     AlertCircle,
-    Image as ImageIcon,
-    FileText,
-    Video,
     MapPin,
     ArrowRight,
     Inbox,
     Undo2,
     ShieldAlert,
+    FileText,
+    Paperclip,
+    Folder,
+    Sparkles,
+    AlertTriangle,
+    Tag,
 } from "lucide-react";
 import { isExternalUrl } from "@/lib/url-utils";
 import { Input } from "@/components/ui/input";
@@ -70,10 +71,14 @@ import { toast } from "sonner";
 import { useTranslations, useLocale } from "next-intl";
 import { fr, enUS } from "date-fns/locale";
 import { type Operation } from "@/lib/staging-store";
+import { PROperationThumbnail } from "./pr-operation-thumbnail";
+import { PRLocationBreadcrumb, PRMoveTransition, type PathSegment } from "./pr-location-breadcrumb";
+import { formatFileSize, getFileBadgeColor, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
+import { TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
 
 /* ── Types ──────────────────────────────────────────── */
 
-type PullRequestOperation = Operation & {
+export type PullRequestOperation = Operation & {
     result_browse_path?: string | null;
     pr_type?: string;
     target_title?: string;
@@ -88,8 +93,21 @@ type PullRequestOperation = Operation & {
     new_parent_id?: string | null;
     file_key?: string | null;
     file_name?: string | null;
+    file_size?: number | null;
     file_mime_type?: string | null;
     diff_summary?: string | null;
+    metadata?: Record<string, unknown>;
+    tags?: string[];
+    attachments?: Array<{
+        title: string;
+        type: string;
+        file_name?: string | null;
+        file_size?: number | null;
+        file_key?: string | null;
+        file_mime_type?: string | null;
+        tags?: string[];
+        metadata?: Record<string, unknown>;
+    }>;
 };
 
 interface PullRequestDetail {
@@ -154,8 +172,6 @@ const OP_LABELS_KEYS: Record<string, string> = {
     move_item: "labels.move_item",
 };
 
-const VISIBLE_FIELDS = new Set(["type", "tags", "description"]);
-
 const STATUS_CONFIG_KEYS: Record<
     string,
     { Icon: React.ElementType; color: string; bg: string; labelKey: string }
@@ -186,19 +202,6 @@ const STATUS_CONFIG_KEYS: Record<
     },
 };
 
-/* ── Types ───────────────────────────────────────────── */
-
-interface ResolvedItemDetails {
-    itemName?: string;
-    sourcePath?: string;
-    sourceUrl?: string;
-    destPath?: string;
-    destUrl?: string;
-    materialId?: string;
-    mimeType?: string;
-    fileName?: string;
-}
-
 /* ── Helpers ─────────────────────────────────────────── */
 
 function getEffectiveOpKey(rawOp: Record<string, unknown>): string {
@@ -211,89 +214,6 @@ function getEffectiveOpKey(rawOp: Record<string, unknown>): string {
     return baseOp;
 }
 
-function opSummary(op: PullRequestOperation, t: (key: any, values?: any) => string): string {
-    const rawOp = op as unknown as Record<string, unknown>;
-    const opType = getEffectiveOpKey(rawOp);
-    const name = (rawOp.title || rawOp.name) as string | undefined;
-    const finalName = name || (opType.includes("directory") ? t("labels.create_directory") : opType.includes("link") ? t("labels.create_link") : t("labels.create_material"));
-
-    switch (opType) {
-        case "create_link":
-            return t("summary.create_link", { name: finalName });
-        case "edit_link":
-            return t("summary.edit_link", { name: finalName });
-        case "delete_link":
-            return t("summary.delete_link", { name: finalName });
-        case "create_material":
-            return t("summary.create_material", { name: finalName });
-        case "edit_material":
-            return t("summary.edit_material", { name: finalName });
-        case "delete_material":
-            return t("summary.delete_material", { name: finalName });
-        case "create_directory":
-            return t("summary.create_directory", { name: finalName });
-        case "edit_directory":
-            return t("summary.edit_directory", { name: finalName });
-        case "delete_directory":
-            return t("summary.delete_directory", { name: finalName });
-        case "move_item":
-            const isDir = rawOp.target_type === "directory";
-            return t("summary.move_item", { isDir, name: finalName });
-        default:
-            return t("summary.fallback", { op: opType, name: finalName });
-    }
-}
-
-function formatValue(value: unknown, mt: (key: any) => string): React.ReactNode {
-    if (value === null || value === undefined) return <span className="text-muted-foreground">—</span>;
-    if (Array.isArray(value)) {
-        if (value.length === 0) return <span className="text-muted-foreground">—</span>;
-        return (
-            <div className="flex flex-wrap gap-1">
-                {value.map((v, i) => (
-                    <Badge
-                        key={i}
-                        variant="secondary"
-                        className="text-xs font-normal"
-                    >
-                        {String(v)}
-                    </Badge>
-                ))}
-            </div>
-        );
-    }
-    if (typeof value === "object") {
-        const entries = Object.entries(value as Record<string, unknown>);
-        if (entries.length === 0) return <span className="text-muted-foreground">—</span>;
-        return (
-            <div className="space-y-0.5 font-mono text-xs">
-                {entries.map(([k, v]) => (
-                    <div key={k} className="flex items-center gap-1.5 break-all">
-                        <span className="text-muted-foreground">{k}:</span>
-                        <span>{String(v)}</span>
-                    </div>
-                ))}
-            </div>
-        );
-    }
-    const str = String(value);
-    return mt(str as any) !== str ? mt(str as any) : str;
-}
-
-async function resolveTargetPath(directoryId: string, tRoot: string): Promise<{ url: string; label: string }> {
-    try {
-        const path = await apiFetch<{ name: string; slug: string }[]>(
-            `/directories/${directoryId}/path`,
-        );
-        if (path.length === 0) return { url: "/browse", label: tRoot };
-        const slugs = path.map((p) => p.slug).join("/");
-        const label = path.map((p) => p.name).join(" › ");
-        return { url: `/browse/${slugs}`, label };
-    } catch {
-        return { url: "/browse", label: tRoot };
-    }
-}
-
 function getInitials(name: string): string {
     return name
         .split(" ")
@@ -303,6 +223,93 @@ function getInitials(name: string): string {
         .toUpperCase();
 }
 
+async function resolveDirectoryPath(
+    dirId: string | null | undefined,
+    allOperations: PullRequestOperation[],
+    tRoot: string,
+): Promise<{ url: string; label: string; segments: PathSegment[]; isTemp: boolean }> {
+    if (!dirId) {
+        return { url: "/browse", label: tRoot, segments: [], isTemp: false };
+    }
+    const dirIdStr = String(dirId);
+    if (dirIdStr.startsWith("$")) {
+        const tempOp = allOperations.find(
+            (o) => {
+                const ro = o as unknown as Record<string, unknown>;
+                return ro.temp_id === dirIdStr && ro.op === "create_directory";
+            }
+        ) as unknown as Record<string, unknown> | undefined;
+
+        if (tempOp) {
+            const tempName = String(tempOp.name || "New folder");
+            const parentDirId = tempOp.parent_id ? String(tempOp.parent_id) : null;
+            if (parentDirId && !parentDirId.startsWith("$")) {
+                try {
+                    const parentPath = await apiFetch<{ name: string; slug: string }[]>(`/directories/${parentDirId}/path`);
+                    if (Array.isArray(parentPath) && parentPath.length > 0) {
+                        const slugs = parentPath.map((p) => p.slug).join("/");
+                        const segs: PathSegment[] = parentPath.map((p) => ({ name: p.name, slug: p.slug }));
+                        segs.push({ name: tempName, isTemp: true });
+                        return {
+                            url: slugs ? `/browse/${slugs}` : "/browse",
+                            label: `${parentPath.map((p) => p.name).join(" › ")} › ${tempName}`,
+                            segments: segs,
+                            isTemp: true,
+                        };
+                    }
+                } catch {
+                    // ignore
+                }
+            }
+            return {
+                url: "/browse",
+                label: `${tRoot} › ${tempName}`,
+                segments: [{ name: tempName, isTemp: true }],
+                isTemp: true,
+            };
+        }
+        return { url: "/browse", label: `${tRoot} › ${dirIdStr}`, segments: [{ name: dirIdStr, isTemp: true }], isTemp: true };
+    }
+
+    try {
+        const path = await apiFetch<{ name: string; slug: string }[]>(`/directories/${dirIdStr}/path`);
+        if (!Array.isArray(path) || path.length === 0) return { url: "/browse", label: tRoot, segments: [], isTemp: false };
+        const slugs = path.map((p) => p.slug).join("/");
+        const label = path.map((p) => p.name).join(" › ");
+        return {
+            url: `/browse/${slugs}`,
+            label,
+            segments: path.map((p) => ({ name: p.name, slug: p.slug })),
+            isTemp: false,
+        };
+    } catch {
+        return { url: "/browse", label: tRoot, segments: [], isTemp: false };
+    }
+}
+
+/* ── Operation Details State ─────────────────────────── */
+
+interface ResolvedItemState {
+    itemName?: string;
+    itemType?: string;
+    materialId?: string;
+    directoryId?: string;
+    fileName?: string;
+    fileSize?: number;
+    mimeType?: string;
+    tags?: string[];
+    description?: string;
+    metadata?: Record<string, unknown>;
+    // Tree locations
+    sourcePath?: string;
+    sourceUrl?: string;
+    sourceSegments?: PathSegment[];
+    destPath?: string;
+    destUrl?: string;
+    destSegments?: PathSegment[];
+    destIsTemp?: boolean;
+}
+
 /* ── OperationRow ────────────────────────────────────── */
 
 function OperationRow({
@@ -310,34 +317,40 @@ function OperationRow({
     prId,
     prStatus,
     index,
+    allOperations,
 }: {
     op: PullRequestOperation;
     prId: string;
     prStatus: string;
     index: number;
+    allOperations: PullRequestOperation[];
 }) {
     const t = useTranslations("PRDetails");
     const mt = useTranslations("MaterialTypes");
+    const dt = useTranslations("DirectoryTypes");
     const rawOp = op as unknown as Record<string, unknown>;
-    const [targetInfo, setTargetInfo] = useState<{ url: string; label: string } | null>(null);
-    const [itemDetails, setItemDetails] = useState<ResolvedItemDetails | null>(null);
-    const [existingPreview, setExistingPreview] = useState<{ url: string; mimeType?: string; fileName?: string } | null>(null);
+
+    const [itemDetails, setItemDetails] = useState<ResolvedItemState | null>(null);
+    const [previewModal, setPreviewModal] = useState<{ url: string; fileName?: string; mimeType?: string } | null>(null);
     const [previewLoading, setPreviewLoading] = useState(false);
 
     const baseOpType = String(rawOp.op || rawOp.pr_type || "unknown");
     const targetUrl = String((rawOp.metadata as Record<string, unknown> | undefined)?.url || rawOp.url || "").trim();
     const isLink = rawOp.type === "link" || rawOp.material_type === "link" || Boolean(targetUrl);
     const isInternalLink = isLink && !isExternalUrl(targetUrl);
+    const isDirectoryOp = baseOpType.includes("directory") || rawOp.target_type === "directory";
+
     const opType = isLink && baseOpType.includes("material")
         ? baseOpType.replace("material", "link")
         : baseOpType;
+
     const Icon = isLink
         ? (isInternalLink ? Link2 : ExternalLink)
         : (OP_ICONS[opType] ?? OP_ICONS[baseOpType] ?? FilePlus);
     const colorClass = OP_COLORS[opType] ?? OP_COLORS[baseOpType] ?? "";
-    const hasFile = Boolean(rawOp.file_key);
     const isApproved = prStatus === "approved";
 
+    // Result browse path if approved
     const resultBrowsePath = (() => {
         if (!isApproved) return null;
         if (rawOp.result_browse_path !== undefined && rawOp.result_browse_path !== null) {
@@ -353,330 +366,420 @@ function OperationRow({
         return null;
     })();
 
-    const needsItemResolution =
-        opType === "delete_material" ||
-        opType === "delete_directory" ||
-        opType === "move_item" ||
-        opType === "edit_material" ||
-        opType === "edit_directory";
-
+    // Resolve item information and tree locations
     useEffect(() => {
-        if (needsItemResolution) return;
-        if (isApproved) return;
-
-        let cancelled = false;
-        async function fetchInfo() {
-            let dirId = "";
-            if (rawOp.directory_id) dirId = String(rawOp.directory_id);
-            else if (rawOp.parent_id) dirId = String(rawOp.parent_id);
-
-            const matId = String(rawOp.material_id ?? "");
-
-            if (!dirId && matId && !matId.startsWith("$")) {
-                try {
-                    const mat = await apiFetch<{ directory_id: string | null }>(`/materials/${matId}`);
-                    if (mat.directory_id) dirId = mat.directory_id;
-                } catch { /* ignore */ }
-            }
-
-            if (dirId && !dirId.startsWith("$") && !cancelled) {
-                const info = await resolveTargetPath(dirId, t("root"));
-                if (!cancelled) setTargetInfo(info);
-            }
-        }
-
-        fetchInfo();
-        return () => { cancelled = true; };
-    }, [rawOp.directory_id, rawOp.parent_id, rawOp.material_id, isApproved, needsItemResolution, t]);
-
-    useEffect(() => {
-        if (!needsItemResolution) return;
-
-        const matId = String(rawOp.material_id ?? "");
-        const dirId = String(rawOp.directory_id ?? "");
-        const targetId = String(rawOp.target_id ?? "");
-
-        if (matId.startsWith("$") || dirId.startsWith("$") || targetId.startsWith("$")) return;
-
         let cancelled = false;
 
-        async function resolveDetails() {
+        async function resolveAll() {
             try {
-                if (opType === "delete_material") {
-                    if (!matId) return;
-                    const mat = await apiFetch<{
-                        title: string;
-                        directory_id: string | null;
-                        current_version_info?: { file_mime_type?: string; file_name?: string } | null;
-                    }>(`/materials/${matId}`);
+                // 1. New Creations (create_material, create_directory, create_link)
+                if (opType.startsWith("create_")) {
+                    const dirId = rawOp.directory_id ? String(rawOp.directory_id) : (rawOp.parent_id ? String(rawOp.parent_id) : null);
+                    const destInfo = await resolveDirectoryPath(dirId, allOperations, t("root"));
                     if (cancelled) return;
-                    let sourcePath: string | undefined;
-                    let sourceUrl: string | undefined;
-                    if (mat.directory_id) {
-                        const info = await resolveTargetPath(mat.directory_id, t("root"));
-                        if (!cancelled) { sourcePath = info.label; sourceUrl = info.url; }
-                    } else {
-                        sourcePath = t("root");
-                        sourceUrl = "/browse";
-                    }
-                    if (!cancelled) setItemDetails({
-                        itemName: mat.title,
-                        sourcePath,
-                        sourceUrl,
-                        materialId: matId,
-                        mimeType: mat.current_version_info?.file_mime_type ?? undefined,
-                        fileName: mat.current_version_info?.file_name ?? undefined,
+                    setItemDetails({
+                        itemName: String(rawOp.title || rawOp.name || ""),
+                        itemType: String(rawOp.type || "document"),
+                        fileName: rawOp.file_name ? String(rawOp.file_name) : undefined,
+                        fileSize: typeof rawOp.file_size === "number" ? rawOp.file_size : undefined,
+                        mimeType: rawOp.file_mime_type ? String(rawOp.file_mime_type) : undefined,
+                        tags: Array.isArray(rawOp.tags) ? rawOp.tags as string[] : undefined,
+                        description: rawOp.description ? String(rawOp.description) : undefined,
+                        metadata: rawOp.metadata as Record<string, unknown> | undefined,
+                        destPath: destInfo.label,
+                        destUrl: destInfo.url,
+                        destSegments: destInfo.segments,
+                        destIsTemp: destInfo.isTemp,
                     });
+                    return;
+                }
 
-                } else if (opType === "delete_directory") {
-                    if (!dirId) return;
-                    const path = await apiFetch<{ name: string; slug: string }[]>(`/directories/${dirId}/path`);
-                    if (cancelled) return;
-                    if (path.length === 0) { setItemDetails({ itemName: t("root") }); return; }
-                    const itemName = path[path.length - 1].name;
-                    const parentSegs = path.slice(0, -1);
-                    const sourcePath = parentSegs.length > 0
-                        ? parentSegs.map((p) => p.name).join(" › ")
-                        : "Root";
-                    const parentSlugs = parentSegs.map((p) => p.slug).join("/");
-                    if (!cancelled) setItemDetails({
-                        itemName,
-                        sourcePath,
-                        sourceUrl: parentSlugs ? `/browse/${parentSlugs}` : "/browse",
-                    });
-
-                } else if (opType === "move_item") {
-                    if (!targetId) return;
-                    const targetType = String(rawOp.target_type ?? "");
-                    let itemName: string | undefined;
-                    let sourcePath: string | undefined;
-                    let sourceUrl: string | undefined;
-                    let materialId: string | undefined;
-                    let mimeType: string | undefined;
-                    let fileName: string | undefined;
-
-                    if (targetType === "material") {
+                // 2. Edit Material or Delete Material
+                if (opType === "edit_material" || opType === "delete_material" || opType === "edit_link" || opType === "delete_link") {
+                    const matId = String(rawOp.material_id ?? "");
+                    if (matId && !matId.startsWith("$")) {
                         const mat = await apiFetch<{
                             title: string;
+                            type: string;
                             directory_id: string | null;
-                            current_version_info?: { file_mime_type?: string; file_name?: string } | null;
-                        }>(`/materials/${targetId}`);
+                            description: string | null;
+                            tags: string[];
+                            metadata: Record<string, unknown>;
+                            current_version_info?: { file_mime_type?: string; file_name?: string; file_size?: number } | null;
+                        }>(`/materials/${matId}`);
                         if (cancelled) return;
-                        itemName = mat.title;
-                        materialId = targetId;
-                        mimeType = mat.current_version_info?.file_mime_type ?? undefined;
-                        fileName = mat.current_version_info?.file_name ?? undefined;
-                        if (mat.directory_id) {
-                            const info = await resolveTargetPath(mat.directory_id, t("root"));
-                            if (!cancelled) { sourcePath = info.label; sourceUrl = info.url; }
-                        } else {
-                            sourcePath = t("root");
-                            sourceUrl = "/browse";
-                        }
-                    } else {
-                        const path = await apiFetch<{ name: string; slug: string }[]>(`/directories/${targetId}/path`);
-                        if (cancelled) return;
-                        if (path.length > 0) {
-                            itemName = path[path.length - 1].name;
-                            const parentSegs = path.slice(0, -1);
-                            sourcePath = parentSegs.length > 0
-                                ? parentSegs.map((p) => p.name).join(" › ")
-                                : t("root");
-                            const parentSlugs = parentSegs.map((p) => p.slug).join("/");
-                            sourceUrl = parentSlugs ? `/browse/${parentSlugs}` : "/browse";
-                        }
-                    }
 
+                        const srcInfo = await resolveDirectoryPath(mat.directory_id, allOperations, t("root"));
+                        if (cancelled) return;
+
+                        setItemDetails({
+                            itemName: mat.title,
+                            itemType: mat.type,
+                            materialId: matId,
+                            fileName: mat.current_version_info?.file_name ?? undefined,
+                            fileSize: typeof mat.current_version_info?.file_size === "number" ? mat.current_version_info.file_size : undefined,
+                            mimeType: mat.current_version_info?.file_mime_type ?? undefined,
+                            tags: mat.tags,
+                            description: mat.description ?? undefined,
+                            metadata: mat.metadata,
+                            sourcePath: srcInfo.label,
+                            sourceUrl: srcInfo.url,
+                            sourceSegments: srcInfo.segments,
+                        });
+                    }
+                    return;
+                }
+
+                // 3. Edit Directory or Delete Directory
+                if (opType === "edit_directory" || opType === "delete_directory") {
+                    const dirId = String(rawOp.directory_id ?? "");
+                    if (dirId && !dirId.startsWith("$")) {
+                        const [dir, path] = await Promise.all([
+                            apiFetch<{ name: string; type: string; description: string | null; parent_id: string | null; metadata?: Record<string, unknown> }>(`/directories/${dirId}`).catch(() => null),
+                            apiFetch<{ name: string; slug: string }[]>(`/directories/${dirId}/path`).catch(() => []),
+                        ]);
+                        if (cancelled) return;
+
+                        const itemName = dir?.name || (path.length > 0 ? path[path.length - 1].name : t("root"));
+                        const parentSegs = path.slice(0, -1);
+                        const sourcePath = parentSegs.length > 0
+                            ? parentSegs.map((p) => p.name).join(" › ")
+                            : t("root");
+                        const parentSlugs = parentSegs.map((p) => p.slug).join("/");
+
+                        setItemDetails({
+                            itemName,
+                            itemType: dir?.type || "folder",
+                            directoryId: dirId,
+                            description: dir?.description ?? undefined,
+                            metadata: dir?.metadata,
+                            sourcePath,
+                            sourceUrl: parentSlugs ? `/browse/${parentSlugs}` : "/browse",
+                            sourceSegments: parentSegs.map((p) => ({ name: p.name, slug: p.slug })),
+                        });
+                    }
+                    return;
+                }
+
+                // 4. Move Item
+                if (opType === "move_item") {
+                    const targetId = String(rawOp.target_id ?? "");
+                    const targetType = String(rawOp.target_type ?? "");
                     const newParentId = rawOp.new_parent_id ? String(rawOp.new_parent_id) : null;
-                    let destPath = t("root");
-                    let destUrl = "/browse";
-                    if (newParentId && !newParentId.startsWith("$")) {
-                        const info = await resolveTargetPath(newParentId, t("root"));
-                        if (!cancelled) { destPath = info.label; destUrl = info.url; }
+
+                    let itemName: string | undefined = rawOp.target_title ? String(rawOp.target_title) : (rawOp.target_name ? String(rawOp.target_name) : undefined);
+                    let itemType: string | undefined = rawOp.target_material_type ? String(rawOp.target_material_type) : (targetType === "directory" ? "folder" : "document");
+                    let materialId: string | undefined;
+                    let directoryId: string | undefined;
+                    let fileName: string | undefined;
+                    let fileSize: number | undefined;
+                    let mimeType: string | undefined;
+                    let sourcePath: string = t("root");
+                    let sourceUrl: string = "/browse";
+                    let sourceSegments: PathSegment[] = [];
+
+                    if (targetType === "material" && targetId && !targetId.startsWith("$")) {
+                        try {
+                            const mat = await apiFetch<{
+                                title: string;
+                                type: string;
+                                directory_id: string | null;
+                                current_version_info?: { file_mime_type?: string; file_name?: string; file_size?: number } | null;
+                            }>(`/materials/${targetId}`);
+                            if (!cancelled) {
+                                itemName = mat.title;
+                                itemType = mat.type;
+                                materialId = targetId;
+                                fileName = mat.current_version_info?.file_name ?? undefined;
+                                fileSize = typeof mat.current_version_info?.file_size === "number" ? mat.current_version_info.file_size : undefined;
+                                mimeType = mat.current_version_info?.file_mime_type ?? undefined;
+
+                                const srcInfo = await resolveDirectoryPath(mat.directory_id, allOperations, t("root"));
+                                sourcePath = srcInfo.label;
+                                sourceUrl = srcInfo.url;
+                                sourceSegments = srcInfo.segments;
+                            }
+                        } catch { /* ignore */ }
+                    } else if (targetType === "directory" && targetId && !targetId.startsWith("$")) {
+                        try {
+                            const [dir, path] = await Promise.all([
+                                apiFetch<{ name: string; type: string; parent_id: string | null }>(`/directories/${targetId}`).catch(() => null),
+                                apiFetch<{ name: string; slug: string }[]>(`/directories/${targetId}/path`).catch(() => []),
+                            ]);
+                            if (!cancelled) {
+                                itemName = dir?.name || (path.length > 0 ? path[path.length - 1].name : itemName);
+                                itemType = dir?.type || "folder";
+                                directoryId = targetId;
+                                const parentSegs = path.slice(0, -1);
+                                sourcePath = parentSegs.length > 0 ? parentSegs.map((p) => p.name).join(" › ") : t("root");
+                                const parentSlugs = parentSegs.map((p) => p.slug).join("/");
+                                sourceUrl = parentSlugs ? `/browse/${parentSlugs}` : "/browse";
+                                sourceSegments = parentSegs.map((p) => ({ name: p.name, slug: p.slug }));
+                            }
+                        } catch { /* ignore */ }
                     }
 
-                    if (!cancelled) setItemDetails({ itemName, sourcePath, sourceUrl, destPath, destUrl, materialId, mimeType, fileName });
-                } else if (opType === "edit_material") {
-                    if (!matId) return;
-                    const mat = await apiFetch<{
-                        title: string;
-                        directory_id: string | null;
-                        current_version_info?: { file_mime_type?: string; file_name?: string } | null;
-                    }>(`/materials/${matId}`);
+                    const destInfo = await resolveDirectoryPath(newParentId, allOperations, t("root"));
                     if (cancelled) return;
-                    let sourcePath: string | undefined;
-                    let sourceUrl: string | undefined;
-                    if (mat.directory_id) {
-                        const info = await resolveTargetPath(mat.directory_id, t("root"));
-                        if (!cancelled) { sourcePath = info.label; sourceUrl = info.url; }
-                    } else {
-                        sourcePath = t("root");
-                        sourceUrl = "/browse";
-                    }
-                    if (!cancelled) setItemDetails({
-                        itemName: mat.title,
+
+                    setItemDetails({
+                        itemName,
+                        itemType,
+                        materialId,
+                        directoryId,
+                        fileName,
+                        fileSize,
+                        mimeType,
                         sourcePath,
                         sourceUrl,
-                        materialId: matId,
-                        mimeType: mat.current_version_info?.file_mime_type ?? undefined,
-                        fileName: mat.current_version_info?.file_name ?? undefined,
-                    });
-                } else if (opType === "edit_directory") {
-                    if (!dirId) return;
-                    const path = await apiFetch<{ name: string; slug: string }[]>(`/directories/${dirId}/path`);
-                    if (cancelled) return;
-                    const itemName = path.length > 0 ? path[path.length - 1].name : t("root");
-                    const parentSegs = path.slice(0, -1);
-                    const sourcePath = parentSegs.length > 0
-                        ? parentSegs.map((p) => p.name).join(" › ")
-                        : t("root");
-                    const parentSlugs = parentSegs.map((p) => p.slug).join("/");
-                    if (!cancelled) setItemDetails({
-                        itemName,
-                        sourcePath,
-                        sourceUrl: parentSlugs ? `/browse/${parentSlugs}` : "/browse",
+                        sourceSegments,
+                        destPath: destInfo.label,
+                        destUrl: destInfo.url,
+                        destSegments: destInfo.segments,
+                        destIsTemp: destInfo.isTemp,
                     });
                 }
-            } catch { /* Silently ignore  */ }
+            } catch {
+                // Silently fallback to basic payload
+            }
         }
 
-        resolveDetails();
+        resolveAll();
         return () => { cancelled = true; };
-    }, [opType, rawOp.material_id, rawOp.directory_id, rawOp.target_id, rawOp.new_parent_id, rawOp.target_type, needsItemResolution]);
+    }, [op, opType, prId, allOperations.length]);
 
-    const handleExistingPreview = async () => {
-        const matId = itemDetails?.materialId;
-        if (!matId) return;
+    // Handle Quick Preview action
+    const handleQuickPreview = async (e?: React.MouseEvent) => {
+        if (e) e.stopPropagation();
+        if (previewLoading) return;
+
+        // If link with targetUrl
+        if (isLink && targetUrl) {
+            setPreviewModal({
+                url: targetUrl,
+                fileName: String(rawOp.title || rawOp.name || itemDetails?.itemName || "Link"),
+                mimeType: "application/x-external-link",
+            });
+            return;
+        }
+
         setPreviewLoading(true);
         try {
-            const res = await apiFetch<{ url: string }>(`/materials/${matId}/inline`);
-            if (res && res.url) {
-                setExistingPreview({
+            // 1. Try PR preview endpoint
+            const res = await apiFetch<{ url: string; file_name?: string; file_mime_type?: string }>(
+                `/pull-requests/${prId}/preview?opIndex=${index}`,
+            );
+            if (res?.url) {
+                setPreviewModal({
                     url: res.url,
-                    mimeType: itemDetails?.mimeType,
-                    fileName: itemDetails?.fileName,
+                    fileName: res.file_name || String(rawOp.file_name || rawOp.title || itemDetails?.fileName || "File"),
+                    mimeType: res.file_mime_type || String(rawOp.file_mime_type || itemDetails?.mimeType || ""),
                 });
+                return;
             }
         } catch {
-            // ignore
+            // 2. Fallback to existing material inline endpoint
+            const matId = itemDetails?.materialId || (rawOp.material_id && !String(rawOp.material_id).startsWith("$") ? String(rawOp.material_id) : undefined);
+            if (matId) {
+                try {
+                    const res = await apiFetch<{ url: string }>(`/materials/${matId}/inline`);
+                    if (res?.url) {
+                        setPreviewModal({
+                            url: res.url,
+                            fileName: itemDetails?.fileName || String(rawOp.title || "File"),
+                            mimeType: itemDetails?.mimeType,
+                        });
+                        return;
+                    }
+                } catch {
+                    toast.error(t("previewUnavailable"));
+                }
+            } else {
+                toast.error(t("previewUnavailable"));
+            }
         } finally {
             setPreviewLoading(false);
         }
     };
 
-    const displaySummary = (() => {
-        const name = itemDetails?.itemName;
-        const opName = (rawOp.title || rawOp.name) as string | undefined;
-        const finalName = name || opName || (opType.includes("directory") ? t("labels.create_directory") : isLink ? t("labels.create_link") : t("labels.create_material"));
+    // Rename detection
+    const isMaterialRename = Boolean(
+        opType.startsWith("edit_material") &&
+        rawOp.title &&
+        itemDetails?.itemName &&
+        String(rawOp.title).trim() !== itemDetails.itemName.trim(),
+    );
+    const isDirectoryRename = Boolean(
+        opType.startsWith("edit_directory") &&
+        rawOp.name &&
+        itemDetails?.itemName &&
+        String(rawOp.name).trim() !== itemDetails.itemName.trim(),
+    );
+    const isRename = isMaterialRename || isDirectoryRename;
+    const oldTitle = itemDetails?.itemName;
+    const newTitle = String(rawOp.title || rawOp.name || "");
 
-        switch (opType) {
-            case "create_link": return t("summary.create_link", { name: finalName });
-            case "edit_link": return t("summary.edit_link", { name: finalName });
-            case "delete_link": return t("summary.delete_link", { name: finalName });
-            case "delete_material": return t("summary.delete_material", { name: finalName });
-            case "delete_directory": return t("summary.delete_directory", { name: finalName });
-            case "edit_material": return t("summary.edit_material", { name: finalName });
-            case "edit_directory": return t("summary.edit_directory", { name: finalName });
-            case "move_item":
-                const isDir = rawOp.target_type === "directory";
-                return t("summary.move_item", { isDir: String(isDir), name: finalName });
-            default: return opSummary(op, t);
-        }
-    })();
+    // File replacement detection
+    const isFileReplaced = Boolean(
+        opType.startsWith("edit_material") &&
+        rawOp.file_key &&
+        (itemDetails?.fileName || rawOp.file_name),
+    );
+    const oldFileName = itemDetails?.fileName;
+    const oldFileSize = itemDetails?.fileSize;
+    const newFileName = rawOp.file_name ? String(rawOp.file_name) : undefined;
+    const newFileSize = typeof rawOp.file_size === "number" ? rawOp.file_size : undefined;
 
-    const entries = Object.entries(op).filter(
-        ([k, v]) => VISIBLE_FIELDS.has(k) && k !== "url" && k !== "metadata" && v !== null && v !== undefined,
+    // Type adjustment detection
+    const isTypeChanged = Boolean(
+        rawOp.type &&
+        itemDetails?.itemType &&
+        String(rawOp.type) !== itemDetails.itemType,
+    );
+    const oldType = itemDetails?.itemType;
+    const newType = rawOp.type ? String(rawOp.type) : undefined;
+
+    // Tag differences
+    const oldTags = itemDetails?.tags || [];
+    const newTags = Array.isArray(rawOp.tags) ? rawOp.tags as string[] : undefined;
+    const tagsAdded = newTags ? newTags.filter((t) => !oldTags.includes(t)) : [];
+    const tagsRemoved = newTags ? oldTags.filter((t) => !newTags.includes(t)) : [];
+
+    // Primary effective name
+    const effectiveName = isRename
+        ? newTitle
+        : (itemDetails?.itemName || String(rawOp.title || rawOp.name || rawOp.target_title || rawOp.target_name || (isDirectoryOp ? t("labels.create_directory") : isLink ? t("labels.create_link") : t("labels.create_material"))));
+
+    // File metadata
+    const activeFileName = newFileName || oldFileName || (rawOp.file_name ? String(rawOp.file_name) : undefined);
+    const activeFileSize = typeof newFileSize === "number" ? newFileSize : (typeof oldFileSize === "number" ? oldFileSize : (typeof rawOp.file_size === "number" ? rawOp.file_size : undefined));
+    const activeMimeType = rawOp.file_mime_type ? String(rawOp.file_mime_type) : itemDetails?.mimeType;
+    const activeMaterialType = newType || oldType || (rawOp.type ? String(rawOp.type) : undefined);
+
+    const hasPreview = Boolean(
+        rawOp.file_key ||
+        itemDetails?.materialId ||
+        isLink ||
+        rawOp.target_type === "material",
     );
 
-    const diffSummary = "diff_summary" in op ? (op as unknown as Record<string, unknown>).diff_summary : null;
-    const hasDiff = Boolean(diffSummary);
-
-    const canPreviewExisting = Boolean(itemDetails?.materialId) && !previewLoading;
+    const attachments = Array.isArray(rawOp.attachments) ? rawOp.attachments : [];
+    const diffSummary = "diff_summary" in op ? (rawOp.diff_summary as string | null) : null;
 
     return (
         <>
-            {existingPreview && (
+            {previewModal && (
                 <PreviewDialog
-                    url={existingPreview.url}
-                    mimeType={existingPreview.mimeType}
-                    fileName={existingPreview.fileName}
-                    onClose={() => setExistingPreview(null)}
+                    url={previewModal.url}
+                    fileName={previewModal.fileName}
+                    mimeType={previewModal.mimeType}
+                    onClose={() => setPreviewModal(null)}
                 />
             )}
+
             <AccordionItem
                 value={`op-${index}`}
-                className="border-b last:border-0"
+                className="border-b last:border-0 transition-colors"
             >
                 <AccordionPrimitive.Header className="flex items-center">
                     <AccordionPrimitive.Trigger
-                        className="flex flex-1 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40 [&[data-state=open]>svg.chevron]:rotate-180 min-w-0"
+                        className="flex flex-1 items-center gap-3.5 px-4 py-3.5 text-left transition-colors hover:bg-accent/40 [&[data-state=open]>svg.chevron]:rotate-180 min-w-0"
                     >
-                        <div
-                            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${colorClass}`}
-                        >
-                            <Icon className="h-3.5 w-3.5" />
-                        </div>
+                        {/* Mini Thumbnail / Icon Preview */}
+                        <PROperationThumbnail
+                            size="sm"
+                            fileName={activeFileName}
+                            mimeType={activeMimeType}
+                            materialType={activeMaterialType}
+                            materialId={itemDetails?.materialId}
+                            stagedFileKey={rawOp.file_key ? String(rawOp.file_key) : undefined}
+                            targetUrl={targetUrl}
+                            isDirectory={isDirectoryOp}
+                            directoryIcon={String((rawOp.metadata as Record<string, unknown> | undefined)?.thumbnail_icon || itemDetails?.metadata?.thumbnail_icon || "")}
+                            directoryColor={String((rawOp.metadata as Record<string, unknown> | undefined)?.thumbnail_color || itemDetails?.metadata?.thumbnail_color || "")}
+                        />
+
+                        {/* Title and Summary */}
                         <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium">
-                                {displaySummary}
-                            </p>
-                            {targetUrl && (
-                                <p className="text-[11px] text-muted-foreground truncate font-mono mt-0.5 max-w-sm sm:max-w-md flex items-center gap-1">
-                                    {isInternalLink ? (
-                                        <Link2 className="h-3 w-3 shrink-0 opacity-70" />
-                                    ) : (
-                                        <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
-                                    )}
-                                    <span className="truncate">{targetUrl}</span>
-                                </p>
-                            )}
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5 flex-wrap">
-                                {(opType === "move_item" || opType.includes("delete")) ? null : (
-                                    <span className={colorClass.split(" ")[0]}>{t(OP_LABELS_KEYS[opType] as any) ?? opType}</span>
+                            <div className="flex items-center gap-2 flex-wrap min-w-0">
+                                {isRename ? (
+                                    <div className="flex items-center gap-1.5 text-sm font-medium truncate flex-wrap">
+                                        <span className="line-through text-muted-foreground opacity-75 truncate max-w-[200px]" title={oldTitle}>
+                                            {oldTitle}
+                                        </span>
+                                        <ArrowRight className="h-3.5 w-3.5 shrink-0 text-primary" />
+                                        <span className="text-foreground font-semibold truncate max-w-[240px]" title={newTitle}>
+                                            {newTitle}
+                                        </span>
+                                    </div>
+                                ) : (
+                                    <p className="truncate text-sm font-medium text-foreground">
+                                        {opType === "move_item"
+                                            ? `${t("summary.move_item", { isDir: String(isDirectoryOp), name: effectiveName })}`
+                                            : effectiveName}
+                                    </p>
                                 )}
 
-                                {opType.startsWith("create_") && targetInfo && (
-                                    <>
-                                        {!opType.includes("delete") && opType !== "move_item" && <span className="opacity-40">·</span>}
-                                        <div className="flex items-center gap-1 max-w-[200px]">
-                                            <MapPin className="h-3 w-3 shrink-0 opacity-60" />
-                                            <span className="truncate">{targetInfo.label}</span>
-                                        </div>
-                                    </>
+                                {/* Action Type Badge */}
+                                <span
+                                    className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium border ${colorClass}`}
+                                >
+                                    <Icon className="h-3 w-3 shrink-0" />
+                                    {t(OP_LABELS_KEYS[opType] as any) ?? opType}
+                                </span>
+                            </div>
+
+                            {/* Second line: Target URL / Breadcrumb Snippet / File badge */}
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1 flex-wrap">
+                                {targetUrl && (
+                                    <span className="inline-flex items-center gap-1 font-mono text-[11px] text-sky-600 dark:text-sky-400 truncate max-w-xs">
+                                        {isInternalLink ? <Link2 className="h-3 w-3 shrink-0" /> : <ExternalLink className="h-3 w-3 shrink-0" />}
+                                        <span className="truncate">{targetUrl}</span>
+                                    </span>
+                                )}
+
+                                {activeFileName && !isDirectoryOp && !isLink && (
+                                    <span className={`px-1.5 py-0.2 rounded text-[10px] font-semibold ${getFileBadgeColor(activeFileName)}`}>
+                                        {getFileBadgeLabel(activeFileName, activeMimeType ?? undefined)}
+                                        {typeof activeFileSize === "number" && ` · ${formatFileSize(activeFileSize)}`}
+                                    </span>
+                                )}
+
+                                {activeMaterialType && !isDirectoryOp && (
+                                    <Badge variant="outline" className="text-[10px] h-4.5 px-1.5 py-0 font-normal">
+                                        {String(mt.has?.(activeMaterialType as any) ? mt(activeMaterialType as any) : activeMaterialType)}
+                                    </Badge>
+                                )}
+
+                                {/* Tree path preview */}
+                                {opType === "move_item" && itemDetails && (
+                                    <div className="flex items-center gap-1 text-[11px] opacity-80 shrink-0">
+                                        <span className="truncate max-w-[100px]">{itemDetails.sourcePath || t("root")}</span>
+                                        <ArrowRight className="h-3 w-3 shrink-0 text-primary" />
+                                        <span className="truncate max-w-[100px] font-medium text-foreground">{itemDetails.destPath || t("root")}</span>
+                                    </div>
+                                )}
+
+                                {opType.startsWith("create_") && itemDetails?.destPath && (
+                                    <div className="flex items-center gap-1 text-[11px] opacity-80">
+                                        <MapPin className="h-3 w-3 shrink-0 opacity-60" />
+                                        <span className="truncate max-w-[180px]">{itemDetails.destPath}</span>
+                                    </div>
                                 )}
 
                                 {(opType.startsWith("edit_") || opType.startsWith("delete_")) && itemDetails?.sourcePath && (
-                                    <>
-                                        {opType.startsWith("edit_") && <span className="opacity-40">·</span>}
-                                        <div className="flex items-center gap-1 max-w-[200px]">
-                                            <MapPin className="h-3 w-3 shrink-0 opacity-60" />
-                                            <span className="truncate">{itemDetails.sourcePath}</span>
-                                        </div>
-                                    </>
-                                )}
-
-                                {opType === "move_item" && itemDetails && (
-                                    <>
-                                        {itemDetails.sourcePath && (
-                                             <div className="flex items-center gap-1 shrink-0">
-                                                <MapPin className="h-3 w-3 shrink-0 opacity-60" />
-                                                <span className="truncate max-w-[120px]">{itemDetails.sourcePath}</span>
-                                            </div>
-                                        )}
-                                        <ArrowRight className="h-3 w-3 shrink-0 opacity-60" />
-                                        <div className="flex items-center gap-1 shrink-0">
-                                            <MapPin className="h-3 w-3 shrink-0 opacity-60" />
-                                            <span className="truncate max-w-[120px]">
-                                                {itemDetails.destPath ?? t("root")}
-                                            </span>
-                                        </div>
-                                    </>
+                                    <div className="flex items-center gap-1 text-[11px] opacity-80">
+                                        <MapPin className="h-3 w-3 shrink-0 opacity-60" />
+                                        <span className="truncate max-w-[180px]">{itemDetails.sourcePath}</span>
+                                    </div>
                                 )}
                             </div>
                         </div>
+
                         <ChevronDown className="chevron h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200" />
                     </AccordionPrimitive.Trigger>
 
+                    {/* Quick Row Actions */}
                     <div
                         className="flex shrink-0 items-center gap-1.5 pr-4"
                         onClick={(e) => e.stopPropagation()}
@@ -695,121 +798,324 @@ function OperationRow({
                             </Button>
                         )}
 
-                        {isApproved && !resultBrowsePath && canPreviewExisting && !opType.includes("delete") && (
+                        {!isApproved && hasPreview && !opType.includes("delete") && (
                             <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-7 gap-1.5 text-xs text-primary"
-                                onClick={handleExistingPreview}
+                                className="h-7 gap-1.5 text-xs text-primary font-medium"
+                                onClick={handleQuickPreview}
                                 disabled={previewLoading}
                             >
-                                {previewLoading
-                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    : <Eye className="h-3.5 w-3.5" />}
+                                {previewLoading ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                    <Eye className="h-3.5 w-3.5" />
+                                )}
                                 {t("preview")}
                             </Button>
                         )}
 
-                        {!isApproved && !opType.includes("delete") && (
-                            <>
-                                {hasFile || isLink ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-7 gap-1.5 text-xs"
-                                        asChild
-                                    >
-                                        <Link href={`/pull-requests/${prId}/preview/${index}`}>
-                                            <Eye className="h-3.5 w-3.5" />
-                                            {t("preview")}
-                                        </Link>
-                                    </Button>
-                                ) : canPreviewExisting ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-7 gap-1.5 text-xs"
-                                        onClick={handleExistingPreview}
-                                        disabled={previewLoading}
-                                    >
-                                        {previewLoading
-                                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                            : <Eye className="h-3.5 w-3.5" />}
-                                        {t("preview")}
-                                    </Button>
-                                ) : null}
-                            </>
+                        {opType.includes("delete") && hasPreview && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 gap-1.5 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                                onClick={handleQuickPreview}
+                                disabled={previewLoading}
+                            >
+                                {previewLoading ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                    <Eye className="h-3.5 w-3.5" />
+                                )}
+                                {t("preview")}
+                            </Button>
                         )}
                     </div>
                 </AccordionPrimitive.Header>
 
-                {(entries.length > 0 || hasDiff || Boolean(targetUrl)) && (
-                    <AccordionContent className="px-4 pb-4">
-                        {(entries.length > 0 || Boolean(targetUrl)) && (
-                            <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
-                                {targetUrl && (
-                                    <div className="contents">
-                                        <dt className="py-0.5 capitalize text-muted-foreground flex items-center gap-1.5">
-                                            {isInternalLink ? (
-                                                <Link2 className="h-3.5 w-3.5 shrink-0" />
-                                            ) : (
-                                                <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-                                            )}
-                                            {t("fields.url")}
-                                        </dt>
-                                        <dd className="py-0.5 min-w-0">
-                                            <a
-                                                href={targetUrl}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="inline-flex items-center gap-1.5 font-mono text-xs text-primary hover:underline break-all"
-                                            >
-                                                <span>{targetUrl}</span>
-                                                {isInternalLink ? (
-                                                    <Link2 className="h-3 w-3 shrink-0 opacity-70" />
-                                                ) : (
-                                                    <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
-                                                )}
-                                            </a>
-                                        </dd>
+                <AccordionContent className="px-4 pb-5 pt-1 space-y-4">
+                    {/* 1. Deletion Warning Banner */}
+                    {opType.includes("delete") && (
+                        <div className="flex items-start gap-2.5 p-3 rounded-lg border border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/20 dark:text-red-200 text-xs">
+                            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-red-600" />
+                            <div className="space-y-1">
+                                <p className="font-semibold">
+                                    {isDirectoryOp ? t("deleteWarningDirectory") : t("deleteWarningMaterial")}
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 2. Structured Information Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {/* Column A: Visual Thumbnail & File / Item Details */}
+                        <div className="rounded-lg border bg-muted/20 p-3 flex flex-col gap-3">
+                            <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                                    {isDirectoryOp ? t("fieldType") : (isLink ? "Lien" : t("fileDetails"))}
+                                </span>
+                            </div>
+
+                            <div className="flex items-start gap-3">
+                                <PROperationThumbnail
+                                    size="md"
+                                    fileName={activeFileName}
+                                    mimeType={activeMimeType}
+                                    materialType={activeMaterialType}
+                                    materialId={itemDetails?.materialId}
+                                    stagedFileKey={rawOp.file_key ? String(rawOp.file_key) : undefined}
+                                    targetUrl={targetUrl}
+                                    isDirectory={isDirectoryOp}
+                                    directoryIcon={String((rawOp.metadata as Record<string, unknown> | undefined)?.thumbnail_icon || itemDetails?.metadata?.thumbnail_icon || "")}
+                                    directoryColor={String((rawOp.metadata as Record<string, unknown> | undefined)?.thumbnail_color || itemDetails?.metadata?.thumbnail_color || "")}
+                                />
+
+                                <div className="space-y-1.5 min-w-0 flex-1 text-xs">
+                                    {activeFileName && !isDirectoryOp && !isLink && (
+                                        <div>
+                                            <span className="text-muted-foreground block text-[10px]">{t("fieldFileName")}</span>
+                                            <p className="font-mono text-xs break-all font-medium">{activeFileName}</p>
+                                        </div>
+                                    )}
+
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        {activeFileName && !isDirectoryOp && !isLink && (
+                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase ${getFileBadgeColor(activeFileName)}`}>
+                                                {getFileBadgeLabel(activeFileName, activeMimeType ?? undefined)}
+                                            </span>
+                                        )}
+
+                                        {typeof activeFileSize === "number" && !isDirectoryOp && !isLink && (
+                                            <span className="text-muted-foreground font-mono text-xs">
+                                                {formatFileSize(activeFileSize)}
+                                            </span>
+                                        )}
+
+                                        {activeMaterialType && !isDirectoryOp && (
+                                            <Badge variant="secondary" className="text-[10px] font-normal">
+                                                {String(mt.has?.(activeMaterialType as any) ? mt(activeMaterialType as any) : activeMaterialType)}
+                                            </Badge>
+                                        )}
+
+                                        {isDirectoryOp && (
+                                            <Badge variant="secondary" className="text-[10px] font-normal">
+                                                {String(dt.has?.(String(rawOp.type || itemDetails?.itemType || "folder") as any) ? dt(String(rawOp.type || itemDetails?.itemType || "folder") as any) : (rawOp.type || itemDetails?.itemType || "Folder"))}
+                                            </Badge>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Link Destination */}
+                            {targetUrl && (
+                                <div className="pt-2 border-t border-border/50 space-y-1 text-xs">
+                                    <span className="text-[10px] text-muted-foreground uppercase font-semibold">{t("fieldUrl")}</span>
+                                    <div className="flex items-center gap-2">
+                                        <a
+                                            href={targetUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1 font-mono text-xs text-primary hover:underline break-all"
+                                        >
+                                            <span className="truncate">{targetUrl}</span>
+                                            <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                                        </a>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Previews Button Group */}
+                            {hasPreview && (
+                                <div className="pt-2 border-t border-border/50 flex items-center gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 text-xs flex-1 gap-1.5"
+                                        onClick={handleQuickPreview}
+                                        disabled={previewLoading}
+                                    >
+                                        {previewLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+                                        {t("quickPreview")}
+                                    </Button>
+
+                                    {!opType.includes("delete") && (
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-7 text-xs px-2"
+                                            asChild
+                                        >
+                                            <Link href={`/pull-requests/${prId}/preview/${index}`} title={t("openFullPreview")}>
+                                                <ExternalLink className="h-3.5 w-3.5" />
+                                            </Link>
+                                        </Button>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Column B: Tree Placement & Path Details */}
+                        <div className="rounded-lg border bg-muted/20 p-3 flex flex-col gap-2.5 md:col-span-2">
+                            <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                                    <MapPin className="h-3.5 w-3.5 text-primary" />
+                                    {t("locationInTree")}
+                                </span>
+                            </div>
+
+                            {/* Move Flow */}
+                            {opType === "move_item" ? (
+                                <PRMoveTransition
+                                    originPath={itemDetails?.sourcePath}
+                                    originUrl={itemDetails?.sourceUrl}
+                                    destPath={itemDetails?.destPath}
+                                    destUrl={itemDetails?.destUrl}
+                                    rootLabel={t("root")}
+                                    originLabel={t("originLocation")}
+                                    destLabel={t("destinationLocation")}
+                                />
+                            ) : (
+                                <div className="p-2.5 rounded-lg border bg-background text-xs space-y-1">
+                                    <PRLocationBreadcrumb
+                                        pathSegments={opType.startsWith("create_") ? itemDetails?.destSegments : itemDetails?.sourceSegments}
+                                        pathString={opType.startsWith("create_") ? itemDetails?.destPath : itemDetails?.sourcePath}
+                                        browseUrl={opType.startsWith("create_") ? itemDetails?.destUrl : itemDetails?.sourceUrl}
+                                        rootLabel={t("root")}
+                                        isNewFolder={itemDetails?.destIsTemp}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Modifications / Renames / Field Changes */}
+                            <div className="pt-2 border-t border-border/50 space-y-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                    {t("modifications")}
+                                </span>
+
+                                {/* Rename diff */}
+                                {isRename && (
+                                    <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
+                                        <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("rename")}:</span>
+                                        <span className="line-through text-red-600/80 dark:text-red-400/80 font-mono">{oldTitle}</span>
+                                        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                        <span className="text-green-600 dark:text-green-400 font-mono font-semibold">{newTitle}</span>
                                     </div>
                                 )}
-                                {entries.map(([k, v]) => (
-                                    <div key={k} className="contents">
-                                        <dt className="py-0.5 capitalize text-muted-foreground">
-                                            {t(`fields.${k}` as any)}
-                                        </dt>
-                                        <dd className="py-0.5 min-w-0">
-                                            {k === "description" ? (
-                                                <ExpandableText
-                                                    text={String(v)}
-                                                    clampedLines={2}
-                                                    className="text-sm"
-                                                />
-                                            ) : (
-                                                formatValue(v, mt)
-                                            )}
-                                        </dd>
+
+                                {/* File replacement diff */}
+                                {isFileReplaced && (
+                                    <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
+                                        <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("fileReplaced")}:</span>
+                                        <span className="line-through text-red-600/80 dark:text-red-400/80 font-mono">
+                                            {oldFileName} {typeof oldFileSize === "number" && `(${formatFileSize(oldFileSize)})`}
+                                        </span>
+                                        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                        <span className="text-green-600 dark:text-green-400 font-mono font-semibold">
+                                            {newFileName} {typeof newFileSize === "number" && `(${formatFileSize(newFileSize)})`}
+                                        </span>
+                                    </div>
+                                )}
+
+                                {/* Type adjustment diff */}
+                                {isTypeChanged && (
+                                    <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
+                                        <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("fieldType")}:</span>
+                                        <Badge variant="outline" className="line-through opacity-70 text-xs">
+                                            {oldType ? String(mt.has?.(oldType as any) ? mt(oldType as any) : oldType) : "—"}
+                                        </Badge>
+                                        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                        <Badge variant="secondary" className="text-xs font-semibold">
+                                            {newType ? String(mt.has?.(newType as any) ? mt(newType as any) : newType) : "—"}
+                                        </Badge>
+                                    </div>
+                                )}
+
+                                {/* Tags changes */}
+                                {(tagsAdded.length > 0 || tagsRemoved.length > 0 || (newTags && newTags.length > 0)) && (
+                                    <div className="flex items-center gap-1.5 flex-wrap text-xs pt-1">
+                                        <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
+                                        <span className="text-muted-foreground text-[11px]">{t("fieldTags")}:</span>
+                                        {tagsAdded.map((tag) => (
+                                            <Badge key={tag} className="bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 text-[10px] font-normal">
+                                                +{tag}
+                                            </Badge>
+                                        ))}
+                                        {tagsRemoved.map((tag) => (
+                                            <Badge key={tag} variant="outline" className="line-through text-red-600 border-red-200 text-[10px] font-normal">
+                                                -{tag}
+                                            </Badge>
+                                        ))}
+                                        {tagsAdded.length === 0 && tagsRemoved.length === 0 && newTags?.map((tag) => (
+                                            <Badge key={tag} variant="secondary" className="text-[10px] font-normal">
+                                                {tag}
+                                            </Badge>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {/* Description */}
+                                {Boolean(rawOp.description) && (
+                                    <div className="pt-1 text-xs">
+                                        <span className="text-[10px] text-muted-foreground uppercase font-semibold block mb-0.5">
+                                            {t("fieldDescription")}
+                                        </span>
+                                        <ExpandableText text={String(rawOp.description)} clampedLines={2} className="text-xs text-muted-foreground" />
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 3. Sub-attachments Breakdown (if any) */}
+                    {attachments.length > 0 && (
+                        <div className="rounded-lg border bg-muted/10 p-3 space-y-2">
+                            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                                <Paperclip className="h-3.5 w-3.5 text-primary" />
+                                {t("fieldAttachments")} ({attachments.length})
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {attachments.map((att, attIdx) => (
+                                    <div
+                                        key={attIdx}
+                                        className="flex items-center gap-2.5 p-2 rounded-md border bg-background text-xs"
+                                    >
+                                        <PROperationThumbnail
+                                            size="sm"
+                                            fileName={att.file_name}
+                                            mimeType={att.file_mime_type}
+                                            materialType={att.type}
+                                            stagedFileKey={att.file_key}
+                                        />
+                                        <div className="min-w-0 flex-1">
+                                            <p className="font-medium truncate">{att.title}</p>
+                                            <p className="text-[11px] text-muted-foreground font-mono truncate">
+                                                {att.file_name || "Attachment"}
+                                                {typeof att.file_size === "number" && ` · ${formatFileSize(att.file_size)}`}
+                                            </p>
+                                        </div>
                                     </div>
                                 ))}
-                            </dl>
-                        )}
-                        {hasDiff && (
-                            <div className={(entries.length > 0 || Boolean(targetUrl)) ? "mt-4 pt-4 border-t" : ""}>
-                                <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-2">
-                                    <Clock className="h-3 w-3" />
-                                    {t("changes")}
-                                </div>
-                                <MarkdownRenderer
-                                    content={String(diffSummary)}
-                                    className="prose prose-xs dark:prose-invert max-w-none
-                                        prose-pre:p-0 prose-pre:bg-transparent prose-pre:border-0
-                                        [&_pre]:m-0 [&_code]:text-[11px] [&_code]:leading-relaxed [&_code]:bg-muted/30 [&_code]:p-3 [&_code]:block [&_code]:rounded-md"
-                                />
                             </div>
-                        )}
-                    </AccordionContent>
-                )}
+                        </div>
+                    )}
+
+                    {/* 4. Diff Summary (if present) */}
+                    {diffSummary && (
+                        <div className="rounded-lg border bg-muted/10 p-3 space-y-2">
+                            <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                                <Clock className="h-3 w-3" />
+                                {t("changes")}
+                            </div>
+                            <MarkdownRenderer
+                                content={String(diffSummary)}
+                                className="prose prose-xs dark:prose-invert max-w-none
+                                    prose-pre:p-0 prose-pre:bg-transparent prose-pre:border-0
+                                    [&_pre]:m-0 [&_code]:text-[11px] [&_code]:leading-relaxed [&_code]:bg-muted/30 [&_code]:p-3 [&_code]:block [&_code]:rounded-md"
+                            />
+                        </div>
+                    )}
+                </AccordionContent>
             </AccordionItem>
         </>
     );
@@ -848,26 +1154,24 @@ function PRDetailContent() {
                 : [pr.payload] as PullRequestOperation[];
     }, [pr]);
 
+    const tRoot = t("root");
     useEffect(() => {
         if (!pr) return;
-        const findDir = async () => {
-            for (const op of operations) {
-                const rawOp = op as unknown as Record<string, unknown>;
-                const dirId = (rawOp.directory_id ?? rawOp.parent_id) as string | undefined;
-                if (dirId && typeof dirId === "string" && !dirId.startsWith("$")) {
-                    setPreviewDirId(dirId);
-                    return;
-                }
+        for (const op of operations) {
+            const rawOp = op as unknown as Record<string, unknown>;
+            const dirId = (rawOp.directory_id ?? rawOp.parent_id) as string | undefined;
+            if (dirId && typeof dirId === "string" && !dirId.startsWith("$")) {
+                setPreviewDirId(dirId);
+                return;
             }
-        };
-        findDir();
-    }, [pr, operations]);
+        }
+    }, [pr]);
 
     useEffect(() => {
         if (previewDirId) {
-            resolveTargetPath(previewDirId, t("root")).then(info => setPreviewPath(info.url));
+            resolveDirectoryPath(previewDirId, operations, tRoot).then((info) => setPreviewPath(info.url));
         }
-    }, [previewDirId, t]);
+    }, [previewDirId, tRoot, operations]);
 
     const allItemValues = useMemo(() => operations.map((_, i) => `op-${i}`), [operations]);
     const allExpanded = useMemo(() => expandedItems.length === allItemValues.length, [expandedItems, allItemValues]);
@@ -973,8 +1277,8 @@ function PRDetailContent() {
     const typeCounts: Record<string, number> = {};
     for (const op of operations) {
         const rawOp = op as unknown as Record<string, unknown>;
-        const t = getEffectiveOpKey(rawOp);
-        typeCounts[t] = (typeCounts[t] || 0) + 1;
+        const tKey = getEffectiveOpKey(rawOp);
+        typeCounts[tKey] = (typeCounts[tKey] || 0) + 1;
     }
 
     const isModerator =
@@ -1002,27 +1306,27 @@ function PRDetailContent() {
         : (previewPath ? `${previewPath}?preview_pr=${id}` : `/browse?preview_pr=${id}`);
 
     return (
-        <div className="container mx-auto max-w-4xl space-y-6 px-4 py-6 pb-20 md:pb-6">
+        <div className="container mx-auto max-w-5xl space-y-6 px-4 py-6 pb-24 sm:px-6 sm:py-8 sm:pb-12 lg:px-8">
             <Link
                 href="/pull-requests"
-                className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors bg-muted/50 hover:bg-muted px-3 py-1.5 rounded-xl w-fit"
             >
                 <ArrowLeft className="h-3.5 w-3.5" />
                 {tPRs("contributions")}
             </Link>
 
             {pr.reverted_by_pr_id && (
-                <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/20">
+                <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50/80 p-4.5 dark:border-amber-800 dark:bg-amber-950/20">
                     <Undo2 className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
                     <div>
-                        <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                        <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
                             {t("revertedBanner")}
                         </p>
-                        <p className="mt-1 text-sm text-amber-600/90 dark:text-amber-400/80">
+                        <p className="mt-1 text-xs leading-relaxed text-amber-700/90 dark:text-amber-400/80">
                             {t("revertedBannerDesc")}{" "}
                             <Link
                                 href={`/pull-requests/${pr.reverted_by_pr_id}`}
-                                className="underline hover:text-amber-700 dark:hover:text-amber-300"
+                                className="underline font-medium hover:text-amber-800 dark:hover:text-amber-200"
                             >
                                 {t("viewRevertPR")}
                             </Link>
@@ -1032,18 +1336,18 @@ function PRDetailContent() {
             )}
 
             {pr.reverts_pr_id && (
-                <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950/20">
+                <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50/80 p-4.5 dark:border-blue-800 dark:bg-blue-950/20">
                     <Undo2 className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
                     <div>
-                        <p className="text-sm font-medium text-blue-700 dark:text-blue-400">
+                        <p className="text-sm font-semibold text-blue-800 dark:text-blue-300">
                             {t("revertOfBanner")}
                         </p>
-                        <p className="mt-1 text-sm text-blue-600/90 dark:text-blue-400/80">
+                        <p className="mt-1 text-xs leading-relaxed text-blue-700/90 dark:text-blue-400/80">
                             {t.rich("revertOfBannerDesc", {
                                 link: (chunks) => (
                                     <Link
                                         href={`/pull-requests/${pr.reverts_pr_id}`}
-                                        className="underline hover:text-blue-700 dark:hover:text-blue-300"
+                                        className="underline font-medium hover:text-blue-800 dark:hover:text-blue-200"
                                     >
                                         {t("originalPR")}
                                     </Link>
@@ -1055,21 +1359,21 @@ function PRDetailContent() {
             )}
 
             {pr.status === "rejected" && pr.rejection_reason && (
-                <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950/20">
+                <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50/80 p-4.5 dark:border-red-800 dark:bg-red-950/20">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
                     <div>
-                        <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                        <p className="text-sm font-semibold text-red-800 dark:text-red-300">
                             {t("rejectionReasonBanner")}
                         </p>
-                        <p className="mt-1 text-sm text-red-600/90 dark:text-red-400/80">
+                        <p className="mt-1 text-xs leading-relaxed text-red-700/90 dark:text-red-400/80">
                             {pr.rejection_reason}
                         </p>
                     </div>
                 </div>
             )}
 
-            <div className="rounded-lg border bg-card shadow-sm">
-                <div className="space-y-4 p-6">
+            <div className="rounded-2xl border bg-card shadow-xs">
+                <div className="space-y-4 p-5 sm:p-6">
                     <div className="flex items-start justify-between gap-4">
                         <div className="space-y-4 flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -1273,11 +1577,12 @@ function PRDetailContent() {
                 )}
             </div>
 
-            <div className="overflow-hidden rounded-lg border bg-card">
-                <div className="flex items-center justify-between border-b bg-muted/50 px-4 py-2.5">
-                    <span className="text-sm font-medium text-muted-foreground">
+            {/* Proposed Changes Section */}
+            <div className="overflow-hidden rounded-2xl border bg-card shadow-xs">
+                <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-3 sm:px-5">
+                    <span className="text-sm font-semibold text-foreground">
                         {t("proposedChanges")}
-                        <span className="ml-1.5 text-foreground/60">
+                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
                             · {t("changeCount", { count: operations.length })}
                         </span>
                     </span>
@@ -1285,7 +1590,7 @@ function PRDetailContent() {
                         <Button
                             variant="ghost"
                             size="sm"
-                            className="h-7 gap-1 text-xs text-muted-foreground"
+                            className="h-7 gap-1 text-xs text-muted-foreground hover:text-foreground"
                             onClick={() =>
                                 setExpandedItems(allExpanded ? [] : allItemValues)
                             }
@@ -1317,20 +1622,23 @@ function PRDetailContent() {
                             prId={pr.id}
                             prStatus={pr.status}
                             index={i}
+                            allOperations={operations}
                         />
                     ))}
                 </Accordion>
             </div>
 
-            <div className="overflow-hidden rounded-lg border bg-card">
-                <div className="border-b bg-muted/50 px-4 py-2.5 text-sm font-medium text-muted-foreground">
+            {/* Discussion Section */}
+            <div className="overflow-hidden rounded-2xl border bg-card shadow-xs">
+                <div className="border-b bg-muted/40 px-4 py-3 sm:px-5 text-sm font-semibold text-foreground">
                     {t("discussion")}
                 </div>
-                <div className="p-4">
+                <div className="p-4 sm:p-5">
                     <PRComments prId={pr.id} />
                 </div>
             </div>
 
+            {/* Reject Dialog */}
             <Dialog open={showRejectDialog} onOpenChange={(open) => { setShowRejectDialog(open); if (!open) setRejectReason(""); }}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
@@ -1369,6 +1677,7 @@ function PRDetailContent() {
                 </DialogContent>
             </Dialog>
 
+            {/* Cancel Dialog */}
             <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
@@ -1395,6 +1704,7 @@ function PRDetailContent() {
                 </DialogContent>
             </Dialog>
 
+            {/* Revert Dialog */}
             <Dialog
                 open={showRevertDialog}
                 onOpenChange={(open) => {

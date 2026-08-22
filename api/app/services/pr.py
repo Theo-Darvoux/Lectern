@@ -2855,6 +2855,35 @@ async def get_pr_preview_service(
                 except (ValueError, TypeError):
                     pass
 
+    # Handle edit_material and delete_material preview resolution when file_key is not on op
+    if not file_key and op.get("op") in ("edit_material", "delete_material"):
+        material_id_raw = op.get("material_id")
+        if material_id_raw:
+            material_id_str = str(material_id_raw)
+            if material_id_str.startswith("$"):
+                source_op = next(
+                    (o for o in pr.payload if o.get("temp_id") == material_id_str), None
+                )
+                if source_op:
+                    file_key = typing.cast(str | None, source_op.get("file_key"))
+                    file_name = typing.cast(str | None, source_op.get("file_name"))
+                    file_mime_type = typing.cast(str | None, source_op.get("file_mime_type"))
+            else:
+                try:
+                    mat_uuid = uuid.UUID(material_id_str)
+                    mv = await db.scalar(
+                        select(MaterialVersion)
+                        .where(MaterialVersion.material_id == mat_uuid)
+                        .order_by(MaterialVersion.version_number.desc())
+                        .limit(1)
+                    )
+                    if mv:
+                        file_key = mv.file_key
+                        file_name = mv.file_name
+                        file_mime_type = mv.file_mime_type
+                except (ValueError, TypeError):
+                    pass
+
     if not file_key:
         raise NotFoundError("No file to preview for this operation")
 
