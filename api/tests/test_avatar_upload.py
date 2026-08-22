@@ -331,6 +331,7 @@ async def test_public_profile_preserves_safe_owned_avatar_reference(
             role="student",
             onboarded=True,
             auto_approve=True,
+            has_password=True,
         ),
     ],
 )
