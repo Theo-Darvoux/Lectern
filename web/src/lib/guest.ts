@@ -6,6 +6,8 @@ export interface UserBrief {
     role: string;
     onboarded: boolean;
     auto_approve: boolean;
+    /** Whether this account can use classic email + password login. */
+    has_password?: boolean;
     /** Tutorial IDs the user has finished (server-persisted). Absent for guests. */
     completed_tutorials?: string[];
 }

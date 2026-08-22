@@ -184,9 +184,7 @@ async def test_search_rejects_conflicting_kind_and_subtype_filters(
     user = await _create_user(db_session)
     await db_session.commit()
 
-    response = await client.get(
-        f"/api/search?query=test&{filters}", headers=_auth_headers(user)
-    )
+    response = await client.get(f"/api/search?query=test&{filters}", headers=_auth_headers(user))
 
     assert response.status_code == 400
     mock_meili_client.multi_search.assert_not_awaited()

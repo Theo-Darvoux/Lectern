@@ -56,6 +56,24 @@ class LoginIn(BaseModel):
         return _validate_email_format(v)
 
 
+class SetPasswordIn(BaseModel):
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class PasswordResetRequestIn(BaseModel):
+    email: str = Field(..., max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        return _validate_email_format(v)
+
+
+class PasswordResetConfirmIn(BaseModel):
+    token: str = Field(..., min_length=1, max_length=_MAGIC_TOKEN_MAX)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
 class SetupIn(BaseModel):
     email: str = Field(..., max_length=254)
     password: str = Field(..., min_length=8, max_length=128)
@@ -97,6 +115,7 @@ class UserBrief(BaseModel):
     role: str
     onboarded: bool
     auto_approve: bool
+    has_password: bool = False
     completed_tutorials: list[str] = Field(default_factory=list)
 
     @field_serializer("avatar_url")

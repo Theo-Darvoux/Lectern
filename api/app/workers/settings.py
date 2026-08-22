@@ -21,6 +21,7 @@ from app.workers.process_upload_post_scan import process_upload_post_scan
 from app.workers.recalculate_thumbnail import recalculate_thumbnail
 from app.workers.reconcile_multipart import reconcile_multipart_uploads
 from app.workers.recover_cas_storage import recover_cas_storage_mutations
+from app.workers.send_password_reset_email import send_password_reset_email
 from app.workers.storage_ops import (
     add_cas_references,
     delete_storage_objects,
@@ -147,6 +148,7 @@ class WorkerSettings:
         reset_14d_views,
         check_bazaar,
         dispatch_outbox,
+        send_password_reset_email,
     ]
     cron_jobs = [
         cron(cleanup_uploads, hour=3, minute=0),

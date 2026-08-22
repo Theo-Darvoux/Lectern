@@ -41,7 +41,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
 
   // `/setup` is a bootstrap route: on a fresh installation there cannot be an
   // authenticated user yet, so session restoration must never gate its UI.
-  const isPublicPage = pathname === "/setup" || pathname === "/login" || pathname === "/login/verify" || pathname === "/privacy" || pathname === "/terms";
+  const isPublicPage = pathname === "/setup" || pathname === "/login" || pathname === "/login/verify" || pathname === "/login/reset-password" || pathname === "/privacy" || pathname === "/terms";
   const isOnboardingPage = pathname === "/onboarding";
   const isPendingPage = pathname === "/pending-approval";
 

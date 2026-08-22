@@ -10,10 +10,10 @@ import google.auth.transport.requests
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from google.oauth2 import id_token
 from redis.asyncio import Redis
-from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.core.database.redis as redis_core
 from app.config import settings
 from app.core.common.exceptions import (
     BadRequestError,
@@ -23,6 +23,7 @@ from app.core.common.exceptions import (
 )
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis
+from app.core.events.limiter import limiter
 from app.core.security.security import (
     BROWSER_READ_COOKIE,
     create_browser_read_token,
@@ -33,8 +34,11 @@ from app.models.user import User, UserRole
 from app.schemas.auth import (
     GoogleLoginIn,
     LoginIn,
+    PasswordResetConfirmIn,
+    PasswordResetRequestIn,
     RefreshResponse,
     RequestCodeIn,
+    SetPasswordIn,
     SetupIn,
     TokenResponse,
     UserBrief,
@@ -62,9 +66,6 @@ def get_client_id(request: Request) -> str:
     # X-Client-ID is client-controlled and can be rotated trivially. The proxy
     # middleware has already limited forwarding headers to trusted peers.
     return get_remote_address(request)
-
-
-limiter = Limiter(key_func=get_client_id, enabled=not settings.is_dev)
 
 
 def _set_refresh_cookie(response: Response, token: str, expire_days: int | None = None) -> None:
@@ -171,6 +172,7 @@ def _login_response(user: User, response: Response, *, is_new: bool) -> TokenRes
             role=user.role.value,
             onboarded=user.onboarded,
             auto_approve=user.auto_approve,
+            has_password=user.has_password,
             completed_tutorials=list(user.completed_tutorials or []),
         ),
         is_new_user=is_new,
@@ -264,6 +266,7 @@ async def guest_session(
             role=guest.role.value,
             onboarded=guest.onboarded,
             auto_approve=guest.auto_approve,
+            has_password=guest.has_password,
             completed_tutorials=list(guest.completed_tutorials or []),
         ),
         is_new_user=False,
@@ -483,6 +486,83 @@ async def login(
     return _login_response(user, response, is_new=False)
 
 
+@router.post("/password")
+async def create_password(
+    data: SetPasswordIn,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, str]:
+    if not settings.classic_auth_enabled:
+        raise UnauthorizedError("Classic authentication (email + password) is disabled")
+    if user.role == UserRole.GUEST:
+        raise UnauthorizedError("Guest accounts cannot create passwords")
+
+    await auth_service.create_password(db, user.id, data.password)
+    return {"message": "Password created"}
+
+
+_PASSWORD_RESET_RESPONSE = {"message": "If an account exists, a password reset link has been sent"}
+
+
+@router.post("/password-reset/request")
+@limiter.limit("5/15minutes" if not settings.is_dev else "10000/minute")
+async def request_password_reset(
+    request: Request,
+    data: PasswordResetRequestIn,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+) -> dict[str, str]:
+    if not settings.classic_auth_enabled:
+        raise UnauthorizedError("Classic authentication (email + password) is disabled")
+    if not await auth_service.consume_password_reset_budget(
+        redis, get_client_id(request), data.email
+    ):
+        return _PASSWORD_RESET_RESPONSE
+
+    if redis_core.arq_pool is None:
+        logger.error("Password reset email was not queued because the ARQ pool is unavailable")
+        return _PASSWORD_RESET_RESPONSE
+
+    delivery = await auth_service.prepare_password_reset(db, redis, data.email)
+    if delivery is None:
+        return _PASSWORD_RESET_RESPONSE
+
+    try:
+        await redis_core.arq_pool.enqueue_job(
+            "send_password_reset_email",
+            email=delivery.email,
+            reset_link=delivery.reset_link,
+        )
+    except Exception as exc:
+        logger.error("Failed to queue password reset email: %s", exc, exc_info=True)
+    return _PASSWORD_RESET_RESPONSE
+
+
+@router.post("/password-reset/confirm")
+@limiter.limit("10/15minutes" if not settings.is_dev else "10000/minute")
+async def confirm_password_reset(
+    request: Request,
+    data: PasswordResetConfirmIn,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+) -> dict[str, str]:
+    if not settings.classic_auth_enabled:
+        raise UnauthorizedError("Classic authentication (email + password) is disabled")
+    consumed = await auth_service.consume_password_reset_token(redis, data.token)
+    if consumed is None:
+        raise BadRequestError("Invalid or expired password reset link")
+    email, issuance_generation = consumed
+    user = await auth_service.reset_password(
+        db,
+        email,
+        issuance_generation,
+        data.password,
+    )
+    if user is None:
+        raise BadRequestError("Invalid or expired password reset link")
+    return {"message": "Password reset"}
+
+
 @router.post("/setup", response_model=TokenResponse)
 @limiter.limit("5/15minutes" if not settings.is_dev else "10000/minute")
 async def setup_first_admin(
@@ -603,6 +683,7 @@ async def refresh_token(
             role=user.role.value,
             onboarded=user.onboarded,
             auto_approve=user.auto_approve,
+            has_password=user.has_password,
             completed_tutorials=list(user.completed_tutorials or []),
         ),
     )

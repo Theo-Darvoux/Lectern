@@ -77,6 +77,14 @@ The platform supports several login methods; turn on the ones you want.
 - **Guest browsing** — `GUEST_ACCESS_ENABLED=true` for read-only access without
   an account.
 
+When email + password login is enabled, users who originally registered with an
+email code or Google can create their first password under **Settings →
+Security**. Accounts that already have a password can use **Forgot password?**
+on the login screen. Reset links are sent through the configured SMTP relay,
+expire after 15 minutes, are single-use, and invalidate the account's existing
+sessions when consumed. The reset request always shows the same confirmation,
+including for unknown addresses, to avoid exposing which accounts exist.
+
 ### Restricting who can register
 
 Only configured email domains may sign up. **A fresh install ships with no

@@ -36,6 +36,19 @@ export interface SearchResponse {
 
 export type SearchStatus = "idle" | "debouncing" | "loading" | "success" | "empty" | "error";
 
+export function getSearchErrorTitleKey(
+    error: Error | null,
+): "searchTooBroad" | "searchRateLimited" | "searchUnavailable" {
+    if (error instanceof ApiError && error.status === 400) return "searchTooBroad";
+    if (error instanceof ApiError && error.status === 429) return "searchRateLimited";
+    return "searchUnavailable";
+}
+
+export function isRetryableSearchError(error: Error | null): boolean {
+    if (error instanceof ApiError && error.status === 400) return false;
+    return true;
+}
+
 export function getSearchErrorMessageKey(
     error: Error | null,
 ): "refineQuery" | "slowDown" | "searchUnavailableDescription" {

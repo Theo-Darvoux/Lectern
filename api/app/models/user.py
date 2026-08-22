@@ -56,6 +56,10 @@ class User(UUIDMixin, Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @property
+    def has_password(self) -> bool:
+        return bool(self.password_hash)
+
+    @property
     def is_guest(self) -> bool:
         return self.role == UserRole.GUEST
 

@@ -346,9 +346,14 @@ export default function LoginPage() {
                                             />
                                         </div>
                                         <div className="space-y-2">
-                                            <Label htmlFor="password-tab-input" className="login-overline">
-                                                {t("passwordLabel")}
-                                            </Label>
+                                            <div className="flex items-center justify-between">
+                                                <Label htmlFor="password-tab-input" className="login-overline">
+                                                    {t("passwordLabel")}
+                                                </Label>
+                                                <Link href="/login/reset-password" className="text-xs text-[#828096] transition-colors hover:text-[#f0eef5]">
+                                                    {t("forgotPassword")}
+                                                </Link>
+                                            </div>
                                             <div className="relative">
                                                 <Input
                                                     id="password-tab-input"
@@ -444,9 +449,14 @@ export default function LoginPage() {
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <Label htmlFor="password-classic" className="login-overline">
-                                        {t("passwordLabel")}
-                                    </Label>
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="password-classic" className="login-overline">
+                                            {t("passwordLabel")}
+                                        </Label>
+                                        <Link href="/login/reset-password" className="text-xs text-[#828096] transition-colors hover:text-[#f0eef5]">
+                                            {t("forgotPassword")}
+                                        </Link>
+                                    </div>
                                     <div className="relative">
                                         <Input
                                             id="password-classic"
@@ -502,7 +512,7 @@ export default function LoginPage() {
                                         </div>
                                         <div className="relative flex justify-center">
                                             <span className="login-overline bg-[#0c0d14] px-2.5">
-                                                {t("orContinue")}
+                                                {t("or")}
                                             </span>
                                         </div>
                                     </div>

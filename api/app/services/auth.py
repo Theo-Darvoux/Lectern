@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -34,6 +35,16 @@ GUEST_SESSION_MINT_TTL_SECONDS = 15 * 60
 CLASSIC_LOGIN_SOURCE_MAX = 20
 CLASSIC_LOGIN_ACCOUNT_MAX = 8
 CLASSIC_LOGIN_TTL_SECONDS = 15 * 60
+PASSWORD_RESET_SOURCE_MAX = 10
+PASSWORD_RESET_ACCOUNT_MAX = 3
+PASSWORD_RESET_TTL_SECONDS = 15 * 60
+
+
+@dataclass(frozen=True)
+class PasswordResetDelivery:
+    email: str
+    reset_link: str
+
 
 # Redis scripts are deliberately small and self-identifying. Challenge issuance
 # and compare/delete decisions happen server-side so concurrent requests cannot
@@ -87,6 +98,35 @@ redis.call("DEL", KEYS[2])
 redis.call("DEL", KEYS[3])
 redis.call("DEL", KEYS[4])
 return {1, generation}
+"""
+
+_STORE_PASSWORD_RESET_LUA = r"""
+-- auth_store_password_reset_v1
+local previous_digest = redis.call("GET", KEYS[3])
+if previous_digest then
+    redis.call("DEL", "auth:password_reset:" .. previous_digest)
+    redis.call("DEL", "auth:password_reset_gen:" .. previous_digest)
+end
+redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[4])
+redis.call("SET", KEYS[2], ARGV[2], "EX", ARGV[4])
+redis.call("SET", KEYS[3], ARGV[3], "EX", ARGV[4])
+return 1
+"""
+
+_CONSUME_PASSWORD_RESET_LUA = r"""
+-- auth_consume_password_reset_v1
+local email = redis.call("GET", KEYS[1])
+local generation = redis.call("GET", KEYS[2])
+local current_digest = redis.call("GET", KEYS[3])
+if not email or not generation or not current_digest or current_digest ~= ARGV[1] then
+    redis.call("DEL", KEYS[1])
+    redis.call("DEL", KEYS[2])
+    return {0}
+end
+redis.call("DEL", KEYS[1])
+redis.call("DEL", KEYS[2])
+redis.call("DEL", KEYS[3])
+return {1, email, generation}
 """
 
 # Fallback used when DB has no AllowedDomain rows and ALLOWED_DOMAINS env is unset.
@@ -262,6 +302,69 @@ def generate_code() -> str:
 
 def generate_magic_token() -> str:
     return secrets.token_urlsafe(48)
+
+
+def _token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+async def store_password_reset_token(
+    redis: Redis,  # type: ignore[type-arg]
+    email: str,
+    token: str,
+    *,
+    auth_generation: int,
+) -> None:
+    digest = _token_digest(token)
+    account_key = _normalized_account_rate_key(email)
+    script = redis.register_script(_STORE_PASSWORD_RESET_LUA)
+    result = await script(
+        keys=[
+            f"auth:password_reset:{digest}",
+            f"auth:password_reset_gen:{digest}",
+            f"auth:password_reset_ref:{account_key}",
+        ],
+        args=[email, auth_generation, digest, PASSWORD_RESET_TTL_SECONDS],
+        client=redis,
+    )
+    if int(result) != 1:
+        raise RuntimeError("Redis failed to store password reset token atomically")
+
+
+async def consume_password_reset_token(
+    redis: Redis,  # type: ignore[type-arg]
+    token: str,
+) -> tuple[str, int] | None:
+    digest = _token_digest(token)
+    token_key = f"auth:password_reset:{digest}"
+    email = await redis.get(token_key)
+    if not email:
+        return None
+    if isinstance(email, bytes):
+        email = email.decode()
+
+    script = redis.register_script(_CONSUME_PASSWORD_RESET_LUA)
+    result = await script(
+        keys=[
+            token_key,
+            f"auth:password_reset_gen:{digest}",
+            f"auth:password_reset_ref:{_normalized_account_rate_key(email)}",
+        ],
+        args=[digest],
+        client=redis,
+    )
+    if not isinstance(result, (list, tuple)) or len(result) < 3 or int(result[0]) != 1:
+        return None
+    raw_email, raw_generation = result[1], result[2]
+    if isinstance(raw_email, bytes):
+        raw_email = raw_email.decode()
+    if isinstance(raw_generation, bytes):
+        raw_generation = raw_generation.decode()
+    try:
+        generation = int(raw_generation)
+    except (TypeError, ValueError):
+        return None
+    return (str(raw_email), generation) if generation >= 0 else None
 
 
 async def login_challenge_auth_generation(db: AsyncSession, email: str) -> int:
@@ -453,6 +556,27 @@ async def consume_classic_login_budget(
     )
 
 
+async def consume_password_reset_budget(
+    redis: Redis,  # type: ignore[type-arg]
+    source: str,
+    email: str,
+) -> bool:
+    if settings.is_dev:
+        return True
+    source_key = f"auth:password_reset:source:{source}"
+    account_key = f"auth:password_reset:account:{_normalized_account_rate_key(email)}"
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.incr(source_key)
+        pipe.expire(source_key, PASSWORD_RESET_TTL_SECONDS, nx=True)
+        pipe.incr(account_key)
+        pipe.expire(account_key, PASSWORD_RESET_TTL_SECONDS, nx=True)
+        results = await pipe.execute()
+    return (
+        int(results[0]) <= PASSWORD_RESET_SOURCE_MAX
+        and int(results[2]) <= PASSWORD_RESET_ACCOUNT_MAX
+    )
+
+
 async def check_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[type-arg]
     if settings.is_dev:
         return True
@@ -595,6 +719,11 @@ async def _verify_password_bounded(plain_password: str, hashed_password: str) ->
         return await asyncio.to_thread(verify_password, plain_password, hashed_password)
 
 
+async def _hash_password_bounded(password: str) -> str:
+    async with _PASSWORD_VERIFY_SEMAPHORE:
+        return await asyncio.to_thread(get_password_hash, password)
+
+
 async def authenticate_user(db: AsyncSession, email: str, password: str) -> User | None:
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
@@ -604,6 +733,59 @@ async def authenticate_user(db: AsyncSession, email: str, password: str) -> User
     is_valid = await _verify_password_bounded(password, password_hash)
     if user is None or not user.password_hash or not is_valid:
         return None
+    return user
+
+
+async def create_password(db: AsyncSession, user_id: object, password: str) -> User:
+    password_hash = await _hash_password_bounded(password)
+    user = await db.scalar(select(User).where(User.id == user_id).with_for_update())
+    if user is None:
+        raise UnauthorizedError("User not found")
+    if user.password_hash is not None:
+        raise ConflictError("This account already has a password")
+    user.password_hash = password_hash
+    await db.flush()
+    return user
+
+
+async def get_password_reset_account(db: AsyncSession, email: str) -> User | None:
+    return await db.scalar(select(User).where(User.email == email))
+
+
+async def prepare_password_reset(
+    db: AsyncSession,
+    redis: Redis,  # type: ignore[type-arg]
+    email: str,
+) -> PasswordResetDelivery | None:
+    """Issue a reset capability for an eligible account without disclosing eligibility."""
+    user = await get_password_reset_account(db, email)
+    if user is None or user.role == UserRole.GUEST:
+        return None
+
+    token = generate_magic_token()
+    await store_password_reset_token(
+        redis,
+        user.email,
+        token,
+        auth_generation=user.auth_generation,
+    )
+    reset_link = f"{settings.frontend_url.rstrip('/')}/login/reset-password#token={token}"
+    return PasswordResetDelivery(email=user.email, reset_link=reset_link)
+
+
+async def reset_password(
+    db: AsyncSession,
+    email: str,
+    issuance_generation: int,
+    password: str,
+) -> User | None:
+    password_hash = await _hash_password_bounded(password)
+    user = await db.scalar(select(User).where(User.email == email).with_for_update())
+    if user is None or user.auth_generation != issuance_generation:
+        return None
+    user.password_hash = password_hash
+    user.auth_generation += 1
+    await db.flush()
     return user
 
 

@@ -69,6 +69,7 @@ class UserOut(PublicUserOut):
     email: str
     onboarded: bool
     auto_approve: bool
+    has_password: bool
     completed_tutorials: list[str] = []
 
 

@@ -20,6 +20,28 @@ from app.models.base import Base
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_test_settings():
+    from app.config import settings
+
+    orig_env = settings.environment
+    orig_bootstrap = settings.bootstrap_token
+    orig_bazaar = settings.malwarebazaar_fail_closed
+    orig_domains = settings.allowed_domains
+    orig_allow_all = settings.allow_all_domains
+
+    settings.bootstrap_token = None
+    settings.malwarebazaar_fail_closed = True
+    try:
+        yield
+    finally:
+        settings.environment = orig_env
+        settings.bootstrap_token = orig_bootstrap
+        settings.malwarebazaar_fail_closed = orig_bazaar
+        settings.allowed_domains = orig_domains
+        settings.allow_all_domains = orig_allow_all
+
+
 @pytest.fixture(scope="session")
 def engine():
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=StaticPool, echo=False)
@@ -342,6 +364,37 @@ class FakeRedis:
                 self.data.pop(keys[2], None)
                 self.data.pop(keys[3], None)
                 return [1, generation]
+
+            if "auth_store_password_reset_v1" in script:
+
+                def _text(value):
+                    return value.decode() if isinstance(value, bytes) else value
+
+                previous = _text(self.data.get(keys[2]))
+                if previous:
+                    self.data.pop(f"auth:password_reset:{previous}", None)
+                    self.data.pop(f"auth:password_reset_gen:{previous}", None)
+                self.data[keys[0]] = str(args[0]).encode()
+                self.data[keys[1]] = str(args[1]).encode()
+                self.data[keys[2]] = str(args[2]).encode()
+                return 1
+
+            if "auth_consume_password_reset_v1" in script:
+
+                def _text(value):
+                    return value.decode() if isinstance(value, bytes) else value
+
+                email = _text(self.data.get(keys[0]))
+                generation = _text(self.data.get(keys[1]))
+                current_digest = _text(self.data.get(keys[2]))
+                if not email or generation is None or current_digest != str(args[0]):
+                    self.data.pop(keys[0], None)
+                    self.data.pop(keys[1], None)
+                    return [0]
+                self.data.pop(keys[0], None)
+                self.data.pop(keys[1], None)
+                self.data.pop(keys[2], None)
+                return [1, email, generation]
 
             if "holder_id" in script and "ZREMRANGEBYSCORE" in script:
                 import time
