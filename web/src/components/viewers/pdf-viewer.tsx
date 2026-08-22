@@ -14,11 +14,18 @@ interface PdfViewerProps {
     fileKey: string;
     materialId: string;
     annotations?: ThreadData[];
+    targetAnnotationId?: string | null;
 }
 
-export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerProps) {
+export function PdfViewer({
+    materialId,
+    fileKey,
+    annotations = [],
+    targetAnnotationId,
+}: PdfViewerProps) {
     const t = useTranslations("Viewers");
     const shellScrollRef = useRef<HTMLDivElement>(null);
+    const scrolledPdfTargetRef = useRef<string | null>(null);
 
     const { blobUrl, loading, error, reload } = useMaterialFile({ materialId, fileKey, mode: "blob" });
 
@@ -51,6 +58,21 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
     const allAnnotationsRef = useRef(allAnnotations);
     useEffect(() => { allAnnotationsRef.current = allAnnotations; });
 
+    const targetThread = useMemo(() => {
+        if (!targetAnnotationId) return null;
+        return annotations.find(
+            (th) => th.root.id === targetAnnotationId || th.replies.some((r) => r.id === targetAnnotationId),
+        ) ?? null;
+    }, [targetAnnotationId, annotations]);
+
+    const targetPage = typeof targetThread?.root.page === "number" ? targetThread.root.page : undefined;
+
+    const annotationsRef = useRef(annotations);
+    useEffect(() => { annotationsRef.current = annotations; });
+
+    const targetThreadRef = useRef(targetThread);
+    useEffect(() => { targetThreadRef.current = targetThread; });
+
     const annotationClickRef = useRef<(threadId: string, e: MouseEvent) => void>(() => {});
     useEffect(() => {
         annotationClickRef.current = (threadId, e) => {
@@ -61,13 +83,29 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
 
     const onTextLayerRendered = useCallback((pageNumber: number, pageDiv: HTMLDivElement) => {
         paintPageHighlights(pageDiv, pageNumber, allAnnotationsRef.current, annotationClickRef.current);
-    }, []);
+
+        if (targetAnnotationId && scrolledPdfTargetRef.current !== targetAnnotationId) {
+            const thread = targetThreadRef.current || annotationsRef.current.find(
+                (th) => th.root.id === targetAnnotationId || th.replies.some((r) => r.id === targetAnnotationId),
+            );
+            if (thread && (thread.root.page === pageNumber || !thread.root.page)) {
+                const hl = pageDiv.querySelector<HTMLElement>(`[data-thread-id="${thread.root.id}"]`);
+                if (hl) {
+                    scrolledPdfTargetRef.current = targetAnnotationId;
+                    requestAnimationFrame(() => {
+                        hl.scrollIntoView({ behavior: "smooth", block: "center" });
+                        hl.classList.add("ring-2", "ring-primary", "ring-offset-2");
+                    });
+                }
+            }
+        }
+    }, [targetAnnotationId]);
 
     const {
         containerRef, viewerElRef, status, error: pdfError,
         numPages, currentPage, scalePercent,
         zoomIn, zoomOut, resetZoom, goToPage, setSpread, reload: reloadDoc,
-    } = usePdfjsDocument({ url: blobUrl, onTextLayerRendered });
+    } = usePdfjsDocument({ url: blobUrl, initialPage: targetPage, onTextLayerRendered });
 
     // The pdf.js container must stay mounted across loading/error so its init
     // effect can attach exactly once (ViewerShell otherwise swaps children out
@@ -93,7 +131,50 @@ export function PdfViewer({ materialId, fileKey, annotations = [] }: PdfViewerPr
             const n = parseInt(pageDiv.getAttribute("data-page-number") ?? "0", 10);
             if (n) paintPageHighlights(pageDiv, n, allAnnotationsRef.current, annotationClickRef.current);
         });
-    }, [annotationsKey, viewerElRef]);
+
+        if (targetAnnotationId && scrolledPdfTargetRef.current !== targetAnnotationId && targetThread) {
+            const hl = root.querySelector<HTMLElement>(`[data-thread-id="${targetThread.root.id}"]`);
+            if (hl) {
+                scrolledPdfTargetRef.current = targetAnnotationId;
+                hl.scrollIntoView({ behavior: "smooth", block: "center" });
+                hl.classList.add("ring-2", "ring-primary", "ring-offset-2");
+            }
+        }
+    }, [annotationsKey, viewerElRef, targetAnnotationId, targetThread]);
+
+    // ── Auto-scroll to target annotation in PDF ──────────────────────────────
+    useEffect(() => {
+        if (!targetAnnotationId || !targetThread || status !== "ready") return;
+
+        if (typeof targetThread.root.page === "number" && targetThread.root.page > 0) {
+            goToPage(targetThread.root.page);
+        }
+
+        const root = viewerElRef.current;
+        if (!root) return;
+
+        const tryScroll = () => {
+            const hl = root.querySelector<HTMLElement>(`[data-thread-id="${targetThread.root.id}"]`);
+            if (hl) {
+                scrolledPdfTargetRef.current = targetAnnotationId;
+                hl.scrollIntoView({ behavior: "smooth", block: "center" });
+                hl.classList.add("ring-2", "ring-primary", "ring-offset-2");
+                return true;
+            }
+            return false;
+        };
+
+        if (!tryScroll()) {
+            let attempts = 0;
+            const interval = setInterval(() => {
+                attempts++;
+                if (tryScroll() || attempts >= 15) {
+                    clearInterval(interval);
+                }
+            }, 200);
+            return () => clearInterval(interval);
+        }
+    }, [targetAnnotationId, targetThread, status, goToPage, viewerElRef]);
 
     // ── Keyboard: page nav (arrows / WASD) + zoom (ctrl/⌘ +/-/0) ──────────────
     const pageRef = useRef(currentPage);

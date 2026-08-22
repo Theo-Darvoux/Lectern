@@ -210,7 +210,10 @@ async def get_user_contributions(
         count_result = await db.execute(select(func.count()).select_from(ann_base.subquery()))
         total = count_result.scalar_one()
         result = await db.execute(
-            ann_base.options(selectinload(Annotation.author))
+            ann_base.options(
+                selectinload(Annotation.author),
+                selectinload(Annotation.material),
+            )
             .order_by(Annotation.created_at.desc())
             .offset(offset)
             .limit(limit)

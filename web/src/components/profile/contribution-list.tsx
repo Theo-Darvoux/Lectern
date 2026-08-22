@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { MaterialCard } from "@/components/home/material-card";
+import { getMaterialBrowsePath } from "@/components/home/file-type-display";
 import {
   PROFILE_MATERIAL_GRID,
   toProfileMaterialDetail,
@@ -36,6 +37,8 @@ interface ContributionItem {
   created_at?: string;
   updated_at?: string;
   material_id?: string;
+  material_title?: string | null;
+  material_slug?: string | null;
   directory_id?: string | null;
   directory_path?: string | null;
   download_count?: number;
@@ -147,19 +150,37 @@ function AnnotationCard({ item }: { item: ContributionItem }) {
     ? formatDistanceToNow(new Date(item.created_at), { addSuffix: true })
     : null;
 
+  const slug = item.material_slug ?? item.slug;
+  const href = slug
+    ? `${getMaterialBrowsePath({ directory_path: item.directory_path ?? null, slug })}?annotation=${item.id}`
+    : `/browse?annotation=${item.id}`;
+
   return (
-    <article className="flex h-full flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
-      <div className="relative flex aspect-4/3 flex-col justify-between overflow-hidden bg-linear-to-br from-amber-500/14 via-amber-500/5 to-background p-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/12 text-amber-600 dark:text-amber-400">
-          <Quote className="h-4 w-4" />
+    <Link
+      href={href}
+      className="group block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      data-annotation-card
+    >
+      <article className="flex h-full flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition-[border-color,box-shadow] group-hover:border-primary/20 group-hover:shadow-md">
+        <div className="relative flex aspect-4/3 flex-col justify-between overflow-hidden bg-linear-to-br from-amber-500/14 via-amber-500/5 to-background p-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/12 text-amber-600 dark:text-amber-400">
+            <Quote className="h-4 w-4" />
+          </div>
+          <p className="line-clamp-4 text-sm leading-relaxed text-foreground/80">{body}</p>
         </div>
-        <p className="line-clamp-4 text-sm leading-relaxed text-foreground/80">{body}</p>
-      </div>
-      <div className="flex min-w-0 items-center justify-between gap-2 p-2.5 sm:p-3">
-        <span className="text-[11px] font-medium text-muted-foreground">{t("annotation")}</span>
-        {timeAgo && <span className="truncate text-[11px] text-muted-foreground">{timeAgo}</span>}
-      </div>
-    </article>
+        <div className="flex min-w-0 flex-1 flex-col p-2.5 sm:p-3">
+          {item.material_title && (
+            <p className="line-clamp-1 text-[13px] font-medium leading-snug text-foreground sm:text-sm group-hover:text-primary transition-colors">
+              {item.material_title}
+            </p>
+          )}
+          <div className="mt-auto flex items-center justify-between gap-2 pt-2 text-[11px] text-muted-foreground">
+            <span className="font-medium">{t("annotation")}</span>
+            {timeAgo && <span className="truncate">{timeAgo}</span>}
+          </div>
+        </div>
+      </article>
+    </Link>
   );
 }
 

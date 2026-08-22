@@ -11,6 +11,7 @@ from app.core.database.database import get_db
 from app.core.storage.facade import generate_presigned_get
 from app.dependencies.auth import CurrentUser, ReadUser
 from app.dependencies.pagination import PaginationParams
+from app.models.annotation import Annotation
 from app.models.material import Material, MaterialFavourite, MaterialVersion
 from app.models.user import UserRole
 from app.schemas.collection import SavedLibraryOut
@@ -21,6 +22,7 @@ from app.schemas.user import (
     PublicAnnotationContribution,
     PublicMaterialContribution,
     PublicPRContribution,
+    PublicUserBrief,
     PublicUserOut,
     PublicUserProfileOut,
     TutorialCompleteIn,
@@ -261,6 +263,14 @@ async def get_contributions(
         materials_list = cast(list[dict[str, typing.Any]], items)
         dir_ids = {m["directory_id"] for m in materials_list if m.get("directory_id") is not None}
         directory_paths = await get_directory_paths(db, dir_ids)
+    elif type == "annotations":
+        annotations_list = cast(list[Annotation], items)
+        dir_ids = {
+            ann.material.directory_id
+            for ann in annotations_list
+            if ann.material and ann.material.directory_id is not None
+        }
+        directory_paths = await get_directory_paths(db, dir_ids)
 
     serialized_items: list[
         PublicPRContribution | PublicMaterialContribution | PublicAnnotationContribution
@@ -276,7 +286,22 @@ async def get_contributions(
                 )
             )
         elif type == "annotations":
-            serialized_items.append(PublicAnnotationContribution.model_validate(item))
+            ann = cast(Annotation, item)
+            mat = ann.material
+            dir_path = directory_paths.get(mat.directory_id) if mat and mat.directory_id else None
+            serialized_items.append(
+                PublicAnnotationContribution(
+                    id=ann.id,
+                    material_id=ann.material_id,
+                    material_title=mat.title if mat else None,
+                    material_slug=mat.slug if mat else None,
+                    directory_path=dir_path,
+                    body=ann.body,
+                    author=PublicUserBrief.model_validate(ann.author) if ann.author else None,
+                    created_at=ann.created_at,
+                    updated_at=ann.updated_at,
+                )
+            )
 
     return PaginatedResponse(
         items=serialized_items,

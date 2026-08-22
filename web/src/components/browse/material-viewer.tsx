@@ -389,6 +389,23 @@ export function MaterialViewer({
     });
   };
 
+  const targetAnnotationId = searchParams.get("annotation") || undefined;
+
+  useEffect(() => {
+    if (targetAnnotationId && materialId) {
+      openSidebar("annotations", {
+        type: "material",
+        id: materialId,
+        data: {
+          ...displayMaterial,
+          __viewerType: viewerType,
+          __path: pathname,
+          __targetAnnotationId: targetAnnotationId,
+        },
+      });
+    }
+  }, [targetAnnotationId, materialId, openSidebar, displayMaterial, viewerType, pathname]);
+
   useEffect(() => {
     // Seed the sidebar target with the current material so any updates
     // (likes, favourites) flow through the shared store and stay in sync
@@ -396,9 +413,14 @@ export function MaterialViewer({
     setSidebarTarget({
       type: "material",
       id: materialId,
-      data: { ...displayMaterial, __viewerType: viewerType },
+      data: {
+        ...displayMaterial,
+        __viewerType: viewerType,
+        __path: pathname,
+        __targetAnnotationId: targetAnnotationId,
+      },
     });
-  }, [materialId, viewerType, setSidebarTarget]);
+  }, [materialId, viewerType, pathname, targetAnnotationId, setSidebarTarget, displayMaterial]);
 
   const breadcrumbItems = useMemo(() => {
     return [
@@ -615,6 +637,7 @@ export function MaterialViewer({
                 fileKey={fileKey}
                 materialId={materialId}
                 annotations={threads}
+                targetAnnotationId={targetAnnotationId}
               />
             )}
             {viewerType === "markdown" && (
@@ -623,6 +646,7 @@ export function MaterialViewer({
                 materialId={materialId}
                 material={material}
                 annotations={threads}
+                targetAnnotationId={targetAnnotationId}
               />
             )}
             {viewerType === "image" && (
@@ -680,7 +704,12 @@ export function MaterialViewer({
               <DjvuViewer fileKey={fileKey} materialId={materialId} />
             )}
             {viewerType === "qcm" && (
-              <QCMViewer fileKey={fileKey} materialId={materialId} initialData={stagedQcmDraft as QCMFile ?? undefined} />
+              <QCMViewer
+                fileKey={fileKey}
+                materialId={materialId}
+                initialData={stagedQcmDraft as QCMFile ?? undefined}
+                targetAnnotationId={targetAnnotationId}
+              />
             )}
             {viewerType === "link" && (
               <LinkViewer material={displayMaterial} />

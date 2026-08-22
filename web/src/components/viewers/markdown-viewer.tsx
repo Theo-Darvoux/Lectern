@@ -19,6 +19,7 @@ interface MarkdownViewerProps {
     materialId: string;
     material?: Record<string, unknown>;
     annotations?: ThreadData[];
+    targetAnnotationId?: string | null;
 }
 
 interface HighlightRect {
@@ -130,10 +131,12 @@ export function MarkdownViewer({
     fileKey,
     material,
     annotations = [],
+    targetAnnotationId,
 }: MarkdownViewerProps) {
     const proseRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const scrolledMarkdownTargetRef = useRef<string | null>(null);
     const [highlights, setHighlights] = useState<HighlightRect[]>([]);
     const [activeAnnotation, setActiveAnnotation] = useState<{
         thread: ThreadData;
@@ -207,8 +210,8 @@ export function MarkdownViewer({
 
     useEffect(() => {
         if (!loading && !error && parsedContent) {
-            const timer = setTimeout(updateHighlights, 50);
-            return () => clearTimeout(timer);
+            const raf = requestAnimationFrame(updateHighlights);
+            return () => cancelAnimationFrame(raf);
         }
     }, [loading, error, parsedContent, updateHighlights]);
 
@@ -233,6 +236,38 @@ export function MarkdownViewer({
             setActiveAnnotation({ thread, clientX: e.clientX, clientY: e.clientY });
         }
     }, [annotations]);
+
+    useEffect(() => {
+        if (!targetAnnotationId || highlights.length === 0) return;
+        if (scrolledMarkdownTargetRef.current === targetAnnotationId) return;
+
+        const targetThread = annotations.find(
+            (t) => t.root.id === targetAnnotationId || t.replies.some((r) => r.id === targetAnnotationId),
+        );
+        if (!targetThread) return;
+
+        const tryScroll = () => {
+            const el = proseRef.current?.querySelector<HTMLElement>(`[data-thread-id="${targetThread.root.id}"]`);
+            if (el) {
+                scrolledMarkdownTargetRef.current = targetAnnotationId;
+                el.scrollIntoView({ behavior: "smooth", block: "center" });
+                el.classList.add("ring-2", "ring-primary", "ring-offset-2");
+                return true;
+            }
+            return false;
+        };
+
+        if (!tryScroll()) {
+            let attempts = 0;
+            const interval = setInterval(() => {
+                attempts++;
+                if (tryScroll() || attempts >= 10) {
+                    clearInterval(interval);
+                }
+            }, 100);
+            return () => clearInterval(interval);
+        }
+    }, [targetAnnotationId, highlights, annotations]);
 
     return (
         <>
@@ -275,6 +310,7 @@ export function MarkdownViewer({
                 {highlights.map((h, i) => (
                     <div
                         key={i}
+                        data-thread-id={h.threadId}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={(e) => handleHighlightClick(h.threadId, e)}
                         className="annotation-highlight rounded-sm"

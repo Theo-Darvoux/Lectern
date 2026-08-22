@@ -190,6 +190,8 @@ async def test_annotation_contributions_require_auth_and_hide_deleted_parent(
     assert visible.status_code == 200
     item = visible.json()["items"][0]
     assert item["body"] == "private annotation body"
+    assert item["material_slug"] == material.slug
+    assert item["material_title"] == "Annotated material"
     assert "selection_text" not in item
     assert "position_data" not in item
     assert "page" not in item
