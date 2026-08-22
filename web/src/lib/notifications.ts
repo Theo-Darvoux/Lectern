@@ -1,4 +1,4 @@
-import type { ElementType } from "react";
+import { createElement, type ElementType } from "react";
 import {
   CheckCircle2,
   Flag,
@@ -27,6 +27,84 @@ const NOTIFICATION_ICONS: Record<string, ElementType> = {
 
 export function notificationIcon(type: string): ElementType {
   return NOTIFICATION_ICONS[type] ?? MessageSquare;
+}
+
+export function NotificationIcon({
+  type,
+  className,
+}: {
+  type: string;
+  className?: string;
+}) {
+  const Icon = NOTIFICATION_ICONS[type] ?? MessageSquare;
+  return createElement(Icon, { className });
+}
+
+export type NotificationCategory = "all" | "pr" | "comment" | "moderation" | "system";
+
+export function getNotificationCategory(type: string): "pr" | "comment" | "moderation" | "system" {
+  if (type.startsWith("pr_") || type.startsWith("pull_request")) {
+    return "pr";
+  }
+  if (
+    type.includes("comment") ||
+    type.includes("annotation") ||
+    type.includes("reply")
+  ) {
+    return "comment";
+  }
+  if (type.includes("flag")) {
+    return "moderation";
+  }
+  if (
+    type.includes("user") ||
+    type.includes("access") ||
+    type.includes("system")
+  ) {
+    return "system";
+  }
+  return "pr";
+}
+
+export function getNotificationStyle(type: string, isRead: boolean) {
+  switch (type) {
+    case "pr_approved":
+    case "access_approved":
+      return {
+        bg: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+        badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+      };
+    case "pr_rejected":
+    case "new_flag":
+      return {
+        bg: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+        badge: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
+      };
+    case "pr_reverted":
+      return {
+        bg: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+        badge: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+      };
+    case "flag_resolved":
+      return {
+        bg: "bg-teal-500/10 text-teal-600 dark:text-teal-400",
+        badge: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
+      };
+    case "pending_user":
+      return {
+        bg: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
+        badge: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
+      };
+    case "material_comment":
+    case "material_annotation":
+    case "annotation_reply":
+    case "pr_comment_reply":
+    default:
+      return {
+        bg: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+        badge: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
+      };
+  }
 }
 
 export interface NotificationItem {

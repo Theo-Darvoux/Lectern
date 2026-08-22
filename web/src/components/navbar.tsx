@@ -15,13 +15,11 @@ import {
   LogOut,
   LogIn,
   Folder,
-  Check,
-  CheckCheck,
   HelpCircle,
   Shield,
   Trophy,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { SearchModal } from "@/components/search/search-modal";
 import { SearchInline } from "@/components/search/search-inline";
 import { useNotificationStore, useConfigStore, usePRStore, useUIStore } from "@/lib/stores";
@@ -38,22 +36,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { API_BASE } from "@/lib/api-client";
-import {
-  fetchNotifications,
-  fetchUnreadCount,
-  markAllNotificationsRead,
-  markNotificationRead,
-  notificationIcon,
-  type NotificationItem,
-} from "@/lib/notifications";
+import { fetchUnreadCount } from "@/lib/notifications";
 import { fetchOpenPRCount } from "@/lib/pr-client";
-import { formatDistanceToNow } from "date-fns/formatDistanceToNow";
 import { useTranslations } from "next-intl";
 
 export function Navbar() {
@@ -68,22 +53,16 @@ export function Navbar() {
   const setSearchOpen = useUIStore((state) => state.setSearchOpen);
   const unreadCount = useNotificationStore((state) => state.unreadCount);
   const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
-  const decrement = useNotificationStore((state) => state.decrement);
   const openPRCount = usePRStore((state) => state.openPRCount);
   const setOpenPRCount = usePRStore((state) => state.setOpenPRCount);
   const config = useConfigStore((state) => state.config);
   const pathname = usePathname();
 
-  const [popoverOpen, setPopoverOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const tutorialProfileOpen = useTutorialMenuOpen("profile-menu");
   // Re-render when the runtime toggle loads so the Help center link hides.
   const tutorialsDisabled = useConfigStore((s) => s.config?.tutorials_enabled === false);
   const showHelp = !tutorialsDisabled && tutorialsEnabled();
-  const [recentNotifications, setRecentNotifications] = useState<
-    NotificationItem[]
-  >([]);
-  const [loadingNotifications, setLoadingNotifications] = useState(false);
 
   useSSE();
 
@@ -92,8 +71,11 @@ export function Navbar() {
       fetchOpenPRCount()
         .then((count) => setOpenPRCount(count))
         .catch(() => {});
+      fetchUnreadCount()
+        .then((count) => setUnreadCount(count))
+        .catch(() => {});
     }
-  }, [pathname, isAuthenticated, user, guest, setOpenPRCount]);
+  }, [pathname, isAuthenticated, user, guest, setOpenPRCount, setUnreadCount]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -106,75 +88,6 @@ export function Navbar() {
     document.addEventListener("keydown", down);
     return () => document.removeEventListener("keydown", down);
   }, [isAuthenticated, setSearchOpen]);
-
-  const fetchRecentNotifications = useCallback(async () => {
-    setLoadingNotifications(true);
-    try {
-      // Sync badge against the authoritative unread count, then load recent 5.
-      const [count, data] = await Promise.all([
-        fetchUnreadCount(),
-        fetchNotifications({ limit: 5 }),
-      ]);
-      setUnreadCount(count);
-      setRecentNotifications(data.items || []);
-    } catch {
-      // Ignore for popover
-    } finally {
-      setLoadingNotifications(false);
-    }
-  }, [setUnreadCount]);
-
-  const handleNotificationClick = useCallback(
-    (n: NotificationItem) => {
-      setPopoverOpen(false);
-      if (n.read) return;
-      // Optimistically clear it; reconcile happens on next focus/open.
-      setRecentNotifications((prev) =>
-        prev.map((item) =>
-          item.id === n.id ? { ...item, read: true } : item,
-        ),
-      );
-      decrement();
-      markNotificationRead(n.id).catch(() => {});
-    },
-    [decrement],
-  );
-
-  const markOneRead = useCallback(
-    (e: React.MouseEvent, n: NotificationItem) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (n.read) return;
-      setRecentNotifications((prev) =>
-        prev.map((item) =>
-          item.id === n.id ? { ...item, read: true } : item,
-        ),
-      );
-      decrement();
-      markNotificationRead(n.id).catch(() => {});
-    },
-    [decrement],
-  );
-
-  const markAllRead = useCallback(async () => {
-    setRecentNotifications((prev) =>
-      prev.map((item) => ({ ...item, read: true })),
-    );
-    setUnreadCount(0);
-    try {
-      await markAllNotificationsRead();
-    } catch {
-      // Reconcile on next open/focus.
-    }
-  }, [setUnreadCount]);
-
-  const hasUnreadRecent = recentNotifications.some((n) => !n.read);
-
-  useEffect(() => {
-    if (popoverOpen) {
-      fetchRecentNotifications();
-    }
-  }, [popoverOpen, fetchRecentNotifications]);
 
   const initials = user?.display_name
     ? user.display_name
@@ -285,121 +198,23 @@ export function Navbar() {
                 </Button>
               </Link>
 
-              <div className="hidden md:flex items-center">
-                <Popover open={popoverOpen} onOpenChange={setPopoverOpen} modal={false}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      data-tutorial="nav-notifications"
-                      className={`relative rounded-full ${pathname.startsWith("/notifications") || popoverOpen ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                      title={t("notifications")}
-                    >
-                      <Bell className="h-4 w-4" />
-                      {unreadCount > 0 && (
-                        <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium text-destructive-foreground border-2 border-background">
-                          {unreadCount > 99 ? "99+" : unreadCount}
-                        </span>
-                      )}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-96 p-0" align="end">
-                    <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold">
-                          {t("notifications")}
-                        </p>
-                        {unreadCount > 0 && (
-                          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/10 px-1.5 text-[11px] font-medium text-primary">
-                            {unreadCount > 99 ? "99+" : unreadCount}
-                          </span>
-                        )}
-                      </div>
-                      {hasUnreadRecent && (
-                        <button
-                          type="button"
-                          onClick={markAllRead}
-                          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                        >
-                          <CheckCheck className="h-3.5 w-3.5" />
-                          {t("markAllRead")}
-                        </button>
-                      )}
-                    </div>
-                    <div className="max-h-[360px] overflow-y-auto">
-                      {loadingNotifications ? (
-                        <div className="p-6 text-center text-sm text-muted-foreground">
-                          {tCommon("loading")}
-                        </div>
-                      ) : recentNotifications.length === 0 ? (
-                        <div className="flex flex-col items-center gap-2 p-8 text-center text-sm text-muted-foreground">
-                          <Bell className="h-6 w-6 opacity-40" />
-                          {t("noNewNotifications")}
-                        </div>
-                      ) : (
-                        <div className="flex flex-col">
-                          {recentNotifications.map((n) => {
-                            const Icon = notificationIcon(n.type);
-                            return (
-                              <div
-                                key={n.id}
-                                className={`group relative flex items-start gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0 hover:bg-muted/50 ${n.read ? "" : "bg-primary/5"}`}
-                              >
-                                <div
-                                  className={`mt-0.5 shrink-0 rounded-full p-1.5 ${n.read ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"}`}
-                                >
-                                  <Icon className="h-3.5 w-3.5" />
-                                </div>
-                                <Link
-                                  href={n.link || "/notifications"}
-                                  onClick={() => handleNotificationClick(n)}
-                                  className="min-w-0 flex-1"
-                                >
-                                  <span
-                                    className={`block line-clamp-2 text-sm ${n.read ? "text-muted-foreground" : "font-medium"}`}
-                                  >
-                                    {n.title}
-                                  </span>
-                                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                                    {formatDistanceToNow(new Date(n.created_at), {
-                                      addSuffix: true,
-                                    })}
-                                  </span>
-                                </Link>
-                                {!n.read && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => markOneRead(e, n)}
-                                    title={t("markRead")}
-                                    aria-label={t("markRead")}
-                                    className="mt-0.5 shrink-0 rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover:opacity-100"
-                                  >
-                                    <Check className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                    <div className="border-t p-2">
-                      <Link
-                        href="/notifications"
-                        onClick={() => setPopoverOpen(false)}
-                      >
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="w-full text-xs"
-                        >
-                          {t("goToNotifications")}
-                        </Button>
-                      </Link>
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              </div>
+              {/* Notifications — desktop only */}
+              <Link href="/notifications" className="hidden md:block">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  data-tutorial="nav-notifications"
+                  className={`relative rounded-full ${pathname.startsWith("/notifications") ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  title={t("notifications")}
+                >
+                  <Bell className="h-4 w-4" />
+                  {unreadCount > 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium text-destructive-foreground border-2 border-background">
+                      {unreadCount > 99 ? "99+" : unreadCount}
+                    </span>
+                  )}
+                </Button>
+              </Link>
 
               <DropdownMenu
                 modal={false}

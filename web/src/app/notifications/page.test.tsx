@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import {
   fetchNotifications,
   fetchUnreadCount,
+  markAllNotificationsRead,
+  markNotificationRead,
   type NotificationItem,
 } from "@/lib/notifications";
 import NotificationsPage from "./page";
@@ -17,9 +19,9 @@ vi.mock("next-intl", () => {
   const translate = (key: string) => key;
   return { useTranslations: () => translate };
 });
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock("@/lib/stores", () => {
-  const store = { setUnreadCount: vi.fn(), decrement: vi.fn() };
+  const store = { setUnreadCount: vi.fn(), decrement: vi.fn(), unreadCount: 1 };
   return {
     useNotificationStore: (selector: (state: typeof store) => unknown) => selector(store),
   };
@@ -42,8 +44,8 @@ const notification: NotificationItem = {
   id: "notification-1",
   type: "pr_approved",
   title: "Your contribution was approved",
-  body: null,
-  link: null,
+  body: "The pull request was merged successfully",
+  link: "/pull-requests/1",
   read: false,
   created_at: "2026-08-22T00:00:00Z",
 };
@@ -57,6 +59,8 @@ describe("NotificationsPage", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     vi.mocked(fetchUnreadCount).mockResolvedValue(1);
+    vi.mocked(markNotificationRead).mockResolvedValue();
+    vi.mocked(markAllNotificationsRead).mockResolvedValue(1);
   });
 
   afterEach(() => {
@@ -80,7 +84,7 @@ describe("NotificationsPage", () => {
     });
 
     const unreadButton = Array.from(container.querySelectorAll("button"))
-      .find((button) => button.textContent === "filterUnread");
+      .find((button) => button.textContent?.includes("filterUnread"));
     await act(async () => {
       unreadButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -111,13 +115,13 @@ describe("NotificationsPage", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     const loadMoreButton = Array.from(container.querySelectorAll("button"))
-      .find((button) => button.textContent === "loadMore");
+      .find((button) => button.textContent?.includes("loadMore"));
     await act(async () => {
       loadMoreButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
     const unreadButton = Array.from(container.querySelectorAll("button"))
-      .find((button) => button.textContent === "filterUnread");
+      .find((button) => button.textContent?.includes("filterUnread"));
     await act(async () => {
       unreadButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -129,5 +133,97 @@ describe("NotificationsPage", () => {
       await oldPage;
     });
     expect(container.textContent).not.toContain("Late all notification");
+  });
+
+  it("marks a notification as read when clicking markRead", async () => {
+    vi.mocked(fetchNotifications).mockResolvedValueOnce({
+      items: [notification],
+      total: 1,
+      page: 1,
+      pages: 1,
+    });
+
+    await act(async () => {
+      root.render(<NotificationsPage />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.textContent).toContain(notification.title);
+
+    const markReadBtn = Array.from(container.querySelectorAll("button"))
+      .find((b) => b.getAttribute("title") === "markRead");
+
+    await act(async () => {
+      markReadBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(markNotificationRead).toHaveBeenCalledWith("notification-1");
+  });
+
+  it("marks all notifications as read when clicking markAllRead", async () => {
+    vi.mocked(fetchNotifications).mockResolvedValueOnce({
+      items: [notification],
+      total: 1,
+      page: 1,
+      pages: 1,
+    });
+
+    await act(async () => {
+      root.render(<NotificationsPage />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const markAllReadBtn = Array.from(container.querySelectorAll("button"))
+      .find((b) => b.textContent?.includes("markAllRead"));
+
+    await act(async () => {
+      markAllReadBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(markAllNotificationsRead).toHaveBeenCalled();
+  });
+
+  it("filters notifications by search query", async () => {
+    const notif2: NotificationItem = {
+      id: "notification-2",
+      type: "material_comment",
+      title: "New comment on algebra notes",
+      body: "Check out this solution",
+      link: null,
+      read: false,
+      created_at: "2026-08-22T00:00:00Z",
+    };
+
+    vi.mocked(fetchNotifications).mockResolvedValueOnce({
+      items: [notification, notif2],
+      total: 2,
+      page: 1,
+      pages: 1,
+    });
+
+    await act(async () => {
+      root.render(<NotificationsPage />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.textContent).toContain("Your contribution was approved");
+    expect(container.textContent).toContain("New comment on algebra notes");
+
+    const searchInput = container.querySelector("input") as HTMLInputElement;
+
+    // React controlled input simulation
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value"
+    )?.set;
+    nativeInputValueSetter?.call(searchInput, "algebra");
+
+    await act(async () => {
+      searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+      searchInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(container.textContent).not.toContain("Your contribution was approved");
+    expect(container.textContent).toContain("New comment on algebra notes");
   });
 });
