@@ -37,6 +37,7 @@ from app.schemas.auth import (
     PasswordResetConfirmIn,
     PasswordResetRequestIn,
     RefreshResponse,
+    RegisterIn,
     RequestCodeIn,
     SetPasswordIn,
     SetupIn,
@@ -284,8 +285,8 @@ async def request_code(
 ) -> dict[str, str]:
     email = data.email
 
-    if not settings.totp_enabled:
-        raise UnauthorizedError("Email verification codes are disabled")
+    if not settings.totp_enabled and not settings.classic_auth_enabled:
+        raise UnauthorizedError("Email verification is disabled")
 
     try:
         await auth_service.validate_email_for_auth(email, db)
@@ -459,6 +460,66 @@ async def verify_google_oauth(
         await notify_admins_pending_user(db, user)
 
     return _login_response(user, response, is_new=is_new)
+
+
+@router.post("/register", response_model=TokenResponse)
+async def register(
+    request: Request,
+    data: RegisterIn,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+) -> TokenResponse:
+    if not settings.classic_auth_enabled:
+        raise UnauthorizedError("Classic authentication (email + password) is disabled")
+    if not await auth_service.consume_classic_login_budget(
+        redis, get_client_id(request), data.email
+    ):
+        raise RateLimitError("Too many attempts. Please try again later.")
+
+    email = data.email.strip().lower()
+
+    if not await auth_service.check_verify_rate_limit(redis, email):
+        raise RateLimitError(
+            "Too many verification attempts. Please wait 10 minutes before trying again."
+        )
+
+    current_generation = await auth_service.login_challenge_auth_generation(db, email)
+    challenge_generation = await auth_service.consume_verification_code(
+        redis,
+        email,
+        data.code,
+        dev_auth_generation=current_generation,
+    )
+    if challenge_generation is None:
+        await auth_service.increment_verify_rate_limit(redis, email)
+        raise BadRequestError("Invalid or expired verification code")
+    await auth_service.reset_verify_rate_limit(redis, email)
+
+    try:
+        auto_approve = await auth_service.validate_email_for_auth(email, db)
+    except ValueError as exc:
+        raise BadRequestError(str(exc))
+
+    user, is_new = await auth_service.get_or_create_user(db, email, auto_approve=auto_approve)
+    if user.auth_generation != challenge_generation:
+        raise BadRequestError("Invalid or expired verification code")
+    if not is_new:
+        raise ConflictError("An account with this email already exists")
+
+    if data.display_name:
+        user.display_name = data.display_name
+    await db.flush()
+
+    await auth_service.create_password(db, user.id, data.password)
+
+    user.last_login_at = datetime.now(UTC)
+    await db.flush()
+
+    if user.role == UserRole.PENDING:
+        await notify_admins_pending_user(db, user)
+
+    return _login_response(user, response, is_new=True)
 
 
 @router.post("/login", response_model=TokenResponse)

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import { parseSegments, type NameSegment } from "@/lib/fonts";
 import { SiteName } from "@/components/site-name";
 import { useConfigStore } from "@/lib/stores";
+import { cn } from "@/lib/utils";
 
 const VERTEX_SHADER = `
 attribute vec2 aPosition;
@@ -190,9 +191,10 @@ interface ShaderTextProps {
     style?: string | null;
     segments?: NameSegment[] | null;
     className?: string;
+    canvasClassName?: string;
 }
 
-export function ShaderText({ text, style, segments: propSegments, className }: ShaderTextProps) {
+export function ShaderText({ text, style, segments: propSegments, className, canvasClassName }: ShaderTextProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [webglSupported, setWebglSupported] = useState(true);
 
@@ -551,7 +553,10 @@ export function ShaderText({ text, style, segments: propSegments, className }: S
         <div className="relative flex items-center justify-center w-full my-0 py-0 overflow-visible">
             <canvas
                 ref={canvasRef}
-                className="w-full max-w-[390px] h-[130px] sm:h-[150px] object-contain block mx-auto pointer-events-none select-none"
+                className={cn(
+                    "w-full max-w-[390px] h-[130px] sm:h-[150px] object-contain block mx-auto pointer-events-none select-none",
+                    canvasClassName
+                )}
                 aria-hidden="true"
             />
             <span className="sr-only">{displayText}</span>

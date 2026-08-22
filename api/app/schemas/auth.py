@@ -46,6 +46,26 @@ class GoogleLoginIn(BaseModel):
     credential: str = Field(..., min_length=1)
 
 
+class RegisterIn(BaseModel):
+    email: str = Field(..., max_length=254)
+    code: str = Field(..., min_length=8, max_length=8, pattern=_OTP_PATTERN)
+    password: str = Field(..., min_length=8, max_length=128)
+    display_name: str | None = Field(default=None, max_length=100)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        return _validate_email_format(v)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
+
+
 class LoginIn(BaseModel):
     email: str = Field(..., max_length=254)
     password: str = Field(..., min_length=1)

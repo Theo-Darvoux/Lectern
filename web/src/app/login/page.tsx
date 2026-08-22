@@ -26,6 +26,12 @@ function getNext(): string | null {
     return sanitizeNext(new URLSearchParams(window.location.search).get("next"));
 }
 
+function getInitialTab(): AuthTab | null {
+    if (typeof window === "undefined") return null;
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    return (tab === "password" || tab === "code") ? tab : null;
+}
+
 export default function LoginPage() {
     const t = useTranslations("Login");
     const [step, setStep] = useState<Step>("email");
@@ -63,9 +69,15 @@ export default function LoginPage() {
         classic_enabled: config?.classic_enabled ?? false,
     };
 
-    // Auto-select active tab based on available methods
+    // Auto-select active tab based on available methods and query params
     useEffect(() => {
-        if (!authMethods.totp_enabled && authMethods.classic_enabled) {
+        const initialTab = getInitialTab();
+        if (initialTab && (
+            (initialTab === "password" && authMethods.classic_enabled) ||
+            (initialTab === "code" && authMethods.totp_enabled)
+        )) {
+            setAuthTab(initialTab);
+        } else if (!authMethods.totp_enabled && authMethods.classic_enabled) {
             setAuthTab("password");
         } else if (authMethods.totp_enabled) {
             setAuthTab("code");
@@ -210,7 +222,7 @@ export default function LoginPage() {
             <div className="login-card-wrapper relative z-10 w-full max-w-[420px] p-6 sm:p-8 space-y-5">
                 
                 {/* Header: 90s 3D Chrome Shader Title (Fills top space inside card) */}
-                <div className="text-center -mt-2 -mb-1">
+                <div className="text-center -mt-2">
                     <ShaderText
                         text={siteName}
                         style={config?.site_name_style}
@@ -218,7 +230,7 @@ export default function LoginPage() {
                     />
 
                     {step !== "email" && (
-                        <p className="text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mt-1">
+                        <p className="-mt-4 sm:-mt-5 text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mb-1">
                             {step === "code" ? t("descCode") : t("descPassword")}
                         </p>
                     )}
@@ -709,6 +721,15 @@ export default function LoginPage() {
                             </Button>
                         </div>
                     </form>
+                )}
+
+                {authMethods.classic_enabled && ((step === "email" && (!authMethods.totp_enabled || authTab === "password")) || step === "password") && (
+                    <div className="mt-4 text-center text-sm">
+                        <span className="text-[#828096]">Don&apos;t have an account? </span>
+                        <Link href="/register" className="text-[#f0eef5] hover:underline transition-colors">
+                            Sign Up
+                        </Link>
+                    </div>
                 )}
             </div>
 

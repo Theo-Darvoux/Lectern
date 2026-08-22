@@ -112,13 +112,13 @@ export default function ResetPasswordPage() {
             <div className="login-dots" aria-hidden="true" />
 
             <div className="login-card-wrapper relative z-10 w-full max-w-[420px] space-y-5 p-6 sm:p-8">
-                <div className="text-center -mb-1 -mt-2">
+                <div className="text-center -mt-2">
                     <ShaderText
                         text={siteName}
                         style={config?.site_name_style}
                         className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"
                     />
-                    <p className="mx-auto mt-1 max-w-[310px] text-xs font-medium leading-relaxed text-[#918da6] sm:text-[0.8125rem]">
+                    <p className="mx-auto -mt-4 sm:-mt-5 max-w-[310px] text-xs sm:text-[0.8125rem] font-medium leading-relaxed text-[#918da6] mb-1">
                         {resetting ? t("chooseNewPassword") : t("forgotPasswordDesc")}
                     </p>
                 </div>
