@@ -97,6 +97,9 @@ describe("FeaturedItemSearch", () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       "Search is temporarily unavailable",
     );
+    expect(container.querySelector('[role="combobox"]')?.getAttribute("aria-required")).toBe(
+      "true",
+    );
     const retryButton = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent === "Try again",
     );

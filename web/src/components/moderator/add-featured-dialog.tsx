@@ -68,6 +68,7 @@ export function FeaturedItemSearch({
           id="featured-item-search"
           role="combobox"
           aria-expanded={open}
+          aria-required="true"
           className="w-full justify-between font-normal h-10 px-3"
         >
           <span className="truncate">
@@ -243,7 +244,7 @@ export function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: A
 
         <div className="space-y-4 flex-1 overflow-y-auto min-h-0 pr-1 py-1">
           <div className="space-y-1.5">
-            <Label htmlFor="item-search">Search file or folder <span className="text-destructive" aria-hidden>*</span></Label>
+            <Label htmlFor="featured-item-search">Search file or folder <span className="text-destructive" aria-hidden>*</span></Label>
             <FeaturedItemSearch
               selectedTitle={selectedTitle}
               onSelect={(id, title, type, path) => {
