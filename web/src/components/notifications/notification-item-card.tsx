@@ -62,7 +62,7 @@ export function NotificationItemCard({
       return;
     }
 
-    if (selectable && onToggleSelect) {
+    if ((selectable || isSelected) && onToggleSelect) {
       onToggleSelect(notification.id);
       return;
     }
@@ -83,18 +83,21 @@ export function NotificationItemCard({
         isSelected && "ring-2 ring-primary bg-primary/5 border-primary/40",
       )}
     >
-      {/* Selection Checkbox (if in selection mode) */}
-      {selectable && (
-        <div
-          className="shrink-0 flex items-center"
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleSelect?.(notification.id);
-          }}
-        >
-          <Checkbox checked={isSelected} aria-label={`Select ${notification.title}`} />
-        </div>
-      )}
+      {/* Selection Checkbox (visible in selection mode or on hover) */}
+      <div
+        className={cn(
+          "shrink-0 flex items-center transition-opacity",
+          selectable || isSelected
+            ? "opacity-100"
+            : "opacity-0 group-hover:opacity-100 focus-within:opacity-100",
+        )}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleSelect?.(notification.id);
+        }}
+      >
+        <Checkbox checked={isSelected} aria-label={`Select ${notification.title}`} />
+      </div>
 
       {/* Category Icon */}
       <div
