@@ -343,6 +343,37 @@ class FakeRedis:
                 self.data.pop(keys[3], None)
                 return [1, generation]
 
+            if "auth_store_password_reset_v1" in script:
+
+                def _text(value):
+                    return value.decode() if isinstance(value, bytes) else value
+
+                previous = _text(self.data.get(keys[2]))
+                if previous:
+                    self.data.pop(f"auth:password_reset:{previous}", None)
+                    self.data.pop(f"auth:password_reset_gen:{previous}", None)
+                self.data[keys[0]] = str(args[0]).encode()
+                self.data[keys[1]] = str(args[1]).encode()
+                self.data[keys[2]] = str(args[2]).encode()
+                return 1
+
+            if "auth_consume_password_reset_v1" in script:
+
+                def _text(value):
+                    return value.decode() if isinstance(value, bytes) else value
+
+                email = _text(self.data.get(keys[0]))
+                generation = _text(self.data.get(keys[1]))
+                current_digest = _text(self.data.get(keys[2]))
+                if not email or generation is None or current_digest != str(args[0]):
+                    self.data.pop(keys[0], None)
+                    self.data.pop(keys[1], None)
+                    return [0]
+                self.data.pop(keys[0], None)
+                self.data.pop(keys[1], None)
+                self.data.pop(keys[2], None)
+                return [1, email, generation]
+
             if "holder_id" in script and "ZREMRANGEBYSCORE" in script:
                 import time
 

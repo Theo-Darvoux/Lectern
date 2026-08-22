@@ -1,3 +1,4 @@
+import html
 import json
 
 from app.config import settings
@@ -231,3 +232,37 @@ Automated authentication email for {site_name}
 """
     await send_email(email, subject, body, plain_text=plain_text)
 
+
+async def send_password_reset_email(email: str, reset_link: str) -> None:
+    site_name = settings.site_name
+    subject = f"{site_name} - Reset your password"
+    safe_site_name = html.escape(site_name)
+    safe_link = html.escape(reset_link, quote=True)
+    plain_text = f"""Reset your {site_name} password
+
+We received a request to reset the password for {email}.
+
+Open this link to choose a new password:
+{reset_link}
+
+This single-use link expires in 15 minutes. If you did not request a password reset,
+you can safely ignore this email.
+"""
+    body = f"""<!doctype html>
+<html lang="en">
+<body style="margin:0;padding:40px 16px;background:#07080d;color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:460px;background:#0f1019;border:1px solid #23263b;border-radius:12px">
+        <tr><td style="padding:36px 32px;text-align:center">
+          <h1 style="margin:0;font-size:24px">{safe_site_name}</h1>
+          <p style="margin:10px 0 24px;color:#c8c5db">Choose a new password for your account.</p>
+          <a href="{safe_link}" style="display:block;padding:13px 24px;border-radius:6px;background:#f3f2f8;color:#08090f;text-decoration:none;font-weight:600">Reset password &rarr;</a>
+          <p style="margin:20px 0 0;color:#b0acc4;font-size:12px;line-height:18px">This single-use link expires in 15 minutes. If you did not request it, you can safely ignore this email.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+    await send_email(email, subject, body, plain_text=plain_text)

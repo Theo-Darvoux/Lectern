@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ElementType, type ReactNode } from "react";
+import { useState, type ElementType, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
@@ -14,6 +14,7 @@ import {
   ExternalLink,
   Globe,
   Info,
+  KeyRound,
   Monitor,
   Moon,
   Palette,
@@ -27,6 +28,8 @@ import {
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useConfirmDialog } from "@/components/confirm-dialog";
@@ -84,11 +87,16 @@ export default function SettingsPage() {
   const setUser = useAuthStore((state) => state.setUser);
   const [exporting, setExporting] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [creatingPassword, setCreatingPassword] = useState(false);
 
   const isStaff = user?.role === "bureau" || user?.role === "vieux" || user?.role === "moderator";
+  const canCreatePassword = config?.classic_enabled === true && user?.has_password === false;
   const navItems = [
     { id: "general", label: t("navigation.general"), icon: SlidersHorizontal },
     ...(isStaff ? [{ id: "contributions", label: t("navigation.contributions"), icon: Zap }] : []),
+    ...(canCreatePassword ? [{ id: "security", label: t("navigation.security"), icon: KeyRound }] : []),
     { id: "privacy", label: t("navigation.privacy"), icon: ShieldCheck },
     { id: "about", label: t("navigation.about"), icon: Info },
     { id: "danger", label: t("navigation.danger"), icon: AlertTriangle },
@@ -133,6 +141,35 @@ export default function SettingsPage() {
       toast.error(t("export.error"));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleCreatePassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!user) return;
+    if (password.length < 8) {
+      toast.error(t("password.tooShort"));
+      return;
+    }
+    if (password !== confirmPassword) {
+      toast.error(t("password.mismatch"));
+      return;
+    }
+
+    setCreatingPassword(true);
+    try {
+      await apiFetch("/auth/password", {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      });
+      setUser({ ...user, has_password: true });
+      setPassword("");
+      setConfirmPassword("");
+      toast.success(t("password.success"));
+    } catch {
+      toast.error(t("password.error"));
+    } finally {
+      setCreatingPassword(false);
     }
   };
 
@@ -257,6 +294,46 @@ export default function SettingsPage() {
                   </div>
                   <Switch checked={!!user?.auto_approve} onCheckedChange={handleToggleAutoApprove} disabled={updating} aria-label={t("contributions.autoApprove")} />
                 </div>
+              </SettingsSection>
+            )}
+
+            {canCreatePassword && (
+              <SettingsSection id="security" icon={KeyRound} title={t("password.title")} description={t("password.description")}>
+                <form onSubmit={handleCreatePassword} className="max-w-xl space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="settings-new-password">{t("password.newPassword")}</Label>
+                    <Input
+                      id="settings-new-password"
+                      type="password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      minLength={8}
+                      maxLength={128}
+                      autoComplete="new-password"
+                      required
+                      disabled={creatingPassword}
+                    />
+                    <p className="text-xs text-muted-foreground">{t("password.hint")}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="settings-confirm-password">{t("password.confirmPassword")}</Label>
+                    <Input
+                      id="settings-confirm-password"
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(event) => setConfirmPassword(event.target.value)}
+                      minLength={8}
+                      maxLength={128}
+                      autoComplete="new-password"
+                      required
+                      disabled={creatingPassword}
+                    />
+                  </div>
+                  <Button type="submit" disabled={creatingPassword || !password || !confirmPassword}>
+                    <KeyRound className="mr-2 h-4 w-4" />
+                    {creatingPassword ? t("password.creating") : t("password.button")}
+                  </Button>
+                </form>
               </SettingsSection>
             )}
 

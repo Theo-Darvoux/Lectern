@@ -33,8 +33,11 @@ from app.models.user import User, UserRole
 from app.schemas.auth import (
     GoogleLoginIn,
     LoginIn,
+    PasswordResetConfirmIn,
+    PasswordResetRequestIn,
     RefreshResponse,
     RequestCodeIn,
+    SetPasswordIn,
     SetupIn,
     TokenResponse,
     UserBrief,
@@ -44,7 +47,7 @@ from app.schemas.auth import (
 from app.schemas.pull_request import MAX_PR_DESCRIPTION_LENGTH
 from app.services import auth as auth_service
 from app.services.avatar import is_safe_avatar_reference, is_trusted_external_avatar_url
-from app.services.email import send_verification_email
+from app.services.email import send_password_reset_email, send_verification_email
 from app.services.notification import notify_admins_pending_user
 from app.services.user import get_user_by_id
 
@@ -171,6 +174,7 @@ def _login_response(user: User, response: Response, *, is_new: bool) -> TokenRes
             role=user.role.value,
             onboarded=user.onboarded,
             auto_approve=user.auto_approve,
+            has_password=user.has_password,
             completed_tutorials=list(user.completed_tutorials or []),
         ),
         is_new_user=is_new,
@@ -264,6 +268,7 @@ async def guest_session(
             role=guest.role.value,
             onboarded=guest.onboarded,
             auto_approve=guest.auto_approve,
+            has_password=guest.has_password,
             completed_tutorials=list(guest.completed_tutorials or []),
         ),
         is_new_user=False,
@@ -483,6 +488,88 @@ async def login(
     return _login_response(user, response, is_new=False)
 
 
+@router.post("/password")
+async def create_password(
+    data: SetPasswordIn,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, str]:
+    if not settings.classic_auth_enabled:
+        raise UnauthorizedError("Classic authentication (email + password) is disabled")
+    if user.role == UserRole.GUEST:
+        raise UnauthorizedError("Guest accounts cannot create passwords")
+
+    await auth_service.create_password(db, user.id, data.password)
+    return {"message": "Password created"}
+
+
+_PASSWORD_RESET_RESPONSE = {"message": "If an account exists, a password reset link has been sent"}
+
+
+@router.post("/password-reset/request")
+@limiter.limit("5/15minutes" if not settings.is_dev else "10000/minute")
+async def request_password_reset(
+    request: Request,
+    data: PasswordResetRequestIn,
+    background_tasks: BackgroundTasks,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+) -> dict[str, str]:
+    if not settings.classic_auth_enabled:
+        raise UnauthorizedError("Classic authentication (email + password) is disabled")
+    if not await auth_service.consume_password_reset_budget(
+        redis, get_client_id(request), data.email
+    ):
+        return _PASSWORD_RESET_RESPONSE
+
+    user = await auth_service.get_password_reset_account(db, data.email)
+    if user is None or user.role == UserRole.GUEST:
+        return _PASSWORD_RESET_RESPONSE
+
+    token = auth_service.generate_magic_token()
+    await auth_service.store_password_reset_token(
+        redis,
+        user.email,
+        token,
+        auth_generation=user.auth_generation,
+    )
+    reset_link = f"{settings.frontend_url.rstrip('/')}/login/reset-password#token={token}"
+
+    async def _send_safe(email: str, link: str) -> None:
+        try:
+            await send_password_reset_email(email, link)
+        except Exception as exc:
+            logger.error("Failed to send password reset email: %s", exc, exc_info=True)
+
+    background_tasks.add_task(_send_safe, user.email, reset_link)
+    return _PASSWORD_RESET_RESPONSE
+
+
+@router.post("/password-reset/confirm")
+@limiter.limit("10/15minutes" if not settings.is_dev else "10000/minute")
+async def confirm_password_reset(
+    request: Request,
+    data: PasswordResetConfirmIn,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+) -> dict[str, str]:
+    if not settings.classic_auth_enabled:
+        raise UnauthorizedError("Classic authentication (email + password) is disabled")
+    consumed = await auth_service.consume_password_reset_token(redis, data.token)
+    if consumed is None:
+        raise BadRequestError("Invalid or expired password reset link")
+    email, issuance_generation = consumed
+    user = await auth_service.reset_password(
+        db,
+        email,
+        issuance_generation,
+        data.password,
+    )
+    if user is None:
+        raise BadRequestError("Invalid or expired password reset link")
+    return {"message": "Password reset"}
+
+
 @router.post("/setup", response_model=TokenResponse)
 @limiter.limit("5/15minutes" if not settings.is_dev else "10000/minute")
 async def setup_first_admin(
@@ -603,6 +690,7 @@ async def refresh_token(
             role=user.role.value,
             onboarded=user.onboarded,
             auto_approve=user.auto_approve,
+            has_password=user.has_password,
             completed_tutorials=list(user.completed_tutorials or []),
         ),
     )

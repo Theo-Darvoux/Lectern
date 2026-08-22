@@ -48,7 +48,23 @@
     "verifySignIn": "Verify your sign-in",
     "verifySignInDesc": "To finish signing in, please click the button below. This extra step helps keep your account secure.",
     "confirmSignIn": "Confirm Sign In",
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "forgotPassword": "Forgot password?",
+    "forgotPasswordDesc": "Enter your email to receive a password reset link.",
+    "resetPasswordTitle": "Reset your password",
+    "chooseNewPassword": "Choose a new password for your account.",
+    "newPasswordLabel": "New password",
+    "confirmPasswordLabel": "Confirm new password",
+    "sendPasswordResetLink": "Send reset link",
+    "passwordResetRequestFailed": "Could not request a password reset.",
+    "passwordResetEmailSent": "If an account exists for that email, a reset link has been sent. Check your inbox.",
+    "invalidPasswordResetLink": "This password reset link is invalid or has expired.",
+    "passwordTooShort": "Password must be at least 8 characters.",
+    "passwordMismatch": "Passwords do not match.",
+    "resetPassword": "Reset password",
+    "resettingPassword": "Resetting password...",
+    "passwordResetSuccess": "Your password has been reset. You can now sign in with it.",
+    "passwordResetUnavailable": "Password login is not enabled on this site."
   },
   "Setup": {
     "title": "Welcome to {siteName}",
@@ -1412,6 +1428,7 @@
       "label": "Settings sections",
       "general": "General",
       "contributions": "Contributions",
+      "security": "Security",
       "privacy": "Privacy & data",
       "about": "About",
       "danger": "Danger zone"
@@ -1442,6 +1459,19 @@
       "staffOnly": "Staff",
       "autoApproveEnabled": "Auto-approval enabled",
       "autoApproveDisabled": "Auto-approval disabled"
+    },
+    "password": {
+      "title": "Create a password",
+      "description": "Add a password so you can also sign in with classic email and password authentication.",
+      "newPassword": "New password",
+      "confirmPassword": "Confirm password",
+      "hint": "Use at least 8 characters.",
+      "button": "Create password",
+      "creating": "Creating password...",
+      "success": "Password created. You can now use classic login.",
+      "error": "Could not create your password.",
+      "tooShort": "Password must be at least 8 characters.",
+      "mismatch": "Passwords do not match."
     },
     "privacy": {
       "title": "Privacy & data",

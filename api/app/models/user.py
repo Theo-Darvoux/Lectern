@@ -71,6 +71,10 @@ class User(UUIDMixin, Base):
     def is_staff(self) -> bool:
         return self.is_moderator
 
+    @property
+    def has_password(self) -> bool:
+        return self.password_hash is not None
+
     pull_requests: Mapped[list[PullRequest]] = relationship(
         back_populates="author",
         foreign_keys="PullRequest.author_id",
