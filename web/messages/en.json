@@ -1053,6 +1053,9 @@
     "locationInTree": "Location in wiki tree",
     "originLocation": "Origin location",
     "destinationLocation": "Destination location",
+    "fieldTitle": "Title",
+    "deletedItemDetails": "Details of item to be deleted",
+    "deletedAttachmentsCount": "{count, plural, one {# attached file will also be permanently deleted} other {# attached files will also be permanently deleted}}",
     "modifications": "Modifications"
   },
   "Roles": {

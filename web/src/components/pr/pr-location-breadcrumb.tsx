@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Folder, MapPin, ArrowRight, CornerDownRight, Sparkles } from "lucide-react";
+import { Folder, MapPin, ArrowRight, ArrowDown, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
@@ -171,43 +171,43 @@ export function PRMoveTransition({
     const finalDest = destPath || rootLabel;
 
     return (
-        <div className={cn("flex flex-col sm:flex-row sm:items-center gap-2 p-2.5 rounded-lg border bg-muted/30 text-xs", className)}>
+        <div className={cn("grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-2 p-2.5 rounded-lg border bg-background text-xs", className)}>
             {/* Origin */}
-            <div className="flex-1 min-w-0 flex items-center gap-2">
-                <span className="font-semibold text-[11px] uppercase tracking-wider text-muted-foreground shrink-0 w-20">
-                    {originLabel}:
+            <div className="flex flex-col gap-1 min-w-0 p-2 rounded-md bg-muted/40 border border-border/40">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground truncate">
+                    {originLabel}
                 </span>
-                <div className="flex items-center gap-1 min-w-0 text-muted-foreground">
-                    <Folder className="h-3.5 w-3.5 shrink-0 text-amber-500/70" />
+                <div className="flex items-center gap-1.5 min-w-0 text-muted-foreground">
+                    <Folder className="h-3.5 w-3.5 shrink-0 text-amber-500/80" />
                     {originUrl ? (
-                        <Link href={originUrl} className="truncate hover:underline hover:text-foreground">
+                        <Link href={originUrl} className="truncate hover:underline hover:text-foreground font-medium" title={finalOrigin}>
                             {finalOrigin}
                         </Link>
                     ) : (
-                        <span className="truncate">{finalOrigin}</span>
+                        <span className="truncate font-medium" title={finalOrigin}>{finalOrigin}</span>
                     )}
                 </div>
             </div>
 
             {/* Arrow */}
-            <div className="flex items-center justify-center shrink-0 px-1 text-muted-foreground">
+            <div className="flex items-center justify-center shrink-0 px-1 py-0.5 sm:py-0 text-muted-foreground">
                 <ArrowRight className="h-4 w-4 hidden sm:block text-primary" />
-                <CornerDownRight className="h-4 w-4 sm:hidden text-primary" />
+                <ArrowDown className="h-4 w-4 sm:hidden text-primary" />
             </div>
 
             {/* Destination */}
-            <div className="flex-1 min-w-0 flex items-center gap-2">
-                <span className="font-semibold text-[11px] uppercase tracking-wider text-primary shrink-0 w-20">
-                    {destLabel}:
+            <div className="flex flex-col gap-1 min-w-0 p-2 rounded-md bg-primary/5 border border-primary/20">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-primary truncate">
+                    {destLabel}
                 </span>
-                <div className="flex items-center gap-1 min-w-0 text-foreground font-medium">
+                <div className="flex items-center gap-1.5 min-w-0 text-foreground font-medium">
                     <Folder className="h-3.5 w-3.5 shrink-0 text-green-500" />
                     {destUrl ? (
-                        <Link href={destUrl} className="truncate hover:underline text-primary">
+                        <Link href={destUrl} className="truncate hover:underline text-primary" title={finalDest}>
                             {finalDest}
                         </Link>
                     ) : (
-                        <span className="truncate">{finalDest}</span>
+                        <span className="truncate text-foreground font-medium" title={finalDest}>{finalDest}</span>
                     )}
                 </div>
             </div>

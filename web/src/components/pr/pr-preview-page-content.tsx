@@ -135,8 +135,31 @@ const VIEWER_ICON_COLORS: Record<string, string> = {
     csv: "text-teal-500", notebook: "text-orange-500", qcm: "text-violet-500", link: "text-sky-600 dark:text-sky-400", generic: "text-muted-foreground",
 };
 
+const STATUS_CONFIG: Record<
+    string,
+    { className: string; labelKey: string }
+> = {
+    open: {
+        className: "text-amber-600 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-400",
+        labelKey: "status.open",
+    },
+    approved: {
+        className: "text-emerald-600 border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-400",
+        labelKey: "status.approved",
+    },
+    rejected: {
+        className: "text-rose-600 border-rose-300 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-400",
+        labelKey: "status.rejected",
+    },
+    cancelled: {
+        className: "text-muted-foreground border-border bg-muted",
+        labelKey: "status.cancelled",
+    },
+};
+
 export function PRPreviewPageContent() {
     const t = useTranslations("Preview");
+    const tPR = useTranslations("PRDetails");
     const pathname = usePathname();
     // pathname: /pull-requests/{id}/preview/{opIndex}/
     const previewMatch = pathname.match(/^\/pull-requests\/([^/]+)\/preview\/([^/]+)/);
@@ -148,6 +171,7 @@ export function PRPreviewPageContent() {
     const [fileName, setFileName] = useState<string>("");
     const [mimeType, setMimeType] = useState<string>("");
     const [prTitle, setPrTitle] = useState<string>("");
+    const [prStatus, setPrStatus] = useState<string>("open");
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -156,7 +180,7 @@ export function PRPreviewPageContent() {
 
         async function load() {
             try {
-                const pr = await apiFetch<{ title: string; payload: Record<string, unknown>[] }>(`/pull-requests/${prId}`);
+                const pr = await apiFetch<{ title: string; payload: Record<string, unknown>[]; status?: string }>(`/pull-requests/${prId}`);
                 if (cancelled) return;
 
                 const op = pr.payload?.[opIndex] ?? {};
@@ -164,7 +188,25 @@ export function PRPreviewPageContent() {
                 const isLink = op.type === "link" || op.material_type === "link" || Boolean(targetUrl);
 
                 setPrTitle(pr.title);
-                setFileName(String(op.title || op.name || "Link"));
+                if (pr.status) {
+                    setPrStatus(pr.status);
+                }
+
+                if (!op.title && !op.name && op.material_id && !String(op.material_id).startsWith("$")) {
+                    try {
+                        const mat = await apiFetch<{ title: string; current_version_info?: { file_name?: string; file_mime_type?: string } }>(`/materials/${op.material_id}`).catch(() => null);
+                        if (!cancelled && mat) {
+                            setFileName(mat.title || mat.current_version_info?.file_name || "File");
+                            if (mat.current_version_info?.file_mime_type) {
+                                setMimeType(mat.current_version_info.file_mime_type);
+                            }
+                        }
+                    } catch {
+                        setFileName(String(op.title || op.name || "File"));
+                    }
+                } else {
+                    setFileName(String(op.title || op.name || "Link"));
+                }
 
                 if (isLink && targetUrl) {
                     setPresignedUrl(targetUrl);
@@ -173,8 +215,8 @@ export function PRPreviewPageContent() {
                     try {
                         const preview = await apiFetch<{ url: string; file_name?: string; file_mime_type?: string }>(`/pull-requests/${prId}/preview?opIndex=${opIndex}`);
                         if (!cancelled && preview) {
-                            setFileName(String(preview.file_name ?? op.file_name ?? "File"));
-                            setMimeType(String(preview.file_mime_type ?? op.file_mime_type ?? ""));
+                            setFileName((prev) => prev || String(preview.file_name ?? op.file_name ?? "File"));
+                            setMimeType((prev) => prev || String(preview.file_mime_type ?? op.file_mime_type ?? ""));
                             setPresignedUrl(preview.url);
                         }
                     } catch (err) {
@@ -196,6 +238,7 @@ export function PRPreviewPageContent() {
     const viewerType = isLinkViewer ? "link" : presignedUrl ? getContributionPreviewViewerType(mimeType, fileName) : "generic";
     const Icon = VIEWER_ICONS[viewerType] ?? Eye;
     const iconColor = VIEWER_ICON_COLORS[viewerType] ?? "";
+    const statusInfo = STATUS_CONFIG[prStatus] ?? STATUS_CONFIG.open;
 
     return (
         <div className="flex h-[calc(100vh-3.5rem)] flex-col">
@@ -234,8 +277,8 @@ export function PRPreviewPageContent() {
                             </Link>
                         </Badge>
                     )}
-                    <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-400">
-                        {t("pending")}
+                    <Badge variant="outline" className={`text-xs ${statusInfo.className}`}>
+                        {tPR(statusInfo.labelKey as any)}
                     </Badge>
                 </div>
             </div>
