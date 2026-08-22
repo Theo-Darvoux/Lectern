@@ -141,6 +141,20 @@ docker compose exec api uv run alembic upgrade head
 
 If a migration fails on startup, the API prints a large banner to its logs and **refuses to start** rather than running against a broken schema — fix the migration and redeploy. With the default `restart: unless-stopped` policy the container will keep retrying (re-printing the banner) until the migration succeeds.
 
+### Search index upgrades
+
+Releases that change indexed search fields require one full backfill after the
+new API is healthy. Run the reindex command before exposing the upgraded site;
+it waits for both MeiliSearch tasks and exits non-zero if either task fails:
+
+```bash
+docker compose exec api uv run python -m app.cli reindex
+```
+
+This is required for the enhanced folder status filtering and external-link
+navigation introduced by the search UX upgrade. New and edited content is kept
+up to date automatically by the indexing workers afterward.
+
 ---
 
 ## Option C : Bare-metal (API + frontend separately)

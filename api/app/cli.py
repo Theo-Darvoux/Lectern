@@ -235,7 +235,11 @@ async def _reindex() -> None:
     from sqlalchemy.orm import selectinload
 
     from app.core.database.database import async_session_factory
-    from app.core.events.meilisearch import meili_admin_client, setup_meilisearch
+    from app.core.events.meilisearch import (
+        meili_admin_client,
+        setup_meilisearch,
+        wait_for_meilisearch_task,
+    )
     from app.models.directory import Directory
     from app.models.material import Material
     from app.services.directory import get_directory_path
@@ -273,7 +277,8 @@ async def _reindex() -> None:
             m_docs.append(build_material_search_document(mat, ancestor_path, browse_path))
 
         if m_docs:
-            await meili_admin_client.index("materials").add_documents(m_docs)
+            task = await meili_admin_client.index("materials").add_documents(m_docs)
+            await wait_for_meilisearch_task(task, operation="material search reindex")
             typer.echo(f"Reindexed {len(m_docs)} materials.")
         else:
             typer.echo("0 materials to reindex.")
@@ -297,7 +302,8 @@ async def _reindex() -> None:
             d_docs.append(build_directory_search_document(dir_obj, ancestor_path, browse_path))
 
         if d_docs:
-            await meili_admin_client.index("directories").add_documents(d_docs)
+            task = await meili_admin_client.index("directories").add_documents(d_docs)
+            await wait_for_meilisearch_task(task, operation="directory search reindex")
             typer.echo(f"Reindexed {len(d_docs)} directories.")
         else:
             typer.echo("0 directories to reindex.")

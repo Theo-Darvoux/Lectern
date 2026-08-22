@@ -88,15 +88,29 @@ async def _apply_settings_if_changed(index_uid: str, desired: MeilisearchSetting
         logger.warning(
             "Could not fetch settings for '%s': %s — applying unconditionally", index_uid, e
         )
-        await meili_admin_client.index(index_uid).update_settings(desired)
+        task = await meili_admin_client.index(index_uid).update_settings(desired)
+        await wait_for_meilisearch_task(task, operation=f"settings update for {index_uid!r}")
         return
 
     changed = _settings_changed(current, desired)
     if changed:
         logger.info("Updating '%s' settings (changed: %s)", index_uid, changed)
-        await meili_admin_client.index(index_uid).update_settings(desired)
+        task = await meili_admin_client.index(index_uid).update_settings(desired)
+        await wait_for_meilisearch_task(task, operation=f"settings update for {index_uid!r}")
     else:
         logger.debug("'%s' settings up-to-date — skipping update_settings", index_uid)
+
+
+async def wait_for_meilisearch_task(task: object, *, operation: str) -> None:
+    """Wait for a mutation task so callers never report success prematurely."""
+    task_uid = getattr(task, "task_uid", None)
+    if not isinstance(task_uid, int):
+        raise RuntimeError(f"{operation} did not return a valid Meilisearch task id")
+    await meili_admin_client.wait_for_task(
+        task_uid,
+        timeout_in_ms=30_000,
+        raise_for_status=True,
+    )
 
 
 async def _apply_pagination_if_changed(index_uid: str) -> None:

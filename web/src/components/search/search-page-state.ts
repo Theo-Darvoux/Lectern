@@ -15,6 +15,7 @@ export const SEARCH_MATERIAL_TYPES = [
 ] as const;
 
 export const SEARCH_STATUSES = ["important", "current", "deprecated", "archived"] as const;
+export const SEARCH_MAX_PAGE = 100;
 
 export type SearchPageKind = SearchKind | "all";
 export type SearchMaterialType = (typeof SEARCH_MATERIAL_TYPES)[number] | "all";
@@ -50,11 +51,16 @@ export function parseSearchPageState(params: URLSearchParams): SearchPageState {
     status: SEARCH_STATUSES.includes(rawStatus as never)
       ? (rawStatus as SearchStatusFilter)
       : "all",
-    page: Number.isFinite(rawPage) && rawPage > 0 ? Math.min(rawPage, 50) : 1,
+    page: Number.isFinite(rawPage) && rawPage > 0 ? Math.min(rawPage, SEARCH_MAX_PAGE) : 1,
     directoryId,
     directoryName: directoryId ? params.get("directory_name") || undefined : undefined,
     recursive: Boolean(directoryId && params.get("recursive") === "true"),
   };
+}
+
+export function getValidSearchPage(total: number, pageSize: number, requestedPage: number): number {
+  const lastPage = Math.max(1, Math.ceil(Math.max(0, total) / pageSize));
+  return Math.min(Math.max(1, requestedPage), lastPage);
 }
 
 export function updateSearchPageParams(

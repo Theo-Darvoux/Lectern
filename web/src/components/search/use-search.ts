@@ -103,6 +103,10 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
                 setResults([]);
                 setStatus("idle");
             } else {
+                // A user can return to the last debounced value before this
+                // timer fires. The version ensures that identical text still
+                // starts a fresh request after the previous one was aborted.
+                setRequestVersion((version) => version + 1);
                 setStatus("loading");
             }
         }, delay);
@@ -113,7 +117,7 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
     }, [query, delay]);
 
     useEffect(() => {
-        if (!debouncedQuery.trim()) {
+        if (!debouncedQuery.trim() || latestQueryRef.current !== debouncedQuery) {
             return;
         }
 

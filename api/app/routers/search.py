@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common.exceptions import BadRequestError
 from app.core.database.database import get_db
+from app.core.events.meilisearch import SEARCH_MAX_TOTAL_HITS
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_search
 from app.models.content_status import ContentStatus
@@ -16,13 +17,16 @@ router = APIRouter(prefix="/api/search", tags=["search"])
 
 _ALLOWED_TYPE_VALUES = ALLOWED_MATERIAL_TYPES | ALLOWED_DIRECTORY_TYPES | {"directory"}
 _ALLOWED_STATUS_VALUES = {status.value for status in ContentStatus}
+_MAX_SEARCH_PAGE = SEARCH_MAX_TOTAL_HITS * 2
 
 
 @router.get("", dependencies=[Depends(rate_limit_search)])
 async def search(
     query: str = Query(..., min_length=1, max_length=200),
     user: CurrentUser = None,  # type: ignore[assignment]
-    page: int = Query(1, ge=1, le=50),
+    # A mixed search can contain SEARCH_MAX_TOTAL_HITS from each index. Keep
+    # page reachable even at limit=1; the service still owns the hard hit cap.
+    page: int = Query(1, ge=1, le=_MAX_SEARCH_PAGE),
     limit: int = Query(10, ge=1, le=50),
     directory_id: uuid.UUID | None = Query(None),
     type: str | None = Query(None, max_length=50),

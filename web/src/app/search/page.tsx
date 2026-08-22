@@ -18,6 +18,7 @@ import { SearchResultRow } from "@/components/search/search-modal";
 import {
   SEARCH_MATERIAL_TYPES,
   SEARCH_STATUSES,
+  getValidSearchPage,
   parseSearchPageState,
   updateSearchPageParams,
   type SearchPageKind,
@@ -80,6 +81,19 @@ function SearchPageContent() {
   const updateFilters = (patch: Parameters<typeof updateSearchPageParams>[1]) => {
     navigate(updateSearchPageParams(new URLSearchParams(params.toString()), patch));
   };
+
+  const validPage = getValidSearchPage(total, PAGE_SIZE, state.page);
+  React.useEffect(() => {
+    if (
+      (status === "success" || status === "empty") &&
+      total > 0 &&
+      validPage !== state.page
+    ) {
+      navigate(
+        updateSearchPageParams(new URLSearchParams(params.toString()), { page: validPage }),
+      );
+    }
+  }, [navigate, params, state.page, status, total, validPage]);
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -147,7 +161,7 @@ function SearchPageContent() {
           onValueChange={(value) =>
             updateFilters({
               kind: value as SearchPageKind,
-              materialType: value === "directory" ? "all" : state.materialType,
+              materialType: value === "material" ? state.materialType : "all",
             })
           }
         >
@@ -165,7 +179,10 @@ function SearchPageContent() {
           <Select
             value={state.materialType}
             onValueChange={(value) =>
-              updateFilters({ materialType: value as SearchMaterialType })
+              updateFilters({
+                materialType: value as SearchMaterialType,
+                kind: value === "all" ? state.kind : "material",
+              })
             }
           >
             <SelectTrigger size="sm" aria-label={t("filterByMaterialType")}>

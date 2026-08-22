@@ -99,7 +99,6 @@ export function SearchList({
   retry,
   results,
   total,
-  onViewAll,
 }: {
   query: string;
   onSelect: (result: SearchResult) => void;
@@ -108,7 +107,6 @@ export function SearchList({
   retry: () => void;
   results: SearchResult[];
   total: number;
-  onViewAll: () => void;
 }) {
   const t = useTranslations("Search");
   const waiting = status === "debouncing" || status === "loading";
@@ -160,14 +158,6 @@ export function SearchList({
               <SearchResultRow result={result} />
             </CommandItem>
           ))}
-          <CommandItem
-            value={`view-all-results-${query}`}
-            onSelect={onViewAll}
-            className="mt-1 cursor-pointer justify-center border-t py-2.5 text-primary"
-          >
-            <span>{t("viewAll", { count: total })}</span>
-            <ArrowRight className="size-4" />
-          </CommandItem>
         </CommandGroup>
       )}
     </CommandList>
@@ -219,9 +209,9 @@ export function SearchModal({
   );
 
   const onSelect = (result: SearchResult) => {
-    onOpenChange(false);
     const targetUrl = String(result.url || result.metadata?.url || "").trim();
     if (result.type === "link" && targetUrl) {
+      onOpenChange(false);
       openLink(targetUrl, (path) => router.push(path));
       return;
     }
@@ -234,7 +224,8 @@ export function SearchModal({
   };
 
   const viewAll = () => {
-    const params = new URLSearchParams({ q: query.trim() });
+    const params = new URLSearchParams();
+    if (query.trim()) params.set("q", query.trim());
     if (kind !== "all") params.set("kind", kind);
     if (scope === "current" && currentDirectory) {
       params.set("directory_id", currentDirectory.id);
@@ -259,7 +250,11 @@ export function SearchModal({
         onValueChange={setQuery}
         maxLength={200}
       />
-      <div className="flex items-center gap-1 border-b px-3 py-2" aria-label={t("filterByKind")}>
+      <div
+        className="flex items-center gap-1 border-b px-3 py-2"
+        role="group"
+        aria-label={t("filterByKind")}
+      >
         {(["all", "material", "directory"] as const).map((value) => (
           <Button
             key={value}
@@ -304,8 +299,13 @@ export function SearchModal({
         retry={retry}
         results={results}
         total={total}
-        onViewAll={viewAll}
       />
+      <div className="border-t p-2">
+        <Button type="button" variant="ghost" size="sm" className="w-full" onClick={viewAll}>
+          {t("openFullSearch")}
+          <ArrowRight className="size-4" />
+        </Button>
+      </div>
       <div className="hidden items-center justify-between border-t px-4 py-2 text-[11px] text-muted-foreground sm:flex">
         <span>{t("keyboardNavigate")}</span>
         <span>{t("keyboardOpen")}</span>

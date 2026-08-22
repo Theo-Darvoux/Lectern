@@ -1,6 +1,7 @@
 """Tests for the search service, router, rate limiting, and Meilisearch setup."""
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -137,7 +138,7 @@ async def test_search_page_above_cap_rejected(
 ):
     user = await _create_user(db_session)
     await db_session.commit()
-    response = await client.get("/api/search?query=test&page=51", headers=_auth_headers(user))
+    response = await client.get("/api/search?query=test&page=2001", headers=_auth_headers(user))
     assert response.status_code == 422
 
 
@@ -496,11 +497,14 @@ async def test_search_kind_returns_only_requested_entity_kind(
 ):
     user = await _create_user(db_session)
     await db_session.commit()
+    material_response = _meili_response(
+        mat_hits=[{"id": str(uuid.uuid4()), "title": "Shared result"}]
+    )[:1]
+    directory_response = _meili_response(
+        dir_hits=[{"id": str(uuid.uuid4()), "name": "Shared result"}]
+    )[1:]
     mock_meili_client.multi_search = AsyncMock(
-        return_value=_meili_response(
-            mat_hits=[{"id": str(uuid.uuid4()), "title": "Shared result"}],
-            dir_hits=[{"id": str(uuid.uuid4()), "name": "Shared result"}],
-        )
+        return_value=material_response if kind == "material" else directory_response
     )
 
     response = await client.get(
@@ -509,6 +513,10 @@ async def test_search_kind_returns_only_requested_entity_kind(
 
     assert response.status_code == 200
     assert {item["search_type"] for item in response.json()["items"]} == {expected_type}
+    params = mock_meili_client.multi_search.call_args.args[0]
+    assert [param.index_uid for param in params] == [
+        "materials" if kind == "material" else "directories"
+    ]
 
 
 @pytest.mark.asyncio
@@ -589,8 +597,8 @@ async def test_search_legacy_material_type_is_not_applied_to_directory_index(
     assert response.status_code == 200
 
     params = mock_meili_client.multi_search.call_args[0][0]
+    assert len(params) == 1
     assert "document" in str(params[0].filter)
-    assert params[1].filter is None
 
 
 @pytest.mark.asyncio
@@ -602,8 +610,7 @@ async def test_search_material_type_and_status_filters_target_the_correct_indexe
     mock_meili_client.multi_search = AsyncMock(
         return_value=_meili_response(
             mat_hits=[{"id": str(uuid.uuid4()), "title": "Document"}],
-            dir_hits=[{"id": str(uuid.uuid4()), "name": "Directory"}],
-        )
+        )[:1]
     )
 
     response = await client.get(
@@ -613,10 +620,9 @@ async def test_search_material_type_and_status_filters_target_the_correct_indexe
 
     assert response.status_code == 200
     params = mock_meili_client.multi_search.call_args[0][0]
+    assert len(params) == 1
     assert "document" in str(params[0].filter)
     assert "current" in str(params[0].filter)
-    assert "document" not in str(params[1].filter)
-    assert "current" in str(params[1].filter)
     assert [item["search_type"] for item in response.json()["items"]] == ["material"]
 
 
@@ -628,9 +634,8 @@ async def test_search_legacy_directory_type_returns_directories(
     await db_session.commit()
     mock_meili_client.multi_search = AsyncMock(
         return_value=_meili_response(
-            mat_hits=[{"id": str(uuid.uuid4()), "title": "Material"}],
             dir_hits=[{"id": str(uuid.uuid4()), "name": "Folder"}],
-        )
+        )[1:]
     )
 
     response = await client.get(
@@ -813,7 +818,10 @@ async def test_settings_update_called_when_changed():
         mock_idx = AsyncMock()
         mock_idx.get_settings = AsyncMock(return_value=stale_settings)
         mock_idx.update_settings = AsyncMock(
-            side_effect=lambda _settings, uid=uid: update_called.append(uid)
+            side_effect=lambda _settings, uid=uid: (
+                update_called.append(uid),
+                SimpleNamespace(task_uid=801 if uid == "materials" else 802),
+            )[1]
         )
         mock_idx.get_pagination = AsyncMock(
             return_value=Pagination(max_total_hits=SEARCH_MAX_TOTAL_HITS)
@@ -840,14 +848,12 @@ async def test_settings_update_called_when_changed():
         await setup_meilisearch()
 
     assert update_called == ["materials", "directories"]
-    mock_admin.wait_for_task.assert_not_awaited()
+    assert mock_admin.wait_for_task.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_pagination_limit_is_explicitly_repaired_and_waited():
     """The authoritative scan bound and Meilisearch maxTotalHits cannot drift."""
-    from types import SimpleNamespace
-
     from meilisearch_python_sdk.models.settings import Pagination
 
     from app.core.events.meilisearch import (
@@ -913,7 +919,7 @@ async def test_search_client_replaced_after_setup_meilisearch():
     mock_admin.index = MagicMock(
         return_value=MagicMock(
             get_settings=AsyncMock(side_effect=Exception("no settings")),
-            update_settings=AsyncMock(),
+            update_settings=AsyncMock(return_value=SimpleNamespace(task_uid=701)),
             get_pagination=AsyncMock(
                 return_value=MagicMock(max_total_hits=ms_module.SEARCH_MAX_TOTAL_HITS)
             ),
@@ -1100,7 +1106,7 @@ async def test_setup_meilisearch_updates_search_client():
     mock_admin.index = MagicMock(
         return_value=MagicMock(
             get_settings=AsyncMock(side_effect=Exception("no settings")),
-            update_settings=AsyncMock(),
+            update_settings=AsyncMock(return_value=SimpleNamespace(task_uid=702)),
             get_pagination=AsyncMock(
                 return_value=MagicMock(max_total_hits=ms_module.SEARCH_MAX_TOTAL_HITS)
             ),

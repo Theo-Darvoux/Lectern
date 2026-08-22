@@ -209,6 +209,7 @@ async def _authoritative_search_hits(
     query: str,
     material_filters: list[str],
     directory_filters: list[str],
+    kind_filter: str | None = None,
 ) -> tuple[list[tuple[dict[str, Any], uuid.UUID]], list[tuple[dict[str, Any], uuid.UUID]]]:
     """Return all bounded live Meili hits, preserving per-index ranking order.
 
@@ -218,33 +219,49 @@ async def _authoritative_search_hits(
     client = get_search_client()
     live_materials: list[tuple[dict[str, Any], uuid.UUID]] = []
     live_directories: list[tuple[dict[str, Any], uuid.UUID]] = []
+    search_materials = kind_filter != "directory"
+    search_directories = kind_filter != "material"
     scan_offset = 0
 
     while scan_offset < _SEARCH_SCAN_MAX_HITS_PER_INDEX:
-        results = await client.multi_search(
-            [
+        requests: list[SearchParams] = []
+        if search_materials:
+            requests.append(
                 _search_params(
                     index_uid="materials",
                     query=query,
                     offset=scan_offset,
                     limit=_SEARCH_SCAN_BATCH,
                     filters=material_filters,
-                ),
+                )
+            )
+        if search_directories:
+            requests.append(
                 _search_params(
                     index_uid="directories",
                     query=query,
                     offset=scan_offset,
                     limit=_SEARCH_SCAN_BATCH,
                     filters=directory_filters,
-                ),
-            ]
-        )
-        materials_res = results[0]  # type: ignore[index]
-        directories_res = results[1]  # type: ignore[index]
+                )
+            )
+        results = await client.multi_search(requests)
+        result_index = 0
+        materials_res = None
+        directories_res = None
+        if search_materials:
+            materials_res = results[result_index]  # type: ignore[index]
+            result_index += 1
+        if search_directories:
+            directories_res = results[result_index]  # type: ignore[index]
 
         if scan_offset == 0:
-            material_estimate = int(materials_res.estimated_total_hits or 0)
-            directory_estimate = int(directories_res.estimated_total_hits or 0)
+            material_estimate = (
+                int(materials_res.estimated_total_hits or 0) if materials_res else 0
+            )
+            directory_estimate = (
+                int(directories_res.estimated_total_hits or 0) if directories_res else 0
+            )
             if (
                 material_estimate > _SEARCH_SCAN_MAX_HITS_PER_INDEX
                 or directory_estimate > _SEARCH_SCAN_MAX_HITS_PER_INDEX
@@ -253,8 +270,8 @@ async def _authoritative_search_hits(
                 # deleted-keyword oracle. The caller only learns the query is too broad.
                 raise BadRequestError("Search query is too broad; add more terms or filters")
 
-        material_hits = list(materials_res.hits)
-        directory_hits = list(directories_res.hits)
+        material_hits = list(materials_res.hits) if materials_res else []
+        directory_hits = list(directories_res.hits) if directories_res else []
         live_materials.extend(await _live_hits_for_batch(db, Material, material_hits))
         live_directories.extend(await _live_hits_for_batch(db, Directory, directory_hits))
 
@@ -335,6 +352,7 @@ async def perform_search(
         query,
         material_filters,
         directory_filters,
+        kind_filter,
     )
     if kind_filter == "material":
         live_directory_pairs = []

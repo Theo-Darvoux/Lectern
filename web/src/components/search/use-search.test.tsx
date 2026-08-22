@@ -118,6 +118,27 @@ describe("useSearch", () => {
     hook.cleanup();
   });
 
+  it("searches again when a user returns to the last debounced query", async () => {
+    vi.mocked(apiFetch)
+      .mockReturnValueOnce(new Promise(() => undefined))
+      .mockResolvedValueOnce(response("Algebra"));
+    const hook = renderSearch("algebra");
+
+    await act(async () => vi.advanceTimersByTime(300));
+    hook.render("calculus");
+    hook.render("algebra");
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    expect(hook.current.results[0]?.title).toBe("Algebra");
+    hook.cleanup();
+  });
+
   it("exposes request failures instead of presenting them as empty results", async () => {
     vi.mocked(apiFetch).mockRejectedValueOnce(new Error("Search unavailable"));
     const hook = renderSearch("algebra");

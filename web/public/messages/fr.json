@@ -445,6 +445,7 @@
     "retry": "Réessayer",
     "resultCount": "{count, plural, =0 {Aucun résultat} =1 {1 résultat} other {# résultats}}",
     "viewAll": "Voir {count, plural, =1 {le résultat} other {les # résultats}}",
+    "openFullSearch": "Ouvrir la recherche complète",
     "libraryRoot": "Bibliothèque",
     "inLocation": "Dans {location}",
     "folder": "Dossier",
