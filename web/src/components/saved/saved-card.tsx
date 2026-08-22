@@ -416,13 +416,13 @@ export const SavedCard = memo(function SavedCard({
       </div>
 
       {/* ── Card Footer Action Toolbar ───────────────────────────────────── */}
-      <div className="flex items-center justify-between border-t bg-muted/10 px-3 py-2">
-        <div className="flex-1 min-w-0 pr-2">
+      <div className="flex items-center justify-between gap-1.5 border-t bg-muted/10 px-3 py-2">
+        <div className="flex-1 min-w-0">
           <CollectionPicker
             targetType={item.target_type}
             targetId={item.target_id}
             onChanged={onCollectionsChanged}
-            className="h-7 text-xs px-2.5 font-medium"
+            className="h-7 text-xs px-2 font-medium"
           />
         </div>
         <Button
