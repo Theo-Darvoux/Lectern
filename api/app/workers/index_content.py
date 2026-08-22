@@ -1,6 +1,5 @@
 import hashlib
 import logging
-import re
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -16,86 +15,10 @@ from app.core.database.post_commit import (
 from app.core.events.meilisearch import meili_admin_client
 from app.models.directory import Directory
 from app.models.material import Material
+from app.services.search_documents import build_directory_search_document as _build_directory_doc
+from app.services.search_documents import build_material_search_document as _build_material_doc
 
 logger = logging.getLogger(__name__)
-
-# Precompiled patterns for identifier tokenization (e.g. "CS101" → "CS 101")
-_ALPHA_NUM = re.compile(r"([a-zA-Z]+)(\d+)")
-_NUM_ALPHA = re.compile(r"(\d+)([a-zA-Z]+)")
-
-
-def split_identifiers(text: str) -> str:
-    if not text:
-        return ""
-    s = _ALPHA_NUM.sub(r"\1 \2", text)
-    s = _NUM_ALPHA.sub(r"\1 \2", s)
-    return s
-
-
-def _build_material_doc(
-    material: Material,
-    ancestor_path: str,
-    browse_path: str,
-) -> dict:  # type: ignore[type-arg]
-    file_name = None
-    file_mime_type = None
-    for v in material.versions:
-        if v.version_number == material.current_version:
-            file_name = v.file_name
-            file_mime_type = v.file_mime_type
-            break
-
-    extra = f"{split_identifiers(material.title)} {split_identifiers(file_name or '')}"
-
-    return {
-        "id": str(material.id),
-        "title": material.title,
-        "slug": material.slug,
-        "description": material.description or "",
-        "type": material.type,
-        "status": material.status,
-        "tags": [t.name for t in material.tags] if material.tags else [],
-        "authorName": material.author.display_name if material.author else None,
-        "directory_id": str(material.directory_id) if material.directory_id else None,
-        "created_at": material.created_at.isoformat() if material.created_at is not None else None,  # type: ignore[redundant-expr]
-        "ancestor_path": ancestor_path,
-        "extra_searchable": extra,
-        "browse_path": browse_path,
-        "total_views": material.total_views,
-        "views_today": material.views_today,
-        "like_count": material.like_count,
-        "file_name": file_name,
-        "file_mime_type": file_mime_type,
-    }
-
-
-def _build_directory_doc(
-    directory: Directory,
-    ancestor_path: str,
-    browse_path: str,
-) -> dict:  # type: ignore[type-arg]
-    metadata = directory.metadata_ or {}
-    code = metadata.get("code") or ""
-    extra = f"{split_identifiers(directory.name)} {split_identifiers(code)}"  # type: ignore[arg-type]
-
-    return {
-        "id": str(directory.id),
-        "name": directory.name,
-        "slug": directory.slug,
-        "type": directory.type.value if directory.type else "folder",
-        "description": directory.description or "",
-        "tags": [t.name for t in directory.tags] if directory.tags else [],
-        "code": code,
-        "parent_id": str(directory.parent_id) if directory.parent_id else None,
-        "created_at": directory.created_at.isoformat()
-        if directory.created_at is not None  # type: ignore[redundant-expr]
-        else None,
-        "ancestor_path": ancestor_path,
-        "extra_searchable": extra,
-        "browse_path": browse_path,
-        "like_count": directory.like_count,
-    }
-
 
 _INDEX_ORDER_LOCK_PERSON = b"WikINTIndexV1"
 

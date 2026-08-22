@@ -230,7 +230,7 @@ async def setup_meilisearch() -> None:
             "ancestor_path",
             "extra_searchable",
         ],
-        filterable_attributes=["parent_id", "type"],
+        filterable_attributes=["parent_id", "type", "status"],
         sortable_attributes=["like_count", "created_at"],
         ranking_rules=_DIRECTORIES_RANKING_RULES,
         typo_tolerance=typo_config,

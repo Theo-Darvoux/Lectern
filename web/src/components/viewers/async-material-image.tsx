@@ -360,10 +360,12 @@ export function AsyncMaterialImage({ src, alt, material, className }: AsyncMater
                 // Step 3: Try global search as a fallback
                 if (!targetMaterialId) {
                     try {
-                        const searchRes = await cachedApiFetch<{ materials: Record<string, unknown>[] }>(
+                        const searchRes = await cachedApiFetch<{ items: Record<string, unknown>[] }>(
                             `/search?query=${encodeURIComponent(fileName)}&limit=10`
                         );
-                        const matched = searchRes.materials?.find(matchesFileName);
+                        const matched = searchRes.items?.find(
+                            (item) => item.search_type === "material" && matchesFileName(item),
+                        );
                         if (matched) targetMaterialId = matched.id as string;
                     } catch {
                         // ignore

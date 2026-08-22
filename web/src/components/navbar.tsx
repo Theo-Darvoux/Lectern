@@ -24,7 +24,7 @@ import {
 import { useState, useEffect, useCallback } from "react";
 import { SearchModal } from "@/components/search/search-modal";
 import { SearchInline } from "@/components/search/search-inline";
-import { useNotificationStore, useConfigStore, usePRStore } from "@/lib/stores";
+import { useNotificationStore, useConfigStore, usePRStore, useUIStore } from "@/lib/stores";
 import { useTutorialMenuOpen } from "@/lib/tutorials/tutorial-store";
 import { tutorialsEnabled } from "@/lib/tutorials/use-tutorial";
 import { isGuest } from "@/lib/guest";
@@ -64,7 +64,8 @@ export function Navbar() {
   const tHelp = useTranslations("Tutorials.helpCenter");
   const { user, isAuthenticated, logout } = useAuth();
   const guest = isGuest(user);
-  const [searchOpen, setSearchOpen] = useState(false);
+  const searchOpen = useUIStore((state) => state.searchOpen);
+  const setSearchOpen = useUIStore((state) => state.setSearchOpen);
   const unreadCount = useNotificationStore((state) => state.unreadCount);
   const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
   const decrement = useNotificationStore((state) => state.decrement);
@@ -98,16 +99,13 @@ export function Navbar() {
     if (!isAuthenticated) return;
     const down = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
-        // Only trigger modal on mobile. On desktop, SearchInline handles focusing the input.
-        if (window.innerWidth < 1024) {
-          e.preventDefault();
-          setSearchOpen((open) => !open);
-        }
+        e.preventDefault();
+        setSearchOpen(!useUIStore.getState().searchOpen);
       }
     };
     document.addEventListener("keydown", down);
     return () => document.removeEventListener("keydown", down);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, setSearchOpen]);
 
   const fetchRecentNotifications = useCallback(async () => {
     setLoadingNotifications(true);
@@ -247,6 +245,7 @@ export function Navbar() {
               data-tutorial="nav-search"
               className="lg:hidden h-9 w-9 text-muted-foreground"
               onClick={() => setSearchOpen(true)}
+              aria-label={tCommon("commandSearchPlaceholder")}
             >
               <Search className="h-4 w-4" />
             </Button>

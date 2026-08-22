@@ -3,8 +3,9 @@ import uuid
 from typing import Any
 
 from meilisearch_python_sdk.models.search import SearchParams
-from sqlalchemy import select
+from sqlalchemy import literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.common.exceptions import BadRequestError
 from app.core.events.meilisearch import SEARCH_MAX_TOTAL_HITS, get_search_client
@@ -21,6 +22,33 @@ _SAFE_TYPE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,50}$")
 # returning a potentially partial total.
 _SEARCH_SCAN_BATCH = 250
 _SEARCH_SCAN_MAX_HITS_PER_INDEX = SEARCH_MAX_TOTAL_HITS
+_DIRECTORY_SCOPE_MAX_DEPTH = 64
+
+
+async def _directory_scope_ids(
+    db: AsyncSession, directory_id: uuid.UUID
+) -> set[uuid.UUID]:
+    base = (
+        select(Directory.id.label("id"), literal(0).label("depth"))
+        .where(Directory.id == directory_id, Directory.deleted_at.is_(None))
+        .cte("search_directory_scope", recursive=True)
+    )
+    child = aliased(Directory)
+    scope = base.union_all(
+        select(child.id, (base.c.depth + 1).label("depth")).where(
+            child.parent_id == base.c.id,
+            child.deleted_at.is_(None),
+            base.c.depth < _DIRECTORY_SCOPE_MAX_DEPTH,
+        )
+    )
+    return set(await db.scalars(select(scope.c.id)))
+
+
+def _uuid_in_filter(attribute: str, values: set[uuid.UUID]) -> str:
+    if not values:
+        return f'{attribute} = "__missing__"'
+    rendered = ", ".join(f'"{value}"' for value in sorted(values, key=str))
+    return f"{attribute} IN [{rendered}]"
 
 
 async def _authoritative_live_ids(
@@ -73,7 +101,107 @@ def _search_params(
         offset=offset,
         limit=limit,
         filter=filters or None,  # type: ignore[arg-type]
+        show_ranking_score=True,
     )
+
+
+def _normalized_label(value: object) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _mix_ranked_hits(
+    query: str,
+    materials: list[tuple[dict[str, Any], uuid.UUID]],
+    directories: list[tuple[dict[str, Any], uuid.UUID]],
+) -> list[tuple[str, dict[str, Any], uuid.UUID]]:
+    """Interleave independently ranked indexes without starving either kind.
+
+    Meilisearch preserves relevance inside each index. Exact label matches are
+    promoted to the front of their own list and determine which kind starts;
+    otherwise the stronger normalized ranking score wins, with directories as
+    the stable tie-breaker for direct navigation.
+    """
+    normalized_query = _normalized_label(query)
+
+    def promote_exact(
+        pairs: list[tuple[dict[str, Any], uuid.UUID]], label_key: str
+    ) -> tuple[list[tuple[dict[str, Any], uuid.UUID]], bool]:
+        exact_index = next(
+            (
+                index
+                for index, (hit, _) in enumerate(pairs)
+                if _normalized_label(hit.get(label_key)) == normalized_query
+            ),
+            None,
+        )
+        if exact_index is None:
+            return pairs, False
+        if exact_index == 0:
+            return pairs, True
+        return [pairs[exact_index], *pairs[:exact_index], *pairs[exact_index + 1 :]], True
+
+    materials, material_exact = promote_exact(materials, "title")
+    directories, directory_exact = promote_exact(directories, "name")
+
+    if material_exact != directory_exact:
+        next_kind = "material" if material_exact else "directory"
+    else:
+        material_score = float(materials[0][0].get("_rankingScore") or 0) if materials else -1
+        directory_score = (
+            float(directories[0][0].get("_rankingScore") or 0) if directories else -1
+        )
+        next_kind = "material" if material_score > directory_score else "directory"
+
+    mixed: list[tuple[str, dict[str, Any], uuid.UUID]] = []
+    material_index = 0
+    directory_index = 0
+    while material_index < len(materials) or directory_index < len(directories):
+        if next_kind == "material" and material_index < len(materials):
+            hit, parsed_id = materials[material_index]
+            mixed.append(("material", hit, parsed_id))
+            material_index += 1
+            next_kind = "directory"
+        elif next_kind == "directory" and directory_index < len(directories):
+            hit, parsed_id = directories[directory_index]
+            mixed.append(("directory", hit, parsed_id))
+            directory_index += 1
+            next_kind = "material"
+        elif material_index < len(materials):
+            hit, parsed_id = materials[material_index]
+            mixed.append(("material", hit, parsed_id))
+            material_index += 1
+        else:
+            hit, parsed_id = directories[directory_index]
+            mixed.append(("directory", hit, parsed_id))
+            directory_index += 1
+    return mixed
+
+
+def _match_explanation(query: str, hit: dict[str, Any], kind: str) -> tuple[str, str] | None:
+    needle = _normalized_label(query)
+    label_key = "name" if kind == "directory" else "title"
+    if not needle or needle in _normalized_label(hit.get(label_key)):
+        return None
+
+    candidates: list[tuple[str, object]] = [
+        ("file_name", hit.get("file_name")),
+        ("tag", " · ".join(str(tag) for tag in (hit.get("tags") or []))),
+        ("author", hit.get("authorName")),
+        ("description", hit.get("description")),
+        ("path", hit.get("ancestor_path")),
+        ("code", hit.get("code")),
+    ]
+    for field, raw_value in candidates:
+        value = " ".join(str(raw_value or "").split())
+        if needle not in value.casefold():
+            continue
+        if field == "description" and len(value) > 160:
+            match_index = value.casefold().find(needle)
+            start = max(0, match_index - 55)
+            end = min(len(value), match_index + len(needle) + 85)
+            value = f"{'…' if start else ''}{value[start:end]}{'…' if end < len(value) else ''}"
+        return field, value
+    return None
 
 
 async def _authoritative_search_hits(
@@ -149,6 +277,11 @@ async def perform_search(
     current_user_id: uuid.UUID | None = None,
     directory_id: uuid.UUID | None = None,
     type_filter: str | None = None,
+    kind_filter: str | None = None,
+    material_type_filter: str | None = None,
+    directory_type_filter: str | None = None,
+    status_filter: str | None = None,
+    recursive: bool = False,
 ) -> dict[str, Any]:
     if not query.strip():
         return {"items": [], "total": 0, "page": page, "limit": limit}
@@ -159,13 +292,43 @@ async def perform_search(
     directory_filters: list[str] = []
 
     if directory_id is not None:
-        material_filters.append(f'directory_id = "{directory_id}"')
+        scope_ids = (
+            await _directory_scope_ids(db, directory_id) if recursive else {directory_id}
+        )
+        material_filters.append(_uuid_in_filter("directory_id", scope_ids))
+        directory_filters.append(_uuid_in_filter("parent_id", scope_ids))
 
     if type_filter is not None:
         if not _SAFE_TYPE_RE.match(type_filter):
             return {"items": [], "total": 0, "page": page, "limit": limit}
-        material_filters.append(f'type = "{type_filter}"')
-        directory_filters.append(f'type = "{type_filter}"')
+        if type_filter == "directory":
+            kind_filter = kind_filter or "directory"
+        elif type_filter in {"folder", "module"}:
+            kind_filter = kind_filter or "directory"
+            directory_type_filter = directory_type_filter or type_filter
+        else:
+            kind_filter = kind_filter or "material"
+            material_type_filter = material_type_filter or type_filter
+
+    if material_type_filter is not None:
+        if not _SAFE_TYPE_RE.match(material_type_filter):
+            return {"items": [], "total": 0, "page": page, "limit": limit}
+        material_filters.append(f'type = "{material_type_filter}"')
+        if directory_type_filter is None:
+            kind_filter = kind_filter or "material"
+
+    if directory_type_filter is not None:
+        if not _SAFE_TYPE_RE.match(directory_type_filter):
+            return {"items": [], "total": 0, "page": page, "limit": limit}
+        directory_filters.append(f'type = "{directory_type_filter}"')
+        if material_type_filter is None:
+            kind_filter = kind_filter or "directory"
+
+    if status_filter is not None:
+        if not _SAFE_TYPE_RE.match(status_filter):
+            return {"items": [], "total": 0, "page": page, "limit": limit}
+        material_filters.append(f'status = "{status_filter}"')
+        directory_filters.append(f'status = "{status_filter}"')
 
     live_material_pairs, live_directory_pairs = await _authoritative_search_hits(
         db,
@@ -173,13 +336,12 @@ async def perform_search(
         material_filters,
         directory_filters,
     )
+    if kind_filter == "material":
+        live_directory_pairs = []
+    elif kind_filter == "directory":
+        live_material_pairs = []
 
-    # Preserve the existing materials-first ordering, but apply pagination only
-    # after stale/malformed/deleted hits have been removed.
-    all_live_pairs: list[tuple[str, dict[str, Any], uuid.UUID]] = [
-        *(("material", hit, parsed_id) for hit, parsed_id in live_material_pairs),
-        *(("directory", hit, parsed_id) for hit, parsed_id in live_directory_pairs),
-    ]
+    all_live_pairs = _mix_ranked_hits(query, live_material_pairs, live_directory_pairs)
     total = len(all_live_pairs)
     page_pairs = all_live_pairs[offset : offset + limit]
 
@@ -207,7 +369,12 @@ async def perform_search(
 
     items: list[dict[str, Any]] = []
     for kind, hit, parsed_id in page_pairs:
+        hit.pop("_rankingScore", None)
+        hit.pop("_rankingScoreDetails", None)
         hit["search_type"] = kind
+        explanation = _match_explanation(query, hit, kind)
+        if explanation is not None:
+            hit["matched_field"], hit["match_context"] = explanation
         if kind == "material":
             hit["is_liked"] = parsed_id in liked_material_ids
         else:

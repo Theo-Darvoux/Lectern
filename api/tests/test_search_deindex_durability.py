@@ -684,8 +684,8 @@ async def test_search_never_returns_deleted_missing_or_malformed_meili_hits(
         result = await perform_search(db_session, "secret")
 
     assert [item["id"] for item in result["items"]] == [
-        str(live_material.id),
         str(live_directory.id),
+        str(live_material.id),
     ]
     rendered = repr(result["items"])
     assert "Deleted secret" not in rendered

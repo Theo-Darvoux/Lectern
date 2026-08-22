@@ -239,17 +239,10 @@ async def _reindex() -> None:
     from app.models.directory import Directory
     from app.models.material import Material
     from app.services.directory import get_directory_path
-
-    def split_identifiers(text: str) -> str:
-        import re
-
-        if not text:
-            return ""
-        # Add space between letters and digits
-        s = re.sub(r"([a-zA-Z]+)(\d+)", r"\1 \2", text)
-        # Add space between digits and letters
-        s = re.sub(r"(\d+)([a-zA-Z]+)", r"\1 \2", s)
-        return s
+    from app.services.search_documents import (
+        build_directory_search_document,
+        build_material_search_document,
+    )
 
     # First ensure indexes exist
     await setup_meilisearch()
@@ -277,35 +270,7 @@ async def _reindex() -> None:
 
             browse_path += f"/{mat.slug}"
 
-            # Find current version metadata
-            file_name = None
-            for v in mat.versions:
-                if v.version_number == mat.current_version:
-                    file_name = v.file_name
-                    # Break after finding current version info
-                    break
-
-            # Build extra searchable fields (identifiers)
-            extra = f"{split_identifiers(mat.title)} {split_identifiers(ancestor_path)} {split_identifiers(file_name or '')}"
-
-            m_docs.append(
-                {
-                    "id": str(mat.id),
-                    "title": mat.title,
-                    "slug": mat.slug,
-                    "description": mat.description or "",
-                    "type": mat.type,
-                    "tags": [t.name for t in mat.tags] if mat.tags else [],
-                    "authorName": mat.author.display_name if mat.author else None,
-                    "directory_id": str(mat.directory_id) if mat.directory_id else None,
-                    "created_at": mat.created_at.isoformat()
-                    if mat.created_at is not None  # type: ignore[redundant-expr]
-                    else None,
-                    "ancestor_path": ancestor_path,
-                    "extra_searchable": extra,
-                    "browse_path": browse_path,
-                }
-            )
+            m_docs.append(build_material_search_document(mat, ancestor_path, browse_path))
 
         if m_docs:
             await meili_admin_client.index("materials").add_documents(m_docs)
@@ -329,30 +294,7 @@ async def _reindex() -> None:
 
             browse_path += f"/{dir_obj.slug}"
 
-            metadata = dir_obj.metadata_ or {}
-            code = metadata.get("code") or ""
-
-            # Build extra searchable fields (identifiers)
-            extra = f"{split_identifiers(dir_obj.name)} {split_identifiers(code)} {split_identifiers(ancestor_path)}"  # type: ignore[arg-type]
-
-            d_docs.append(
-                {
-                    "id": str(dir_obj.id),
-                    "name": dir_obj.name,
-                    "slug": dir_obj.slug,
-                    "type": dir_obj.type.value if dir_obj.type else "folder",
-                    "description": dir_obj.description or "",
-                    "tags": [t.name for t in dir_obj.tags] if dir_obj.tags else [],
-                    "code": code,
-                    "parent_id": str(dir_obj.parent_id) if dir_obj.parent_id else None,
-                    "created_at": dir_obj.created_at.isoformat()
-                    if dir_obj.created_at is not None  # type: ignore[redundant-expr]
-                    else None,
-                    "ancestor_path": ancestor_path,
-                    "extra_searchable": extra,
-                    "browse_path": browse_path,
-                }
-            )
+            d_docs.append(build_directory_search_document(dir_obj, ancestor_path, browse_path))
 
         if d_docs:
             await meili_admin_client.index("directories").add_documents(d_docs)
