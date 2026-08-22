@@ -41,7 +41,7 @@ jobs:
         working-directory: api
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
@@ -137,7 +137,7 @@ jobs:
       AUTH_ATOMICITY_REDIS_URL: redis://127.0.0.1:6379/15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
@@ -176,7 +176,7 @@ jobs:
         working-directory: api
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
@@ -206,7 +206,7 @@ jobs:
       - name: Load pinned release toolchain
         id: toolchain
         run: python3 scripts/export-release-toolchain.py --github-output "$GITHUB_OUTPUT"
-      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
@@ -265,7 +265,7 @@ jobs:
           set -euo pipefail
           [[ "$IMAGE" =~ ^docker\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}$ ]]
           echo "SEAWEEDFS_IMAGE=$IMAGE" >> "$GITHUB_ENV"
-      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
