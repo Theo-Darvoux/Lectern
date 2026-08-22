@@ -750,11 +750,9 @@ def test_search_scan_bound_matches_explicit_meili_pagination_horizon() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_too_broad_never_returns_unvalidated_meili_total(
+async def test_search_broad_queries_return_validated_live_hits_without_error(
     db_session: AsyncSession,
 ) -> None:
-    from app.core.common.exceptions import BadRequestError
-
     client = AsyncMock()
     client.multi_search.return_value = [
         SimpleNamespace(hits=[], estimated_total_hits=1_001),
@@ -762,5 +760,7 @@ async def test_search_too_broad_never_returns_unvalidated_meili_total(
     ]
 
     with patch("app.services.search.get_search_client", return_value=client):
-        with pytest.raises(BadRequestError, match="too broad"):
-            await perform_search(db_session, "broad")
+        result = await perform_search(db_session, "broad")
+        assert result["items"] == []
+        assert result["total"] == 0
+

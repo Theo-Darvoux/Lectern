@@ -512,7 +512,7 @@ export default function LoginPage() {
                                         </div>
                                         <div className="relative flex justify-center">
                                             <span className="login-overline bg-[#0c0d14] px-2.5">
-                                                {t("orContinue")}
+                                                {t("or")}
                                             </span>
                                         </div>
                                     </div>

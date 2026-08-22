@@ -30,6 +30,8 @@ vi.mock("next-intl", () => ({
 
 vi.mock("@/components/search/use-search", () => ({
   getSearchErrorMessageKey: () => "searchUnavailableDescription",
+  getSearchErrorTitleKey: () => "searchUnavailable",
+  isRetryableSearchError: () => true,
   useSearch: () => searchState,
 }));
 

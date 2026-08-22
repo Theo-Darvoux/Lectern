@@ -7,7 +7,6 @@ from sqlalchemy import literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.core.common.exceptions import BadRequestError
 from app.core.events.meilisearch import SEARCH_MAX_TOTAL_HITS, get_search_client
 from app.models.directory import Directory, DirectoryLike
 from app.models.material import Material, MaterialLike
@@ -18,8 +17,7 @@ _SAFE_TYPE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,50}$")
 # Public search must not expose Meilisearch-only counts or let stale documents
 # consume page slots. Scan the explicitly configured Meilisearch pagination
 # horizon, validate IDs against PostgreSQL, then paginate/count only authoritative
-# live hits. Queries that fill the complete horizon fail closed rather than
-# returning a potentially partial total.
+# live hits.
 _SEARCH_SCAN_BATCH = 250
 _SEARCH_SCAN_MAX_HITS_PER_INDEX = SEARCH_MAX_TOTAL_HITS
 _DIRECTORY_SCOPE_MAX_DEPTH = 64
@@ -255,21 +253,6 @@ async def _authoritative_search_hits(
         if search_directories:
             directories_res = results[result_index]  # type: ignore[index]
 
-        if scan_offset == 0:
-            material_estimate = (
-                int(materials_res.estimated_total_hits or 0) if materials_res else 0
-            )
-            directory_estimate = (
-                int(directories_res.estimated_total_hits or 0) if directories_res else 0
-            )
-            if (
-                material_estimate > _SEARCH_SCAN_MAX_HITS_PER_INDEX
-                or directory_estimate > _SEARCH_SCAN_MAX_HITS_PER_INDEX
-            ):
-                # Do not return the unvalidated estimate: that would recreate the
-                # deleted-keyword oracle. The caller only learns the query is too broad.
-                raise BadRequestError("Search query is too broad; add more terms or filters")
-
         material_hits = list(materials_res.hits) if materials_res else []
         directory_hits = list(directories_res.hits) if directories_res else []
         live_materials.extend(await _live_hits_for_batch(db, Material, material_hits))
@@ -278,10 +261,6 @@ async def _authoritative_search_hits(
         if len(material_hits) < _SEARCH_SCAN_BATCH and len(directory_hits) < _SEARCH_SCAN_BATCH:
             break
         scan_offset += _SEARCH_SCAN_BATCH
-    else:
-        # Defensive fallback if the server under-reports estimated_total_hits but
-        # still returns a full final page at our bound. Never emit a partial count.
-        raise BadRequestError("Search query is too broad; add more terms or filters")
 
     return live_materials, live_directories
 

@@ -35,6 +35,8 @@ import {
 } from "@/components/search/search-page-state";
 import {
   getSearchErrorMessageKey,
+  getSearchErrorTitleKey,
+  isRetryableSearchError,
   useSearch,
   type SearchResult,
 } from "@/components/search/use-search";
@@ -510,21 +512,23 @@ function SearchPageContent() {
           >
             <AlertCircle className="mx-auto size-8 sm:size-9 text-destructive" />
             <h2 className="mt-3 text-sm sm:text-base font-semibold text-foreground">
-              {t("searchUnavailable")}
+              {t(getSearchErrorTitleKey(error))}
             </h2>
             <p className="mt-1 text-xs sm:text-sm text-muted-foreground max-w-md mx-auto">
               {t(getSearchErrorMessageKey(error))}
             </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={retry}
-              className="mt-4 gap-2 text-xs"
-            >
-              <RotateCcw className="size-3.5" />
-              <span>{t("retry")}</span>
-            </Button>
+            {isRetryableSearchError(error) && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={retry}
+                className="mt-4 gap-2 text-xs"
+              >
+                <RotateCcw className="size-3.5" />
+                <span>{t("retry")}</span>
+              </Button>
+            )}
           </div>
         ) : results.length === 0 ? (
           /* 4. Empty Results State */

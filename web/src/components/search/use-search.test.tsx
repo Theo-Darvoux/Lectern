@@ -6,6 +6,8 @@ import { ApiError, apiFetch } from "@/lib/api-client";
 import {
   buildSearchPath,
   getSearchErrorMessageKey,
+  getSearchErrorTitleKey,
+  isRetryableSearchError,
   useSearch,
   type SearchOptions,
   type SearchResponse,
@@ -213,11 +215,19 @@ describe("useSearch", () => {
   });
 
   it("maps actionable request failures to localized guidance", () => {
+    expect(getSearchErrorTitleKey(new ApiError(400, "too broad"))).toBe("searchTooBroad");
+    expect(getSearchErrorTitleKey(new ApiError(429, "slow down"))).toBe("searchRateLimited");
+    expect(getSearchErrorTitleKey(new Error("offline"))).toBe("searchUnavailable");
+
     expect(getSearchErrorMessageKey(new ApiError(400, "too broad"))).toBe("refineQuery");
     expect(getSearchErrorMessageKey(new ApiError(429, "slow down"))).toBe("slowDown");
     expect(getSearchErrorMessageKey(new Error("offline"))).toBe(
       "searchUnavailableDescription",
     );
+
+    expect(isRetryableSearchError(new ApiError(400, "too broad"))).toBe(false);
+    expect(isRetryableSearchError(new ApiError(429, "slow down"))).toBe(true);
+    expect(isRetryableSearchError(new Error("offline"))).toBe(true);
   });
 
   it("preserves previous results while fetching updated filters or pages to prevent flickering", async () => {

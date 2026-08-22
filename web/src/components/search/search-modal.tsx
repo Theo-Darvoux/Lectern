@@ -38,6 +38,8 @@ import {
 import type { MaterialDetail } from "@/components/home/types";
 import {
   getSearchErrorMessageKey,
+  getSearchErrorTitleKey,
+  isRetryableSearchError,
   useSearch,
   type SearchResult,
   type SearchStatus,
@@ -206,14 +208,16 @@ export function SearchList({
           <div className="flex flex-col items-center gap-3 px-5 py-2" role="alert">
             <AlertCircle className="size-5 text-destructive" />
             <div>
-              <p className="font-medium text-foreground">{t("searchUnavailable")}</p>
+              <p className="font-medium text-foreground">{t(getSearchErrorTitleKey(error))}</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {t(getSearchErrorMessageKey(error))}
               </p>
             </div>
-            <Button type="button" variant="outline" size="sm" onClick={retry}>
-              {t("retry")}
-            </Button>
+            {isRetryableSearchError(error) && (
+              <Button type="button" variant="outline" size="sm" onClick={retry}>
+                {t("retry")}
+              </Button>
+            )}
           </div>
         ) : query.trim() === "" ? (
           <div className="px-6">
