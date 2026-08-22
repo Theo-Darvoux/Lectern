@@ -154,6 +154,23 @@ describe("useSearch", () => {
     hook.cleanup();
   });
 
+  it("does not identify old totals as belonging to a newly rendered query", async () => {
+    vi.mocked(apiFetch).mockResolvedValueOnce(response("Algebra"));
+    const hook = renderSearch("algebra");
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(hook.current.resolvedRequestKey).toBe(hook.current.requestKey);
+
+    hook.render("calculus");
+
+    expect(hook.current.resolvedRequestKey).not.toBe(hook.current.requestKey);
+    hook.cleanup();
+  });
+
   it("builds one canonical request for result-page filters and scope", () => {
     expect(
       buildSearchPath("linear algebra", {

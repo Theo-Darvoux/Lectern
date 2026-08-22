@@ -59,7 +59,15 @@ function SearchPageContent() {
 
   React.useEffect(() => setDraft(state.query), [state.query]);
 
-  const { results, total, status, error, retry } = useSearch(state.query, {
+  const {
+    results,
+    total,
+    status,
+    error,
+    retry,
+    requestKey,
+    resolvedRequestKey,
+  } = useSearch(state.query, {
     delay: 0,
     page: state.page,
     limit: PAGE_SIZE,
@@ -86,6 +94,7 @@ function SearchPageContent() {
   React.useEffect(() => {
     if (
       (status === "success" || status === "empty") &&
+      resolvedRequestKey === requestKey &&
       total > 0 &&
       validPage !== state.page
     ) {
@@ -93,7 +102,7 @@ function SearchPageContent() {
         updateSearchPageParams(new URLSearchParams(params.toString()), { page: validPage }),
       );
     }
-  }, [navigate, params, state.page, status, total, validPage]);
+  }, [navigate, params, requestKey, resolvedRequestKey, state.page, status, total, validPage]);
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();

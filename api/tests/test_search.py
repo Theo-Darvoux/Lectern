@@ -169,6 +169,10 @@ async def test_search_limit_50_accepted(
     [
         "kind=directory&material_type=document",
         "kind=material&directory_type=folder",
+        "kind=directory&type=document",
+        "kind=material&type=folder",
+        "type=document&material_type=document",
+        "type=folder&directory_type=folder",
     ],
 )
 async def test_search_rejects_conflicting_kind_and_subtype_filters(

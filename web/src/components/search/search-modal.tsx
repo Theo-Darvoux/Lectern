@@ -250,25 +250,27 @@ export function SearchModal({
         onValueChange={setQuery}
         maxLength={200}
       />
-      <div
-        className="flex items-center gap-1 border-b px-3 py-2"
-        role="group"
-        aria-label={t("filterByKind")}
-      >
-        {(["all", "material", "directory"] as const).map((value) => (
-          <Button
-            key={value}
-            type="button"
-            size="xs"
-            variant={kind === value ? "secondary" : "ghost"}
-            aria-pressed={kind === value}
-            onClick={() => setKind(value)}
-          >
-            {t(`kinds.${value}`)}
-          </Button>
-        ))}
+      <div className="flex items-center gap-1 border-b px-3 py-2">
+        <div className="flex items-center gap-1" role="group" aria-label={t("filterByKind")}>
+          {(["all", "material", "directory"] as const).map((value) => (
+            <Button
+              key={value}
+              type="button"
+              size="xs"
+              variant={kind === value ? "secondary" : "ghost"}
+              aria-pressed={kind === value}
+              onClick={() => setKind(value)}
+            >
+              {t(`kinds.${value}`)}
+            </Button>
+          ))}
+        </div>
         {currentDirectory && (
-          <div className="ml-auto flex items-center gap-1 border-l pl-2">
+          <div
+            className="ml-auto flex items-center gap-1 border-l pl-2"
+            role="group"
+            aria-label={t("filterByScope")}
+          >
             <Button
               type="button"
               size="xs"

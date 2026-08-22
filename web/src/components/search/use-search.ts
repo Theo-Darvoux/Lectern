@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ApiError, apiFetch } from "@/lib/api-client";
 
 export interface SearchResult {
@@ -85,9 +85,19 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
     const [status, setStatus] = useState<SearchStatus>(query.trim() ? "debouncing" : "idle");
     const [error, setError] = useState<Error | null>(null);
     const [total, setTotal] = useState(0);
+    const [resolvedRequestKey, setResolvedRequestKey] = useState<string | null>(null);
     const [requestVersion, setRequestVersion] = useState(0);
     const latestQueryRef = useRef(query);
     const requestControllerRef = useRef<AbortController | null>(null);
+    const requestKey = buildSearchPath(query, {
+        page,
+        limit,
+        kind,
+        materialType,
+        status: statusFilter,
+        directoryId,
+        recursive,
+    });
 
     useEffect(() => {
         latestQueryRef.current = query;
@@ -95,6 +105,7 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
         setResults([]);
         setTotal(0);
         setError(null);
+        setResolvedRequestKey(null);
         setStatus(query.trim() ? "debouncing" : "idle");
 
         const handler = setTimeout(() => {
@@ -129,7 +140,7 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
         setError(null);
         setStatus("loading");
 
-        apiFetch<SearchResponse>(buildSearchPath(debouncedQuery, {
+        const activeRequestKey = buildSearchPath(debouncedQuery, {
             page,
             limit,
             kind,
@@ -137,7 +148,8 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
             status: statusFilter,
             directoryId,
             recursive,
-        }), {
+        });
+        apiFetch<SearchResponse>(activeRequestKey, {
             signal: controller.signal,
             timeoutMs: 10_000,
         })
@@ -145,6 +157,7 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
                 if (isMounted && latestQueryRef.current === debouncedQuery) {
                     setResults(data.items);
                     setTotal(data.total);
+                    setResolvedRequestKey(activeRequestKey);
                     setStatus(data.items.length > 0 ? "success" : "empty");
                 }
             })
@@ -165,9 +178,9 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
         };
     }, [debouncedQuery, page, limit, kind, materialType, statusFilter, directoryId, recursive, requestVersion]);
 
-    const retry = useCallback(() => {
+    const retry = () => {
         if (query.trim()) setRequestVersion((version) => version + 1);
-    }, [query]);
+    };
 
     return {
         results,
@@ -175,6 +188,8 @@ export function useSearch(query: string, options: SearchOptions | number = {}) {
         status,
         error,
         retry,
+        requestKey,
+        resolvedRequestKey,
         loading: status === "debouncing" || status === "loading",
     };
 }

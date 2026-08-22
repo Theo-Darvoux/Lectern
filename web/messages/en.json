@@ -452,6 +452,7 @@
     "material": "Material",
     "untitled": "Untitled",
     "filterByKind": "Filter search results",
+    "filterByScope": "Choose search location",
     "dialogTitle": "Search the library",
     "dialogDescription": "Find materials and folders by title, filename, tag, author, description, or location.",
     "keyboardNavigate": "↑↓ to navigate",

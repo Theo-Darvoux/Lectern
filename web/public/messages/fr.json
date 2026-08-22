@@ -452,6 +452,7 @@
     "material": "Ressource",
     "untitled": "Sans titre",
     "filterByKind": "Filtrer les résultats",
+    "filterByScope": "Choisir l’emplacement de recherche",
     "dialogTitle": "Rechercher dans la bibliothèque",
     "dialogDescription": "Trouvez des ressources et des dossiers par titre, fichier, tag, auteur, description ou emplacement.",
     "keyboardNavigate": "↑↓ pour naviguer",

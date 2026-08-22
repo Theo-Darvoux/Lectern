@@ -53,6 +53,13 @@ async def search(
         raise BadRequestError(
             f"Invalid status filter. Allowed: {', '.join(sorted(_ALLOWED_STATUS_VALUES))}"
         )
+    if type is not None and (material_type is not None or directory_type is not None):
+        raise BadRequestError("type cannot be combined with material_type or directory_type")
+    legacy_kind = (
+        "directory" if type == "directory" or type in ALLOWED_DIRECTORY_TYPES else "material"
+    )
+    if type is not None and kind is not None and kind != legacy_kind:
+        raise BadRequestError(f"type={type} cannot be combined with kind={kind}")
     if kind == "directory" and material_type is not None:
         raise BadRequestError("material_type cannot be combined with kind=directory")
     if kind == "material" and directory_type is not None:
