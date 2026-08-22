@@ -23,9 +23,7 @@ _SEARCH_SCAN_MAX_HITS_PER_INDEX = SEARCH_MAX_TOTAL_HITS
 _DIRECTORY_SCOPE_MAX_DEPTH = 64
 
 
-async def _directory_scope_ids(
-    db: AsyncSession, directory_id: uuid.UUID
-) -> set[uuid.UUID]:
+async def _directory_scope_ids(db: AsyncSession, directory_id: uuid.UUID) -> set[uuid.UUID]:
     base = (
         select(Directory.id.label("id"), literal(0).label("depth"))
         .where(Directory.id == directory_id, Directory.deleted_at.is_(None))
@@ -145,9 +143,7 @@ def _mix_ranked_hits(
         next_kind = "material" if material_exact else "directory"
     else:
         material_score = float(materials[0][0].get("_rankingScore") or 0) if materials else -1
-        directory_score = (
-            float(directories[0][0].get("_rankingScore") or 0) if directories else -1
-        )
+        directory_score = float(directories[0][0].get("_rankingScore") or 0) if directories else -1
         next_kind = "material" if material_score > directory_score else "directory"
 
     mixed: list[tuple[str, dict[str, Any], uuid.UUID]] = []
@@ -288,9 +284,7 @@ async def perform_search(
     directory_filters: list[str] = []
 
     if directory_id is not None:
-        scope_ids = (
-            await _directory_scope_ids(db, directory_id) if recursive else {directory_id}
-        )
+        scope_ids = await _directory_scope_ids(db, directory_id) if recursive else {directory_id}
         material_filters.append(_uuid_in_filter("directory_id", scope_ids))
         directory_filters.append(_uuid_in_filter("parent_id", scope_ids))
 

@@ -107,4 +107,3 @@ def test_html_to_plain_preserves_links() -> None:
     plain = _html_to_plain(html)
     assert "https://intellect.clubcode.fr/verify" in plain
     assert "Click here" in plain
-

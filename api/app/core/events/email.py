@@ -84,7 +84,7 @@ async def send_email(
     html_body = body.strip()
     if not re.search(r"<html[\s>]", html_body, re.IGNORECASE):
         html_body = (
-            f"<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{subject}</title></head>"
+            f'<!DOCTYPE html><html><head><meta charset="utf-8"><title>{subject}</title></head>'
             f"<body>{html_body}</body></html>"
         )
 

@@ -115,11 +115,7 @@ class UserBrief(BaseModel):
     role: str
     onboarded: bool
     auto_approve: bool
-<<<<<<< Updated upstream
-    has_password: bool
-=======
     has_password: bool = False
->>>>>>> Stashed changes
     completed_tutorials: list[str] = Field(default_factory=list)
 
     @field_serializer("avatar_url")

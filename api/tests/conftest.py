@@ -20,6 +20,28 @@ from app.models.base import Base
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_test_settings():
+    from app.config import settings
+
+    orig_env = settings.environment
+    orig_bootstrap = settings.bootstrap_token
+    orig_bazaar = settings.malwarebazaar_fail_closed
+    orig_domains = settings.allowed_domains
+    orig_allow_all = settings.allow_all_domains
+
+    settings.bootstrap_token = None
+    settings.malwarebazaar_fail_closed = True
+    try:
+        yield
+    finally:
+        settings.environment = orig_env
+        settings.bootstrap_token = orig_bootstrap
+        settings.malwarebazaar_fail_closed = orig_bazaar
+        settings.allowed_domains = orig_domains
+        settings.allow_all_domains = orig_allow_all
+
+
 @pytest.fixture(scope="session")
 def engine():
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=StaticPool, echo=False)

@@ -763,4 +763,3 @@ async def test_search_broad_queries_return_validated_live_hits_without_error(
         result = await perform_search(db_session, "broad")
         assert result["items"] == []
         assert result["total"] == 0
-

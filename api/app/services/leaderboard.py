@@ -166,27 +166,15 @@ async def get_leaderboard(
     )
     combined = union_all(page_rows, current_user_row, total_row).subquery()
     rows = (
-        await db.execute(
-            select(combined).order_by(combined.c.row_kind.desc(), combined.c.position)
-        )
+        await db.execute(select(combined).order_by(combined.c.row_kind.desc(), combined.c.position))
     ).all()
 
-    page_entries = [
-        _entry_from_row(row) for row in rows if row._mapping["row_kind"] == "page"
-    ]
+    page_entries = [_entry_from_row(row) for row in rows if row._mapping["row_kind"] == "page"]
     current_entry = next(
-        (
-            _entry_from_row(row)
-            for row in rows
-            if row._mapping["row_kind"] == "current_user"
-        ),
+        (_entry_from_row(row) for row in rows if row._mapping["row_kind"] == "current_user"),
         None,
     )
-    total = next(
-        int(row._mapping["total"])
-        for row in rows
-        if row._mapping["row_kind"] == "total"
-    )
+    total = next(int(row._mapping["total"]) for row in rows if row._mapping["row_kind"] == "total")
 
     return LeaderboardResponse(
         items=page_entries,
