@@ -181,7 +181,7 @@ export function ViewerFab({
   };
 
   const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
-  const { print, isPrinting, canPrint } = usePrint({
+  const { print, downloadPdf, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId,
     fileName,
@@ -280,12 +280,12 @@ export function ViewerFab({
           }}
         >
           {/* ── Download ── */}
-          {viewerType === "qcm" ? (
+          {viewerType === "qcm" || viewerType === "markdown" ? (
             <DropdownMenu modal={false}>
-              <DropdownMenuTrigger asChild disabled={isDownloading}>
+              <DropdownMenuTrigger asChild disabled={isDownloading || isPrinting}>
                 <button className="flex flex-col items-center gap-2">
                   <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-secondary hover:bg-secondary/80 transition-transform active:scale-90">
-                    {isDownloading
+                    {isDownloading || isPrinting
                       ? <Loader2 className="h-5 w-5 animate-spin" />
                       : <Download className="h-5 w-5" />}
                   </span>
@@ -296,17 +296,26 @@ export function ViewerFab({
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="center" className="min-w-44">
                 <DropdownMenuItem
-                  onClick={() => { close(); downloadQcmAsPdf(materialId, materialTitle); }}
+                  onClick={() => {
+                    close();
+                    if (viewerType === "qcm") downloadQcmAsPdf(materialId, materialTitle);
+                    else downloadPdf();
+                  }}
                 >
                   <FileText className="h-4 w-4" />
                   {t("downloadPdf")}
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => { close(); downloadQcmAsXml(materialId); }}
-                >
-                  <Code2 className="h-4 w-4" />
-                  {t("downloadXml")}
-                </DropdownMenuItem>
+                {viewerType === "qcm" ? (
+                  <DropdownMenuItem onClick={() => { close(); downloadQcmAsXml(materialId); }}>
+                    <Code2 className="h-4 w-4" />
+                    {t("downloadXml")}
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem onClick={() => { close(); downloadMaterial(materialId); }}>
+                    <Code2 className="h-4 w-4" />
+                    {t("downloadOriginal")}
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (

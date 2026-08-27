@@ -336,6 +336,7 @@
     "emptyDirectory": "Ce dossier est vide.",
     "download": "Télécharger",
     "downloadPdf": "Télécharger en PDF",
+    "downloadOriginal": "Télécharger le Markdown original",
     "downloadXml": "Télécharger Moodle XML",
     "print": "Imprimer",
     "edit": "Modifier",

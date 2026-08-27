@@ -6,6 +6,7 @@ import { useMaterialFile } from "@/hooks/use-material-file";
 import type { ThreadData } from "@/hooks/use-annotations";
 import { MarkdownRenderer } from "./markdown-renderer";
 import { registerViewerPrint, unregisterViewerPrint } from "@/lib/viewer-print-registry";
+import { prepareMarkdownForPrint, waitForMarkdownRender } from "@/lib/markdown-print";
 import { ViewerShell } from "./viewer-shell";
 import { ZoomControls } from "./zoom-controls";
 import { AnnotationInlinePopover } from "@/components/annotations/annotation-inline-popover";
@@ -166,7 +167,12 @@ export function MarkdownViewer({
 
     useEffect(() => {
         registerViewerPrint(materialId, {
-            getContent: () => proseRef.current?.innerHTML ?? null
+            getContent: async () => {
+                const viewer = proseRef.current;
+                if (!viewer) return null;
+                await waitForMarkdownRender(viewer);
+                return prepareMarkdownForPrint(viewer);
+            },
         });
         return () => unregisterViewerPrint(materialId);
     }, [materialId]);

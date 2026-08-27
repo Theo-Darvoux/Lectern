@@ -85,7 +85,10 @@ export function Mermaid({ chart }: MermaidProps) {
 
     if (!svg) {
         return (
-            <div className="my-4 flex items-center justify-center rounded-md bg-muted p-8 animate-pulse border border-border">
+            <div
+                data-markdown-export-pending="diagram"
+                className="my-4 flex items-center justify-center rounded-md bg-muted p-8 animate-pulse border border-border"
+            >
                 <Loader2 className="mr-2 h-5 w-5 animate-spin text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">{t("rendering")}</span>
             </div>
