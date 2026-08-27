@@ -7,7 +7,7 @@
 
 interface PrintRegistryEntry {
   /** Returns the rendered HTML content of the viewer (used by Markdown) */
-  getContent?: () => string | null;
+  getContent?: () => string | null | Promise<string | null>;
   /** Directly triggers the viewer's built-in print (used by Office/OnlyOffice) */
   print?: () => void;
 }

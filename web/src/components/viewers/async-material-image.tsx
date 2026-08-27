@@ -395,7 +395,10 @@ export function AsyncMaterialImage({ src, alt, material, className }: AsyncMater
 
     if (loading) {
         return (
-            <span className="my-4 flex items-center justify-center rounded-md bg-muted p-8 animate-pulse border border-border">
+            <span
+                data-markdown-export-pending="image"
+                className="my-4 flex items-center justify-center rounded-md bg-muted p-8 animate-pulse border border-border"
+            >
                 <Loader2 className="mr-2 h-5 w-5 animate-spin text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">{t("resolving", { src })}</span>
             </span>

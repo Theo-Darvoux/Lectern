@@ -354,7 +354,7 @@ export function MaterialViewer({
       setIsRecalculatingThumbnail(false);
     }
   };
-  const { print, isPrinting, canPrint } = usePrint({
+  const { print, downloadPdf, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId,
     fileName,
@@ -510,18 +510,18 @@ export function MaterialViewer({
                           )}
                         </Button>
                       )}
-                      {viewerType === "qcm" ? (
+                      {viewerType === "qcm" || viewerType === "markdown" ? (
                         <DropdownMenu modal={false}>
                           <DropdownMenuTrigger asChild>
                             <Button
                               variant="outline"
                               size="icon"
                               className="h-8 w-8 shrink-0"
-                              disabled={isDownloading}
+                              disabled={isDownloading || (viewerType === "markdown" && isPrinting)}
                               title={t("downloadDocument")}
                               aria-label={t("downloadDocument")}
                             >
-                              {isDownloading ? (
+                              {isDownloading || (viewerType === "markdown" && isPrinting) ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
                                 <Download className="h-4 w-4" />
@@ -529,14 +529,24 @@ export function MaterialViewer({
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => downloadQcmAsPdf(materialId, title)} className="cursor-pointer">
+                            <DropdownMenuItem
+                              onClick={() => viewerType === "qcm" ? downloadQcmAsPdf(materialId, title) : downloadPdf()}
+                              className="cursor-pointer"
+                            >
                               <FileText className="mr-2 h-4 w-4" />
                               <span>{t("downloadPdf")}</span>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => downloadQcmAsXml(materialId)} className="cursor-pointer">
-                              <Code2 className="mr-2 h-4 w-4" />
-                              <span>{t("downloadXml")}</span>
-                            </DropdownMenuItem>
+                            {viewerType === "qcm" ? (
+                              <DropdownMenuItem onClick={() => downloadQcmAsXml(materialId)} className="cursor-pointer">
+                                <Code2 className="mr-2 h-4 w-4" />
+                                <span>{t("downloadXml")}</span>
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem onClick={() => downloadMaterial(materialId)} className="cursor-pointer">
+                                <Code2 className="mr-2 h-4 w-4" />
+                                <span>{t("downloadOriginal")}</span>
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       ) : viewerType !== "link" ? (

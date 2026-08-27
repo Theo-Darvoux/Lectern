@@ -353,6 +353,7 @@
     "emptyDirectory": "This directory is empty.",
     "download": "Download",
     "downloadPdf": "Download PDF",
+    "downloadOriginal": "Download original Markdown",
     "downloadXml": "Download Moodle XML",
     "print": "Print",
     "edit": "Edit",

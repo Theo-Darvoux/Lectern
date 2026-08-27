@@ -37,6 +37,35 @@ async def _bounded_redis_call(label: str, awaitable: Any) -> Any:
         pytest.fail(message, pytrace=False)
 
 
+async def _bounded_event_while_task_running(
+    label: str,
+    event: asyncio.Event,
+    task: asyncio.Task[Any],
+) -> None:
+    """Wait for an event, surfacing an early task failure without leaking it."""
+    event_waiter = asyncio.create_task(event.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {event_waiter, task},
+            timeout=_REDIS_COMMAND_TIMEOUT_SECONDS,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not done:
+            pytest.fail(
+                f"Redis integration timed out after {_REDIS_COMMAND_TIMEOUT_SECONDS:.0f}s "
+                f"while {label}",
+                pytrace=False,
+            )
+        if task in done:
+            await task
+            pytest.fail(f"Writer completed before {label}", pytrace=False)
+        await event_waiter
+    finally:
+        if not event_waiter.done():
+            event_waiter.cancel()
+            await asyncio.gather(event_waiter, return_exceptions=True)
+
+
 @pytest.fixture
 async def redis() -> Redis:  # type: ignore[type-arg]
     if not _REDIS_URL:
@@ -597,7 +626,10 @@ async def test_slow_preflight_cannot_make_live_dispatched_write_recoverable(
     monkeypatch.setattr(redis_core, "redis_client", redis)
     monkeypatch.setattr(settings, "cas_mutation_io_timeout_seconds", 0.6)
     monkeypatch.setattr(settings, "cas_mutation_recovery_grace_seconds", 0.1)
-    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_EXPIRE", 0.25)
+    # This test covers the dispatch-based recovery clock, not sub-second lease
+    # renewal. Keep the synthetic lease comfortably beyond the intentional
+    # slow preflight; lock loss is forced explicitly below.
+    monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_EXPIRE", 5.0)
     monkeypatch.setattr(capacity, "_CAS_STORAGE_LOCK_TIMEOUT", 1.0)
     await redis.set(_STORAGE_USAGE_KEY, 0)
     await redis.set(_STORAGE_USAGE_GENERATION_KEY, 0)
@@ -612,7 +644,9 @@ async def test_slow_preflight_cannot_make_live_dispatched_write_recoverable(
     assert "recover_after_ms" not in preflight
     await asyncio.sleep(0.8)  # beyond the vulnerable creation-based 0.7s window
     storage.allow_preflight.set()
-    await _bounded_redis_call("waiting for writer dispatch", storage.dispatched.wait())
+    await _bounded_event_while_task_running(
+        "waiting for writer dispatch", storage.dispatched, writer
+    )
     intents = await redis.hgetall(capacity._STORAGE_MUTATION_INTENTS_KEY)
     _mutation_id, raw = next(iter(intents.items()))
     dispatched = json.loads(raw)

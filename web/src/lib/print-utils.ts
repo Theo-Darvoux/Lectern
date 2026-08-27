@@ -18,6 +18,61 @@ interface PrintIframeOptions {
   css?: string;
   /** Title for the printed page. */
   title?: string;
+  /** Reuse the application's stylesheets for rendered HTML such as Markdown. */
+  copyStyles?: boolean;
+}
+
+function waitForPrintImages(doc: Document, timeoutMs = 3_000): Promise<void> {
+  const pending = Array.from(doc.images).filter((image) => !image.complete);
+  if (pending.length === 0) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let remaining = pending.length;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve();
+    };
+    const markLoaded = () => {
+      remaining -= 1;
+      if (remaining === 0) finish();
+    };
+    const timeout = setTimeout(finish, timeoutMs);
+
+    pending.forEach((image) => {
+      image.addEventListener("load", markLoaded, { once: true });
+      image.addEventListener("error", markLoaded, { once: true });
+    });
+  });
+}
+
+function waitForPrintStyles(doc: Document, timeoutMs = 3_000): Promise<void> {
+  const pending = Array.from(doc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
+    .filter((link) => !link.sheet);
+  if (pending.length === 0) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let remaining = pending.length;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve();
+    };
+    const markLoaded = () => {
+      remaining -= 1;
+      if (remaining === 0) finish();
+    };
+    const timeout = setTimeout(finish, timeoutMs);
+
+    pending.forEach((link) => {
+      link.addEventListener("load", markLoaded, { once: true });
+      link.addEventListener("error", markLoaded, { once: true });
+    });
+  });
 }
 
 /**
@@ -52,7 +107,7 @@ export function printInIframe(content: string, options: PrintIframeOptions = {})
     <html>
       <head>
         <title></title>
-        <style>
+        <style data-print-overrides>
           *, *::before, *::after { box-sizing: border-box; }
           body {
             margin: 0;
@@ -78,9 +133,18 @@ export function printInIframe(content: string, options: PrintIframeOptions = {})
   doc.close();
   doc.title = options.title ?? "Print";
 
+  if (options.copyStyles) {
+    const printOverrides = doc.querySelector("style[data-print-overrides]");
+    document.head
+      .querySelectorAll<HTMLStyleElement | HTMLLinkElement>('style, link[rel="stylesheet"]')
+      .forEach((style) => printOverrides?.before(style.cloneNode(true)));
+  }
+
   iframe.contentWindow?.addEventListener("afterprint", cleanup);
-  setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
-  }, 300);
+  void Promise.all([waitForPrintImages(doc), waitForPrintStyles(doc)]).then(() => {
+    setTimeout(() => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    }, 100);
+  });
 }
