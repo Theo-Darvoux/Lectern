@@ -223,6 +223,9 @@ async def upload_events(
 
     cached_status: str | None = await redis.get(f"{_STATUS_CACHE_PREFIX}{file_key}")
     row = await _load_authoritative_upload(file_key, user.id, db)
+    # get_db only tears down after the stream ends; release the pooled connection
+    # now instead of pinning it idle-in-transaction for the stream's lifetime.
+    await db.commit()
     authoritative = _authoritative_terminal_payload(row, file_key) if row else None
     authoritative_override = False
     if authoritative is not None:
