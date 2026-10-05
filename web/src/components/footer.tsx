@@ -3,7 +3,7 @@ import { useConfigStore } from "@/lib/stores";
 import { useTranslations } from "next-intl";
 
 // Baked in at build time from the Docker image's commit SHA (see web/Dockerfile
-// and the `NEXT_PUBLIC_COMMIT_SHA` build-arg in .github/workflows/build.yml).
+// and the `NEXT_PUBLIC_COMMIT_SHA` build-arg in .github/workflows/release.yml).
 const commitSha = process.env.NEXT_PUBLIC_COMMIT_SHA;
 
 export function Footer() {

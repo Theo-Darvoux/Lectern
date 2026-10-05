@@ -13,9 +13,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # NEXT_PUBLIC_* values are inlined into the static export at build time — the
 # static prod image has no Node runtime to read them later, so they MUST be
-# present as env during `pnpm build`. build.yml supplies these as build-args
-# (from GitHub Actions repo variables); any left unset bake as "" and the app
-# falls back to its in-code default via `|| ...` (e.g. NEXT_PUBLIC_API_URL -> "/api").
+# present as env during `pnpm build`. release.yml supplies NEXT_PUBLIC_COMMIT_SHA
+# as a build-arg; any left unset bake as "" and the app falls back to its
+# in-code default via `|| ...` (e.g. NEXT_PUBLIC_API_URL -> "/api").
 ARG NEXT_PUBLIC_COMMIT_SHA
 ARG NEXT_PUBLIC_API_URL
 ARG NEXT_PUBLIC_EUROOFFICE_URL

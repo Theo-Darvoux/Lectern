@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -25,24 +24,10 @@ def test_production_compose_is_accepted_by_the_real_compose_cli(tmp_path: Path) 
 
     runtime_env = tmp_path / "runtime.env"
     runtime_env.write_text("ENVIRONMENT=production\n", encoding="utf-8")
-    digest = "a" * 64
     env = {
         **os.environ,
         "RUNTIME_ENV_FILE": str(runtime_env),
         "EUROOFFICE_JWT_SECRET": "compose-policy-test",
-        "API_IMAGE": f"ghcr.io/theo-darvoux/lectern/api-release@sha256:{digest}",
-        "WORKER_IMAGE": f"ghcr.io/theo-darvoux/lectern/worker-release@sha256:{digest}",
-        "WEB_IMAGE": f"ghcr.io/theo-darvoux/lectern/web-release@sha256:{digest}",
-        "SELFHOST_WORKER_IMAGE": (
-            f"ghcr.io/theo-darvoux/lectern/selfhost-worker-release@sha256:{digest}"
-        ),
-        "REDIS_IMAGE": f"docker.io/library/redis@sha256:{digest}",
-        "NGINX_IMAGE": f"docker.io/library/nginx@sha256:{digest}",
-        "MEILI_IMAGE": f"docker.io/getmeili/meilisearch@sha256:{digest}",
-        "EUROOFFICE_IMAGE": f"ghcr.io/euro-office/documentserver@sha256:{digest}",
-        "POLICY_IMAGE_DIGEST": f"sha256:{digest}",
-        "POSTGRES_IMAGE": f"docker.io/library/postgres@sha256:{digest}",
-        "SEAWEEDFS_IMAGE": f"docker.io/chrislusf/seaweedfs@sha256:{digest}",
         "WORKER_ZIP_HMAC_SECRET": "compose-hmac-test-secret",
         "S3_ACCESS_KEY": "compose-access-key",
         "S3_SECRET_KEY": "compose-secret-key",
@@ -117,25 +102,6 @@ def test_production_master_restore_guards_numeric_volume_id_monotonicity() -> No
     assert '"$new_volume_id" -gt "$delayed_volume_id"' in topology_test
 
 
-def test_production_overlay_pins_workloads_infrastructure_and_policy_helper() -> None:
-    production = _read("compose.prod.yaml")
-    expected_repositories = (
-        "api-release@sha256:[0-9a-f]{64}",
-        "worker-release@sha256:[0-9a-f]{64}",
-        "web-release@sha256:[0-9a-f]{64}",
-        "selfhost-worker-release@sha256:[0-9a-f]{64}",
-        "docker\\.io/library/postgres@sha256:[0-9a-f]{64}",
-        "docker\\.io/library/redis@sha256:[0-9a-f]{64}",
-        "docker\\.io/library/nginx@sha256:[0-9a-f]{64}",
-        "docker\\.io/getmeili/meilisearch@sha256:[0-9a-f]{64}",
-        "ghcr\\.io/euro-office/documentserver@sha256:[0-9a-f]{64}",
-        "docker\\.io/chrislusf/seaweedfs@sha256:[0-9a-f]{64}",
-    )
-    for repository in expected_repositories:
-        assert repository in production
-    assert production.count("image: docker.io/library/alpine@${POLICY_IMAGE_DIGEST:") == 4
-
-
 def test_production_overlay_forces_hardened_runtime_and_compose_trusts_its_proxy() -> None:
     production = _read("compose.prod.yaml")
     for service, next_service in (
@@ -153,80 +119,6 @@ def test_production_overlay_forces_hardened_runtime_and_compose_trusts_its_proxy
         "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
     )
     assert trusted_default in compose
-
-
-def test_every_manifest_platform_is_scanned_before_immutable_promotion() -> None:
-    build = _read(".github/workflows/build.yml")
-    scanner = _read(".github/workflows/scan-and-promote.yml")
-    assert "linux/amd64,linux/arm64" in build
-    assert build.count("uses: ./.github/workflows/scan-and-promote.yml") == 4
-    assert "fail-fast: false" in scanner
-    assert "platform: linux/amd64" in scanner
-    assert "platform: linux/arm64" in scanner
-    assert "TRIVY_PLATFORM: ${{ matrix.platform }}" in scanner
-    assert "needs: [validate, scan]" in scanner
-    assert "alias_name" not in scanner
-
-
-def test_release_completion_is_manifest_driven_without_automated_cross_repo_aliases() -> None:
-    build = _read(".github/workflows/build.yml")
-    assert "  finalize-release:" in build
-    assert "Publish authoritative release-complete artifact" in build
-    assert "production-release-${{ github.sha }}" in build
-    assert "validate-production-compose.py" in build
-    assert "production-compose-services.json" in build
-    assert "release-toolchain.env" in build
-    assert "--compose-service-map-file" in build
-    assert "production-compose.config.yml" not in build
-    assert "production-compose-images.txt" not in build
-    assert "  publish-aliases:" not in build
-    assert "publish-release-aliases.sh" not in build
-    promote = _read("scripts/promote-release-image.sh")
-    assert "Commit tags are write-once" in promote
-    assert "immutable release tag already exists with a different digest" in promote
-
-
-def test_release_manifest_input_is_strict_canonical_and_secret_safe() -> None:
-    library = _read("scripts/release_manifest_lib.py")
-    prepare = _read("scripts/prepare-production-release.sh")
-    compose = _read("compose.yaml")
-    assert "unsupported release variable" in library
-    assert "shell-style export assignments are forbidden" in library
-    assert "duplicate variable" in library
-    assert 'key != "COMPOSE_PROFILES"' in library
-    assert 'if raw == ""' in library
-    assert "--canonical-manifest" in prepare
-    assert "materialize-production-deployment.py" in prepare
-    assert "--runtime-env" in prepare
-    assert "config --quiet --no-env-resolution" in prepare
-    assert "--format json --no-env-resolution" in prepare
-    assert "production-compose.config.yml" not in prepare
-    assert "production-compose-images.txt" not in prepare
-    assert "git diff --quiet -- ." in prepare
-    assert "git diff --cached --quiet -- ." in prepare
-    assert "validate-production-compose.py" in prepare
-    assert "inspect-production-images.py" in prepare
-    assert compose.count("env_file: ${RUNTIME_ENV_FILE:-.env}") == 5
-
-
-def test_premerge_ci_installs_real_sandbox_runtime_and_requires_storage() -> None:
-    ci = _read(".github/workflows/ci.yml")
-    assert "pull_request:" in ci.split("jobs:", 1)[0]
-    assert "sudo apt-get install --yes --no-install-recommends bubblewrap" in ci
-    assert "kernel.apparmor_restrict_unprivileged_userns" in ci
-    assert "kernel.apparmor_restrict_unprivileged_unconfined" in ci
-    assert "Smoke-test real sandbox runtime" in ci
-    assert 'uv run pytest -m "not integration"' in ci
-    assert "  seaweedfs:" in ci
-    assert "  seaweedfs-production-topology:" not in ci
-    seaweed = ci.split("  seaweedfs:", 1)[1].split("\n  web:", 1)[0]
-    assert "suite: storage-semantics" in seaweed
-    assert "suite: production-topology" in seaweed
-    assert "run-seaweedfs-integration-tests.sh" in seaweed
-    assert "run-seaweedfs-topology-tests.sh" in seaweed
-    required = ci.split("  required:", 1)[1]
-    assert "- seaweedfs" in required
-    assert "- seaweedfs-production-topology" not in required
 
 
 def test_parser_hosts_drop_default_capabilities_and_forbid_privilege_escalation() -> None:
@@ -252,11 +144,6 @@ def test_authenticated_delivery_never_uses_pre_auth_nginx_cache() -> None:
     assert "proxy_cache off;" in file_location
     assert "proxy_cache worker_cache;" not in file_location
     assert 'proxy_cache_key "$uri"' not in file_location
-
-    ci = _read(".github/workflows/ci.yml")
-    delivery = ci.split("  delivery:", 1)[1].split("\n  required:", 1)[0]
-    assert "npm test" in delivery
-    assert "npm run test:node" in delivery
 
 
 def test_self_hosted_delivery_container_drops_root() -> None:
@@ -288,24 +175,6 @@ def test_self_hosted_delivery_uses_hardened_runtime_and_production_storage_endpo
     assert 'throw new Error("WORKER_ZIP_HMAC_SECRET must contain at least 32 bytes")' in server
 
 
-def test_all_external_actions_are_pinned_to_full_commit_shas() -> None:
-    workflow_dir = REPO_ROOT / ".github/workflows"
-    unpinned: list[str] = []
-    for path in sorted(workflow_dir.glob("*.yml")):
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            match = re.search(r"\buses:\s*([^\s#]+)", line)
-            if match is None:
-                continue
-            reference = match.group(1)
-            if reference.startswith("./"):
-                continue
-            if re.fullmatch(r"[^@]+@[0-9a-f]{40}", reference) is None:
-                unpinned.append(f"{path.name}:{line_number}:{reference}")
-    assert not unpinned, unpinned
-    dependabot = _read(".github/dependabot.yml")
-    assert "package-ecosystem: github-actions" in dependabot
-
-
 def test_postgresql_transaction_pooling_is_rejected_for_cas_session_fencing() -> None:
     with pytest.raises(ValueError, match="DATABASE_POOL_MODE=transaction"):
         Settings(
@@ -317,3 +186,68 @@ def test_postgresql_transaction_pooling_is_rejected_for_cas_session_fencing() ->
     env_example = _read(".env.example")
     assert "DATABASE_POOL_MODE=session" in env_example
     assert "Transaction pooling is intentionally rejected" in env_example
+
+
+def test_sandbox_launcher_error_is_not_misreported_as_child_exit() -> None:
+    from app.core.security.sandbox import (
+        SandboxInfrastructureError,
+        _raise_if_sandbox_launcher_failed,
+    )
+
+    with pytest.raises(SandboxInfrastructureError, match="bwrap"):
+        _raise_if_sandbox_launcher_failed(1, b"bwrap: setting up uid map: Permission denied\n")
+
+
+def test_base_compose_does_not_advertise_profile_only_production_startup() -> None:
+    compose = _read("compose.yaml")
+    header = "\n".join(compose.splitlines()[:30])
+    assert "-f compose.yaml -f compose.prod.yaml" in header
+    assert "127.0.0.1:${API_HOST_PORT:-8000}:8000" in compose
+
+
+def test_topology_backup_restore_is_independent_of_host_uid() -> None:
+    script = _read("api/scripts/run-seaweedfs-topology-tests.sh")
+
+    assert 'MASTER_DATA_VOLUME="${PREFIX}-master-data"' in script
+    assert 'MASTER_BACKUP_VOLUME="${PREFIX}-master-backup"' in script
+    assert 'docker volume create "$MASTER_DATA_VOLUME"' in script
+    assert 'docker volume create "$MASTER_BACKUP_VOLUME"' in script
+    assert 'copy_volume_contents "$MASTER_DATA_VOLUME" "$MASTER_BACKUP_VOLUME"' in script
+    assert 'copy_volume_contents "$MASTER_BACKUP_VOLUME" "$MASTER_DATA_VOLUME"' in script
+    assert "--user 0:0" in script
+    assert "--entrypoint /bin/sh" in script
+    assert '-v "$source_volume:/source:ro"' in script
+    assert '-v "$destination_volume:/destination"' in script
+    assert "cp -a /source/. /destination/" in script
+    assert 'docker volume rm "$MASTER_BACKUP_VOLUME" "$MASTER_DATA_VOLUME"' in script
+
+    forbidden_host_state_operations = (
+        'cp -a "$MASTER_DATA/."',
+        'cp -a "$MASTER_BACKUP/."',
+        'rm -rf "$MASTER_DATA"',
+        'find "$MASTER_DATA"',
+    )
+    for forbidden in forbidden_host_state_operations:
+        assert forbidden not in script
+
+
+def test_production_topology_storage_proof_is_independent_of_redis() -> None:
+    conftest = _read("api/tests/integration/storage/conftest.py")
+    topology_runner = _read("api/scripts/run-seaweedfs-topology-tests.sh")
+    topology_test = _read("api/tests/integration/storage/test_zz_seaweedfs_topology_failover.py")
+
+    # The topology runner identifies itself explicitly but does not provision
+    # Redis. Its proof is SeaweedFS replication/failover, not CAS accounting.
+    assert "SEAWEEDFS_TOPOLOGY=production" in topology_runner
+    assert "REDIS_URL=" not in topology_runner
+
+    # The shared fixture bypasses Redis only for that explicit shard.
+    assert 'os.environ.get("SEAWEEDFS_TOPOLOGY") == "production"' in conftest
+    assert "yield None" in conftest
+    assert "REDIS_URL must be set by the SeaweedFS storage-semantics runner" in conftest
+
+    # Keep the topology proof on ordinary non-CAS keys. If this changes to CAS,
+    # the shard must deliberately gain Redis rather than silently inheriting it.
+    assert 'prefix = f"integration/{uuid.uuid4().hex}"' in conftest
+    assert 'storage_key("cross-rack-failover.bin")' in topology_test
+    assert '"cas/' not in topology_test

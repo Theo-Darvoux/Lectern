@@ -9,7 +9,7 @@ uses the lossless backup system (v2.0) built into the admin panel.
 ## Prerequisites
 
 - [ ] SeaweedFS prod server provisioned (two disks/volumes minimum)
-- [ ] Canonical production release prepared with the certified `seaweedfs-prod,selfhost-worker` profiles (see [Production release manifest](production-release-manifest.md))
+- [ ] Production stack deployable with the `seaweedfs-prod,selfhost-worker` profiles (see [Option B](setup.md#option-b--production-deployment))
 - [ ] `s3.json` rendered from template with prod credentials:
   ```sh
   envsubst < infra/docker/seaweedfs/s3.json.template > /opt/seaweedfs/s3.json
@@ -53,12 +53,10 @@ checks these records before changing the database or object store.
 
 ### Step 3 — Deploy SeaweedFS Stack
 
-Prepare and deploy the exact canonical release as described in
-[Option B](setup.md#option-b--production-deployment), selecting the
-`seaweedfs-prod,selfhost-worker` profiles. Use the generated
-`production-<commit>.deployment-images.env` for both startup and later `ps`
-commands. Do not export a hand-written `SEAWEEDFS_IMAGE` or start the production
-profile from `compose.yaml` alone.
+Deploy as described in [Option B](setup.md#option-b--production-deployment)
+with `COMPOSE_PROFILES=seaweedfs-prod,selfhost-worker`. Always include
+`-f compose.prod.yaml`; do not start the production profile from `compose.yaml`
+alone.
 
 The `seaweedfs-dev` profile's `seaweedfs-setup` one-shot container is not available
 in `seaweedfs-prod`. Create the bucket manually if needed:

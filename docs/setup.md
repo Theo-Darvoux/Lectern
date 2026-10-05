@@ -75,43 +75,25 @@ To create your first account, open the app in a browser — you are redirected t
 
 ## Option B : Production deployment
 
-Production uses only the immutable image set certified by the canonical
-`production-release-<commit>` CI artifact. Check out that exact commit and
-prepare the deployment from the extracted canonical manifest:
+Every push to `main` runs CI, then builds the `api`, `worker`, `web` and
+`selfhost-worker` images (linux/amd64) and pushes them to GHCR as
+`ghcr.io/theo-darvoux/lectern/<image>:latest` and `:sha-<commit>`. Pushing an
+`alpha-*` tag also publishes `:<tag>`.
+
+On the server, check out the repository, fill in `.env` from `.env.example`, then:
 
 ```bash
-./scripts/prepare-production-release.sh \
-  --canonical-manifest /secure/release/production-<commit>.json \
-  --runtime-env /secure/runtime/production.env
+docker compose -f compose.yaml -f compose.prod.yaml pull
+docker compose -f compose.yaml -f compose.prod.yaml up -d
 ```
 
-This validates the exact commit, Compose inputs, service-to-image mapping,
-registry manifests, platforms, and runtime interpolation. It writes a
-`production-<commit>.deployment-images.env` containing only certified digests.
-Use that generated file for both pull and startup, from a cleared environment
-so shell variables cannot replace canonical image references:
-
-```bash
-commit=$(git rev-parse HEAD)
-images="$PWD/release-manifests/production-${commit}.deployment-images.env"
-runtime=/secure/runtime/production.env
-
-env -i PATH="$PATH" HOME="$HOME" RUNTIME_ENV_FILE="$runtime" \
-  docker compose --env-file "$runtime" --env-file "$images" \
-  -f compose.yaml -f compose.prod.yaml pull
-env -i PATH="$PATH" HOME="$HOME" RUNTIME_ENV_FILE="$runtime" \
-  docker compose --env-file "$runtime" --env-file "$images" \
-  -f compose.yaml -f compose.prod.yaml up -d
-```
-
-For optional `postgres`, `seaweedfs-prod`, or `selfhost-worker` profiles, pass
-the desired certified subset to the preparation command and the same
-`--profile` flags to both Compose commands. See
-[Production release manifest](production-release-manifest.md). Never substitute
-`latest`, a commit tag, or a hand-authored image environment file.
+To deploy (or roll back to) a specific build, set `IMAGE_TAG`, for example
+`IMAGE_TAG=sha-<commit>` or `IMAGE_TAG=alpha-3`, in `.env` or the shell.
+Optional `postgres`, `seaweedfs-prod` and `selfhost-worker` services are enabled
+through `COMPOSE_PROFILES` (or `--profile` flags on both commands).
 
 What production mode changes relative to the dev defaults:
-- All services use the digest-pinned images certified together by release CI
+- App services use the pre-built GHCR images (`IMAGE_TAG`, default `latest`) instead of building locally
 - API runs under **gunicorn** with 4 uvicorn workers (defined in `compose.prod.yaml`)
 - Web is served by **nginx** from the pre-built static export (64 MB container, defined in `compose.prod.yaml`)
 - The production overlay forces `ENVIRONMENT=production`, activating secret validation and hiding OpenAPI docs
@@ -124,7 +106,7 @@ After first deploy, the `api` container applies database migrations automaticall
 
 ```bash
 openssl rand -hex 32
-# store the 64-character hexadecimal result as BOOTSTRAP_TOKEN in /secure/runtime/production.env
+# store the 64-character hexadecimal result as BOOTSTRAP_TOKEN in .env
 ```
 
 Open the site in a browser, enter that same capability in the **first-run setup screen**, and create the initial administrator account. The capability is checked server-side and the database records a one-way installation marker in the same transaction as the administrator creation. After setup commits, HTTP bootstrap never reopens even if administrators are later changed, and `BOOTSTRAP_TOKEN` may be removed from the runtime environment.

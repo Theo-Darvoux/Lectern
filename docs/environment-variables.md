@@ -287,6 +287,15 @@ Rarely need touching; defaults match S3 multipart constraints.
 
 ---
 
+## Deployment images
+
+| Variable | Default | Description |
+|---|---|---|
+| `IMAGE_TAG` | `latest` | Production only (`compose.prod.yaml`): tag of the `api`, `worker`, `web` and `selfhost-worker` images pulled from `ghcr.io/theo-darvoux/lectern/`. CI publishes `latest`, `sha-<commit>` and `alpha-*` tags. |
+| `SEAWEEDFS_IMAGE` | `chrislusf/seaweedfs:4.29` | SeaweedFS image for the `seaweedfs-dev` / `seaweedfs-prod` profiles. |
+
+---
+
 ## Scaling & worker concurrency
 
 `WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS` control how many containers

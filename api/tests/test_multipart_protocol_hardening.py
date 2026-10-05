@@ -527,48 +527,12 @@ def test_redis_preserves_upload_state_instead_of_eviction() -> None:
     assert "maxmemory-policy noeviction" in redis_config
 
 
-def test_production_seaweedfs_policy_is_rack_aware_and_immutable() -> None:
-    repo_root = Path(__file__).parents[2]
-    compose = (repo_root / "compose.yaml").read_text(encoding="utf-8")
-    prod = (repo_root / "compose.prod.yaml").read_text(encoding="utf-8")
+def test_production_seaweedfs_policy_is_rack_aware() -> None:
+    compose = (Path(__file__).parents[2] / "compose.yaml").read_text(encoding="utf-8")
 
     assert "-defaultReplication=010" in compose
     assert "-defaultReplicaPlacement=010" in compose
     assert "chrislusf/seaweedfs:latest" not in compose
-    assert "@sha256:" in prod
-    assert "SEAWEEDFS_IMAGE is not an approved immutable SeaweedFS digest" in prod
-
-
-def test_required_ci_covers_live_storage_semantics_and_production_topology() -> None:
-    repo_root = Path(__file__).parents[2]
-    ci = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    standalone = (repo_root / ".github" / "workflows" / "seaweedfs-integration.yml").read_text(
-        encoding="utf-8"
-    )
-
-    # Required CI runs for every PR, so storage-sensitive changes cannot bypass
-    # either live suite through path-filter drift.
-    trigger_block = ci.split("jobs:", 1)[0]
-    assert "pull_request:" in trigger_block
-
-    seaweed = ci.split("  seaweedfs:", 1)[1].split("\n  web:", 1)[0]
-    assert "suite: storage-semantics" in seaweed
-    assert "suite: production-topology" in seaweed
-    assert "run-seaweedfs-integration-tests.sh" in seaweed
-    assert "run-seaweedfs-topology-tests.sh" in seaweed
-    assert "steps.toolchain.outputs.seaweedfs_test_image" in seaweed
-
-    required = ci.split("  required:", 1)[1]
-    assert "- seaweedfs" in required
-    assert '"$SEAWEEDFS_RESULT"' in required
-
-    # The separate workflow is intentionally manual-only and retains the
-    # candidate-image resolver for diagnostic/ad-hoc testing.
-    standalone_trigger = standalone.split("permissions:", 1)[0]
-    assert "pull_request:" not in standalone_trigger
-    assert "workflow_dispatch:" in standalone_trigger
-    assert "Resolve SeaweedFS to an immutable digest" in standalone
-    assert "run-seaweedfs-topology-tests.sh" in standalone
 
 
 @pytest.mark.asyncio

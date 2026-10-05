@@ -4,7 +4,7 @@ services:
       context: ./api
       dockerfile: Dockerfile
       target: api
-    command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
+    command: gunicorn app.main:app -w 4 -k app.core.http.gunicorn_worker.RecyclingUvicornWorker -b 0.0.0.0:8000 --timeout 60 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --preload
     environment:
       ENVIRONMENT: production
 

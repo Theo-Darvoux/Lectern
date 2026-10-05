@@ -116,6 +116,9 @@ async def master_event_stream(
     """One authenticated stream multiplexing every live-update channel."""
     topic_channels = parse_master_topics(user.id, topic or [])
     await _validate_entity_topics(db, topic_channels)
+    # get_db only tears down after the stream ends; release the pooled connection
+    # now instead of pinning it idle-in-transaction for the stream's lifetime.
+    await db.commit()
 
     queue = register_master_queue(user.id, topic_channels)
     return EventSourceResponse(
