@@ -25,6 +25,13 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
+      - name: Install bubblewrap (sandbox used by some unit tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          # Ubuntu 24.04 runners block unprivileged user namespaces by default.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0 || true
       - run: uv sync --frozen --extra dev
       - run: uv run ruff check .
       - run: uv run mypy app/
