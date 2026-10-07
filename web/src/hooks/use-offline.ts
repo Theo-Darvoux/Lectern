@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiRequest } from "@/lib/api-client";
+
+const RECONNECT_PROBE_MS = 5_000;
 
 /**
  * Hook to track browser online/offline status (U4).
@@ -25,6 +28,17 @@ export function useOffline() {
             window.removeEventListener("lectern-api-unreachable", handleUnreachable);
         };
     }, []);
+
+    // While offline, probe the API so the banner clears as soon as it is back
+    // (e.g. after a restart), even if the current page issues no requests.
+    // apiRequest dispatches the reachability events itself.
+    useEffect(() => {
+        if (!isOffline) return;
+        const id = setInterval(() => {
+            apiRequest("/health", { skipAuth: true, timeoutMs: RECONNECT_PROBE_MS }).catch(() => {});
+        }, RECONNECT_PROBE_MS);
+        return () => clearInterval(id);
+    }, [isOffline]);
 
     return isOffline;
 }

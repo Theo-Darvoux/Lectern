@@ -63,6 +63,21 @@ function withTimeout(signal: AbortSignal | null | undefined, timeoutMs?: number)
     return controller.signal;
 }
 
+/** A 502/503/504 that did not come from the API itself: the reverse proxy
+ *  (nginx, Cloudflare) answers with an HTML error page while the API container
+ *  is down or restarting. The API's own 503s carry a JSON body. */
+function isGatewayUnavailable(res: Response): boolean {
+    if (res.status !== 502 && res.status !== 503 && res.status !== 504) return false;
+    return !res.headers.get("content-type")?.includes("json");
+}
+
+function dispatchReachability(reachable: boolean) {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(
+        new CustomEvent(reachable ? "lectern-api-reachable" : "lectern-api-unreachable"),
+    );
+}
+
 /** Whether a failed request is worth retrying (transient infra/network), as
  *  opposed to a deterministic 4xx that will fail again. Real cancellations are
  *  the caller's responsibility to filter out before calling this. */
@@ -119,7 +134,7 @@ async function refreshToken(): Promise<RefreshResult | null> {
     if (!res.ok) {
         // Treat 5xx and 429 as transient/retriable errors. Do not clear the session.
         if (res.status >= 500 || res.status === 429) {
-            throw new ApiError(res.status, res.statusText);
+            throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`);
         }
         return null;
     }
@@ -201,19 +216,15 @@ export async function apiRequest(
             credentials: "include",
             signal: createAttemptSignal(),
         });
-        // If we got a response (any response), the API is reachable.
-        if (typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
-        }
+        // Any response except a proxy error page means the API is reachable.
+        dispatchReachability(!isGatewayUnavailable(res));
     } catch (err) {
         // Network error (not a 4xx/5xx response). Do not mark unreachable if the request was aborted (e.g. page navigation).
         const isAbort =
             fetchOptions.signal?.aborted ||
             (err instanceof DOMException && err.name === "AbortError") ||
             (typeof err === "object" && err !== null && "name" in err && (err as { name: string }).name === "AbortError");
-        if (!isAbort && typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("lectern-api-unreachable"));
-        }
+        if (!isAbort) dispatchReachability(false);
         throw err;
     }
 
@@ -234,17 +245,13 @@ export async function apiRequest(
                         credentials: "include",
                         signal: createAttemptSignal(),
                     });
-                    if (typeof window !== "undefined") {
-                        window.dispatchEvent(new CustomEvent("lectern-api-reachable"));
-                    }
+                    dispatchReachability(!isGatewayUnavailable(res));
                 } catch (retryErr) {
                     const isAbort =
                         fetchOptions.signal?.aborted ||
                         (retryErr instanceof DOMException && retryErr.name === "AbortError") ||
                         (typeof retryErr === "object" && retryErr !== null && "name" in retryErr && (retryErr as { name: string }).name === "AbortError");
-                    if (!isAbort && typeof window !== "undefined") {
-                        window.dispatchEvent(new CustomEvent("lectern-api-unreachable"));
-                    }
+                    if (!isAbort) dispatchReachability(false);
                     throw retryErr;
                 }
             } else {
@@ -266,7 +273,9 @@ export async function apiRequest(
 
     if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: res.statusText }));
-        let message = body.detail ?? "Unknown error";
+        // `||`, not `??`: over HTTP/2 statusText is "" and proxy error pages are
+        // not JSON, which would otherwise yield an empty error message.
+        let message = body.detail || res.statusText || `HTTP ${res.status}`;
         if (Array.isArray(body.detail)) {
             message = body.detail.map((err: Record<string, unknown>) => err.msg || err.detail || JSON.stringify(err)).join(", ");
         }

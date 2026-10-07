@@ -17,8 +17,21 @@ function jsonResponse(status: number, body: unknown): Response {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers({ "content-type": "application/json" }),
     json: async () => body,
   } as Response;
+}
+
+/** What nginx/Cloudflare return while the API container is down: an HTML
+ *  error page and, over HTTP/2, an empty statusText. */
+function gatewayErrorResponse(status: number): Response {
+  return {
+    ok: false,
+    status,
+    statusText: "",
+    headers: new Headers({ "content-type": "text/html" }),
+    json: async () => { throw new SyntaxError("Unexpected token <"); },
+  } as unknown as Response;
 }
 
 describe("api-client", () => {
@@ -207,6 +220,33 @@ describe("api-client", () => {
 
       expect(dispatchSpy).toHaveBeenCalledWith(
         expect.objectContaining({ type: "lectern-api-unreachable" }),
+      );
+    });
+
+    it("treats a proxy 502 error page as unreachable, with a non-empty message", async () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      vi.mocked(fetch).mockResolvedValue(gatewayErrorResponse(502));
+
+      const err = await apiRequest("/test").catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).message).toBe("HTTP 502");
+      expect(dispatchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "lectern-api-unreachable" }),
+      );
+      expect(dispatchSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "lectern-api-reachable" }),
+      );
+    });
+
+    it("treats the API's own JSON 503 as reachable", async () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(503, { detail: "Backup in progress" }));
+
+      await expect(apiRequest("/test")).rejects.toThrow("Backup in progress");
+
+      expect(dispatchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "lectern-api-reachable" }),
       );
     });
 

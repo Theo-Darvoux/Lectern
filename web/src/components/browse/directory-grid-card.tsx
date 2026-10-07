@@ -22,6 +22,8 @@ interface DirectoryGridCardProps {
   directory: Record<string, unknown>;
   staged?: "edited" | "deleted" | "moved" | "created" | null;
   isExternal?: boolean;
+  /** Item is on the move clipboard (cut, waiting to be pasted) */
+  isCut?: boolean;
   selectMode?: boolean;
   selected?: boolean;
   onToggleSelect?: (index: number, e?: React.MouseEvent) => void;
@@ -37,6 +39,7 @@ function DirectoryGridCardImpl({
   directory,
   staged,
   isExternal,
+  isCut,
   selectMode,
   selected,
   onToggleSelect,
@@ -184,6 +187,7 @@ function DirectoryGridCardImpl({
           stagedRing,
           selectMode && selected ? "bg-primary/5 dark:bg-primary/10 ring-1 ring-primary p-2 -m-2" : "",
           focused ? "ring-2 ring-primary/40 p-2 -m-2" : "",
+          isCut ? "opacity-50" : "",
         )}
       >
         {/* Icon area */}
