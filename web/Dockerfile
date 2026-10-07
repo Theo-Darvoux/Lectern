@@ -5,7 +5,10 @@ RUN corepack enable
 FROM base AS deps
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+# BuildKit cache mount keeps the pnpm store across builds, so a lockfile change
+# only downloads the packages that actually changed.
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
 FROM base AS builder
 WORKDIR /app
@@ -34,7 +37,10 @@ ENV NEXT_PUBLIC_COMMIT_SHA=$NEXT_PUBLIC_COMMIT_SHA \
     SITE_NAME=$SITE_NAME \
     SITE_DESCRIPTION=$SITE_DESCRIPTION \
     SITE_FAVICON_URL=$SITE_FAVICON_URL
-RUN pnpm build
+# Persist webpack's incremental cache between builds; a small source change then
+# rebuilds only the affected modules instead of the whole bundle.
+RUN --mount=type=cache,id=next-cache,target=/app/.next/cache \
+    pnpm build
 
 FROM nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752 AS runner
 # The reviewed nginx base is digest-pinned. Security updates arrive by an
