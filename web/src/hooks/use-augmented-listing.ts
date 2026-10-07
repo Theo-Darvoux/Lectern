@@ -5,6 +5,8 @@ import { useStagingStore, unwrapOp } from "@/lib/staging-store";
 import type {
   CreateMaterialOp,
   CreateDirectoryOp,
+  EditDirectoryOp,
+  EditMaterialOp,
   MoveItemOp,
   Operation,
   StagedOperation,
@@ -36,6 +38,75 @@ export function stagedStatus(
       return "moved";
   }
   return null;
+}
+
+export type StagedState = "edited" | "deleted" | "moved";
+
+export interface StagedInfo {
+  /** Strongest staged state for the item: deleted > moved > edited */
+  staged: StagedState;
+  /** Metadata/content edits staged for the item, in staging order */
+  edits: (EditMaterialOp | EditDirectoryOp)[];
+  /** PR preview index of the first external material edit, if any */
+  previewOpIndex?: number;
+}
+
+const STAGED_RANK: Record<StagedState, number> = { edited: 0, moved: 1, deleted: 2 };
+
+/**
+ * Index staged operations by target id once per render so each row is an O(1)
+ * lookup. An item can carry several ops at once (e.g. moved *and* renamed), so
+ * keep the strongest state for the badge and every edit for the display.
+ */
+export function indexStagedOps(ops: AugmentedOp[]) {
+  const dirs = new Map<string, StagedInfo>();
+  const mats = new Map<string, StagedInfo>();
+  const note = (
+    m: Map<string, StagedInfo>,
+    id: string,
+    staged: StagedState,
+    op: AugmentedOp,
+  ) => {
+    const cur = m.get(id) ?? { staged, edits: [] };
+    if (STAGED_RANK[staged] > STAGED_RANK[cur.staged]) cur.staged = staged;
+    if (op.op === "edit_material" || op.op === "edit_directory") {
+      cur.edits.push(op);
+      if (op.op === "edit_material" && op.isExternal && cur.previewOpIndex === undefined) {
+        cur.previewOpIndex = op._previewIdx;
+      }
+    }
+    m.set(id, cur);
+  };
+  for (const o of ops) {
+    if (o.op === "edit_directory") note(dirs, o.directory_id, "edited", o);
+    else if (o.op === "delete_directory") note(dirs, o.directory_id, "deleted", o);
+    else if (o.op === "edit_material") note(mats, o.material_id, "edited", o);
+    else if (o.op === "delete_material") note(mats, o.material_id, "deleted", o);
+    else if (o.op === "move_item") {
+      note(o.target_type === "directory" ? dirs : mats, o.target_id, "moved", o);
+    }
+  }
+  return { dirs, mats };
+}
+
+/** Overlay staged edits on an item's data so the listing shows pending values. */
+export function applyStagedEdits(
+  data: Record<string, unknown>,
+  edits: (EditMaterialOp | EditDirectoryOp)[] | undefined,
+): Record<string, unknown> {
+  if (!edits?.length) return data;
+  let out = data;
+  for (const op of edits) {
+    out = {
+      ...out,
+      ...(op.op === "edit_material" && op.title != null ? { title: op.title } : {}),
+      ...(op.op === "edit_directory" && op.name != null ? { name: op.name } : {}),
+      ...(op.type != null ? { type: op.type } : {}),
+      ...(op.description != null ? { description: op.description } : {}),
+      ...(op.tags != null ? { tags: op.tags } : {}),
+    };
+  }
+  return out;
 }
 
 export interface GhostDirEntry {

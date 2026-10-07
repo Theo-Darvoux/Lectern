@@ -20,6 +20,8 @@ import {
   MessageSquare,
   RefreshCw,
   BookOpenCheck,
+  Scissors,
+  Undo2,
 } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
@@ -57,7 +59,8 @@ import { toast } from "sonner";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
 import { apiFetch } from "@/lib/api-client";
-import { useStagingStore, unwrapOp } from "@/lib/staging-store";
+import { useStagingStore, unwrapOp, type Operation } from "@/lib/staging-store";
+import { useSelectionStore } from "@/lib/selection-store";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { useAuthStore, useBrowseRefreshStore, useUIStore } from "@/lib/stores";
 import { isGuest, isStaff } from "@/lib/guest";
@@ -118,6 +121,12 @@ function useItemActions(item: ItemData, itemPath?: string) {
   const isPreview = searchParams?.has("preview_pr");
   const isDraft = item.id.startsWith("$");
   const isRestricted = isPreview || isDraft || !!item.staged;
+  // Items with a local pending move or metadata edit are still real items:
+  // they can be (re-)edited or moved again, the new op replaces the old one.
+  const canModify =
+    !isPreview && !isDraft && !item.isExternal &&
+    (!item.staged || item.staged === "moved" || item.staged === "edited");
+  const isLocalMove = item.staged === "moved" && !item.isExternal && !isPreview;
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -216,6 +225,31 @@ function useItemActions(item: ItemData, itemPath?: string) {
       toast.error(t("failedToDeleteItem"));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleCut = () => {
+    const parentId = (isMaterial ? item.data.directory_id : item.data.parent_id) as string | null | undefined;
+    useSelectionStore.getState().cutItems([
+      {
+        id: item.id,
+        type: item.type,
+        name: title,
+        parentId: parentId ?? null,
+        ...(isMaterial ? { material_type: String(item.data.type ?? "other") } : {}),
+      },
+    ]);
+    toast.success(t("itemsCut", { count: 1 }));
+  };
+
+  const handleCancelMove = () => {
+    const idx = getOperations().findIndex((o) => {
+      const op = unwrapOp(o);
+      return op.op === "move_item" && op.target_type === item.type && op.target_id === item.id;
+    });
+    if (idx !== -1) {
+      removeOperation(idx);
+      toast.success(t("moveCancelled"));
     }
   };
 
@@ -319,7 +353,60 @@ function useItemActions(item: ItemData, itemPath?: string) {
     isPrinting,
     canPrint,
     isRestricted,
+    canModify,
+    isLocalMove,
+    handleCut,
+    handleCancelMove,
   };
+}
+
+/**
+ * Data for the edit dialog. Ghost rows (e.g. an item shown at its pending
+ * move destination) only carry id/title/type, so fetch the full item and
+ * re-apply any locally staged metadata edits on top of it.
+ */
+function useEditTargetData(item: ItemData, enabled: boolean) {
+  const isThin = item.data.slug === undefined;
+  const [fetched, setFetched] = useState<Record<string, unknown> | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || !isThin || fetched || failed) return;
+    let cancelled = false;
+    apiFetch<Record<string, unknown>>(
+      item.type === "material" ? `/materials/${item.id}` : `/directories/${item.id}`,
+    )
+      .then((d) => {
+        if (!cancelled) setFetched(d);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, isThin, fetched, failed, item.type, item.id]);
+
+  if (!isThin) return { data: item.data, failed: false };
+  if (!fetched) return { data: null, failed };
+
+  let data = fetched;
+  for (const staged of useStagingStore.getState().operations) {
+    const op: Operation = unwrapOp(staged);
+    const isEdit =
+      (op.op === "edit_material" && op.material_id === item.id) ||
+      (op.op === "edit_directory" && op.directory_id === item.id);
+    if (!isEdit) continue;
+    data = {
+      ...data,
+      ...(op.op === "edit_material" && op.title != null ? { title: op.title } : {}),
+      ...(op.op === "edit_directory" && op.name != null ? { name: op.name } : {}),
+      ...(op.description != null ? { description: op.description } : {}),
+      ...(op.tags != null ? { tags: op.tags } : {}),
+      ...(op.metadata != null ? { metadata: op.metadata } : {}),
+    };
+  }
+  return { data, failed: false };
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -475,26 +562,34 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
         </>
       )}
 
-      {!actions.isRestricted && (
+      {!guest && actions.canModify && (
         <>
-          {!guest && actions.isMaterial &&
-            (actions.viewerType === "qcm" ? (
-              <Item onClick={() => router.push(`/qcm/${item.id}/edit`)} className="cursor-pointer">
-                <PencilLine className="mr-2 h-4 w-4" />
-                <span>{t("edit")}</span>
-              </Item>
-            ) : (
-              <Item onClick={() => actions.setEditDialogOpen(true)} className="cursor-pointer">
-                <Edit2 className="mr-2 h-4 w-4" />
-                <span>{t("edit")}</span>
-              </Item>
-            ))}
-          {!guest && !actions.isMaterial && (
+          {actions.isMaterial && actions.viewerType === "qcm" ? (
+            <Item onClick={() => router.push(`/qcm/${item.id}/edit`)} className="cursor-pointer">
+              <PencilLine className="mr-2 h-4 w-4" />
+              <span>{t("edit")}</span>
+            </Item>
+          ) : (
             <Item onClick={() => actions.setEditDialogOpen(true)} className="cursor-pointer">
               <Edit2 className="mr-2 h-4 w-4" />
               <span>{t("edit")}</span>
             </Item>
           )}
+          <Item onClick={actions.handleCut} className="cursor-pointer">
+            <Scissors className="mr-2 h-4 w-4" />
+            <span>{actions.isLocalMove ? t("moveElsewhere") : t("moveItem")}</span>
+          </Item>
+          {actions.isLocalMove && (
+            <Item onClick={actions.handleCancelMove} className="cursor-pointer">
+              <Undo2 className="mr-2 h-4 w-4" />
+              <span>{t("cancelMove")}</span>
+            </Item>
+          )}
+        </>
+      )}
+
+      {!actions.isRestricted && (
+        <>
           <Item onClick={actions.handleShare} className="cursor-pointer">
             <LinkIcon className="mr-2 h-4 w-4" />
             <span>{t("copyLink")}</span>
@@ -615,7 +710,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
         </div>
       )}
 
-      {!guest && (
+      {!guest && !actions.isLocalMove && (
         <>
           <Separator />
           <Item
@@ -647,6 +742,14 @@ interface ArmedMenuBodyProps {
 
 function ArmedMenuBody({ item, onAddAttachment, itemPath, actionsRef, onReady }: ArmedMenuBodyProps) {
   const actions = useItemActions(item, itemPath);
+  const editTarget = useEditTargetData(item, actions.editDialogOpen);
+  const { setEditDialogOpen, t } = actions;
+
+  useEffect(() => {
+    if (!editTarget.failed) return;
+    toast.error(t("failedToLoadItem"));
+    setEditDialogOpen(false);
+  }, [editTarget.failed, setEditDialogOpen, t]);
 
   // Keep the shared ref current on every render so context consumers always
   // read the latest state (dialog open flags, loading states, etc.) through
@@ -664,11 +767,11 @@ function ArmedMenuBody({ item, onAddAttachment, itemPath, actionsRef, onReady }:
         <MenuItemsList isContextMenu />
       </ContextMenuContent>
 
-      {!item.isExternal && actions.editDialogOpen && (
+      {!item.isExternal && actions.editDialogOpen && editTarget.data && (
         <FileEditDialog
           open
           onOpenChange={actions.setEditDialogOpen}
-          target={{ type: item.type, id: item.id, data: item.data }}
+          target={{ type: item.type, id: item.id, data: editTarget.data }}
         />
       )}
 

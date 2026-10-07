@@ -9,6 +9,7 @@ import { AuthBootstrap } from "@/components/auth-bootstrap";
 import { RuntimeRouter } from "@/components/runtime-router";
 import { CookieBanner } from "@/components/cookie-banner";
 import { ExternalLinkDialog } from "@/components/external-link-dialog";
+import { installToastGuard } from "@/lib/toast-guard";
 import type { AbstractIntlMessages } from "next-intl";
 import {
   DEFAULT_LOCALE,
@@ -18,6 +19,8 @@ import {
   SUPPORTED_LOCALES,
   type SupportedLocale,
 } from "@/lib/locale-messages";
+
+installToastGuard();
 
 function getCookieLocale(): SupportedLocale {
   const match = document.cookie.match(/NEXT_LOCALE=([^;]+)/);

@@ -24,6 +24,8 @@ interface SelectionState {
     /** Pass IDs to deselect only those; omit to clear all */
     deselectAll: (ids?: string[]) => void;
     cut: () => void;
+    /** Replace the clipboard with the given items (e.g. "Move" from an item's menu) */
+    cutItems: (items: SelectedItem[]) => void;
     clearClipboard: () => void;
     /** Exit select mode and clear everything */
     reset: () => void;
@@ -72,6 +74,8 @@ export const useSelectionStore = create<SelectionState>()((set, get) => ({
         const items = Array.from(get().selected.values());
         set({ clipboard: items, selected: new Map(), selectMode: false });
     },
+
+    cutItems: (items) => set({ clipboard: items, selected: new Map(), selectMode: false }),
 
     clearClipboard: () => set({ clipboard: [] }),
 

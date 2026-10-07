@@ -102,6 +102,8 @@ interface MaterialLineItemProps {
     material: Record<string, unknown>;
     staged?: "edited" | "deleted" | "moved" | "created" | null;
     isExternal?: boolean;
+    /** Item is on the move clipboard (cut, waiting to be pasted) */
+    isCut?: boolean;
     selectMode?: boolean;
     selected?: boolean;
     onToggleSelect?: (index: number, e?: React.MouseEvent) => void;
@@ -131,6 +133,7 @@ function MaterialLineItemImpl({
     material,
     staged,
     isExternal,
+    isCut,
     selectMode,
     selected,
     onToggleSelect,
@@ -297,7 +300,7 @@ function MaterialLineItemImpl({
                 onPointerLeave={handlePointerLeave}
                 data-nav-index={navIndex}
                 style={{ contentVisibility: "auto", containIntrinsicSize: "0 72px" }}
-                className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 cursor-pointer ${stagedBorder} ${selectMode && selected ? "bg-primary/5 dark:bg-primary/10" : ""} ${focused ? "bg-muted ring-2 ring-inset ring-primary/40" : ""}`}
+                className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 cursor-pointer ${stagedBorder} ${selectMode && selected ? "bg-primary/5 dark:bg-primary/10" : ""} ${focused ? "bg-muted ring-2 ring-inset ring-primary/40" : ""} ${isCut ? "opacity-50" : ""}`}
             >
                 {selectMode && (
                     <Checkbox

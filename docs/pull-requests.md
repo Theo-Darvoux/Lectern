@@ -44,11 +44,26 @@ approved ──► reverted  (creates a new PR that undoes it)
 | Type | Effect |
 |---|---|
 | `create_material` | Add a new file to a directory |
-| `update_material` | Modify title, description, tags, or other metadata |
+| `edit_material` | Modify title, description, tags, other metadata, or replace the file |
 | `delete_material` | Mark a material for removal |
 | `create_directory` | Add a subdirectory |
-| `update_directory` | Modify directory metadata |
+| `edit_directory` | Modify directory metadata |
 | `delete_directory` | Remove a directory (recursively) |
+| `move_item` | Move a material or directory to another parent directory |
+
+### Moving items
+
+In the file browser, use **Move** from an item's menu (or select several items
+and click **Move**). A banner then stays at the top of every folder you open
+and lists what you're moving. Open the destination folder and click
+**Move here**. You can then add the move to your draft or apply it right away.
+
+A pending move is shown in amber, both in the source folder and at its
+destination. The item can still be edited while the move is pending: the edit
+is staged next to the move, and both are applied together. Use **Move
+elsewhere** to change the destination, which replaces the pending move. Use
+**Cancel move** to drop it. Moving an item back into its original folder also
+cancels the pending move.
 
 ---
 

@@ -105,6 +105,8 @@ interface MaterialGridCardProps {
   material: Record<string, unknown>;
   staged?: "edited" | "deleted" | "moved" | "created" | null;
   isExternal?: boolean;
+  /** Item is on the move clipboard (cut, waiting to be pasted) */
+  isCut?: boolean;
   selectMode?: boolean;
   selected?: boolean;
   onToggleSelect?: (index: number, e?: React.MouseEvent) => void;
@@ -131,6 +133,7 @@ function MaterialGridCardImpl({
   material,
   staged,
   isExternal,
+  isCut,
   selectMode,
   selected,
   onToggleSelect,
@@ -295,6 +298,7 @@ function MaterialGridCardImpl({
           status === "archived" ? "opacity-75" : "",
           selectMode && selected ? "bg-primary/5 dark:bg-primary/10 ring-primary" : "",
           focused ? "ring-2 ring-primary/40" : "",
+          isCut ? "opacity-50" : "",
         )}
       >
         {/* Preview area */}
