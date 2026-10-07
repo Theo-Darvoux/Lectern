@@ -10,9 +10,9 @@ COPY package.json pnpm-lock.yaml ./
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+# Building on top of deps (rather than base) reuses node_modules and the pnpm
+# binary Corepack already downloaded there, instead of fetching it on every build.
+FROM deps AS builder
 COPY . .
 # NEXT_PUBLIC_* values are inlined into the static export at build time — the
 # static prod image has no Node runtime to read them later, so they MUST be
