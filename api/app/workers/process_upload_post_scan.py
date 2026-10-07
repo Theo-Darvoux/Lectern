@@ -19,10 +19,11 @@ import contextlib
 import inspect
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.common.exceptions import ConflictError
@@ -40,12 +41,14 @@ from app.core.security.async_utils import settle_awaitable
 from app.core.security.processing_paths import make_processing_temp_path
 from app.core.storage.facade import delete_object, upload_file_multipart
 from app.core.storage.liveness import storage_lifecycle_lock
+from app.models.material import MaterialVersion
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
 from app.models.upload import Upload
 from app.routers.upload.cancellation import upload_cancel_key, upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
 from app.services.notification import notify_user
 from app.services.pr import (
+    _AUTO_MERGE_SETTLED_STATUSES,
     _cleanup_pr_resources,
     _lock_and_validate_pr_cas_files,
     _pr_directory_topics,
@@ -66,7 +69,7 @@ _POST_MAX_RETRIES = 3
 # Max total attempts for thumbnail generation (includes initial attempt + retries).
 _THUMB_MAX_ATTEMPTS = 2
 # Settled processing statuses — a PR can auto-merge when all its files reach one of these.
-_SETTLED_STATUSES = frozenset({"complete", "degraded"})
+_SETTLED_STATUSES = _AUTO_MERGE_SETTLED_STATUSES
 
 
 async def _publish_postprocessed_upload(
@@ -99,8 +102,41 @@ async def _publish_postprocessed_upload(
         for key, value in update_values.items():
             setattr(upload, key, value)
         upload.status = "clean"
+
+        # A reviewer may approve the contribution before post-processing settles;
+        # apply_pr then copied an empty thumbnail into the MaterialVersion. Backfill
+        # those versions now, otherwise they never get the generated thumbnail.
+        backfilled_material_ids: list[uuid.UUID] = []
+        thumbnail_status = update_values.get("thumbnail_status")
+        if upload.final_key and upload.user_id is not None and thumbnail_status is not None:
+            backfill_values: dict[str, Any] = {"thumbnail_status": thumbnail_status}
+            if update_values.get("thumbnail_key"):
+                backfill_values["thumbnail_key"] = update_values["thumbnail_key"]
+            result = await session.execute(
+                update(MaterialVersion)
+                .where(
+                    MaterialVersion.file_key == upload.final_key,
+                    MaterialVersion.author_id == upload.user_id,
+                    MaterialVersion.thumbnail_key.is_(None),
+                    MaterialVersion.thumbnail_status.is_(None),
+                )
+                .values(**backfill_values)
+                .returning(MaterialVersion.material_id)
+            )
+            backfilled_material_ids = list(result.scalars().all())
         await session.commit()
-        return True
+
+    if backfilled_material_ids:
+        logger.info(
+            "Backfilled thumbnail for %d material version(s) of upload %s",
+            len(backfilled_material_ids),
+            upload_id,
+        )
+        with contextlib.suppress(Exception):
+            await worker_ctx.redis.delete(
+                *{f"thumbnail:v1:{material_id}" for material_id in backfilled_material_ids}
+            )
+    return True
 
 
 def _post_scan_lifecycle_guard(worker_ctx: WorkerContext, upload_id: str) -> Any:
