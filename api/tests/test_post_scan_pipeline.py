@@ -47,6 +47,8 @@ def _make_ctx(job_try: int = 1, with_db: bool = True) -> dict:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.scalar = AsyncMock(return_value=MagicMock(status="clean"))
+        # SQLAlchemy results are synchronous objects (``result.scalars().all()``).
+        mock_session.execute = AsyncMock(return_value=MagicMock())
         ctx["db_sessionmaker"] = MagicMock(return_value=mock_session)
     else:
         ctx["db_sessionmaker"] = None

@@ -18,6 +18,7 @@ async def test_post_scan_preserves_immutable_cas_metadata_in_db_and_cache():
     mock_db.__aexit__ = AsyncMock(return_value=False)
     mock_upload = MagicMock(status="clean", size_bytes=10000, content_sha256="cas-sha")
     mock_db.scalar = AsyncMock(return_value=mock_upload)
+    mock_db.execute = AsyncMock(return_value=MagicMock())
 
     ctx = {"redis": mock_redis, "db_sessionmaker": MagicMock(return_value=mock_db), "job_try": 1}
 
