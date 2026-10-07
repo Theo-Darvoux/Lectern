@@ -191,6 +191,10 @@ async def _lock_open_pr_for_transition(db: AsyncSession, pr_id: uuid.UUID) -> Pu
     return pr
 
 
+# Upload processing statuses after which a deferred auto-merge may proceed.
+_AUTO_MERGE_SETTLED_STATUSES = frozenset({"complete", "degraded"})
+
+
 async def _lock_and_validate_pr_cas_files(
     db: AsyncSession,
     pr: PullRequest,
@@ -1955,19 +1959,18 @@ async def create_pull_request_service(
     # defer the merge: create the PR as OPEN with auto_merge_pending=True.
     # process_upload_post_scan will trigger the merge once all files settle.
     if current_user.is_moderator and current_user.auto_approve:
-        cas_keys = [k for k in keys_to_check if k.startswith("cas/")]
+        # Use the exact eligibility check the deferred auto-merge applies. Counting
+        # every Upload row sharing a CAS key let stale duplicates (cancelled uploads,
+        # other users' copies) defer the merge forever: their post-scan never settles,
+        # so nothing ever re-triggers it. Ownership and cleanliness were validated
+        # above, so a conflict here only means a file is still being post-processed.
         all_settled = True
-        if cas_keys:
-            unsettled = await db.scalar(
-                select(func.count())
-                .select_from(Upload)
-                .where(
-                    Upload.final_key.in_(cas_keys),
-                    Upload.processing_status.not_in(["complete", "degraded"]),
-                )
+        try:
+            await _lock_and_validate_pr_cas_files(
+                db, pr, settled_statuses=_AUTO_MERGE_SETTLED_STATUSES
             )
-            if unsettled:
-                all_settled = False
+        except ConflictError:
+            all_settled = False
 
         if all_settled:
             pr.status = PRStatus.APPROVED
