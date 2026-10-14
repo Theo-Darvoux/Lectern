@@ -3277,6 +3277,11 @@ export interface components {
             parent_material_id: string | null;
             /** Author Id */
             author_id: string | null;
+            /**
+             * Is Anonymous
+             * @default false
+             */
+            is_anonymous?: boolean;
             /** Metadata */
             metadata: {
                 [key: string]: unknown;
@@ -3364,6 +3369,11 @@ export interface components {
             diff_summary: string | null;
             /** Author Id */
             author_id: string | null;
+            /**
+             * Is Anonymous
+             * @default false
+             */
+            is_anonymous?: boolean;
             /** Pr Id */
             pr_id: string | null;
             virus_scan_result: components["schemas"]["VirusScanResult"];
@@ -3642,6 +3652,11 @@ export interface components {
             description?: string | null;
             /** Operations */
             operations: (components["schemas"]["CreateMaterialOp"] | components["schemas"]["EditMaterialOp"] | components["schemas"]["DeleteMaterialOp"] | components["schemas"]["CreateDirectoryOp"] | components["schemas"]["EditDirectoryOp"] | components["schemas"]["DeleteDirectoryOp"] | components["schemas"]["MoveItemOp"])[];
+            /**
+             * Is Anonymous
+             * @default false
+             */
+            is_anonymous?: boolean;
         };
         /** PullRequestOut */
         PullRequestOut: {
@@ -3676,6 +3691,16 @@ export interface components {
             /** Rejection Reason */
             rejection_reason?: string | null;
             author: components["schemas"]["PublicUserBrief"] | null;
+            /**
+             * Is Anonymous
+             * @default false
+             */
+            is_anonymous?: boolean;
+            /**
+             * Is Own
+             * @default false
+             */
+            is_own?: boolean;
             /**
              * Created At
              * Format: date-time

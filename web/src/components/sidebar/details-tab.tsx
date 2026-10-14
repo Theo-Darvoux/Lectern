@@ -655,8 +655,15 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
 const authorNameCache = new Map<string, string>();
 const authorNameInflight = new Map<string, Promise<string>>();
 
-function AuthorName({ authorId }: { authorId: string | null }) {
+function AuthorName({
+  authorId,
+  isAnonymous = false,
+}: {
+  authorId: string | null;
+  isAnonymous?: boolean;
+}) {
   const t = useTranslations("Sidebar");
+  const tPRs = useTranslations("PRs");
   const [name, setName] = useState<string | null>(
     authorId ? (authorNameCache.get(authorId) ?? null) : null,
   );
@@ -691,7 +698,7 @@ function AuthorName({ authorId }: { authorId: string | null }) {
     };
   }, [authorId, t]);
 
-  if (!authorId) return <span>{t("deletedUser")}</span>;
+  if (!authorId) return <span>{isAnonymous ? tPRs("anonymous") : t("deletedUser")}</span>;
   if (!name)
     return <span className="animate-pulse text-muted-foreground">…</span>;
   return (
@@ -859,7 +866,7 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
         <MetaRow
           icon={User}
           label={t("author")}
-          value={<AuthorName authorId={authorId} />}
+          value={<AuthorName authorId={authorId} isAnonymous={data.is_anonymous === true} />}
         />
         {fileSize > 0 && (
           <MetaRow

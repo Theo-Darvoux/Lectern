@@ -43,7 +43,9 @@ def build_material_search_document(
         "type": material.type,
         "status": material.status,
         "tags": [tag.name for tag in material.tags] if material.tags else [],
-        "authorName": material.author.display_name if material.author else None,
+        "authorName": (
+            material.author.display_name if material.author and not material.is_anonymous else None
+        ),
         "directory_id": str(material.directory_id) if material.directory_id else None,
         "created_at": material.created_at.isoformat() if material.created_at is not None else None,
         "ancestor_path": ancestor_path,

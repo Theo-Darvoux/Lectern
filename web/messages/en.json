@@ -922,7 +922,8 @@
       "update": "Update material",
       "delete": "Delete material",
       "revert": "Revert"
-    }
+    },
+    "anonymousModeratorHint": "Anonymous contribution: the author is only visible to moderators"
   },
   "MaterialTypes": {
     "document": "Document",
@@ -1301,7 +1302,9 @@
     "overLimitText": "overLimitText",
     "expired": "expired",
     "hours": "h",
-    "minutes": "m"
+    "minutes": "m",
+    "submitAnonymously": "Submit anonymously",
+    "submitAnonymouslyHint": "Your name won't be shown on this contribution or on the published documents. Only moderators can see who proposed it. Anonymous contributions don't count towards your reputation."
   },
   "AutoTitle": {
     "draft": "Contribution draft",

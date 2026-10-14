@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 from app.models.content_status import ContentStatus
 from app.models.security import VirusScanResult
@@ -18,12 +18,19 @@ class MaterialVersionOut(BaseModel):
     file_mime_type: str | None
     diff_summary: str | None
     author_id: uuid.UUID | None
+    is_anonymous: bool = False
     pr_id: uuid.UUID | None
     virus_scan_result: VirusScanResult
     version_lock: int
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def hide_anonymous_author(self) -> "MaterialVersionOut":
+        if self.is_anonymous:
+            self.author_id = None
+        return self
 
 
 class PublicMaterialVersionOut(BaseModel):
@@ -57,6 +64,7 @@ class MaterialOut(BaseModel):
     current_version: int
     parent_material_id: uuid.UUID | None
     author_id: uuid.UUID | None
+    is_anonymous: bool = False
     metadata: dict[str, object] = Field(validation_alias=AliasChoices("metadata_", "metadata"))
     download_count: int
     total_views: int
@@ -77,6 +85,13 @@ class MaterialOut(BaseModel):
         if not v:
             return []
         return [tag.name if hasattr(tag, "name") else str(tag) for tag in v]
+
+    @model_validator(mode="after")
+    def hide_anonymous_author(self) -> "MaterialOut":
+        # Anonymous materials keep author_id in the database for moderation only.
+        if self.is_anonymous:
+            self.author_id = None
+        return self
 
     model_config = {"from_attributes": True}
 

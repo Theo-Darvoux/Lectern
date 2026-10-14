@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api-client";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
+import { AnonymousBadge } from "@/components/pr/anonymous-badge";
 
 interface PRItem {
   id: string;
@@ -20,6 +21,7 @@ interface PRItem {
     id: string;
     display_name: string | null;
   } | null;
+  is_anonymous?: boolean;
 }
 
 export default function StaffPRQueuePage() {
@@ -91,7 +93,10 @@ export default function StaffPRQueuePage() {
               <tr key={pr.id} className="transition-colors hover:bg-muted/30 group">
                 <td className="p-4 font-medium">
                   <div className="flex flex-col gap-1">
-                    <div className="line-clamp-1">{pr.title}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="line-clamp-1">{pr.title}</span>
+                      {pr.is_anonymous && <AnonymousBadge className="shrink-0" />}
+                    </div>
                     <div className="text-xs font-normal text-muted-foreground sm:hidden">
                       {t(("types." + pr.type) as Parameters<typeof t>[0])} •{" "}
                       {pr.author?.display_name || "[deleted]"}

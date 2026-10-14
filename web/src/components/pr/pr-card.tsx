@@ -22,6 +22,7 @@ import { type PullRequestOut } from "@/components/home/types";
 import { useTranslations, useLocale } from "next-intl";
 import { fr, enUS } from "date-fns/locale";
 import { cn } from "@/lib/utils";
+import { AnonymousBadge } from "@/components/pr/anonymous-badge";
 
 const OP_ICONS: Record<string, React.ElementType> = {
   create_material: FilePlus,
@@ -200,6 +201,7 @@ export function PRCard({ pr }: PullRequestProps) {
                 <span>{pr.author?.display_name || t("anonymous")}</span>
               )}
             </span>
+            {pr.is_anonymous && pr.author && <AnonymousBadge />}
             <span>·</span>
             <span>
               {formatDistanceToNow(new Date(pr.created_at), {

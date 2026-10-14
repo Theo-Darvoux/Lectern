@@ -56,6 +56,7 @@ async def get_leaderboard(
     pr_filters: list[ColumnElement[bool]] = [
         PullRequest.status == PRStatus.APPROVED,
         PullRequest.author_id.is_not(None),
+        PullRequest.is_anonymous.is_(False),
         PullRequest.type != "revert",
         PullRequest.reverted_by_pr_id.is_(None),
     ]

@@ -40,6 +40,7 @@ from app.services.pr import (
     reject_pr_service,
     revert_pr_service,
 )
+from app.services.pr_visibility import project_pr_for_viewer
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ async def create_pull_request(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> PullRequestOut:
     pr = await create_pull_request_service(db, data, current_user, redis=redis)
-    return PullRequestOut.model_validate(pr)
+    return project_pr_for_viewer(pr, current_user)
 
 
 @router.get("", response_model=list[PullRequestOut])
@@ -68,9 +69,11 @@ async def list_pull_requests(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
 ) -> list[PullRequestOut]:
-    prs, total_count = await list_prs_service(db, status, type, author_id, page, limit)
+    prs, total_count = await list_prs_service(
+        db, status, type, author_id, page, limit, viewer=current_user
+    )
     set_pagination_headers(response, total_count)
-    return [PullRequestOut.model_validate(pr) for pr in prs]
+    return [project_pr_for_viewer(pr, current_user) for pr in prs]
 
 
 @router.get("/for-item", response_model=list[PullRequestOut])
@@ -90,7 +93,7 @@ async def list_pull_requests_for_item(
     prs, total_count = await list_prs_for_item_service(db, target_type, target_id, page, limit)
     set_pagination_headers(response, total_count)
 
-    return [PullRequestOut.model_validate(pr) for pr in prs]
+    return [project_pr_for_viewer(pr, current_user) for pr in prs]
 
 
 @router.get("/{id}", response_model=PullRequestOut)
@@ -104,7 +107,7 @@ async def get_pull_request(
     )
     if not pr:
         raise NotFoundError("Pull request not found")
-    return PullRequestOut.model_validate(pr)
+    return project_pr_for_viewer(pr, current_user)
 
 
 @router.post("/{id}/approve")
@@ -144,7 +147,7 @@ async def revert_pull_request(
     ],
 ) -> PullRequestOut:
     revert = await revert_pr_service(db, id, current_user)
-    return PullRequestOut.model_validate(revert)
+    return project_pr_for_viewer(revert, current_user)
 
 
 @router.post("/{id}/cancel")

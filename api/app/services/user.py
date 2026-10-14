@@ -3,7 +3,7 @@ import typing
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common.exceptions import BadRequestError
@@ -74,20 +74,38 @@ async def get_user_by_id(db: AsyncSession, user_id: str) -> User | None:
     return result.scalar_one_or_none()
 
 
-async def get_user_stats(db: AsyncSession, user_id: str) -> dict[str, int]:
+async def get_user_stats(
+    db: AsyncSession, user_id: str, *, include_anonymous: bool = False
+) -> dict[str, int]:
+    """Profile counters. Anonymous PRs never earn reputation; they only show up in
+    the PR counters when ``include_anonymous`` (the user's own profile)."""
     uid = uuid.UUID(str(user_id))
     from app.models.pull_request import PRStatus
 
+    counted = true() if include_anonymous else PullRequest.is_anonymous.is_(False)
     # All PR counts in a single pass with conditional aggregation. (AsyncSession
     # can't run queries concurrently, so folding queries beats asyncio.gather.)
     prs_total, pr_approved, open_pr_count = (
         await db.execute(
             select(
-                func.count(PullRequest.id),
+                func.coalesce(func.sum(case((counted, 1), else_=0)), 0),
                 func.coalesce(
-                    func.sum(case((PullRequest.status == PRStatus.APPROVED, 1), else_=0)), 0
+                    func.sum(
+                        case(
+                            (
+                                (PullRequest.status == PRStatus.APPROVED)
+                                & PullRequest.is_anonymous.is_(False),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
                 ),
-                func.coalesce(func.sum(case((PullRequest.status == PRStatus.OPEN, 1), else_=0)), 0),
+                func.coalesce(
+                    func.sum(case(((PullRequest.status == PRStatus.OPEN) & counted, 1), else_=0)),
+                    0,
+                ),
             ).where(PullRequest.author_id == uid)
         )
     ).one()
@@ -152,12 +170,15 @@ async def get_user_contributions(
     limit: int,
     offset: int,
     current_user_id: uuid.UUID | None = None,
+    include_anonymous: bool = False,
 ) -> tuple[list[PullRequest] | list[dict[str, typing.Any]] | list[Annotation], int]:
     uid = uuid.UUID(str(user_id))
     from sqlalchemy.orm import selectinload
 
     if contribution_type == "prs":
         pr_base = select(PullRequest).where(PullRequest.author_id == uid)
+        if not include_anonymous:
+            pr_base = pr_base.where(PullRequest.is_anonymous.is_(False))
         count_result = await db.execute(select(func.count()).select_from(pr_base.subquery()))
         total = count_result.scalar_one()
         result = await db.execute(
@@ -170,12 +191,15 @@ async def get_user_contributions(
     elif contribution_type == "materials":
         from app.models.material import MaterialVersion
 
-        mat_base = select(Material).where(Material.author_id == uid)
+        mat_filters = [Material.author_id == uid]
+        if not include_anonymous:
+            mat_filters.append(Material.is_anonymous.is_(False))
+        mat_base = select(Material).where(*mat_filters)
         count_result = await db.execute(select(func.count()).select_from(mat_base.subquery()))
         total = count_result.scalar_one()
         result = await db.execute(
             select(Material, MaterialVersion)
-            .where(Material.author_id == uid)
+            .where(*mat_filters)
             .options(selectinload(Material.directory))
             .outerjoin(
                 MaterialVersion,

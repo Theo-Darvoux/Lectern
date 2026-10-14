@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/accordion";
 import { Accordion as AccordionPrimitive } from "radix-ui";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { AnonymousBadge } from "@/components/pr/anonymous-badge";
 import { Separator } from "@/components/ui/separator";
 import {
     Dialog,
@@ -118,6 +119,8 @@ interface PullRequestDetail {
     description: string | null;
     rejection_reason: string | null;
     author: { id: string; display_name: string } | null;
+    is_anonymous?: boolean;
+    is_own?: boolean;
     created_at: string;
     updated_at: string;
     payload: PullRequestOperation[] | PullRequestOperation;
@@ -1370,7 +1373,8 @@ function PRDetailContent() {
         user?.role === "bureau" ||
         user?.role === "vieux";
     const isAdmin = user?.role === "bureau" || user?.role === "vieux";
-    const isAuthor = !!user && !!pr.author?.id && pr.author.id === user.id;
+    // Anonymous PRs hide `author` from their own author too; `is_own` still says who it is.
+    const isAuthor = !!user && (pr.is_own === true || (!!pr.author?.id && pr.author.id === user.id));
     const canCancel = pr.status === "open" && isAuthor;
     const canRevert = isAdmin && pr.can_revert === true && !pr.reverted_by_pr_id;
     const status = STATUS_CONFIG_KEYS[pr.status] ?? STATUS_CONFIG_KEYS.open;
@@ -1510,8 +1514,11 @@ function PRDetailContent() {
                                 {pr.author.display_name}
                             </Link>
                         ) : (
-                            <span className="font-medium">{tCommon("deletedAccount")}</span>
+                            <span className="font-medium">
+                                {pr.is_anonymous ? tPRs("anonymous") : tCommon("deletedAccount")}
+                            </span>
                         )}
+                        {pr.is_anonymous && pr.author && <AnonymousBadge />}
                         <span className="text-muted-foreground">
                             {t("submitted", {
                                 time: formatDistanceToNow(new Date(pr.created_at), {

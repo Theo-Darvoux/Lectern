@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -229,6 +230,7 @@ export function ReviewDrawer() {
     const purgeExpired = useStagingStore((s) => s.purgeExpired);
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
+    const [isAnonymous, setIsAnonymous] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
     const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -411,7 +413,8 @@ export function ReviewDrawer() {
             operations.map(unwrapOp),
             title,
             description,
-            tAuto
+            tAuto,
+            isAnonymous
         );
         setSubmitting(false);
 
@@ -419,6 +422,7 @@ export function ReviewDrawer() {
             clearOperations();
             setTitle("");
             setDescription("");
+            setIsAnonymous(false);
             setReviewOpen(false);
         }
     };
@@ -592,6 +596,21 @@ export function ReviewDrawer() {
                                 onChange={(e) => setDescription(e.target.value)}
                                 maxLength={maxDescriptionLength}
                                 rows={4}
+                            />
+                        </div>
+                        <div className="flex items-start justify-between gap-3 rounded-md border p-3">
+                            <label htmlFor="pr-anonymous" className="space-y-0.5">
+                                <span className="block text-sm font-medium">
+                                    {t("submitAnonymously")}
+                                </span>
+                                <span className="block text-xs text-muted-foreground">
+                                    {t("submitAnonymouslyHint")}
+                                </span>
+                            </label>
+                            <Switch
+                                id="pr-anonymous"
+                                checked={isAnonymous}
+                                onCheckedChange={setIsAnonymous}
                             />
                         </div>
                     </div>

@@ -13,6 +13,7 @@ from app.dependencies.auth import CurrentUser, ReadUser
 from app.dependencies.pagination import PaginationParams
 from app.models.annotation import Annotation
 from app.models.material import Material, MaterialFavourite, MaterialVersion
+from app.models.pull_request import PullRequest
 from app.models.user import UserRole
 from app.schemas.collection import SavedLibraryOut
 from app.schemas.common import PaginatedResponse
@@ -33,6 +34,7 @@ from app.schemas.user import (
 from app.services.avatar import is_owned_avatar_storage_key, is_trusted_external_avatar_url
 from app.services.directory import get_directory_paths
 from app.services.material import get_liked_favourited_sets, material_orm_to_dict
+from app.services.pr_visibility import can_see_anonymous_authors
 from app.services.saved import get_favourite_items
 from app.services.user import (
     export_user_data,
@@ -65,7 +67,7 @@ async def get_me(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UserProfileOut:
-    stats = await get_user_stats(db, str(user.id))
+    stats = await get_user_stats(db, str(user.id), include_anonymous=True)
     user_data = UserOut.model_validate(user).model_dump()
     return UserProfileOut.model_validate({**user_data, **stats})
 
@@ -205,7 +207,7 @@ async def get_user_profile(
     target = await get_user_by_id(db, user_id)
     if not target:
         raise NotFoundError("User not found")
-    stats = await get_user_stats(db, user_id)
+    stats = await get_user_stats(db, user_id, include_anonymous=target.id == user.id)
     user_data = PublicUserOut.model_validate(target).model_dump()
     return PublicUserProfileOut.model_validate({**user_data, **stats})
 
@@ -256,6 +258,7 @@ async def get_contributions(
         limit=pagination.limit,
         offset=pagination.offset,
         current_user_id=user.id,
+        include_anonymous=target.id == user.id or can_see_anonymous_authors(user),
     )
 
     directory_paths = {}
@@ -277,7 +280,11 @@ async def get_contributions(
     ] = []
     for item in items:
         if type == "prs":
-            serialized_items.append(PublicPRContribution.model_validate(item))
+            pr_item = cast(PullRequest, item)
+            contribution = PublicPRContribution.model_validate(pr_item)
+            if pr_item.is_anonymous and not can_see_anonymous_authors(user):
+                contribution.author = None
+            serialized_items.append(contribution)
         elif type == "materials":
             m_item = cast(dict[str, typing.Any], item)
             serialized_items.append(
@@ -301,7 +308,9 @@ async def get_contributions(
                     material_slug=mat.slug if mat is not None else None,
                     directory_path=dir_path,
                     body=ann.body,
-                    author=PublicUserBrief.model_validate(ann.author) if ann.author is not None else None,
+                    author=PublicUserBrief.model_validate(ann.author)
+                    if ann.author is not None
+                    else None,
                     created_at=ann.created_at,
                     updated_at=ann.updated_at,
                 )

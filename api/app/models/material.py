@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -79,6 +80,11 @@ class Material(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         ForeignKey("materials.id", ondelete="CASCADE")
     )
     author_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # Created by an anonymous pull request: author_id is kept for moderation but
+    # never serialized to clients.
+    is_anonymous: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     metadata_: Mapped[dict[str, object]] = mapped_column(
         "metadata", JSONB, default=dict, server_default="{}"
     )
@@ -164,6 +170,10 @@ class MaterialVersion(UUIDMixin, SoftDeleteMixin, Base):
     file_mime_type: Mapped[str | None] = mapped_column(String(100))
     diff_summary: Mapped[str | None] = mapped_column(Text)
     author_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # Produced by an anonymous pull request: author_id is never serialized.
+    is_anonymous: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     pr_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pull_requests.id", ondelete="SET NULL")
     )

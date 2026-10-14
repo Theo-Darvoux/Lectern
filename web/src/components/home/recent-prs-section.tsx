@@ -32,7 +32,9 @@ function PRRowSkeleton() {
 
 function PRRow({ pr }: { pr: PullRequestOut }) {
     const t = useTranslations("Home");
-    const authorLabel = pr.author?.display_name ?? t("unknownAuthor");
+    const tPRs = useTranslations("PRs");
+    const authorLabel =
+        pr.author?.display_name ?? (pr.is_anonymous ? tPRs("anonymous") : t("unknownAuthor"));
 
     const timeAgo = formatDistanceToNow(new Date(pr.created_at), {
         addSuffix: true,

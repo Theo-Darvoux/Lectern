@@ -31,6 +31,7 @@ from app.schemas.material import (
 from app.schemas.pull_request import PullRequestOut
 from app.services.directory import get_directory_paths, get_preview_material_ids
 from app.services.material import get_liked_favourited_sets, material_orm_to_dict
+from app.services.pr_visibility import project_pr_for_viewer
 
 router = APIRouter(prefix="/api/home", tags=["home"])
 
@@ -526,7 +527,8 @@ async def get_home(
         featured=featured_out,
         popular_today=popular_today,
         popular_14d=popular_14d,
-        recent_prs=recent_prs,
+        # The cache holds unprojected PRs; anonymity is applied per viewer.
+        recent_prs=[project_pr_for_viewer(pr, user) for pr in recent_prs],
         recent_favourites=recent_favourites,
         recently_viewed=recently_viewed,
         recently_added=recently_added,

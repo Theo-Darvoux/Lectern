@@ -72,6 +72,10 @@ export interface PullRequestOut {
     title: string;
     description: string | null;
     author: { id: string; display_name: string | null; avatar_url: string | null } | null;
+    /** Author hidden from everyone but moderators; `author` is null for other viewers. */
+    is_anonymous?: boolean;
+    /** True only for the PR's author, even when `author` is hidden. */
+    is_own?: boolean;
     created_at: string;
     updated_at?: string;
     approved_at?: string | null;

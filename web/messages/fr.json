@@ -922,7 +922,8 @@
       "update": "Mise à jour de matériel",
       "delete": "Suppression de matériel",
       "revert": "Rétablissement"
-    }
+    },
+    "anonymousModeratorHint": "Contribution anonyme : l'auteur n'est visible que par les modérateurs"
   },
   "MaterialTypes": {
     "document": "Document",
@@ -1301,7 +1302,9 @@
     "overLimitText": "overLimitText",
     "expired": "expiré",
     "hours": "h",
-    "minutes": "min"
+    "minutes": "min",
+    "submitAnonymously": "Soumettre anonymement",
+    "submitAnonymouslyHint": "Votre nom ne sera pas affiché sur cette contribution ni sur les documents publiés. Seuls les modérateurs pourront voir qui l'a proposée. Les contributions anonymes ne comptent pas dans votre réputation."
   },
   "AutoTitle": {
     "draft": "Brouillon de contribution",

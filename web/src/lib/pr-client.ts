@@ -128,7 +128,8 @@ export async function submitDirectOperations(
     ops: Operation[],
     manualTitle: string | undefined,
     manualDescription: string | null | undefined,
-    t: any
+    t: any,
+    isAnonymous = false
 ): Promise<{ id: string; status: string } | null> {
     if (ops.length === 0) return null;
 
@@ -144,6 +145,7 @@ export async function submitDirectOperations(
                 title: title.trim(),
                 description: manualDescription ? truncateDescription(manualDescription) : null,
                 operations: ops,
+                is_anonymous: isAnonymous,
             }),
         }
     );

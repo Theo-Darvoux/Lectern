@@ -40,6 +40,7 @@ interface PR {
     type: string;
     summary_types?: string[];
     author: { id: string; display_name: string } | null;
+    is_anonymous?: boolean;
     created_at: string;
 }
 
@@ -190,7 +191,8 @@ export function DirectoryOpenPRs({ directoryId }: DirectoryOpenPRsProps) {
                                                 { addSuffix: true },
                                             )}{" "}
                                             {t("by")}{" "}
-                                            {pr.author?.display_name || "[deleted]"}
+                                            {pr.author?.display_name ||
+                                                (pr.is_anonymous ? tPRs("anonymous") : "[deleted]")}
                                         </p>
                                     </div>
                                     <ChevronRight className="h-4 w-4 shrink-0 text-amber-400 dark:text-amber-600 group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors" />

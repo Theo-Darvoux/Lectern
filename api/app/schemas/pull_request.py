@@ -366,6 +366,8 @@ class PullRequestCreate(BaseModel):
     operations: Annotated[list[Operation], BeforeValidator(strip_null_chars)] = Field(
         ..., min_length=1
     )
+    # Hide the author from everyone except moderators. Fixed at creation.
+    is_anonymous: bool = False
 
     @field_validator("operations")
     @classmethod
@@ -394,6 +396,10 @@ class PullRequestOut(BaseModel):
     virus_scan_result: VirusScanResult
     rejection_reason: str | None = None
     author: PublicUserBrief | None
+    is_anonymous: bool = False
+    # True only for the author. Lets the client offer author actions on an
+    # anonymous PR whose author fields are hidden from the viewer.
+    is_own: bool = False
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None = None

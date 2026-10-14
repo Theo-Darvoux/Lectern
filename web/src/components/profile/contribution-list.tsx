@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
+import { AnonymousBadge } from "@/components/pr/anonymous-badge";
 
 interface ContributionItem {
   id: string;
@@ -48,6 +49,7 @@ interface ContributionItem {
   is_favourited?: boolean;
   metadata?: Record<string, unknown>;
   author?: { id: string; display_name: string | null; avatar_url: string | null } | null;
+  is_anonymous?: boolean;
 }
 
 interface PaginatedContributions {
@@ -128,6 +130,7 @@ function PRCard({ item }: { item: ContributionItem }) {
               {statusLabel}
             </span>
           )}
+          {item.is_anonymous && <AnonymousBadge className="absolute left-2 top-2 bg-background/80" />}
         </div>
         <div className="flex min-w-0 flex-1 flex-col p-2.5 sm:p-3">
           <p className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground sm:text-sm">

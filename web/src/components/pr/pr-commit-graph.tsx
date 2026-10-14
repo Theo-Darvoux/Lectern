@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import type { PullRequestOut } from "@/components/home/types";
 import { cn } from "@/lib/utils";
+import { AnonymousBadge } from "@/components/pr/anonymous-badge";
 
 const LANE_WIDTH = 16;
 const ROW_HEIGHT = 36;
@@ -601,6 +602,7 @@ export function PRCommitGraph({ prs, loading }: PRCommitGraphProps) {
                     <span className="truncate text-muted-foreground">
                       {pr.author.display_name}
                     </span>
+                    {pr.is_anonymous && <AnonymousBadge className="shrink-0" />}
                   </Link>
                 ) : (
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground truncate">

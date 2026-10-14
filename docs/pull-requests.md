@@ -81,6 +81,29 @@ Reverting creates a new PR containing the inverse operations and auto-approves i
 
 ---
 
+## Anonymous contributions
+
+When submitting from the review drawer, the author can tick **Submit anonymously**
+(`is_anonymous: true` on `POST /api/pull-requests`). The choice is fixed at creation.
+
+- `author_id` is still stored, so quotas, cancellation and moderation work as usual.
+- Moderators (`moderator`, `bureau`, `vieux`) see the author, with an "Anonymous" badge.
+- Everyone else, the author included, gets `author: null` and `author_id: null` in every
+  response: PR list and detail, home feed, profile contributions. The author is never sent
+  to them, so it can't be read from the network tab. The author still gets `is_own: true`,
+  which unlocks the cancel action.
+- Anonymity carries over on approval. The materials and versions created get
+  `is_anonymous = true`, their `author_id` is never serialized, and the search index drops
+  `authorName`. Text edits are copied to `materials/anonymous/{upload_id}/…` instead of
+  `materials/{user_id}/…`, so the storage key doesn't reveal the author either.
+- For non-moderators, `GET /api/pull-requests?author_id=X` leaves out X's anonymous PRs,
+  unless X is the person asking. The same goes for the profile contribution lists and counters.
+- Anonymous PRs don't count in reputation or on the leaderboard.
+- Comments are unchanged: if the author comments on their own anonymous PR, the comment
+  shows their name.
+
+---
+
 ## API endpoints
 
 | Method | Path | Description |

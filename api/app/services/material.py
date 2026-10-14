@@ -69,7 +69,8 @@ def material_orm_to_dict(
         "status": m.status,
         "current_version": m.current_version,
         "parent_material_id": m.parent_material_id,
-        "author_id": m.author_id,
+        "author_id": None if m.is_anonymous else m.author_id,
+        "is_anonymous": m.is_anonymous,
         "metadata": m.metadata_,
         "download_count": m.download_count,
         "total_views": m.total_views,
@@ -98,7 +99,8 @@ def version_orm_to_dict(v: MaterialVersion) -> dict[str, typing.Any]:
         "file_size": v.file_size,
         "file_mime_type": v.file_mime_type,
         "diff_summary": v.diff_summary,
-        "author_id": v.author_id,
+        "author_id": None if v.is_anonymous else v.author_id,
+        "is_anonymous": v.is_anonymous,
         "pr_id": v.pr_id,
         "virus_scan_result": v.virus_scan_result.value
         if hasattr(v.virus_scan_result, "value")

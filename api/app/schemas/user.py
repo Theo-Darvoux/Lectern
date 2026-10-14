@@ -102,6 +102,7 @@ class PublicPRContribution(BaseModel):
     description: str | None
     summary_types: list[str] = Field(default_factory=list)
     author: PublicUserBrief | None
+    is_anonymous: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -33,6 +33,7 @@ from app.models.user import User
 from app.schemas.pull_request import PullRequestCreate
 from app.services.directory import slugify
 from app.services.notification import notify_user
+from app.services.pr_visibility import anonymous_material_key, can_see_anonymous_authors
 from app.services.reaction_lock import acquire_reaction_toggle_lock
 from app.services.tag import get_or_create_tags, prune_orphan_tags
 
@@ -815,6 +816,7 @@ async def _prepare_version_file(
     file_key: str,
     payload: dict[str, typing.Any],
     author_id: uuid.UUID | None,
+    is_anonymous: bool = False,
 ) -> _PreparedVersionFile:
     """Resolve/copy external file state before any hierarchy transaction lock is taken."""
     stored_content_sha256: str | None = None
@@ -883,7 +885,11 @@ async def _prepare_version_file(
 
         enforce_upload_size_limit(mime_type, real_size)
 
-        final_key = file_key.replace("uploads/", "materials/", 1)
+        final_key = (
+            anonymous_material_key(file_key)
+            if is_anonymous
+            else file_key.replace("uploads/", "materials/", 1)
+        )
 
         async def rollback_copy() -> None:
             await delete_object(final_key)
@@ -921,6 +927,7 @@ async def _prepare_pr_version_files(
     db: AsyncSession,
     operations: list[dict[str, typing.Any]],
     author_id: uuid.UUID | None,
+    is_anonymous: bool = False,
 ) -> None:
     """Perform every external file read/copy before PR hierarchy locking begins."""
     prepared: dict[int, _PreparedVersionFile] = {}
@@ -942,6 +949,7 @@ async def _prepare_pr_version_files(
                 file_key=str(raw_key),
                 payload=payload,
                 author_id=author_id,
+                is_anonymous=is_anonymous,
             )
 
     db.info[_PR_PREPARED_VERSION_FILES_KEY] = prepared
@@ -959,6 +967,7 @@ async def _make_version_for_file(
     pr_id: uuid.UUID,
     diff_summary: str | None = None,
     version_lock: int = 0,
+    is_anonymous: bool = False,
 ) -> MaterialVersion:
     """Resolve file metadata and create+flush a MaterialVersion.
 
@@ -979,6 +988,7 @@ async def _make_version_for_file(
             file_key=file_key,
             payload=payload,
             author_id=author_id,
+            is_anonymous=is_anonymous,
         )
 
     file_key = prepared["file_key"]
@@ -998,6 +1008,7 @@ async def _make_version_for_file(
         file_mime_type=mime_type,
         cas_sha256=stored_content_sha256 if file_key.startswith("cas/") else None,
         author_id=author_id,
+        is_anonymous=is_anonymous,
         pr_id=pr_id,
         virus_scan_result=VirusScanResult.CLEAN,
         version_lock=version_lock,
@@ -1077,6 +1088,7 @@ async def _exec_create_material(
         type=p["type"],
         parent_material_id=parent_material_id,
         author_id=pr.author_id,
+        is_anonymous=pr.is_anonymous,
         metadata_=p.get("metadata", {}),
         tags=tag_objs,
     )
@@ -1096,6 +1108,7 @@ async def _exec_create_material(
             version_number=1,
             author_id=pr.author_id,
             pr_id=pr.id,
+            is_anonymous=pr.is_anonymous,
         )
 
     for att in p.get("attachments") or []:
@@ -1110,6 +1123,7 @@ async def _exec_create_material(
             type=att["type"],
             parent_material_id=m.id,
             author_id=pr.author_id,
+            is_anonymous=pr.is_anonymous,
             tags=att_tags,
             metadata_=att.get("metadata", {}),
         )
@@ -1125,6 +1139,7 @@ async def _exec_create_material(
                 version_number=1,
                 author_id=pr.author_id,
                 pr_id=pr.id,
+                is_anonymous=pr.is_anonymous,
             )
 
     # External object metadata/copies are complete before entering the global
@@ -1211,6 +1226,7 @@ async def _exec_edit_material(
             version_number=mat.current_version,
             author_id=pr.author_id,
             pr_id=pr.id,
+            is_anonymous=pr.is_anonymous,
             diff_summary=p.get("diff_summary"),
             version_lock=_next_version_lock,
         )
@@ -1937,6 +1953,7 @@ async def create_pull_request_service(
         payload=ops_payload,
         summary_types=summary_types,
         author_id=current_user.id,
+        is_anonymous=data.is_anonymous,
         virus_scan_result=VirusScanResult.CLEAN if has_file else VirusScanResult.SKIPPED,
     )
     db.add(pr)
@@ -2022,7 +2039,7 @@ async def apply_pr(db: AsyncSession, pr: PullRequest) -> None:
 
     # Storage calls can block on S3/SeaweedFS. Finish all of them before any
     # transaction-scoped global hierarchy lock can be acquired.
-    await _prepare_pr_version_files(db, sorted_ops, pr.author_id)
+    await _prepare_pr_version_files(db, sorted_ops, pr.author_id, is_anonymous=pr.is_anonymous)
 
     # Enforce one transaction-wide lock order for mixed-operation PRs:
     # hierarchy advisory lock -> any target-row FOR UPDATE -> mutation.  Taking
@@ -2567,6 +2584,7 @@ async def list_prs_service(
     author_id: uuid.UUID | None = None,
     page: int = 1,
     limit: int = 50,
+    viewer: User | None = None,
 ) -> tuple[list[PullRequest], int]:
     """List pull requests with filtering and pagination. Returns (prs, total_count)."""
     base_stmt = select(PullRequest)
@@ -2576,6 +2594,9 @@ async def list_prs_service(
         base_stmt = base_stmt.where(PullRequest.type == type)
     if author_id:
         base_stmt = base_stmt.where(PullRequest.author_id == author_id)
+        # Filtering by author must not attribute anonymous PRs to someone else.
+        if not can_see_anonymous_authors(viewer) and (viewer is None or viewer.id != author_id):
+            base_stmt = base_stmt.where(PullRequest.is_anonymous.is_(False))
 
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     total_count = await db.scalar(count_stmt) or 0
@@ -2896,7 +2917,11 @@ async def get_pr_preview_service(
 
     # Legacy V1: after approval, files were moved from uploads/ to materials/
     if pr.status == "approved" and file_key_str.startswith("uploads/"):
-        file_key_str = file_key_str.replace("uploads/", "materials/", 1)
+        file_key_str = (
+            anonymous_material_key(file_key_str)
+            if pr.is_anonymous
+            else file_key_str.replace("uploads/", "materials/", 1)
+        )
 
     # Refuse to serve unscanned quarantine files
     if file_key_str.startswith("quarantine/"):

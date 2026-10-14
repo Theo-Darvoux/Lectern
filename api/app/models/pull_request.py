@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -56,6 +57,11 @@ class PullRequest(UUIDMixin, TimestampMixin, Base):
         JSONB, nullable=False, default=list, server_default="[]"
     )
     author_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # Chosen at creation and immutable. The author is hidden from everyone except
+    # moderators; see app.services.pr_visibility.
+    is_anonymous: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
