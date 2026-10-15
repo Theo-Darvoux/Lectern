@@ -17,7 +17,11 @@ from app.services.reaction_lock import acquire_reaction_toggle_lock
 def _ensure_uuid(value: str | uuid.UUID) -> uuid.UUID:
     if isinstance(value, uuid.UUID):
         return value
-    return uuid.UUID(str(value))
+    try:
+        return uuid.UUID(str(value))
+    except ValueError:
+        # A malformed ID can't match any row: answer 404 instead of a 500.
+        raise NotFoundError("Material not found") from None
 
 
 def material_orm_to_dict(
