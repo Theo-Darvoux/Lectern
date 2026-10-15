@@ -589,8 +589,10 @@ function _tusUpload(
                 options.onBytesProgress?.(bytesUploaded, bytesTotal);
             },
             onAfterResponse: (_req, res) => {
+                // Percent-encoded server-side: the key embeds the filename,
+                // which may contain non-latin-1 characters.
                 const key = res.getHeader("X-Lectern-File-Key");
-                if (key) quarantineKey = key;
+                if (key) quarantineKey = decodeURIComponent(key);
 
                 // Capture tus URL once available (after first POST)
                 if (upload.url) {

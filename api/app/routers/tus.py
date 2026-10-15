@@ -28,6 +28,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request, Response
 from redis.asyncio import Redis
@@ -185,7 +186,7 @@ async def _finalize_tus_upload(
             headers=_tus_headers(
                 **{
                     "Upload-Offset": state["offset"],
-                    "X-Lectern-File-Key": quarantine_key,
+                    "X-Lectern-File-Key": _encode_file_key_header(quarantine_key),
                 }
             ),
         )
@@ -267,10 +268,19 @@ async def _finalize_tus_upload(
         headers=_tus_headers(
             **{
                 "Upload-Offset": state["offset"],
-                "X-Lectern-File-Key": quarantine_key,
+                "X-Lectern-File-Key": _encode_file_key_header(quarantine_key),
             }
         ),
     )
+
+
+def _encode_file_key_header(file_key: str) -> str:
+    """Percent-encode a storage key for an HTTP header (headers must be latin-1).
+
+    Keys embed the sanitized filename, which may hold non-Latin characters
+    (e.g. Korean). The client decodes it with ``decodeURIComponent``.
+    """
+    return quote(file_key, safe="/")
 
 
 def _decode_upload_metadata(header: str | None) -> dict[str, str]:
