@@ -525,10 +525,10 @@ export function FileEditDialog({
             return {
                 op: "edit_material",
                 material_id: target.id,
+                target_title: currentTitle,
                 ...(title !== currentTitle ? { title: title.trim() } : {}),
-                ...(description !== currentDescription
-                    ? { description: description.trim() || null }
-                    : {}),
+                // "" clears the description; null would mean "leave it unchanged".
+                ...(description !== currentDescription ? { description: description.trim() } : {}),
                 ...(hasTagsChanged() ? { tags } : {}),
                 ...(isLink && url.trim() !== currentUrl.trim()
                     ? { metadata: { ...currentMetadata, url: normalizeTargetUrl(url.trim()) } }
@@ -539,10 +539,9 @@ export function FileEditDialog({
             return {
                 op: "edit_directory",
                 directory_id: target.id,
+                target_name: currentTitle,
                 ...(title !== currentTitle ? { name: title.trim() } : {}),
-                ...(description !== currentDescription
-                    ? { description: description.trim() || null }
-                    : {}),
+                ...(description !== currentDescription ? { description: description.trim() } : {}),
                 ...(hasTagsChanged() ? { tags } : {}),
             };
         }
@@ -556,6 +555,7 @@ export function FileEditDialog({
         return {
             op: "edit_material",
             material_id: target.id,
+            target_title: currentTitle,
             file_key: fileKey,
             file_name: fileName,
             file_size: fileSize,

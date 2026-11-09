@@ -27,7 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.common.exceptions import BadRequestError, ServiceUnavailableError
+from app.core.common.exceptions import BadRequestError, NotFoundError, ServiceUnavailableError
 from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.database import get_db
 from app.core.database.post_commit import register_transaction_callbacks
@@ -274,6 +274,29 @@ async def get_qcm_limits() -> dict[str, Any]:
         "max_questions_per_qcm": QCM_MAX_QUESTIONS,
         "max_answers_per_question": QCM_MAX_ANSWERS_PER_QUESTION,
     }
+
+
+@router.get("/staged")
+async def get_staged_qcm(
+    file_key: str,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    """Return a QCM the caller saved to their draft and has not submitted yet."""
+    claim_id = await db.scalar(
+        select(CasStagingClaim.id)
+        .where(
+            CasStagingClaim.user_id == user.id,
+            CasStagingClaim.file_key == file_key,
+            CasStagingClaim.consumed_at.is_(None),
+            CasStagingClaim.expires_at > datetime.now(UTC),
+        )
+        .limit(1)
+    )
+    if claim_id is None:
+        raise NotFoundError("This QCM draft is no longer available")
+    data: dict[str, Any] = json.loads(await read_full_object(file_key))
+    return data
 
 
 @router.post("/stage", response_model=QCMStageResponse)

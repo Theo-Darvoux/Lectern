@@ -357,8 +357,6 @@ Operation = Annotated[
     Discriminator(_get_op_discriminator),
 ]
 
-MAX_OPERATIONS = 50
-
 
 class PullRequestCreate(BaseModel):
     title: SanitizedStr = Field(..., min_length=3, max_length=300, pattern=r"^\s*\S.*$")

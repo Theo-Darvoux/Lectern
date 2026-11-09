@@ -3,7 +3,7 @@ import { applyStagedEdits, indexStagedOps, type AugmentedOp } from "./use-augmen
 import type { Operation } from "@/lib/staging-store";
 
 const local = (op: Operation, idx = 0): AugmentedOp =>
-  ({ ...op, isExternal: false, _previewIdx: undefined, _storeIndex: idx }) as AugmentedOp;
+  ({ ...op, isExternal: false, _previewIdx: undefined, _stagedId: String(idx) }) as AugmentedOp;
 
 describe("indexStagedOps", () => {
   it("keeps a moved item's edits so it stays editable and shows the new title", () => {

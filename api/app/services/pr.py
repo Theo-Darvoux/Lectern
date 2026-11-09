@@ -145,6 +145,33 @@ def _collect_temp_refs(op: dict[str, typing.Any]) -> set[str]:
     return refs
 
 
+_TEMP_REF_FIELDS = (
+    "directory_id",
+    "parent_id",
+    "parent_material_id",
+    "material_id",
+    "target_id",
+    "new_parent_id",
+)
+
+
+def _assert_temp_refs_defined(operations: list[dict[str, typing.Any]]) -> None:
+    """Reject a batch referencing a $temp-id that no operation in it creates.
+
+    Such a reference can only fail at approval, leaving a contribution that
+    nobody can apply.
+    """
+    defined = {op["temp_id"] for op in operations if op.get("temp_id")}
+    for op in operations:
+        for field in _TEMP_REF_FIELDS:
+            value = op.get(field)
+            if _is_temp_id(value) and value not in defined:
+                raise BadRequestError(
+                    "This contribution refers to an item that is no longer in your draft. "
+                    "Remove it from the draft and try again."
+                )
+
+
 def get_pr_staging_files(pr: PullRequest) -> list[str]:
     """Collect all 'uploads/' prefixed file keys from a PR payload."""
     staging_files: list[str] = []
@@ -761,6 +788,69 @@ def topo_sort_operations(operations: list[dict[str, typing.Any]]) -> list[dict[s
         raise BadRequestError("Cyclic dependency detected among temp_id references")
 
     return [operations[i] for i in result]
+
+
+async def _without_deletes_covered_by_parent(
+    db: AsyncSession, operations: list[dict[str, typing.Any]]
+) -> list[dict[str, typing.Any]]:
+    """Drop deletes that another delete in the same batch already performs.
+
+    Deleting a directory soft-deletes its subtree and deleting a material its
+    attachments, so a separate delete of one of those items would not find it.
+    """
+
+    def real_id(value: object) -> uuid.UUID | None:
+        try:
+            return uuid.UUID(str(value))
+        except ValueError:
+            return None  # A temp id, or an invalid one the executor will report.
+
+    def ids_of(op_type: str, field: str) -> set[uuid.UUID]:
+        ids = {real_id(op.get(field)) for op in operations if op.get("op") == op_type}
+        return {value for value in ids if value is not None}
+
+    deleted_dirs = ids_of("delete_directory", "directory_id")
+    deleted_mats = ids_of("delete_material", "material_id")
+    if not deleted_dirs and not deleted_mats:
+        return operations
+
+    covered_dirs: set[uuid.UUID] = set()
+    if deleted_dirs:
+        child_cte = (
+            select(Directory.id)
+            .where(Directory.parent_id.in_(deleted_dirs), Directory.deleted_at.is_(None))
+            .cte(name="covered_dirs", recursive=True)
+        )
+        dir_alias = aliased(Directory)
+        child_cte = child_cte.union_all(
+            select(dir_alias.id)
+            .join(child_cte, dir_alias.parent_id == child_cte.c.id)
+            .where(dir_alias.deleted_at.is_(None))
+        )
+        covered_dirs = set(await db.scalars(select(child_cte.c.id)))
+
+    covered_mats: set[uuid.UUID] = set()
+    if deleted_mats:
+        rows = await db.execute(
+            select(Material.id, Material.directory_id, Material.parent_material_id).where(
+                Material.id.in_(deleted_mats)
+            )
+        )
+        all_deleted_dirs = deleted_dirs | covered_dirs
+        covered_mats = {
+            row.id
+            for row in rows
+            if row.directory_id in all_deleted_dirs or row.parent_material_id in deleted_mats
+        }
+
+    def is_covered(op: dict[str, typing.Any]) -> bool:
+        if op.get("op") == "delete_directory":
+            return real_id(op.get("directory_id")) in covered_dirs
+        if op.get("op") == "delete_material":
+            return real_id(op.get("material_id")) in covered_mats
+        return False
+
+    return [op for op in operations if not is_covered(op)]
 
 
 def _resolve_mime_type(
@@ -1693,6 +1783,8 @@ async def create_pull_request_service(
     """Validate and create a new batch pull request."""
     is_privileged = current_user.is_moderator
 
+    _assert_temp_refs_defined([op.model_dump(mode="json") for op in data.operations])
+
     if not is_privileged:
         if len(data.operations) > settings.pr_max_ops_student:
             raise BadRequestError(
@@ -2033,7 +2125,9 @@ async def apply_pr(db: AsyncSession, pr: PullRequest) -> None:
     if pr.applied_result is not None:
         return
 
-    sorted_ops = topo_sort_operations(list(pr.payload))
+    sorted_ops = await _without_deletes_covered_by_parent(
+        db, topo_sort_operations(list(pr.payload))
+    )
     id_map: dict[str, uuid.UUID] = {}
     result_ops: list[dict[str, typing.Any]] = []
 

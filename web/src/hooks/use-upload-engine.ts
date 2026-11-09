@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
-import { useStagingStore } from "@/lib/staging-store";
+import { stagedDirectoryIds, useStagingStore } from "@/lib/staging-store";
 import type { CreateMaterialOp } from "@/lib/staging-store";
 import { MAX_FILE_SIZE_MB, ACCEPTED_FILE_TYPES, guessFileMime } from "@/lib/file-utils";
 import { beginUploadGroup, getUploadConfig, uploadLimitMbForMime, type UploadConfig } from "@/lib/upload-client";
@@ -101,11 +101,11 @@ export function useUploadEngine({
     const addOperations = useStagingStore((s) => s.addOperations);
     const nextTempId = useStagingStore((s) => s.nextTempId);
     const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
+    const draftOperations = useStagingStore((s) => s.operations);
 
     const durableFiles = useUploadQueue((s) => s.items);
     const dirTempIds = useUploadQueue((s) => s.dirTempIds);
-    const stagedDirKeys = useUploadQueue((s) => s.stagedDirKeys);
-    const { addItems, updateItem, removeItem, setDirTempIds, markDirsStaged, renameDirectory } = useUploadQueue.getState();
+    const { addItems, updateItem, removeItem, setDirTempIds, renameDirectory } = useUploadQueue.getState();
 
     const telemetryById = useUploadTelemetry((state) => state.byId);
     const files = useMemo(
@@ -120,16 +120,16 @@ export function useUploadEngine({
 
     /** Folders that adding the current rows would create, by path. */
     const pendingDirPaths = useMemo(() => {
-        const staged = new Set(stagedDirKeys);
+        const staged = stagedDirectoryIds(draftOperations);
         const paths = new Map<string, string>();
         for (const item of durableFiles) {
             for (const path of ancestorPaths(item.targetDirPath)) {
                 const key = dirKey(item, path);
-                if (!staged.has(key)) paths.set(path, dirTempIds[key] ?? key);
+                if (!staged.has(dirTempIds[key])) paths.set(path, dirTempIds[key] ?? key);
             }
         }
         return paths;
-    }, [durableFiles, dirTempIds, stagedDirKeys]);
+    }, [durableFiles, dirTempIds, draftOperations]);
 
     const [pendingMimeFiles, setPendingMimeFiles] = useState<ScannedFile[]>([]);
     const [editingPath, setEditingPath] = useState<string | null>(null);
@@ -461,9 +461,9 @@ export function useUploadEngine({
     const handleStage = () => {
         if (!canStage) return;
 
-        const state = useUploadQueue.getState();
-        const staged = new Set(state.stagedDirKeys);
-        const tempIds = { ...state.dirTempIds };
+        // A folder counts as staged only while the draft still creates it.
+        const staged = stagedDirectoryIds(useStagingStore.getState().operations);
+        const tempIds = { ...useUploadQueue.getState().dirTempIds };
         const dirIdFor = (item: QueueItem, path: string) => {
             const key = dirKey(item, path);
             tempIds[key] ??= nextTempId("dir");
@@ -476,7 +476,7 @@ export function useUploadEngine({
         for (const item of doneFiles) {
             for (const path of ancestorPaths(item.targetDirPath)) {
                 const key = dirKey(item, path);
-                if (!staged.has(key)) dirsToCreate.set(key, { item, path });
+                if (!staged.has(tempIds[key])) dirsToCreate.set(key, { item, path });
             }
         }
         const dirOps = [...dirsToCreate.values()]
@@ -513,7 +513,6 @@ export function useUploadEngine({
 
         addOperations([...dirOps, ...matOps]);
         setDirTempIds(tempIds);
-        markDirsStaged([...dirsToCreate.keys()]);
         doneFiles.forEach((f) => forgetUpload(f.clientId));
 
         toast.success(t("addedToDraft", { count: dirOps.length + matOps.length }));

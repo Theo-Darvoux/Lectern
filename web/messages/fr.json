@@ -834,7 +834,7 @@
       "ERR_MIME_MISMATCH": "Le contenu du fichier ne correspond pas à son extension.",
       "ERR_SVG_UNSAFE": "Ce SVG contient du contenu dangereux et a été rejeté.",
       "ERR_SCAN_UNAVAILABLE": "L'analyse de sécurité est temporairement indisponible. Réessayez dans quelques minutes.",
-      "ERR_QUOTA_EXCEEDED": "Vous avez trop de téléversements en attente. Soumettez votre brouillon ou retirez des fichiers, puis réessayez.",
+      "ERR_QUOTA_EXCEEDED": "Vous avez trop de téléversements récents. Ils se libèrent lorsque vos contributions sont traitées, ou après 25 heures.",
       "ERR_STORAGE_FULL": "L'espace de stockage est plein. Contactez un administrateur.",
       "ERR_PROCESSING_FAILED": "Le traitement a échoué. Réessayez, et contactez le support si le problème persiste.",
       "ERR_FILE_UNREADABLE": "Ce fichier est endommagé et n'a pas pu être lu."
@@ -1313,13 +1313,14 @@
       "material": "le document",
       "folder": "le dossier"
     },
-    "overLimitTitle": "overLimitTitle",
-    "overLimitText": "overLimitText",
+    "overLimitTitle": "{count} changements pour un maximum de {max}",
+    "overLimitText": "Retirez des changements, puis soumettez le reste en plusieurs contributions.",
     "expired": "expiré",
     "hours": "h",
     "minutes": "min",
     "submitAnonymously": "Soumettre anonymement",
-    "submitAnonymouslyHint": "Votre nom ne sera pas affiché sur cette contribution ni sur les documents publiés. Seuls les modérateurs pourront voir qui l'a proposée. Les contributions anonymes ne comptent pas dans votre réputation."
+    "submitAnonymouslyHint": "Votre nom ne sera pas affiché sur cette contribution ni sur les documents publiés. Seuls les modérateurs pourront voir qui l'a proposée. Les contributions anonymes ne comptent pas dans votre réputation.",
+    "keepCurrent": "Inchangé"
   },
   "AutoTitle": {
     "draft": "Brouillon de contribution",
@@ -2407,7 +2408,13 @@
       "addImage": "Ajouter une image",
       "imageTooLarge": "Image trop volumineuse, même après compression. Essayez une image plus petite.",
       "imageError": "Impossible d'ajouter l'image.",
-      "imageTooMany": "Maximum {max} images par QCM."
+      "imageTooMany": "Maximum {max} images par QCM.",
+      "titleRequired": "Veuillez saisir un titre",
+      "questionRequired": "Le QCM doit contenir au moins une question",
+      "moodleImported": "Import Moodle réussi",
+      "moodleApplied": "Import Moodle appliqué",
+      "importFailed": "Erreur lors de l'import",
+      "defaultChapter": "Chapitre {number}"
     },
     "viewer": {
       "chapter": "Chapitre",
@@ -2425,6 +2432,23 @@
       "notes": "Notes",
       "noNotes": "Pas encore de notes",
       "addNote": "Ajouter une note..."
+    },
+    "draft": {
+      "createHeading": "Créer un QCM",
+      "editHeading": "Modifier le QCM",
+      "createTitle": "Création du QCM : {title}",
+      "editTitle": "Modification du QCM : {title}",
+      "diffSummary": "QCM modifié via l'éditeur",
+      "saved": "QCM enregistré dans le brouillon",
+      "saveFailed": "Erreur lors de l'enregistrement",
+      "submitFailed": "Erreur lors de la soumission",
+      "loadFailed": "Impossible de charger le QCM",
+      "notFound": "Ce brouillon de QCM est introuvable ou a expiré",
+      "preview": "Aperçu",
+      "edit": "Modifier",
+      "delete": "Supprimer",
+      "deleteTitle": "Supprimer le brouillon ?",
+      "deleteDescription": "Le brouillon « {title} » sera définitivement supprimé des modifications en attente."
     }
   },
   "Tutorials": {

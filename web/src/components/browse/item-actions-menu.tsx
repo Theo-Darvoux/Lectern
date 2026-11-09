@@ -59,7 +59,8 @@ import { toast } from "sonner";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
 import { apiFetch } from "@/lib/api-client";
-import { useStagingStore, unwrapOp, type Operation } from "@/lib/staging-store";
+import { useStagingStore, type EditDirectoryOp, type EditMaterialOp } from "@/lib/staging-store";
+import { applyStagedEdits } from "@/hooks/use-augmented-listing";
 import { useSelectionStore } from "@/lib/selection-store";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { useAuthStore, useBrowseRefreshStore, useUIStore } from "@/lib/stores";
@@ -175,35 +176,13 @@ function useItemActions(item: ItemData, itemPath?: string) {
   };
 
   const handleDraftDelete = () => {
-    // If this is already a staged creation, "deleting" it means just removing the creation op
-    if (item.staged === "created" && !item.isExternal) {
-      // Find index of the creation op for this temp id
-      const idx = getOperations().findIndex(o => {
-        const unwrapped = unwrapOp(o);
-        if (item.type === "directory") {
-          return unwrapped.op === "create_directory" && unwrapped.temp_id === item.id;
-        } else {
-          return unwrapped.op === "create_material" && unwrapped.temp_id === item.id;
-        }
-      });
-      if (idx !== -1) {
-        removeOperation(idx);
-        toast.success(t("creationCancelled"));
-      }
-    } else {
-      if (isMaterial) {
-        addOperation({
-          op: "delete_material",
-          material_id: item.id,
-        });
-      } else {
-        addOperation({
-          op: "delete_directory",
-          directory_id: item.id,
-        });
-      }
-      toast.success(t("addedDeletionToDraft"));
-    }
+    // On an item that only exists in the draft, this cancels its creation.
+    addOperation(
+      isMaterial
+        ? { op: "delete_material", material_id: item.id, target_title: title }
+        : { op: "delete_directory", directory_id: item.id, target_name: title },
+    );
+    toast.success(t(item.staged === "created" ? "creationCancelled" : "addedDeletionToDraft"));
     setDeleteDialogOpen(false);
   };
 
@@ -220,6 +199,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
         },
       ], undefined, undefined, tAuto);
       if (!result) return;
+      useStagingStore.getState().forgetItems([{ type: item.type, id: item.id }]);
       setDeleteDialogOpen(false);
     } catch {
       toast.error(t("failedToDeleteItem"));
@@ -243,12 +223,12 @@ function useItemActions(item: ItemData, itemPath?: string) {
   };
 
   const handleCancelMove = () => {
-    const idx = getOperations().findIndex((o) => {
-      const op = unwrapOp(o);
-      return op.op === "move_item" && op.target_type === item.type && op.target_id === item.id;
-    });
-    if (idx !== -1) {
-      removeOperation(idx);
+    const entry = getOperations().find(
+      ({ operation: op }) =>
+        op.op === "move_item" && op.target_type === item.type && op.target_id === item.id,
+    );
+    if (entry) {
+      removeOperation(entry.id);
       toast.success(t("moveCancelled"));
     }
   };
@@ -390,23 +370,15 @@ function useEditTargetData(item: ItemData, enabled: boolean) {
   if (!isThin) return { data: item.data, failed: false };
   if (!fetched) return { data: null, failed };
 
-  let data = fetched;
-  for (const staged of useStagingStore.getState().operations) {
-    const op: Operation = unwrapOp(staged);
-    const isEdit =
-      (op.op === "edit_material" && op.material_id === item.id) ||
-      (op.op === "edit_directory" && op.directory_id === item.id);
-    if (!isEdit) continue;
-    data = {
-      ...data,
-      ...(op.op === "edit_material" && op.title != null ? { title: op.title } : {}),
-      ...(op.op === "edit_directory" && op.name != null ? { name: op.name } : {}),
-      ...(op.description != null ? { description: op.description } : {}),
-      ...(op.tags != null ? { tags: op.tags } : {}),
-      ...(op.metadata != null ? { metadata: op.metadata } : {}),
-    };
-  }
-  return { data, failed: false };
+  const edits = useStagingStore
+    .getState()
+    .operations.map((entry) => entry.operation)
+    .filter(
+      (op): op is EditMaterialOp | EditDirectoryOp =>
+        (op.op === "edit_material" && op.material_id === item.id) ||
+        (op.op === "edit_directory" && op.directory_id === item.id),
+    );
+  return { data: applyStagedEdits(fetched, edits), failed: false };
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -710,7 +682,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
         </div>
       )}
 
-      {!guest && !actions.isLocalMove && (
+      {!guest && !actions.isLocalMove && item.staged !== "deleted" && !(isCreated && item.isExternal) && (
         <>
           <Separator />
           <Item

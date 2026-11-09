@@ -45,15 +45,17 @@ import Link from "next/link";
 import { toast } from "sonner";
 import {
     useStagingStore,
+    type Operation,
     type StagedOperation,
     isExpired,
     isExpiringSoon,
     msUntilExpiry,
     formatTimeRemaining,
     hasFileKey,
-    unwrapOp,
+    operationName,
 } from "@/lib/staging-store";
-import { autoTitle, submitDirectOperations, truncateDescription } from "@/lib/pr-client";
+import { autoTitle, describeOperationPaths, submitDirectOperations } from "@/lib/pr-client";
+import { fetchStagedQcm } from "@/lib/qcm-draft";
 import { StagedItemEditDialog } from "./staged-item-edit-dialog";
 import { useConfigStore } from "@/lib/stores";
 import { PreviewDialog } from "./preview-dialog";
@@ -63,8 +65,9 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { MIME_QCM } from "@/lib/file-utils";
 import { isExternalUrl } from "@/lib/url-utils";
+import { isStaff } from "@/lib/guest";
 
-const OP_ICONS: Record<string, React.ElementType> = {
+const OP_ICONS: Record<Operation["op"], React.ElementType> = {
     create_material: FilePlus,
     edit_material: FilePenLine,
     delete_material: FileX,
@@ -74,11 +77,7 @@ const OP_ICONS: Record<string, React.ElementType> = {
     move_item: ArrowRightLeft,
 };
 
-const PRIVILEGED_ROLES = new Set(["moderator", "bureau", "vieux"]);
-const LIMIT_REGULAR = 50;
-const LIMIT_PRIVILEGED = 500;
-
-const OP_COLORS: Record<string, string> = {
+const OP_COLORS: Record<Operation["op"], string> = {
     create_material: "text-green-600 dark:text-green-400",
     edit_material: "text-blue-600 dark:text-blue-400",
     delete_material: "text-red-500 dark:text-red-400",
@@ -88,45 +87,47 @@ const OP_COLORS: Record<string, string> = {
     move_item: "text-amber-600 dark:text-amber-400",
 };
 
+function qcmEditHref(op: Operation, entryId: string): string {
+    return op.op === "edit_material"
+        ? `/qcm/${op.material_id}/edit`
+        : `/qcm/new?draftId=${entryId}`;
+}
+
 function OperationCard({
     staged,
-    index,
+    disabled,
     onRemove,
     onEdit,
     onPreview,
-    tCommon,
 }: {
     staged: StagedOperation;
-    index: number;
-    onRemove: (i: number) => void;
-    onEdit: (i: number) => void;
-    onPreview: (i: number) => void;
-    tCommon: any;
+    disabled: boolean;
+    onRemove: (id: string) => void;
+    onEdit: (id: string) => void;
+    onPreview: (staged: StagedOperation) => void;
 }) {
     const t = useTranslations("Staging");
-    const op = unwrapOp(staged);
-    const Icon = OP_ICONS[op.op] ?? FilePlus;
-    const color = OP_COLORS[op.op] ?? "";
+    const tCommon = useTranslations("Common");
+    const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
+    const op = staged.operation;
+    const Icon = OP_ICONS[op.op];
+    const color = OP_COLORS[op.op];
 
     const expired = isExpired(staged);
     const expiringSoon = isExpiringSoon(staged);
     const remaining = msUntilExpiry(staged);
 
     const label = t(`labels.${op.op}`, {
-        name: (op as any).title || (op as any).name || (op as any).target_title || (op as any).target_name || "",
-        type: (op as any).target_type === "directory" ? t("labels.folder") : t("labels.material")
+        name: operationName(op),
+        type: op.op === "move_item" && op.target_type === "directory" ? t("labels.folder") : t("labels.material"),
     });
 
-    const isQcm = (op as any).file_mime_type === MIME_QCM;
-    const isLink = (op as any).type === "link" || !!(op as any).metadata?.url;
-    const linkUrl = (op as any).metadata?.url as string | undefined;
+    const materialOp = op.op === "create_material" || op.op === "edit_material" ? op : null;
+    const isQcm = materialOp?.file_mime_type === MIME_QCM;
+    const linkUrl = materialOp?.metadata?.url as string | undefined;
+    const isLink = materialOp?.type === "link" || !!linkUrl;
     const isInternalLink = isLink && !isExternalUrl(linkUrl);
-    const hasQcmDraft = isQcm && !!(op as any).metadata?.qcm_draft;
-    const qcmEditHref = isQcm && op.op === "edit_material"
-        ? `/qcm/${op.material_id}/edit?draftIndex=${index}`
-        : isQcm && op.op === "create_material"
-        ? `/qcm/new?${(op as any).directory_id ? `directoryId=${encodeURIComponent((op as any).directory_id)}&` : ""}draftIndex=${index}`
-        : null;
+    const canEditDetails = op.op !== "delete_material" && op.op !== "delete_directory" && op.op !== "move_item";
 
     return (
         <div className={`rounded-lg border transition-colors ${expired ? "border-red-300 bg-red-50/50 dark:border-red-800 dark:bg-red-950/20" : expiringSoon ? "border-amber-300 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20" : ""}`}>
@@ -167,20 +168,18 @@ function OperationCard({
                     )}
                 </div>
                 <div className="flex items-center shrink-0">
-                    {/* Preview: for QCMs use blob URL from metadata; for others use /upload/preview */}
-                    { !expired && hasFileKey(op) && (!isQcm || hasQcmDraft) && (
+                    {!expired && hasFileKey(op) && (
                         <Button
                             variant="ghost"
                             size="icon"
                             className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary"
-                            onClick={() => onPreview(index)}
+                            onClick={() => onPreview(staged)}
                             aria-label={t("preview")}
                         >
                             <Eye className="h-3.5 w-3.5" />
                         </Button>
                     )}
-                    {/* Edit: for QCM edit ops, link to QCM editor; otherwise open metadata dialog */}
-                    { qcmEditHref ? (
+                    {isQcm ? (
                         <Button
                             variant="ghost"
                             size="icon"
@@ -188,16 +187,17 @@ function OperationCard({
                             asChild
                             aria-label={tCommon("edit")}
                         >
-                            <Link href={qcmEditHref}>
+                            <Link href={qcmEditHref(op, staged.id)} onClick={() => setReviewOpen(false)}>
                                 <FilePenLine className="h-3.5 w-3.5" />
                             </Link>
                         </Button>
-                    ) : !isQcm && (op.op === "create_material" || op.op === "edit_material" || op.op === "create_directory" || op.op === "edit_directory") ? (
+                    ) : canEditDetails ? (
                         <Button
                             variant="ghost"
                             size="icon"
                             className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary"
-                            onClick={() => onEdit(index)}
+                            onClick={() => onEdit(staged.id)}
+                            disabled={disabled}
                             aria-label={tCommon("edit")}
                         >
                             <FilePenLine className="h-3.5 w-3.5" />
@@ -207,7 +207,8 @@ function OperationCard({
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                        onClick={() => onRemove(index)}
+                        onClick={() => onRemove(staged.id)}
+                        disabled={disabled}
                         aria-label={tCommon("remove")}
                     >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -220,187 +221,96 @@ function OperationCard({
 
 export function ReviewDrawer() {
     const t = useTranslations("Staging");
-    const tCommon = useTranslations("Common");
     const tAuto = useTranslations("AutoTitle");
-    const operations = useStagingStore((s) => s.operations) ?? [];
+    const operations = useStagingStore((s) => s.operations);
     const reviewOpen = useStagingStore((s) => s.reviewOpen);
     const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
     const removeOperation = useStagingStore((s) => s.removeOperation);
+    const removeOperations = useStagingStore((s) => s.removeOperations);
     const clearOperations = useStagingStore((s) => s.clearOperations);
     const purgeExpired = useStagingStore((s) => s.purgeExpired);
-    const [title, setTitle] = useState("");
-    const [description, setDescription] = useState("");
+
+    // Title and note follow the draft until the user writes their own.
+    const [manualTitle, setManualTitle] = useState<string | null>(null);
+    const [manualDescription, setManualDescription] = useState<string | null>(null);
+    const [autoDescription, setAutoDescription] = useState("");
     const [isAnonymous, setIsAnonymous] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
-    const [editingIndex, setEditingIndex] = useState<number | null>(null);
+    const [editingId, setEditingId] = useState<string | null>(null);
 
     // Preview state
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [previewMime, setPreviewMime] = useState<string | undefined>();
     const [previewName, setPreviewName] = useState<string | undefined>();
 
+    const ops = operations.map((entry) => entry.operation);
+    const title = manualTitle ?? (ops.length > 0 ? autoTitle(ops, tAuto) : "");
+    const description = manualDescription ?? autoDescription;
+
+    const resetForm = () => {
+        setManualTitle(null);
+        setManualDescription(null);
+        setAutoDescription("");
+        setIsAnonymous(false);
+    };
+
+    const isEmpty = operations.length === 0;
+    useEffect(() => {
+        if (isEmpty) resetForm();
+    }, [isEmpty]);
+
+    const wantsAutoDescription = reviewOpen && !isEmpty && manualDescription === null;
+    useEffect(() => {
+        if (!wantsAutoDescription) return;
+        let cancelled = false;
+        describeOperationPaths(
+            operations.map((entry) => entry.operation),
+            t("item"),
+        ).then((text) => {
+            if (!cancelled) setAutoDescription(text);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [wantsAutoDescription, operations, t]);
+
     const closePreview = () => {
         if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
         setPreviewUrl(null);
     };
 
-    const handlePreview = async (index: number) => {
-        const op = unwrapOp(operations[index]);
+    const handlePreview = async ({ operation: op }: StagedOperation) => {
         if (!hasFileKey(op) || !op.file_key) return;
-
-        // Prefer the drafted title over the raw file name for the preview header.
-        // If this is a content-only op (no title), look for a sibling metadata op
-        // for the same material that carries the new title.
-        const siblingTitle = !(op as any).title && op.op === "edit_material"
-            ? operations.map(unwrapOp).find(
-                (o) => o.op === "edit_material" && o.material_id === op.material_id && !(o as any).file_key
-              ) as any
-            : null;
-        const displayName = (op as any).title || siblingTitle?.title || op.file_name || undefined;
-        const isQcm = (op as any).file_mime_type === MIME_QCM;
-
-        if (isQcm) {
-            const qcmDraft = (op as any).metadata?.qcm_draft;
-            if (qcmDraft) {
-                const blob = new Blob([JSON.stringify(qcmDraft)], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                setPreviewUrl(url);
-                setPreviewName(displayName);
-                setPreviewMime(MIME_QCM);
-            }
-            return;
-        }
+        const name = operationName(op) || op.file_name || undefined;
 
         try {
-            const res = await apiFetch<{ url: string }>(`/upload/preview?file_key=${encodeURIComponent(op.file_key)}`);
-            if (res && res.url) {
-                setPreviewUrl(res.url);
-                setPreviewName(displayName);
-                setPreviewMime(op.file_mime_type || undefined);
+            let url: string;
+            if (op.file_mime_type === MIME_QCM) {
+                const qcm = await fetchStagedQcm(op.file_key);
+                url = URL.createObjectURL(new Blob([JSON.stringify(qcm)], { type: "application/json" }));
+            } else {
+                const res = await apiFetch<{ url: string }>(`/upload/preview?file_key=${encodeURIComponent(op.file_key)}`);
+                url = res.url;
             }
+            setPreviewUrl(url);
+            setPreviewName(name);
+            setPreviewMime(op.file_mime_type || undefined);
         } catch (e) {
             toast.error((e as Error).message || t("unableToPreview"));
         }
     };
 
-    // Auto-fill title & description
-    useEffect(() => {
-        if (operations.length === 0) return;
-        
-        const ops = operations.map(unwrapOp);
-        
-        // Auto-title if empty
-        if (title === "") {
-            setTitle(autoTitle(ops, tAuto));
-        }
-
-        // Auto-description with path if empty
-        if (description === "") {
-            let cancelled = false;
-
-            async function resolveAllPaths() {
-                const materialIdsToFetch: string[] = [];
-                const directoryIdsToFetch: string[] = [];
-                
-                for (const op of ops) {
-                    if (op.op === "edit_material" || op.op === "delete_material") {
-                        if (!op.material_id.startsWith("$")) {
-                            materialIdsToFetch.push(op.material_id);
-                        }
-                    } else if (op.op === "move_item") {
-                        if (op.new_parent_id && !op.new_parent_id.startsWith("$")) {
-                            directoryIdsToFetch.push(op.new_parent_id);
-                        }
-                    } else if (op.op === "create_material") {
-                        if (op.directory_id && !op.directory_id.startsWith("$")) {
-                            directoryIdsToFetch.push(op.directory_id);
-                        }
-                    } else if (op.op === "create_directory") {
-                        if (op.parent_id && !op.parent_id.startsWith("$")) {
-                            directoryIdsToFetch.push(op.parent_id);
-                        }
-                    }
-                }
-
-                let resolvedMats: Record<string, { directory_id: string | null; title: string }> = {};
-                let resolvedDirs: Record<string, { id: string; name: string; slug: string }[]> = {};
-
-                if (materialIdsToFetch.length > 0 || directoryIdsToFetch.length > 0) {
-                    try {
-                        const payload = {
-                            material_ids: Array.from(new Set(materialIdsToFetch)),
-                            directory_ids: Array.from(new Set(directoryIdsToFetch))
-                        };
-                        const res = await apiFetch<{
-                            materials: Record<string, { directory_id: string | null; title: string }>;
-                            directories: Record<string, { id: string; name: string; slug: string }[]>;
-                        }>("/directories/resolve-paths", {
-                            method: "POST",
-                            body: JSON.stringify(payload)
-                        });
-                        resolvedMats = res.materials || {};
-                        resolvedDirs = res.directories || {};
-                    } catch {
-                        // ignore
-                    }
-                }
-
-                const paths: string[] = [];
-                
-                for (const op of ops) {
-                    let dirId: string | null = null;
-                    let itemName: string | null = null;
-
-                    if (op.op === "edit_material" || op.op === "delete_material") {
-                        const mat = resolvedMats[op.material_id];
-                        if (mat) {
-                            dirId = mat.directory_id;
-                            itemName = mat.title;
-                        }
-                    } else if (op.op === "move_item") {
-                        dirId = op.new_parent_id;
-                        itemName = op.target_title || op.target_name || t("item");
-                    } else if (op.op === "create_material") {
-                        dirId = op.directory_id;
-                        itemName = op.title;
-                    } else if (op.op === "create_directory") {
-                        dirId = op.parent_id ?? null;
-                        itemName = op.name;
-                    }
-
-                    if (dirId && !dirId.startsWith("$")) {
-                        const path = resolvedDirs[dirId];
-                        if (path && path.length > 0) {
-                            const pathStr = path.map(p => p.name).join(" › ") + " › " + (itemName || "");
-                            paths.push(pathStr);
-                        } else if (itemName) {
-                            paths.push(itemName);
-                        }
-                    } else if (itemName) {
-                        paths.push(itemName);
-                    }
-                }
-
-                if (!cancelled && paths.length > 0) {
-                    setDescription(truncateDescription(paths.join("\n")));
-                }
-            }
-
-            resolveAllPaths();
-            return () => { cancelled = true; };
-        }
-
-    }, [operations, tAuto]);
-
     const { user } = useAuth();
-    const maxDescriptionLength = useConfigStore((s) => s.config?.max_contribution_note_length ?? 10000);
-    const isPrivileged = PRIVILEGED_ROLES.has(user?.role ?? "");
-    const maxOps = isPrivileged ? LIMIT_PRIVILEGED : LIMIT_REGULAR;
+    const config = useConfigStore((s) => s.config);
+    const maxDescriptionLength = config?.max_contribution_note_length ?? 10000;
+    const maxOps = isStaff(user)
+        ? (config?.max_contribution_ops_staff ?? 500)
+        : (config?.max_contribution_ops_student ?? 50);
     const overLimit = operations.length > maxOps;
 
-    const expiredCount = operations.filter((s) => isExpired(s)).length;
-    const expiringSoonCount = operations.filter((s) => isExpiringSoon(s)).length;
+    const expiredCount = operations.filter(isExpired).length;
+    const expiringSoonCount = operations.filter(isExpiringSoon).length;
     const hasExpired = expiredCount > 0;
 
     const canSubmit =
@@ -409,28 +319,27 @@ export function ReviewDrawer() {
     const handleSubmit = async () => {
         if (!canSubmit) return;
         setSubmitting(true);
+        const submitted = operations;
         const result = await submitDirectOperations(
-            operations.map(unwrapOp),
+            submitted.map((entry) => entry.operation),
             title,
             description,
             tAuto,
-            isAnonymous
+            isAnonymous,
         );
         setSubmitting(false);
 
         if (result) {
-            clearOperations();
-            setTitle("");
-            setDescription("");
-            setIsAnonymous(false);
+            // Only what was sent: another tab may have added to the draft meanwhile.
+            removeOperations(submitted.map((entry) => entry.id));
+            resetForm();
             setReviewOpen(false);
         }
     };
 
     const handleClear = () => {
         clearOperations();
-        setTitle("");
-        setDescription("");
+        resetForm();
         setShowDiscardConfirm(false);
         setReviewOpen(false);
         toast(t("draftDiscarded"));
@@ -446,7 +355,7 @@ export function ReviewDrawer() {
                     onClose={closePreview}
                 />
             )}
-            <StagedItemEditDialog index={editingIndex} onClose={() => setEditingIndex(null)} />
+            <StagedItemEditDialog key={editingId} stagedId={editingId} onClose={() => setEditingId(null)} />
             <Sheet open={reviewOpen} onOpenChange={setReviewOpen}>
                 <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
                     <SheetHeader className="shrink-0 space-y-1 border-b px-5 py-4 pr-12 text-left">
@@ -519,31 +428,16 @@ export function ReviewDrawer() {
                             {t("changes")}
                         </h3>
                         <div className="space-y-2">
-                            {operations.map((staged, i) => {
-                                const op = unwrapOp(staged);
-                                // Batch-created items share stagedAt and often the same
-                                // parent directory. Prefer the generated temp_id so each
-                                // staged create keeps a distinct React identity.
-                                const targetId =
-                                    (op as any).material_id ??
-                                    (op as any).target_id ??
-                                    (op as any).temp_id ??
-                                    (op as any).file_key ??
-                                    (op as any).directory_id ??
-                                    i;
-                                const stableKey = `${staged.stagedAt ?? i}-${op.op}-${targetId}`;
-                                return (
-                                    <OperationCard
-                                        key={stableKey}
-                                        staged={staged}
-                                        index={i}
-                                        onRemove={removeOperation}
-                                        onEdit={setEditingIndex}
-                                        onPreview={handlePreview}
-                                        tCommon={tCommon}
-                                    />
-                                );
-                            })}
+                            {operations.map((staged) => (
+                                <OperationCard
+                                    key={staged.id}
+                                    staged={staged}
+                                    disabled={submitting}
+                                    onRemove={removeOperation}
+                                    onEdit={setEditingId}
+                                    onPreview={handlePreview}
+                                />
+                            ))}
                             {operations.length === 0 && (
                                 <p className="py-8 text-center text-sm text-muted-foreground">
                                     {t("noPendingChanges")}
@@ -567,7 +461,7 @@ export function ReviewDrawer() {
                                 id="pr-title"
                                 placeholder={t("contributionTitlePlaceholder")}
                                 value={title}
-                                onChange={(e) => setTitle(e.target.value)}
+                                onChange={(e) => setManualTitle(e.target.value)}
                                 maxLength={300}
                             />
                         </div>
@@ -593,7 +487,7 @@ export function ReviewDrawer() {
                                 id="pr-desc"
                                 placeholder={t("moderatorNotePlaceholder")}
                                 value={description}
-                                onChange={(e) => setDescription(e.target.value)}
+                                onChange={(e) => setManualDescription(e.target.value)}
                                 maxLength={maxDescriptionLength}
                                 rows={4}
                             />

@@ -221,6 +221,8 @@ async def get_auth_methods(
         "data_transfers": settings.data_transfers,
         "legal_version": settings.legal_version,
         "max_contribution_note_length": MAX_PR_DESCRIPTION_LENGTH,
+        "max_contribution_ops_student": settings.pr_max_ops_student,
+        "max_contribution_ops_staff": settings.pr_max_ops_staff,
     }
 
 

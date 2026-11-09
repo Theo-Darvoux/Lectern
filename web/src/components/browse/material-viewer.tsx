@@ -30,14 +30,16 @@ import {
   getFileBadgeLabel,
   getViewerType,
   isThumbnailEligible,
+  MIME_QCM,
 } from "@/lib/file-utils";
 import { useUIStore, useAuthStore, useBrowseRefreshStore } from "@/lib/stores";
 import { isGuest, isStaff } from "@/lib/guest";
 import { apiFetch } from "@/lib/api-client";
-import { useStagingStore, unwrapOp } from "@/lib/staging-store";
+import { hasFileKey, useStagingStore } from "@/lib/staging-store";
+import { applyStagedEdits } from "@/hooks/use-augmented-listing";
+import { useStagedQcm } from "@/hooks/use-staged-qcm";
 import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
 import { toast } from "sonner";
-import type { QCMFile } from "@/lib/qcm-types";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -259,27 +261,23 @@ export function MaterialViewer({
   // the drafted version rather than the live one.
   const stagingOps = useStagingStore((s) => s.operations);
   const stagedEdit = useMemo(() => {
-    const op = stagingOps.map(unwrapOp).find(
-      (o) => o.op === "edit_material" && o.material_id === materialId,
-    );
+    const op = stagingOps
+      .map((entry) => entry.operation)
+      .find((o) => o.op === "edit_material" && o.material_id === materialId);
     return op?.op === "edit_material" ? op : null;
   }, [stagingOps, materialId]);
 
-  const displayMaterial = useMemo(() => {
-    if (!stagedEdit) return material;
-    return {
-      ...material,
-      ...(stagedEdit.title != null ? { title: stagedEdit.title } : {}),
-      ...(stagedEdit.description != null ? { description: stagedEdit.description } : {}),
-      ...(stagedEdit.tags != null ? { tags: stagedEdit.tags } : {}),
-    };
-  }, [material, stagedEdit]);
+  const displayMaterial = useMemo(
+    () => applyStagedEdits(material, stagedEdit ? [stagedEdit] : undefined),
+    [material, stagedEdit],
+  );
 
-  // For QCM: pass the staged draft data directly to QCMViewer to bypass fetch.
-  const stagedQcmDraft = useMemo(() => {
-    if (!stagedEdit) return null;
-    return (stagedEdit.metadata as Record<string, unknown> | undefined)?.qcm_draft ?? null;
-  }, [stagedEdit]);
+  // For QCM: show the version saved to the draft instead of the live file.
+  const stagedQcm = useStagedQcm(
+    stagedEdit && hasFileKey(stagedEdit) && stagedEdit.file_mime_type === MIME_QCM
+      ? stagedEdit.file_key
+      : null,
+  );
 
   const title = String(displayMaterial.title ?? "");
   const directoryId = String(material.directory_id ?? "");
@@ -488,6 +486,11 @@ export function MaterialViewer({
                     id: materialId,
                     type: "material",
                     data: displayMaterial,
+                    staged: stagingOps.some(
+                      ({ operation: o }) => o.op === "delete_material" && o.material_id === materialId,
+                    )
+                      ? "deleted"
+                      : undefined,
                   } as ItemData}
                   itemPath={pathname}
                 >
@@ -714,12 +717,16 @@ export function MaterialViewer({
               <DjvuViewer fileKey={fileKey} materialId={materialId} />
             )}
             {viewerType === "qcm" && (
-              <QCMViewer
-                fileKey={fileKey}
-                materialId={materialId}
-                initialData={stagedQcmDraft as QCMFile ?? undefined}
-                targetAnnotationId={targetAnnotationId}
-              />
+              stagedQcm.isLoading ? (
+                <Skeleton className="h-full w-full" />
+              ) : (
+                <QCMViewer
+                  fileKey={fileKey}
+                  materialId={materialId}
+                  initialData={stagedQcm.qcm ?? undefined}
+                  targetAnnotationId={targetAnnotationId}
+                />
+              )
             )}
             {viewerType === "link" && (
               <LinkViewer material={displayMaterial} />
@@ -743,7 +750,7 @@ export function MaterialViewer({
         <SharedSidebar />
         {isMobile && (
           <ViewerFab
-            material={material}
+            material={displayMaterial}
             materialId={materialId}
             materialTitle={title}
             directoryId={directoryId}

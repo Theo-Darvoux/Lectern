@@ -17,7 +17,7 @@ const base: QueueItem = {
 async function reloadWith(items: QueueItem[]) {
   sessionStorage.setItem(
     "lectern_upload_queue",
-    JSON.stringify({ state: { items, dirTempIds: { k: "dir-1" }, stagedDirKeys: [] }, version: 0 }),
+    JSON.stringify({ state: { items, dirTempIds: { k: "dir-1" } }, version: 0 }),
   );
   await useUploadQueue.persist.rehydrate();
   return useUploadQueue.getState();

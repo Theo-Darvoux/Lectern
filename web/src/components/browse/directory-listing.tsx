@@ -58,7 +58,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
-import { useStagingStore, unwrapOp } from "@/lib/staging-store";
+import { useStagingStore } from "@/lib/staging-store";
+import { MIME_QCM } from "@/lib/file-utils";
 import { useDropZoneStore } from "@/lib/drop-zone-store";
 import { useSelectionStore } from "@/lib/selection-store";
 import type { Operation } from "@/lib/staging-store";
@@ -66,7 +67,6 @@ import type { SelectedItem } from "@/lib/selection-store";
 import { useTranslations } from "next-intl";
 import {
   useAugmentedListing,
-  stagedStatus,
   indexStagedOps,
   applyStagedEdits,
   type NavItem,
@@ -215,13 +215,36 @@ export function DirectoryListing({
       }
     } else if (
       op.op === "create_material" &&
-      op.metadata?.qcm_draft &&
-      op._storeIndex !== undefined
+      op.file_mime_type === MIME_QCM &&
+      op._stagedId !== undefined
     ) {
-      router.push(`/qcm/preview?draftIndex=${op._storeIndex}`);
+      router.push(`/qcm/preview?draftId=${op._stagedId}`);
     } else {
       setReviewOpen(true);
     }
+  };
+
+  const openGhostDir = async (op: (typeof ghostDirs)[number], tempId: string, name: string) => {
+    if (op.op === "move_item" && !tempId.startsWith("$")) {
+      // A real folder awaiting a move: its contents are still at its current path.
+      try {
+        const { directories } = await apiFetch<{
+          directories: Record<string, { slug: string }[]>;
+        }>("/directories/resolve-paths", {
+          method: "POST",
+          body: JSON.stringify({ material_ids: [], directory_ids: [tempId] }),
+        });
+        const path = directories[tempId];
+        if (path?.length) {
+          const query = previewPrId ? `?preview_pr=${previewPrId}` : "";
+          navigateBrowse(`/browse/${path.map((p) => p.slug).join("/")}${query}`);
+          return;
+        }
+      } catch {
+        // Fall through to the draft view of the folder.
+      }
+    }
+    enterGhostDir(tempId, name);
   };
 
   const addOperations = useStagingStore((s) => s.addOperations);
@@ -436,25 +459,18 @@ export function DirectoryListing({
         if (item.type === "dir") {
           navigateBrowse(buildItemPath(String(item.dir.slug ?? "")));
         } else if (item.type === "ghost-dir") {
-          enterGhostDir(item.tempId, item.name);
+          void openGhostDir(item.op, item.tempId, item.name);
         } else if (item.type === "mat") {
           navigateBrowse(buildItemPath(String(item.mat.slug ?? "")));
         } else if (item.type === "ghost-mat") {
-          const op = item.op;
-          if (op.isExternal && previewPrId && op._previewIdx !== undefined) {
-            router.push(
-              `/pull-requests/${previewPrId}/preview/${op._previewIdx}`,
-            );
-          } else {
-            setReviewOpen(true);
-          }
+          openGhostMaterial(item.op);
         }
       }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-     
-  }, [flatItems, selectMode, router, pathBase, previewPrId, enterGhostDir, setReviewOpen, buildItemPath, setFocusedIndex]);
+
+  }, [flatItems, selectMode, router, pathBase, previewPrId, enterGhostDir, setReviewOpen, buildItemPath, setFocusedIndex, openGhostDir, openGhostMaterial]);
 
   const selectedCount = selected.size;
   const allSelected =
@@ -465,17 +481,23 @@ export function DirectoryListing({
   const [batchPasteOps, setBatchPasteOps] = useState<Operation[] | null>(null);
   const [submittingBatch, setSubmittingBatch] = useState(false);
 
+  const localStaged = useMemo(
+    () => indexStagedOps(operations.map((entry) => entry.operation)),
+    [operations],
+  );
+  const isStagedForDeletion = (item: SelectedItem) =>
+    (item.type === "directory" ? localStaged.dirs : localStaged.mats).get(item.id)?.staged === "deleted";
+
   const handleBatchDelete = () => {
     const ops: Operation[] = [];
     for (const item of selected.values()) {
-      const existing = stagedStatus(operations, item.id, item.type);
-      if (existing === "deleted") {
+      if (isStagedForDeletion(item)) {
         continue;
       }
       if (item.type === "directory") {
-        ops.push({ op: "delete_directory", directory_id: item.id });
+        ops.push({ op: "delete_directory", directory_id: item.id, target_name: item.name });
       } else {
-        ops.push({ op: "delete_material", material_id: item.id });
+        ops.push({ op: "delete_material", material_id: item.id, target_title: item.name });
       }
     }
     if (ops.length === 0) {
@@ -487,14 +509,7 @@ export function DirectoryListing({
   };
 
   const handleCut = () => {
-    let hasConflict = false;
-    for (const item of selected.values()) {
-      if (stagedStatus(operations, item.id, item.type) === "deleted") {
-        hasConflict = true;
-        break;
-      }
-    }
-    if (hasConflict) {
+    if ([...selected.values()].some(isStagedForDeletion)) {
       toast.error(t("someSelectedAlreadyStagedForDeletion"));
       return;
     }
@@ -511,17 +526,14 @@ export function DirectoryListing({
     ...ghostDirStack.map((g) => g.tempId),
   ]);
 
-  const localMoveIndex = (id: string) =>
-    useStagingStore.getState().operations.findIndex((s) => {
-      const o = unwrapOp(s);
-      return o.op === "move_item" && o.target_id === id;
-    });
+  const localMove = (id: string) =>
+    useStagingStore.getState().operations.find(
+      ({ operation }) => operation.op === "move_item" && operation.target_id === id,
+    );
 
   const removeLocalMoves = (ids: string[]) => {
-    for (const id of ids) {
-      const idx = localMoveIndex(id);
-      if (idx !== -1) useStagingStore.getState().removeOperation(idx);
-    }
+    const entries = ids.flatMap((id) => localMove(id)?.id ?? []);
+    useStagingStore.getState().removeOperations(entries);
   };
 
   // Split the clipboard for the current folder: items to move here, items
@@ -535,7 +547,7 @@ export function DirectoryListing({
       if (item.type === "directory" && ancestorIds.has(item.id)) {
         intoItself = true;
       } else if (item.parentId === targetParent) {
-        if (localMoveIndex(item.id) !== -1) reverts.push(item);
+        if (localMove(item.id)) reverts.push(item);
       } else {
         movable.push(item);
       }
@@ -586,20 +598,90 @@ export function DirectoryListing({
     setBatchPasteOps(ops);
   };
 
-  /** Stage moves, replacing any earlier pending move of the same item. */
-  const stageMoves = (ops: Operation[]) => {
-    const { updateOperation, addOperation } = useStagingStore.getState();
-    for (const op of ops) {
-      if (op.op !== "move_item") continue;
-      const idx = localMoveIndex(op.target_id);
-      if (idx !== -1) updateOperation(idx, op);
-      else addOperation(op);
-    }
-  };
-
   const canDirectMove =
     !dirId?.startsWith("$") &&
     !!batchPasteOps?.every((op) => op.op !== "move_item" || !op.target_id.startsWith("$"));
+
+  // A draft-only item has nothing to delete on the server yet.
+  const canDirectDelete = ![...selected.keys()].some((id) => id.startsWith("$"));
+
+  const DirectoryRow = viewMode === "list" ? DirectoryLineItem : DirectoryGridCard;
+  const MaterialRow = viewMode === "list" ? MaterialLineItem : MaterialGridCard;
+  const rowProps = (id: string | undefined, navIndex: number) => ({
+    isCut: !!id && clipboardIds.has(id),
+    selectMode,
+    selected: selected.has(id ?? ""),
+    onToggleSelect: handleToggleItem,
+    navIndex,
+    focused: focusedIndex === navIndex,
+    pathBase,
+    isMobile,
+  });
+
+  const ghostDirOffset = sortedDirs.length;
+  const matOffset = ghostDirOffset + ghostDirs.length;
+  const ghostMatOffset = matOffset + sortedMats.length;
+  const rows = [
+    ...sortedDirs.map((dir, i) => {
+      const id = String(dir.id);
+      const row = dirRow(dir);
+      return (
+        <DirectoryRow
+          key={id}
+          directory={row.data}
+          staged={row.staged}
+          previewPrId={previewPrId}
+          {...rowProps(id, i)}
+        />
+      );
+    }),
+    ...ghostDirs.map((op, i) => {
+      const row = ghostDirRow(op, i);
+      return (
+        <DirectoryRow
+          key={`ghost-dir-${row.tempId}`}
+          directory={row.data}
+          staged={row.staged}
+          isExternal={op.isExternal}
+          onNavigate={() => void openGhostDir(op, row.tempId, row.name)}
+          {...rowProps(row.tempId, ghostDirOffset + i)}
+        />
+      );
+    }),
+    ...sortedMats.map((mat, i) => {
+      const id = String(mat.id);
+      const row = matRow(mat);
+      return (
+        <MaterialRow
+          key={id}
+          material={row.data}
+          staged={row.staged}
+          previewOpIndex={row.previewOpIndex}
+          previewPrId={previewPrId}
+          onAddAttachment={handleAddAttachment}
+          {...rowProps(id, matOffset + i)}
+        />
+      );
+    }),
+    ...ghostMaterials.map((op, i) => {
+      const row = ghostMatRow(op, i);
+      return (
+        <MaterialRow
+          key={`ghost-mat-${row.tempId ?? i}`}
+          material={row.data}
+          staged={row.staged}
+          isExternal={op.isExternal}
+          previewOpIndex={op._previewIdx}
+          ghostFileKey={row.ghostFileKey}
+          ghostFileMimeType={row.ghostFileMimeType}
+          onNavigate={() => openGhostMaterial(op)}
+          onAddAttachment={handleAddAttachment}
+          draftAttachmentCount={row.draftAttachmentCount}
+          {...rowProps(row.tempId, ghostMatOffset + i)}
+        />
+      );
+    }),
+  ];
 
   return (
     <div className="space-y-4">
@@ -915,194 +997,11 @@ export function DirectoryListing({
         !isEmpty && (
           viewMode === "list" ? (
             <VirtualizedDirectoryList focusedIndex={focusedIndex} className={`rounded-lg border ${selectMode ? "select-none" : ""}`}>
-              {sortedDirs.map((dir, i) => {
-                const id = String(dir.id);
-                const row = dirRow(dir);
-                return (
-                  <DirectoryLineItem
-                    key={id}
-                    directory={row.data}
-                    staged={row.staged}
-                    isCut={clipboardIds.has(id)}
-                    selectMode={selectMode}
-                    selected={selected.has(id)}
-                    onToggleSelect={handleToggleItem}
-                    previewPrId={previewPrId}
-                    navIndex={i}
-                    focused={focusedIndex === i}
-                    pathBase={pathBase}
-                    isMobile={isMobile}
-                  />
-                );
-              })}
-
-              {ghostDirs.map((op, i) => {
-                const row = ghostDirRow(op, i);
-                const ghostDirNavIndex = sortedDirs.length + i;
-                return (
-                  <DirectoryLineItem
-                    key={`ghost-dir-${row.tempId}`}
-                    directory={row.data}
-                    staged={row.staged}
-                    isExternal={op.isExternal}
-                    isCut={clipboardIds.has(row.tempId)}
-                    selectMode={selectMode}
-                    selected={selected.has(row.tempId)}
-                    onToggleSelect={handleToggleItem}
-                    navIndex={ghostDirNavIndex}
-                    focused={focusedIndex === ghostDirNavIndex}
-                    onNavigate={() => enterGhostDir(row.tempId, row.name)}
-                    pathBase={pathBase}
-                    isMobile={isMobile}
-                  />
-                );
-              })}
-
-              {sortedMats.map((mat, i) => {
-                const id = String(mat.id);
-                const row = matRow(mat);
-                const matNavIndex = sortedDirs.length + ghostDirs.length + i;
-                return (
-                  <MaterialLineItem
-                    key={id}
-                    material={row.data}
-                    staged={row.staged}
-                    previewOpIndex={row.previewOpIndex}
-                    isCut={clipboardIds.has(id)}
-                    selectMode={selectMode}
-                    selected={selected.has(id)}
-                    onToggleSelect={handleToggleItem}
-                    previewPrId={previewPrId}
-                    navIndex={matNavIndex}
-                    focused={focusedIndex === matNavIndex}
-                    onAddAttachment={handleAddAttachment}
-                    pathBase={pathBase}
-                    isMobile={isMobile}
-                  />
-                );
-              })}
-
-              {ghostMaterials.map((op, i) => {
-                const row = ghostMatRow(op, i);
-                const ghostMatNavIndex =
-                  sortedDirs.length + ghostDirs.length + sortedMats.length + i;
-                return (
-                  <MaterialLineItem
-                    key={`ghost-mat-${row.tempId ?? i}`}
-                    material={row.data}
-                    staged={row.staged}
-                    isExternal={op.isExternal}
-                    isCut={!!row.tempId && clipboardIds.has(row.tempId)}
-                    selectMode={selectMode}
-                    selected={selected.has(row.tempId || "")}
-                    onToggleSelect={handleToggleItem}
-                    navIndex={ghostMatNavIndex}
-                    focused={focusedIndex === ghostMatNavIndex}
-                    previewOpIndex={op._previewIdx}
-                    ghostFileKey={row.ghostFileKey}
-                    ghostFileMimeType={row.ghostFileMimeType}
-                    onNavigate={() => openGhostMaterial(op)}
-                    onAddAttachment={handleAddAttachment}
-                    draftAttachmentCount={row.draftAttachmentCount}
-                    pathBase={pathBase}
-                    isMobile={isMobile}
-                  />
-                );
-              })}
+              {rows}
             </VirtualizedDirectoryList>
           ) : (
-            /* ── Grid view ──────────────────────────────────────────────────── */
             <VirtualizedDirectoryGrid focusedIndex={focusedIndex} className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 ${selectMode ? "select-none" : ""}`}>
-              {sortedDirs.map((dir, i) => {
-                const id = String(dir.id);
-                const row = dirRow(dir);
-                return (
-                  <DirectoryGridCard
-                    key={id}
-                    directory={row.data}
-                    staged={row.staged}
-                    isCut={clipboardIds.has(id)}
-                    selectMode={selectMode}
-                    selected={selected.has(id)}
-                    onToggleSelect={handleToggleItem}
-                    previewPrId={previewPrId}
-                    navIndex={i}
-                    focused={focusedIndex === i}
-                    pathBase={pathBase}
-                  />
-                );
-              })}
-
-              {ghostDirs.map((op, i) => {
-                const row = ghostDirRow(op, i);
-                const ghostDirNavIndex = sortedDirs.length + i;
-                return (
-                  <DirectoryGridCard
-                    key={`ghost-dir-${row.tempId}`}
-                    directory={row.data}
-                    staged={row.staged}
-                    isExternal={op.isExternal}
-                    isCut={clipboardIds.has(row.tempId)}
-                    selectMode={selectMode}
-                    selected={selected.has(row.tempId)}
-                    onToggleSelect={handleToggleItem}
-                    navIndex={ghostDirNavIndex}
-                    focused={focusedIndex === ghostDirNavIndex}
-                    onNavigate={() => enterGhostDir(row.tempId, row.name)}
-                    pathBase={pathBase}
-                  />
-                );
-              })}
-
-              {sortedMats.map((mat, i) => {
-                const id = String(mat.id);
-                const row = matRow(mat);
-                const matNavIndex = sortedDirs.length + ghostDirs.length + i;
-                return (
-                  <MaterialGridCard
-                    key={id}
-                    material={row.data}
-                    staged={row.staged}
-                    previewOpIndex={row.previewOpIndex}
-                    isCut={clipboardIds.has(id)}
-                    selectMode={selectMode}
-                    selected={selected.has(id)}
-                    onToggleSelect={handleToggleItem}
-                    previewPrId={previewPrId}
-                    navIndex={matNavIndex}
-                    focused={focusedIndex === matNavIndex}
-                    onAddAttachment={handleAddAttachment}
-                    pathBase={pathBase}
-                  />
-                );
-              })}
-
-              {ghostMaterials.map((op, i) => {
-                const row = ghostMatRow(op, i);
-                const ghostMatNavIndex =
-                  sortedDirs.length + ghostDirs.length + sortedMats.length + i;
-                return (
-                  <MaterialGridCard
-                    key={`ghost-mat-${row.tempId ?? i}`}
-                    material={row.data}
-                    staged={row.staged}
-                    isExternal={op.isExternal}
-                    isCut={!!row.tempId && clipboardIds.has(row.tempId)}
-                    selectMode={selectMode}
-                    selected={selected.has(row.tempId || "")}
-                    onToggleSelect={handleToggleItem}
-                    navIndex={ghostMatNavIndex}
-                    focused={focusedIndex === ghostMatNavIndex}
-                    previewOpIndex={op._previewIdx}
-                    ghostFileKey={row.ghostFileKey}
-                    ghostFileMimeType={row.ghostFileMimeType}
-                    onNavigate={() => openGhostMaterial(op)}
-                    onAddAttachment={handleAddAttachment}
-                    draftAttachmentCount={row.draftAttachmentCount}
-                    pathBase={pathBase}
-                  />
-                );
-              })}
+              {rows}
             </VirtualizedDirectoryGrid>
           )
         )
@@ -1182,13 +1081,14 @@ export function DirectoryListing({
             </Button>
             <Button
               variant="destructive"
-              disabled={submittingBatch}
+              disabled={submittingBatch || !canDirectDelete}
               onClick={async () => {
                 if (batchDeleteOps) {
                   setSubmittingBatch(true);
                   const result = await submitDirectOperations(batchDeleteOps, undefined, undefined, tAutoTitle);
                   setSubmittingBatch(false);
                   if (!result) return;
+                  useStagingStore.getState().forgetItems([...selected.values()]);
                   setBatchDeleteOps(null);
                   setSelectMode(false);
                 }
@@ -1251,7 +1151,7 @@ export function DirectoryListing({
               disabled={submittingBatch}
               onClick={() => {
                 if (batchPasteOps) {
-                  stageMoves(batchPasteOps);
+                  addOperations(batchPasteOps);
                   toast.success(t("itemsAddedToDraft", { count: batchPasteOps.length }));
                   setBatchPasteOps(null);
                   clearClipboard();

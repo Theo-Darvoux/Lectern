@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { TagInput } from "@/components/ui/tag-input";
-import { useStagingStore, unwrapOp } from "@/lib/staging-store";
+import { useStagingStore } from "@/lib/staging-store";
 import { sanitizeNameInput } from "@/lib/utils";
 import { formatFileSize, MIME_QCM } from "@/lib/file-utils";
 import { uploadFile, logicalFileSize } from "@/lib/upload-client";
@@ -25,9 +25,23 @@ import { normalizeTargetUrl } from "@/lib/url-utils";
 import { localizeUploadError } from "@/lib/upload-errors";
 
 interface StagedItemEditDialogProps {
-    /** The index in the staging operations array, or null if closed */
-    index: number | null;
+    /** The draft entry being edited, or null if closed. Remount per entry via `key`. */
+    stagedId: string | null;
     onClose: () => void;
+}
+
+const NAME_MAX = 128;
+const DESCRIPTION_MAX = 1000;
+
+function initialName(op: Operation | null): string {
+    if (op?.op === "create_material" || op?.op === "edit_material") return op.title ?? "";
+    if (op?.op === "create_directory" || op?.op === "edit_directory") return op.name ?? "";
+    return "";
+}
+
+function initialUrl(op: Operation | null): string {
+    if (op?.op !== "create_material" && op?.op !== "edit_material") return "";
+    return String(op.metadata?.url ?? op.metadata?.link ?? "");
 }
 
 interface ReplacedFile {
@@ -37,19 +51,20 @@ interface ReplacedFile {
     fileMimeType: string;
 }
 
-export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogProps) {
+export function StagedItemEditDialog({ stagedId, onClose }: StagedItemEditDialogProps) {
     const t = useTranslations("Staging");
     const tWizard = useTranslations("PRWizard");
     const tUpload = useTranslations("Upload");
     const tCommon = useTranslations("Common");
     const tLink = useTranslations("NewLink");
-    const operations = useStagingStore((s) => s.operations);
+    const op = useStagingStore((s) => s.operations.find((e) => e.id === stagedId)?.operation ?? null);
     const updateOperation = useStagingStore((s) => s.updateOperation);
 
-    const [title, setTitle] = useState("");
-    const [url, setUrl] = useState("");
-    const [description, setDescription] = useState("");
-    const [tags, setTags] = useState<string[]>([]);
+    const [title, setTitle] = useState(() => initialName(op));
+    const [url, setUrl] = useState(() => initialUrl(op));
+    const detailed = op?.op === "delete_material" || op?.op === "delete_directory" || op?.op === "move_item" ? null : op;
+    const [description, setDescription] = useState(detailed?.description ?? "");
+    const [tags, setTags] = useState<string[]>(detailed?.tags ?? []);
 
     // File replacement state
     const [replacedFile, setReplacedFile] = useState<ReplacedFile | null>(null);
@@ -60,53 +75,12 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
     const abortRef = useRef<AbortController | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // Safety check against out of bounds index
-    const staged = index !== null ? operations[index] : null;
-    const op = staged ? unwrapOp(staged) : null;
-
-    const isLink =
-        (op?.op === "create_material" && (op.type === "link" || !!op.metadata?.url)) ||
-        (op?.op === "edit_material" && (op.type === "link" || !!op.metadata?.url));
-
-    const [prevOp, setPrevOp] = useState<Operation | null>(null);
-    if (op !== prevOp) {
-        setPrevOp(op);
-        // Reset upload state whenever we switch to a different op
-        abortRef.current?.abort();
-        setReplacedFile(null);
-        setUploadState("idle");
-        setUploadProgress(0);
-        setUploadFileName("");
-        setUploadError("");
-        if (op) {
-            if (op.op === "create_material") {
-                setTitle(op.title);
-                setUrl(String(op.metadata?.url ?? op.metadata?.link ?? ""));
-                setDescription(op.description || "");
-                setTags(op.tags || []);
-            } else if (op.op === "create_directory") {
-                setTitle(op.name);
-                setUrl("");
-                setDescription(op.description || "");
-                setTags(op.tags || []);
-            } else if (op.op === "edit_material") {
-                setTitle(op.title || "");
-                setUrl(String(op.metadata?.url ?? op.metadata?.link ?? ""));
-                setDescription(op.description || "");
-                setTags(op.tags || []);
-            } else if (op.op === "edit_directory") {
-                setTitle(op.name || "");
-                setUrl("");
-                setDescription(op.description || "");
-                setTags(op.tags || []);
-            } else {
-                setTitle("");
-                setUrl("");
-                setDescription("");
-                setTags([]);
-            }
-        }
-    }
+    const isMaterialOp = op?.op === "create_material" || op?.op === "edit_material";
+    const isDirectoryOp = op?.op === "create_directory" || op?.op === "edit_directory";
+    const isCreate = op?.op === "create_material" || op?.op === "create_directory";
+    const isLink = isMaterialOp && (op.type === "link" || !!op.metadata?.url);
+    // An edit only carries what the user changed; empty fields keep the live value.
+    const placeholderFor = (label: string) => (isCreate ? label : t("keepCurrent"));
 
     // Whether this op has a replaceable binary file (not a QCM draft handled by the QCM editor)
     const hasReplaceableFile =
@@ -156,43 +130,35 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
         setUploadError("");
     }, []);
 
-    const NAME_MAX = 128;
-
     const handleSave = () => {
-        if (index === null || !op) return;
+        if (stagedId === null || !op || !detailed) return;
 
-        const newOp = { ...op } as Record<string, unknown>;
-
-        if (op.op === "create_material" || op.op === "edit_material") {
-            newOp.title = title.trim() || undefined;
-            newOp.description = description.trim() || null;
+        const trimmedDescription = description.trim();
+        const fallbackName = !isCreate ? undefined : isMaterialOp ? t("untitled") : t("newFolder");
+        const newOp: Record<string, unknown> = {
+            ...op,
+            [isMaterialOp ? "title" : "name"]: title.trim() || fallbackName,
+        };
+        // Leave untouched fields out of an edit: sending them would overwrite the live values.
+        if (isCreate) {
+            newOp.description = trimmedDescription || null;
             newOp.tags = tags;
-            if (op.op === "create_material" && !newOp.title) {
-                newOp.title = t("untitled");
-            }
-            if (isLink) {
-                newOp.metadata = {
-                    ...((op.metadata as Record<string, unknown>) || {}),
-                    url: normalizeTargetUrl(url.trim()),
-                };
-            }
-            // Apply file replacement if a new file was uploaded
-            if (replacedFile) {
-                newOp.file_key = replacedFile.fileKey;
-                newOp.file_name = replacedFile.fileName;
-                newOp.file_size = replacedFile.fileSize;
-                newOp.file_mime_type = replacedFile.fileMimeType;
-            }
-        } else if (op.op === "create_directory" || op.op === "edit_directory") {
-            newOp.name = title.trim() || undefined;
-            newOp.description = description.trim() || null;
-            newOp.tags = tags;
-            if (op.op === "create_directory" && !newOp.name) {
-                newOp.name = t("newFolder");
-            }
+        } else {
+            if (detailed.description != null || trimmedDescription) newOp.description = trimmedDescription;
+            if (detailed.tags != null || tags.length > 0) newOp.tags = tags;
         }
 
-        updateOperation(index, newOp as unknown as Operation);
+        if (isLink) {
+            newOp.metadata = { ...op.metadata, url: normalizeTargetUrl(url.trim()) };
+        }
+        if (replacedFile) {
+            newOp.file_key = replacedFile.fileKey;
+            newOp.file_name = replacedFile.fileName;
+            newOp.file_size = replacedFile.fileSize;
+            newOp.file_mime_type = replacedFile.fileMimeType;
+        }
+
+        updateOperation(stagedId, newOp as unknown as Operation);
         onClose();
     };
 
@@ -201,12 +167,10 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
         onClose();
     };
 
-    // If modal tries to open but we are tracking a non-editable op type, close it
-    const isEditable = op?.op === "create_material" || op?.op === "edit_material" || op?.op === "create_directory" || op?.op === "edit_directory";
-    const isSaveDisabled = uploadState === "uploading";
+    const isSaveDisabled = uploadState === "uploading" || (isLink && !url.trim());
 
     return (
-        <Dialog open={index !== null && isEditable} onOpenChange={(open) => !open && handleClose()}>
+        <Dialog open={detailed !== null} onOpenChange={(open) => !open && handleClose()}>
             <DialogContent className="sm:max-w-[425px] overflow-hidden">
                 <DialogHeader>
                     <DialogTitle>{t("editItemTitle")}</DialogTitle>
@@ -219,7 +183,7 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
                     <div className="min-w-0 space-y-1.5">
                         <label className="text-sm font-medium">{tWizard("nameTitle")}</label>
                         <Input
-                            placeholder={tWizard("nameTitle")}
+                            placeholder={placeholderFor(tWizard("nameTitle"))}
                             value={title}
                             onChange={(e) => setTitle(sanitizeNameInput(e.target.value))}
                             maxLength={NAME_MAX}
@@ -247,9 +211,10 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
                     <div className="min-w-0 space-y-1.5">
                         <label className="text-sm font-medium">{tWizard("description")}</label>
                         <Textarea
-                            placeholder={tWizard("description")}
+                            placeholder={placeholderFor(tWizard("description"))}
                             className="resize-none"
                             rows={3}
+                            maxLength={DESCRIPTION_MAX}
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
                         />
@@ -258,7 +223,7 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
                     <div className="min-w-0 space-y-1.5">
                         <label className="text-sm font-medium">{tWizard("tags")}</label>
                         <TagInput
-                            placeholder={tWizard("tagsPlaceholder")}
+                            placeholder={placeholderFor(tWizard("tagsPlaceholder"))}
                             tags={tags}
                             onChange={(newTags) => setTags(newTags)}
                         />
@@ -365,7 +330,7 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
                 </div>
 
                 <DialogFooter>
-                    <Button variant="outline" onClick={handleClose} disabled={isSaveDisabled}>{tCommon("cancel")}</Button>
+                    <Button variant="outline" onClick={handleClose}>{tCommon("cancel")}</Button>
                     <Button onClick={handleSave} disabled={isSaveDisabled}>{tCommon("save")}</Button>
                 </DialogFooter>
             </DialogContent>

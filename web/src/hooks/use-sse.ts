@@ -15,6 +15,7 @@ import {
     resolvePendingContributionEvent,
     usePendingContributionsStore,
 } from "@/lib/pending-contributions";
+import { useStagingStore } from "@/lib/staging-store";
 
 export function useSSE() {
     const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -26,8 +27,10 @@ export function useSSE() {
 
     useEffect(() => {
         if (isAuthLoading) return;
-        const ownerId = isAuthenticated && user ? String(user.id) : null;
+        const ownerId = isAuthenticated && user?.id ? String(user.id) : null;
         usePendingContributionsStore.getState().activateOwner(ownerId);
+        // A guest session can't own a draft, so it must not replace the last account's.
+        useStagingStore.getState().activateOwner(isGuest(user) ? null : ownerId);
         if (!isAuthenticated) return;
 
         const reconcile = () => {

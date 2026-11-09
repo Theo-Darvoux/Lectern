@@ -1,5 +1,5 @@
 import { ApiError, apiFetch, apiFetchWithResponse } from "@/lib/api-client";
-import { type Operation } from "@/lib/staging-store";
+import { operationName, type Operation } from "@/lib/staging-store";
 import { useAuthStore, useBrowseRefreshStore, useConfigStore } from "@/lib/stores";
 import { usePendingContributionsStore } from "@/lib/pending-contributions";
 import { toast } from "sonner";
@@ -118,6 +118,69 @@ export function autoTitle(ops: Operation[], t: any): string {
         default:
             return t("draft");
     }
+}
+
+function isRealId(id: string | null | undefined): id is string {
+    return !!id && !id.startsWith("$");
+}
+
+function destinationOf(op: Operation): string | null {
+    switch (op.op) {
+        case "move_item":
+            return op.new_parent_id;
+        case "create_material":
+            return op.directory_id;
+        case "create_directory":
+            return op.parent_id ?? null;
+        default:
+            return null;
+    }
+}
+
+/** List each operation's item with its folder path, one per line. */
+export async function describeOperationPaths(
+    ops: Operation[],
+    fallbackItemName: string,
+): Promise<string> {
+    const materialIds = ops.flatMap((op) =>
+        (op.op === "edit_material" || op.op === "delete_material") && isRealId(op.material_id)
+            ? [op.material_id]
+            : [],
+    );
+    const directoryIds = ops.map(destinationOf).filter(isRealId);
+
+    let materials: Record<string, { directory_id: string | null; title: string }> = {};
+    let directories: Record<string, { name: string }[]> = {};
+    if (materialIds.length > 0 || directoryIds.length > 0) {
+        try {
+            const resolved = await apiFetch<{
+                materials: typeof materials;
+                directories: typeof directories;
+            }>("/directories/resolve-paths", {
+                method: "POST",
+                body: JSON.stringify({
+                    material_ids: [...new Set(materialIds)],
+                    directory_ids: [...new Set(directoryIds)],
+                }),
+            });
+            materials = resolved.materials ?? {};
+            directories = resolved.directories ?? {};
+        } catch {
+            // Names alone still make a useful note.
+        }
+    }
+
+    const lines = ops.map((op) => {
+        const material =
+            op.op === "edit_material" || op.op === "delete_material"
+                ? materials[op.material_id]
+                : undefined;
+        const name = material?.title ?? (operationName(op) || fallbackItemName);
+        const directoryId = material ? material.directory_id : destinationOf(op);
+        const path = isRealId(directoryId) ? directories[directoryId] : undefined;
+        return path?.length ? [...path.map((p) => p.name), name].join(" › ") : name;
+    });
+    return truncateDescription(lines.join("\n"));
 }
 
 /**

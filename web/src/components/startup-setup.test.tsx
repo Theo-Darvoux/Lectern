@@ -108,6 +108,8 @@ const freshConfig = {
   tutorials_enabled: false,
   allow_external_document_links: true,
   max_contribution_note_length: 10000,
+  max_contribution_ops_student: 50,
+  max_contribution_ops_staff: 500,
 };
 
 const configuredConfig = { ...freshConfig, needs_setup: false };

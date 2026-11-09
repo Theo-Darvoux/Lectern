@@ -79,8 +79,6 @@ interface UploadQueueState {
     items: QueueItem[];
     /** Draft temp id of each folder to create, by destination-scoped path. */
     dirTempIds: Record<string, string>;
-    /** Destination-scoped paths whose folder is already in the draft. */
-    stagedDirKeys: string[];
 
     // Mutations
     addItems: (items: QueueItem[]) => void;
@@ -88,11 +86,10 @@ interface UploadQueueState {
     removeItem: (clientId: string) => void;
     clearAll: () => void;
     setDirTempIds: (ids: Record<string, string>) => void;
-    markDirsStaged: (keys: string[]) => void;
     renameDirectory: (oldPath: string, newPath: string) => void;
 }
 
-type PersistedQueue = Pick<UploadQueueState, "items" | "dirTempIds" | "stagedDirKeys">;
+type PersistedQueue = Pick<UploadQueueState, "items" | "dirTempIds">;
 
 /** Key of a folder path within the destination its files were dropped on. */
 export function dirKey(item: Pick<QueueItem, "directoryId" | "parentMaterialId">, path: string): string {
@@ -186,7 +183,6 @@ export const useUploadQueue = create<UploadQueueState>()(
         (set) => ({
             items: [],
             dirTempIds: {},
-            stagedDirKeys: [],
 
             addItems: (items) => set((s) => ({ items: [...s.items, ...items] })),
 
@@ -199,15 +195,12 @@ export const useUploadQueue = create<UploadQueueState>()(
                 set((s) => {
                     const items = s.items.filter((i) => i.clientId !== clientId);
                     // Folder ids are only meaningful while a row can still use them.
-                    return items.length > 0 ? { items } : { items, dirTempIds: {}, stagedDirKeys: [] };
+                    return items.length > 0 ? { items } : { items, dirTempIds: {} };
                 }),
 
-            clearAll: () => set({ items: [], dirTempIds: {}, stagedDirKeys: [] }),
+            clearAll: () => set({ items: [], dirTempIds: {} }),
 
             setDirTempIds: (ids) => set((s) => ({ dirTempIds: { ...s.dirTempIds, ...ids } })),
-
-            markDirsStaged: (keys) =>
-                set((s) => ({ stagedDirKeys: [...new Set([...s.stagedDirKeys, ...keys])] })),
 
             renameDirectory: (oldPath, newPath) =>
                 set((s) => ({
@@ -218,7 +211,6 @@ export const useUploadQueue = create<UploadQueueState>()(
                     dirTempIds: Object.fromEntries(
                         Object.entries(s.dirTempIds).map(([key, id]) => [renamedKey(key, oldPath, newPath), id]),
                     ),
-                    stagedDirKeys: s.stagedDirKeys.map((key) => renamedKey(key, oldPath, newPath)),
                 })),
         }),
         {
@@ -227,7 +219,6 @@ export const useUploadQueue = create<UploadQueueState>()(
             partialize: (s) => ({
                 items: s.items.map(durableQueueItem),
                 dirTempIds: s.dirTempIds,
-                stagedDirKeys: s.stagedDirKeys,
             }),
             merge: (persisted, current) => {
                 const stored = persisted as Partial<PersistedQueue> | undefined;

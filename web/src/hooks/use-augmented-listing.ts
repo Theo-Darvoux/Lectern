@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { compareNatural } from "@/lib/utils";
 import { compareMaterialStatus } from "@/components/content-status-badge";
-import { useStagingStore, unwrapOp } from "@/lib/staging-store";
+import { useStagingStore } from "@/lib/staging-store";
 import type {
   CreateMaterialOp,
   CreateDirectoryOp,
@@ -9,7 +9,6 @@ import type {
   EditMaterialOp,
   MoveItemOp,
   Operation,
-  StagedOperation,
 } from "@/lib/staging-store";
 import type { SelectedItem } from "@/lib/selection-store";
 import {
@@ -17,28 +16,6 @@ import {
   usePendingContributionsStore,
 } from "@/lib/pending-contributions";
 import { useAuthStore } from "@/lib/stores";
-
-export function stagedStatus(
-  ops: (StagedOperation | Operation)[],
-  id: string,
-  kind: "directory" | "material",
-): "edited" | "deleted" | "moved" | null {
-  for (const staged of ops) {
-    const op = unwrapOp(staged as StagedOperation);
-    if (kind === "directory") {
-      if (op.op === "delete_directory" && op.directory_id === id)
-        return "deleted";
-      if (op.op === "edit_directory" && op.directory_id === id) return "edited";
-    } else {
-      if (op.op === "delete_material" && op.material_id === id)
-        return "deleted";
-      if (op.op === "edit_material" && op.material_id === id) return "edited";
-    }
-    if (op.op === "move_item" && op.target_type === kind && op.target_id === id)
-      return "moved";
-  }
-  return null;
-}
 
 export type StagedState = "edited" | "deleted" | "moved";
 
@@ -58,14 +35,14 @@ const STAGED_RANK: Record<StagedState, number> = { edited: 0, moved: 1, deleted:
  * lookup. An item can carry several ops at once (e.g. moved *and* renamed), so
  * keep the strongest state for the badge and every edit for the display.
  */
-export function indexStagedOps(ops: AugmentedOp[]) {
+export function indexStagedOps(ops: IndexableOp[]) {
   const dirs = new Map<string, StagedInfo>();
   const mats = new Map<string, StagedInfo>();
   const note = (
     m: Map<string, StagedInfo>,
     id: string,
     staged: StagedState,
-    op: AugmentedOp,
+    op: IndexableOp,
   ) => {
     const cur = m.get(id) ?? { staged, edits: [] };
     if (STAGED_RANK[staged] > STAGED_RANK[cur.staged]) cur.staged = staged;
@@ -104,6 +81,7 @@ export function applyStagedEdits(
       ...(op.type != null ? { type: op.type } : {}),
       ...(op.description != null ? { description: op.description } : {}),
       ...(op.tags != null ? { tags: op.tags } : {}),
+      ...(op.metadata != null ? { metadata: op.metadata } : {}),
     };
   }
   return out;
@@ -117,9 +95,11 @@ export interface GhostDirEntry {
 export type AugmentedOp = Operation & {
   isExternal: boolean;
   _previewIdx: number | undefined;
-  /** Index into the staging store's `operations` array (undefined for external PR ops). */
-  _storeIndex: number | undefined;
+  /** Draft entry id (undefined for external PR ops). */
+  _stagedId: string | undefined;
 };
+
+type IndexableOp = Operation & Partial<Pick<AugmentedOp, "isExternal" | "_previewIdx">>;
 
 export type NavItem =
   | { type: "dir"; dir: Record<string, unknown> }
@@ -140,8 +120,7 @@ export function useAugmentedListing({
   materials,
   previewOperations,
 }: UseAugmentedListingProps) {
-  const rawOperations = useStagingStore((s) => s.operations);
-  const operations = useMemo(() => rawOperations ?? [], [rawOperations]);
+  const operations = useStagingStore((s) => s.operations);
   const pendingContributions = usePendingContributionsStore((s) => s.contributions);
   const pendingOwnerId = usePendingContributionsStore((s) => s.ownerId);
   const currentOwnerId = useAuthStore((s) => s.user?.id ? String(s.user.id) : null);
@@ -157,7 +136,7 @@ export function useAugmentedListing({
     ghostDirStack.length > 0 ? ghostDirStack[ghostDirStack.length - 1] : null;
 
   const allOps = useMemo(() => {
-    const local = operations.map((s) => unwrapOp(s));
+    const local = operations.map((s) => s.operation);
     const external = [
       ...submittedOperations.map((op) => ({ op, idx: undefined as number | undefined })),
       ...(previewOperations ?? []).map((op, idx) => ({ op, idx })),
@@ -188,13 +167,13 @@ export function useAugmentedListing({
       .map(({ op, idx }) => ({ ...op, isExternal: true, _previewIdx: idx }));
 
     return [
-      ...local.map((op, idx) => ({
-        ...op,
+      ...operations.map((entry) => ({
+        ...entry.operation,
         isExternal: false,
         _previewIdx: undefined as number | undefined,
-        _storeIndex: idx,
+        _stagedId: entry.id as string | undefined,
       })),
-      ...external.map((op) => ({ ...op, _storeIndex: undefined as number | undefined })),
+      ...external.map((op) => ({ ...op, _stagedId: undefined as string | undefined })),
     ];
   }, [operations, previewOperations, submittedOperations]);
 
@@ -218,7 +197,8 @@ export function useAugmentedListing({
   }) as (AugmentedOp & (CreateDirectoryOp | MoveItemOp))[];
 
   const ghostMaterials = allOps.filter((op) => {
-    if (op.op === "create_material") {
+    // Attachments are counted on their parent's row, not listed themselves.
+    if (op.op === "create_material" && !op.parent_material_id) {
       const isCreatedHere = isRoot ? !op.directory_id : op.directory_id === dirId;
       if (isCreatedHere) return true;
     }

@@ -67,6 +67,26 @@ cancels the pending move.
 
 ---
 
+## Drafts
+
+Changes can be collected in a draft and submitted together as one contribution.
+The draft lives in the browser (`localStorage`), not on the server, and belongs
+to the signed-in account: signing out keeps it, and another account signing in
+on the same browser clears it.
+
+- An item has at most one pending edit and one pending move. Editing it again
+  merges into the existing edit, and moving it again replaces the destination.
+- Deleting an item replaces whatever was pending on it. Deleting something that
+  only exists in the draft simply removes it, along with anything inside it.
+- Staged files stay usable for 48 hours. An expired file blocks the submission
+  until it is removed from the draft; nothing is removed automatically.
+- A quiz saved to the draft is stored on the server like any staged file
+  (`POST /api/qcm/stage`) and read back with `GET /api/qcm/staged?file_key=…`.
+- A contribution that refers to a temporary id (`$…`) nothing in it creates is
+  rejected when submitted.
+
+---
+
 ## Roles and permissions
 
 | Action | Required role |

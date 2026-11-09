@@ -268,6 +268,8 @@ export interface PublicConfig {
     /** Permit safe external links in document viewers (ALLOW_EXTERNAL_DOCUMENT_LINKS). */
     allow_external_document_links: boolean;
     max_contribution_note_length: number;
+    max_contribution_ops_student: number;
+    max_contribution_ops_staff: number;
     /** True only until the durable one-way installation bootstrap marker is committed. */
     needs_setup: boolean;
     /** Whether the setup form must collect the out-of-band operator capability. */

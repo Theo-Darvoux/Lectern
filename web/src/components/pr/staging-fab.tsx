@@ -11,7 +11,7 @@ import { useUIStore } from "@/lib/stores";
 
 export function StagingFab() {
   const t = useTranslations("Staging");
-  const operations = useStagingStore((s) => s.operations) ?? [];
+  const operations = useStagingStore((s) => s.operations);
   const setReviewOpen = useStagingStore((s) => s.setReviewOpen);
   const count = operations.length;
   const expiredCount = operations.filter((s) => isExpired(s)).length;

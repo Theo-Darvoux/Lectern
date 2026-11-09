@@ -834,7 +834,7 @@
       "ERR_MIME_MISMATCH": "The file content does not match its extension.",
       "ERR_SVG_UNSAFE": "This SVG contains unsafe content and was rejected.",
       "ERR_SCAN_UNAVAILABLE": "The security scan is temporarily unavailable. Retry in a few minutes.",
-      "ERR_QUOTA_EXCEEDED": "You have too many pending uploads. Submit your draft or remove files, then retry.",
+      "ERR_QUOTA_EXCEEDED": "You have too many recent uploads. They are released once your contributions are reviewed, or after 25 hours.",
       "ERR_STORAGE_FULL": "Storage is full. Contact an administrator.",
       "ERR_PROCESSING_FAILED": "Processing failed. Retry, and contact support if it continues.",
       "ERR_FILE_UNREADABLE": "This file is damaged and could not be read."
@@ -1313,13 +1313,14 @@
       "material": "material",
       "folder": "folder"
     },
-    "overLimitTitle": "overLimitTitle",
-    "overLimitText": "overLimitText",
+    "overLimitTitle": "{count} changes, the maximum is {max}",
+    "overLimitText": "Remove some changes, then submit the rest as separate contributions.",
     "expired": "expired",
     "hours": "h",
     "minutes": "m",
     "submitAnonymously": "Submit anonymously",
-    "submitAnonymouslyHint": "Your name won't be shown on this contribution or on the published documents. Only moderators can see who proposed it. Anonymous contributions don't count towards your reputation."
+    "submitAnonymouslyHint": "Your name won't be shown on this contribution or on the published documents. Only moderators can see who proposed it. Anonymous contributions don't count towards your reputation.",
+    "keepCurrent": "Unchanged"
   },
   "AutoTitle": {
     "draft": "Contribution draft",
@@ -2407,7 +2408,13 @@
       "addImage": "Add image",
       "imageTooLarge": "Image is too large, even after compression. Try a smaller image.",
       "imageError": "Could not add the image.",
-      "imageTooMany": "Maximum {max} images per QCM."
+      "imageTooMany": "Maximum {max} images per QCM.",
+      "titleRequired": "Please enter a title",
+      "questionRequired": "The quiz must contain at least one question",
+      "moodleImported": "Moodle import complete",
+      "moodleApplied": "Moodle import applied",
+      "importFailed": "Import failed",
+      "defaultChapter": "Chapter {number}"
     },
     "viewer": {
       "chapter": "Chapter",
@@ -2425,6 +2432,23 @@
       "notes": "Notes",
       "noNotes": "No notes yet",
       "addNote": "Add a note..."
+    },
+    "draft": {
+      "createHeading": "Create a quiz",
+      "editHeading": "Edit the quiz",
+      "createTitle": "New quiz: {title}",
+      "editTitle": "Quiz update: {title}",
+      "diffSummary": "Quiz updated in the editor",
+      "saved": "Quiz saved to the draft",
+      "saveFailed": "Could not save the quiz",
+      "submitFailed": "Could not submit the quiz",
+      "loadFailed": "Could not load the quiz",
+      "notFound": "This quiz draft was not found or has expired",
+      "preview": "Preview",
+      "edit": "Edit",
+      "delete": "Delete",
+      "deleteTitle": "Delete this draft?",
+      "deleteDescription": "The draft “{title}” will be permanently removed from your pending changes."
     }
   },
   "Tutorials": {

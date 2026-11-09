@@ -763,7 +763,7 @@ export function QCMEditor({
   }, [setHideFooter]);
 
   const [qcm, setQcm] = useState<QCMFile>(
-    initialData ?? { version: 1, chapters: [createEmptyChapter("Chapitre 1")] },
+    initialData ?? { version: 1, chapters: [createEmptyChapter(t("defaultChapter", { number: 1 }))] },
   );
 
   // Stable ref so addImage can read the current image count without re-creating.
@@ -808,7 +808,7 @@ export function QCMEditor({
       ...prev,
       chapters: [
         ...prev.chapters,
-        createEmptyChapter(`Chapitre ${prev.chapters.length + 1}`),
+        createEmptyChapter(t("defaultChapter", { number: prev.chapters.length + 1 })),
       ],
     }));
   };
@@ -856,10 +856,10 @@ export function QCMEditor({
         setImportConfirmData(result);
       } else {
         setQcm(result);
-        toast.success("Import Moodle réussi");
+        toast.success(t("moodleImported"));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Erreur lors de l'import");
+      toast.error(err instanceof Error ? err.message : t("importFailed"));
     } finally {
       setIsImporting(false);
       if (moodleInputRef.current) moodleInputRef.current.value = "";
@@ -870,30 +870,30 @@ export function QCMEditor({
     if (importConfirmData) {
       setQcm(importConfirmData);
       setImportConfirmData(null);
-      toast.success("Import Moodle appliqué");
+      toast.success(t("moodleApplied"));
     }
   };
 
   // ── Submit ──
 
-  const handleSubmit = async () => {
+  const canLeaveEditor = () => {
     if (!meta.title.trim()) {
-      toast.error("Veuillez saisir un titre");
-      return;
+      toast.error(t("titleRequired"));
+      return false;
     }
     if (countQCMQuestions(qcm) === 0) {
-      toast.error("Le QCM doit contenir au moins une question");
-      return;
+      toast.error(t("questionRequired"));
+      return false;
     }
-    await onSubmit(pruneQcmImages(qcm), meta);
+    return true;
+  };
+
+  const handleSubmit = async () => {
+    if (canLeaveEditor()) await onSubmit(pruneQcmImages(qcm), meta);
   };
 
   const handleSaveDraft = async () => {
-    if (!meta.title.trim()) {
-      toast.error("Veuillez saisir un titre");
-      return;
-    }
-    await onSaveDraft!(pruneQcmImages(qcm), meta);
+    if (canLeaveEditor()) await onSaveDraft!(pruneQcmImages(qcm), meta);
   };
 
   const totalQuestions = countQCMQuestions(qcm);

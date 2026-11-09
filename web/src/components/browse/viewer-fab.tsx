@@ -200,6 +200,11 @@ export function ViewerFab({
   const likeCount = likeOverride !== undefined ? likeOverride.likeCount : Number(liveData.like_count ?? 0);
   const [isLiking, setIsLiking] = useState(false);
   const addOperation = useStagingStore((s) => s.addOperation);
+  const stagedForDeletion = useStagingStore((s) =>
+    s.operations.some(
+      ({ operation: op }) => op.op === "delete_material" && op.material_id === materialId,
+    ),
+  );
 
   const handleShare = async () => {
     const shareUrl = `${window.location.origin}${pathname}`;
@@ -248,6 +253,7 @@ export function ViewerFab({
     addOperation({
         op: "delete_material",
         material_id: materialId,
+        target_title: materialTitle,
     });
     toast.success(t("addedDeletionToDraft"));
     close();
@@ -448,11 +454,13 @@ export function ViewerFab({
                 icon={<Edit className="h-5 w-5" />}
                 label={t("edit")}
                 href={`/qcm/${materialId}/edit`}
+                disabled={stagedForDeletion}
               />
             ) : (
               <ActionCell
                 icon={<Edit className="h-5 w-5" />}
                 label={t("edit")}
+                disabled={stagedForDeletion}
                 onClick={() => {
                   close();
                   setEditDialogOpen(true);
@@ -545,6 +553,7 @@ export function ViewerFab({
                       icon={<Trash2 className="h-5 w-5" />}
                       label={t("delete")}
                       tint="destructive"
+                      disabled={stagedForDeletion}
                   />
               }
             />
