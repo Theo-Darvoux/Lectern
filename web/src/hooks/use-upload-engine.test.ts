@@ -25,7 +25,6 @@ describe("isInterruptedQueueMatch", () => {
     progress: 0,
     processingStatus: "",
     targetDirPath: "course/week-1",
-    error: "translated old message",
     referenceLost: true,
   };
 
@@ -34,7 +33,6 @@ describe("isInterruptedQueueMatch", () => {
     expect(isInterruptedQueueMatch(
       interrupted,
       { file, relativePath: "course/week-1/notes.pdf" },
-      "current translated message",
     )).toBe(true);
   });
 
@@ -43,7 +41,22 @@ describe("isInterruptedQueueMatch", () => {
     expect(isInterruptedQueueMatch(
       interrupted,
       { file, relativePath: "course/week-1/notes.pdf" },
-      "current translated message",
+    )).toBe(false);
+  });
+
+  it("does not confuse a same-sized file saved at another time", () => {
+    const file = new File([new Uint8Array(123)], "notes.pdf", { lastModified: 2_000 });
+    expect(isInterruptedQueueMatch(
+      { ...interrupted, fileLastModified: 1_000 },
+      { file, relativePath: "course/week-1/notes.pdf" },
+    )).toBe(false);
+  });
+
+  it("ignores rows that still hold their file", () => {
+    const file = new File([new Uint8Array(123)], "notes.pdf");
+    expect(isInterruptedQueueMatch(
+      { ...interrupted, referenceLost: false },
+      { file, relativePath: "course/week-1/notes.pdf" },
     )).toBe(false);
   });
 });

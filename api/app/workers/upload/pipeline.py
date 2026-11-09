@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
+from arq import Retry
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config import settings
 from app.core.common.exceptions import ServiceUnavailableError
+from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.redis import redis_lock
 from app.core.events.processing import ProcessingFile
 from app.core.observability.metrics import mime_category as _mime_cat
@@ -37,7 +39,6 @@ from app.workers.upload.cache_repo import UploadCacheRepository
 from app.workers.upload.constants import (
     _CANCEL_KEY_PREFIX,
     _MAX_ARQ_RETRIES,
-    _SHA256_CACHE_PREFIX,
     _STAGE_TOTAL,
     _STAGES,
     _overall,
@@ -50,7 +51,6 @@ from app.workers.upload.stages.finalize import FinalizeInput, run_finalize_stora
 from app.workers.upload.stages.scan_strip import (
     run_post_strip_pdf_check,
     run_scan_and_strip,
-    run_strip_only,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,9 @@ logger = logging.getLogger(__name__)
 _BAZAAR_ATTEMPTS = 3
 _BAZAAR_RETRY_DELAYS_SECONDS = (0.5, 1.5)
 _BAZAAR_CLEAN_TTL_SECONDS = 7 * 24 * 3600
+_RETRY_BASE_DELAY_SECONDS = 5
+# pipeline_stage value written once the upload has been published as CLEAN.
+_PUBLISHED_STAGE = 5
 
 
 def _get_fallback_scanner() -> MalwareScanner:
@@ -107,7 +110,6 @@ class UploadPipeline:
         self.event_channel = f"upload:events:{quarantine_key}"
         self.event_log_key = f"upload:eventlog:{quarantine_key}"
 
-        self.completed_stage = 0
         self.tmp_path: Path | None = None
         self.pf: ProcessingFile | None = None
 
@@ -134,6 +136,7 @@ class UploadPipeline:
         result: dict[str, Any] | None = None,
         stage_name_or_label: str | None = None,
         stage_percent: float = 0.0,
+        error_code: str | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "upload_id": self.upload_id,
@@ -142,8 +145,11 @@ class UploadPipeline:
             "detail": detail,
             "result": result,
         }
+        if error_code is not None:
+            payload["error_code"] = error_code
         if stage_name_or_label is not None:
             stage_index = _get_stage_index(stage_name_or_label)
+            payload["stage"] = _STAGES[stage_index][0]
             payload["stage_index"] = stage_index
             payload["stage_total"] = _STAGE_TOTAL
             payload["stage_percent"] = round(stage_percent, 4)
@@ -154,9 +160,14 @@ class UploadPipeline:
             self.status_key, self.event_channel, self.event_log_key, payload_json
         )
 
-    async def _fail_upload(self, detail: str, status: UploadStatus = UploadStatus.FAILED) -> None:
+    async def _fail_upload(
+        self,
+        detail: str,
+        status: UploadStatus = UploadStatus.FAILED,
+        error_code: str | None = None,
+    ) -> None:
         """Helper to transition upload to FAILED/MALICIOUS status and record it."""
-        await self.emit_status(status, detail=detail)
+        await self.emit_status(status, detail=detail, error_code=error_code)
         status_str = "malicious" if status == UploadStatus.MALICIOUS else "failed"
         await self.repo.update_upload_status(self.upload_id, status_str, error_detail=detail)
         try:
@@ -166,6 +177,18 @@ class UploadPipeline:
             logger.warning(
                 "Failed to release storage reservation for upload %s: %s",
                 self.upload_id,
+                exc,
+            )
+        await self._release_quarantine_quota()
+
+    async def _release_quarantine_quota(self) -> None:
+        """Stop counting the quarantine object against the pending-upload cap."""
+        try:
+            await self.redis.zrem(f"quota:uploads:{self.user_id}", self.quarantine_key)
+        except Exception as exc:
+            logger.warning(
+                "Failed to release quota membership for %s: %s",
+                self.quarantine_key,
                 exc,
             )
 
@@ -191,78 +214,50 @@ class UploadPipeline:
     async def _delete_quarantine_object(self) -> None:
         """Delete quarantine bytes and release their upload-quota membership."""
         await delete_object(self.quarantine_key)
-        try:
-            await self.redis.zrem(f"quota:uploads:{self.user_id}", self.quarantine_key)
-        except Exception as exc:
-            logger.warning(
-                "Deleted quarantine object %s but failed to release quota membership: %s",
-                self.quarantine_key,
-                exc,
-            )
+        await self._release_quarantine_quota()
 
     async def _run_stages(self) -> None:
-        """Core pipeline execution logic.
+        """Scan and sanitize the downloaded file, then publish it to CAS.
 
-        Stage 1-2: scan + strip (the security gate — user blocks until here).
-        Stage 5:   fast finalize — upload stripped file to immutable CAS,
-                   emit CLEAN so the user is immediately unblocked, then enqueue
-                   process_upload_post_scan for background thumbnailing.
+        Both steps always run together: their result lives only in this run's
+        temporary file, so a rerun that skipped sanitization would publish the
+        original quarantine bytes. After CLEAN is emitted the user is unblocked and
+        process_upload_post_scan generates the thumbnail in the background.
         """
-        # Checkpoint 1: Metadata Strip + Scan
-        if self.completed_stage < 2:
-            self._check_deadline("scan_strip")
-            if self.pf is None or self.tmp_path is None:
-                raise UploadError(UploadStatus.FAILED, "Pipeline state missing at scan_strip stage")
-            if self.completed_stage == 1:
-                await self.emit_status(
-                    UploadStatus.PROCESSING,
-                    detail="Stripping metadata",
-                    stage_name_or_label="stripping",
-                    stage_percent=0.5,
-                )
-                await run_strip_only(
-                    self.pf, self.tmp_path, self.mime_type, self.upload_id, self.tracer
-                )
-            else:
-                await self.emit_status(
-                    UploadStatus.PROCESSING,
-                    detail="Scanning for malware",
-                    stage_name_or_label="scanning",
-                    stage_percent=0.0,
-                )
-                scan_heartbeat_task = asyncio.create_task(
-                    self._scan_heartbeat(interval=4.0, max_duration=120.0)
-                )
-                try:
-                    await run_scan_and_strip(
-                        self.ctx,
-                        self.pf,
-                        self.tmp_path,
-                        self.original_filename,
-                        self.original_sha256,
-                        self.mime_type,
-                        self.mime_category,
-                        self.upload_id,
-                        self.tracer,
-                    )
-                finally:
-                    scan_heartbeat_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await scan_heartbeat_task
-            await self.repo.checkpoint_pipeline_stage(self.upload_id, 2)
+        self._check_deadline("scan_strip")
+        if self.pf is None or self.tmp_path is None:
+            raise UploadError(UploadStatus.FAILED, "Pipeline state missing at scan_strip stage")
+        await self.emit_status(
+            UploadStatus.PROCESSING,
+            detail="Scanning for malware",
+            stage_name_or_label="scanning",
+            stage_percent=0.0,
+        )
+        scan_heartbeat_task = asyncio.create_task(
+            self._scan_heartbeat(interval=4.0, max_duration=120.0)
+        )
+        try:
+            await run_scan_and_strip(
+                self.ctx,
+                self.pf,
+                self.tmp_path,
+                self.original_filename,
+                self.original_sha256,
+                self.mime_type,
+                self.mime_category,
+                self.upload_id,
+                self.tracer,
+            )
+        finally:
+            scan_heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await scan_heartbeat_task
 
-        if self.pf is None:
-            raise UploadError(UploadStatus.FAILED, "Pipeline state missing after scan+strip stage")
         await run_post_strip_pdf_check(self.pf, self.mime_type)
         await self._check_cancellation("after scan+strip stage")
 
-        # Checkpoint 5: Fast finalize (idempotent via completed_stage guard).
-        # Uploads the stripped file to immutable CAS so the user can
-        # immediately add it to a PR draft. Background thumbnail generation is
-        # handled by process_upload_post_scan.
-        if self.completed_stage < 5:
-            await self._fast_finalize_and_enqueue_post_scan()
-            await self.repo.checkpoint_pipeline_stage(self.upload_id, 5)
+        await self._fast_finalize_and_enqueue_post_scan()
+        await self.repo.checkpoint_pipeline_stage(self.upload_id, _PUBLISHED_STAGE)
 
     async def _scan_heartbeat(self, interval: float = 4.0, max_duration: float = 120.0) -> None:
         """Emit incremental scan progress events while the scanner is running.
@@ -412,6 +407,10 @@ class UploadPipeline:
                 )
                 raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")
 
+        # finalize added the synthetic staging entry. Holding the quarantine entry
+        # too would count every file twice until post-scan processing catches up.
+        await self._release_quarantine_quota()
+
         # Publication and cancellation race through the conditional DB update.
         # After publication, compete for the shared lifecycle lock once more:
         # a cancellation that is already pending can acquire it first, release
@@ -431,18 +430,6 @@ class UploadPipeline:
         async with lifecycle_guard:
             if has_authoritative_db:
                 await self._check_cancellation("after clean publication")
-            try:
-                await self.redis.set(
-                    f"{_SHA256_CACHE_PREFIX}{self.user_id}:{self.original_sha256}",
-                    final_res.final_key,
-                    ex=24 * 3600,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to publish personal dedup cache for upload %s: %s",
-                    self.upload_id,
-                    exc,
-                )
             await self.emit_status(
                 UploadStatus.CLEAN,
                 detail="File ready — optimising in background",
@@ -521,6 +508,10 @@ class UploadPipeline:
         # Return before the lookup: a skipped check must not cache a clean verdict.
         if not settings.malware_scan_enabled:
             return
+        # MalwareBazaar rejects anonymous requests, so without a key the lookup is
+        # unconfigured rather than unavailable. Worker startup logs this once.
+        if not settings.malwarebazaar_api_key:
+            return
         if await self.redis.get(f"bazaar:clean:{self.original_sha256}"):
             return
 
@@ -559,6 +550,7 @@ class UploadPipeline:
                             UploadStatus.FAILED,
                             "External malware scan is temporarily unavailable; "
                             "please retry this upload.",
+                            error_code=UploadErrorCode.SCAN_UNAVAILABLE,
                         ) from exc
 
                     delay = _BAZAAR_RETRY_DELAYS_SECONDS[attempt]
@@ -567,6 +559,7 @@ class UploadPipeline:
                             UploadStatus.FAILED,
                             "External malware scan is temporarily unavailable; "
                             "please retry this upload.",
+                            error_code=UploadErrorCode.SCAN_UNAVAILABLE,
                         ) from exc
                     await self.emit_status(
                         UploadStatus.PROCESSING,
@@ -604,9 +597,11 @@ class UploadPipeline:
         )
 
     async def run(self) -> None:
-        self.completed_stage = await self.repo.get_pipeline_stage(self.upload_id)
-        if self.completed_stage > 0:
-            logger.info("Resuming upload %s from stage %d", self.upload_id, self.completed_stage)
+        # A rerun after publication must not reprocess: post-scan may already have
+        # deleted the quarantine object, and CLEAN must not regress to PROCESSING.
+        if await self.repo.get_pipeline_stage(self.upload_id) >= _PUBLISHED_STAGE:
+            logger.info("Upload %s was already published; skipping rerun", self.upload_id)
+            return
 
         try:
             await self._check_cancellation("before start")
@@ -651,36 +646,37 @@ class UploadPipeline:
             self._record_pipeline_metrics(
                 "malicious" if exc.status == UploadStatus.MALICIOUS else "failed"
             )
-            await self._fail_upload(exc.detail, exc.status)
+            await self._fail_upload(exc.detail, exc.status, error_code=exc.error_code)
         except Exception as exc:
             logger.exception("Error processing upload %s", self.quarantine_key)
+            # ARQ reruns a job only for Retry. The client keeps waiting meanwhile,
+            # so report failure only once no attempt remains.
+            if self.ctx.job_try < _MAX_ARQ_RETRIES:
+                raise Retry(defer=_RETRY_BASE_DELAY_SECONDS * self.ctx.job_try) from exc
+
             msg = "Internal processing error occurred. Please try again or contact support."
-            await self._fail_upload(msg)
+            await self._fail_upload(msg, error_code=UploadErrorCode.PROCESSING_FAILED)
             self._record_pipeline_metrics("failed")
+            await self.repo.insert_dead_letter(
+                self.upload_id,
+                job_name="process_upload",
+                payload={
+                    "user_id": self.user_id,
+                    "upload_id": self.upload_id,
+                    "quarantine_key": self.quarantine_key,
+                    "original_filename": self.original_filename,
+                    "mime_type": self.mime_type,
+                },
+                error=str(exc),
+                attempts=self.ctx.job_try,
+            )
 
-            if self.ctx.job_try >= _MAX_ARQ_RETRIES:
-                await self.repo.insert_dead_letter(
-                    self.upload_id,
-                    job_name="process_upload",
-                    payload={
-                        "user_id": self.user_id,
-                        "upload_id": self.upload_id,
-                        "quarantine_key": self.quarantine_key,
-                        "original_filename": self.original_filename,
-                        "mime_type": self.mime_type,
-                    },
-                    error=str(exc),
-                    attempts=self.ctx.job_try,
+            try:
+                await self._delete_quarantine_object()
+            except Exception as del_exc:
+                logger.warning(
+                    "Failed to clean up quarantine object %s: %s", self.quarantine_key, del_exc
                 )
-
-                try:
-                    await self._delete_quarantine_object()
-                except Exception as del_exc:
-                    logger.warning(
-                        "Failed to clean up quarantine object %s: %s", self.quarantine_key, del_exc
-                    )
-            else:
-                raise
         finally:
             if self.pf is not None:
                 self.pf.cleanup()

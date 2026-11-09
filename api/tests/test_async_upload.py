@@ -125,9 +125,6 @@ async def test_worker_process_upload_logic():
         patch(
             "app.workers.upload.stages.scan_strip.sanitize_upload", new_callable=AsyncMock
         ) as mock_sanitize,
-        patch(
-            "app.workers.upload.stages.compress.compress_file_path", new_callable=AsyncMock
-        ) as mock_comp,
         patch("app.workers.upload.stages.finalize.upload_file_multipart", new_callable=AsyncMock),
         patch("app.workers.upload.pipeline.delete_object", new_callable=AsyncMock),
         patch(
@@ -169,10 +166,6 @@ async def test_worker_process_upload_logic():
         comp_path = Path(t2.name)
 
         mock_sanitize.return_value = clean_path
-
-        from app.core.security.file_security import CompressResultPath
-
-        mock_comp.return_value = CompressResultPath(comp_path, 500, None, "application/pdf")
 
         try:
             await process_upload(ctx, user_id, upload_id, q_key, "test.pdf", "application/pdf")

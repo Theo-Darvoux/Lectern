@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -109,40 +107,6 @@ def test_sandbox_rejects_paths_outside_processing_root(
             sandbox._sandbox_command(["true"], ro_paths=[processing_root])
     finally:
         allowed.unlink(missing_ok=True)
-
-
-@pytest.mark.asyncio
-async def test_compression_stage_cleans_unadopted_output_on_cancellation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pytest.importorskip("redis")
-    pytest.importorskip("pikepdf")
-    pytest.importorskip("oletools")
-
-    from app.core.security.file_security.compress import CompressResultPath
-    from app.workers.upload.stages import compress as stage
-
-    original = tmp_path / "original.bin"
-    generated = tmp_path / "generated.bin"
-    original.write_bytes(b"original")
-    generated.write_bytes(b"generated")
-
-    pf = type("PF", (), {"path": original})()
-    pf.replace_with = AsyncMock(side_effect=asyncio.CancelledError())
-    monkeypatch.setattr(
-        stage,
-        "compress_file_path",
-        AsyncMock(return_value=CompressResultPath(generated, 9, None, "application/octet-stream")),
-    )
-
-    @contextmanager
-    def span(*_args: object, **_kwargs: object):
-        yield None
-
-    tracer = type("Tracer", (), {"start_as_current_span": span})()
-    with pytest.raises(asyncio.CancelledError):
-        await stage.run_compress_stage(pf, "application/octet-stream", "file.bin", tracer)
-    assert not generated.exists()
 
 
 @pytest.mark.asyncio

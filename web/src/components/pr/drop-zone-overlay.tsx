@@ -15,7 +15,6 @@ interface DropZoneOverlayProps {
     onReAttach: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onDragOver: (e: React.DragEvent) => void;
     onDragLeave: (e: React.DragEvent) => void;
-    onDrop: (e: React.DragEvent) => void;
 }
 
 export function DropZoneOverlay({
@@ -29,7 +28,6 @@ export function DropZoneOverlay({
     onReAttach,
     onDragOver,
     onDragLeave,
-    onDrop,
 }: DropZoneOverlayProps) {
     const t = useTranslations("Upload");
 
@@ -40,7 +38,6 @@ export function DropZoneOverlay({
             aria-label={t("dropzoneActive")}
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
-            onDrop={onDrop}
             onClick={() => fileInputRef.current?.click()}
             onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
@@ -86,6 +83,7 @@ export function DropZoneOverlay({
                 multiple
                 accept={config?.allowed_extensions.join(",") || ACCEPTED_FILE_TYPES}
                 className="hidden"
+                onClick={(e) => e.stopPropagation()}
                 onChange={(e) => {
                     if (e.target.files) onAddFiles(e.target.files);
                     e.target.value = "";
@@ -95,6 +93,7 @@ export function DropZoneOverlay({
                 ref={reAttachFileInputRef}
                 type="file"
                 className="hidden"
+                onClick={(e) => e.stopPropagation()}
                 onChange={onReAttach}
             />
         </div>

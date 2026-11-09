@@ -2,6 +2,7 @@ import { lockedRefresh, registerTokenRefreshCallback, apiFetch, isRetriableError
 import { clearAccessToken, decodeToken, getAccessToken, hasAuthHint, setAccessToken } from "./auth-tokens";
 import { useAuthStore } from "./stores";
 import type { UserBrief } from "./guest";
+import { useUploadQueue } from "./upload-queue";
 
 type AuthMessage =
     | { type: "TOKEN_REFRESHED"; token: string }
@@ -69,6 +70,7 @@ async function handleMessage(event: MessageEvent<AuthMessage>) {
         case "LOGOUT":
             clearAccessToken();
             clearRefreshTimer();
+            clearUploadQueue();
             useAuthStore.getState().logout();
             break;
     }
@@ -180,9 +182,16 @@ function broadcastLogout() {
     }
 }
 
+/** The queue names the previous user's files; the runtime aborts their transfers. */
+function clearUploadQueue() {
+    useUploadQueue.getState().clearAll();
+    useUploadQueue.persist.clearStorage();
+}
+
 export function performLogout() {
     clearAccessToken();
     clearRefreshTimer();
+    clearUploadQueue();
     useAuthStore.getState().logout();
     broadcastLogout();
 }

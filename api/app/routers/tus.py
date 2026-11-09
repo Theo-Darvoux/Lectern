@@ -47,6 +47,7 @@ from app.core.common.exceptions import (
     ServiceUnavailableError,
 )
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_limits import configured_allowed_extensions, configured_allowed_mimes
 from app.core.database.database import get_db
 from app.core.database.redis import (
     RedisConcurrencyError,
@@ -361,20 +362,8 @@ async def tus_create(
         metadata.get("filetype") or metadata.get("content_type") or "application/octet-stream"
     )
 
-    # Process allowed lists
-    allowed_exts: set[str] | None = None
-    if settings.allowed_extensions:
-        allowed_exts = {
-            e.strip().lower() for e in settings.allowed_extensions.split(",") if e.strip()
-        }
-        if not all(e.startswith(".") for e in allowed_exts):
-            allowed_exts = {e if e.startswith(".") else f".{e}" for e in allowed_exts}
-
-    allowed_mimes: set[str] | None = None
-    if settings.allowed_mime_types:
-        allowed_mimes = {
-            m.strip().lower() for m in settings.allowed_mime_types.split(",") if m.strip()
-        }
+    allowed_exts = configured_allowed_extensions()
+    allowed_mimes = configured_allowed_mimes()
 
     safe_name, _ext = _validate_filename(raw_filename, allowed_extensions=allowed_exts)
 
@@ -519,16 +508,15 @@ async def _tus_patch_admitted(
         if chunk_size > 0:
             total_read = 0
 
-            def _write_and_hash(data: bytes) -> None:
-                with tmp_path.open("ab") as file_handle:
-                    file_handle.write(data)
-                hasher.update(data)
-
-            async for data_chunk in request.stream():
-                total_read += len(data_chunk)
-                if total_read > chunk_size or total_read > chunk_max:
-                    raise BadRequestError("Payload size exceeded Content-Length or maximum limits.")
-                await asyncio.to_thread(_write_and_hash, data_chunk)
+            with tmp_path.open("ab") as chunk_writer:
+                async for data_chunk in request.stream():
+                    total_read += len(data_chunk)
+                    if total_read > chunk_size or total_read > chunk_max:
+                        raise BadRequestError(
+                            "Payload size exceeded Content-Length or maximum limits."
+                        )
+                    hasher.update(data_chunk)
+                    await asyncio.to_thread(chunk_writer.write, data_chunk)
 
             if total_read != chunk_size:
                 raise BadRequestError(

@@ -506,7 +506,6 @@ async def test_shared_cancellation_releases_published_cas_exactly_once(
     )
     await fake_redis_setup.set(f"upload:status:{quarantine_key}", "clean")
     await fake_redis_setup.set(f"upload:eventlog:{quarantine_key}", "clean-event")
-    await fake_redis_setup.set(f"upload:sha256:{user_id}:{original_sha256}", row.final_key)
 
     from app.core.common.exceptions import ServiceUnavailableError
 
@@ -544,7 +543,6 @@ async def test_shared_cancellation_releases_published_cas_exactly_once(
     assert await fake_redis_setup.get(hmac_cas_key(content_sha256)) is None
     assert await fake_redis_setup.get(f"upload:status:{quarantine_key}") is None
     assert await fake_redis_setup.get(f"upload:eventlog:{quarantine_key}") is None
-    assert await fake_redis_setup.get(f"upload:sha256:{user_id}:{original_sha256}") is None
 
 
 @pytest.mark.asyncio
@@ -862,10 +860,6 @@ async def test_post_scan_database_cancellation_without_marker_blocks_republicati
             new=AsyncMock(return_value=download_result),
         ),
         patch(
-            "app.workers.process_upload_post_scan.run_strip_only",
-            new_callable=AsyncMock,
-        ),
-        patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage",
             new=AsyncMock(return_value="/tmp/post-scan-thumb.webp"),
         ),
@@ -1041,10 +1035,6 @@ async def test_post_scan_holds_lifecycle_lock_through_clean_event_and_followups(
             new=AsyncMock(return_value=download_result),
         ),
         patch(
-            "app.workers.process_upload_post_scan.run_strip_only",
-            new_callable=AsyncMock,
-        ),
-        patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage",
             new=AsyncMock(return_value=None),
         ),
@@ -1102,64 +1092,6 @@ async def test_post_scan_holds_lifecycle_lock_through_clean_event_and_followups(
     assert await fake_redis_setup.get(f"upload:eventlog:{quarantine_key}") is None
     webhook.assert_awaited_once_with(upload_id)
     auto_merge.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("status", "cas_ref_count"),
-    [
-        ("cancelled", 1),
-        ("failed", 1),
-        ("malicious", 1),
-        ("applied", 1),
-        ("clean", 0),
-    ],
-)
-async def test_check_exists_discards_stale_personal_dedup_entries(
-    status: str,
-    cas_ref_count: int,
-    db_session: AsyncSession,
-    fake_redis_setup: Any,
-) -> None:
-    from app.routers.upload.status import check_file_exists
-    from app.schemas.material import CheckExistsRequest
-
-    upload_id = str(uuid.uuid4())
-    user = await _create_user_and_upload(
-        db_session,
-        upload_id=upload_id,
-        quarantine_key=f"quarantine/pending/{upload_id}/document.pdf",
-        size=128,
-    )
-    sha256 = "5" * 64
-    file_key = f"cas/stale-{status}-{cas_ref_count}"
-    row = await db_session.scalar(select(Upload).where(Upload.upload_id == upload_id))
-    assert row is not None
-    row.sha256 = sha256
-    row.content_sha256 = "6" * 64
-    row.final_key = file_key
-    row.cas_ref_count = cas_ref_count
-    row.status = status
-    await db_session.commit()
-
-    cache_key = f"upload:sha256:{user.id}:{sha256}"
-    await fake_redis_setup.set(cache_key, file_key)
-
-    with patch(
-        "app.core.storage.facade.object_exists",
-        new=AsyncMock(return_value=True),
-    ) as object_exists:
-        response = await check_file_exists(
-            CheckExistsRequest(sha256=sha256, size=128),
-            user,
-            fake_redis_setup,
-            db_session,
-        )
-
-    assert response.exists is False
-    assert response.file_key is None
-    assert await fake_redis_setup.get(cache_key) is None
-    object_exists.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1259,49 +1191,6 @@ async def test_single_part_presigned_completion_rejects_database_cancelled_inten
             )
 
     get_object_info.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_global_cas_hint_does_not_create_personal_dedup_ownership(
-    db_session: AsyncSession,
-    fake_redis_setup: Any,
-) -> None:
-    from app.core.security.cas import hmac_cas_key
-    from app.routers.upload.status import check_file_exists
-    from app.schemas.material import CheckExistsRequest
-
-    user = User(
-        id=uuid.uuid4(),
-        email=f"{uuid.uuid4().hex}@example.com",
-        display_name="Global CAS hint tester",
-        role=UserRole.STUDENT,
-        onboarded=True,
-        gdpr_consent=True,
-    )
-    db_session.add(user)
-    await db_session.commit()
-
-    sha256 = "7" * 64
-    file_key = "cas/global-hint"
-    await fake_redis_setup.set(
-        hmac_cas_key(sha256),
-        json.dumps({"ref_count": 1, "final_key": file_key, "size": 128}),
-    )
-
-    with patch(
-        "app.core.storage.facade.object_exists",
-        new=AsyncMock(return_value=True),
-    ):
-        response = await check_file_exists(
-            CheckExistsRequest(sha256=sha256, size=128),
-            user,
-            fake_redis_setup,
-            db_session,
-        )
-
-    assert response.exists is True
-    assert response.file_key is None
-    assert await fake_redis_setup.get(f"upload:sha256:{user.id}:{sha256}") is None
 
 
 @pytest.mark.asyncio
@@ -1620,10 +1509,6 @@ async def test_retroactive_quarantine_serializes_after_post_scan_clean_event(
         patch(
             "app.workers.process_upload_post_scan.run_download_and_validate",
             new=AsyncMock(return_value=download_result),
-        ),
-        patch(
-            "app.workers.process_upload_post_scan.run_strip_only",
-            new_callable=AsyncMock,
         ),
         patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage",

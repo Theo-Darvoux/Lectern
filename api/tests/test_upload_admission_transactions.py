@@ -128,6 +128,7 @@ async def test_processing_job_is_not_dispatched_before_outbox_commit(
             "quarantine/user-1/upload-1/file.pdf",
             "file.pdf",
             "application/pdf",
+            file_size=10 * 1024 * 1024,
             trace_context={},
         )
         await persist_post_commit_jobs(db_session)

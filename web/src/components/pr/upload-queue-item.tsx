@@ -26,9 +26,9 @@ interface UploadQueueItemProps {
     f: QueueItem;
     previewUrl?: string;
     hasFileObject: boolean;
-    eta?: { bps: number; etaSec: number };
     fileSizeStr: string;
-    hasTusHandle: boolean;
+    /** Set when this row uploads somewhere other than the drawer's own location. */
+    destinationName?: string;
     onUpdateTitle: (clientId: string, title: string) => void;
     onReAttach: (clientId: string) => void;
     onPause: (clientId: string) => void;
@@ -37,13 +37,18 @@ interface UploadQueueItemProps {
     onRemove: (clientId: string) => void;
 }
 
-export function UploadQueueItem({
+function formatEta(seconds: number, t: (key: string) => string): string {
+    return seconds < 60
+        ? `~${seconds}${t("secondsShort")}`
+        : `~${Math.ceil(seconds / 60)}${t("minutesShort")}`;
+}
+
+export const UploadQueueItem = React.memo(function UploadQueueItem({
     f,
     previewUrl,
     hasFileObject,
-    eta,
     fileSizeStr,
-    hasTusHandle,
+    destinationName,
     onUpdateTitle,
     onReAttach,
     onPause,
@@ -53,11 +58,18 @@ export function UploadQueueItem({
 }: UploadQueueItemProps) {
     const t = useTranslations("Upload");
     const threatReason = f.status === "virus" ? malwareDetectionReason(f.error) : null;
+    const isFolderRow = Boolean(f.folderName);
+    const isScanningFolder = isFolderRow && f.status === "uploading";
+    const needsFile = !isFolderRow && !hasFileObject;
+    const isTransferring = f.status === "uploading" && !isFolderRow && f.progress < 80;
+    const canPause = isTransferring && Boolean(f.tusUrl || f.multipartUploadId);
+    const hasTransferBar = !isFolderRow && (f.status === "uploading" || f.status === "paused");
+    const transferPercent = f.progress < 80 ? Math.round((f.progress * 100) / 80) : 100;
 
     return (
         <div
             className={cn(
-                "group flex items-start gap-3 rounded-lg border p-3",
+                "group flex items-start gap-3 rounded-lg border p-3 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
                 f.status === "virus" &&
                     "animate-[virus-pulse-border_2s_ease-in-out_3] border-destructive bg-destructive/5 motion-reduce:animate-none dark:bg-destructive/10",
             )}
@@ -75,22 +87,22 @@ export function UploadQueueItem({
                 </div>
 
                 <div className="h-9 w-9 overflow-hidden rounded border bg-muted/50 flex items-center justify-center">
-                    {previewUrl ? (
-                        f.fileMimeType === "application/pdf" ? (
-                            <div className="flex flex-col items-center gap-0.5">
-                                <FileText className="h-4 w-4 text-red-500" />
-                                <span className="text-[8px] font-bold uppercase text-red-500">PDF</span>
-                            </div>
-                        ) : (
-                            <Image
-                                src={previewUrl}
-                                alt={t("previewAlt")}
-                                className="h-full w-full object-cover"
-                                width={36}
-                                height={36}
-                                unoptimized
-                            />
-                        )
+                    {f.fileMimeType === "application/pdf" ? (
+                        <div className="flex flex-col items-center gap-0.5">
+                            <FileText className="h-4 w-4 text-red-500" />
+                            <span className="text-[8px] font-bold uppercase text-red-500">PDF</span>
+                        </div>
+                    ) : isFolderRow ? (
+                        <Folder className="h-4 w-4 text-muted-foreground/60" />
+                    ) : previewUrl ? (
+                        <Image
+                            src={previewUrl}
+                            alt={t("previewAlt")}
+                            className="h-full w-full object-cover"
+                            width={36}
+                            height={36}
+                            unoptimized
+                        />
                     ) : (
                         <div className="flex flex-col items-center gap-0.5">
                             {f.fileMimeType.startsWith("image/") ? (
@@ -114,16 +126,22 @@ export function UploadQueueItem({
                     placeholder={t("titlePlaceholder")}
                 />
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="shrink-0">{fileSizeStr}</span>
+                    {!isFolderRow && <span className="shrink-0">{fileSizeStr}</span>}
+                    {isScanningFolder && <span>{t("scanningFolder")}</span>}
                     {f.wasCompressed && (
                         <span className="shrink-0 rounded bg-blue-100 px-1 py-0.5 text-[9px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
                             {t("compressed")}
                         </span>
                     )}
                 </div>
-                {!f.isFromBatchZip && !hasFileObject && (f.status === "pending" || f.status === "uploading" || f.status === "paused") && (
+                {f.referenceLost && needsFile && (
                     <p className="text-[10px] text-destructive font-medium">
                         {t("fileReferenceLost")}
+                    </p>
+                )}
+                {destinationName && (
+                    <p className="truncate text-[10px] text-muted-foreground">
+                        {t("destination", { name: destinationName })}
                     </p>
                 )}
                 {f.targetDirPath && (
@@ -132,25 +150,25 @@ export function UploadQueueItem({
                         <span className="truncate">{f.targetDirPath}</span>
                     </div>
                 )}
-                {(f.status === "uploading" || f.status === "paused") && (
+                {hasTransferBar && (
                     <div className="flex flex-col gap-1.5">
                         <div className="flex flex-col gap-0.5">
                             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                                <span>{t("uploading")}</span>
+                                <span>{isTransferring && f.processingStatus ? f.processingStatus : t("uploading")}</span>
                                 {f.status !== "paused" && (
                                     <span>
-                                        {Math.min(Math.round(f.progress * 100 / 80), 100)}%
-                                        {eta && f.progress < 80 && (
+                                        {transferPercent}%
+                                        {isTransferring && f.bps != null && (
                                             <span className="ml-1">
-                                                · {(eta.bps / (1024 * 1024)).toFixed(1)} {t("mbPerSec")} · ~{eta.etaSec}
-                                                {t("secondsShort")}
+                                                · {(f.bps / (1024 * 1024)).toFixed(1)} {t("mbPerSec")}
+                                                {f.etaSec != null && ` · ${formatEta(f.etaSec, t)}`}
                                             </span>
                                         )}
                                     </span>
                                 )}
                             </div>
                             <Progress
-                                value={f.progress < 80 ? Math.min(Math.round(f.progress * 100 / 80), 100) : 100}
+                                value={transferPercent}
                                 className="h-1.5"
                             />
                         </div>
@@ -195,15 +213,15 @@ export function UploadQueueItem({
                         )}
                     </div>
                 )}
-                {f.status === "error" && f.error && (
+                {f.status === "error" && (f.error || !f.referenceLost) && (
                     <p className="text-xs text-destructive">
-                        {f.error}
+                        {f.error ?? t("errorProcessing")}
                     </p>
                 )}
             </div>
 
             <div className="flex shrink-0 items-center gap-1">
-                {!f.isFromBatchZip && !hasFileObject && (f.status === "pending" || f.status === "uploading" || f.status === "paused" || f.status === "error") && (
+                {needsFile && (f.referenceLost || f.status === "error") && (
                     <Button
                         variant="ghost"
                         size="icon"
@@ -215,7 +233,7 @@ export function UploadQueueItem({
                     </Button>
                 )}
 
-                {f.status === "uploading" && hasTusHandle && (
+                {canPause && (
                     <Button
                         variant="ghost"
                         size="icon"
@@ -226,7 +244,7 @@ export function UploadQueueItem({
                         <Pause className="h-3.5 w-3.5" />
                     </Button>
                 )}
-                {f.status === "paused" && hasFileObject && (
+                {f.status === "paused" && !needsFile && (
                     <Button
                         variant="ghost"
                         size="icon"
@@ -237,7 +255,7 @@ export function UploadQueueItem({
                         <Play className="h-3.5 w-3.5" />
                     </Button>
                 )}
-                {(f.status === "error" || f.status === "virus") && hasFileObject && (
+                {f.status === "error" && !isFolderRow && !needsFile && (
                     <Button
                         variant="ghost"
                         size="icon"
@@ -260,4 +278,4 @@ export function UploadQueueItem({
             </div>
         </div>
     );
-}
+});

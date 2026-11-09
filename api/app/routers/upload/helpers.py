@@ -40,7 +40,8 @@ _QUOTA_KEY_PREFIX = "quota:uploads:"
 _IDEM_KEY_PREFIX = "upload:idem:"
 _IDEM_TTL = 25 * 3600  # 25 h -- slightly longer than the 24 h file TTL
 _UPLOAD_INTENT_PREFIX = "upload:intent:"
-_UPLOAD_INTENT_TTL = 3600  # 1 h to complete a presigned upload
+_UPLOAD_INTENT_TTL = 3600  # 1 h to complete a presigned single-part upload
+_MULTIPART_INTENT_TTL = 24 * 3600  # resumable, so it matches the tus session lifetime
 _STATUS_CACHE_PREFIX = "upload:status:"
 
 
@@ -208,28 +209,12 @@ async def _enqueue_processing(
 
 def _processing_queue_name(mime_type: str, file_size: int) -> str:
     """Choose the ARQ queue used for an upload's processing job."""
-    is_fast_mime = any(mime_type.startswith(m) for m in ("text/", "image/"))
-    is_heavy_mime = any(
-        mime_type.startswith(m)
-        for m in (
-            "video/",
-            "application/pdf",
-            "application/zip",
-            "application/x-zip-compressed",
-            "application/epub+zip",
-            "application/vnd.openxmlformats-officedocument",
-        )
-    )
-
-    if is_fast_mime and not is_heavy_mime:
-        queue_name = _FAST_QUEUE_NAME
-    elif is_heavy_mime:
-        queue_name = _SLOW_QUEUE_NAME
-    else:
-        # Fallback to size-based routing for unknown/mixed types
-        queue_name = _FAST_QUEUE_NAME if file_size < _FAST_QUEUE_THRESHOLD else _SLOW_QUEUE_NAME
-
-    return queue_name
+    if mime_type.startswith("video/"):
+        return _SLOW_QUEUE_NAME
+    if mime_type.startswith(("text/", "image/")):
+        return _FAST_QUEUE_NAME
+    # Size decides for everything else, so a short PDF never waits behind a large one.
+    return _FAST_QUEUE_NAME if file_size < _FAST_QUEUE_THRESHOLD else _SLOW_QUEUE_NAME
 
 
 def _queue_processing_after_commit(

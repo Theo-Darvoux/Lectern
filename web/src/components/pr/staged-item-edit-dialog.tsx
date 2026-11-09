@@ -22,6 +22,7 @@ import { useTranslations } from "next-intl";
 import { Loader2, CheckCircle2, UploadCloud, X, FileIcon, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { normalizeTargetUrl } from "@/lib/url-utils";
+import { localizeUploadError } from "@/lib/upload-errors";
 
 interface StagedItemEditDialogProps {
     /** The index in the staging operations array, or null if closed */
@@ -39,6 +40,7 @@ interface ReplacedFile {
 export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogProps) {
     const t = useTranslations("Staging");
     const tWizard = useTranslations("PRWizard");
+    const tUpload = useTranslations("Upload");
     const tCommon = useTranslations("Common");
     const tLink = useTranslations("NewLink");
     const operations = useStagingStore((s) => s.operations);
@@ -128,7 +130,6 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
             const result = await uploadFile(file, {
                 signal: ctrl.signal,
                 onProgress: setUploadProgress,
-                forcePipeline: true,
             });
             setUploadState("done");
             setReplacedFile({
@@ -138,13 +139,13 @@ export function StagedItemEditDialog({ index, onClose }: StagedItemEditDialogPro
                 fileMimeType: result.mime_type,
             });
         } catch (err) {
-            if ((err as Error)?.message === "Upload cancelled") return;
+            if (ctrl.signal.aborted) return;
             setUploadState("error");
-            setUploadError((err as Error)?.message ?? "Upload failed");
+            setUploadError(localizeUploadError(err, tUpload));
         } finally {
             abortRef.current = null;
         }
-    }, []);
+    }, [tUpload]);
 
     const resetUpload = useCallback(() => {
         abortRef.current?.abort();

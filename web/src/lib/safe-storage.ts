@@ -46,3 +46,28 @@ export const safeLocalStorage = {
         }
     }
 };
+
+/** Per-tab storage: a queue's File objects never outlive their tab either. */
+export const safeSessionStorage = {
+    getItem: (name: string): string | null => {
+        try {
+            return sessionStorage.getItem(name);
+        } catch {
+            return null;
+        }
+    },
+    setItem: (name: string, value: string): void => {
+        try {
+            sessionStorage.setItem(name, value);
+        } catch {
+            // The queue still works for this page; it just will not survive a reload.
+        }
+    },
+    removeItem: (name: string): void => {
+        try {
+            sessionStorage.removeItem(name);
+        } catch {
+            // ignore
+        }
+    },
+};

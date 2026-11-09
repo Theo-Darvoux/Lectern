@@ -183,7 +183,9 @@ async def test_dead_letter_queue_retry(client: AsyncClient, db_session: AsyncSes
 
 
 @pytest.mark.asyncio
-async def test_unexpected_pipeline_failure_is_reraised_for_arq_retry() -> None:
+async def test_unexpected_pipeline_failure_requests_arq_retry_without_terminal_event() -> None:
+    from arq import Retry
+
     from app.workers.upload.context import WorkerContext
     from app.workers.upload.pipeline import UploadPipeline
 
@@ -211,8 +213,10 @@ async def test_unexpected_pipeline_failure_is_reraised_for_arq_retry() -> None:
             AsyncMock(side_effect=RuntimeError("transient storage failure")),
         ),
         patch("app.workers.upload.pipeline.release_storage_reservation", AsyncMock()),
-        pytest.raises(RuntimeError, match="transient storage failure"),
+        pytest.raises(Retry),
     ):
         await pipeline.run()
 
     pipeline.repo.insert_dead_letter.assert_not_awaited()
+    emitted = [call.args[3] for call in pipeline.cache.emit_event.await_args_list]
+    assert not any('"status": "failed"' in payload for payload in emitted)

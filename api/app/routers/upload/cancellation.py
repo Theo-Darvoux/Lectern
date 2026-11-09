@@ -75,8 +75,6 @@ async def _clear_cached_upload_state(
     redis: Redis[Any],
     *,
     quarantine_key: str | None,
-    user_id: str,
-    original_sha256: str | None,
 ) -> None:
     keys: list[str] = []
     if quarantine_key:
@@ -86,8 +84,6 @@ async def _clear_cached_upload_state(
                 f"upload:eventlog:{quarantine_key}",
             )
         )
-    if original_sha256:
-        keys.append(f"upload:sha256:{user_id}:{original_sha256}")
     if keys:
         await redis.delete(*keys)
 
@@ -174,7 +170,6 @@ async def cancel_upload_lifecycle(
     row_thumbnail_key = (
         raw_thumbnail_key if isinstance(raw_thumbnail_key, str) and raw_thumbnail_key else None
     )
-    original_sha256 = row.sha256 if row is not None else None
     content_sha256 = None
     cas_ref_count = 0
     if row is not None:
@@ -191,8 +186,6 @@ async def cancel_upload_lifecycle(
         await _clear_cached_upload_state(
             redis,
             quarantine_key=row_quarantine_key,
-            user_id=user_id,
-            original_sha256=original_sha256,
         )
     except Exception as exc:
         raise ServiceUnavailableError(

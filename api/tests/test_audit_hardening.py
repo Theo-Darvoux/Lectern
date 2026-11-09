@@ -237,7 +237,7 @@ async def test_stale_pending_upload_cleanup(db_session: AsyncSession, fake_redis
         mime_type="text/plain",
         size_bytes=100,
         status="pending",
-        created_at=datetime.now(UTC) - timedelta(hours=3),
+        created_at=datetime.now(UTC) - timedelta(hours=26),
     )
     up2 = Upload(
         upload_id=str(uuid.uuid4()),

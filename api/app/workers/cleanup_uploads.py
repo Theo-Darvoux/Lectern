@@ -131,8 +131,9 @@ async def _reap_expired_legacy_material_key(
 async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     logger.info("Running upload cleanup cron job")
 
-    # ── 1. Expire stale pending Uploads (2 hours) ────────────────────────────
-    pending_cutoff = datetime.now(UTC) - timedelta(hours=2)
+    # ── 1. Expire stale pending Uploads ──────────────────────────────────────
+    # Resumable sessions may stay pending for 24 hours, so the cutoff must exceed that.
+    pending_cutoff = datetime.now(UTC) - timedelta(hours=25)
 
     async with async_session_factory() as db:
         db.info[PostCommitKey.JOBS] = []
@@ -145,7 +146,7 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
         )
         pending_rows = list((await db.execute(pending_stmt)).all())
         if pending_rows:
-            logger.info("Expired %d stale pending uploads (older than 2h)", len(pending_rows))
+            logger.info("Expired %d stale pending uploads (older than 25h)", len(pending_rows))
 
         now = datetime.now(UTC)
         expired_claims = list(

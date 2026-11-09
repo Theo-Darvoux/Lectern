@@ -363,6 +363,18 @@ class S3Backend:
                 MultipartUpload={"Parts": parts},
             )
 
+    async def list_uploaded_parts(self, file_key: str, s3_upload_id: str) -> list[dict[str, Any]]:
+        """Return the parts already stored for an in-progress multipart upload."""
+        cfg = self._cfg()
+        async with self._client(cfg) as s3:
+            paginator = s3.get_paginator("list_parts")
+            parts: list[dict[str, Any]] = []
+            async for page in paginator.paginate(
+                Bucket=cfg["bucket"], Key=file_key, UploadId=s3_upload_id
+            ):
+                parts.extend(page.get("Parts", []))
+            return parts
+
     async def abort_multipart_upload(self, file_key: str, s3_upload_id: str) -> None:
         """Abort a multipart upload, freeing all uploaded parts."""
         cfg = self._cfg()

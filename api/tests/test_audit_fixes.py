@@ -232,8 +232,8 @@ class TestCompressionRatioGuard:
     def test_overall_progress_math(self):
         """Basic sanity: _overall at boundaries works correctly."""
         assert _overall(0, 0.0) == 0.0
-        assert abs(_overall(0, 1.0) - 0.35) < 1e-6
-        assert abs(_overall(4, 1.0) - 1.0) < 1e-6
+        assert abs(_overall(0, 1.0) - 0.85) < 1e-6
+        assert abs(_overall(1, 1.0) - 1.0) < 1e-6
 
 
 # =============================================================================
@@ -855,9 +855,9 @@ class TestPipelineStageProgress:
             assert abs(_overall(i, 1.0) - accumulated) < 1e-6
 
     def test_overall_midstage(self):
-        """50% through stage 0 (weight=0.35) should give 0.175."""
+        """50% through stage 0 (weight=0.85) should give 0.425."""
         result = _overall(0, 0.5)
-        assert abs(result - 0.175) < 1e-4
+        assert abs(result - 0.425) < 1e-4
 
 
 # =============================================================================

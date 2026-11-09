@@ -6,8 +6,7 @@ processing_status=pending.
 
 Failure behaviour:
   - Thumbnail failures are soft: the sanitized CAS object remains accessible.
-  - A second metadata-strip failure preserves the original sanitized CAS bytes and
-    marks post-processing degraded.
+  - A failed download of the sanitized object marks post-processing degraded.
   - Unexpected failures retry up to ``_POST_MAX_RETRIES`` before dead-lettering.
   - A settled state (complete | degraded) triggers pending auto-merge PRs.
 """
@@ -56,11 +55,10 @@ from app.services.pr import (
     get_pr_all_file_keys,
 )
 from app.workers.upload.cache_repo import UploadCacheRepository
-from app.workers.upload.constants import _STATUS_CACHE_PREFIX
+from app.workers.upload.constants import _STAGE_TOTAL, _STATUS_CACHE_PREFIX
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.repository import UploadWorkerRepository
 from app.workers.upload.stages.download import run_download_and_validate
-from app.workers.upload.stages.scan_strip import run_strip_only
 from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
 logger = logging.getLogger(__name__)
@@ -187,8 +185,8 @@ async def process_upload_post_scan(
 ) -> None:
     """Generate derived metadata for a previously scanned, immutable CAS object.
 
-    The quarantine object is re-downloaded and stripped again before thumbnailing.
-    The CAS object created by the scan job is never overwritten.
+    The thumbnail is rendered from the sanitized CAS object created by the scan
+    job, which is never overwritten.
 
     A thumbnail failure is soft; unexpected infrastructure failures retry the job.
     """
@@ -206,20 +204,20 @@ async def process_upload_post_scan(
     thumbnail_path: str | None = None
 
     try:
-        # ── 1. Re-download from quarantine ───────────────────────────────────
+        # ── 1. Download the sanitized object ─────────────────────────────────
         try:
             download_result = await run_download_and_validate(
                 tmp_path,
-                quarantine_key,
+                cas_s3_key,
                 original_filename,
                 mime_type,
-                expected_sha256=original_sha256,
+                expected_sha256=None,
                 upload_id=upload_id,
             )
         except Exception as exc:
             logger.error(
-                "Post-scan download from quarantine failed for upload %s: %s — "
-                "sanitized file remains available in CAS.",
+                "Post-scan download of sanitized object failed for upload %s: %s — "
+                "file remains available without a thumbnail.",
                 upload_id,
                 exc,
             )
@@ -235,25 +233,7 @@ async def process_upload_post_scan(
         actual_mime = download_result.actual_mime
         auth_config = await repo.get_auth_config()
 
-        # ── 2. Re-strip metadata (idempotent) ────────────────────────────────
-        try:
-            await run_strip_only(pf, tmp_path, actual_mime, upload_id, tracer)
-        except Exception as exc:
-            logger.error(
-                "Post-scan metadata strip failed for upload %s: %s — preserving existing "
-                "sanitized CAS object.",
-                upload_id,
-                exc,
-            )
-            await _settle_degraded_post_scan(
-                worker_ctx,
-                repo,
-                upload_id=upload_id,
-                cas_s3_key=cas_s3_key,
-            )
-            return
-
-        # ── 3. Generate thumbnail (soft failure — retried, then accepted without) ─
+        # ── 2. Generate thumbnail (soft failure — retried, then accepted without) ─
         thumbnail_status: str = "skipped"
         for _thumb_attempt in range(1, _THUMB_MAX_ATTEMPTS + 1):
             try:
@@ -324,7 +304,7 @@ async def process_upload_post_scan(
                         Path(thumbnail_path).unlink(missing_ok=True)
                     thumbnail_path = None  # already cleaned up
 
-            # ── 7. Persist results ────────────────────────────────────────────
+            # ── 3. Persist results ────────────────────────────────────────────
             update_kwargs: dict[str, Any] = {
                 "processing_status": "complete",
                 "thumbnail_status": thumbnail_status,
@@ -353,7 +333,7 @@ async def process_upload_post_scan(
                             payload["result"]["processing_status"] = "complete"
                             payload["status"] = UploadStatus.CLEAN
                             payload["detail"] = "Processing complete"
-                            payload["stage_index"] = 4
+                            payload["stage_index"] = _STAGE_TOTAL - 1
                             payload["stage_percent"] = 1.0
                             payload["overall_percent"] = 100
                             await cache.emit_event(
@@ -379,7 +359,7 @@ async def process_upload_post_scan(
 
         await _trigger_pending_auto_merges(worker_ctx, cas_s3_key)
 
-        # ── 8. Delete quarantine object ───────────────────────────────────────
+        # ── 4. Delete quarantine object ───────────────────────────────────────
         try:
             await delete_object(quarantine_key)
             try:

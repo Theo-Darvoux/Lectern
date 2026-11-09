@@ -29,6 +29,7 @@ from app.workers.storage_ops import (
     release_storage_reservations,
     release_upload_quota,
 )
+from app.workers.upload.constants import UPLOAD_JOB_TIMEOUT_SECONDS
 from app.workers.view_reset import reset_14d_views, reset_daily_views
 from app.workers.webhook_dispatch import dispatch_webhook
 from app.workers.year_rollover import year_rollover
@@ -76,6 +77,10 @@ async def startup(ctx: dict[str, Any]) -> None:
     scanner = MalwareScanner()
     scanner.initialize()
     ctx["scanner"] = scanner
+    if settings.malware_scan_enabled and not settings.malwarebazaar_api_key:
+        logger.warning(
+            "MALWAREBAZAAR_API_KEY is not set: skipping MalwareBazaar lookups (YARA still runs)."
+        )
 
     from app.core.observability.telemetry import setup_telemetry
 
@@ -161,6 +166,7 @@ class WorkerSettings:
         cron(dispatch_outbox, minute=set(range(60))),
         cron(reconcile_search_documents, hour=5, minute=30),
     ]
+    job_timeout = UPLOAD_JOB_TIMEOUT_SECONDS
     on_startup = startup
     on_shutdown = shutdown
 
@@ -171,6 +177,7 @@ class UploadFastWorkerSettings:
     redis_settings = build_redis_settings()
     queue_name = UPLOAD_FAST_QUEUE
     max_jobs = settings.worker_fast_max_jobs
+    job_timeout = UPLOAD_JOB_TIMEOUT_SECONDS
     functions = [process_upload, process_upload_post_scan, recalculate_thumbnail, check_bazaar]
     on_startup = startup
     on_shutdown = shutdown
@@ -182,6 +189,7 @@ class UploadSlowWorkerSettings:
     redis_settings = build_redis_settings()
     queue_name = UPLOAD_SLOW_QUEUE
     max_jobs = settings.worker_slow_max_jobs
+    job_timeout = UPLOAD_JOB_TIMEOUT_SECONDS
     functions = [process_upload, process_upload_post_scan, recalculate_thumbnail, check_bazaar]
     on_startup = startup
     on_shutdown = shutdown

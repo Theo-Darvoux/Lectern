@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from app.core.security.file_security.errors import SanitizationError
+from app.core.security.file_security.errors import SanitizationError, UnreadableFileError
 from app.core.security.processing_paths import make_processing_temp_path as _make_temp_path
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def _strip_image_metadata(file_bytes: bytes) -> bytes:
         raise
     except Exception as exc:
         logger.warning("Image metadata strip failed: %s", exc)
-        raise SanitizationError("Failed to sanitize image metadata") from exc
+        raise UnreadableFileError("Failed to sanitize image metadata") from exc
 
 
 def _strip_image_from_path(file_path: Path) -> Path:
@@ -126,7 +126,7 @@ def _strip_image_from_path(file_path: Path) -> Path:
         logger.warning("Image metadata strip path failed: %s", exc)
         if new_path is not None:
             new_path.unlink(missing_ok=True)
-        raise SanitizationError("Failed to sanitize image metadata") from exc
+        raise UnreadableFileError("Failed to sanitize image metadata") from exc
 
 
 def _save_compressed_image(img: Image.Image, img_format: str, dest: "io.BytesIO | Path") -> None:

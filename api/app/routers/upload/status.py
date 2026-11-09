@@ -1,4 +1,4 @@
-"""Upload status endpoints: config, check-exists, batch-status, history, cancel."""
+"""Upload status endpoints: config, batch-status, history, cancel."""
 
 import json
 from typing import Annotated, Any
@@ -18,11 +18,14 @@ from app.core.common.batch_upload_limits import (
     BATCH_MAX_ZIP_SIZE_BYTES,
 )
 from app.core.common.exceptions import BadRequestError, ForbiddenError
-from app.core.common.upload_limits import upload_size_limit
+from app.core.common.upload_limits import (
+    configured_allowed_extensions,
+    configured_allowed_mimes,
+    upload_size_limit,
+)
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_lock
 from app.core.media.mimetypes import ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES
-from app.core.security.cas import hmac_cas_key
 from app.core.storage.facade import delete_object, generate_presigned_get
 from app.dependencies.auth import CurrentUser
 from app.models.upload import Upload
@@ -36,8 +39,6 @@ from app.routers.upload.helpers import (
 )
 from app.schemas.material import (
     BatchStatusRequest,
-    CheckExistsOut,
-    CheckExistsRequest,
     UploadHistoryItem,
     UploadHistoryOut,
     UploadStatus,
@@ -70,13 +71,8 @@ async def get_upload_config() -> UploadConfigOut:
     Clients should use ``recommended_path`` and ``direct_threshold_mb`` to decide
     which upload path to use without hard-coding the thresholds.
     """
-    allowed_exts = ALLOWED_EXTENSIONS
-    if settings.allowed_extensions:
-        allowed_exts = [e.strip() for e in settings.allowed_extensions.split(",") if e.strip()]  # type: ignore[assignment]
-
-    allowed_mimes = ALLOWED_MIME_TYPES
-    if settings.allowed_mime_types:
-        allowed_mimes = [m.strip() for m in settings.allowed_mime_types.split(",") if m.strip()]  # type: ignore[assignment]
+    allowed_exts = configured_allowed_extensions() or ALLOWED_EXTENSIONS
+    allowed_mimes = configured_allowed_mimes() or ALLOWED_MIME_TYPES
 
     return UploadConfigOut(
         allowed_extensions=sorted(allowed_exts),
@@ -121,59 +117,6 @@ async def cancel_upload(
             delete_object_fn=delete_object,
             release_reservation_fn=_release_storage_reservation,
         )
-
-
-# ── POST /api/upload/check-exists ────────────────────────────────────────────
-
-
-@router.post("/check-exists", response_model=CheckExistsOut)
-async def check_file_exists(
-    data: CheckExistsRequest,
-    user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> CheckExistsOut:
-    """Check whether an identical file (by SHA-256) has already been processed."""
-    user_id = str(user.id)
-
-    sha256_cache_key = f"upload:sha256:{user_id}:{data.sha256}"
-    cached = await redis.get(sha256_cache_key)
-    if cached:
-        file_key = cached.decode() if isinstance(cached, bytes) else str(cached)
-        cached_owner = await db.scalar(
-            select(Upload.id).where(
-                Upload.user_id == user.id,
-                Upload.sha256 == data.sha256,
-                Upload.final_key == file_key,
-                Upload.status == "clean",
-                Upload.cas_ref_count > 0,
-            )
-        )
-        if cached_owner is not None:
-            from app.core.storage.facade import object_exists
-
-            if await object_exists(file_key):
-                return CheckExistsOut(exists=True, file_key=file_key)
-        await redis.delete(sha256_cache_key)
-
-    # ── Global CAS fallback (Audit Fix #15) ──
-    # Return exists=True but WITHOUT a raw cas/ key to avoid leaking
-    # internal storage paths.  The upload flow's CAS-hit path will handle
-    # the actual copy from CAS to the per-user prefix.
-    cas_key = hmac_cas_key(data.sha256)
-    cas_raw = await redis.get(cas_key)
-    if cas_raw:
-        cas_data = json.loads(cas_raw)
-        file_key = cas_data.get("final_key")
-        if file_key:
-            from app.core.storage.facade import object_exists
-
-            if await object_exists(file_key):
-                # A global CAS hit is only a hint. The upload flow must acquire
-                # new ownership before any user-scoped cache points at the object.
-                return CheckExistsOut(exists=True, file_key=None)
-
-    return CheckExistsOut(exists=False, file_key=None)
 
 
 # ── POST /api/upload/status/batch ────────────────────────────────────────────

@@ -478,6 +478,10 @@ async def complete_multipart_upload(
     await get_storage().complete_multipart_upload(file_key, s3_upload_id, parts)
 
 
+async def list_uploaded_parts(file_key: str, s3_upload_id: str) -> list[dict[str, Any]]:
+    return await get_storage().list_uploaded_parts(file_key, s3_upload_id)
+
+
 async def abort_multipart_upload(file_key: str, s3_upload_id: str) -> None:
     await get_storage().abort_multipart_upload(file_key, s3_upload_id)
 

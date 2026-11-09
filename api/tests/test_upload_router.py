@@ -348,12 +348,12 @@ async def test_processing_job_enqueued_after_upload(
     resp = await client.post("/api/upload", files=_pdf_file(), headers=_auth_headers(user))
     assert resp.status_code == 202
 
-    # V2: _queue_name is now included; test PDF goes to the slow/heavy queue
-    from app.routers.upload import _SLOW_QUEUE_NAME
+    # A short PDF is routed by size, so it goes to the fast queue.
+    from app.routers.upload import _FAST_QUEUE_NAME
 
     mock_arq_pool.enqueue_job.assert_called_once_with(
         "process_upload",
-        _queue_name=_SLOW_QUEUE_NAME,
+        _queue_name=_FAST_QUEUE_NAME,
         user_id=str(user.id),
         upload_id=ANY,
         quarantine_key=resp.json()["file_key"],

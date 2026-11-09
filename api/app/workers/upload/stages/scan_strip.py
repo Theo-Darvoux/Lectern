@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from app.core.common.exceptions import BadRequestError
+from app.core.common.upload_errors import UploadErrorCode
 from app.core.events.processing import ProcessingFile
 from app.core.observability.metrics import upload_scan_duration
 from app.core.security.async_utils import shielded_await, shielded_to_thread
 from app.core.security.file_security import strip_metadata_file
+from app.core.security.file_security.errors import UnreadableFileError
 from app.core.security.isolated_parser import (
     check_pdf_safety_isolated,
     requires_isolated_sanitization,
@@ -97,6 +99,12 @@ async def run_scan_and_strip(
 
         if isinstance(strip_res, TimeoutError):
             raise UploadError(UploadStatus.FAILED, "Metadata stripping timed out")
+        if isinstance(strip_res, UnreadableFileError):
+            raise UploadError(
+                UploadStatus.FAILED,
+                "This file is damaged and could not be read.",
+                error_code=UploadErrorCode.FILE_UNREADABLE,
+            )
         if isinstance(strip_res, ValueError):
             raise MalwareError(str(strip_res))
         if isinstance(strip_res, BaseException):
@@ -110,38 +118,6 @@ async def run_scan_and_strip(
             except Exception as e:
                 logger.warning("Failed to clean up leaked strip_res path %s: %s", strip_res, e)
         raise
-
-
-async def run_strip_only(
-    pf: ProcessingFile,
-    tmp_path: Path,
-    mime_type: str,
-    upload_id: str,
-    tracer: Any,
-) -> None:
-    clean_path = None
-    with tracer.start_as_current_span("upload.strip_metadata"):
-        try:
-            clean_path = await asyncio.wait_for(
-                (
-                    sanitize_upload(tmp_path, mime_type=mime_type)
-                    if requires_isolated_sanitization(mime_type)
-                    else strip_metadata_file(tmp_path, mime_type)
-                ),
-                timeout=60.0,
-            )
-            if clean_path != tmp_path:
-                await pf.replace_with(clean_path)
-        except TimeoutError:
-            if clean_path is not None and clean_path != tmp_path and pf.path != clean_path:
-                clean_path.unlink(missing_ok=True)
-            raise UploadError(UploadStatus.FAILED, "Metadata stripping timed out")
-        except BaseException as exc:
-            if clean_path is not None and clean_path != tmp_path and pf.path != clean_path:
-                clean_path.unlink(missing_ok=True)
-            if isinstance(exc, ValueError):
-                raise MalwareError(str(exc))
-            raise
 
 
 async def run_post_strip_pdf_check(

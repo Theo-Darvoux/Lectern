@@ -1,20 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-vi.mock("fflate", () => ({
-  Zip: class {
-    constructor(private callback: (error: Error, chunk: Uint8Array, final: boolean) => void) {}
-    add() {}
-    end() {
-      this.callback(new Error("zip encoder failed"), new Uint8Array(), true);
-    }
-  },
-  ZipPassThrough: class {
-    constructor(_name: string) {}
-    push() {}
-  },
-}));
-
-import { collectDroppedItems, traverseFolder, zipScannedFiles } from "./drop-utils";
+import { collectDroppedItems, traverseFolder } from "./drop-utils";
 
 function fileEntry(name: string, result: File | DOMException): FileSystemFileEntry {
   return {
@@ -80,15 +66,5 @@ describe("collectDroppedItems", () => {
 
     expect(result.files.map((entry) => entry.file.name)).toEqual(["good.pdf"]);
     expect(result.inaccessible).toEqual(["locked.pdf"]);
-  });
-});
-
-describe("zipScannedFiles", () => {
-  it("rejects when the encoder reports an error", async () => {
-    const file = new File(["%PDF-1.4"], "good.pdf", { type: "application/pdf" });
-
-    await expect(zipScannedFiles([{ file, relativePath: "folder/good.pdf" }])).rejects.toThrow(
-      "zip encoder failed",
-    );
   });
 });

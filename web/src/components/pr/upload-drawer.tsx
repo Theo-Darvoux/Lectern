@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
     Sheet,
     SheetContent,
@@ -24,6 +24,7 @@ import { MimeSelectDialog } from "./mime-select-dialog";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { getUploadFlowState } from "@/lib/upload-flow";
+import { getUploadPreview, hasUploadFile } from "@/lib/upload-runtime";
 
 interface UploadDrawerProps {
     open: boolean;
@@ -50,6 +51,7 @@ export function UploadDrawer({
         open,
         onOpenChange,
         directoryId,
+        directoryName,
         parentMaterialId,
         initialFiles,
         initialFolderEntries,
@@ -66,10 +68,13 @@ export function UploadDrawer({
     const flow = getUploadFlowState({
         fileCount: engine.files.length,
         unsettledCount: engine.inFlightFiles.length,
-        errorCount: engine.errorFiles.length,
-        readyCount: engine.doneFiles.length,
     });
     const steps = [t("steps.choose"), t("steps.process"), t("steps.review")];
+    const { setReAttachingClientId } = engine;
+    const handleReAttachRequest = useCallback((clientId: string) => {
+        setReAttachingClientId(clientId);
+        reAttachFileInputRef.current?.click();
+    }, [setReAttachingClientId]);
 
     return (
     <>
@@ -77,22 +82,6 @@ export function UploadDrawer({
             <SheetContent
                 side="right"
                 className="flex w-full flex-col overflow-hidden sm:max-w-lg"
-                onInteractOutside={(e) => {
-                    if (engine.inFlightFiles.length > 0) {
-                        e.preventDefault();
-                        // eslint-disable-next-line @typescript-eslint/no-require-imports
-                        const { toast } = require("sonner");
-                        toast.warning(t("uploadsInProgress"));
-                    }
-                }}
-                onEscapeKeyDown={(e) => {
-                    if (engine.inFlightFiles.length > 0) {
-                        e.preventDefault();
-                        // eslint-disable-next-line @typescript-eslint/no-require-imports
-                        const { toast } = require("sonner");
-                        toast.warning(t("uploadsInProgress"));
-                    }
-                }}
             >
                 <SheetHeader>
                     <SheetTitle>{parentMaterialId ? t("titleAttachments") : t("titleFiles")}</SheetTitle>
@@ -142,7 +131,6 @@ export function UploadDrawer({
                     onReAttach={engine.handleReAttach}
                     onDragOver={engine.handleDragOver}
                     onDragLeave={engine.handleDragLeave}
-                    onDrop={engine.handleDrop}
                 />
 
                 {engine.files.length > 0 && (
@@ -158,6 +146,14 @@ export function UploadDrawer({
                             <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
                         </summary>
                         <div className="space-y-1.5 border-t px-3 py-3">
+                            <label className="flex items-center gap-2 pb-2 text-sm font-medium">
+                                <input
+                                    type="checkbox"
+                                    checked={engine.keepOriginalImages}
+                                    onChange={(e) => engine.setKeepOriginalImages(e.target.checked)}
+                                />
+                                {t("keepOriginalImages")}
+                            </label>
                             <label className="text-sm font-medium">{t("batchTags")}</label>
                             <TagInput
                                 tags={engine.batchTags}
@@ -213,26 +209,22 @@ export function UploadDrawer({
                     <ScrollArea className="-mx-6 min-h-0 flex-1 px-6 mt-4">
                         <div className="space-y-2 py-1">
                             {engine.files.map((f) => {
-                                const previewUrl = engine.previewUrlsRef.current.get(f.clientId);
-                                const hasFileObject = engine.fileObjectsRef.current.has(f.clientId);
-                                const eta = engine.etaMap.get(f.clientId);
-                                const fileSizeStr = f.serverSize != null ? fileSize(f.serverSize, t) : fileSize(f.fileSize, t);
-                                const hasTusHandle = f.status === "uploading" && !!f.tusUrl; 
+                                const fileSizeStr = fileSize(f.serverSize ?? f.fileSize, t);
+                                const isElsewhere =
+                                    f.directoryId !== undefined &&
+                                    ((f.directoryId || null) !== (directoryId || null) ||
+                                        (f.parentMaterialId || null) !== (parentMaterialId || null));
 
                                 return (
                                     <UploadQueueItem
                                         key={f.clientId}
                                         f={f}
-                                        previewUrl={previewUrl}
-                                        hasFileObject={hasFileObject}
-                                        eta={eta}
+                                        previewUrl={getUploadPreview(f.clientId)}
+                                        hasFileObject={hasUploadFile(f.clientId)}
                                         fileSizeStr={fileSizeStr}
-                                        hasTusHandle={hasTusHandle}
+                                        destinationName={isElsewhere ? f.directoryName : undefined}
                                         onUpdateTitle={engine.updateTitleField}
-                                        onReAttach={(cid) => {
-                                            engine.setReAttachingClientId(cid);
-                                            reAttachFileInputRef.current?.click();
-                                        }}
+                                        onReAttach={handleReAttachRequest}
                                         onPause={engine.pauseUpload}
                                         onResume={engine.resumeUpload}
                                         onRetry={engine.retryFile}

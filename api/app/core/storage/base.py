@@ -68,6 +68,9 @@ class ObjectStorage(Protocol):
     async def complete_multipart_upload(
         self, file_key: str, s3_upload_id: str, parts: list[dict[str, int | str]]
     ) -> None: ...
+    async def list_uploaded_parts(
+        self, file_key: str, s3_upload_id: str
+    ) -> list[dict[str, Any]]: ...
     async def abort_multipart_upload(self, file_key: str, s3_upload_id: str) -> None: ...
     async def generate_presigned_upload_part(
         self,

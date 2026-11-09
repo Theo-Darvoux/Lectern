@@ -189,14 +189,21 @@ async def upload_status(
 
     row = await _load_authoritative_upload(file_key, user.id, db)
     authoritative = _authoritative_terminal_payload(row, file_key) if row else None
-    if authoritative is not None:
-        return UploadStatusOut(**authoritative)
-
     cached = await redis.get(f"{_STATUS_CACHE_PREFIX}{file_key}")
-    if not cached:
+    try:
+        cached_payload = json.loads(cached) if cached else None
+    except ValueError:
+        cached_payload = None
+
+    if authoritative is not None:
+        # The row stores only the message; the structured code lives in the event.
+        error_code = cached_payload.get("error_code") if cached_payload else None
+        return UploadStatusOut(**authoritative, error_code=error_code)
+
+    if not cached_payload:
         return UploadStatusOut(file_key=file_key, status=UploadStatus.PENDING)
     try:
-        return UploadStatusOut(**json.loads(cached))
+        return UploadStatusOut(**cached_payload)
     except Exception:
         return UploadStatusOut(file_key=file_key, status=UploadStatus.PENDING)
 

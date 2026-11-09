@@ -171,43 +171,19 @@ class TestHigh1MultipartAtomicIntent:
 
 
 class TestHigh2FrontendMultipartAbortCleanup:
-    """_presignedMultipartUpload in upload-client.ts has no try/catch that
-    calls the abort endpoint when upload fails."""
+    """A failed transfer keeps its multipart session for resume; removal aborts it."""
 
-    def test_multipart_upload_has_abort_on_failure(self):
-        """The frontend multipart upload function must call the abort endpoint
-        on failure to prevent orphaned S3 multipart uploads."""
-        upload_client_path = (
-            Path(__file__).parent.parent.parent / "web" / "src" / "lib" / "upload-client.ts"
-        )
-        if not upload_client_path.exists():
+    def test_removing_a_row_aborts_its_multipart_session(self):
+        web_lib = Path(__file__).parent.parent.parent / "web" / "src" / "lib"
+        if not web_lib.exists():
             pytest.skip("Frontend code not available in this test environment")
 
-        source = upload_client_path.read_text()
-
-        # Find the _presignedMultipartUpload function
-        fn_start = source.find("async function _presignedMultipartUpload")
-        assert fn_start != -1, "Cannot find _presignedMultipartUpload function"
-
-        # Extract roughly the function body (find next top-level function)
-        fn_body = source[fn_start : fn_start + 5000]
-
-        # Must have a catch/finally that calls the abort endpoint
-        has_abort_cleanup = (
-            "presigned-multipart" in fn_body
-            and ("catch" in fn_body or "finally" in fn_body)
-            and "DELETE" in fn_body
-        )
-
-        assert has_abort_cleanup, (
-            "_presignedMultipartUpload does not clean up on failure. "
-            "Failed multipart uploads leave orphaned S3 parts until the 24h cleanup cron."
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# HIGH-3: MalwareBazaar fail-soft default
-# ═══════════════════════════════════════════════════════════════════════════════
+        runtime = (web_lib / "upload-runtime.ts").read_text()
+        fn_start = runtime.find("function cancelOnServer")
+        assert fn_start != -1, "Cannot find cancelOnServer function"
+        fn_body = runtime[fn_start : fn_start + 800]
+        assert "/upload/presigned-multipart/" in fn_body
+        assert 'method: "DELETE"' in fn_body
 
 
 class TestHigh3MalwareBazaarFailClosed:
@@ -287,7 +263,7 @@ class TestMedium2ProgressReaches100:
         after_wait = fn_body[wait_pos:]
 
         # Look for onProgress?.(100) before the return statement
-        return_pos = after_wait.find("return {")
+        return_pos = after_wait.find("return _toUploadResult")
         assert return_pos != -1
         between = after_wait[:return_pos]
 
@@ -359,10 +335,10 @@ class TestMedium4UploadQueueRehydration:
 
         source = queue_path.read_text()
 
-        has_rehydration_handler = "onRehydrateStorage" in source or "onRehydrate" in source
+        has_rehydration_handler = "restoreAfterReload" in source
 
         assert has_rehydration_handler, (
-            "Upload queue store has no onRehydrateStorage handler. "
+            "Upload queue store does not restore rows after a reload. "
             "Items stuck in 'uploading' state after page reload will show as "
             "in-progress forever with no way to resume or cancel."
         )

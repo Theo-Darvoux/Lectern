@@ -866,33 +866,3 @@ class TestTempFileLeakProtection:
             # verify that the temp stripped file was deleted and not registered to pf
             assert not strip_res_path.exists()
             assert pf.path == pf_path
-
-    @pytest.mark.asyncio
-    async def test_run_strip_only_unlinks_temp_on_exception(self, tmp_path):
-        """run_strip_only unlinks the clean file if an exception occurs during replace_with."""
-        from app.core.events.processing import ProcessingFile
-        from app.workers.upload.stages.scan_strip import run_strip_only
-
-        pf_path = tmp_path / "pf.bin"
-        pf_path.write_bytes(b"original data")
-        pf = ProcessingFile(pf_path, len(pf_path.read_bytes()))
-
-        strip_res_path = tmp_path / "stripped_temp.bin"
-        strip_res_path.write_bytes(b"stripped data")
-
-        # mock replace_with to fail
-        with patch.object(
-            pf, "replace_with", new_callable=AsyncMock, side_effect=RuntimeError("Replace failed")
-        ):
-            with patch(
-                "app.workers.upload.stages.scan_strip.strip_metadata_file", new_callable=AsyncMock
-            ) as mock_strip:
-                mock_strip.return_value = strip_res_path
-
-                assert strip_res_path.exists()
-
-                with pytest.raises(RuntimeError, match="Replace failed"):
-                    await run_strip_only(pf, pf_path, "bin", "upload_id", MagicMock())
-
-                # verify that the temp stripped file was deleted
-                assert not strip_res_path.exists()

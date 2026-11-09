@@ -174,6 +174,18 @@ function refreshTokenOnce(): Promise<RefreshResult | null> {
     return refreshPromise;
 }
 
+/** Refresh a token close to expiry; XHR and tus requests cannot do it after a 401. */
+export async function ensureFreshAccessToken(): Promise<void> {
+    const token = getAccessToken();
+    const decoded = token ? decodeToken(token) : null;
+    if (!decoded || decoded.exp > Date.now() / 1000 + 60) return;
+    const refreshed = await refreshTokenOnce();
+    if (refreshed) {
+        setAccessToken(refreshed.accessToken);
+        _onTokenRefreshed?.(refreshed.accessToken);
+    }
+}
+
 export function getClientId(): string {
     if (typeof window === "undefined") return "server-client";
     let clientId = localStorage.getItem("lectern_client_id");

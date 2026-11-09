@@ -147,7 +147,7 @@ class TestAnonymousPRVisibility:
 
         profile = await client.get(f"/api/users/{author.id}", headers=_auth_headers(other))
         assert profile.json()["prs_total"] == 0
-        assert profile.json()["open_pr_count"] == 0
+        assert "open_pr_count" not in profile.json()
 
         own = await client.get(
             f"/api/users/{author.id}/contributions?type=prs", headers=_auth_headers(author)

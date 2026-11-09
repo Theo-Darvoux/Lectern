@@ -653,11 +653,13 @@ def test_frontend_retries_uncertain_completion_without_abort() -> None:
         encoding="utf-8"
     )
 
-    assert "let completionStarted = false" in source
-    assert "let completionAttempts = 0" in source
-    assert "const uncertainCompletion" in source
-    assert "if (!uncertainCompletion)" in source
-    assert "Preserve that intent so the exact manifest can be retried" in source
+    completion = source[
+        source.index("etags.sort((a, b)") : source.index("return session.quarantine_key")
+    ]
+    assert "_withRetry(" in completion
+    assert "/upload/presigned-multipart/complete" in completion
+    # A failed completion keeps the session, so the same manifest can be retried.
+    assert 'method: "DELETE"' not in completion
 
 
 @pytest.mark.asyncio

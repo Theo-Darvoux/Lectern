@@ -17,7 +17,7 @@ from app.core.security.async_utils import shielded_to_thread as _shielded_to_thr
 from app.core.security.file_security._concurrency import _get_concurrency_guard
 from app.core.security.file_security._image import MAX_IMAGE_PIXELS
 from app.core.security.file_security._jpeg import strip_jpeg_metadata
-from app.core.security.file_security.errors import SanitizationError
+from app.core.security.file_security.errors import SanitizationError, UnreadableFileError
 from app.core.security.processing_paths import (
     make_processing_temp_path as _make_temp_path,
 )
@@ -390,7 +390,7 @@ def _strip_pdf_from_path(file_path: Path) -> Path:
         logger.warning("PDF metadata strip path failed: %s", exc)
         if new_path is not None:
             Path(new_path).unlink(missing_ok=True)
-        raise ValueError("Failed to sanitize PDF metadata") from exc
+        raise UnreadableFileError("Failed to sanitize PDF metadata") from exc
 
 
 async def _compress_pdf_ghostscript(file_path: Path, quality: int) -> Path:

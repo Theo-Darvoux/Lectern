@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.core.security.file_security.errors import UnreadableFileError
+
 
 def _inspect(arguments: list[str]) -> dict[str, object]:
     if len(arguments) != 4:
@@ -73,7 +75,7 @@ def _sanitize(arguments: list[str]) -> dict[str, object]:
             check=False,
         )
         if completed.returncode != 0:
-            raise ValueError("Failed to sanitize legacy Office document metadata")
+            raise UnreadableFileError("Failed to sanitize legacy Office document metadata")
     else:
         sanitized = asyncio.run(strip_metadata_file(file_path, mime_type))
     if sanitized == file_path or not sanitized.is_file():
@@ -242,6 +244,9 @@ def _extract_zip(arguments: list[str]) -> dict[str, object]:
     }
 
 
+EXIT_UNREADABLE_FILE = 3
+
+
 def main() -> int:
     try:
         operation, *arguments = sys.argv[1:]
@@ -263,6 +268,9 @@ def main() -> int:
             payload = _extract_zip(arguments)
         else:
             raise ValueError(f"Unsupported parser operation: {operation!r}")
+    except UnreadableFileError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_UNREADABLE_FILE
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1

@@ -111,6 +111,7 @@ async def test_public_pr_contribution_author_is_minimal(
         "description",
         "summary_types",
         "author",
+        "is_anonymous",
         "created_at",
         "updated_at",
     }

@@ -7,7 +7,7 @@ exists.  Once the corresponding fix is applied the test should turn green.
 import json
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
@@ -162,68 +162,6 @@ async def test_high3_sse_concurrency_counter_decrements_in_generator():
         "sse_concurrency_guard is used at the endpoint level (outside event_generator) — "
         "the guard will exit before streaming finishes."
     )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MEDIUM #1 — check_file_exists exposes CAS keys across users
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_medium1_check_exists_does_not_expose_raw_cas_key(
-    client: AsyncClient,
-    db_session: AsyncSession,
-    mock_redis: AsyncMock,
-):
-    """check-exists should not return raw cas/ keys from the global CAS
-    that belong to other users' uploads.
-    """
-    user = await _create_user(db_session)
-    headers = _auth_headers(user)
-
-    # No per-user cache hit
-    # CAS fallback returns a cas/ key
-    cas_data = json.dumps(
-        {
-            "final_key": "cas/global_secret_hash",
-            "mime_type": "application/pdf",
-            "size": 1234,
-        }
-    )
-
-    call_count = 0
-
-    async def _fake_get(key):
-        nonlocal call_count
-        call_count += 1
-        if "upload:sha256:" in str(key):
-            return None  # No per-user cache
-        if "upload:cas:" in str(key):
-            return cas_data.encode()
-        return None
-
-    mock_redis.get.side_effect = _fake_get
-    mock_redis.set.side_effect = AsyncMock()
-
-    with (
-        patch("app.core.security.cas.hmac_cas_key", return_value="upload:cas:test123"),
-        patch("app.core.storage.facade.object_exists", AsyncMock(return_value=True)),
-    ):
-        resp = await client.post(
-            "/api/upload/check-exists",
-            json={"sha256": "a" * 64, "size": 1234},
-            headers=headers,
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-
-    if body.get("exists"):
-        file_key = body.get("file_key")
-        assert file_key is None or not file_key.startswith("cas/"), (
-            f"check-exists returned raw CAS key '{file_key}' — "
-            "this leaks internal storage paths to clients."
-        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

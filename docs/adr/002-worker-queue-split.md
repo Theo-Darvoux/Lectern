@@ -18,11 +18,11 @@ Three worker tiers:
 
 | Worker | Queue | MIME types / size | Concurrency | Memory |
 |---|---|---|---|---|
-| `worker-fast` | `upload-fast` | `text/*`, `image/*` under 5 MiB | 4 jobs × 2 replicas | 1 GB / replica |
-| `worker-slow` | `upload-slow` | video, PDF, Office, ZIP, ≥ 5 MiB | 2 jobs × 2 replicas | 2 GB / replica |
+| `worker-fast` | `upload-fast` | `text/*`, `image/*`, any other non-video type under 5 MiB | 4 jobs × 2 replicas | 1 GB / replica |
+| `worker-slow` | `upload-slow` | video, any other non-text, non-image type ≥ 5 MiB | 2 jobs × 2 replicas | 2 GB / replica |
 | `worker` | default | non-upload tasks + fallback | unlimited | 2 GB |
 
-Queue routing runs at job enqueue time in `routers/upload/helpers.py`. The logic prioritises MIME type over size: a 3 MiB MP4 goes to `upload-slow` even though it is under the 5 MiB threshold.
+Queue routing runs at job enqueue time in `routers/upload/helpers.py`. Video always goes to `upload-slow`, even at 3 MiB. Documents such as PDFs are routed by size, so a short PDF does not wait behind a large one.
 
 Replicas are configurable via `WORKER_FAST_REPLICAS` and `WORKER_SLOW_REPLICAS` env vars, allowing the slow queue to scale horizontally during high-load events without touching the fast path.
 

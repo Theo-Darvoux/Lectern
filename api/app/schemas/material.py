@@ -167,6 +167,8 @@ class UploadStatusOut(BaseModel):
     stage_total: int | None = None  # total number of pipeline stages
     stage_percent: float | None = None  # completion within the current stage [0.0, 1.0]
     overall_percent: float | None = None  # overall pipeline completion [0.0, 1.0]
+    stage: str | None = None  # stable stage name, for client-side translation
+    error_code: str | None = None  # UploadErrorCode of a terminal failure
 
 
 # ── Presigned upload schemas ──
@@ -249,29 +251,6 @@ class UploadGroupOut(BaseModel):
 # ── V2 endpoints ──────────────────────────────────────────────────────────────
 
 
-class CheckExistsRequest(BaseModel):
-    """Body for POST /upload/check-exists — skip re-upload of identical files."""
-
-    sha256: str = Field(..., min_length=64, max_length=64)
-    size: int = Field(..., ge=0)
-
-    @field_validator("sha256")
-    @classmethod
-    def validate_sha256(cls, v: str) -> str:
-        try:
-            bytes.fromhex(v)
-        except ValueError:
-            raise ValueError("sha256 must be a valid hex string")
-        return v.lower()
-
-
-class CheckExistsOut(BaseModel):
-    """Response from POST /upload/check-exists."""
-
-    exists: bool
-    file_key: str | None = None
-
-
 # ── V3 endpoints ──────────────────────────────────────────────────────────────
 
 
@@ -318,7 +297,9 @@ class UploadHistoryOut(BaseModel):
 class PresignedMultipartPart(BaseModel):
     part_number: int
     size: int = Field(ge=1)
-    url: str
+    # Exactly one is set: a URL for a part still to send, or the ETag of a stored part.
+    url: str | None = None
+    etag: str | None = None
 
 
 class PresignedMultipartInitOut(BaseModel):

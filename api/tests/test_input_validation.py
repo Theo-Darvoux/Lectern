@@ -814,7 +814,7 @@ class TestCreateDirectoryOp:
 
 
 # ===========================================================================
-# 8. schemas/material — UploadInitRequest, CheckExistsRequest, BatchStatusRequest
+# 8. schemas/material — UploadInitRequest, BatchStatusRequest
 # ===========================================================================
 
 
@@ -877,38 +877,6 @@ class TestUploadInitRequest:
     def test_rejects_mime_type_too_long(self):
         with pytest.raises(ValidationError):
             self._make(mime_type="a" * 201)
-
-
-class TestCheckExistsRequest:
-    def _make(self, **kw):
-        from app.schemas.material import CheckExistsRequest
-
-        defaults = {"sha256": "a" * 64, "size": 1024}
-        return CheckExistsRequest(**{**defaults, **kw})
-
-    def test_valid(self):
-        m = self._make()
-        assert len(m.sha256) == 64
-
-    def test_lowercases_sha256(self):
-        m = self._make(sha256="ABCDEF" + "0" * 58)
-        assert m.sha256 == m.sha256.lower()
-
-    def test_rejects_wrong_length(self):
-        with pytest.raises(ValidationError):
-            self._make(sha256="abc")
-
-    def test_rejects_non_hex(self):
-        with pytest.raises(ValidationError):
-            self._make(sha256="z" * 64)
-
-    def test_rejects_negative_size(self):
-        with pytest.raises(ValidationError):
-            self._make(size=-1)
-
-    def test_zero_size_ok(self):
-        m = self._make(size=0)
-        assert m.size == 0
 
 
 class TestBatchStatusRequest:

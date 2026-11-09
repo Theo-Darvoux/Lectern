@@ -47,6 +47,13 @@ def _make_ctx(redis: Any, session_factory: Any = None) -> WorkerContext:
 
 
 @pytest.fixture(autouse=True)
+def _bazaar_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "malwarebazaar_api_key", "test-key")
+
+
+@pytest.fixture(autouse=True)
 def _bypass_retroactive_lifecycle_lock() -> AsyncIterator[None]:
     @asynccontextmanager
     async def no_op_lock(*_args: Any, **_kwargs: Any) -> AsyncIterator[None]:

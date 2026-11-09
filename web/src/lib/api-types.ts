@@ -1948,6 +1948,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/upload/presigned-multipart/{upload_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+                post: operations["presigned_multipart_resume_api_upload_presigned_multipart__upload_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/upload/presigned-multipart/{upload_id}": {
         parameters: {
             query?: never;
@@ -2053,26 +2069,6 @@ export interface paths {
          * @description Cancel any upload through the shared CAS-aware lifecycle operation.
          */
         delete: operations["cancel_upload_api_upload__upload_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/upload/check-exists": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Check File Exists
-         * @description Check whether an identical file (by SHA-256) has already been processed.
-         */
-        post: operations["check_file_exists_api_upload_check_exists_post"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2664,26 +2660,6 @@ export interface components {
         Body_upload_file_api_upload_post: {
             /** File */
             file: string;
-        };
-        /**
-         * CheckExistsOut
-         * @description Response from POST /upload/check-exists.
-         */
-        CheckExistsOut: {
-            /** Exists */
-            exists: boolean;
-            /** File Key */
-            file_key?: string | null;
-        };
-        /**
-         * CheckExistsRequest
-         * @description Body for POST /upload/check-exists — skip re-upload of identical files.
-         */
-        CheckExistsRequest: {
-            /** Sha256 */
-            sha256: string;
-            /** Size */
-            size: number;
         };
         /** ColorUpdateBody */
         ColorUpdateBody: {
@@ -3568,7 +3544,9 @@ export interface components {
             /** Size */
             size: number;
             /** Url */
-            url: string;
+            url?: string | null;
+            /** Etag */
+            etag?: string | null;
         };
         /**
          * PresignedUploadOut
@@ -4009,6 +3987,10 @@ export interface components {
             stage_percent?: number | null;
             /** Overall Percent */
             overall_percent?: number | null;
+            /** Stage */
+            stage?: string | null;
+            /** Error Code */
+            error_code?: string | null;
         };
         /** UserBrief */
         UserBrief: {
@@ -7892,6 +7874,37 @@ export interface operations {
             };
         };
     };
+    presigned_multipart_resume_api_upload_presigned_multipart__upload_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresignedMultipartInitOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     presigned_multipart_abort_api_upload_presigned_multipart__upload_id__delete: {
         parameters: {
             query?: never;
@@ -8020,39 +8033,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    check_file_exists_api_upload_check_exists_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CheckExistsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CheckExistsOut"];
-                };
             };
             /** @description Validation Error */
             422: {

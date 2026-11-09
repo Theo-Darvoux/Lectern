@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { safeLocalStorage } from "./safe-storage";
+import { safeSessionStorage } from "./safe-storage";
 import { useUploadQueue, type QueueItem } from "./upload-queue";
 import {
     clearAllUploadTelemetry,
@@ -24,13 +24,15 @@ const item: QueueItem = {
 describe("upload telemetry", () => {
     beforeEach(() => {
         vi.useFakeTimers();
-        useUploadQueue.setState({ items: [item], activeCount: 0 });
+        useUploadQueue.setState({ items: [item] });
         clearAllUploadTelemetry();
+        window.dispatchEvent(new Event("pagehide"));
     });
 
     afterEach(() => {
         clearAllUploadTelemetry();
-        useUploadQueue.setState({ items: [], activeCount: 0 });
+        useUploadQueue.setState({ items: [] });
+        window.dispatchEvent(new Event("pagehide"));
         vi.restoreAllMocks();
         vi.useRealTimers();
     });
@@ -61,7 +63,7 @@ describe("upload telemetry", () => {
     });
 
     it("keeps telemetry updates out of durable storage", () => {
-        const persistSpy = vi.spyOn(safeLocalStorage, "setItem");
+        const persistSpy = vi.spyOn(safeSessionStorage, "setItem");
 
         updateUploadTelemetry(item.clientId, { progress: 50 });
         vi.advanceTimersByTime(16);
@@ -69,11 +71,12 @@ describe("upload telemetry", () => {
         expect(persistSpy).not.toHaveBeenCalled();
 
         useUploadQueue.getState().updateItem(item.clientId, { status: "paused" });
+        vi.advanceTimersByTime(250);
         expect(persistSpy).toHaveBeenCalledOnce();
     });
 
     it("persists resumability without stale display telemetry", () => {
-        const persistSpy = vi.spyOn(safeLocalStorage, "setItem");
+        const persistSpy = vi.spyOn(safeSessionStorage, "setItem");
 
         useUploadQueue.getState().updateItem(item.clientId, {
             tusUrl: "https://uploads.test/resume/1",
@@ -82,6 +85,7 @@ describe("upload telemetry", () => {
             stageIndex: 2,
             stageTotal: 4,
         });
+        vi.advanceTimersByTime(250);
 
         const [, serialized] = persistSpy.mock.calls.at(-1)!;
         const persisted = JSON.parse(serialized).state.items[0];

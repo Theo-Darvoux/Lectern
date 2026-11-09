@@ -57,7 +57,6 @@ describe("UploadQueueItem", () => {
                     f={item}
                     hasFileObject={true}
                     fileSizeStr="100 B"
-                    hasTusHandle={false}
                     onUpdateTitle={() => undefined}
                     onReAttach={() => undefined}
                     onPause={() => undefined}

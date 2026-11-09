@@ -2,7 +2,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.core.common.upload_limits import upload_size_limit
+from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_limits import configured_allowed_mimes, upload_size_limit
 from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import ZIP_MIME_TYPES, MimeRegistry
 from app.core.observability.metrics import mime_category as _mime_cat
@@ -38,7 +39,11 @@ async def run_download_and_validate(
     initial_size = info["size"]
     download_limit, _ = upload_size_limit(mime_type)
     if initial_size > download_limit:
-        raise UploadError(UploadStatus.FAILED, "File exceeds configured upload size limit")
+        raise UploadError(
+            UploadStatus.FAILED,
+            "File exceeds configured upload size limit",
+            error_code=UploadErrorCode.FILE_TOO_LARGE,
+        )
 
     # Cut-off for suspicious expansion, matching ZIP_MAX_TOTAL_BYTES.
     expansion_hard_limit = 500 * 1024 * 1024
@@ -103,13 +108,14 @@ async def run_download_and_validate(
         raise UploadError(
             UploadStatus.FAILED,
             f"File exceeds configured size limit for detected type {actual_mime}",
+            error_code=UploadErrorCode.FILE_TOO_LARGE,
         )
 
     mime_category = _mime_cat(actual_mime)
 
-    if not MimeRegistry.is_allowed_mime(actual_mime):
+    if not MimeRegistry.is_allowed_mime(actual_mime, allowed=configured_allowed_mimes()):
         msg = f"File type {actual_mime} is not allowed"
-        raise UploadError(UploadStatus.FAILED, msg)
+        raise UploadError(UploadStatus.FAILED, msg, error_code=UploadErrorCode.TYPE_NOT_ALLOWED)
 
     pf = ProcessingFile(tmp_path, size=initial_size)
     cas_key = hmac_cas_key(original_sha256)

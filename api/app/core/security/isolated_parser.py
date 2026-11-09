@@ -13,7 +13,16 @@ from pathlib import Path
 from app.core.common.upload_limits import maximum_upload_size_bytes
 from app.core.media.mimetypes import OLE2_MIME_TYPES, ZIP_MIME_TYPES
 from app.core.security.file_security._concurrency import image_guard, run_managed_subprocess
+from app.core.security.file_security.errors import UnreadableFileError
 from app.core.security.processing_paths import make_processing_temp_dir, make_processing_temp_path
+
+_EXIT_UNREADABLE_FILE = 3
+
+
+def _child_error_detail(stderr: bytes) -> str:
+    """Return the child's error message without its log lines, which name temp paths."""
+    lines = stderr.decode(errors="replace").strip().splitlines()
+    return lines[-1][:2000].strip() if lines else ""
 
 
 @dataclass(frozen=True)
@@ -67,7 +76,7 @@ async def inspect_upload(
         check=False,
     )
     if result.returncode != 0:
-        detail = result.stderr.decode(errors="replace")[:2000].strip()
+        detail = _child_error_detail(result.stderr)
         raise ValueError(detail or "Isolated upload inspection failed")
     try:
         payload = json.loads(result.stdout)
@@ -113,8 +122,10 @@ async def sanitize_upload(
                 python_runtime=True,
                 check=False,
             )
+        if result.returncode == _EXIT_UNREADABLE_FILE:
+            raise UnreadableFileError(_child_error_detail(result.stderr))
         if result.returncode != 0:
-            detail = result.stderr.decode(errors="replace")[:2000].strip()
+            detail = _child_error_detail(result.stderr)
             raise ValueError(detail or "Isolated upload sanitization failed")
         if not output_path.is_file() or output_path.stat().st_size == 0:
             raise ValueError("Isolated sanitizer did not produce an output file")
@@ -141,7 +152,7 @@ async def check_pdf_safety_isolated(file_path: Path, *, timeout: int = 30) -> No
         check=False,
     )
     if result.returncode != 0:
-        detail = result.stderr.decode(errors="replace")[:2000].strip()
+        detail = _child_error_detail(result.stderr)
         raise ValueError(detail or "Isolated PDF safety validation failed")
 
 
@@ -174,7 +185,7 @@ async def process_avatar_isolated(
                 check=False,
             )
         if result.returncode != 0:
-            detail = result.stderr.decode(errors="replace")[:2000].strip()
+            detail = _child_error_detail(result.stderr)
             raise ValueError(detail or "Isolated avatar rendering failed")
         data = await asyncio.to_thread(output_path.read_bytes)
         if not data.startswith(b"RIFF") or b"WEBP" not in data[:16]:
@@ -217,7 +228,7 @@ async def render_thumbnail_isolated(
             check=False,
         )
     if result.returncode != 0:
-        detail = result.stderr.decode(errors="replace")[:2000].strip()
+        detail = _child_error_detail(result.stderr)
         raise ValueError(detail or "Isolated thumbnail rendering failed")
     try:
         payload = json.loads(result.stdout)
@@ -263,7 +274,7 @@ async def extract_office_thumbnail_isolated(
             check=False,
         )
     if result.returncode != 0:
-        detail = result.stderr.decode(errors="replace")[:2000].strip()
+        detail = _child_error_detail(result.stderr)
         raise ValueError(detail or "Isolated Office thumbnail fallback failed")
     try:
         produced = json.loads(result.stdout)["produced"]
@@ -302,7 +313,7 @@ async def scan_yara_isolated(
         check=False,
     )
     if result.returncode != 0:
-        detail = result.stderr.decode(errors="replace")[:2000].strip()
+        detail = _child_error_detail(result.stderr)
         raise RuntimeError(detail or "Isolated YARA scan failed")
     try:
         payload = json.loads(result.stdout)
@@ -342,7 +353,7 @@ async def extract_zip_isolated(
         check=False,
     )
     if result.returncode != 0:
-        detail = result.stderr.decode(errors="replace")[:2000].strip()
+        detail = _child_error_detail(result.stderr)
         raise RuntimeError(detail or "Isolated ZIP extraction failed")
 
     try:

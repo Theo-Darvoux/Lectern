@@ -10,17 +10,15 @@ in the API followed by hostile-file scanning and processing in an ARQ worker.
 ```
 Client                       API                          ARQ Worker
   │                           │                               │
-  ├─ hash file (WebCrypto) ──►│                               │
   ├─ validate (size/type) ───►│                               │
   ├─ transfer to S3 ─────────►│ quarantine/{user}/{id}/file   │
   ├─ complete upload ────────►│                               │
   │                           ├── enqueue ───────────────────►│
   │◄── upload_id, status ─────┤                               │
-  │                           │                               ├─ download & verify hash
+  │                           │                               ├─ download & hash    
   │                           │                               ├─ YARA scan
   │                           │                               ├─ strip metadata
-  │                           │                               ├─ move to CAS
-  │                           │                               ├─ compress
+  │                           │                               ├─ publish to CAS
   │                           │                               ├─ generate thumbnail
   │◄── SSE: processing_status ┤◄── SSE event ─────────────────┤
 ```
@@ -31,25 +29,45 @@ Client                       API                          ARQ Worker
 
 ### 1. Initiation
 
-`POST /api/upload/init` validates:
+Every entry point validates:
 - File size against per-type and global limits
-- MIME type against the allowlist
-- User storage quota
+- MIME type and extension against the allowlist (including `ALLOWED_EXTENSIONS` and `ALLOWED_MIME_TYPES` when set)
+- Storage capacity
 - Pending upload cap (prevents queue flooding)
 
-A database `Upload` row is created with `status=staging` and a `quarantine_key` pointing to `quarantine/{user_id}/{upload_id}/{filename}` in S3.
+A database `Upload` row is created with `status=pending` and a `quarantine_key` pointing to `quarantine/{user_id}/{upload_id}/{filename}` in S3.
 
 ### 2. Transfer
 
-The client chooses a transfer strategy based on file size:
+The client chooses a transfer strategy based on `GET /api/upload/config`:
 
 | Size | Strategy |
 |---|---|
-| < 5 MiB | Presigned `PUT` directly to S3 |
-| 5–100 MiB | Resumable [tus](https://tus.io/) protocol (8 MiB chunks → S3 multipart) |
-| > 100 MiB | Presigned multipart URLs (8 MiB parts) |
+| Below `DIRECT_UPLOAD_THRESHOLD_MB` (10 MiB by default) | `POST /api/upload` through the API |
+| At or above that threshold | Presigned multipart straight to S3 (8 MiB parts, 4 in parallel) |
+| Multipart disabled, or the browser cannot reach the bucket | Resumable [tus](https://tus.io/) through the API (8 MiB chunks) |
 
-The browser hashes the file with WebCrypto (SHA-256) during upload. This hash is sent to the API on completion.
+Four files transfer at once. A file releases its slot as soon as its bytes are
+stored, so server-side scanning never delays the next transfer.
+
+Transfers survive interruptions:
+
+- Direct uploads retry transient failures with the same `X-Upload-ID`. The server
+  returns the original upload rather than creating a second one.
+- Multipart sessions last 24 hours. `POST /api/upload/presigned-multipart/{id}/resume`
+  returns the ETags of stored parts and fresh URLs for the missing ones, so a retry,
+  pause, or page reload re-sends only what is missing.
+- tus sessions last 24 hours and retry busy-server (`429`) responses.
+
+The queue is kept per browser tab. After a reload, files already stored continue
+processing without any action. Files still transferring need their `File` back:
+re-attach the file or drop the same folder again.
+
+**Multipart endpoints:**
+- `POST /api/upload/presigned-multipart/init` : start session, returns part URLs
+- `POST /api/upload/presigned-multipart/{id}/resume` : stored ETags and fresh URLs
+- `POST /api/upload/presigned-multipart/complete` : finish and enqueue
+- `DELETE /api/upload/presigned-multipart/{id}` : abort
 
 **Tus endpoints:**
 - `POST /api/upload/tus` : start session, begins S3 multipart
@@ -68,10 +86,10 @@ worker's security gate.
 
 | Condition | Queue |
 |---|---|
-| MIME is `text/*` or `image/*` and not heavy | `upload-fast` |
-| MIME is video, PDF, ZIP, EPUB, or Office | `upload-slow` |
-| Fallback: size < 5 MiB | `upload-fast` |
-| Fallback: size ≥ 5 MiB | `upload-slow` |
+| MIME is `video/*` | `upload-slow` |
+| MIME is `text/*` or `image/*` | `upload-fast` |
+| Any other type, size < 5 MiB | `upload-fast` |
+| Any other type, size ≥ 5 MiB | `upload-slow` |
 
 The fast and slow queues run on separate worker replicas with different resource limits, preventing a large video transcode from blocking a quick image upload.
 
@@ -79,23 +97,24 @@ The fast and slow queues run on separate worker replicas with different resource
 
 The browser traverses folders, preserves each file's relative directory path,
 and sends every readable file through the normal per-file transfer strategy.
-Only four transfers/processors are active at once. This avoids constructing one
-large in-memory archive and gives every file its own resumable upload ID,
-progress, retry, and terminal status. An unreadable, unsupported, oversized, or
+This avoids constructing one large in-memory archive and gives every file its
+own resumable upload ID, progress, retry, and terminal status. An unreadable, unsupported, oversized, or
 malicious entry is reported on that entry and does not cancel clean siblings.
 Once all entries reach a terminal state, clean files can be added to the draft
 even while failed entries remain visible.
 
-Before the transfers start, the browser requests one bounded admission with
+When more than one file is added at once, from a folder or a multi-file
+selection, the browser requests one bounded admission with
 `POST /api/upload/groups`. Each admitted file sends that group ID together with
 its stable upload ID. The server counts distinct IDs up to the role's advertised
-folder limit, so a large moderator folder does not weaken the ordinary upload
-rate limit or unrelated mutation limits. After a browser reload, persisted queue
+limit, so a large batch does not consume the ordinary upload rate limit. After a browser reload, persisted queue
 rows no longer hold their `File` objects; dropping the same folder again matches
-interrupted rows by relative path and size, restores those references, and
-resumes them in bulk.
+interrupted rows by relative path, size and modification time, restores those
+references, and resumes them in bulk. Folder structure and destination are stored
+with each queue row, so they survive the reload.
 
-`POST /api/upload/batch-zip` remains available for older clients. Its current
+`POST /api/upload/batch-zip` remains available for older API clients; the web
+client does not use it. Its current
 limits are advertised by `GET /api/upload/config`; clients should reuse one
 `X-Upload-ID` when retrying a batch. Entry IDs are derived from that batch ID,
 the tenant, relative path, and content hash, so a lost response can be retried
@@ -107,7 +126,7 @@ without duplicating committed uploads.
 
 ### Stage 1 : Download and verify
 
-The worker downloads the file from `quarantine/` to a local temp file, recomputes the SHA-256, and checks it against the expected hash from Phase 1. This ensures integrity across retries.
+The worker downloads the file from `quarantine/` to a local temp file and computes its SHA-256.
 
 Real MIME type is detected from magic bytes (not trusted from the client).
 
@@ -123,13 +142,13 @@ Two operations run concurrently:
 - Images: EXIF data stripped (piexif, Pillow)
 - Audio/Video: metadata tags stripped
 
-**MalwareBazaar** is synchronous by default because
-`MALWAREBAZAAR_FAIL_CLOSED=true`: a lookup error rejects publication. In
-fail-open mode, `BAZAAR_ASYNC_ENABLED=true` moves the lookup to a background job
-after the YARA gate; a later match retroactively quarantines references. The
-fail-closed path retries short-lived service/network failures three times. If
-the service remains unavailable, the file fails with an explicit retry-later
-error rather than being labeled as malware.
+**MalwareBazaar** runs before publication when `MALWAREBAZAAR_API_KEY` is set (the
+service rejects anonymous requests, so without a key the lookup is skipped and
+workers log a warning at startup). A clean verdict is cached by hash
+for 7 days. With `MALWAREBAZAAR_FAIL_CLOSED=true` (the default) a lookup error
+rejects publication, after three attempts for short-lived failures: the file fails
+with an explicit retry-later error rather than being labeled as malware. In
+fail-open mode an unavailable service is skipped and no verdict is cached.
 
 ### Stage 3 : Content-Addressed Storage (CAS)
 
@@ -144,16 +163,22 @@ A Redis entry tracks the ref count. First upload: ref_count=1, storage quota inc
 
 The `Upload` row is updated to `status=clean, processing_status=pending`.
 
+Scanning and sanitization always run in the same worker attempt: their result
+exists only in that attempt's temporary file. A rerun after a worker restart
+repeats both. A rerun after publication does nothing.
+
 ### Stage 4 : Post-scan processing
 
 A follow-up `process_upload_post_scan` job runs:
+
+It downloads the sanitized CAS object, so nothing is scanned or stripped twice.
 
 **Thumbnail generation** (soft failure):
 - Images, video: WebP, 640 px wide, 85% quality
 - Documents: first-page render
 - Stored at `thumbnails/{cas_id}.webp`
 
-On completion, `processing_status=complete`. Failure after 3 ARQ retries sets `processing_status=degraded` : the original uncompressed file is served.
+On completion, `processing_status=complete`. Failure after 3 attempts sets `processing_status=degraded`: the sanitized file is served without a thumbnail.
 
 ---
 
@@ -161,17 +186,17 @@ On completion, `processing_status=complete`. Failure after 3 ARQ retries sets `p
 
 | Stage | Failure mode | Outcome |
 |---|---|---|
-| Hash mismatch | Hard | Upload rejected, retried |
 | YARA match | Hard | Upload rejected, no retry |
 | OLE macro detected | Hard | Upload rejected |
-| CAS upload failure | Hard | ARQ retries (max 3), then `degraded` |
+| Unexpected worker error (storage outage, …) | Transient | Retried up to 3 attempts with no client-visible failure, then `failed` and dead-lettered |
+| Worker restart during processing | Transient | Job reruns from the start |
 | Thumbnail failure | Soft | No thumbnail, upload completes |
-| MalwareBazaar unreachable | Configurable | Three bounded attempts, then retry-later in fail-closed mode; asynchronous only in explicit fail-open mode |
+| MalwareBazaar unreachable | Configurable | Three bounded attempts, then retry-later in fail-closed mode; skipped in fail-open mode |
 
 ---
 
 ## Monitoring
 
 - Upload status: `GET /api/upload/{id}/status`
-- Live progress updates: `GET /api/upload/sse` (Server-Sent Events, per user)
+- Live progress updates: `GET /api/upload/events/{file_key}` (Server-Sent Events, per file)
 - ARQ queue depth: check Redis keys `arq:queue:upload-fast` and `arq:queue:upload-slow`

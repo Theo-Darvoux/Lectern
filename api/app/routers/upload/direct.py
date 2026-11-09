@@ -15,6 +15,7 @@ from app.config import settings
 from app.core.common.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
 from app.core.common.exceptions import BadRequestError, ForbiddenError
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_limits import configured_allowed_extensions, configured_allowed_mimes
 from app.core.database.database import get_db
 from app.core.database.post_commit import register_transaction_callbacks
 from app.core.database.redis import get_redis
@@ -62,7 +63,10 @@ async def _authoritative_upload_result(
     return UploadPendingOut(
         upload_id=existing.upload_id,
         file_key=existing_key,
-        status=UploadStatus(existing.status),
+        # A cancelled attempt is terminal; the API has no separate public state for it.
+        status=UploadStatus.FAILED
+        if existing.status == "cancelled"
+        else UploadStatus(existing.status),
         size=existing.size_bytes or 0,
         mime_type=existing.mime_type or "application/octet-stream",
     )
@@ -186,21 +190,8 @@ async def upload_file(
             raise BadRequestError("X-Upload-ID must be a valid UUID")
         upload_id = idem_header
 
-    # Process allowed lists
-    allowed_exts: set[str] | None = None
-    if settings.allowed_extensions:
-        allowed_exts = {
-            e.strip().lower() for e in settings.allowed_extensions.split(",") if e.strip()
-        }
-        if not all(e.startswith(".") for e in allowed_exts):
-            # Ensure dots
-            allowed_exts = {e if e.startswith(".") else f".{e}" for e in allowed_exts}
-
-    allowed_mimes: set[str] | None = None
-    if settings.allowed_mime_types:
-        allowed_mimes = {
-            m.strip().lower() for m in settings.allowed_mime_types.split(",") if m.strip()
-        }
+    allowed_exts = configured_allowed_extensions()
+    allowed_mimes = configured_allowed_mimes()
 
     # Validate filename / extension
     safe_name, ext = _validate_filename(file.filename or "unnamed", allowed_extensions=allowed_exts)

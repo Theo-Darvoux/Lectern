@@ -22,7 +22,6 @@ from app.routers.upload.helpers import (
 from app.routers.upload.presigned import router as presigned_router
 from app.routers.upload.sse import router as sse_router
 from app.routers.upload.sse import upload_events
-from app.routers.upload.status import check_file_exists
 from app.routers.upload.status import router as status_router
 from app.routers.upload.validators import (
     _check_per_type_size,
@@ -45,7 +44,6 @@ __all__ = [
     "_create_upload_row",
     "_enqueue_processing",
     "_validate_filename",
-    "check_file_exists",
     "upload_events",
 ]
 

@@ -253,8 +253,8 @@ Rarely need touching; defaults match S3 multipart constraints.
 | `TUS_CHUNK_MAX_BYTES` | `100 MiB` | Maximum chunk size. |
 | `TUS_MAX_SIZE_BYTES` | `500 MiB` | Maximum resumable upload size. |
 | `TUS_MAX_CONCURRENT_PER_USER` | `8` | Concurrent in-flight uploads per user. |
-| `ENABLE_PRESIGNED_MULTIPART` | `true` | Use presigned multipart PUTs for large uploads. |
-| `DIRECT_UPLOAD_THRESHOLD_MB` | `10` | Files below this use a single direct upload instead of multipart. |
+| `ENABLE_PRESIGNED_MULTIPART` | `true` | Send large uploads straight from the browser to object storage. Needs bucket CORS that exposes `ETag`; without it, browsers fall back to tus through the API. Set `false` to always use tus. |
+| `DIRECT_UPLOAD_THRESHOLD_MB` | `10` | Files below this go through the API. Larger files use presigned multipart, or tus when multipart is disabled. |
 | `CAS_MAX_AGE_SECONDS` | `604800` (7 days) | How long a CAS entry is trusted before re-scanning. Bump it down after changing YARA rules. `0` disables staleness checks. |
 
 ---
@@ -267,10 +267,10 @@ Rarely need touching; defaults match S3 multipart constraints.
 | `YARA_RULES_DIR` | `yara_rules` | Directory of compiled YARA rules. |
 | `YARA_SCAN_TIMEOUT` | `60` | Seconds before a YARA scan is aborted. |
 | `MALWAREBAZAAR_URL` | `https://mb-api.abuse.ch/api/v1/` | MalwareBazaar API endpoint. |
-| `MALWAREBAZAAR_API_KEY` | *(unset)* | Optional API key to avoid stricter rate limits. |
+| `MALWAREBAZAAR_API_KEY` | *(unset)* | MalwareBazaar API key. When unset, the lookup is skipped with a startup warning; YARA and sanitization still run. |
 | `MALWAREBAZAAR_TIMEOUT` | `5` | Request timeout in seconds. |
 | `MALWAREBAZAAR_FAIL_CLOSED` | `true` | When `true`, a MalwareBazaar error/timeout fails the scan (rejects the upload). When `false`, YARA stays the authoritative gate on API failure. |
-| `BAZAAR_ASYNC_ENABLED` | `true` | Run the MalwareBazaar check as a background job after YARA-only promotion (avoids ~6 s of blocking per upload). YARA remains the synchronous gate; flags trigger retroactive quarantine. |
+| `BAZAAR_ASYNC_ENABLED` | `true` | Deprecated, no effect. The MalwareBazaar check always runs before publication. |
 | `BAZAAR_RETROACTIVE_CHECK_MATERIALS` | `true` | When a retroactive flag fires, also soft-delete approved material versions referencing the flagged S3 key. |
 
 ---

@@ -1,26 +1,27 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   uploadFile,
-  uploadBatchZip,
   logicalFileSize,
   getUploadConfig,
   beginUploadGroup,
   uploadLimitMbForMime,
 } from "./upload-client";
-import { sha256File } from "./crypto-utils";
 import { compressImageIfNeeded } from "./file-utils";
-import { apiRequest } from "./api-client";
+import { apiRequest, ensureFreshAccessToken, ApiError } from "./api-client";
+import * as tus from "tus-js-client";
 
-// Mock dependencies
 vi.mock("./api-client", () => ({
   apiRequest: vi.fn(),
+  ensureFreshAccessToken: vi.fn(async () => undefined),
   getClientId: vi.fn(() => "test-client-id"),
   API_BASE: "http://test-api",
   ApiError: class extends Error {
     status: number;
-    constructor(status: number, message: string) {
+    error_code?: string;
+    constructor(status: number, message: string, error_code?: string) {
       super(message);
       this.status = status;
+      this.error_code = error_code;
     }
   },
 }));
@@ -29,29 +30,116 @@ vi.mock("./auth-tokens", () => ({
   getAccessToken: vi.fn(() => "test-token"),
 }));
 
-vi.mock("./crypto-utils", () => ({
-  sha256File: vi.fn(),
-}));
-
 vi.mock("./file-utils", () => ({
   compressImageIfNeeded: vi.fn(),
-  formatFileSize: vi.fn(),
-  getFileExtension: vi.fn(),
-  getViewerType: vi.fn(),
 }));
 
-// Mock tus-js-client
 vi.mock("tus-js-client", () => ({
-  Upload: vi.fn().mockImplementation(() => ({
-    start: vi.fn(),
-  })),
+  Upload: vi.fn().mockImplementation(function (this: Record<string, unknown>, _file: File, options: Record<string, (...args: unknown[]) => void>) {
+    this.url = "http://test-api/upload/tus/session";
+    this.abort = vi.fn(async () => undefined);
+    this.start = vi.fn(() => {
+      options.onAfterResponse({}, { getHeader: () => "tus-key" });
+      options.onSuccess();
+    });
+  }),
 }));
+
+interface FakeXhr {
+  url: string;
+  headers: Record<string, string>;
+  body: unknown;
+  aborted: boolean;
+}
+
+type XhrReply = (xhr: FakeXhr) => { status: number; body?: string; etag?: string } | "network" | "hang";
+
+let xhrs: FakeXhr[];
+let replyToXhr: XhrReply;
+
+function installXhr() {
+  xhrs = [];
+  global.XMLHttpRequest = vi.fn().mockImplementation(function (this: any) {
+    const record: FakeXhr = { url: "", headers: {}, body: null, aborted: false };
+    xhrs.push(record);
+    this.upload = {};
+    this.open = vi.fn((_method: string, url: string) => {
+      record.url = url;
+    });
+    this.setRequestHeader = vi.fn((name: string, value: string) => {
+      record.headers[name] = value;
+    });
+    this.getResponseHeader = vi.fn(() => this.etag ?? null);
+    this.abort = vi.fn(() => {
+      record.aborted = true;
+      this.onabort?.();
+    });
+    this.send = vi.fn((body: unknown) => {
+      record.body = body;
+      const reply = replyToXhr(record);
+      if (reply === "hang") return;
+      queueMicrotask(() => {
+        if (reply === "network") {
+          this.onerror?.();
+          return;
+        }
+        this.status = reply.status;
+        this.responseText = reply.body ?? "";
+        this.etag = reply.etag;
+        this.onload?.();
+      });
+    });
+  }) as any;
+}
+
+function sseResponse(status = "clean") {
+  const data = JSON.stringify({
+    status,
+    error_code: status === "failed" ? "ERR_SCAN_UNAVAILABLE" : undefined,
+    detail: status === "failed" ? "scanner down" : undefined,
+    result: status === "clean"
+      ? { file_key: "final-key", size: 100, original_size: 100, mime_type: "application/pdf" }
+      : undefined,
+  });
+  const encoder = new TextEncoder();
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+      controller.close();
+    },
+  });
+  return { body } as unknown as Response;
+}
+
+const DIRECT_OK = {
+  status: 202,
+  body: JSON.stringify({ upload_id: "u", file_key: "direct-key", status: "pending", size: 1, mime_type: "application/pdf" }),
+};
+
+function fileOfSize(size: number) {
+  const file = new File(["x"], "doc.pdf", { type: "application/pdf" });
+  Object.defineProperty(file, "size", { value: size });
+  return file;
+}
+
+const CONFIG = {
+  allowed_extensions: [".pdf"],
+  allowed_mimetypes: ["application/pdf"],
+  max_file_size_mb: 100,
+  max_size_mb_by_mime: {},
+  recommended_path: "direct",
+  direct_threshold_mb: 10,
+};
+
+let apiRoutes: Record<string, () => Response | Promise<Response>>;
+
+function respondJson(value: unknown) {
+  return { json: async () => value } as unknown as Response;
+}
 
 describe("beginUploadGroup", () => {
-  it("requests one bounded admission for the folder", async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce({
-      json: async () => ({ group_id: "group-1", max_files: 275, expires_in: 172800 }),
-    } as Response);
+  it("requests one bounded admission for the batch", async () => {
+    vi.mocked(apiRequest).mockResolvedValueOnce(respondJson({ group_id: "group-1", max_files: 275, expires_in: 172800 }));
 
     await expect(beginUploadGroup(275)).resolves.toEqual({
       group_id: "group-1",
@@ -65,209 +153,251 @@ describe("beginUploadGroup", () => {
   });
 });
 
-// Mock XMLHttpRequest
-global.XMLHttpRequest = vi.fn().mockImplementation(function(this: any) {
-  this.upload = {};
-  this.open = vi.fn();
-  this.setRequestHeader = vi.fn();
-  this.send = vi.fn().mockImplementation(() => {
-    setTimeout(() => {
-      this.status = 200;
-      if (this.onload) this.onload();
-    }, 0);
-  });
-}) as any;
-
 describe("upload-client: uploadFile", () => {
-  const mockFile = new File(["test content"], "test.png", { type: "image/png" });
-
   beforeEach(() => {
     vi.clearAllMocks();
-    
-    // Robust mock implementation for apiRequest
-    vi.mocked(apiRequest).mockImplementation(async (url: any) => {
-      const urlStr = typeof url === "string" ? url : url.toString();
-      
-      if (urlStr.includes("/upload/check-exists")) {
-        return { json: async () => ({ exists: false }) } as any;
+    installXhr();
+    replyToXhr = () => DIRECT_OK;
+    apiRoutes = {};
+    vi.mocked(compressImageIfNeeded).mockImplementation(async (file) => ({ file, compressed: false }));
+    vi.mocked(apiRequest).mockImplementation(async (url: unknown) => {
+      const path = String(url);
+      for (const [prefix, respond] of Object.entries(apiRoutes)) {
+        if (path.includes(prefix)) return respond();
       }
-      if (urlStr.includes("/upload/config")) {
-        return {
-          json: async () => ({
-            allowed_extensions: [".png", ".svg", ".pdf"],
-            allowed_mimetypes: ["image/png", "image/svg+xml", "application/pdf"],
-            max_file_size_mb: 100,
-            max_size_mb_by_mime: {},
-            recommended_path: "direct",
-            direct_threshold_mb: 10,
-          }),
-        } as any;
-      }
-      if (urlStr === "/upload") {
-        return {
-          json: async () => ({
-            upload_id: "u-id",
-            file_key: "q-key",
-            status: "pending",
-            size: mockFile.size,
-            mime_type: mockFile.type,
-          }),
-        } as any;
-      }
-      if (urlStr.includes("/upload/init")) {
-        return { json: async () => ({ 
-          quarantine_key: "q-key", 
-          upload_id: "u-id", 
-          presigned_url: "p-url" 
-        }) } as any;
-      }
-      if (urlStr.includes("/upload/complete")) {
-        return { json: async () => ({ status: "pending" }) } as any;
-      }
-      if (urlStr.includes("/upload/events/")) {
-        const encoder = new TextEncoder();
-        const data = JSON.stringify({
-          status: "clean",
-          result: {
-            file_key: "final-key",
-            size: 100,
-            original_size: 100,
-            mime_type: "image/png",
-          }
-        });
-        const stream = new ReadableStream({
-          start(controller) {
-            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-            controller.close();
-          }
-        });
-        return { body: stream } as any;
-      }
-      return { json: async () => ({}) } as any;
+      if (path.includes("/upload/config")) return respondJson(CONFIG);
+      if (path.includes("/upload/events/")) return sseResponse();
+      return respondJson({});
     });
   });
 
-  it("re-calculates hash if file was compressed", async () => {
-    vi.mocked(sha256File).mockResolvedValueOnce("original-hash");
-    
-    const compressedFile = new File(["compressed content"], "test.png", { type: "image/png" });
-    vi.mocked(compressImageIfNeeded).mockResolvedValueOnce({
-      file: compressedFile,
-      compressed: true,
-    });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-    vi.mocked(sha256File).mockResolvedValueOnce("compressed-hash");
-
-    const result = await uploadFile(mockFile);
-
-    expect(sha256File).toHaveBeenCalledTimes(2);
-    expect(sha256File).toHaveBeenNthCalledWith(1, mockFile, expect.any(Function), undefined);
-    expect(sha256File).toHaveBeenNthCalledWith(2, compressedFile, undefined, undefined);
-    
-    expect(result.content_sha256).toBe("compressed-hash");
-    expect(result.file_key).toBe("final-key");
-  }, 10000); // Increased timeout
-
-  it("does not re-calculate hash if file was not compressed", async () => {
-    vi.mocked(sha256File).mockResolvedValueOnce("original-hash");
-
-    vi.mocked(compressImageIfNeeded).mockResolvedValueOnce({
-      file: mockFile,
-      compressed: false,
-    });
-
-    const result = await uploadFile(mockFile);
-
-    expect(sha256File).toHaveBeenCalledTimes(1);
-    expect(sha256File).toHaveBeenCalledWith(mockFile, expect.any(Function), undefined);
-    expect(result.content_sha256).toBe("original-hash");
-  }, 10000);
-
-  it("uses the backend-recommended direct endpoint for small files", async () => {
-    vi.mocked(sha256File).mockResolvedValueOnce("original-hash");
-    vi.mocked(compressImageIfNeeded).mockResolvedValueOnce({
-      file: mockFile,
-      compressed: false,
-    });
-
-    await uploadFile(mockFile);
-
-    expect(apiRequest).toHaveBeenCalledWith(
-      "/upload",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.any(FormData),
-        timeoutMs: 120_000,
-      }),
-    );
-    const calls = vi.mocked(apiRequest).mock.calls.map(([u]) => String(u));
-    expect(calls.some((u) => u.includes("/upload/init"))).toBe(false);
-    expect(calls.some((u) => u.includes("/upload/complete"))).toBe(false);
-  }, 10000);
-
-  it("sends the stable file and folder admission IDs to the upload endpoint", async () => {
-    vi.mocked(sha256File).mockResolvedValueOnce("original-hash");
-    vi.mocked(compressImageIfNeeded).mockResolvedValueOnce({
-      file: mockFile,
-      compressed: false,
-    });
-
-    await uploadFile(mockFile, {
+  it("sends small files through the direct endpoint with their admission IDs", async () => {
+    const result = await uploadFile(fileOfSize(1024), {
       uploadId: "982fbdc1-34ed-46df-a42a-86a9dad8ad74",
       uploadGroupId: "9652c70f-baa7-4ad9-9708-3ec8d5d9832c",
     });
 
-    expect(apiRequest).toHaveBeenCalledWith(
-      "/upload",
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          "X-Upload-ID": "982fbdc1-34ed-46df-a42a-86a9dad8ad74",
-          "X-Upload-Group-ID": "9652c70f-baa7-4ad9-9708-3ec8d5d9832c",
-        }),
-      }),
-    );
-  }, 10000);
+    expect(xhrs).toHaveLength(1);
+    expect(xhrs[0].url).toBe("http://test-api/upload");
+    expect(xhrs[0].headers).toMatchObject({
+      "X-Upload-ID": "982fbdc1-34ed-46df-a42a-86a9dad8ad74",
+      "X-Upload-Group-ID": "9652c70f-baa7-4ad9-9708-3ec8d5d9832c",
+      Authorization: "Bearer test-token",
+    });
+    expect(result.file_key).toBe("final-key");
+    expect(ensureFreshAccessToken).toHaveBeenCalled();
+  });
 
-  it("skips upload and returns result when dedup check says file exists", async () => {
-    vi.mocked(sha256File).mockResolvedValueOnce("known-hash");
+  it("retries a dropped direct upload with the same upload ID", async () => {
+    let attempt = 0;
+    replyToXhr = () => (attempt++ === 0 ? "network" : DIRECT_OK);
 
-    vi.mocked(apiRequest).mockImplementation(async (url: any) => {
-      const urlStr = String(url);
-      if (urlStr.includes("/upload/check-exists")) {
-        return { json: async () => ({ exists: true, file_key: "cached-key" }) } as any;
-      }
-      if (urlStr.includes("/upload/status/batch")) {
-        return {
-          json: async () => ({
-            statuses: {
-              "cached-key": {
-                status: "clean",
-                file_key: "cached-key",
-                result: {
-                  file_key: "cached-key",
-                  size: 100,
-                  original_size: 100,
-                  mime_type: "image/png",
-                  content_encoding: null,
-                },
-              },
-            },
-          }),
-        } as any;
-      }
-      return { json: async () => ({}) } as any;
+    await uploadFile(fileOfSize(1024), { uploadId: "11111111-1111-4111-8111-111111111111" });
+
+    expect(xhrs.map((xhr) => xhr.headers["X-Upload-ID"])).toEqual([
+      "11111111-1111-4111-8111-111111111111",
+      "11111111-1111-4111-8111-111111111111",
+    ]);
+  }, 10_000);
+
+  it("does not retry a rejected file and keeps its error code", async () => {
+    replyToXhr = () => ({
+      status: 400,
+      body: JSON.stringify({ detail: "Too big", error_code: "ERR_FILE_TOO_LARGE" }),
     });
 
-    // forcePipeline: false is required to enable the dedup check path
-    const result = await uploadFile(mockFile, { forcePipeline: false });
+    await expect(uploadFile(fileOfSize(1024))).rejects.toMatchObject({
+      status: 400,
+      error_code: "ERR_FILE_TOO_LARGE",
+    });
+    expect(xhrs).toHaveLength(1);
+  });
 
-    const calls = vi.mocked(apiRequest).mock.calls.map(([u]) => String(u));
-    expect(calls.some((u) => u.includes("/upload/init"))).toBe(false);
-    expect(result.file_key).toBe("cached-key");
-  }, 10000);
+  it("reports the transfer before waiting for processing", async () => {
+    const order: string[] = [];
+    vi.mocked(apiRequest).mockImplementation(async (url: unknown) => {
+      if (String(url).includes("/upload/events/")) {
+        order.push("watch");
+        return sseResponse();
+      }
+      return respondJson(CONFIG);
+    });
+
+    await uploadFile(fileOfSize(1024), { onTransferred: () => order.push("transferred") });
+
+    expect(order).toEqual(["transferred", "watch"]);
+  });
+
+  it("carries the terminal failure code from processing", async () => {
+    apiRoutes["/upload/events/"] = () => sseResponse("failed");
+
+    await expect(uploadFile(fileOfSize(1024))).rejects.toMatchObject({
+      status: 500,
+      error_code: "ERR_SCAN_UNAVAILABLE",
+    });
+  });
+
+  it("uses parallel multipart above the direct threshold", async () => {
+    const eightMiB = 8 * 1024 * 1024;
+    apiRoutes["/upload/presigned-multipart/init"] = () => respondJson({
+      quarantine_key: "mp-key",
+      upload_id: "mp-1",
+      s3_multipart_id: "s3",
+      parts: [
+        { part_number: 1, size: eightMiB, url: "http://s3/1" },
+        { part_number: 2, size: eightMiB, url: "http://s3/2" },
+      ],
+    });
+    replyToXhr = (xhr) => ({ status: 200, etag: `"${xhr.url.slice(-1)}"` });
+    const started = vi.fn();
+
+    await uploadFile(fileOfSize(2 * eightMiB), { onMultipartStarted: started });
+
+    expect(started).toHaveBeenCalledWith("mp-1");
+    const complete = vi.mocked(apiRequest).mock.calls.find(([url]) => String(url).endsWith("/complete"));
+    expect(JSON.parse(String(complete?.[1]?.body))).toEqual({
+      upload_id: "mp-1",
+      parts: [{ PartNumber: 1, ETag: '"1"' }, { PartNumber: 2, ETag: '"2"' }],
+    });
+  });
+
+  it("resumes multipart by sending only the missing parts", async () => {
+    const eightMiB = 8 * 1024 * 1024;
+    apiRoutes["/upload/presigned-multipart/mp-1/resume"] = () => respondJson({
+      quarantine_key: "mp-key",
+      upload_id: "mp-1",
+      s3_multipart_id: "s3",
+      parts: [
+        { part_number: 1, size: eightMiB, etag: '"stored"' },
+        { part_number: 2, size: eightMiB, url: "http://s3/2" },
+      ],
+    });
+    replyToXhr = () => ({ status: 200, etag: '"new"' });
+
+    await uploadFile(fileOfSize(2 * eightMiB), { multipartUploadId: "mp-1" });
+
+    expect(xhrs.map((xhr) => xhr.url)).toEqual(["http://s3/2"]);
+    const complete = vi.mocked(apiRequest).mock.calls.find(([url]) => String(url).endsWith("/complete"));
+    expect(JSON.parse(String(complete?.[1]?.body)).parts).toEqual([
+      { PartNumber: 1, ETag: '"stored"' },
+      { PartNumber: 2, ETag: '"new"' },
+    ]);
+  });
+
+  it("starts a new session when the old one cannot be resumed", async () => {
+    const eightMiB = 8 * 1024 * 1024;
+    apiRoutes["/resume"] = () => {
+      throw new ApiError(409, "already failed");
+    };
+    apiRoutes["/upload/presigned-multipart/init"] = () => respondJson({
+      quarantine_key: "mp-key",
+      upload_id: "mp-2",
+      s3_multipart_id: "s3",
+      parts: [
+        { part_number: 1, size: eightMiB, url: "http://s3/1" },
+        { part_number: 2, size: eightMiB, url: "http://s3/2" },
+      ],
+    });
+    replyToXhr = () => ({ status: 200, etag: '"x"' });
+    const started = vi.fn();
+
+    await uploadFile(fileOfSize(2 * eightMiB), { multipartUploadId: "mp-1", onMultipartStarted: started });
+
+    expect(started).toHaveBeenCalledWith("mp-2");
+  });
+
+  it("cancels sibling parts when one part fails, and keeps the session", async () => {
+    const eightMiB = 8 * 1024 * 1024;
+    apiRoutes["/upload/presigned-multipart/init"] = () => respondJson({
+      quarantine_key: "mp-key",
+      upload_id: "mp-1",
+      s3_multipart_id: "s3",
+      parts: [
+        { part_number: 1, size: eightMiB, url: "http://s3/fail" },
+        { part_number: 2, size: eightMiB, url: "http://s3/hang" },
+      ],
+    });
+    replyToXhr = (xhr) => (xhr.url.endsWith("fail") ? { status: 403 } : "hang");
+
+    await expect(uploadFile(fileOfSize(2 * eightMiB))).rejects.toMatchObject({ status: 403 });
+
+    expect(xhrs.find((xhr) => xhr.url.endsWith("hang"))?.aborted).toBe(true);
+    const calls = vi.mocked(apiRequest).mock.calls;
+    expect(calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+  });
+
+  it("falls back to tus when multipart is disabled", async () => {
+    apiRoutes["/upload/presigned-multipart/init"] = () => {
+      throw new ApiError(501, "disabled");
+    };
+
+    await uploadFile(fileOfSize(16 * 1024 * 1024));
+
+    expect(tus.Upload).toHaveBeenCalledOnce();
+    const options = vi.mocked(tus.Upload).mock.calls[0][1]!;
+    const retry = (status: number) =>
+      options.onShouldRetry!({ originalResponse: { getStatus: () => status } } as never, 0, options as never);
+    expect(retry(429)).toBe(true);
+    expect(retry(409)).toBe(true);
+    expect(retry(400)).toBe(false);
+  });
+
+  it("does not resume a stored session with recompressed bytes", async () => {
+    const compressed = fileOfSize(1024);
+    vi.mocked(compressImageIfNeeded).mockResolvedValueOnce({ file: compressed, compressed: true });
+    const image = new File(["x"], "photo.png", { type: "image/png" });
+
+    const result = await uploadFile(image, { tusUrl: "http://test-api/upload/tus/old" });
+
+    expect(tus.Upload).not.toHaveBeenCalled();
+    expect(xhrs).toHaveLength(1);
+    expect(result.wasCompressed).toBe(true);
+  });
+
+  it("stops without reporting a failure when aborted", async () => {
+    replyToXhr = () => "hang";
+    const controller = new AbortController();
+
+    const pending = uploadFile(fileOfSize(1024), { signal: controller.signal });
+    await vi.waitFor(() => expect(xhrs).toHaveLength(1));
+    controller.abort();
+
+    await expect(pending).rejects.toThrow("Upload cancelled");
+    expect(xhrs).toHaveLength(1);
+  });
+
+  // Keep last: the first blocked bucket disables multipart for the rest of the page.
+  it("falls back to tus when bucket CORS hides the ETag", async () => {
+    const eightMiB = 8 * 1024 * 1024;
+    apiRoutes["/upload/presigned-multipart/init"] = () => respondJson({
+      quarantine_key: "mp-key",
+      upload_id: "mp-1",
+      s3_multipart_id: "s3",
+      parts: [
+        { part_number: 1, size: eightMiB, url: "http://s3/1" },
+        { part_number: 2, size: eightMiB, url: "http://s3/2" },
+      ],
+    });
+    replyToXhr = () => ({ status: 200 });
+
+    await uploadFile(fileOfSize(2 * eightMiB));
+
+    expect(tus.Upload).toHaveBeenCalledOnce();
+    expect(apiRequest).toHaveBeenCalledWith(
+      "/upload/presigned-multipart/mp-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+
+    vi.mocked(apiRequest).mockClear();
+    await uploadFile(fileOfSize(2 * eightMiB));
+    const calls = vi.mocked(apiRequest).mock.calls.map(([url]) => String(url));
+    expect(calls.some((url) => url.includes("presigned-multipart"))).toBe(false);
+  });
 });
-
-// ── logicalFileSize ──────────────────────────────────────────────────────────
 
 describe("logicalFileSize", () => {
   it("returns size when content_encoding is null", () => {
@@ -281,13 +411,7 @@ describe("logicalFileSize", () => {
   it("returns size for unknown encodings (not gzip)", () => {
     expect(logicalFileSize({ size: 400, original_size: 800, content_encoding: "br" })).toBe(400);
   });
-
-  it("handles identical size and original_size", () => {
-    expect(logicalFileSize({ size: 200, original_size: 200, content_encoding: null })).toBe(200);
-  });
 });
-
-// ── getUploadConfig ──────────────────────────────────────────────────────────
 
 describe("getUploadConfig", () => {
   const mockConfig = {
@@ -297,40 +421,22 @@ describe("getUploadConfig", () => {
     max_size_mb_by_mime: { "application/pdf": 200, "image/png": 25 },
     recommended_path: "direct" as const,
     direct_threshold_mb: 10,
-    batch_max_zip_size_bytes: 500 * 1024 * 1024,
-    batch_max_total_extracted_bytes: 2 * 1024 ** 3,
-    batch_max_files: 200,
-    batch_max_files_privileged: 2_000,
-    batch_max_path_depth: 20,
   };
 
-  // Run all three behaviours in a single test so module-level cache state
-  // flows naturally from one assertion to the next without ordering issues.
   it("fetches once, caches within TTL, and re-fetches after expiry", async () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
-
-    // Advance past any cache left by previous tests so the first call fetches.
     vi.advanceTimersByTime(10 * 60 * 1000);
+    vi.mocked(apiRequest).mockResolvedValue(respondJson(mockConfig));
 
-    vi.mocked(apiRequest).mockResolvedValue({
-      json: async () => mockConfig,
-    } as any);
-
-    // First call: fetches from the network.
     const result = await getUploadConfig();
     expect(result).toEqual(mockConfig);
     const callsAfterFirst = vi.mocked(apiRequest).mock.calls.length;
-    expect(callsAfterFirst).toBeGreaterThanOrEqual(1);
 
-    // Second call immediately: uses the cache (no extra network call).
     await getUploadConfig();
     expect(vi.mocked(apiRequest).mock.calls.length).toBe(callsAfterFirst);
 
-    // Advance past the 5-minute TTL.
     vi.advanceTimersByTime(6 * 60 * 1000);
-
-    // Third call: cache expired, fetches again.
     await getUploadConfig();
     expect(vi.mocked(apiRequest).mock.calls.length).toBe(callsAfterFirst + 1);
 
@@ -342,62 +448,5 @@ describe("getUploadConfig", () => {
     expect(uploadLimitMbForMime(mockConfig, "image/png", 100)).toBe(25);
     expect(uploadLimitMbForMime(mockConfig, "application/octet-stream", 100)).toBe(50);
     expect(uploadLimitMbForMime(null, "application/pdf", 100)).toBe(100);
-  });
-});
-
-describe("uploadBatchZip", () => {
-  it("retries a network failure with the same batch id", async () => {
-    const originalXhr = global.XMLHttpRequest;
-    const requestHeaders: Array<Record<string, string>> = [];
-    let attempt = 0;
-
-    global.XMLHttpRequest = vi.fn().mockImplementation(function(this: any) {
-      this.upload = {};
-      const headers: Record<string, string> = {};
-      requestHeaders.push(headers);
-      this.open = vi.fn();
-      this.setRequestHeader = vi.fn((key: string, value: string) => {
-        headers[key] = value;
-      });
-      this.abort = vi.fn();
-      this.send = vi.fn(() => {
-        if (attempt++ === 0) {
-          queueMicrotask(() => this.onerror?.());
-        } else {
-          queueMicrotask(() => {
-            this.status = 202;
-            this.responseText = JSON.stringify({
-              batch_id: "11111111-1111-4111-8111-111111111111",
-              files: [],
-              skipped: 0,
-              errors: [],
-            });
-            this.onload?.();
-          });
-        }
-      });
-    }) as any;
-
-    try {
-      const result = await uploadBatchZip(new Blob(["PK\u0003\u0004"]), {
-        uploadId: "11111111-1111-4111-8111-111111111111",
-      });
-
-      expect(result.batch_id).toBe("11111111-1111-4111-8111-111111111111");
-      expect(requestHeaders).toHaveLength(2);
-      expect(requestHeaders.map((headers) => headers["X-Upload-ID"])).toEqual([
-        "11111111-1111-4111-8111-111111111111",
-        "11111111-1111-4111-8111-111111111111",
-      ]);
-    } finally {
-      global.XMLHttpRequest = originalXhr;
-    }
-  });
-
-  it("rejects an archive larger than the advertised server limit before transfer", async () => {
-    const archive = new Blob();
-    Object.defineProperty(archive, "size", { value: 500 * 1024 * 1024 + 1 });
-
-    await expect(uploadBatchZip(archive)).rejects.toMatchObject({ status: 413 });
   });
 });

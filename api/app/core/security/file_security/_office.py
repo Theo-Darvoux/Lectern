@@ -34,7 +34,11 @@ from app.core.security.file_security._zip import (
     _validate_zip_info,
     _validate_zip_name_conflicts,
 )
-from app.core.security.file_security.errors import SanitizationError, UnsafeFileError
+from app.core.security.file_security.errors import (
+    SanitizationError,
+    UnreadableFileError,
+    UnsafeFileError,
+)
 from app.core.security.processing_paths import (
     make_processing_temp_path as _make_temp_path,
 )
@@ -108,7 +112,7 @@ async def _strip_ole2_from_path(file_path: Path, mime_type: str | None = None) -
                     result.returncode,
                     result.stderr[:500],
                 )
-                raise SanitizationError("Failed to sanitize legacy Office document metadata.")
+                raise UnreadableFileError("Failed to sanitize legacy Office document metadata.")
             await _shielded_to_thread(shutil.copyfile, working_path, final_path)
         return final_path
     except BaseException:

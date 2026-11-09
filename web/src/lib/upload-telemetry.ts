@@ -8,6 +8,8 @@ export interface UploadTelemetry {
     processingStatus?: string;
     stageIndex?: number;
     stageTotal?: number;
+    bps?: number;
+    etaSec?: number;
 }
 
 type TelemetryById = Readonly<Record<string, UploadTelemetry>>;

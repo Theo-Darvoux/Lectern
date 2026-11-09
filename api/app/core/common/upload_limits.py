@@ -10,6 +10,26 @@ from app.core.common.upload_errors import UploadErrorCode
 _MIB = 1024 * 1024
 
 
+def configured_allowed_extensions() -> frozenset[str] | None:
+    """Return the operator's extension allowlist, or None for the built-in list."""
+    if not settings.allowed_extensions:
+        return None
+    return frozenset(
+        ext if ext.startswith(".") else f".{ext}"
+        for ext in (part.strip().lower() for part in settings.allowed_extensions.split(","))
+        if ext
+    )
+
+
+def configured_allowed_mimes() -> frozenset[str] | None:
+    """Return the operator's MIME allowlist, or None for the built-in list."""
+    if not settings.allowed_mime_types:
+        return None
+    return frozenset(
+        mime.strip().lower() for mime in settings.allowed_mime_types.split(",") if mime.strip()
+    )
+
+
 def _configured_bytes(
     key: str,
     fallback_mb: int,

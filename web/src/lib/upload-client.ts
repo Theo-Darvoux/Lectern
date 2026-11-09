@@ -1,50 +1,42 @@
 import * as tus from "tus-js-client";
-import { API_BASE, ApiError, apiRequest, getClientId } from "@/lib/api-client";
+import { API_BASE, ApiError, apiRequest, ensureFreshAccessToken, getClientId } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { compressImageIfNeeded } from "@/lib/file-utils";
-import { sha256File } from "@/lib/crypto-utils";
 import { withMalwareErrorPrefix } from "@/lib/upload-errors";
 
-type UploadStatus = "pending" | "processing" | "clean" | "malicious" | "failed";
-
-export interface TusUploadHandle {
-    pause(): void;
-    resume(): void;
-    abort(sendDelete?: boolean): void;
-}
+type UploadStatus = "pending" | "processing" | "clean" | "malicious" | "failed" | "applied";
 
 interface UploadFileOptions {
     /**
      * Progress callback. Values:
-     *   0–5    Initialisation (Hashing + Dedup check)
-     *   5–80   Transfer to S3 (XHR PUT for small files, tus chunks for large)
-     *   80–99  Server-side processing (via SSE overall_percent)
-     *   100    Complete
+     *   0-80    Transfer to storage
+     *   80-99   Server-side processing (via SSE overall_percent)
+     *   100     Complete
      */
     onProgress?: (pct: number) => void;
-    /** Called with granular server status messages (e.g. "Scanning for malware…"). */
+    /** Called with granular status messages (e.g. "Scanning for malware…"). */
     onStatusUpdate?: (status: string, stageIndex?: number, stageTotal?: number) => void;
     /** Called with raw byte progress. */
     onBytesProgress?: (uploaded: number, total: number) => void;
-    /** Called when a tus upload is ready to be controlled (paused/resumed). */
-    onTusReady?: (handle: TusUploadHandle) => void;
-    /** Called when the tus Location URL is available (for persistence). */
+    /** Called once the bytes are stored and server-side processing has been requested. */
+    onTransferred?: (quarantineKey: string) => void;
+    /** Called when a tus Location URL is available (for resuming). */
     onTusUrlAvailable?: (url: string) => void;
-    /** Called when the client-side SHA-256 hash is computed. */
-    onHashComputed?: (hash: string) => void;
+    /** Called when a multipart session exists (for resuming). */
+    onMultipartStarted?: (uploadId: string) => void;
     signal?: AbortSignal;
     /** Stable UUID for this upload attempt — enables server-side idempotency on retry. */
     uploadId?: string;
-    /** Server-issued bounded admission capability for one folder. */
+    /** Server-issued bounded admission capability for one batch. */
     uploadGroupId?: string;
-    /** Optional tus URL to resume from. */
+    /** tus URL of an earlier attempt to continue. */
     tusUrl?: string;
-    /** Skip client-side image compression (useful for 4K+ scans) (U10). */
+    /** Multipart session of an earlier attempt to continue. */
+    multipartUploadId?: string;
+    /** Keep the original image bytes instead of recompressing large images. */
     skipCompression?: boolean;
     /** Translation function for status messages (keys from Upload namespace). */
     t?: (key: string) => string;
-    /** Force the file through the entire pipeline (no deduplication skipping). */
-    forcePipeline?: boolean;
 }
 
 /**
@@ -68,8 +60,6 @@ interface UploadResult {
     correctedName: string;
     /** True when client-side image compression was applied before upload. */
     wasCompressed: boolean;
-    /** The client-computed SHA-256 hash. */
-    content_sha256?: string;
 }
 
 interface DirectUploadResponse {
@@ -82,46 +72,49 @@ interface DirectUploadResponse {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/** Files above this threshold are uploaded via tus (resumable chunked); below go via presigned PUT. */
-const TUS_THRESHOLD_BYTES = 5 * 1024 * 1024; // 5 MiB
+const UPLOAD_CANCELLED = "Upload cancelled";
 
-/** Files above this threshold use direct-to-S3 multipart; below go via tus. */
-const PRESIGNED_MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024; // 100 MiB
+/** Smallest file the multipart endpoint accepts. */
+const MULTIPART_MIN_BYTES = 5 * 1024 * 1024;
+
+/** Parallel part transfers per multipart upload. */
+const MULTIPART_CONCURRENCY = 4;
 
 /** tus chunk size — must satisfy S3 minimum part size (5 MiB) for non-final parts. */
-const TUS_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB
+const TUS_CHUNK_SIZE = 8 * 1024 * 1024;
 
-/** Direct uploads are small, but still bound the whole request so UI cannot hang forever. */
-const DIRECT_UPLOAD_TIMEOUT_MS = 120_000;
+const TUS_RETRY_DELAYS = [0, 1_000, 3_000, 5_000, 10_000, 20_000, 30_000];
+
+/** A transfer that makes no progress for this long is treated as a lost connection. */
+const STALL_TIMEOUT_MS = 60_000;
+
+/** Time the server may take to answer once the request body has been sent. */
+const RESPONSE_TIMEOUT_MS = 120_000;
+
+/** Concurrent processing watchers; each one holds an SSE connection. */
+const MAX_PROCESSING_WATCHERS = 4;
+
+const MAX_TRANSFER_ATTEMPTS = 5;
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
-interface InitUploadResponse {
-    quarantine_key: string;
-    upload_id: string;
-    presigned_url: string;
-}
-
-interface InitMultipartResponse {
+interface MultipartSession {
     quarantine_key: string;
     upload_id: string;
     s3_multipart_id: string;
     parts: Array<{
         part_number: number;
         size: number;
-        url: string;
+        url?: string | null;
+        etag?: string | null;
     }>;
-}
-
-interface CheckExistsResponse {
-    exists: boolean;
-    file_key: string | null;
 }
 
 interface UploadEventPayload {
     file_key: string;
     status: UploadStatus;
-    detail?: string;
+    detail?: string | null;
+    error_code?: string | null;
     result?: {
         file_key: string;
         file_name?: string;
@@ -129,11 +122,12 @@ interface UploadEventPayload {
         original_size: number;
         mime_type: string;
         content_encoding?: string | null;
-    };
-    stage_index?: number;
-    stage_total?: number;
-    stage_percent?: number;
-    overall_percent?: number;
+    } | null;
+    stage?: string | null;
+    stage_index?: number | null;
+    stage_total?: number | null;
+    stage_percent?: number | null;
+    overall_percent?: number | null;
 }
 
 export interface UploadConfig {
@@ -208,385 +202,363 @@ function addUploadAdmissionHeaders(
 
 // ── Retry helpers ─────────────────────────────────────────────────────────────
 
-const _MAX_RETRIES = 3;
+/** The connection dropped or stalled; the same request may be sent again. */
+class TransferInterruptedError extends Error {
+    override readonly name = "TransferInterruptedError";
+}
 
-function _isRetryable(status: number): boolean {
-    return status === 429 || status >= 500;
+/** The browser cannot use object storage directly, e.g. bucket CORS hides ETag. */
+class StorageUnreachableError extends Error {
+    override readonly name = "StorageUnreachableError";
+    constructor(message: string, readonly multipartUploadId?: string) {
+        super(message);
+    }
+}
+
+function _isRetryable(err: unknown): boolean {
+    if (err instanceof ApiError) return err.status === 408 || err.status === 429 || err.status >= 500;
+    return (
+        err instanceof TransferInterruptedError ||
+        err instanceof TypeError ||
+        (err instanceof DOMException && err.name === "AbortError")
+    );
 }
 
 function _sleep(ms: number, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener("abort", () => {
+        if (signal?.aborted) {
+            reject(new Error(UPLOAD_CANCELLED));
+            return;
+        }
+        const onAbort = () => {
             clearTimeout(timer);
-            reject(new Error("Upload cancelled"));
-        }, { once: true });
+            reject(new Error(UPLOAD_CANCELLED));
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
     });
 }
 
-// ── XHR PUT to presigned S3 URL ───────────────────────────────────────────────
+/** Run an idempotent request, backing off on transient failures. */
+async function _withRetry<T>(attempt: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    for (let attempts = 1; ; attempts++) {
+        try {
+            return await attempt();
+        } catch (err) {
+            if (signal?.aborted) throw new Error(UPLOAD_CANCELLED);
+            if (attempts >= MAX_TRANSFER_ATTEMPTS || !_isRetryable(err)) throw err;
+            await _sleep(Math.min(1_000 * 2 ** (attempts - 1), 15_000) + Math.random() * 250, signal);
+        }
+    }
+}
 
-function _xhrPut(
-    url: string,
-    file: File,
-    onProgress?: (pct: number) => void,
-    onBytesProgress?: (uploaded: number, total: number) => void,
-    signal?: AbortSignal,
-): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-        if (signal?.aborted) {
-            reject(new Error("Upload cancelled"));
+// ── XHR transport (fetch cannot report upload progress) ───────────────────────
+
+interface XhrRequest {
+    method: "POST" | "PUT";
+    url: string;
+    body: XMLHttpRequestBodyInit;
+    headers?: Record<string, string>;
+    withCredentials?: boolean;
+    signal?: AbortSignal;
+    onProgress?: (loaded: number, total: number) => void;
+}
+
+function _xhr(request: XhrRequest): Promise<XMLHttpRequest> {
+    return new Promise((resolve, reject) => {
+        if (request.signal?.aborted) {
+            reject(new Error(UPLOAD_CANCELLED));
             return;
         }
 
         const xhr = new XMLHttpRequest();
-
-        xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-                // Maps to the 5–80 range
-                onProgress?.(5 + Math.round((e.loaded / e.total) * 75));
-                onBytesProgress?.(e.loaded, e.total);
-            }
+        let stalled = false;
+        let watchdog: ReturnType<typeof setTimeout> | undefined;
+        const armWatchdog = (ms: number) => {
+            clearTimeout(watchdog);
+            watchdog = setTimeout(() => {
+                stalled = true;
+                xhr.abort();
+            }, ms);
+        };
+        const onAbort = () => xhr.abort();
+        const settle = () => {
+            clearTimeout(watchdog);
+            request.signal?.removeEventListener("abort", onAbort);
         };
 
+        xhr.open(request.method, request.url);
+        xhr.withCredentials = request.withCredentials ?? false;
+        for (const [name, value] of Object.entries(request.headers ?? {})) {
+            xhr.setRequestHeader(name, value);
+        }
+        xhr.upload.onprogress = (event) => {
+            armWatchdog(STALL_TIMEOUT_MS);
+            if (event.lengthComputable) request.onProgress?.(event.loaded, event.total);
+        };
+        xhr.upload.onload = () => armWatchdog(RESPONSE_TIMEOUT_MS);
         xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-                resolve();
-            } else {
-                reject(new ApiError(xhr.status, `S3 PUT failed with status ${xhr.status}`));
-            }
+            settle();
+            resolve(xhr);
+        };
+        xhr.onerror = () => {
+            settle();
+            reject(new TransferInterruptedError("Network error during upload"));
+        };
+        xhr.onabort = () => {
+            settle();
+            reject(stalled ? new TransferInterruptedError("Upload stalled") : new Error(UPLOAD_CANCELLED));
         };
 
-        xhr.onerror = () => reject(new Error("Network error during S3 upload"));
-        xhr.onabort = () => reject(new Error("Upload cancelled"));
-
-        xhr.open("PUT", url);
-        // S3 presigned PUT requires the Content-Type to match what was signed
-        xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-
-        signal?.addEventListener("abort", () => xhr.abort(), { once: true });
-
-        xhr.send(file);
+        request.signal?.addEventListener("abort", onAbort, { once: true });
+        armWatchdog(STALL_TIMEOUT_MS);
+        xhr.send(request.body);
     });
 }
-async function _xhrPutWithRetry(
-    url: string,
-    file: File,
-    onProgress?: (pct: number) => void,
-    onBytesProgress?: (uploaded: number, total: number) => void,
-    signal?: AbortSignal,
-): Promise<void> {
-    let attempts = 0;
-    while (attempts < _MAX_RETRIES) {
-        try {
-            return await _xhrPut(url, file, onProgress, onBytesProgress, signal);
-        } catch (err) {
-            attempts++;
-            const isLast = attempts >= _MAX_RETRIES;
-            const retryable = err instanceof ApiError && _isRetryable(err.status);
-            const isNetwork =
-                !(err instanceof ApiError) &&
-                err instanceof Error &&
-                err.message.startsWith("Network error");
 
-            if (isLast || (!retryable && !isNetwork)) throw err;
-            const delay = Math.min(1000 * 2 ** attempts, 30_000);
-            await _sleep(delay, signal);
-        }
+function _apiErrorFromBody(status: number, body: string, fallback: string): ApiError {
+    try {
+        const parsed = JSON.parse(body) as { detail?: unknown; error_code?: string };
+        const detail = typeof parsed.detail === "string" ? parsed.detail : fallback;
+        return new ApiError(status, detail, parsed.error_code);
+    } catch {
+        return new ApiError(status, fallback);
     }
 }
 
-// ── Backend-recommended direct upload path (small files) ──────────────────────
+function _authHeaders(options: Pick<UploadFileOptions, "uploadId" | "uploadGroupId">): Record<string, string> {
+    const headers: Record<string, string> = { "X-Client-ID": getClientId() };
+    const token = getAccessToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    addUploadAdmissionHeaders(headers, options);
+    return headers;
+}
 
-async function _directUpload(
-    file: File,
-    options: UploadFileOptions,
-): Promise<string> {
-    const { onProgress, onStatusUpdate, onBytesProgress, signal } = options;
+// ── Direct path (small files, sent through the API) ───────────────────────────
+
+async function _directUpload(file: File, options: UploadFileOptions): Promise<string> {
+    const { onProgress, onBytesProgress, signal } = options;
     const form = new FormData();
     form.append("file", file, file.name);
 
-    _onStatusUpdate(onStatusUpdate, "uploading", options.t);
+    // Every attempt carries the same X-Upload-ID, so a retry after a lost response
+    // returns the original upload instead of creating a second one.
+    const result = await _withRetry(async () => {
+        const xhr = await _xhr({
+            method: "POST",
+            url: `${API_BASE}/upload`,
+            body: form,
+            headers: _authHeaders(options),
+            withCredentials: true,
+            signal,
+            onProgress: (loaded, total) => {
+                onProgress?.(Math.round((loaded / total) * 80));
+                onBytesProgress?.(Math.round((loaded / total) * file.size), file.size);
+            },
+        });
+        if (xhr.status < 200 || xhr.status >= 300) {
+            throw _apiErrorFromBody(xhr.status, xhr.responseText, `Upload failed (${xhr.status})`);
+        }
+        return JSON.parse(xhr.responseText) as DirectUploadResponse;
+    }, signal);
 
-    const headers: Record<string, string> = {};
-    addUploadAdmissionHeaders(headers, options);
-
-    const response = await apiRequest("/upload", {
-        method: "POST",
-        headers,
-        body: form,
-        signal,
-        timeoutMs: DIRECT_UPLOAD_TIMEOUT_MS,
-    });
-    const result = await response.json() as DirectUploadResponse;
-
-    // fetch() does not expose upload-body progress. This route is only selected
-    // below the backend-advertised direct threshold, so report the transfer as
-    // complete once the server has durably accepted the request.
-    onBytesProgress?.(file.size, file.size);
-    onProgress?.(80);
-    _onStatusUpdate(onStatusUpdate, "processing", options.t);
     return result.file_key;
 }
 
-function _xhrPutPart(
-    url: string,
-    blob: Blob,
-    onPartProgress: (partPct: number) => void,
-    signal?: AbortSignal,
-    partNumber?: number,
-): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("PUT", url);
-        xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) onPartProgress((e.loaded / e.total) * 100);
-        };
-        xhr.onload = () => {
-            const etagHeader = xhr.getResponseHeader("ETag");
-            if (xhr.status >= 200 && xhr.status < 300 && etagHeader) {
-                resolve(etagHeader);
-            } else {
-                reject(new ApiError(xhr.status, `Part ${partNumber} failed: ${xhr.status}`));
-            }
-        };
-        xhr.onerror = () => reject(new Error(`Network error on part ${partNumber}`));
-        xhr.onabort = () => reject(new Error("Upload cancelled"));
+// ── Multipart path (large files, sent straight to object storage) ─────────────
 
-        if (signal) {
-            signal.addEventListener("abort", () => xhr.abort(), { once: true });
+async function _sendPart(url: string, blob: Blob, partNumber: number, onPartProgress: (bytes: number) => void, signal: AbortSignal): Promise<string> {
+    return _withRetry(async () => {
+        onPartProgress(0);
+        const xhr = await _xhr({
+            method: "PUT",
+            url,
+            body: blob,
+            signal,
+            onProgress: (loaded) => onPartProgress(loaded),
+        });
+        if (xhr.status < 200 || xhr.status >= 300) {
+            throw new ApiError(xhr.status, `Part ${partNumber} failed: ${xhr.status}`);
         }
-        xhr.send(blob);
-    });
+        const etag = xhr.getResponseHeader("ETag");
+        if (!etag) throw new StorageUnreachableError(`Part ${partNumber} response has no readable ETag`);
+        return etag;
+    }, signal);
 }
 
-async function _xhrPutPartWithRetry(
-    url: string,
-    blob: Blob,
-    onPartProgress: (partPct: number) => void,
-    signal?: AbortSignal,
-    partNumber?: number,
-): Promise<string> {
-    let attempts = 0;
-    while (attempts < _MAX_RETRIES) {
-        try {
-            return await _xhrPutPart(url, blob, onPartProgress, signal, partNumber);
-        } catch (err) {
-            attempts++;
-            const isLast = attempts >= _MAX_RETRIES;
-            const retryable = err instanceof ApiError && _isRetryable(err.status);
-            const isNetwork =
-                !(err instanceof ApiError) &&
-                err instanceof Error &&
-                (err.message.startsWith("Network error") || err.message.includes("failed"));
+async function _beginMultipart(file: File, options: UploadFileOptions): Promise<MultipartSession> {
+    const totalsMatch = (session: MultipartSession) =>
+        session.parts.reduce((sum, part) => sum + part.size, 0) === file.size;
 
-            if (isLast || (!retryable && !isNetwork)) throw err;
-            const delay = Math.min(1000 * 2 ** attempts, 30_000);
-            await _sleep(delay, signal);
+    if (options.multipartUploadId) {
+        try {
+            const resumed = await apiRequest(
+                `/upload/presigned-multipart/${encodeURIComponent(options.multipartUploadId)}/resume`,
+                { method: "POST", signal: options.signal, timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS },
+            ).then((response) => response.json() as Promise<MultipartSession>);
+            if (totalsMatch(resumed)) return resumed;
+        } catch (err) {
+            // Expired, failed or cancelled sessions restart below; outages do not.
+            if (!(err instanceof ApiError) || _isRetryable(err)) throw err;
         }
     }
-    throw new Error(`Failed to upload part ${partNumber} after ${_MAX_RETRIES} attempts`);
-}
 
-// ── Direct S3 multipart path (extra-large files) ─────────────────────────────
-
-async function _presignedMultipartUpload(
-    file: File,
-    options: UploadFileOptions,
-): Promise<string> {
-    const { onProgress, onStatusUpdate, onBytesProgress, signal, uploadId } = options;
-    const token = getAccessToken();
-    const baseHeaders: Record<string, string> = { "X-Client-ID": getClientId() };
-    if (token) baseHeaders["Authorization"] = `Bearer ${token}`;
-    addUploadAdmissionHeaders(baseHeaders, options);
-
-    _onStatusUpdate(onStatusUpdate, "preparingMultipart", options.t);
-
-    const initResp = await apiRequest("/upload/presigned-multipart/init", {
+    const session = await apiRequest("/upload/presigned-multipart/init", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...baseHeaders },
+        headers: { "Content-Type": "application/json", ..._authHeaders(options) },
         body: JSON.stringify({
             filename: file.name,
             size: file.size,
             mime_type: file.type || "application/octet-stream",
-            upload_id: uploadId,
         }),
-        signal,
-    }).then((r) => r.json() as Promise<InitMultipartResponse>);
-
-    const parts = initResp.parts;
-
-    _onStatusUpdate(onStatusUpdate, "uploadingChunks", options.t);
-
-    const CONCURRENCY = 4;
-    const etags: Array<{ PartNumber: number; ETag: string }> = [];
-    const progressPerPart: Record<number, number> = {};
-    let activePromises: Promise<void>[] = [];
-
-    const calculateProgress = () => {
-        const totalUploaded = Object.values(progressPerPart).reduce((a, b) => a + b, 0);
-        onProgress?.(5 + Math.round((totalUploaded / file.size) * 75));
-        onBytesProgress?.(totalUploaded, file.size);
-    };
-
-    let nextPartOffset = 0;
-    const partSpecs = parts.map((part) => {
-        const start = nextPartOffset;
-        const end = start + part.size;
-        nextPartOffset = end;
-        return { part, start, end };
-    });
-    if (nextPartOffset !== file.size) {
-        throw new Error(
-            `Server multipart plan totals ${nextPartOffset} bytes, expected ${file.size}`,
-        );
+        signal: options.signal,
+        timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS,
+    }).then((response) => response.json() as Promise<MultipartSession>);
+    if (!totalsMatch(session)) {
+        throw new Error("Server multipart plan does not match the file size");
     }
-
-    const tasks = partSpecs.map(({ part: p, start, end }) => async () => {
-        const blob = file.slice(start, end);
-        if (blob.size !== p.size) {
-            throw new Error(
-                `Server/client multipart size mismatch for part ${p.part_number}: ${blob.size} !== ${p.size}`,
-            );
-        }
-        const partSize = p.size;
-
-        const onPartProgress = (partPct: number) => {
-            progressPerPart[p.part_number] = (partPct / 100) * partSize;
-            calculateProgress();
-        };
-
-        const etag = await _xhrPutPartWithRetry(
-            p.url,
-            blob,
-            onPartProgress,
-            signal,
-            p.part_number,
-        );
-
-        etags.push({ PartNumber: p.part_number, ETag: etag });
-        progressPerPart[p.part_number] = partSize;
-        calculateProgress();
-    });
-
-    let completionStarted = false;
-    try {
-        for (const task of tasks) {
-            const promise = task().finally(() => {
-                activePromises = activePromises.filter((p) => p !== promise);
-            });
-            activePromises.push(promise);
-            if (activePromises.length >= CONCURRENCY) {
-                await Promise.race(activePromises);
-            }
-        }
-        await Promise.all(activePromises);
-        etags.sort((a, b) => a.PartNumber - b.PartNumber); // Ensure sorted for S3 Complete
-
-        _onStatusUpdate(onStatusUpdate, "finalizingMultipart", options.t);
-
-        completionStarted = true;
-        let completionAttempts = 0;
-        while (true) {
-            try {
-                await apiRequest("/upload/presigned-multipart/complete", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", ...baseHeaders },
-                    body: JSON.stringify({
-                        upload_id: initResp.upload_id,
-                        parts: etags,
-                    }),
-                    signal,
-                });
-                break;
-            } catch (err) {
-                completionAttempts++;
-                const retryable =
-                    (err instanceof ApiError && _isRetryable(err.status)) ||
-                    (!(err instanceof ApiError) && !signal?.aborted);
-                if (!retryable || completionAttempts >= _MAX_RETRIES) throw err;
-                await _sleep(Math.min(1000 * 2 ** completionAttempts, 30_000), signal);
-            }
-        }
-
-        return initResp.quarantine_key;
-    } catch (err) {
-        const uncertainCompletion =
-            completionStarted &&
-            !signal?.aborted &&
-            ((err instanceof ApiError && _isRetryable(err.status)) || !(err instanceof ApiError));
-
-        // A timeout or 5xx may mean S3 committed and only the response was lost.
-        // Preserve that intent so the exact manifest can be retried/reconciled.
-        if (!uncertainCompletion) {
-            try {
-                await apiRequest(`/upload/presigned-multipart/${initResp.upload_id}`, {
-                    method: "DELETE",
-                    headers: baseHeaders,
-                });
-            } catch { /* best-effort cleanup */ }
-        }
-        throw err;
-    }
+    return session;
 }
 
-// ── tus upload path (large files) ────────────────────────────────────────────
+async function _multipartUpload(file: File, options: UploadFileOptions): Promise<string> {
+    const { onProgress, onBytesProgress, signal } = options;
+    const session = await _beginMultipart(file, options);
+    options.onMultipartStarted?.(session.upload_id);
 
-/**
- * Upload a large file (≥ TUS_THRESHOLD_BYTES) via tus 1.0.0.
- *
- * Returns the quarantine_key once the upload is complete and the worker has
- * been enqueued. The caller then subscribes to the SSE stream for processing status.
- */
-function _tusUpload(
-    file: File,
-    options: UploadFileOptions,
-): Promise<string> {
-    const { onProgress, onStatusUpdate, signal } = options;
+    const sentByPart = new Map<number, number>();
+    const reportProgress = () => {
+        const sent = [...sentByPart.values()].reduce((sum, bytes) => sum + bytes, 0);
+        onProgress?.(Math.round((sent / file.size) * 80));
+        onBytesProgress?.(sent, file.size);
+    };
+
+    const etags: Array<{ PartNumber: number; ETag: string }> = [];
+    const pending: Array<{ number: number; url: string; start: number; size: number }> = [];
+    let offset = 0;
+    for (const part of [...session.parts].sort((a, b) => a.part_number - b.part_number)) {
+        if (part.etag) {
+            etags.push({ PartNumber: part.part_number, ETag: part.etag });
+            sentByPart.set(part.part_number, part.size);
+        } else if (part.url) {
+            pending.push({ number: part.part_number, url: part.url, start: offset, size: part.size });
+        } else {
+            throw new Error(`Server multipart plan has no URL for part ${part.part_number}`);
+        }
+        offset += part.size;
+    }
+    reportProgress();
+
+    // One failed part cancels its siblings; the session stays resumable.
+    const parts = new AbortController();
+    const abortParts = () => parts.abort();
+    if (signal?.aborted) abortParts();
+    signal?.addEventListener("abort", abortParts, { once: true });
+    const runPartWorker = async () => {
+        for (let next = pending.shift(); next; next = pending.shift()) {
+            const { number, url, start, size } = next;
+            const etag = await _sendPart(
+                url,
+                file.slice(start, start + size),
+                number,
+                (bytes) => {
+                    sentByPart.set(number, bytes);
+                    reportProgress();
+                },
+                parts.signal,
+            );
+            sentByPart.set(number, size);
+            reportProgress();
+            etags.push({ PartNumber: number, ETag: etag });
+        }
+    };
+    try {
+        await Promise.all(Array.from({ length: MULTIPART_CONCURRENCY }, runPartWorker));
+    } catch (err) {
+        parts.abort();
+        if (signal?.aborted) throw new Error(UPLOAD_CANCELLED);
+        // A blocked or misconfigured bucket fails before any part is stored.
+        const storageUnreachable =
+            err instanceof StorageUnreachableError ||
+            (err instanceof TransferInterruptedError && etags.length === 0);
+        throw storageUnreachable ? new StorageUnreachableError((err as Error).message, session.upload_id) : err;
+    } finally {
+        signal?.removeEventListener("abort", abortParts);
+    }
+
+    _onStatusUpdate(options.onStatusUpdate, "finalizingMultipart", options.t);
+    etags.sort((a, b) => a.PartNumber - b.PartNumber);
+    await _withRetry(
+        () =>
+            apiRequest("/upload/presigned-multipart/complete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ upload_id: session.upload_id, parts: etags }),
+                signal,
+                timeoutMs: RESPONSE_TIMEOUT_MS,
+            }),
+        signal,
+    );
+    return session.quarantine_key;
+}
+
+// ── tus path (when browsers cannot reach object storage directly) ─────────────
+
+function _apiErrorFromTus(err: Error): Error {
+    const response = (err as tus.DetailedError).originalResponse;
+    if (!response) return new TransferInterruptedError(err.message);
+    return _apiErrorFromBody(response.getStatus(), response.getBody() ?? "", err.message);
+}
+
+function _tusUpload(file: File, options: UploadFileOptions): Promise<string> {
+    const { onProgress, onBytesProgress, signal } = options;
 
     return new Promise<string>((resolve, reject) => {
         if (signal?.aborted) {
-            reject(new Error("Upload cancelled"));
+            reject(new Error(UPLOAD_CANCELLED));
             return;
         }
 
-        const token = getAccessToken();
-        const headers: Record<string, string> = {
-            "X-Client-ID": getClientId(),
-        };
-        if (token) headers["Authorization"] = `Bearer ${token}`;
-        addUploadAdmissionHeaders(headers, options);
-
         let quarantineKey: string | undefined;
+        let knownUrl = options.tusUrl;
 
         const upload = new tus.Upload(file, {
             endpoint: `${API_BASE}/upload/tus`,
             uploadUrl: options.tusUrl,
             chunkSize: TUS_CHUNK_SIZE,
-            retryDelays: [0, 1000, 3000, 5000],
-            headers,
+            retryDelays: TUS_RETRY_DELAYS,
+            // The queue stores the upload URL itself.
+            storeFingerprintForResuming: false,
+            headers: _authHeaders(options),
             metadata: {
                 filename: file.name,
                 filetype: file.type || "application/octet-stream",
             },
-            // (O12) Per-chunk SHA-256 checksum via crypto.subtle (audit fix #12)
+            onShouldRetry: (err) => {
+                const status = err.originalResponse?.getStatus() ?? 0;
+                const isClientError = status >= 400 && status < 500;
+                // 429 means the server's chunk slots are busy, which passes quickly.
+                const retryable = !isClientError || status === 409 || status === 423 || status === 429;
+                return retryable && (typeof navigator === "undefined" || navigator.onLine);
+            },
             onBeforeRequest: (req) => {
+                const token = getAccessToken();
+                if (token) req.setHeader("Authorization", `Bearer ${token}`);
+
                 const originalSend = req.send.bind(req);
                 req.send = async (body) => {
-                    const method = req.getMethod();
-                    if (method === "PATCH" && (body instanceof Blob || body instanceof File)) {
-                        const buffer = await body.arrayBuffer();
-                        const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-                        const b64 = btoa(String.fromCharCode(...new Uint8Array(hashBuffer)));
-                        req.setHeader("Upload-Checksum", `sha256 ${b64}`);
+                    if (req.getMethod() === "PATCH" && body instanceof Blob) {
+                        const digest = await crypto.subtle.digest("SHA-256", await body.arrayBuffer());
+                        req.setHeader("Upload-Checksum", `sha256 ${btoa(String.fromCharCode(...new Uint8Array(digest)))}`);
                     }
                     return originalSend(body);
                 };
             },
             onProgress: (bytesUploaded, bytesTotal) => {
-                // Map 5–80% range (same as presigned XHR path)
-                onProgress?.(5 + Math.round((bytesUploaded / bytesTotal) * 75));
-                options.onBytesProgress?.(bytesUploaded, bytesTotal);
+                onProgress?.(Math.round((bytesUploaded / bytesTotal) * 80));
+                onBytesProgress?.(bytesUploaded, bytesTotal);
             },
             onAfterResponse: (_req, res) => {
                 // Percent-encoded server-side: the key embeds the filename,
@@ -594,40 +566,25 @@ function _tusUpload(
                 const key = res.getHeader("X-Lectern-File-Key");
                 if (key) quarantineKey = decodeURIComponent(key);
 
-                // Capture tus URL once available (after first POST)
-                if (upload.url) {
+                if (upload.url && upload.url !== knownUrl) {
+                    knownUrl = upload.url;
                     options.onTusUrlAvailable?.(upload.url);
                 }
             },
             onSuccess: () => {
-                if (!quarantineKey) {
-                    reject(new Error("Server did not return X-Lectern-File-Key after tus upload"));
-                    return;
-                }
-                onStatusUpdate?.(options.t ? options.t("processing") : "Processing…");
-                onProgress?.(80);
-                resolve(quarantineKey);
+                if (quarantineKey) resolve(quarantineKey);
+                else reject(new Error("Server did not return X-Lectern-File-Key after tus upload"));
             },
             onError: (err) => {
-                if (signal?.aborted) {
-                    reject(new Error("Upload cancelled"));
-                } else {
-                    reject(err instanceof Error ? err : new Error(String(err)));
-                }
+                reject(signal?.aborted ? new Error(UPLOAD_CANCELLED) : _apiErrorFromTus(err));
             },
         });
 
-        // Provide handle to caller for pause/resume
-        options.onTusReady?.({
-            pause: () => upload.abort(false), // false = don't send DELETE to server
-            resume: () => upload.start(),
-            abort: (sendDelete) => upload.abort(sendDelete),
-        });
-
-        // Abort via signal
+        // Abort without DELETE: a paused upload must stay resumable. Removing the
+        // file cancels the session on the server separately.
         signal?.addEventListener("abort", () => {
-            upload.abort().catch(() => { });
-            reject(new Error("Upload cancelled"));
+            upload.abort(false).catch(() => { });
+            reject(new Error(UPLOAD_CANCELLED));
         }, { once: true });
 
         upload.start();
@@ -636,217 +593,97 @@ function _tusUpload(
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/**
- * Upload a file through the pipeline:
- *
- *   Phase 1 (0–5 %):   Client-side SHA-256 computation + dedup check.
- *                        If already processed, returns immediately.
- *   Phase 2 (5–80 %):  For files < 5 MiB: POST /init → XHR PUT → POST /complete.
- *                        For files ≥ 5 MiB: tus 1.0.0 chunked resumable upload.
- *   Phase 3 (80–100 %): SSE stream for background processing (scan + strip + compress).
- */
-export async function uploadFile(
-    file: File,
-    options: UploadFileOptions = {},
-): Promise<UploadResult> {
-    const { onProgress, signal, forcePipeline = true } = options;
+let storageUnreachableFromBrowser = false;
 
-    // ── Phase 1: Client-side SHA-256 computation + dedup check (0–5%) ────────
-    onProgress?.(0);
-    _onStatusUpdate(options.onStatusUpdate, "hashing", options.t);
-
-    const token = getAccessToken();
-    const baseHeaders: Record<string, string> = {
-        "X-Client-ID": getClientId(),
-    };
-    if (token) baseHeaders["Authorization"] = `Bearer ${token}`;
-    addUploadAdmissionHeaders(baseHeaders, options);
-
-    // Compute hash for deduplication
-    const sha256 = await sha256File(file, (pct) => onProgress?.(Math.round(pct * 0.04)), signal);
-    onProgress?.(4);
-    options.onHashComputed?.(sha256);
-
-    // Check if file already exists in user's namespace or globally
-    let checkResp: CheckExistsResponse = { exists: false, file_key: null };
-    if (!forcePipeline) {
-        _onStatusUpdate(options.onStatusUpdate, "checkingDedup", options.t);
-        checkResp = await apiRequest("/upload/check-exists", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...baseHeaders },
-            body: JSON.stringify({ sha256, size: file.size }),
-            signal,
-        }).then(r => r.json() as Promise<CheckExistsResponse>);
-    }
-
-    if (checkResp.exists && checkResp.file_key) {
-        // Hit in user's personal cache — we can skip upload and processing entirely
-        onProgress?.(100);
-        _onStatusUpdate(options.onStatusUpdate, "completed", options.t);
-        
-        // Fetch full metadata to satisfy UploadResult
-        const statusResp = await apiRequest("/upload/status/batch", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...baseHeaders },
-            body: JSON.stringify({ file_keys: [checkResp.file_key] }),
-        }).then(r => r.json() as Promise<{ statuses: Record<string, UploadEventPayload> }>);
-
-        const s = statusResp.statuses[checkResp.file_key];
-        if (s?.status === "clean" && s.result) {
-            return {
-                file_key: s.result.file_key,
-                size: s.result.size,
-                original_size: s.result.original_size,
-                mime_type: s.result.mime_type,
-                content_encoding: s.result.content_encoding ?? null,
-                correctedName: s.result.file_name ?? s.result.file_key.split("/").pop() ?? file.name,
-                wasCompressed: false,
-                content_sha256: sha256,
-            };
-        }
-        // Fallback if status metadata is missing
-        return {
-            file_key: checkResp.file_key,
-            size: file.size,
-            original_size: file.size,
-            mime_type: file.type || "application/octet-stream",
-            content_encoding: null,
-            correctedName: file.name,
-            wasCompressed: false,
-            content_sha256: sha256,
-        };
-    }
-
-    onProgress?.(5);
-
-    // ── Client-side image compression (U8: AFTER hashing original) ───────────
-    _onStatusUpdate(options.onStatusUpdate, "compressing", options.t);
-    const { file: fileToUpload, compressed } = await compressImageIfNeeded(file, options.skipCompression);
-
-    let finalSha256 = sha256;
-    if (compressed) {
-        // Re-calculate hash for the compressed bytes so server-side integrity check passes.
-        // We use a simplified progress update here as re-hashing is usually fast for compressed images.
-        finalSha256 = await sha256File(fileToUpload, undefined, signal);
-        options.onHashComputed?.(finalSha256);
-    }
-
-    // ── Phase 2: Transfer to S3 (5–80%) ──────────────────────────────────────
-    let quarantineKey: string;
-
-    // The backend owns the upload routing policy. In particular, /upload/config
-    // advertises the successor direct endpoint and its size threshold. Keep the
-    // legacy presigned path only as a compatibility fallback when config cannot
-    // be loaded (e.g. mixed-version rolling deployments).
-    let uploadConfig: UploadConfig | null = null;
-    try {
-        uploadConfig = await getUploadConfig();
-    } catch {
-        // Compatibility fallback below.
-    }
-    const directThresholdBytes = Math.max(0, uploadConfig?.direct_threshold_mb ?? 0) * 1024 * 1024;
-    const useDirectUpload =
-        uploadConfig?.recommended_path === "direct" &&
-        directThresholdBytes > 0 &&
-        fileToUpload.size < directThresholdBytes;
-
+async function _transfer(file: File, options: UploadFileOptions): Promise<string> {
     if (options.tusUrl) {
-        // RESUME: If we have a tusUrl, we must use TUS regardless of current size
-        // (the file might have been compressed or is just being resumed).
         _onStatusUpdate(options.onStatusUpdate, "resumingUpload", options.t);
-        quarantineKey = await _tusUpload(fileToUpload, options);
-    } else if (useDirectUpload) {
-        // Successor to the deprecated /upload/init + presigned PUT flow.
-        quarantineKey = await _directUpload(fileToUpload, options);
-    } else if (fileToUpload.size >= PRESIGNED_MULTIPART_THRESHOLD_BYTES) {
-        // Extra-large file: direct S3 multipart
+        return _tusUpload(file, options);
+    }
+
+    // The backend owns the routing policy; if its config cannot be loaded, every
+    // file still takes a resumable path.
+    const config = await getUploadConfig().catch(() => null);
+    const directThresholdBytes = Math.max(0, config?.direct_threshold_mb ?? 0) * 1024 * 1024;
+
+    _onStatusUpdate(options.onStatusUpdate, "uploading", options.t);
+    if (config?.recommended_path === "direct" && file.size < directThresholdBytes) {
+        return _directUpload(file, options);
+    }
+    if (file.size >= MULTIPART_MIN_BYTES && !storageUnreachableFromBrowser) {
         try {
-            quarantineKey = await _presignedMultipartUpload(fileToUpload, options);
+            return await _multipartUpload(file, options);
         } catch (err) {
-            if (err instanceof ApiError && err.status === 501) {
-                // Fallback to TUS if not enabled on server
-                quarantineKey = await _tusUpload(fileToUpload, options);
-            } else {
+            if (err instanceof StorageUnreachableError) {
+                // Later files skip the probe; this one continues through the API.
+                storageUnreachableFromBrowser = true;
+                if (err.multipartUploadId) {
+                    apiRequest(`/upload/presigned-multipart/${encodeURIComponent(err.multipartUploadId)}`, {
+                        method: "DELETE",
+                    }).catch(() => { });
+                }
+            } else if (!(err instanceof ApiError) || err.status !== 501) {
+                // 501: the deployment does not expose object storage to browsers.
                 throw err;
             }
         }
-    } else if (fileToUpload.size >= TUS_THRESHOLD_BYTES) {
-        // Large file: tus resumable upload
-        _onStatusUpdate(options.onStatusUpdate, "uploading", options.t);
-        quarantineKey = await _tusUpload(fileToUpload, options);
-    } else {
-
-        // Small file: presigned PUT
-        _onStatusUpdate(options.onStatusUpdate, "uploading", options.t);
-
-        const initResp = await apiRequest("/upload/init", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...baseHeaders },
-            body: JSON.stringify({
-                filename: fileToUpload.name,
-                size: fileToUpload.size,
-                mime_type: fileToUpload.type || "application/octet-stream",
-                sha256: finalSha256, // Pass expected hash for server-side verification
-            }),
-            signal,
-            timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS,
-        }).then((r) => r.json() as Promise<InitUploadResponse>);
-
-        // PUT directly to S3 — bypasses the API server entirely
-        await _xhrPutWithRetry(
-            initResp.presigned_url,
-            fileToUpload,
-            onProgress,
-            options.onBytesProgress,
-            signal,
-        );
-        quarantineKey = initResp.quarantine_key;
-
-        onProgress?.(80);
-        _onStatusUpdate(options.onStatusUpdate, "processing", options.t);
-
-        // Notify API that the upload is complete and trigger background processing
-        const completeHeaders: Record<string, string> = {
-            "Content-Type": "application/json",
-            ...baseHeaders,
-        };
-        if (options.uploadId) completeHeaders["X-Upload-ID"] = options.uploadId;
-
-        await apiRequest("/upload/complete", {
-            method: "POST",
-            headers: completeHeaders,
-            body: JSON.stringify({
-                upload_id: initResp.upload_id,
-                quarantine_key: initResp.quarantine_key,
-            }),
-            signal,
-            timeoutMs: UPLOAD_CONTROL_TIMEOUT_MS,
-        });
-
-        quarantineKey = initResp.quarantine_key;
     }
+    return _tusUpload(file, options);
+}
 
-    // ── Phase 3: SSE stream (80–100%) ─────────────────────────────────────────
-    const result = await _waitForUploadCompletion(quarantineKey, {
-        onProgress: (p) => onProgress?.(80 + Math.round(p * 19)),
-        onStatusUpdate: options.onStatusUpdate,
-        signal,
-        t: options.t,
-    });
-
-    // Explicitly mark 100% complete (audit review fix: 80 + round(1.0*19) = 99)
-    onProgress?.(100);
-
+function _toUploadResult(
+    result: NonNullable<UploadEventPayload["result"]>,
+    fallbackName: string,
+    wasCompressed: boolean,
+): UploadResult {
     return {
         file_key: result.file_key,
         size: result.size,
         original_size: result.original_size,
         mime_type: result.mime_type,
         content_encoding: result.content_encoding ?? null,
-        correctedName: result.file_name ?? result.file_key.split("/").pop() ?? file.name,
-        wasCompressed: compressed,
-        content_sha256: finalSha256,
+        correctedName: result.file_name ?? result.file_key.split("/").pop() ?? fallbackName,
+        wasCompressed,
     };
+}
+
+/**
+ * Upload a file through the pipeline: transfer its bytes (0–80 %), then wait for
+ * server-side scanning and sanitization (80–100 %).
+ */
+export async function uploadFile(
+    file: File,
+    options: UploadFileOptions = {},
+): Promise<UploadResult> {
+    const { onProgress, signal } = options;
+
+    onProgress?.(0);
+    await ensureFreshAccessToken();
+
+    if (file.type.startsWith("image/")) _onStatusUpdate(options.onStatusUpdate, "compressing", options.t);
+    const { file: fileToUpload, compressed } = await compressImageIfNeeded(file, options.skipCompression);
+
+    // Recompression is not byte-stable, so its output cannot continue an earlier session.
+    const quarantineKey = await _transfer(
+        fileToUpload,
+        compressed ? { ...options, tusUrl: undefined, multipartUploadId: undefined } : options,
+    );
+
+    onProgress?.(80);
+    _onStatusUpdate(options.onStatusUpdate, "processing", options.t);
+    options.onTransferred?.(quarantineKey);
+
+    const result = await _withProcessingWatcher(signal, () =>
+        _waitForUploadCompletion(quarantineKey, {
+            onProgress: (p) => onProgress?.(80 + Math.round(p * 19)),
+            onStatusUpdate: options.onStatusUpdate,
+            signal,
+            t: options.t,
+        }),
+    );
+
+    onProgress?.(100);
+    return _toUploadResult(result, file.name, compressed);
 }
 
 function _onStatusUpdate(
@@ -857,41 +694,88 @@ function _onStatusUpdate(
     cb?.(t ? t(msg) : msg);
 }
 
+// ── Processing watchers ───────────────────────────────────────────────────────
+
+let activeProcessingWatchers = 0;
+const processingWatcherWaiters: Array<() => void> = [];
+
+/** Bound concurrent SSE streams; transfers keep running while watchers queue. */
+async function _withProcessingWatcher<T>(signal: AbortSignal | undefined, watch: () => Promise<T>): Promise<T> {
+    if (activeProcessingWatchers < MAX_PROCESSING_WATCHERS) {
+        activeProcessingWatchers++;
+    } else {
+        await new Promise<void>((resolve, reject) => {
+            const grant = () => {
+                signal?.removeEventListener("abort", onAbort);
+                resolve();
+            };
+            const onAbort = () => {
+                processingWatcherWaiters.splice(processingWatcherWaiters.indexOf(grant), 1);
+                reject(new Error(UPLOAD_CANCELLED));
+            };
+            processingWatcherWaiters.push(grant);
+            signal?.addEventListener("abort", onAbort, { once: true });
+        });
+    }
+    try {
+        return await watch();
+    } finally {
+        const next = processingWatcherWaiters.shift();
+        if (next) next();
+        else activeProcessingWatchers--;
+    }
+}
+
 // ── SSE stream reader ─────────────────────────────────────────────────────────
 
-/**
- * Opens an SSE stream to /upload/events/{fileKey} using fetch (not EventSource)
- * so we can send a proper Authorization header.
- */
-// Terminal upload failure — should NOT be retried by the SSE reconnection loop (audit fix).
+/** Terminal upload failure — must not be retried by the SSE reconnection loop. */
 class UploadTerminalError extends Error {
     public readonly status: number;
-    constructor(status: number, message: string) {
+    public readonly errorCode?: string;
+    constructor(status: number, message: string, errorCode?: string) {
         super(message);
         this.name = "UploadTerminalError";
         this.status = status;
+        this.errorCode = errorCode;
     }
 }
 
 /** Maximum wall-clock time (ms) to wait for SSE processing before giving up. */
 const SSE_TOTAL_TIMEOUT = 15 * 60 * 1000;
+const SSE_READ_TIMEOUT_MS = 30_000;
+const SSE_MAX_RECONNECTS = 10;
+
+type WatchOptions = {
+    onProgress?: (p: number) => void;
+    onStatusUpdate?: (s: string, stageIndex?: number, stageTotal?: number) => void;
+    signal?: AbortSignal;
+    t?: (key: string) => string;
+};
+
+async function _settleFromStatus(fileKey: string, options: WatchOptions): Promise<NonNullable<UploadEventPayload["result"]>> {
+    const polled = await pollUploadStatus(fileKey);
+    let result: NonNullable<UploadEventPayload["result"]> | null = null;
+    try {
+        if (polled) result = _handleUploadEvent("upload", JSON.stringify(polled), undefined, undefined, options.t);
+    } catch (err) {
+        if (err instanceof UploadTerminalError) throw new ApiError(err.status, err.message, err.errorCode);
+        throw err;
+    }
+    if (result) return result;
+    throw new Error("Upload processing timed out. Check upload history for status.");
+}
 
 async function _waitForUploadCompletion(
     fileKey: string,
-    options: {
-        onProgress?: (p: number) => void;
-        onStatusUpdate?: (s: string, stageIndex?: number, stageTotal?: number) => void;
-        signal?: AbortSignal;
-        t?: (key: string) => string;
-    } = {},
+    options: WatchOptions = {},
 ): Promise<NonNullable<UploadEventPayload["result"]>> {
     const { onStatusUpdate, signal } = options;
     let lastEventId = 0;
     let attempts = 0;
-    let highWaterMark = 0; // Track highest progress to prevent regression (audit fix)
+    let highWaterMark = 0;
     const deadline = Date.now() + SSE_TOTAL_TIMEOUT;
 
-    // Wrap onProgress to never report a lower value than previously seen
+    // Reconnects replay earlier events; progress must never move backwards.
     const safeOnProgress = options.onProgress
         ? (p: number) => {
               if (p > highWaterMark) {
@@ -902,13 +786,7 @@ async function _waitForUploadCompletion(
         : undefined;
 
     while (true) {
-        // Total timeout guard (audit review fix): prevent indefinite wait
-        // when the worker is dead but the SSE endpoint keeps sending pings.
-        if (Date.now() > deadline) {
-            const fallback = await pollUploadStatus(fileKey);
-            if (fallback?.result && fallback.status === "clean") return fallback.result;
-            throw new Error("Upload processing timed out. Check upload history for status.");
-        }
+        if (Date.now() > deadline) return _settleFromStatus(fileKey, options);
 
         try {
             const response = await apiRequest(`/upload/events/${encodeURIComponent(fileKey)}`, {
@@ -931,26 +809,26 @@ async function _waitForUploadCompletion(
             let currentData = "";
 
             const readWithTimeout = async () => {
-                return Promise.race([
-                    reader.read(),
-                    new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) =>
-                        setTimeout(() => reject(new Error("SSE Read Timeout")), 30000)
-                    )
-                ]);
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                try {
+                    return await Promise.race([
+                        reader.read(),
+                        new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+                            timer = setTimeout(() => reject(new Error("SSE Read Timeout")), SSE_READ_TIMEOUT_MS);
+                        }),
+                    ]);
+                } finally {
+                    clearTimeout(timer);
+                }
             };
 
             try {
-                while (true) {
+                while (Date.now() <= deadline) {
                     const { done, value } = await readWithTimeout();
-                    
-                    // (O2) Connection is active, reset attempts to allow for 
-                    // long processing times (e.g. large file scans).
+                    if (done) break;
+
+                    // Data arrived, so long processing does not count as a failure.
                     attempts = 0;
-
-                    if (done) {
-                        break;
-                    }
-
                     buffer += decoder.decode(value, { stream: true });
 
                     const lines = buffer.split(/\r?\n/);
@@ -982,23 +860,16 @@ async function _waitForUploadCompletion(
             } finally {
                 reader.cancel().catch(() => { });
             }
-
-            // (O2) Always add a small delay and increment attempts on closure
-            // to prevent infinite loop if the server is closing the connection immediately.
-            attempts++;
-            if (attempts >= 10) throw new Error("SSE reconnection limit reached");
-            const delay = Math.min(1000 * 2 ** (attempts - 1), 10_000);
-            await _sleep(delay, signal);
         } catch (err) {
-            if (signal?.aborted) throw err;
-            if (err instanceof UploadTerminalError) throw new ApiError(err.status, err.message);
-            if (err instanceof Error && err.message === "SSE reconnection limit reached") throw err;
-            
-            attempts++;
-            if (attempts >= 10) throw err;
-            const delay = Math.min(1000 * 2 ** (attempts - 1), 10_000);
-            await _sleep(delay, signal);
+            if (signal?.aborted) throw new Error(UPLOAD_CANCELLED);
+            if (err instanceof UploadTerminalError) throw new ApiError(err.status, err.message, err.errorCode);
+            if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 429) throw err;
         }
+
+        // Both a closed stream and a failed connection reconnect with backoff.
+        attempts++;
+        if (attempts >= SSE_MAX_RECONNECTS) return _settleFromStatus(fileKey, options);
+        await _sleep(Math.min(1000 * 2 ** (attempts - 1), 10_000), signal);
     }
 }
 
@@ -1022,21 +893,16 @@ function _handleUploadEvent(
         return null;
     }
 
-    if (payload.detail) {
-        onStatusUpdate?.(payload.detail, payload.stage_index, payload.stage_total);
+    const statusText = payload.stage && t ? t(`stages.${payload.stage}`) : payload.detail;
+    if (statusText) {
+        onStatusUpdate?.(statusText, payload.stage_index ?? undefined, payload.stage_total ?? undefined);
     }
 
-    // Use structured overall_percent (0.0–1.0) for smooth progress in 80–99 range.
-    if (payload.overall_percent != null) {
-        // Map 0.0-1.0 from worker to 80-100 range for the caller's formula
-        // p is expected to be 0.0-1.0, and the caller does 80 + Math.round(p * 19)
-        onProgress?.(payload.overall_percent);
-    } else {
-        onProgress?.(0.5); // midpoint fallback for older worker versions
-    }
+    if (payload.overall_percent != null) onProgress?.(payload.overall_percent);
 
     switch (payload.status) {
         case "clean":
+        case "applied":
             if (!payload.result) throw new Error("Received clean status with no result payload");
             onProgress?.(1.0);
             return payload.result;
@@ -1054,37 +920,19 @@ function _handleUploadEvent(
         }
 
         case "failed":
-            throw new UploadTerminalError(500, payload.detail ?? "File processing failed");
+            throw new UploadTerminalError(
+                500,
+                payload.detail ?? "File processing failed",
+                payload.error_code ?? "ERR_PROCESSING_FAILED",
+            );
 
         default:
             return null;
     }
 }
 
-// ── Batch-zip types and helpers ───────────────────────────────────────────────
-
-interface BatchZipEntry {
-    filename: string;
-    relative_path: string;
-    quarantine_key: string;
-    upload_id: string;
-    size: number;
-    mime_type: string;
-}
-
-interface BatchZipResponse {
-    batch_id: string;
-    files: BatchZipEntry[];
-    skipped: number;
-    errors: string[];
-}
-
 /**
- * Track an already-uploaded file that is sitting in quarantine waiting for
- * pipeline processing.  Used for files extracted from a batch-zip upload —
- * the zip endpoint already placed them in quarantine and enqueued the ARQ job;
- * the client only needs to subscribe to the SSE stream.
- *
+ * Follow an upload whose bytes are already stored, e.g. after a page reload.
  * Returns the same UploadResult shape as uploadFile().
  */
 export async function trackExistingUpload(
@@ -1092,112 +940,19 @@ export async function trackExistingUpload(
     options: Pick<UploadFileOptions, "onProgress" | "onStatusUpdate" | "signal" | "t"> = {},
 ): Promise<UploadResult> {
     const { onProgress, signal } = options;
-
     onProgress?.(80);
 
-    const result = await _waitForUploadCompletion(quarantineKey, {
-        onProgress: (p: number) => onProgress?.(80 + Math.round(p * 19)),
-        onStatusUpdate: options.onStatusUpdate,
-        signal,
-        t: options.t,
-    });
+    const result = await _withProcessingWatcher(signal, () =>
+        _waitForUploadCompletion(quarantineKey, {
+            onProgress: (p: number) => onProgress?.(80 + Math.round(p * 19)),
+            onStatusUpdate: options.onStatusUpdate,
+            signal,
+            t: options.t,
+        }),
+    );
 
     onProgress?.(100);
-
-    return {
-        file_key: result.file_key,
-        size: result.size,
-        original_size: result.original_size,
-        mime_type: result.mime_type,
-        content_encoding: result.content_encoding ?? null,
-        correctedName: result.file_name ?? result.file_key.split("/").pop() ?? quarantineKey,
-        wasCompressed: false,
-    };
-}
-
-/**
- * Upload a zip blob to the batch-zip endpoint and return the list of
- * individual file entries the server extracted and queued.
- *
- * onProgress receives 0–100 (upload transfer progress only; server-side
- * processing for each file is tracked separately via trackExistingUpload).
- */
-export async function uploadBatchZip(
-    zipBlob: Blob,
-    options: Pick<UploadFileOptions, "onProgress" | "signal" | "uploadId"> = {},
-): Promise<BatchZipResponse> {
-    const { onProgress, signal } = options;
-    const config = await getUploadConfig();
-    const maxBatchBytes = config.batch_max_zip_size_bytes ?? 500 * 1024 * 1024;
-    if (zipBlob.size > maxBatchBytes) {
-        throw new ApiError(
-            413,
-            `Batch archive exceeds the ${Math.floor(maxBatchBytes / (1024 * 1024))} MiB limit`,
-        );
-    }
-
-    const batchId = options.uploadId ?? crypto.randomUUID();
-    const token = getAccessToken();
-    const headers: Record<string, string> = { "X-Client-ID": getClientId() };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-    headers["X-Upload-ID"] = batchId;
-
-    const uploadOnce = () => new Promise<BatchZipResponse>((resolve, reject) => {
-        if (signal?.aborted) {
-            reject(new Error("Upload cancelled"));
-            return;
-        }
-
-        const xhr = new XMLHttpRequest();
-
-        xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-                onProgress?.(Math.round((e.loaded / e.total) * 100));
-            }
-        };
-
-        xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-                try {
-                    resolve(JSON.parse(xhr.responseText) as BatchZipResponse);
-                } catch {
-                    reject(new Error("Invalid response from batch-zip endpoint"));
-                }
-            } else {
-                let detail = `Batch-zip upload failed (${xhr.status})`;
-                try {
-                    const body = JSON.parse(xhr.responseText) as { detail?: string };
-                    if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-                } catch { /* ignore */ }
-                reject(new ApiError(xhr.status, detail));
-            }
-        };
-
-        xhr.onerror = () => reject(new Error("Network error during batch-zip upload"));
-        xhr.onabort = () => reject(new Error("Upload cancelled"));
-
-        xhr.open("POST", `${API_BASE}/upload/batch-zip`);
-        for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
-
-        signal?.addEventListener("abort", () => xhr.abort(), { once: true });
-
-        const form = new FormData();
-        form.append("file", zipBlob, "batch.zip");
-        xhr.send(form);
-    });
-
-    for (let attempt = 0; ; attempt++) {
-        try {
-            return await uploadOnce();
-        } catch (error) {
-            const retryable =
-                error instanceof ApiError
-                    ? _isRetryable(error.status)
-                    : error instanceof Error && error.message === "Network error during batch-zip upload";
-            if (!retryable || attempt >= _MAX_RETRIES || signal?.aborted) throw error;
-            await _sleep(500 * 2 ** attempt, signal);
-        }
-    }
+    return _toUploadResult(result, quarantineKey, false);
 }
 
 // ── Status polling fallback ───────────────────────────────────────────────────

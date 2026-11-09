@@ -51,10 +51,6 @@ async def test_post_scan_preserves_immutable_cas_metadata_in_db_and_cache():
             AsyncMock(return_value=dr),
         ),
         patch(
-            "app.workers.process_upload_post_scan.run_strip_only",
-            AsyncMock(),
-        ),
-        patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)
         ),
         patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
@@ -147,7 +143,11 @@ async def test_apply_pr_prepares_files_before_hierarchy_lock():
     author_id = uuid.uuid4()
 
     async def fake_prepare(
-        db: Any, operations: list[dict[str, Any]], prepared_author_id: uuid.UUID | None
+        db: Any,
+        operations: list[dict[str, Any]],
+        prepared_author_id: uuid.UUID | None,
+        *,
+        is_anonymous: bool = False,
     ) -> None:
         assert operations
         assert prepared_author_id == author_id

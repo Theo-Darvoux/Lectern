@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import { UploadCloud } from "lucide-react";
+import { Loader2, UploadCloud } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useUploadQueue } from "@/lib/upload-queue";
 import { UploadDrawer } from "@/components/pr/upload-drawer";
 import { usePathname } from "next/navigation";
 import { apiFetch } from "@/lib/api-client";
@@ -68,6 +70,23 @@ export function GlobalDropZone() {
     const browseContext = useDropZoneStore((state) => state.browseContext);
     const setDismissOverlay = useDropZoneStore((state) => state.setDismissOverlay);
     const clear = useDropZoneStore((state) => state.clear);
+    const queuedItems = useUploadQueue((state) => state.items);
+    const tUpload = useTranslations("Upload");
+    const unsettledCount = queuedItems.filter(
+        (item) => (item.status === "uploading" || item.status === "pending") && !item.referenceLost,
+    ).length;
+    const isQcmEditor = /^\/qcm\/(new|[^/]+\/edit)/.test(pathname);
+
+    const reopenQueue = useCallback(() => {
+        const first = useUploadQueue.getState().items[0];
+        if (!first) return;
+        setTarget({
+            directoryId: first.directoryId ?? "",
+            directoryName: first.directoryName ?? "",
+            parentMaterialId: first.parentMaterialId ?? undefined,
+        });
+        setLocalDrawerOpen(true);
+    }, []);
 
     // Register overlay dismiss so UploadDrawer can clear it on drop
     const dismiss = useCallback(() => {
@@ -253,6 +272,24 @@ export function GlobalDropZone() {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {queuedItems.length > 0 && !localDrawerOpen && !isQcmEditor && (
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={reopenQueue}
+                    className="fixed bottom-[4.5rem] left-4 z-40 gap-2 rounded-full shadow-lg md:bottom-6 md:left-6"
+                >
+                    {unsettledCount > 0 ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                        <UploadCloud className="h-4 w-4" />
+                    )}
+                    {unsettledCount > 0
+                        ? tUpload("uploadsRunning", { count: unsettledCount })
+                        : tUpload("uploadsWaiting", { count: queuedItems.length })}
+                </Button>
             )}
 
             {/* Upload drawer rendered here with the resolved target */}

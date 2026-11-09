@@ -445,7 +445,9 @@ export function getFileBadgeLabel(fileName: string, mimeType?: string): string {
 // ────────────────────────────────────────────────────────────────────────────────
 
 const COMPRESSIBLE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-const MIN_COMPRESSION_SIZE = 512 * 1024; // 512 KB — skip small files to avoid overhead
+const COMPRESSION_TARGET_MB = 4;
+/** Images at or below the target are uploaded byte-for-byte. */
+const MIN_COMPRESSION_SIZE = COMPRESSION_TARGET_MB * 1024 * 1024;
 
 interface CompressResult {
     file: File;
@@ -472,14 +474,14 @@ export async function compressImageIfNeeded(file: File, skip = false): Promise<C
     }
 
     // Skip small files (compression overhead not worth it)
-    if (file.size < MIN_COMPRESSION_SIZE) {
+    if (file.size <= MIN_COMPRESSION_SIZE) {
         return { file, compressed: false };
     }
 
     try {
         const { default: imageCompression } = await import("browser-image-compression");
         const compressedFile = await imageCompression(file, {
-            maxSizeMB: 4, // Increased from 2 MB
+            maxSizeMB: COMPRESSION_TARGET_MB,
             maxWidthOrHeight: 4096, // Increased from 1920 to preserve 4K (U10)
             useWebWorker: true, // Non-blocking
             initialQuality: 0.85, // Increased from 0.8

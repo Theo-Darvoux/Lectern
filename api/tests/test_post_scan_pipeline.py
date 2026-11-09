@@ -11,7 +11,7 @@ Phase 2 (process_upload_post_scan):
   - The sanitized CAS object is immutable and is never overwritten.
   - Soft failure: thumbnail fails → no thumbnail → processing_status=complete.
   - Strip failure: preserve CAS and mark processing_status=degraded.
-  - Hard failure: quarantine missing → processing_status=degraded (immediate, no retry needed).
+  - Hard failure: sanitized object missing → processing_status=degraded (no retry needed).
   - Retry exhausted: dead-letter + processing_status=degraded.
   - arq retry: raises on recoverable error while job_try < max.
 
@@ -175,7 +175,6 @@ async def test_pipeline_enqueues_post_scan_job_after_scan() -> None:
     pipeline.original_sha256 = "b" * 64
     pipeline.cas_key = f"upload:cas:{'c' * 64}"
     pipeline.initial_size = 1024
-    pipeline.completed_stage = 2  # scan already done
 
     mock_pool = AsyncMock()
     finalize_result = MagicMock()
@@ -187,6 +186,7 @@ async def test_pipeline_enqueues_post_scan_job_after_scan() -> None:
     finalize_result.new_cas_ref = 1
 
     with (
+        patch("app.workers.upload.pipeline.run_scan_and_strip", AsyncMock()),
         patch("app.workers.upload.pipeline.run_post_strip_pdf_check", AsyncMock()),
         patch(
             "app.workers.upload.pipeline.run_finalize_storage",
@@ -244,7 +244,6 @@ async def test_pipeline_emits_clean_status_after_scan() -> None:
     pipeline.original_sha256 = "b" * 64
     pipeline.cas_key = f"upload:cas:{'c' * 64}"
     pipeline.initial_size = 512
-    pipeline.completed_stage = 2
 
     emitted_statuses: list[str] = []
 
@@ -262,6 +261,7 @@ async def test_pipeline_emits_clean_status_after_scan() -> None:
     )
 
     with (
+        patch("app.workers.upload.pipeline.run_scan_and_strip", AsyncMock()),
         patch("app.workers.upload.pipeline.run_post_strip_pdf_check", AsyncMock()),
         patch(
             "app.workers.upload.pipeline.run_finalize_storage",
@@ -291,8 +291,8 @@ async def test_pipeline_emits_clean_status_after_scan() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pipeline_does_not_compress_or_thumbnail_in_job1() -> None:
-    """Job 1 must NOT call run_compress_stage or run_thumbnail_stage."""
+async def test_pipeline_does_not_thumbnail_in_job1() -> None:
+    """Job 1 must NOT call run_thumbnail_stage."""
     from app.workers.upload.context import WorkerContext
     from app.workers.upload.pipeline import UploadPipeline
 
@@ -311,7 +311,6 @@ async def test_pipeline_does_not_compress_or_thumbnail_in_job1() -> None:
     pipeline.original_sha256 = "b" * 64
     pipeline.cas_key = f"upload:cas:{'c' * 64}"
     pipeline.initial_size = 1024
-    pipeline.completed_stage = 2
 
     finalize_result = MagicMock(
         final_key="cas/" + "c" * 64,
@@ -321,10 +320,10 @@ async def test_pipeline_does_not_compress_or_thumbnail_in_job1() -> None:
         db_cas_key=f"upload:cas:{'c' * 64}",
         new_cas_ref=1,
     )
-    mock_compress = AsyncMock()
     mock_thumbnail = AsyncMock()
 
     with (
+        patch("app.workers.upload.pipeline.run_scan_and_strip", AsyncMock()),
         patch("app.workers.upload.pipeline.run_post_strip_pdf_check", AsyncMock()),
         patch(
             "app.workers.upload.pipeline.run_finalize_storage",
@@ -334,7 +333,6 @@ async def test_pipeline_does_not_compress_or_thumbnail_in_job1() -> None:
         patch("app.core.database.redis.arq_pool", AsyncMock()),
         patch("app.config.settings.bazaar_async_enabled", False),
         # These must NOT be imported or called in pipeline.py anymore
-        patch("app.workers.upload.stages.compress.run_compress_stage", mock_compress),
         patch("app.workers.upload.stages.thumbnail.run_thumbnail_stage", mock_thumbnail),
     ):
         repo_instance = mock_repo.return_value
@@ -349,7 +347,6 @@ async def test_pipeline_does_not_compress_or_thumbnail_in_job1() -> None:
 
         await pipeline._run_stages()
 
-    mock_compress.assert_not_called()
     mock_thumbnail.assert_not_called()
 
 
@@ -374,7 +371,6 @@ async def test_pipeline_sets_processing_status_pending_in_db() -> None:
     pipeline.original_sha256 = "b" * 64
     pipeline.cas_key = f"upload:cas:{'c' * 64}"
     pipeline.initial_size = 1024
-    pipeline.completed_stage = 2
 
     finalize_result = MagicMock(
         final_key="cas/" + "c" * 64,
@@ -385,6 +381,7 @@ async def test_pipeline_sets_processing_status_pending_in_db() -> None:
         new_cas_ref=1,
     )
     with (
+        patch("app.workers.upload.pipeline.run_scan_and_strip", AsyncMock()),
         patch("app.workers.upload.pipeline.run_post_strip_pdf_check", AsyncMock()),
         patch(
             "app.workers.upload.pipeline.run_finalize_storage",
@@ -429,7 +426,6 @@ async def test_post_scan_happy_path_marks_complete() -> None:
             "app.workers.process_upload_post_scan.run_download_and_validate",
             AsyncMock(return_value=dr),
         ),
-        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
         patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage",
             AsyncMock(return_value="/tmp/thumb.webp"),
@@ -501,7 +497,6 @@ async def test_post_scan_holds_thumbnail_lifecycle_lock_through_publication() ->
             "app.workers.process_upload_post_scan.run_download_and_validate",
             AsyncMock(return_value=_make_download_result()),
         ),
-        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
         patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage",
             AsyncMock(return_value="/tmp/thumb.webp"),
@@ -546,7 +541,6 @@ async def test_post_scan_removes_thumbnail_if_upload_was_quarantined() -> None:
             "app.workers.process_upload_post_scan.run_download_and_validate",
             AsyncMock(return_value=_make_download_result()),
         ),
-        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
         patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage",
             AsyncMock(return_value="/tmp/thumb.webp"),
@@ -566,46 +560,6 @@ async def test_post_scan_removes_thumbnail_if_upload_was_quarantined() -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_scan_strip_failure_preserves_existing_cas() -> None:
-    """A second-pass strip failure must not upload or overwrite the CAS object."""
-    from app.workers.process_upload_post_scan import process_upload_post_scan
-
-    ctx = _make_ctx()
-    dr = _make_download_result()
-    mock_upload = AsyncMock()
-    mock_delete = AsyncMock()
-    mock_trigger = AsyncMock()
-
-    with (
-        patch(
-            "app.workers.process_upload_post_scan.run_download_and_validate",
-            AsyncMock(return_value=dr),
-        ),
-        patch(
-            "app.workers.process_upload_post_scan.run_strip_only",
-            AsyncMock(side_effect=ValueError("sanitization failed")),
-        ),
-        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock()) as thumbnail,
-        patch("app.workers.process_upload_post_scan.upload_file_multipart", mock_upload),
-        patch("app.workers.process_upload_post_scan.delete_object", mock_delete),
-        patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", mock_trigger),
-        patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
-    ):
-        repo = mock_repo.return_value
-        repo.update_processing_status = AsyncMock()
-        repo.get_auth_config = AsyncMock(return_value={})
-
-        await process_upload_post_scan(ctx, **_post_scan_kwargs())
-
-    status_calls = [call.args[1] for call in repo.update_processing_status.await_args_list]
-    assert status_calls == ["running", "degraded"]
-    thumbnail.assert_not_awaited()
-    mock_upload.assert_not_awaited()
-    mock_delete.assert_not_awaited()
-    mock_trigger.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 async def test_post_scan_thumbnail_failure_yields_no_thumbnail() -> None:
     """If thumbnail generation raises on all attempts, upload completes with thumbnail_status=failed."""
     from app.workers.process_upload_post_scan import process_upload_post_scan
@@ -619,7 +573,6 @@ async def test_post_scan_thumbnail_failure_yields_no_thumbnail() -> None:
             "app.workers.process_upload_post_scan.run_download_and_validate",
             AsyncMock(return_value=dr),
         ),
-        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
         patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage",
             AsyncMock(side_effect=OSError("Pillow exploded")),
@@ -668,7 +621,6 @@ async def test_post_scan_thumbnail_retried_once_then_succeeds() -> None:
             "app.workers.process_upload_post_scan.run_download_and_validate",
             AsyncMock(return_value=dr),
         ),
-        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
         patch("app.workers.process_upload_post_scan.run_thumbnail_stage", _thumb_fail_once),
         patch("app.workers.process_upload_post_scan.upload_file_multipart", AsyncMock()),
         patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
@@ -705,7 +657,6 @@ async def test_post_scan_thumbnail_skipped_for_unsupported_type() -> None:
             "app.workers.process_upload_post_scan.run_download_and_validate",
             AsyncMock(return_value=dr),
         ),
-        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
         patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage",
             AsyncMock(return_value=None),
@@ -731,7 +682,7 @@ async def test_post_scan_thumbnail_skipped_for_unsupported_type() -> None:
 
 @pytest.mark.asyncio
 async def test_post_scan_quarantine_missing_marks_degraded() -> None:
-    """If quarantine download fails (file expired/missing), mark degraded without retry."""
+    """If the sanitized object cannot be downloaded, mark degraded without retry."""
     from app.workers.process_upload_post_scan import process_upload_post_scan
 
     ctx = _make_ctx()
@@ -752,7 +703,7 @@ async def test_post_scan_quarantine_missing_marks_degraded() -> None:
         await process_upload_post_scan(ctx, **_post_scan_kwargs())
 
     status_calls = [c.args[1] for c in repo.update_processing_status.call_args_list]
-    assert "degraded" in status_calls, "quarantine missing → processing_status=degraded"
+    assert "degraded" in status_calls, "sanitized object missing → processing_status=degraded"
     # Must still trigger auto-merges (degraded is a settled state)
     mock_trigger.assert_awaited_once()
 
@@ -799,7 +750,6 @@ async def test_post_scan_deletes_quarantine_on_success() -> None:
             "app.workers.process_upload_post_scan.run_download_and_validate",
             AsyncMock(return_value=dr),
         ),
-        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
         patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)
         ),
@@ -868,7 +818,6 @@ async def test_post_scan_dispatches_webhook_on_success() -> None:
             "app.workers.process_upload_post_scan.run_download_and_validate",
             AsyncMock(return_value=dr),
         ),
-        patch("app.workers.process_upload_post_scan.run_strip_only", AsyncMock()),
         patch(
             "app.workers.process_upload_post_scan.run_thumbnail_stage", AsyncMock(return_value=None)
         ),

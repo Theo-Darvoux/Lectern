@@ -22,6 +22,7 @@ from app.core.common.exceptions import (
     ServiceUnavailableError,
 )
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_limits import configured_allowed_extensions, configured_allowed_mimes
 from app.core.database.database import get_db
 from app.core.database.redis import get_redis, redis_lock
 from app.core.media.mimetypes import MimeRegistry, guess_mime_from_bytes
@@ -32,6 +33,7 @@ from app.core.storage.facade import (
     generate_presigned_put,
     generate_presigned_upload_part,
     get_object_info,
+    list_uploaded_parts,
 )
 from app.core.storage.multipart_completion import (
     MultipartCompletionError,
@@ -46,6 +48,7 @@ from app.routers.upload.cancellation import (
     upload_lifecycle_lock_name,
 )
 from app.routers.upload.helpers import (
+    _MULTIPART_INTENT_TTL,
     _QUOTA_KEY_PREFIX,
     _UPLOAD_INTENT_PREFIX,
     _UPLOAD_INTENT_TTL,
@@ -85,6 +88,27 @@ _PRESIGNED_DEPRECATION_HEADERS = {
     "Link": '</api/upload>; rel="successor-version"',
 }
 _PRESIGNED_MULTIPART_PART_SIZE = 8 * 1024 * 1024
+
+
+def _expected_part_size(total_size: int, part_size: int, part_number: int) -> int:
+    """Return the fixed size of one part; only the last part may be shorter."""
+    return min(part_size, total_size - (part_number - 1) * part_size)
+
+
+async def _reserve_or_release_quota(
+    size: int,
+    upload_id: str,
+    user_id: str,
+    quarantine_key: str,
+    redis: Redis,  # type: ignore[type-arg]
+    db: AsyncSession,
+) -> None:
+    """Reserve storage, giving back the pending-upload slot when storage is full."""
+    try:
+        await _reserve_storage_limit(size, upload_id, redis, db)
+    except Exception:
+        await redis.zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", quarantine_key)
+        raise
 
 
 async def _presigned_upload_is_cancelled(
@@ -196,10 +220,12 @@ async def init_upload(
         response.headers[k] = v
     user_id = str(user.id)
 
-    safe_name, _ext = _validate_filename(data.filename)
+    safe_name, _ext = _validate_filename(
+        data.filename, allowed_extensions=configured_allowed_extensions()
+    )
     resolved_mime = MimeRegistry.resolve_upload_mime(safe_name, data.mime_type)
 
-    if not MimeRegistry.is_allowed_mime(resolved_mime):
+    if not MimeRegistry.is_allowed_mime(resolved_mime, allowed=configured_allowed_mimes()):
         raise BadRequestError(
             f"MIME type '{data.mime_type}' is not allowed for upload.",
             code=UploadErrorCode.TYPE_NOT_ALLOWED,
@@ -221,7 +247,7 @@ async def init_upload(
         privileged=user.role in PRIVILEGED_ROLES,
         reserve_key=quarantine_key,
     )
-    await _reserve_storage_limit(data.size, upload_id, redis, db)
+    await _reserve_or_release_quota(data.size, upload_id, user_id, quarantine_key, redis, db)
     try:
         presigned_url = await generate_presigned_put(
             quarantine_key,
@@ -309,7 +335,9 @@ async def complete_upload(
         real_mime = guess_mime_from_bytes(head)
         ext = MimeRegistry.get_extension(intent["filename"])
         if real_mime != "application/octet-stream":
-            safe_name, ext = _apply_mime_correction(intent["filename"], real_mime, ext)
+            safe_name, ext = _apply_mime_correction(
+                intent["filename"], real_mime, ext, allowed_mimes=configured_allowed_mimes()
+            )
             intent["filename"] = safe_name
             intent["mime_type"] = real_mime
 
@@ -353,10 +381,12 @@ async def presigned_multipart_init(
         raise HTTPException(status_code=501, detail="Presigned multipart not enabled")
 
     user_id = str(user.id)
-    safe_name, _ext = _validate_filename(data.filename)
+    safe_name, _ext = _validate_filename(
+        data.filename, allowed_extensions=configured_allowed_extensions()
+    )
     resolved_mime = MimeRegistry.resolve_upload_mime(safe_name, data.mime_type)
 
-    if not MimeRegistry.is_allowed_mime(resolved_mime):
+    if not MimeRegistry.is_allowed_mime(resolved_mime, allowed=configured_allowed_mimes()):
         raise BadRequestError(
             f"MIME type '{data.mime_type}' is not allowed for upload.",
             code=UploadErrorCode.TYPE_NOT_ALLOWED,
@@ -376,7 +406,7 @@ async def presigned_multipart_init(
         privileged=user.role in PRIVILEGED_ROLES,
         reserve_key=quarantine_key,
     )
-    await _reserve_storage_limit(data.size, upload_id, redis, db)
+    await _reserve_or_release_quota(data.size, upload_id, user_id, quarantine_key, redis, db)
     s3_multipart_id: str | None = None
     try:
         s3_multipart_id = await create_multipart_upload(
@@ -388,15 +418,12 @@ async def presigned_multipart_init(
         parts: list[PresignedMultipartPart] = []
 
         for i in range(1, num_parts + 1):
-            expected_part_size = min(
-                part_size,
-                data.size - ((i - 1) * part_size),
-            )
+            expected_part_size = _expected_part_size(data.size, part_size, i)
             url = await generate_presigned_upload_part(
                 quarantine_key,
                 s3_multipart_id,
                 i,
-                ttl=_UPLOAD_INTENT_TTL,
+                ttl=_MULTIPART_INTENT_TTL,
                 content_length=expected_part_size,
             )
             parts.append(
@@ -420,7 +447,7 @@ async def presigned_multipart_init(
                 "num_parts": num_parts,
             }
         )
-        await redis.set(f"{_UPLOAD_INTENT_PREFIX}{upload_id}", intent, ex=_UPLOAD_INTENT_TTL)
+        await redis.set(f"{_UPLOAD_INTENT_PREFIX}{upload_id}", intent, ex=_MULTIPART_INTENT_TTL)
 
         await _create_upload_row(
             upload_id=upload_id,
@@ -450,7 +477,87 @@ async def presigned_multipart_init(
         upload_id=upload_id,
         s3_multipart_id=s3_multipart_id,
         parts=parts,
-        expires_in=_UPLOAD_INTENT_TTL,
+        expires_in=_MULTIPART_INTENT_TTL,
+    )
+
+
+@router.post("/presigned-multipart/{upload_id}/resume", response_model=PresignedMultipartInitOut)
+async def presigned_multipart_resume(
+    upload_id: str,
+    user: CurrentUser,
+    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> PresignedMultipartInitOut:
+    """Return stored ETags and fresh part URLs so a client can continue an upload."""
+    intent_key = f"{_UPLOAD_INTENT_PREFIX}{upload_id}"
+    async with redis_lock(redis, upload_lifecycle_lock_name(upload_id), timeout=5, expire=120):
+        intent_raw = await redis.get(intent_key)
+        if not intent_raw:
+            raise BadRequestError(
+                "Upload intent not found or expired. Please restart the upload.",
+                code=UploadErrorCode.INTENT_EXPIRED,
+            )
+        intent = json.loads(intent_raw)
+        if intent["user_id"] != str(user.id):
+            raise ForbiddenError("You do not own this upload intent")
+        await _ensure_presigned_upload_active(intent, redis, db)
+        status = await db.scalar(select(Upload.status).where(Upload.upload_id == upload_id))
+        if status in ("failed", "malicious"):
+            raise ConflictError("This upload already failed. Please restart the upload.")
+
+        size = int(intent["size"])
+        part_size = int(intent["part_size"])
+        expected_sizes = {
+            number: _expected_part_size(size, part_size, number)
+            for number in range(1, int(intent["num_parts"]) + 1)
+        }
+
+        # Completion may already have consumed the S3 upload; its checkpointed
+        # manifest lets the client repeat the idempotent completion request.
+        if intent.get("part_manifest") is not None:
+            stored = {
+                int(part["PartNumber"]): str(part["ETag"]) for part in intent["part_manifest"]
+            }
+        else:
+            try:
+                uploaded = await list_uploaded_parts(
+                    intent["quarantine_key"], intent["s3_multipart_id"]
+                )
+            except Exception as exc:
+                raise ConflictError(
+                    "This upload can no longer be resumed. Please restart the upload."
+                ) from exc
+            stored = {
+                part["PartNumber"]: part["ETag"]
+                for part in uploaded
+                if part["Size"] == expected_sizes.get(part["PartNumber"])
+            }
+
+        parts = [
+            PresignedMultipartPart(
+                part_number=number,
+                size=expected_size,
+                etag=stored.get(number),
+                url=None
+                if number in stored
+                else await generate_presigned_upload_part(
+                    intent["quarantine_key"],
+                    intent["s3_multipart_id"],
+                    number,
+                    ttl=_MULTIPART_INTENT_TTL,
+                    content_length=expected_size,
+                ),
+            )
+            for number, expected_size in expected_sizes.items()
+        ]
+        await redis.expire(intent_key, _MULTIPART_INTENT_TTL)
+
+    return PresignedMultipartInitOut(
+        quarantine_key=intent["quarantine_key"],
+        upload_id=upload_id,
+        s3_multipart_id=intent["s3_multipart_id"],
+        parts=parts,
+        expires_in=_MULTIPART_INTENT_TTL,
     )
 
 
@@ -507,7 +614,7 @@ async def presigned_multipart_complete(
             # Checkpoint the exact manifest before the non-atomic S3 operation.
             intent["part_manifest"] = part_manifest
             intent["finalizing"] = True
-            await redis.set(intent_key, json.dumps(intent), ex=_UPLOAD_INTENT_TTL)
+            await redis.set(intent_key, json.dumps(intent), ex=_MULTIPART_INTENT_TTL)
 
             try:
                 await complete_multipart_verified(
@@ -536,7 +643,7 @@ async def presigned_multipart_complete(
             intent["multipart_completed"] = True
             intent["finalizing"] = False
             intent["actual_size"] = int(intent["size"])
-            await redis.set(intent_key, json.dumps(intent), ex=_UPLOAD_INTENT_TTL)
+            await redis.set(intent_key, json.dumps(intent), ex=_MULTIPART_INTENT_TTL)
 
         from app.core.storage.facade import read_object_bytes
 
@@ -545,7 +652,9 @@ async def presigned_multipart_complete(
         ext = MimeRegistry.get_extension(intent["filename"])
         if real_mime != "application/octet-stream":
             try:
-                safe_name, ext = _apply_mime_correction(intent["filename"], real_mime, ext)
+                safe_name, ext = _apply_mime_correction(
+                    intent["filename"], real_mime, ext, allowed_mimes=configured_allowed_mimes()
+                )
             except BadRequestError:
                 await _discard_multipart_intent(
                     intent,
@@ -600,7 +709,7 @@ async def presigned_multipart_complete(
 
         intent["actual_size"] = actual_size
         intent["enqueued"] = True
-        await redis.set(intent_key, json.dumps(intent), ex=_UPLOAD_INTENT_TTL)
+        await redis.set(intent_key, json.dumps(intent), ex=_MULTIPART_INTENT_TTL)
 
     return UploadPendingOut(
         upload_id=data.upload_id,
@@ -637,7 +746,7 @@ async def presigned_multipart_abort(
             raise ForbiddenError("You do not own this upload intent")
 
         intent["cancelled"] = True
-        await redis.set(intent_key, json.dumps(intent), ex=_UPLOAD_INTENT_TTL)
+        await redis.set(intent_key, json.dumps(intent), ex=_MULTIPART_INTENT_TTL)
 
         await cancel_upload_lifecycle(
             upload_id=upload_id,
