@@ -24,13 +24,17 @@ ENV UV_PROJECT_ENVIRONMENT=/venv
 ENV UV_PYTHON_DOWNLOADS=never
 RUN uv sync --frozen --no-dev --python /usr/local/bin/python3.12
 
-# Strip stub/test files from the venv. We intentionally do NOT pre-compile
-# bytecode: the runtime sets PYTHONDONTWRITEBYTECODE=1, so shipped .pyc files
-# would never be reused — they'd only inflate the image.
+# Strip stub/test files from the venv.
 RUN find /venv -name "*.pyi" -delete && \
     find /venv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true && \
     find /venv -type d \( -name "tests" -o -name "test" \) -exec rm -rf {} + 2>/dev/null || true && \
     rm -rf /venv/include
+
+# Ship bytecode. Each sandboxed parser is a fresh interpreter that cannot write
+# caches, so without .pyc files it recompiles every import for every uploaded file.
+# PYTHONDONTWRITEBYTECODE only stops writing: existing .pyc files are still read.
+# compileall exits non-zero on a few vendored Python 2 modules, which never run.
+RUN python -m compileall -qq -j 0 /venv/lib || true
 
 # ── Stage 2: common OS base (shared by api + worker targets) ─────────────────
 # libyara10: YARA runtime — imported by app.core.security.scanner at API startup, and
@@ -100,9 +104,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Bubblewrap child boundary as workers. Heavy converters remain worker-only.
 FROM runtime-base AS api
 
+# The official Python image ships no stdlib bytecode. See the builder stage.
+RUN python -m compileall -qq -j 0 /usr/local/lib/python3.12 || true
 COPY --from=builder --chown=appuser:appuser /venv /venv
 USER appuser
 COPY --chown=appuser:appuser . .
+RUN python -m compileall -qq -j 0 app
 RUN chmod +x scripts/start.sh scripts/worker-start.sh
 
 ENTRYPOINT ["./scripts/start.sh"]
@@ -113,9 +120,12 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 # yields the full-capability image.
 FROM worker-base AS worker
 
+# The official Python image ships no stdlib bytecode. See the builder stage.
+RUN python -m compileall -qq -j 0 /usr/local/lib/python3.12 || true
 COPY --from=builder --chown=appuser:appuser /venv /venv
 USER appuser
 COPY --chown=appuser:appuser . .
+RUN python -m compileall -qq -j 0 app
 RUN chmod +x scripts/start.sh scripts/worker-start.sh
 
 ENTRYPOINT ["./scripts/worker-start.sh"]
