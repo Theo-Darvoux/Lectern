@@ -62,6 +62,10 @@ async def check_bazaar(
         cas_s3_key: The ``cas/<id>`` S3 key the file was promoted to.
         user_id:    Uploader's user UUID string (for quota cleanup).
     """
+    # Return before the lookup: a skipped check must not write a clean tombstone.
+    if not settings.malware_scan_enabled:
+        return
+
     wctx = WorkerContext.from_arq_ctx(ctx)
     redis = wctx.redis
 

@@ -465,13 +465,21 @@ async def get_detailed_health(
             .where(MaterialVersion.virus_scan_result == "pending")
         )
 
+        scan_enabled = settings.malware_scan_enabled
+        if not scan_enabled:
+            scanner_message = "Malware scanning disabled by MALWARE_SCAN_ENABLED=false"
+        elif not is_ready:
+            scanner_message = "Scanner not initialized"
+        else:
+            scanner_message = None
+
         services["scanner"] = ServiceStatus(
-            status="healthy" if is_ready else "degraded",
+            status="healthy" if is_ready and scan_enabled else "degraded",
             latency_ms=latency,
-            message=None if is_ready else "Scanner not initialized",
+            message=scanner_message,
             metadata={
-                "yara_enabled": is_ready,
-                "malwarebazaar_enabled": bool(settings.malwarebazaar_api_key),
+                "yara_enabled": is_ready and scan_enabled,
+                "malwarebazaar_enabled": scan_enabled and bool(settings.malwarebazaar_api_key),
                 "pending_scans": pending_scans,
             },
         )

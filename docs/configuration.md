@@ -227,7 +227,8 @@ populate the legal-notice and privacy pages.
 - **Malware policy** — `MALWAREBAZAAR_FAIL_CLOSED=true` rejects uploads when the
   MalwareBazaar API is unreachable; `false` lets YARA stay the gate. After
   updating YARA rules, lower `CAS_MAX_AGE_SECONDS` so cached-clean files get
-  re-scanned.
+  re-scanned. `MALWARE_SCAN_ENABLED=false` turns off both YARA and MalwareBazaar;
+  files accepted while it is off are not scanned later.
 
 ---
 

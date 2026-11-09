@@ -56,6 +56,8 @@ class MalwareScanner:
         self._compiled_rules_path = compiled_path
         self.client = httpx.AsyncClient(timeout=settings.malwarebazaar_timeout)
         logger.info("Scanner: compiled %d YARA rule file(s) from %s", len(rule_files), rules_dir)
+        if not settings.malware_scan_enabled:
+            logger.warning("MALWARE_SCAN_ENABLED=false: uploads are NOT scanned for malware.")
 
     async def close(self) -> None:
         """Shut down the shared HTTP client and scanner executor."""
@@ -92,6 +94,8 @@ class MalwareScanner:
         filename: str,
     ) -> None:
         """Run the local YARA gate; the pipeline applies the configured Bazaar policy."""
+        if not settings.malware_scan_enabled:
+            return
         await self._run_scan_gate(self._scan_yara(file_bytes, filename), filename)
 
     async def scan_file_path(
@@ -100,6 +104,8 @@ class MalwareScanner:
         filename: str,
     ) -> None:
         """Run the local YARA gate; the pipeline applies the configured Bazaar policy."""
+        if not settings.malware_scan_enabled:
+            return
         await self._run_scan_gate(self._scan_yara_path(file_path, filename), filename)
 
     async def _scan_yara(self, file_bytes: bytes, filename: str) -> str | None:

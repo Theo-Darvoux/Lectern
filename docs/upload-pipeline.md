@@ -115,7 +115,7 @@ Real MIME type is detected from magic bytes (not trusted from the client).
 
 Two operations run concurrently:
 
-**YARA scan** : the file is matched against compiled rules in `YARA_RULES_DIR`. A match raises `ERR_MALWARE_DETECTED` and aborts the upload immediately.
+**YARA scan** : the file is matched against compiled rules in `YARA_RULES_DIR`. A match raises `ERR_MALWARE_DETECTED` and aborts the upload immediately. Setting `MALWARE_SCAN_ENABLED=false` skips both this scan and the MalwareBazaar lookup; metadata stripping still runs.
 
 **Metadata strip** : removes identifying metadata:
 - PDFs: embedded JavaScript, fonts, comments (pypdf)

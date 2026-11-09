@@ -160,6 +160,9 @@ class Settings(BaseSettings):
     tus_max_concurrent_per_user: int = 8
     tus_max_concurrent_global: int = Field(default=8, ge=1, le=64)
 
+    # Master switch for YARA and MalwareBazaar checks on uploads. Files accepted
+    # while this is False are never scanned retroactively when it is re-enabled.
+    malware_scan_enabled: bool = True
     yara_rules_dir: str = "yara_rules"
     yara_scan_timeout: int = 60
     malwarebazaar_timeout: int = 5

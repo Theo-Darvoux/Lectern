@@ -263,6 +263,7 @@ Rarely need touching; defaults match S3 multipart constraints.
 
 | Variable | Default | Description |
 |---|---|---|
+| `MALWARE_SCAN_ENABLED` | `true` | Master switch for the YARA and MalwareBazaar checks on uploads. When `false`, uploads are published without a malware check and are still recorded as clean. They are not scanned retroactively if you turn it back on. Metadata stripping and the other file-safety checks still run. YARA rules must still exist at startup. |
 | `YARA_RULES_DIR` | `yara_rules` | Directory of compiled YARA rules. |
 | `YARA_SCAN_TIMEOUT` | `60` | Seconds before a YARA scan is aborted. |
 | `MALWAREBAZAAR_URL` | `https://mb-api.abuse.ch/api/v1/` | MalwareBazaar API endpoint. |

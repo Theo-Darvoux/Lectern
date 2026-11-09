@@ -518,6 +518,9 @@ class UploadPipeline:
 
     async def _check_bazaar_before_finalize(self) -> None:
         """Complete the external malware check before publishing a clean upload."""
+        # Return before the lookup: a skipped check must not cache a clean verdict.
+        if not settings.malware_scan_enabled:
+            return
         if await self.redis.get(f"bazaar:clean:{self.original_sha256}"):
             return
 
