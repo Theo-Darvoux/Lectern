@@ -310,8 +310,8 @@ The default in `compose.yaml` is 1 replica for dev; set these to 2+ in productio
 | `WORKER_FAST_MAX_JOBS` | `4` | Concurrent jobs per fast worker (I/O-bound, safe to over-subscribe). |
 | `WORKER_SLOW_REPLICAS` | `1` | Number of `worker-slow` containers (large/video files). Set to 2+ in production. |
 | `WORKER_SLOW_MAX_JOBS` | `2` | Concurrent jobs per slow worker (CPU-heavy, keep low). |
-| `GLOBAL_MAX_SUBPROCESSES` | `4` | Per-process cap on heavy sandboxed subprocesses. |
-| `MAX_CONCURRENT_IMAGE_OPS` | `1` | Per-process cap on native image operations. |
+| `GLOBAL_MAX_SUBPROCESSES` | `4` | Cap on heavy sandboxed subprocesses. In production it applies across all worker replicas (Redis semaphore), so adding replicas does not raise it. |
+| `MAX_CONCURRENT_IMAGE_OPS` | `3` | Cap on image, PDF and Office sanitizing and thumbnails. In production it applies across all worker replicas (Redis semaphore), so adding replicas does not raise it. Set it to at most the CPUs available to the workers. |
 
 ---
 

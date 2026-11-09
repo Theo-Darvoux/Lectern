@@ -222,7 +222,7 @@ class Settings(BaseSettings):
     # Concurrency guards for heavy worker operations. These are explicit rather
     # than CPU-derived so every production worker uses the same Redis limit.
     global_max_subprocesses: int = Field(default=4, ge=1)
-    max_concurrent_image_ops: int = Field(default=1, ge=1)
+    max_concurrent_image_ops: int = Field(default=3, ge=1)
 
     # Upload worker concurrency — how many jobs each worker process runs in parallel.
     # Tune alongside WORKER_FAST_REPLICAS / WORKER_SLOW_REPLICAS in compose.prod.yaml.

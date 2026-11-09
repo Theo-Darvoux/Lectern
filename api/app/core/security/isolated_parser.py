@@ -12,7 +12,11 @@ from pathlib import Path
 
 from app.core.common.upload_limits import maximum_upload_size_bytes
 from app.core.media.mimetypes import OLE2_MIME_TYPES, ZIP_MIME_TYPES
-from app.core.security.file_security._concurrency import image_guard, run_managed_subprocess
+from app.core.security.file_security._concurrency import (
+    DEFAULT_GUARD_ACQUIRE_SECONDS,
+    image_guard,
+    run_managed_subprocess,
+)
 from app.core.security.file_security.errors import UnreadableFileError
 from app.core.security.processing_paths import make_processing_temp_dir, make_processing_temp_path
 
@@ -99,12 +103,17 @@ async def sanitize_upload(
     *,
     mime_type: str,
     timeout: int = 60,
+    queue_timeout: float = 0.0,
 ) -> Path:
-    """Sanitize hostile structured bytes and return a parent-owned output file."""
+    """Sanitize hostile structured bytes and return a parent-owned output file.
+
+    ``queue_timeout`` is how long to wait for each concurrency slot. It is separate
+    from ``timeout``, which bounds the sanitizer process.
+    """
     work_dir = make_processing_temp_dir(prefix="parser-sanitize-")
     output_path = make_processing_temp_path(suffix=file_path.suffix, prefix="sanitized-")
     try:
-        async with image_guard():
+        async with image_guard(acquire_timeout=max(DEFAULT_GUARD_ACQUIRE_SECONDS, queue_timeout)):
             result = await run_managed_subprocess(
                 [
                     str(Path(sys.executable).resolve()),
@@ -119,6 +128,7 @@ async def sanitize_upload(
                 ro_paths=[file_path],
                 rw_paths=[work_dir, output_path],
                 timeout=timeout,
+                queue_timeout=queue_timeout,
                 python_runtime=True,
                 check=False,
             )

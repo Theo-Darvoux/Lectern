@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _SUBPROCESS_LIMIT = int(settings.global_max_subprocesses)
 _IMAGE_CONCURRENCY_LIMIT = int(settings.max_concurrent_image_ops)
+DEFAULT_GUARD_ACQUIRE_SECONDS = 60.0
 
 _local_subprocess_sem = asyncio.Semaphore(_SUBPROCESS_LIMIT)
 _local_image_sem = asyncio.Semaphore(_IMAGE_CONCURRENCY_LIMIT)
@@ -27,7 +28,11 @@ _redis_unavailable_until: dict[str, float] = {"subprocess": 0.0, "image": 0.0}
 
 
 @asynccontextmanager
-async def _get_concurrency_guard(guard_type: str) -> AsyncIterator[None]:
+async def _get_concurrency_guard(
+    guard_type: str,
+    *,
+    acquire_timeout: float = DEFAULT_GUARD_ACQUIRE_SECONDS,
+) -> AsyncIterator[None]:
     """Acquire a distributed semaphore with a local fallback in development, failing closed in production."""
     if guard_type not in {"subprocess", "image"}:
         raise ValueError(f"Unknown guard_type '{guard_type}'")
@@ -50,7 +55,12 @@ async def _get_concurrency_guard(guard_type: str) -> AsyncIterator[None]:
     acquired = False
     body_exc: BaseException | None = None
     try:
-        async with redis_semaphore(redis_client, f"heavy_ops:{guard_type}", limit=limit):
+        async with redis_semaphore(
+            redis_client,
+            f"heavy_ops:{guard_type}",
+            limit=limit,
+            timeout=acquire_timeout,
+        ):
             acquired = True
             async with local_sem:
                 try:
@@ -83,16 +93,20 @@ async def _get_concurrency_guard(guard_type: str) -> AsyncIterator[None]:
 
 
 @asynccontextmanager
-async def subprocess_guard() -> AsyncIterator[None]:
+async def subprocess_guard(
+    *, acquire_timeout: float = DEFAULT_GUARD_ACQUIRE_SECONDS
+) -> AsyncIterator[None]:
     """Concurrency guard for heavy sandboxed subprocess execution."""
-    async with _get_concurrency_guard("subprocess"):
+    async with _get_concurrency_guard("subprocess", acquire_timeout=acquire_timeout):
         yield
 
 
 @asynccontextmanager
-async def image_guard() -> AsyncIterator[None]:
+async def image_guard(
+    *, acquire_timeout: float = DEFAULT_GUARD_ACQUIRE_SECONDS
+) -> AsyncIterator[None]:
     """Concurrency guard for heavy in-process image operations."""
-    async with _get_concurrency_guard("image"):
+    async with _get_concurrency_guard("image", acquire_timeout=acquire_timeout):
         yield
 
 
@@ -105,13 +119,21 @@ async def run_managed_subprocess(
     ro_paths: list[Path | str] | None = None,
     python_runtime: bool = False,
     file_size_limit_bytes: int | None = None,
+    queue_timeout: float = 0.0,
 ) -> subprocess.CompletedProcess[Any]:
-    """Run a cancellation-safe sandboxed subprocess under the global limit with an end-to-end deadline."""
+    """Run a cancellation-safe sandboxed subprocess under the global limit with an end-to-end deadline.
+
+    ``queue_timeout`` extends the deadline to cover waiting for a slot. The process
+    itself still runs for at most ``timeout`` seconds.
+    """
     start_time = asyncio.get_running_loop().time()
-    async with asyncio.timeout(timeout):
-        async with subprocess_guard():
+    deadline = timeout + queue_timeout
+    async with asyncio.timeout(deadline):
+        async with subprocess_guard(
+            acquire_timeout=max(DEFAULT_GUARD_ACQUIRE_SECONDS, queue_timeout)
+        ):
             elapsed = asyncio.get_running_loop().time() - start_time
-            remaining_timeout = max(1.0, timeout - elapsed)
+            remaining_timeout = min(timeout, max(1.0, deadline - elapsed))
             result = await async_sandboxed_run(
                 cmd,
                 timeout=int(remaining_timeout),

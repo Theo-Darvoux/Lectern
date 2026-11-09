@@ -264,9 +264,11 @@ class UploadPipeline:
 
         Advances stage_percent from 0.05 to 0.90 over max_duration seconds so the
         progress bar visibly moves while the scanner works in the background.
+        Keeps emitting past max_duration: a queued file can wait longer, and the
+        client treats a silent event stream as a dropped connection.
         """
         elapsed = 0.0
-        while elapsed < max_duration:
+        while True:
             await asyncio.sleep(interval)
             elapsed += interval
             # Ease toward 0.90 so the final jump to 1.0 happens when scan completes

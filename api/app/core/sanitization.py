@@ -27,7 +27,16 @@ _DANGEROUS_CHARS_RE = re.compile(
 )
 
 # Matches characters not allowed in name/title fields.
-_INVALID_NAME_CHAR_RE = re.compile(r"[^\x20-\x7e\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f]")
+# Keep in sync with sanitizeNameInput in web/src/lib/utils.ts.
+_INVALID_NAME_CHAR_RE = re.compile(
+    r"[^\x20-\x7e"
+    r"\u00ab\u00b0\u00bb"  # \u00ab \u00b0 \u00bb
+    r"\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f"  # precomposed Latin accents
+    r"\u2010-\u2015"  # hyphens and en/em dashes
+    r"\u2018-\u201f"  # curly quotes
+    r"\u2026\u20ac"  # \u2026 \u20ac
+    r"]"
+)
 
 
 def clean_text(v: str) -> str:
@@ -62,7 +71,8 @@ def _validate_name_value(v: Any) -> Any:
     return v
 
 
-# NameStr: printable ASCII + precomposed Latin accents, Zalgo/emoji/etc. rejected.
+# NameStr: printable ASCII + precomposed Latin accents + typographic punctuation,
+# Zalgo/emoji/etc. rejected.
 NameStr = Annotated[str, BeforeValidator(_validate_name_value)]
 
 

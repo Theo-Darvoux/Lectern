@@ -25,6 +25,11 @@ from app.workers.upload.utils import parallel_tasks
 
 logger = logging.getLogger(__name__)
 
+_SANITIZE_WORK_TIMEOUT_SECONDS = 60
+# Sanitizers share a cluster-wide slot, so a batch queues. Waiting for a turn must
+# not consume the time allowed for the work itself.
+_SANITIZE_QUEUE_TIMEOUT_SECONDS = 300
+
 
 async def run_scan_and_strip(
     ctx: WorkerContext,
@@ -69,13 +74,19 @@ async def run_scan_and_strip(
 
     async def _run_strip() -> Path:
         with tracer.start_as_current_span("upload.strip_metadata"):
+            if requires_isolated_sanitization(mime_type):
+                return await asyncio.wait_for(
+                    sanitize_upload(
+                        tmp_path,
+                        mime_type=mime_type,
+                        timeout=_SANITIZE_WORK_TIMEOUT_SECONDS,
+                        queue_timeout=_SANITIZE_QUEUE_TIMEOUT_SECONDS,
+                    ),
+                    timeout=_SANITIZE_WORK_TIMEOUT_SECONDS + _SANITIZE_QUEUE_TIMEOUT_SECONDS,
+                )
             return await asyncio.wait_for(
-                (
-                    sanitize_upload(tmp_path, mime_type=mime_type)
-                    if requires_isolated_sanitization(mime_type)
-                    else strip_metadata_file(tmp_path, mime_type)
-                ),
-                timeout=60.0,
+                strip_metadata_file(tmp_path, mime_type),
+                timeout=_SANITIZE_WORK_TIMEOUT_SECONDS,
             )
 
     try:

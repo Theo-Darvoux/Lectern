@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { dirKey, useUploadQueue, type QueueItem } from "./upload-queue";
+import { dirKey, titleFromFilename, useUploadQueue, type QueueItem } from "./upload-queue";
 
 const base: QueueItem = {
   clientId: "a",
@@ -61,6 +61,13 @@ describe("queue restore after reload", () => {
 
   it("restores the temp ids of folders still to create", async () => {
     expect((await reloadWith([base])).dirTempIds).toEqual({ k: "dir-1" });
+  });
+});
+
+describe("titleFromFilename", () => {
+  it("keeps dashes and underscores from the file name", () => {
+    expect(titleFromFilename("cours-de-maths_2024.pdf")).toBe("Cours-de-maths_2024");
+    expect(titleFromFilename("TD-1 – analyse.pdf")).toBe("TD-1 – Analyse");
   });
 });
 

@@ -48,7 +48,7 @@ x-common-env: &common-env
   SANDBOX_FILE_SIZE_LIMIT_MB: ${SANDBOX_FILE_SIZE_LIMIT_MB:-100}
   SANDBOX_PROCESS_LIMIT: ${SANDBOX_PROCESS_LIMIT:-64}
   GLOBAL_MAX_SUBPROCESSES: ${GLOBAL_MAX_SUBPROCESSES:-4}
-  MAX_CONCURRENT_IMAGE_OPS: ${MAX_CONCURRENT_IMAGE_OPS:-1}
+  MAX_CONCURRENT_IMAGE_OPS: ${MAX_CONCURRENT_IMAGE_OPS:-3}
 
 x-worker-base: &worker-base
   restart: unless-stopped
@@ -273,8 +273,8 @@ services:
       replicas: ${WORKER_FAST_REPLICAS:-1}
       resources:
         limits:
-          cpus: "1.0"
-          memory: 1G
+          cpus: "3.0"
+          memory: 2G
           pids: ${WORKER_PIDS_LIMIT:-512}
         reservations:
           cpus: "0.25"

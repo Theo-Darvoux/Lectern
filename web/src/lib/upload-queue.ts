@@ -102,7 +102,6 @@ export function dirKey(item: Pick<QueueItem, "directoryId" | "parentMaterialId">
 export function titleFromFilename(name: string): string {
     return name
         .replace(/\.[^.]+$/, "")
-        .replace(/[-_]+/g, " ")
         .replace(/(^|\s)(\p{L})/gu, (_, sep, ch) => sep + ch.toUpperCase())
         .trim();
 }

@@ -136,7 +136,7 @@ Two operations run concurrently:
 
 **YARA scan** : the file is matched against compiled rules in `YARA_RULES_DIR`. A match raises `ERR_MALWARE_DETECTED` and aborts the upload immediately. Setting `MALWARE_SCAN_ENABLED=false` skips both this scan and the MalwareBazaar lookup; metadata stripping still runs.
 
-**Metadata strip** : removes identifying metadata:
+**Metadata strip** : image, PDF and Office files wait for a slot limited by `MAX_CONCURRENT_IMAGE_OPS`, for up to 5 minutes. The sanitizer then has 60 seconds to finish. Large batches therefore queue instead of failing. It removes identifying metadata:
 - PDFs: embedded JavaScript, fonts, comments (pypdf)
 - OLE2 / Office: VBA macro inspection via oletools; suspicious macros are rejected
 - Images: EXIF data stripped (piexif, Pillow)

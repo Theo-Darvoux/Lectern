@@ -2,7 +2,7 @@
 
 clean_text and strip_null_chars are already covered in test_input_validation.py.
 This file covers the gaps:
-- NameStr: printable ASCII + precomposed Latin accents only; emoji, Arabic,
+- NameStr: printable ASCII + precomposed Latin accents + typographic punctuation; emoji, Arabic,
   Chinese, Greek, and other non-allowlist chars are rejected.
 - SanitizedStr: strips dangerous chars but allows emoji (wider than NameStr).
 - sanitize_json_payload: delegates to strip_null_chars on nested structures.
@@ -60,9 +60,19 @@ def test_name_str_latin_extended_a_passes() -> None:
 
 
 def test_name_str_realistic_course_name() -> None:
-    # Note: em dash (U+2014) is outside the ASCII+Latin allowlist; use hyphen-minus instead.
     name = "Mathematiques - Algebre lineaire (2A)"
     assert _validate_name(name) == name
+
+
+def test_name_str_typographic_punctuation_passes() -> None:
+    for name in ("TD-1 – analyse", "Cours — partie 2", "L’essentiel", "« cours »", "N°3", "5 €…"):
+        assert _validate_name(name) == name
+
+
+def test_name_str_invisible_separators_stay_rejected_or_stripped() -> None:
+    # U+2028 sits just past the allowed punctuation range and must not become valid.
+    assert _validate_name("a\u2028b") == "ab"
+    _should_reject_name("a\u2030b")
 
 
 # ── NameStr: rejected inputs ─────────────────────────────────────────────────

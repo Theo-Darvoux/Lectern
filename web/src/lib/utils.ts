@@ -25,11 +25,13 @@ export function isRestrictedTarget(id: string | null | undefined, previewPr?: st
 /**
  * Strip characters not allowed in name/title fields.
  * Keeps printable ASCII plus precomposed Latin accented characters
- * (U+00C0–U+017F) used in French and other Western European languages.
+ * (U+00C0–U+017F) used in French and other Western European languages,
+ * and typographic punctuation (dashes, curly quotes, guillemets, degree, ellipsis, euro).
  * Blocks Zalgo text, emoji, Arabic, CJK, and other non-Latin scripts.
+ * Keep in sync with _INVALID_NAME_CHAR_RE in api/app/core/sanitization.py.
  */
 export function sanitizeNameInput(v: string): string {
-  return v.replace(/[^\x20-\x7e\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f]/g, "");
+  return v.replace(/[^\x20-\x7e\u00ab\u00b0\u00bb\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f\u2010-\u2015\u2018-\u201f\u2026\u20ac]/g, "");
 }
 
 /**
