@@ -505,7 +505,6 @@ async def test_shared_cancellation_releases_published_cas_exactly_once(
         json.dumps({"ref_count": 1, "final_key": row.final_key, "size": 128}),
     )
     await fake_redis_setup.set(f"upload:status:{quarantine_key}", "clean")
-    await fake_redis_setup.set(f"upload:eventlog:{quarantine_key}", "clean-event")
 
     from app.core.common.exceptions import ServiceUnavailableError
 
@@ -542,7 +541,6 @@ async def test_shared_cancellation_releases_published_cas_exactly_once(
     assert row.cas_ref_count == 0
     assert await fake_redis_setup.get(hmac_cas_key(content_sha256)) is None
     assert await fake_redis_setup.get(f"upload:status:{quarantine_key}") is None
-    assert await fake_redis_setup.get(f"upload:eventlog:{quarantine_key}") is None
 
 
 @pytest.mark.asyncio
@@ -603,7 +601,7 @@ async def test_worker_cancellation_after_publish_blocks_clean_and_post_scan() ->
         with pytest.raises(UploadError, match="cancelled"):
             await pipeline._fast_finalize_and_enqueue_post_scan()
 
-    emitted_payloads = [call.args[3] for call in pipeline.cache.emit_event.await_args_list]
+    emitted_payloads = [call.args[2] for call in pipeline.cache.emit_event.await_args_list]
     assert not any(f'"status": "{UploadStatus.CLEAN}"' in payload for payload in emitted_payloads)
     arq_pool.enqueue_job.assert_not_awaited()
 
@@ -990,19 +988,12 @@ async def test_post_scan_holds_lifecycle_lock_through_clean_event_and_followups(
     async def blocked_emit(
         cache: UploadCacheRepository,
         event_status_key: str,
-        event_channel: str,
-        event_log_key: str,
+        user_id: str,
         payload_json: str,
     ) -> None:
         emit_entered.set()
         await release_emit.wait()
-        await original_emit(
-            cache,
-            event_status_key,
-            event_channel,
-            event_log_key,
-            payload_json,
-        )
+        await original_emit(cache, event_status_key, user_id, payload_json)
 
     webhook = AsyncMock()
     auto_merge = AsyncMock()
@@ -1089,7 +1080,6 @@ async def test_post_scan_holds_lifecycle_lock_through_clean_event_and_followups(
     assert row.status == "cancelled"
     assert row.cas_ref_count == 0
     assert await fake_redis_setup.get(status_key) is None
-    assert await fake_redis_setup.get(f"upload:eventlog:{quarantine_key}") is None
     webhook.assert_awaited_once_with(upload_id)
     auto_merge.assert_awaited_once()
 
@@ -1352,13 +1342,11 @@ async def test_processing_status_database_failure_is_retryable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_status_and_sse_override_stale_clean_after_cancellation(
+async def test_status_overrides_stale_clean_after_cancellation(
     db_session: AsyncSession,
     fake_redis_setup: Any,
 ) -> None:
-    from fastapi import Request
-
-    from app.routers.upload.sse import upload_events, upload_status
+    from app.routers.upload.file_status import upload_status
     from app.schemas.material import UploadStatus
 
     upload_id = str(uuid.uuid4())
@@ -1388,7 +1376,6 @@ async def test_status_and_sse_override_stale_clean_after_cancellation(
         }
     )
     await fake_redis_setup.set(f"upload:status:{quarantine_key}", stale_clean)
-    await fake_redis_setup.rpush(f"upload:eventlog:{quarantine_key}", stale_clean)
 
     status = await upload_status(
         quarantine_key,
@@ -1398,20 +1385,6 @@ async def test_status_and_sse_override_stale_clean_after_cancellation(
     )
     assert status.status == UploadStatus.FAILED
     assert status.result is None
-
-    request = MagicMock(spec=Request)
-    request.headers = {}
-    response = await upload_events(
-        quarantine_key,
-        request,
-        user,
-        fake_redis_setup,
-        db_session,
-    )
-    event = await anext(aiter(response.body_iterator))
-    event_payload = json.loads(event["data"])
-    assert event_payload["status"] == "failed"
-    assert event_payload["result"] is None
 
 
 def test_thumbnail_keys_are_upload_specific() -> None:
@@ -1479,7 +1452,6 @@ async def test_retroactive_quarantine_serializes_after_post_scan_clean_event(
         }
     )
     await fake_redis_setup.set(f"upload:status:{quarantine_key}", initial_clean)
-    await fake_redis_setup.rpush(f"upload:eventlog:{quarantine_key}", initial_clean)
 
     pf = MagicMock()
     pf.path = Path("/tmp/retroactive-race.pdf")
@@ -1494,14 +1466,13 @@ async def test_retroactive_quarantine_serializes_after_post_scan_clean_event(
     async def blocked_clean_emit(
         cache: UploadCacheRepository,
         status_key: str,
-        event_channel: str,
-        event_log_key: str,
+        user_id: str,
         payload_json: str,
     ) -> None:
         if json.loads(payload_json).get("status") == "clean":
             clean_emit_entered.set()
             await release_clean_emit.wait()
-        await original_emit(cache, status_key, event_channel, event_log_key, payload_json)
+        await original_emit(cache, status_key, user_id, payload_json)
 
     with (
         patch("app.workers.process_upload_post_scan.redis_lock", new=shared_lock),
@@ -1589,10 +1560,6 @@ async def test_retroactive_quarantine_serializes_after_post_scan_clean_event(
     assert cached is not None
     cached_payload = json.loads(cached)
     assert cached_payload["status"] == "malicious"
-
-    log_entries = await fake_redis_setup.lrange(f"upload:eventlog:{quarantine_key}", 0, -1)
-    assert log_entries
-    assert json.loads(log_entries[-1])["status"] == "malicious"
 
 
 @pytest.mark.asyncio
@@ -1947,7 +1914,6 @@ async def test_retroactive_quarantine_retry_repairs_malicious_cache(
         }
     )
     await fake_redis_setup.set(f"upload:status:{quarantine_key}", stale_clean)
-    await fake_redis_setup.rpush(f"upload:eventlog:{quarantine_key}", stale_clean)
 
     @asynccontextmanager
     async def no_op_lock(*_args: Any, **_kwargs: Any) -> AsyncIterator[None]:
@@ -1973,8 +1939,6 @@ async def test_retroactive_quarantine_retry_repairs_malicious_cache(
     cached = await fake_redis_setup.get(f"upload:status:{quarantine_key}")
     assert cached is not None
     assert json.loads(cached)["status"] == "malicious"
-    log_entries = await fake_redis_setup.lrange(f"upload:eventlog:{quarantine_key}", 0, -1)
-    assert json.loads(log_entries[-1])["status"] == "malicious"
 
 
 @pytest.mark.asyncio

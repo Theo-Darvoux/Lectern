@@ -177,7 +177,6 @@ export function PRList() {
         pr_closed: () => setRefreshKey((k) => k + 1),
       },
       onResync: () => setRefreshKey((k) => k + 1),
-      startupDelay: 50,
     });
     return () => connection.close();
   }, []);

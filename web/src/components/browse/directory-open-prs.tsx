@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { apiFetchWithResponse } from "@/lib/api-client";
 import { subscribeToSSE } from "@/lib/sse-client";
@@ -57,10 +57,15 @@ export function DirectoryOpenPRs({ directoryId }: DirectoryOpenPRsProps) {
     const [loading, setLoading] = useState(true);
     const [isNavigating, setIsNavigating] = useState(false);
     const [isExpanded, setIsExpanded] = useState(false);
+    const pageRef = useRef(page);
+
+    useEffect(() => {
+        pageRef.current = page;
+    }, [page]);
 
     const fetchPRs = useCallback(
         async (p: number) => {
-            if (!directoryId) return;
+            if (!directoryId) return null;
 
             try {
                 const { data, response } = await apiFetchWithResponse<PR[]>(
@@ -73,8 +78,10 @@ export function DirectoryOpenPRs({ directoryId }: DirectoryOpenPRsProps) {
                 );
                 setTotalCount(total);
                 setPrs(data);
+                return data.length;
             } catch {
                 // Silently ignore — not critical
+                return null;
             }
         },
         [directoryId],
@@ -98,14 +105,23 @@ export function DirectoryOpenPRs({ directoryId }: DirectoryOpenPRsProps) {
 
     useEffect(() => {
         if (!directoryId) return;
+        // A gap must not move the reader off the page they are on, unless that
+        // page no longer exists.
+        const refreshCurrentPage = async () => {
+            const currentPage = pageRef.current;
+            const rowCount = await fetchPRs(currentPage);
+            if (rowCount === 0 && currentPage > 1) {
+                setPage(1);
+                await fetchPRs(1);
+            }
+        };
         const connection = subscribeToSSE({
             channel: `directory:${directoryId}`,
             listeners: {
                 pr_opened: () => { setPage(1); fetchPRs(1); },
                 pr_closed: () => { setPage(1); fetchPRs(1); },
             },
-            onResync: () => { setPage(1); fetchPRs(1); },
-            startupDelay: 50,
+            onResync: () => { void refreshCurrentPage(); },
         });
         return () => connection.close();
     }, [directoryId, fetchPRs]);

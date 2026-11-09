@@ -153,7 +153,7 @@ never executes notebook code; active HTML and SVG outputs are not rendered.
 
 ## Real-time updates (SSE)
 
-`GET /api/events/sse` is the sole persistent Server-Sent Events endpoint. The frontend elects one master tab per browser profile, multiplexes notification, PR, material, and directory channels over that connection, and routes each event envelope back to logical subscribers. PR events use the `pull_requests` channel; entity interests are supplied as repeated `topic` query parameters.
+`GET /api/events/sse` is the only Server-Sent Events endpoint. The frontend elects one leader tab per browser, which holds one stream carrying the notification, PR, upload, material, and directory channels of all that browser's tabs. Each user may have one stream per browser (up to 8 per API process, so a laptop and a phone both receive live updates), and a reconnect from the same browser replaces its older stream. PR events use the `pull_requests` channel; entity interests are supplied as repeated `topic` query parameters, and topics that no longer exist are ignored. See [ADR 006](adr/006-single-sse-stream-per-browser.md).
 
 | Event | Trigger |
 |---|---|

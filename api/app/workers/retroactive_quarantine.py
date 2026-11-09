@@ -39,16 +39,15 @@ from app.models.material import Material, MaterialVersion
 from app.models.upload import Upload
 from app.routers.upload.cancellation import upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
+from app.workers.upload.cache_repo import UploadCacheRepository
 from app.workers.upload.context import WorkerContext
 
 logger = logging.getLogger(__name__)
 
 # Redis key prefix for the quota tracking sorted set (mirrors upload worker logic).
 _QUOTA_KEY_PREFIX = "quota:uploads:"
-# Redis prefix for upload event log / channel (mirrors pipeline.py).
+# Redis prefix for the upload status cache (mirrors pipeline.py).
 _STATUS_KEY_PREFIX = "upload:status:"
-_EVENT_CHANNEL_PREFIX = "upload:events:"
-_EVENT_LOG_PREFIX = "upload:eventlog:"
 
 
 async def retroactive_quarantine(
@@ -137,7 +136,7 @@ async def retroactive_quarantine(
 
         # Cache/event publication is part of the same lifecycle critical section,
         # so a post-scan worker cannot append CLEAN after this MALICIOUS event.
-        await _emit_malicious_sse(redis, upload_id, threat, quarantine_key)
+        await _emit_malicious_sse(redis, user_id, upload_id, threat, quarantine_key)
 
         staging_key = f"staging:{user_id}:{upload_id}"
         try:
@@ -245,6 +244,7 @@ async def _quarantine_material_versions(
 
 async def _emit_malicious_sse(
     redis: Any,
+    user_id: str,
     upload_id: str,
     threat: str,
     quarantine_key: str | None,
@@ -254,8 +254,6 @@ async def _emit_malicious_sse(
         return
 
     status_key = f"{_STATUS_KEY_PREFIX}{quarantine_key}"
-    event_channel = f"{_EVENT_CHANNEL_PREFIX}{quarantine_key}"
-    event_log_key = f"{_EVENT_LOG_PREFIX}{quarantine_key}"
 
     payload: dict[str, Any] = {
         "upload_id": upload_id,
@@ -267,13 +265,7 @@ async def _emit_malicious_sse(
     payload_json = json.dumps(payload)
 
     try:
-        await redis.set(status_key, payload_json, ex=3600)
-        idx = await redis.rpush(event_log_key, payload_json)
-        if idx == 1:
-            await redis.expire(event_log_key, 7200)
-        elif idx > 200:
-            await redis.ltrim(event_log_key, -200, -1)
-        await redis.publish(event_channel, payload_json)
+        await UploadCacheRepository(redis).emit_event(status_key, user_id, payload_json)
     except Exception as exc:
         logger.warning("retroactive_quarantine: SSE emit failed for upload %s: %s", upload_id, exc)
         raise

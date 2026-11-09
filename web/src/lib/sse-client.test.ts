@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
     closeAllSSEConnections,
+    setSSEIdentity,
     subscribeToSSE as subscribeToSSEBase,
     type SSEOptions,
 } from "./sse-client";
@@ -12,7 +13,7 @@ function subscribeToSSE(
 }
 
 // ---------------------------------------------------------------------------
-// EventSource mock
+// Mocks
 // ---------------------------------------------------------------------------
 
 class MockEventSource {
@@ -22,8 +23,8 @@ class MockEventSource {
     withCredentials: boolean;
     onopen: ((e: Event) => void) | null = null;
     onerror: ((e: Event) => void) | null = null;
-    private handlers: Record<string, EventListenerOrEventListenerObject[]> = {};
-    readyState = 1; // OPEN
+    onmessage: ((e: MessageEvent) => void) | null = null;
+    readyState = 0; // CONNECTING
 
     constructor(url: string, opts?: { withCredentials?: boolean }) {
         this.url = url;
@@ -31,27 +32,19 @@ class MockEventSource {
         MockEventSource.instances.push(this);
     }
 
-    addEventListener(type: string, handler: EventListenerOrEventListenerObject) {
-        if (!this.handlers[type]) this.handlers[type] = [];
-        this.handlers[type].push(handler);
+    open() {
+        this.readyState = 1;
+        this.onopen?.(new Event("open"));
     }
 
-    removeEventListener(type: string, handler: EventListenerOrEventListenerObject) {
-        const listeners = this.handlers[type];
-        if (!listeners) return;
-        this.handlers[type] = listeners.filter((listener) => listener !== handler);
+    fail() {
+        this.onerror?.(new Event("error"));
     }
 
-    dispatchCustomEvent(
-        type: string,
-        data = JSON.stringify({ channel: "notifications", data: {} }),
-    ) {
-        const listeners = this.handlers[type] ?? [];
-        const event = new MessageEvent(type, { data });
-        for (const l of listeners) {
-            if (typeof l === "function") l(event);
-            else l.handleEvent(event);
-        }
+    deliver(channel: string, type: string, data: unknown = {}) {
+        this.onmessage?.(
+            new MessageEvent("message", { data: JSON.stringify({ channel, type, data }) }),
+        );
     }
 
     close() {
@@ -60,27 +53,53 @@ class MockEventSource {
 }
 
 class MockBroadcastChannel {
+    static instances: MockBroadcastChannel[] = [];
     onmessage: ((event: MessageEvent) => void) | null = null;
     postMessage = vi.fn();
     close = vi.fn();
 
-    constructor(public readonly name: string) {}
+    constructor(public readonly name: string) {
+        MockBroadcastChannel.instances.push(this);
+    }
+
+    receive(data: unknown) {
+        this.onmessage?.(new MessageEvent("message", { data }));
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
+function sources() {
+    return MockEventSource.instances;
+}
+
+function lastSource() {
+    return sources().at(-1)!;
+}
+
+/** Flush the refresh debounce so pending subscription changes reach the transport. */
+function flush() {
+    vi.advanceTimersByTime(150);
+}
+
+function retryWindow() {
+    // Base 1000ms retry plus at most 20% jitter.
+    vi.advanceTimersByTime(1250);
+}
+
+const MATERIAL = "material:11111111-1111-4111-8111-111111111111" as const;
+const DIRECTORY = "directory:22222222-2222-4222-8222-222222222222" as const;
 
 vi.mock("@/lib/api-client", () => ({ API_BASE: "http://api.test" }));
 
 beforeEach(() => {
     MockEventSource.instances = [];
+    MockBroadcastChannel.instances = [];
     vi.stubGlobal("EventSource", MockEventSource);
     Object.defineProperty(navigator, "locks", {
         configurable: true,
         value: undefined,
     });
     vi.useFakeTimers();
+    setSSEIdentity("user-1");
 });
 
 afterEach(() => {
@@ -93,254 +112,299 @@ afterEach(() => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("subscribeToSSE", () => {
-    it("opens the master endpoint with the requested entity topic", () => {
-        subscribeToSSE({ channel: "material:123", listeners: {} });
-        vi.runAllTimers();
-        expect(MockEventSource.instances).toHaveLength(1);
-        expect(MockEventSource.instances[0].url).toBe(
-            "http://api.test/events/sse?topic=material%3A123",
-        );
+describe("transport", () => {
+    it("opens one credentialed stream carrying the entity topics and a client id", () => {
+        subscribeToSSE({ channel: MATERIAL, listeners: {} });
+        flush();
+
+        expect(sources()).toHaveLength(1);
+        const url = new URL(lastSource().url);
+        expect(url.pathname).toBe("/events/sse");
+        expect(url.searchParams.getAll("topic")).toEqual([MATERIAL]);
+        expect(url.searchParams.get("client")).toBeTruthy();
+        expect(lastSource().withCredentials).toBe(true);
     });
 
-    it("sends credentials on the master transport", () => {
-        subscribeToSSE({ channel: "notifications", listeners: {} });
-        vi.runAllTimers();
-        expect(MockEventSource.instances[0].url).toBe("http://api.test/events/sse");
-        expect(MockEventSource.instances[0].withCredentials).toBe(true);
-    });
-
-    it("registers provided event listeners", () => {
-        const handler = vi.fn();
-        subscribeToSSE({
-            channel: "notifications",
-            listeners: { material_deleted: handler },
-        });
-        vi.runAllTimers();
-        MockEventSource.instances[0].dispatchCustomEvent("material_deleted");
-        expect(handler).toHaveBeenCalledOnce();
-    });
-
-    it("registers multiple listeners independently", () => {
-        const onDelete = vi.fn();
-        const onChild = vi.fn();
-        subscribeToSSE({
-            channel: "directory:abc",
-            listeners: { directory_deleted: onDelete, child_added: onChild },
-        });
-        vi.runAllTimers();
-        const es = MockEventSource.instances[0];
-        const data = JSON.stringify({ channel: "directory:abc", data: {} });
-        es.dispatchCustomEvent("directory_deleted", data);
-        es.dispatchCustomEvent("child_added", data);
-        expect(onDelete).toHaveBeenCalledOnce();
-        expect(onChild).toHaveBeenCalledOnce();
-    });
-
-    it("respects startupDelay before connecting", () => {
-        subscribeToSSE({ channel: "notifications", listeners: {}, startupDelay: 100 });
-        expect(MockEventSource.instances).toHaveLength(0);
-        vi.advanceTimersByTime(99);
-        expect(MockEventSource.instances).toHaveLength(0);
-        vi.advanceTimersByTime(1);
-        vi.runOnlyPendingTimers();
-        expect(MockEventSource.instances).toHaveLength(1);
-    });
-
-    it("reconnects after onerror with reconnectDelay", () => {
-        subscribeToSSE({ channel: "notifications", listeners: {}, reconnectDelay: 500 });
-        vi.runAllTimers();
-        expect(MockEventSource.instances).toHaveLength(1);
-
-        MockEventSource.instances[0].onerror?.(new Event("error"));
-        expect(MockEventSource.instances).toHaveLength(1); // no immediate reconnect
-
-        vi.advanceTimersByTime(500);
-        expect(MockEventSource.instances).toHaveLength(2);
-    });
-
-    it("reconciles when a fallback tab's transport is rejected", () => {
-        const onResync = vi.fn();
-        subscribeToSSE({
-            channel: "notifications",
-            listeners: {},
-            onResync,
-            reconnectDelay: 500,
-        });
-        vi.runAllTimers();
-
-        MockEventSource.instances[0].onerror?.(new Event("error"));
-
-        expect(onResync).toHaveBeenCalledOnce();
-    });
-
-    it("close() stops reconnection after error", () => {
-        const conn = subscribeToSSE({
-            channel: "notifications",
-            listeners: {},
-            reconnectDelay: 500,
-        });
-        vi.runAllTimers();
-        MockEventSource.instances[0].onerror?.(new Event("error"));
-        conn.close();
-        vi.advanceTimersByTime(1000);
-        // Still only 1 instance — cancelled flag prevents reconnect
-        expect(MockEventSource.instances).toHaveLength(1);
-    });
-
-    it("close() before startup prevents connection", () => {
-        const conn = subscribeToSSE({
-            channel: "notifications",
-            listeners: {},
-            startupDelay: 200,
-        });
-        conn.close();
-        vi.advanceTimersByTime(500);
-        expect(MockEventSource.instances).toHaveLength(0);
-    });
-
-    it("close() closes the underlying EventSource", () => {
-        const conn = subscribeToSSE({ channel: "notifications", listeners: {} });
-        vi.runAllTimers();
-        const es = MockEventSource.instances[0];
-        conn.close();
-        expect(es.readyState).toBe(2); // CLOSED
-    });
-
-    it("calls onResync for the overflow control event", () => {
-        const onResync = vi.fn();
-        subscribeToSSE({
-            channel: "notifications",
-            listeners: {},
-            onResync,
-        });
-        vi.runAllTimers();
-
-        MockEventSource.instances[0].dispatchCustomEvent("resync_required");
-
-        expect(onResync).toHaveBeenCalledOnce();
-    });
-
-    it("reconciles authoritative state whenever a transport opens", () => {
-        const onResync = vi.fn();
-        subscribeToSSE({ channel: "notifications", listeners: {}, onResync });
-        vi.runAllTimers();
-
-        MockEventSource.instances[0].onopen?.(new Event("open"));
-
-        expect(onResync).toHaveBeenCalledOnce();
-    });
-
-    it("shares one EventSource between subscribers to the same URL", () => {
-        const firstHandler = vi.fn();
-        const secondHandler = vi.fn();
-
-        const first = subscribeToSSE({
-            channel: "material:shared",
-            listeners: { material_updated: firstHandler },
-        });
-        const second = subscribeToSSE({
-            channel: "material:shared",
-            listeners: { annotation_created: secondHandler },
-        });
-
-        vi.runAllTimers();
-
-        expect(MockEventSource.instances).toHaveLength(1);
-        const es = MockEventSource.instances[0];
-
-        const data = JSON.stringify({ channel: "material:shared", data: {} });
-        es.dispatchCustomEvent("material_updated", data);
-        es.dispatchCustomEvent("annotation_created", data);
-        expect(firstHandler).toHaveBeenCalledOnce();
-        expect(secondHandler).toHaveBeenCalledOnce();
-
-        first.close();
-        expect(es.readyState).toBe(1);
-
-        es.dispatchCustomEvent("material_updated", data);
-        es.dispatchCustomEvent("annotation_created", data);
-        expect(firstHandler).toHaveBeenCalledOnce();
-        expect(secondHandler).toHaveBeenCalledTimes(2);
-
-        second.close();
-        expect(es.readyState).toBe(2);
-    });
-
-    it("reconnects a shared URL only once after an error", () => {
-        subscribeToSSE({
-            channel: "material:shared",
-            listeners: { material_updated: vi.fn() },
-            reconnectDelay: 500,
-        });
-        subscribeToSSE({
-            channel: "material:shared",
-            listeners: { annotation_created: vi.fn() },
-            reconnectDelay: 500,
-        });
-
-        vi.runAllTimers();
-        expect(MockEventSource.instances).toHaveLength(1);
-
-        MockEventSource.instances[0].onerror?.(new Event("error"));
-        vi.advanceTimersByTime(500);
-
-        expect(MockEventSource.instances).toHaveLength(2);
-    });
-
-    it("uses one master EventSource for different logical channels", () => {
+    it("keeps one stream across logical channels", () => {
         subscribeToSSE({ channel: "notifications", listeners: {} });
         subscribeToSSE({ channel: "pull_requests", listeners: {} });
+        subscribeToSSE({ channel: "uploads", listeners: {} });
+        flush();
 
-        vi.runAllTimers();
-
-        expect(MockEventSource.instances).toHaveLength(1);
+        expect(sources()).toHaveLength(1);
     });
 
-    it("keeps the master URL valid and polls when logical topics exceed its budget", () => {
+    it("coalesces a burst of subscription changes into one stream", () => {
+        const first = subscribeToSSE({ channel: MATERIAL, listeners: {} });
+        first.close();
+        subscribeToSSE({ channel: MATERIAL, listeners: {} });
+        subscribeToSSE({ channel: DIRECTORY, listeners: {} });
+        flush();
+
+        expect(sources()).toHaveLength(1);
+        expect(new URL(lastSource().url).searchParams.getAll("topic")).toEqual([
+            DIRECTORY,
+            MATERIAL,
+        ]);
+    });
+
+    it("waits for an account before connecting and closes when it signs out", () => {
+        setSSEIdentity(null);
+        subscribeToSSE({ channel: "notifications", listeners: {} });
+        flush();
+        expect(sources()).toHaveLength(0);
+
+        setSSEIdentity("user-1");
+        flush();
+        expect(sources()).toHaveLength(1);
+
+        setSSEIdentity(null);
+        expect(lastSource().readyState).toBe(2);
+    });
+
+    it("replaces the stream when the account changes", () => {
+        subscribeToSSE({ channel: "notifications", listeners: {} });
+        flush();
+        const first = lastSource();
+
+        setSSEIdentity("user-2");
+        flush();
+
+        expect(first.readyState).toBe(2);
+        expect(sources()).toHaveLength(2);
+    });
+
+    it("closes the stream with the last subscriber", () => {
+        const connection = subscribeToSSE({ channel: "notifications", listeners: {} });
+        flush();
+
+        connection.close();
+        flush();
+
+        expect(lastSource().readyState).toBe(2);
+    });
+
+    it("does not touch a subscription to a channel already carried", () => {
+        subscribeToSSE({ channel: MATERIAL, listeners: {} });
+        flush();
+        lastSource().open();
+
+        subscribeToSSE({ channel: MATERIAL, listeners: {} });
+        flush();
+
+        expect(sources()).toHaveLength(1);
+        expect(lastSource().readyState).toBe(1);
+    });
+});
+
+describe("topic changes", () => {
+    it("keeps the old stream until the replacement opens", () => {
+        subscribeToSSE({ channel: MATERIAL, listeners: {} });
+        flush();
+        const original = lastSource();
+        original.open();
+
+        subscribeToSSE({ channel: DIRECTORY, listeners: {} });
+        flush();
+        const replacement = lastSource();
+
+        expect(replacement).not.toBe(original);
+        expect(original.readyState).toBe(1);
+
+        replacement.open();
+        expect(original.readyState).toBe(2);
+    });
+
+    it("resyncs only channels the new stream gained", () => {
+        const onMaterial = vi.fn();
+        const onDirectory = vi.fn();
+        subscribeToSSE({ channel: MATERIAL, listeners: {}, onResync: onMaterial });
+        flush();
+        lastSource().open();
+        onMaterial.mockClear();
+
+        subscribeToSSE({ channel: DIRECTORY, listeners: {}, onResync: onDirectory });
+        flush();
+        lastSource().open();
+
+        expect(onDirectory).toHaveBeenCalledOnce();
+        expect(onMaterial).not.toHaveBeenCalled();
+    });
+
+    it("does not resync when the old stream ends just before the replacement opens", () => {
+        const onMaterial = vi.fn();
+        subscribeToSSE({ channel: MATERIAL, listeners: {}, onResync: onMaterial });
+        flush();
+        const original = lastSource();
+        original.open();
+        onMaterial.mockClear();
+
+        subscribeToSSE({ channel: DIRECTORY, listeners: {} });
+        flush();
+        original.fail(); // The server ends the old stream first.
+        lastSource().open();
+
+        expect(onMaterial).not.toHaveBeenCalled();
+    });
+
+    it("keeps the old stream when the replacement fails, then retries", () => {
+        subscribeToSSE({ channel: MATERIAL, listeners: {} });
+        flush();
+        const original = lastSource();
+        original.open();
+
+        subscribeToSSE({ channel: DIRECTORY, listeners: {} });
+        flush();
+        lastSource().fail();
+        expect(original.readyState).toBe(1);
+
+        retryWindow();
+        expect(sources()).toHaveLength(3);
+    });
+});
+
+describe("topic changes that revert", () => {
+    it("drops a pending replacement when the open stream already fits", () => {
+        const directory = subscribeToSSE({ channel: DIRECTORY, listeners: {} });
+        flush();
+        const original = lastSource();
+        original.open();
+
+        const material = subscribeToSSE({ channel: MATERIAL, listeners: {} });
+        flush();
+        const pending = lastSource();
+
+        material.close();
+        flush();
+
+        expect(pending.readyState).toBe(2);
+        expect(original.readyState).toBe(1);
+        expect(sources()).toHaveLength(2);
+        directory.close();
+    });
+});
+
+describe("reconnection", () => {
+    it("reconnects after a dropped stream with backoff, not immediately", () => {
+        subscribeToSSE({ channel: "notifications", listeners: {} });
+        flush();
+        lastSource().open();
+        lastSource().fail();
+
+        expect(sources()).toHaveLength(1);
+        retryWindow();
+        expect(sources()).toHaveLength(2);
+    });
+
+    it("does not spend retries on new subscribers during backoff", () => {
+        subscribeToSSE({ channel: "notifications", listeners: {} });
+        flush();
+        lastSource().fail();
+
+        subscribeToSSE({ channel: MATERIAL, listeners: {} });
+        vi.advanceTimersByTime(200);
+        expect(sources()).toHaveLength(1);
+
+        retryWindow();
+        expect(sources()).toHaveLength(2);
+        expect(new URL(lastSource().url).searchParams.getAll("topic")).toEqual([MATERIAL]);
+    });
+
+    it("resyncs every channel after a real gap, once per reconnect", () => {
         const onResync = vi.fn();
-        for (let index = 0; index < 21; index += 1) {
-            subscribeToSSE({
-                channel: `directory:${index}`,
-                listeners: {},
-                onResync,
-            });
-        }
+        subscribeToSSE({ channel: "notifications", listeners: {}, onResync });
+        flush();
+        lastSource().open();
+        expect(onResync).toHaveBeenCalledOnce();
 
-        vi.advanceTimersByTime(0);
-        vi.advanceTimersToNextTimer();
+        lastSource().fail();
+        expect(onResync).toHaveBeenCalledOnce();
 
-        const url = new URL(MockEventSource.instances.at(-1)?.url ?? "");
-        expect(url.searchParams.getAll("topic")).toHaveLength(20);
-
-        vi.advanceTimersByTime(30_000);
-        expect(onResync).toHaveBeenCalledTimes(21);
+        retryWindow();
+        lastSource().open();
+        expect(onResync).toHaveBeenCalledTimes(2);
     });
 
+    it("close() cancels a pending retry", () => {
+        const connection = subscribeToSSE({ channel: "notifications", listeners: {} });
+        flush();
+        lastSource().fail();
+        connection.close();
+
+        vi.advanceTimersByTime(5000);
+
+        expect(sources()).toHaveLength(1);
+    });
+});
+
+describe("routing", () => {
     it("routes the same event type only to its envelope channel", () => {
         const materialHandler = vi.fn();
         const directoryHandler = vi.fn();
-        subscribeToSSE({
-            channel: "material:123",
-            listeners: { child_updated: materialHandler },
-        });
-        subscribeToSSE({
-            channel: "directory:456",
-            listeners: { child_updated: directoryHandler },
-        });
-        vi.runAllTimers();
+        subscribeToSSE({ channel: MATERIAL, listeners: { child_updated: materialHandler } });
+        subscribeToSSE({ channel: DIRECTORY, listeners: { child_updated: directoryHandler } });
+        flush();
 
-        MockEventSource.instances[0].dispatchCustomEvent(
-            "child_updated",
-            JSON.stringify({ channel: "material:123", data: { id: "item" } }),
-        );
+        lastSource().deliver(MATERIAL, "child_updated", { id: "item" });
 
         expect(materialHandler).toHaveBeenCalledOnce();
         expect(directoryHandler).not.toHaveBeenCalled();
         expect(materialHandler.mock.calls[0][0].data).toBe(JSON.stringify({ id: "item" }));
     });
 
-    it("waits for cross-tab leadership before opening the master transport", async () => {
+    it("ignores malformed messages", () => {
+        const handler = vi.fn();
+        subscribeToSSE({ channel: "notifications", listeners: { notification: handler } });
+        flush();
+
+        lastSource().onmessage?.(new MessageEvent("message", { data: "not json" }));
+        lastSource().onmessage?.(new MessageEvent("message", { data: JSON.stringify({ type: 1 }) }));
+
+        expect(handler).not.toHaveBeenCalled();
+    });
+});
+
+describe("topic budget", () => {
+    function subscribeMany(count: number, onResync: () => void) {
+        for (let index = 0; index < count; index += 1) {
+            subscribeToSSE({
+                channel: `directory:${String(index).padStart(2, "0")}`,
+                listeners: {},
+                onResync,
+            });
+        }
+        flush();
+    }
+
+    it("stays within the budget and polls only channels it could not carry", () => {
+        const onResync = vi.fn();
+        subscribeMany(21, onResync);
+        lastSource().open();
+        onResync.mockClear();
+
+        expect(new URL(lastSource().url).searchParams.getAll("topic")).toHaveLength(20);
+
+        vi.advanceTimersByTime(30_000);
+        expect(onResync).toHaveBeenCalledOnce();
+    });
+
+    it("stops polling once every channel fits", () => {
+        const onResync = vi.fn();
+        const extra = subscribeToSSE({ channel: "directory:zz", listeners: {}, onResync });
+        subscribeMany(20, () => {});
+        lastSource().open();
+
+        extra.close();
+        flush();
+        onResync.mockClear();
+
+        vi.advanceTimersByTime(60_000);
+        expect(onResync).not.toHaveBeenCalled();
+    });
+});
+
+describe("cross-tab coordination", () => {
+    function enableCoordination() {
         const leadership: { acquire?: () => void } = {};
         const locks = {
             request: vi.fn(
@@ -352,25 +416,103 @@ describe("subscribeToSSE", () => {
                 },
             ),
         };
-        Object.defineProperty(navigator, "locks", {
-            configurable: true,
-            value: locks,
-        });
+        Object.defineProperty(navigator, "locks", { configurable: true, value: locks });
         vi.stubGlobal("BroadcastChannel", MockBroadcastChannel);
+        return {
+            locks,
+            acquire: async () => {
+                leadership.acquire?.();
+                await Promise.resolve();
+            },
+        };
+    }
 
+    function coordinator() {
+        return MockBroadcastChannel.instances[0];
+    }
+
+    function posted(kind: string) {
+        return coordinator().postMessage.mock.calls.filter(([message]) => message.kind === kind);
+    }
+
+    it("waits for leadership before opening the stream", async () => {
+        const { locks, acquire } = enableCoordination();
         subscribeToSSE({ channel: "notifications", listeners: {} });
-        vi.advanceTimersByTime(0);
+        flush();
 
-        expect(MockEventSource.instances).toHaveLength(0);
+        expect(sources()).toHaveLength(0);
         expect(locks.request).toHaveBeenCalledOnce();
 
-        const acquire = leadership.acquire;
-        if (!acquire) throw new Error("leadership callback was not registered");
-        acquire();
-        await Promise.resolve();
-        vi.advanceTimersByTime(0);
-
-        expect(MockEventSource.instances).toHaveLength(1);
+        await acquire();
+        flush();
+        expect(sources()).toHaveLength(1);
     });
 
+    it("a follower routes forwarded events and never connects", () => {
+        enableCoordination();
+        const handler = vi.fn();
+        subscribeToSSE({ channel: "notifications", listeners: { notification: handler } });
+        flush();
+
+        coordinator().receive({
+            kind: "event",
+            sender: "leader",
+            payload: JSON.stringify({ channel: "notifications", type: "notification", data: {} }),
+        });
+
+        expect(handler).toHaveBeenCalledOnce();
+        expect(sources()).toHaveLength(0);
+    });
+
+    it("the leader includes peer channels and forwards events", async () => {
+        const { acquire } = enableCoordination();
+        subscribeToSSE({ channel: "notifications", listeners: {} });
+        await acquire();
+        coordinator().receive({ kind: "snapshot", sender: "peer", channels: [MATERIAL] });
+        flush();
+
+        expect(new URL(lastSource().url).searchParams.getAll("topic")).toEqual([MATERIAL]);
+
+        lastSource().deliver(MATERIAL, "material_updated");
+        expect(posted("event")).toHaveLength(1);
+    });
+
+    it("drops a leaving peer's channels", async () => {
+        const { acquire } = enableCoordination();
+        subscribeToSSE({ channel: "notifications", listeners: {} });
+        await acquire();
+        coordinator().receive({ kind: "snapshot", sender: "peer", channels: [MATERIAL] });
+        flush();
+
+        coordinator().receive({ kind: "leaving", sender: "peer" });
+        flush();
+
+        expect(new URL(lastSource().url).searchParams.getAll("topic")).toEqual([]);
+    });
+
+    it("keeps a quiet peer through background timer throttling", async () => {
+        const { acquire } = enableCoordination();
+        subscribeToSSE({ channel: "notifications", listeners: {} });
+        await acquire();
+        coordinator().receive({ kind: "snapshot", sender: "peer", channels: [MATERIAL] });
+        flush();
+        const stream = lastSource();
+
+        vi.advanceTimersByTime(60_000);
+
+        expect(lastSource()).toBe(stream);
+    });
+
+    it("forwards a resync to followers with its channels", async () => {
+        const { acquire } = enableCoordination();
+        subscribeToSSE({ channel: "notifications", listeners: {} });
+        await acquire();
+        flush();
+
+        lastSource().open();
+
+        expect(posted("resync")).toEqual([
+            [{ kind: "resync", sender: expect.any(String), channels: ["notifications"] }],
+        ]);
+    });
 });

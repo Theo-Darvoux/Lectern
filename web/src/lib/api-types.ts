@@ -2004,33 +2004,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/upload/events/{file_key}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Upload Events
-         * @description SSE stream for upload processing status.
-         *
-         *     Auth via Authorization: Bearer header (fetch-based SSE, not native EventSource).
-         *     Reconnect-safe: replays the bounded durable log at least once on reconnect.
-         *
-         *     Events:
-         *       - type=upload, data=UploadStatusOut JSON  (status updates from worker)
-         *       - type=ping,   data=""                    (keepalive)
-         */
-        get: operations["upload_events_api_upload_events__file_key__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/upload/config": {
         parameters: {
             query?: never;
@@ -3944,7 +3917,8 @@ export interface components {
          * @description Immediate response from POST /upload or POST /upload/complete.
          *
          *     The file is in quarantine and being processed asynchronously.
-         *     Poll /upload/events/{file_key} via SSE for the final status.
+         *     Follow the ``uploads`` channel of /events/sse, or poll
+         *     /upload/status/{file_key}, for the final status.
          */
         UploadPendingOut: {
             /** Upload Id */
@@ -7532,7 +7506,8 @@ export interface operations {
     };
     master_event_stream_api_events_sse_get: {
         parameters: {
-            query?: {
+            query: {
+                client: string;
                 topic?: string[] | null;
             };
             header?: never;
@@ -7952,37 +7927,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UploadStatusOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    upload_events_api_upload_events__file_key__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                file_key: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

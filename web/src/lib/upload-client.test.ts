@@ -26,6 +26,10 @@ vi.mock("./api-client", () => ({
   },
 }));
 
+vi.mock("./sse-client", () => ({
+  subscribeToSSE: vi.fn(() => ({ close: vi.fn() })),
+}));
+
 vi.mock("./auth-tokens", () => ({
   getAccessToken: vi.fn(() => "test-token"),
 }));
@@ -92,8 +96,8 @@ function installXhr() {
   }) as any;
 }
 
-function sseResponse(status = "clean") {
-  const data = JSON.stringify({
+function statusResponse(status = "clean") {
+  return respondJson({
     status,
     error_code: status === "failed" ? "ERR_SCAN_UNAVAILABLE" : undefined,
     detail: status === "failed" ? "scanner down" : undefined,
@@ -101,14 +105,6 @@ function sseResponse(status = "clean") {
       ? { file_key: "final-key", size: 100, original_size: 100, mime_type: "application/pdf" }
       : undefined,
   });
-  const encoder = new TextEncoder();
-  const body = new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-      controller.close();
-    },
-  });
-  return { body } as unknown as Response;
 }
 
 const DIRECT_OK = {
@@ -166,7 +162,7 @@ describe("upload-client: uploadFile", () => {
         if (path.includes(prefix)) return respond();
       }
       if (path.includes("/upload/config")) return respondJson(CONFIG);
-      if (path.includes("/upload/events/")) return sseResponse();
+      if (path.includes("/upload/status/")) return statusResponse();
       return respondJson({});
     });
   });
@@ -220,9 +216,9 @@ describe("upload-client: uploadFile", () => {
   it("reports the transfer before waiting for processing", async () => {
     const order: string[] = [];
     vi.mocked(apiRequest).mockImplementation(async (url: unknown) => {
-      if (String(url).includes("/upload/events/")) {
+      if (String(url).includes("/upload/status/")) {
         order.push("watch");
-        return sseResponse();
+        return statusResponse();
       }
       return respondJson(CONFIG);
     });
@@ -233,7 +229,7 @@ describe("upload-client: uploadFile", () => {
   });
 
   it("carries the terminal failure code from processing", async () => {
-    apiRoutes["/upload/events/"] = () => sseResponse("failed");
+    apiRoutes["/upload/status/"] = () => statusResponse("failed");
 
     await expect(uploadFile(fileOfSize(1024))).rejects.toMatchObject({
       status: 500,

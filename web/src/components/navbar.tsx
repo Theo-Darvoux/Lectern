@@ -37,7 +37,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { API_BASE } from "@/lib/api-client";
-import { fetchUnreadCount } from "@/lib/notifications";
 import { fetchOpenPRCount } from "@/lib/pr-client";
 import { useTranslations } from "next-intl";
 
@@ -52,7 +51,6 @@ export function Navbar() {
   const searchOpen = useUIStore((state) => state.searchOpen);
   const setSearchOpen = useUIStore((state) => state.setSearchOpen);
   const unreadCount = useNotificationStore((state) => state.unreadCount);
-  const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
   const openPRCount = usePRStore((state) => state.openPRCount);
   const setOpenPRCount = usePRStore((state) => state.setOpenPRCount);
   const config = useConfigStore((state) => state.config);
@@ -71,11 +69,8 @@ export function Navbar() {
       fetchOpenPRCount()
         .then((count) => setOpenPRCount(count))
         .catch(() => {});
-      fetchUnreadCount()
-        .then((count) => setUnreadCount(count))
-        .catch(() => {});
     }
-  }, [pathname, isAuthenticated, user, guest, setOpenPRCount, setUnreadCount]);
+  }, [pathname, isAuthenticated, user, guest, setOpenPRCount]);
 
   useEffect(() => {
     if (!isAuthenticated) return;

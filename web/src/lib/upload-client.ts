@@ -2,6 +2,7 @@ import * as tus from "tus-js-client";
 import { API_BASE, ApiError, apiRequest, ensureFreshAccessToken, getClientId } from "@/lib/api-client";
 import { getAccessToken } from "@/lib/auth-tokens";
 import { compressImageIfNeeded } from "@/lib/file-utils";
+import { subscribeToSSE } from "@/lib/sse-client";
 import { withMalwareErrorPrefix } from "@/lib/upload-errors";
 
 type UploadStatus = "pending" | "processing" | "clean" | "malicious" | "failed" | "applied";
@@ -91,8 +92,6 @@ const STALL_TIMEOUT_MS = 60_000;
 /** Time the server may take to answer once the request body has been sent. */
 const RESPONSE_TIMEOUT_MS = 120_000;
 
-/** Concurrent processing watchers; each one holds an SSE connection. */
-const MAX_PROCESSING_WATCHERS = 4;
 
 const MAX_TRANSFER_ATTEMPTS = 5;
 
@@ -673,14 +672,12 @@ export async function uploadFile(
     _onStatusUpdate(options.onStatusUpdate, "processing", options.t);
     options.onTransferred?.(quarantineKey);
 
-    const result = await _withProcessingWatcher(signal, () =>
-        _waitForUploadCompletion(quarantineKey, {
-            onProgress: (p) => onProgress?.(80 + Math.round(p * 19)),
-            onStatusUpdate: options.onStatusUpdate,
-            signal,
-            t: options.t,
-        }),
-    );
+    const result = await _waitForUploadCompletion(quarantineKey, {
+        onProgress: (p) => onProgress?.(80 + Math.round(p * 19)),
+        onStatusUpdate: options.onStatusUpdate,
+        signal,
+        t: options.t,
+    });
 
     onProgress?.(100);
     return _toUploadResult(result, file.name, compressed);
@@ -694,41 +691,9 @@ function _onStatusUpdate(
     cb?.(t ? t(msg) : msg);
 }
 
-// ── Processing watchers ───────────────────────────────────────────────────────
+// ── Processing watcher ────────────────────────────────────────────────────────
 
-let activeProcessingWatchers = 0;
-const processingWatcherWaiters: Array<() => void> = [];
-
-/** Bound concurrent SSE streams; transfers keep running while watchers queue. */
-async function _withProcessingWatcher<T>(signal: AbortSignal | undefined, watch: () => Promise<T>): Promise<T> {
-    if (activeProcessingWatchers < MAX_PROCESSING_WATCHERS) {
-        activeProcessingWatchers++;
-    } else {
-        await new Promise<void>((resolve, reject) => {
-            const grant = () => {
-                signal?.removeEventListener("abort", onAbort);
-                resolve();
-            };
-            const onAbort = () => {
-                processingWatcherWaiters.splice(processingWatcherWaiters.indexOf(grant), 1);
-                reject(new Error(UPLOAD_CANCELLED));
-            };
-            processingWatcherWaiters.push(grant);
-            signal?.addEventListener("abort", onAbort, { once: true });
-        });
-    }
-    try {
-        return await watch();
-    } finally {
-        const next = processingWatcherWaiters.shift();
-        if (next) next();
-        else activeProcessingWatchers--;
-    }
-}
-
-// ── SSE stream reader ─────────────────────────────────────────────────────────
-
-/** Terminal upload failure — must not be retried by the SSE reconnection loop. */
+/** Terminal upload failure. */
 class UploadTerminalError extends Error {
     public readonly status: number;
     public readonly errorCode?: string;
@@ -740,10 +705,11 @@ class UploadTerminalError extends Error {
     }
 }
 
-/** Maximum wall-clock time (ms) to wait for SSE processing before giving up. */
-const SSE_TOTAL_TIMEOUT = 15 * 60 * 1000;
-const SSE_READ_TIMEOUT_MS = 30_000;
-const SSE_MAX_RECONNECTS = 10;
+/** Maximum wall-clock time (ms) to wait for processing before giving up. */
+const PROCESSING_TOTAL_TIMEOUT_MS = 15 * 60 * 1000;
+// Live events carry progress. Polling is only the safety net for missed events.
+const STATUS_POLL_MIN_MS = 5_000;
+const STATUS_POLL_MAX_MS = 30_000;
 
 type WatchOptions = {
     onProgress?: (p: number) => void;
@@ -752,147 +718,109 @@ type WatchOptions = {
     t?: (key: string) => string;
 };
 
-async function _settleFromStatus(fileKey: string, options: WatchOptions): Promise<NonNullable<UploadEventPayload["result"]>> {
-    const polled = await pollUploadStatus(fileKey);
-    let result: NonNullable<UploadEventPayload["result"]> | null = null;
-    try {
-        if (polled) result = _handleUploadEvent("upload", JSON.stringify(polled), undefined, undefined, options.t);
-    } catch (err) {
-        if (err instanceof UploadTerminalError) throw new ApiError(err.status, err.message, err.errorCode);
-        throw err;
-    }
-    if (result) return result;
-    throw new Error("Upload processing timed out. Check upload history for status.");
-}
-
+/**
+ * Follow processing on the master SSE stream, reconciling with the status
+ * endpoint at start, on every stream gap, and on a slow timer.
+ */
 async function _waitForUploadCompletion(
     fileKey: string,
     options: WatchOptions = {},
 ): Promise<NonNullable<UploadEventPayload["result"]>> {
-    const { onStatusUpdate, signal } = options;
-    let lastEventId = 0;
-    let attempts = 0;
-    let highWaterMark = 0;
-    const deadline = Date.now() + SSE_TOTAL_TIMEOUT;
+    const { onStatusUpdate, signal, t } = options;
+    if (signal?.aborted) throw new Error(UPLOAD_CANCELLED);
 
-    // Reconnects replay earlier events; progress must never move backwards.
-    const safeOnProgress = options.onProgress
-        ? (p: number) => {
-              if (p > highWaterMark) {
-                  highWaterMark = p;
-                  options.onProgress!(p);
-              }
-          }
-        : undefined;
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let highWaterMark = 0;
+        let pollDelay = STATUS_POLL_MIN_MS;
+        let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
-    while (true) {
-        if (Date.now() > deadline) return _settleFromStatus(fileKey, options);
+        const finish = (settle: () => void) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(pollTimer);
+            clearTimeout(deadlineTimer);
+            signal?.removeEventListener("abort", onAbort);
+            subscription.close();
+            settle();
+        };
+        const onAbort = () => finish(() => reject(new Error(UPLOAD_CANCELLED)));
 
-        try {
-            const response = await apiRequest(`/upload/events/${encodeURIComponent(fileKey)}`, {
-                headers: {
-                    Accept: "text/event-stream",
-                    "Cache-Control": "no-cache",
-                    ...(lastEventId > 0 ? { "Last-Event-ID": String(lastEventId) } : {}),
-                },
-                signal,
-            });
+        // Events and polls can arrive out of order; progress must never move backwards.
+        const onProgress = (p: number) => {
+            if (p <= highWaterMark) return;
+            highWaterMark = p;
+            options.onProgress?.(p);
+        };
 
-            if (!response.body) {
-                throw new Error("SSE response has no body");
-            }
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-
-            let buffer = "";
-            let currentEventType = "message";
-            let currentData = "";
-
-            const readWithTimeout = async () => {
-                let timer: ReturnType<typeof setTimeout> | undefined;
-                try {
-                    return await Promise.race([
-                        reader.read(),
-                        new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
-                            timer = setTimeout(() => reject(new Error("SSE Read Timeout")), SSE_READ_TIMEOUT_MS);
-                        }),
-                    ]);
-                } finally {
-                    clearTimeout(timer);
-                }
-            };
-
+        const apply = (payload: UploadEventPayload) => {
+            if (settled) return;
             try {
-                while (Date.now() <= deadline) {
-                    const { done, value } = await readWithTimeout();
-                    if (done) break;
-
-                    // Data arrived, so long processing does not count as a failure.
-                    attempts = 0;
-                    buffer += decoder.decode(value, { stream: true });
-
-                    const lines = buffer.split(/\r?\n/);
-                    buffer = lines.pop() ?? "";
-
-                    for (const line of lines) {
-                        if (line === "") {
-                            if (currentData !== "") {
-                                const result = _handleUploadEvent(
-                                    currentEventType,
-                                    currentData,
-                                    safeOnProgress,
-                                    onStatusUpdate,
-                                    options.t,
-                                );
-                                if (result !== null) return result;
-                            }
-                            currentEventType = "message";
-                            currentData = "";
-                        } else if (line.startsWith("event:")) {
-                            currentEventType = line.slice(6).trim();
-                        } else if (line.startsWith("data:")) {
-                            currentData = line.slice(5).trimStart();
-                        } else if (line.startsWith("id:")) {
-                            lastEventId = parseInt(line.slice(3).trim()) || lastEventId;
-                        }
-                    }
-                }
-            } finally {
-                reader.cancel().catch(() => { });
+                const result = _handleUploadEvent(payload, onProgress, onStatusUpdate, t);
+                if (result !== null) finish(() => resolve(result));
+            } catch (err) {
+                finish(() =>
+                    reject(
+                        err instanceof UploadTerminalError
+                            ? new ApiError(err.status, err.message, err.errorCode)
+                            : err,
+                    ),
+                );
             }
-        } catch (err) {
-            if (signal?.aborted) throw new Error(UPLOAD_CANCELLED);
-            if (err instanceof UploadTerminalError) throw new ApiError(err.status, err.message, err.errorCode);
-            if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 429) throw err;
-        }
+        };
 
-        // Both a closed stream and a failed connection reconnect with backoff.
-        attempts++;
-        if (attempts >= SSE_MAX_RECONNECTS) return _settleFromStatus(fileKey, options);
-        await _sleep(Math.min(1000 * 2 ** (attempts - 1), 10_000), signal);
-    }
+        const poll = async () => {
+            try {
+                const response = await apiRequest(`/upload/status/${encodeURIComponent(fileKey)}`, { signal });
+                apply((await response.json()) as UploadEventPayload);
+            } catch (err) {
+                if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 429) {
+                    finish(() => reject(err));
+                }
+            }
+        };
+
+        const schedulePoll = () => {
+            pollTimer = setTimeout(async () => {
+                await poll();
+                pollDelay = Math.min(pollDelay * 2, STATUS_POLL_MAX_MS);
+                if (!settled) schedulePoll();
+            }, pollDelay);
+        };
+
+        const subscription = subscribeToSSE({
+            channel: "uploads",
+            listeners: {
+                upload: (event) => {
+                    const payload = JSON.parse(event.data) as UploadEventPayload;
+                    if (payload.file_key === fileKey) apply(payload);
+                },
+            },
+            onResync: () => void poll(),
+        });
+
+        const deadlineTimer = setTimeout(() => {
+            void poll().finally(() =>
+                finish(() => reject(new Error("Upload processing timed out. Check upload history for status."))),
+            );
+        }, PROCESSING_TOTAL_TIMEOUT_MS);
+
+        signal?.addEventListener("abort", onAbort, { once: true });
+        void poll();
+        schedulePoll();
+    });
 }
 
 // Public alias for workflows (such as avatar adoption) that need to await the
-// same security-processing terminal state without duplicating SSE/poll logic.
+// same security-processing terminal state without duplicating the watch logic.
 export { _waitForUploadCompletion as waitForUploadCompletion };
 
 function _handleUploadEvent(
-    eventType: string,
-    rawData: string,
+    payload: UploadEventPayload,
     onProgress?: (p: number) => void,
     onStatusUpdate?: (s: string, stageIndex?: number, stageTotal?: number) => void,
     t?: (key: string) => string,
 ): NonNullable<UploadEventPayload["result"]> | null {
-    if (eventType === "ping" || rawData === "") return null;
-
-    let payload: UploadEventPayload;
-    try {
-        payload = JSON.parse(rawData) as UploadEventPayload;
-    } catch {
-        return null;
-    }
-
     const statusText = payload.stage && t ? t(`stages.${payload.stage}`) : payload.detail;
     if (statusText) {
         onStatusUpdate?.(statusText, payload.stage_index ?? undefined, payload.stage_total ?? undefined);
@@ -903,7 +831,8 @@ function _handleUploadEvent(
     switch (payload.status) {
         case "clean":
         case "applied":
-            if (!payload.result) throw new Error("Received clean status with no result payload");
+            // The status endpoint supplies the result on the next reconciliation.
+            if (!payload.result) return null;
             onProgress?.(1.0);
             return payload.result;
 
@@ -942,30 +871,13 @@ export async function trackExistingUpload(
     const { onProgress, signal } = options;
     onProgress?.(80);
 
-    const result = await _withProcessingWatcher(signal, () =>
-        _waitForUploadCompletion(quarantineKey, {
-            onProgress: (p: number) => onProgress?.(80 + Math.round(p * 19)),
-            onStatusUpdate: options.onStatusUpdate,
-            signal,
-            t: options.t,
-        }),
-    );
+    const result = await _waitForUploadCompletion(quarantineKey, {
+        onProgress: (p: number) => onProgress?.(80 + Math.round(p * 19)),
+        onStatusUpdate: options.onStatusUpdate,
+        signal,
+        t: options.t,
+    });
 
     onProgress?.(100);
     return _toUploadResult(result, quarantineKey, false);
-}
-
-// ── Status polling fallback ───────────────────────────────────────────────────
-
-/**
- * Poll /upload/status/{fileKey} once. Used as a reconnect fallback when SSE
- * is unavailable (e.g. corporate proxies that buffer SSE).
- */
-async function pollUploadStatus(fileKey: string): Promise<UploadEventPayload | null> {
-    try {
-        const r = await apiRequest(`/upload/status/${encodeURIComponent(fileKey)}`);
-        return (await r.json()) as UploadEventPayload;
-    } catch {
-        return null;
-    }
 }

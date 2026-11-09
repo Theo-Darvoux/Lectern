@@ -125,46 +125,6 @@ async def test_high2_svg_detection_accepts_real_svg():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HIGH #3 — SSE concurrency guard exits before stream finishes
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_high3_sse_concurrency_counter_decrements_in_generator():
-    """The SSE concurrency counter must be decremented INSIDE the generator
-    (so it stays alive for the stream duration), not in the endpoint body
-    (where it would exit before streaming starts).
-
-    We verify the generator body contains the decrement logic.
-    """
-    import inspect
-
-    from app.routers.upload.sse import upload_events
-
-    source = inspect.getsource(upload_events)
-
-    # Find the event_generator function body
-    gen_start = source.find("async def event_generator")
-    assert gen_start != -1, "event_generator not found"
-
-    # The generator must contain the counter decrement in a finally block
-    gen_body = source[gen_start:]
-
-    assert "redis.decr" in gen_body or "sse_concurrency_guard" in gen_body, (
-        "The SSE generator does not decrement the concurrency counter — "
-        "the counter will never decrease, eventually blocking all SSE streams."
-    )
-
-    # Verify it's NOT wrapped with `async with sse_concurrency_guard` at endpoint level
-    # (which exits before streaming finishes)
-    endpoint_body = source[:gen_start]
-    assert "async with sse_concurrency_guard" not in endpoint_body, (
-        "sse_concurrency_guard is used at the endpoint level (outside event_generator) — "
-        "the guard will exit before streaming finishes."
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # MEDIUM #2 — No MIME re-validation for extension mismatch on TUS path
 #             (Tested via the MIME sniffing in tus.py — requires deeper
 #             integration test; covered by unit test of _apply_mime_correction.)
@@ -201,42 +161,6 @@ async def test_medium4_multipart_abort_logs_db_errors():
         "presigned_multipart_abort still has bare `pass` in DB error handler — "
         "errors are silently swallowed."
     )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MEDIUM #5 — AsyncIteratorAdapter.__aiter__ is non-standard
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_medium5_async_iterator_adapter_protocol():
-    """AsyncIteratorAdapter must implement the standard async iterator protocol:
-    __aiter__ returns self (sync), __anext__ yields items.
-    """
-    import asyncio
-
-    from app.routers.upload.sse import AsyncIteratorAdapter
-
-    items = [{"event": "upload", "data": "test"}]
-    adapter = AsyncIteratorAdapter(items)
-
-    # __aiter__ must be a regular (non-async) method
-    assert not asyncio.iscoroutinefunction(adapter.__aiter__), (
-        "AsyncIteratorAdapter.__aiter__ is defined as 'async def' — "
-        "it should be a regular 'def' returning self per the async iterator protocol."
-    )
-
-    # Must have __anext__
-    assert hasattr(adapter, "__anext__"), (
-        "AsyncIteratorAdapter lacks __anext__ — it should implement the full "
-        "async iterator protocol."
-    )
-
-    # Collect items
-    collected = []
-    async for item in adapter:
-        collected.append(item)
-    assert collected == items
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

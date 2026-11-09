@@ -2,7 +2,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,60 +80,6 @@ async def test_presigned_multipart_flow(
             # Verify quota was updated
             quota_key = f"{_QUOTA_KEY_PREFIX}{user.id}"
             assert await fake_redis_setup.zcard(quota_key) == 1
-
-
-@pytest.mark.asyncio
-async def test_sse_replay_logic(client: AsyncClient, db_session: AsyncSession, fake_redis_setup):
-    """Test Phase 2.1: Replaying missed events using Last-Event-ID."""
-    user = await _create_user(db_session)
-    await db_session.commit()
-
-    file_key = f"quarantine/{user.id}/up123/test.txt"
-    event_log_key = f"upload:eventlog:{file_key}"
-
-    # Seed event log
-    events = [
-        json.dumps({"file_key": file_key, "status": "processing", "stage_index": 0}),
-        json.dumps({"file_key": file_key, "status": "processing", "stage_index": 1}),
-        json.dumps({"file_key": file_key, "status": "processing", "stage_index": 2}),
-    ]
-    for e in events:
-        await fake_redis_setup.rpush(event_log_key, e)
-
-    # Request with Last-Event-ID: 1 (should get events from index 1 -> events[1] and [2])
-    # Note: Redis LRANGE start index is 0-based. If Last-Event-ID is 1, we want everything AFTER the 1st event.
-    # The code does: await redis.lrange(event_log_key, last_event_id, -1)
-    # If last_event_id=1, it gets index 1 and 2. Correct.
-
-    headers = _auth_headers(user)
-    headers["Last-Event-ID"] = "1"
-
-    # We use a mock for the SSE response to avoid hanging
-    from app.routers.upload import upload_events
-
-    mock_request = MagicMock(spec=Request)
-    mock_request.headers = headers
-
-    response = await upload_events(file_key, mock_request, user, fake_redis_setup, db_session)
-
-    # Manually drive the generator to check replayed events
-    gen = aiter(response.body_iterator)
-
-    # 1st replayed event (original index 2, SSE id 2)
-    import typing
-
-    ev1 = typing.cast(dict[str, typing.Any], await anext(gen))
-    assert ev1["event"] == "upload"
-    assert ev1["id"] == "2"
-    assert json.loads(ev1["data"])["stage_index"] == 1
-
-    # 2nd replayed event (original index 3, SSE id 3)
-    import typing
-
-    ev2 = typing.cast(dict[str, typing.Any], await anext(gen))
-    assert ev2["event"] == "upload"
-    assert ev2["id"] == "3"
-    assert json.loads(ev2["data"])["stage_index"] == 2
 
 
 @pytest.mark.asyncio

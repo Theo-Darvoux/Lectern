@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { subscribeToSSE } from "@/lib/sse-client";
+import { subscribeToSSE, type SSEChannel } from "@/lib/sse-client";
 import { invalidateMaterialFileUrl } from "@/lib/api-client";
 import { invalidateBrowseEntity } from "@/lib/browse-prefetch";
 import { resolvePendingContributionEvent } from "@/lib/pending-contributions";
@@ -10,6 +10,17 @@ interface BrowseData {
     directory?: Record<string, unknown> | null;
     material?: Record<string, unknown> | null;
     breadcrumbs?: { id: string; name: string; slug: string }[];
+}
+
+// The logical topic changes only with the entity.
+function browseChannel(data: BrowseData | null): SSEChannel | null {
+    if (data?.type === "directory_listing") {
+        return `directory:${data.directory ? String(data.directory.id) : "root"}`;
+    }
+    if (data?.type === "material" && data.material) {
+        return `material:${String(data.material.id)}`;
+    }
+    return null;
 }
 
 /**
@@ -32,15 +43,7 @@ export function useBrowseSSE(
 ): void {
     const router = useRouter();
 
-    // Derive a stable entity key. The logical topic changes only with the entity.
-    let sseEntityKey: string | null = null;
-    if (data?.type === "directory_listing") {
-        const dirId = data.directory ? String(data.directory.id) : "root";
-        sseEntityKey = `dir:${dirId}`;
-    } else if (data?.type === "material" && data.material) {
-        const matId = String(data.material.id);
-        sseEntityKey = `mat:${matId}`;
-    }
+    const channel = browseChannel(data);
 
     // Mutable refs — updated after each render so listeners always see fresh values.
     const pathRef = useRef(path);
@@ -56,78 +59,52 @@ export function useBrowseSSE(
     });
 
     useEffect(() => {
-        if (!sseEntityKey) return;
+        if (!channel) return;
+        const [kind, id] = channel.split(":");
+        const invalidate = () => invalidateBrowseEntity(channel, pathRef.current);
+        const refresh = () => {
+            invalidate();
+            fetchDataRef.current(true);
+        };
+        const redirectTo = (parentPath: string) => {
+            invalidate();
+            routerRef.current.replace(parentPath);
+        };
+        const browsePath = (slugs: string[]) =>
+            slugs.length > 0 ? `/browse/${slugs.join("/")}` : "/browse";
         const listeners: Record<string, (event: MessageEvent) => void> = {};
+        let onResync = refresh;
 
-        if (sseEntityKey.startsWith("dir:")) {
-            const dirId = sseEntityKey.slice(4);
-
-            if (dirId !== "root") {
+        if (kind === "directory") {
+            if (id !== "root") {
                 listeners["directory_deleted"] = () => {
-                    const slugs = breadcrumbSlugsRef.current;
-                    const parentSlugs = slugs.slice(0, -1);
-                    const parentPath =
-                        parentSlugs.length > 0
-                            ? `/browse/${parentSlugs.join("/")}`
-                            : "/browse";
-                    invalidateBrowseEntity(`directory:${dirId}`, pathRef.current);
-                    routerRef.current.replace(parentPath);
+                    redirectTo(browsePath(breadcrumbSlugsRef.current.slice(0, -1)));
                 };
+                listeners["directory_icon_updated"] = refresh;
+                listeners["directory_color_updated"] = refresh;
             }
-
-            const refreshDir = () => {
-                invalidateBrowseEntity(`directory:${dirId}`, pathRef.current);
-                fetchDataRef.current(true);
-            };
-
-            listeners["child_added"] = refreshDir;
-            listeners["child_updated"] = refreshDir;
-            listeners["child_removed"] = refreshDir;
+            listeners["child_added"] = refresh;
+            listeners["child_updated"] = refresh;
+            listeners["child_removed"] = refresh;
             listeners["pr_closed"] = (event) => {
                 resolvePendingContributionEvent(event);
-                refreshDir();
+                refresh();
             };
         } else {
-            // mat: key — material view
-            const matId = sseEntityKey.slice(4);
+            // A new version may have been applied (e.g. a reviewed/merged edit).
+            // Drop the cached file URL so the viewer re-fetches the updated content.
+            const refreshMaterial = () => {
+                invalidateMaterialFileUrl(id);
+                refresh();
+            };
             listeners["material_deleted"] = () => {
-                const slugs = breadcrumbSlugsRef.current;
-                const parentPath =
-                    slugs.length > 0
-                        ? `/browse/${slugs.join("/")}`
-                        : "/browse";
-                invalidateBrowseEntity(`material:${matId}`, pathRef.current);
-                routerRef.current.replace(parentPath);
+                redirectTo(browsePath(breadcrumbSlugsRef.current));
             };
-            // A new version was applied (e.g. a reviewed/merged edit). Drop the
-            // cached file URL so the viewer re-fetches the updated content.
-            listeners["material_updated"] = () => {
-                invalidateMaterialFileUrl(matId);
-                invalidateBrowseEntity(`material:${matId}`, pathRef.current);
-                fetchDataRef.current(true);
-            };
+            listeners["material_updated"] = refreshMaterial;
+            onResync = refreshMaterial;
         }
 
-        if (Object.keys(listeners).length === 0) return;
-
-        const connection = subscribeToSSE({
-            channel: sseEntityKey.startsWith("dir:")
-                ? `directory:${sseEntityKey.slice(4)}`
-                : `material:${sseEntityKey.slice(4)}`,
-            listeners,
-            onResync: () => {
-                if (sseEntityKey.startsWith("mat:")) {
-                    invalidateMaterialFileUrl(sseEntityKey.slice(4));
-                }
-                const entityTag = sseEntityKey.startsWith("dir:")
-                    ? `directory:${sseEntityKey.slice(4)}`
-                    : `material:${sseEntityKey.slice(4)}`;
-                invalidateBrowseEntity(entityTag, pathRef.current);
-                fetchDataRef.current(true);
-            },
-            startupDelay: 50,
-        });
-
+        const connection = subscribeToSSE({ channel, listeners, onResync });
         return () => connection.close();
-    }, [sseEntityKey]); // update the master topic when the entity changes
+    }, [channel]); // update the master topic when the entity changes
 }

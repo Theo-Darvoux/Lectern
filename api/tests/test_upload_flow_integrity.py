@@ -107,7 +107,7 @@ async def test_last_attempt_reports_failure_and_dead_letters() -> None:
         await pipeline.run()
 
     pipeline.repo.insert_dead_letter.assert_awaited_once()
-    payloads = [json.loads(call.args[3]) for call in pipeline.cache.emit_event.await_args_list]
+    payloads = [json.loads(call.args[2]) for call in pipeline.cache.emit_event.await_args_list]
     assert payloads[-1]["status"] == UploadStatus.FAILED
     assert payloads[-1]["error_code"] == "ERR_PROCESSING_FAILED"
 

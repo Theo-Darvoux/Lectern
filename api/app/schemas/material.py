@@ -129,7 +129,8 @@ class UploadPendingOut(BaseModel):
     """Immediate response from POST /upload or POST /upload/complete.
 
     The file is in quarantine and being processed asynchronously.
-    Poll /upload/events/{file_key} via SSE for the final status.
+    Follow the ``uploads`` channel of /events/sse, or poll
+    /upload/status/{file_key}, for the final status.
     """
 
     upload_id: str

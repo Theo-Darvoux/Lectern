@@ -1,5 +1,6 @@
 import logging
 import uuid
+from typing import Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,22 @@ logger = logging.getLogger(__name__)
 
 MODERATOR_ROLES = (UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX)
 ADMIN_ROLES = (UserRole.BUREAU, UserRole.VIEUX)
+
+
+def _live_event(notif: Notification) -> dict[str, Any]:
+    """Build the SSE event for a notification.
+
+    ``type`` is the event the browser listens for. The domain-level kind travels
+    separately so adding a notification type never breaks live delivery.
+    """
+    return {
+        "type": "notification",
+        "notification_type": notif.type,
+        "id": str(notif.id),
+        "title": notif.title,
+        "body": notif.body,
+        "link": notif.link,
+    }
 
 
 async def create_notification(
@@ -35,17 +52,7 @@ async def create_notification(
     )
     db.add(notif)
     await db.flush()
-    add_post_commit_user_sse(
-        db,
-        user_id,
-        {
-            "type": notification_type,
-            "id": str(notif.id),
-            "title": title,
-            "body": body,
-            "link": link,
-        },
-    )
+    add_post_commit_user_sse(db, user_id, _live_event(notif))
     return notif
 
 
@@ -187,17 +194,7 @@ async def notify_admins_pending_user(db: AsyncSession, user: User) -> None:
         db.add_all(notifications)
         await db.flush()
         for notif in notifications:
-            add_post_commit_user_sse(
-                db,
-                notif.user_id,
-                {
-                    "type": "pending_user",
-                    "id": str(notif.id),
-                    "title": notif.title,
-                    "body": notif.body,
-                    "link": notif.link,
-                },
-            )
+            add_post_commit_user_sse(db, notif.user_id, _live_event(notif))
 
 
 async def notify_moderators(
@@ -227,14 +224,4 @@ async def notify_moderators(
         db.add_all(notifications)
         await db.flush()
         for notif in notifications:
-            add_post_commit_user_sse(
-                db,
-                notif.user_id,
-                {
-                    "type": notification_type,
-                    "id": str(notif.id),
-                    "title": title,
-                    "body": body,
-                    "link": link,
-                },
-            )
+            add_post_commit_user_sse(db, notif.user_id, _live_event(notif))

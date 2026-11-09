@@ -855,7 +855,6 @@ export function DirectoryTreeSidebar() {
         pr_closed: handleRootChange,
       },
       onResync: handleRootChange,
-      startupDelay: 50,
     })];
 
     const subscribedBranches = new Set(expanded);
@@ -873,7 +872,6 @@ export function DirectoryTreeSidebar() {
           pr_closed: handleChildChange,
         },
         onResync: handleChildChange,
-        startupDelay: 50,
       }));
     }
 

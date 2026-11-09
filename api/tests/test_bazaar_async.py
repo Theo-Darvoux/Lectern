@@ -320,7 +320,7 @@ async def test_fail_closed_bazaar_error_prevents_publication(mock_redis: AsyncMo
         await pipeline._fast_finalize_and_enqueue_post_scan()
 
     finalize.assert_not_awaited()
-    emitted = [call.args[3] for call in pipeline.cache.emit_event.await_args_list]
+    emitted = [call.args[2] for call in pipeline.cache.emit_event.await_args_list]
     assert all('"status": "clean"' not in payload for payload in emitted)
 
 

@@ -218,5 +218,5 @@ async def test_unexpected_pipeline_failure_requests_arq_retry_without_terminal_e
         await pipeline.run()
 
     pipeline.repo.insert_dead_letter.assert_not_awaited()
-    emitted = [call.args[3] for call in pipeline.cache.emit_event.await_args_list]
+    emitted = [call.args[2] for call in pipeline.cache.emit_event.await_args_list]
     assert not any('"status": "failed"' in payload for payload in emitted)

@@ -392,3 +392,18 @@ class TestCreateDirectoryBroadcasts:
         broadcasts = _broadcasts(db_session)
         child_broadcasts = [b for b in broadcasts if b[1].get("type") == "child_added"]
         assert child_broadcasts[0][1]["id"] == str(new_id)
+
+
+def test_notification_events_use_the_type_browsers_listen_for() -> None:
+    from types import SimpleNamespace
+
+    from app.services.notification import _live_event
+
+    event = _live_event(
+        SimpleNamespace(  # type: ignore[arg-type]
+            type="pr_approved", id=uuid.uuid4(), title="t", body="b", link="/l"
+        )
+    )
+
+    assert event["type"] == "notification"
+    assert event["notification_type"] == "pr_approved"

@@ -247,7 +247,7 @@ async def test_pipeline_emits_clean_status_after_scan() -> None:
 
     emitted_statuses: list[str] = []
 
-    def capture_emit(_sk: str, _ec: str, _elk: str, payload_json: str) -> None:
+    def capture_emit(_sk: str, _user_id: str, payload_json: str) -> None:
         data = json.loads(payload_json)
         emitted_statuses.append(data.get("status", ""))
 

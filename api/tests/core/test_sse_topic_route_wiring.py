@@ -1,16 +1,13 @@
 import ast
 import uuid
-from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from app.core.common.exceptions import NotFoundError
-from app.core.database.redis import RedisLockTimeoutError
-from app.core.events.sse import SSECapacityError
+import app.core.events.sse as sse
 from app.routers import events
-from app.routers.events import parse_master_topics
+from app.routers.events import parse_topics
 
 _API_ROOT = Path(__file__).resolve().parents[2]
 
@@ -41,57 +38,78 @@ def test_persistent_live_updates_expose_only_the_master_sse_route() -> None:
         assert not sse_routes, f"{relative_path} still exposes a legacy SSE route"
 
 
-def test_master_topics_are_normalized_deduplicated_and_include_user_prs() -> None:
+def test_upload_progress_has_no_dedicated_stream_route() -> None:
+    source = (_API_ROOT / "app/routers/upload/file_status.py").read_text(encoding="utf-8")
+    assert "EventSourceResponse" not in source
+    assert '"/events/' not in source
+
+
+def test_topics_are_normalized_deduplicated_and_include_user_channels() -> None:
     user_id = uuid.uuid4()
     material_id = uuid.uuid4()
 
-    assert parse_master_topics(
+    assert parse_topics(
         user_id,
         ["directory:root", f"material:{material_id}", f"material:{material_id}"],
     ) == {
+        "notifications": f"notifications:{user_id}",
         "pull_requests": f"pr_updates:{user_id}",
+        "uploads": f"uploads:{user_id}",
         "directory:root": "root",
         f"material:{material_id}": str(material_id),
     }
 
 
-@pytest.mark.parametrize("topic", ["unknown:value", "material:not-a-uuid", "directory:nope"])
-def test_master_topics_reject_unknown_or_malformed_values(topic: str) -> None:
-    with pytest.raises(NotFoundError, match="Live-update topic not found"):
-        parse_master_topics(uuid.uuid4(), [topic])
+@pytest.mark.parametrize("topic", ["unknown:value", "material:not-a-uuid", "directory:nope", ""])
+def test_invalid_topics_are_ignored_without_losing_user_channels(topic: str) -> None:
+    user_id = uuid.uuid4()
+
+    assert parse_topics(user_id, [topic]) == {
+        "notifications": f"notifications:{user_id}",
+        "pull_requests": f"pr_updates:{user_id}",
+        "uploads": f"uploads:{user_id}",
+    }
+
+
+def test_entity_topics_are_capped() -> None:
+    topics = [f"material:{uuid.uuid4()}" for _ in range(events._MAX_ENTITY_TOPICS + 5)]
+
+    parsed = parse_topics(uuid.uuid4(), topics)
+
+    assert sum(channel.startswith("material:") for channel in parsed) == events._MAX_ENTITY_TOPICS
 
 
 @pytest.mark.asyncio
-async def test_master_lease_is_held_for_dependency_lifetime(monkeypatch) -> None:
-    lifecycle: list[str] = []
+async def test_deleted_entities_are_dropped_without_failing_the_stream(monkeypatch) -> None:
+    live_id, deleted_id = uuid.uuid4(), uuid.uuid4()
 
-    @asynccontextmanager
-    async def fake_lock(*args, **kwargs):
-        lifecycle.append("acquired")
-        try:
-            yield
-        finally:
-            lifecycle.append("released")
+    async def existing_ids(_db: object, _model: object, ids: set[uuid.UUID]) -> set[uuid.UUID]:
+        return ids & {live_id}
 
-    monkeypatch.setattr(events, "redis_lock", fake_lock)
-    lease = events._hold_master_lease(SimpleNamespace(id=uuid.uuid4()), object())
+    monkeypatch.setattr(events, "_existing_ids", existing_ids)
+    user_id = uuid.uuid4()
 
-    assert await anext(lease) is None
-    assert lifecycle == ["acquired"]
+    filtered = await events._drop_deleted_entities(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        parse_topics(user_id, [f"directory:{live_id}", f"material:{deleted_id}", "directory:root"]),
+    )
 
-    await lease.aclose()
-    assert lifecycle == ["acquired", "released"]
+    assert filtered == {
+        "notifications": f"notifications:{user_id}",
+        "pull_requests": f"pr_updates:{user_id}",
+        "uploads": f"uploads:{user_id}",
+        "directory:root": "root",
+        f"directory:{live_id}": str(live_id),
+    }
 
 
 @pytest.mark.asyncio
-async def test_duplicate_master_lease_is_rejected_before_streaming(monkeypatch) -> None:
-    @asynccontextmanager
-    async def unavailable_lock(*args, **kwargs):
-        raise RedisLockTimeoutError("already held")
-        yield
+async def test_stream_slot_releases_stream_even_if_body_never_started() -> None:
+    user_id = uuid.uuid4()
+    slot_dependency = events._stream_slot()
+    slot = await anext(slot_dependency)
+    slot.stream = sse.register_stream(user_id, "browser-a", {})
 
-    monkeypatch.setattr(events, "redis_lock", unavailable_lock)
-    lease = events._hold_master_lease(SimpleNamespace(id=uuid.uuid4()), object())
+    await slot_dependency.aclose()
 
-    with pytest.raises(SSECapacityError, match="already active"):
-        await anext(lease)
+    assert user_id not in sse._user_streams

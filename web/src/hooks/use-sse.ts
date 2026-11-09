@@ -8,7 +8,7 @@ import {
     useNotificationStore,
     usePRStore,
 } from "@/lib/stores";
-import { subscribeToSSE } from "@/lib/sse-client";
+import { setSSEIdentity, subscribeToSSE } from "@/lib/sse-client";
 import { isGuest } from "@/lib/guest";
 import { fetchOpenPRCount, reconcilePendingContribution } from "@/lib/pr-client";
 import {
@@ -25,19 +25,23 @@ export function useSSE() {
     const setUnreadCount = useNotificationStore((state) => state.setUnreadCount);
     const setOpenPRCount = usePRStore((state) => state.setOpenPRCount);
 
+    const ownerId = isAuthenticated && user?.id ? String(user.id) : null;
+    const isGuestUser = isGuest(user);
+    const canTrackPRs = Boolean(user) && !isGuestUser;
+
     useEffect(() => {
         if (isAuthLoading) return;
-        const ownerId = isAuthenticated && user?.id ? String(user.id) : null;
         usePendingContributionsStore.getState().activateOwner(ownerId);
         // A guest session can't own a draft, so it must not replace the last account's.
-        useStagingStore.getState().activateOwner(isGuest(user) ? null : ownerId);
+        useStagingStore.getState().activateOwner(isGuestUser ? null : ownerId);
+        setSSEIdentity(ownerId);
         if (!isAuthenticated) return;
 
         const reconcile = () => {
             fetchUnreadCount()
                 .then((count) => setUnreadCount(count))
                 .catch(() => {});
-            if (user && !isGuest(user)) {
+            if (canTrackPRs) {
                 fetchOpenPRCount()
                     .then((count) => setOpenPRCount(count))
                     .catch(() => {});
@@ -60,26 +64,35 @@ export function useSSE() {
             onResync: reconcile,
         });
 
-        const pullRequests =
-            user && !isGuest(user)
-                ? subscribeToSSE({
-                      channel: "pull_requests",
-                      listeners: {
-                          pr_opened: reconcile,
-                          pr_closed: (event) => {
-                              resolvePendingContributionEvent(event);
-                              useBrowseRefreshStore.getState().triggerBrowseRefresh();
-                              reconcile();
-                          },
+        const pullRequests = canTrackPRs
+            ? subscribeToSSE({
+                  channel: "pull_requests",
+                  listeners: {
+                      pr_opened: reconcile,
+                      pr_closed: (event) => {
+                          resolvePendingContributionEvent(event);
+                          useBrowseRefreshStore.getState().triggerBrowseRefresh();
+                          reconcile();
                       },
-                      onResync: reconcile,
-                  })
-                : null;
+                  },
+                  // The notifications subscription reconciles PR counts too.
+                  onResync: () => {},
+              })
+            : null;
 
         return () => {
             document.removeEventListener("visibilitychange", onVisible);
             notifications.close();
             pullRequests?.close();
         };
-    }, [isAuthenticated, isAuthLoading, user, increment, setUnreadCount, setOpenPRCount]);
+    }, [
+        isAuthenticated,
+        isAuthLoading,
+        ownerId,
+        isGuestUser,
+        canTrackPRs,
+        increment,
+        setUnreadCount,
+        setOpenPRCount,
+    ]);
 }

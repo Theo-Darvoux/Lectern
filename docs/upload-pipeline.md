@@ -20,7 +20,7 @@ Client                       API                          ARQ Worker
   │                           │                               ├─ strip metadata
   │                           │                               ├─ publish to CAS
   │                           │                               ├─ generate thumbnail
-  │◄── SSE: processing_status ┤◄── SSE event ─────────────────┤
+  │◄── SSE: uploads channel ──┤◄── SSE event ─────────────────┤
 ```
 
 ---
@@ -198,5 +198,5 @@ On completion, `processing_status=complete`. Failure after 3 attempts sets `proc
 ## Monitoring
 
 - Upload status: `GET /api/upload/{id}/status`
-- Live progress updates: `GET /api/upload/events/{file_key}` (Server-Sent Events, per file)
+- Live progress updates: the `uploads` channel of `GET /api/events/sse`, one stream per browser. `GET /api/upload/status/{file_key}` remains the source of truth: clients reconcile against it at start, after any stream gap, and on a slow timer.
 - ARQ queue depth: check Redis keys `arq:queue:upload-fast` and `arq:queue:upload-slow`

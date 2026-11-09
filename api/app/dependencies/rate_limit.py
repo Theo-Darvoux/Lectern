@@ -19,7 +19,7 @@ from app.services.audit import flag_user_account
 logger = logging.getLogger(__name__)
 
 
-def _request_session_id(request: Request) -> str | None:
+def request_session_id(request: Request) -> str | None:
     auth_header = request.headers.get("authorization", "")
     candidates: list[tuple[str, str]] = []
     if auth_header.startswith("Bearer "):
@@ -49,7 +49,7 @@ def _rate_limit_subject(request: Request, user: User) -> str:
     if user.role != UserRole.GUEST:
         return str(user.id)
 
-    session_id = _request_session_id(request)
+    session_id = request_session_id(request)
     if session_id:
         return f"guest-session:{session_id}"
 

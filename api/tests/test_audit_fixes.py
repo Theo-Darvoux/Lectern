@@ -9,7 +9,6 @@ Covers:
 - H5: S3 copy timeout wrappers
 - M1: OOXML dead code removal
 - M2: GIF pixel budget enforcement
-- M5: SSE event log cap (LTRIM)
 - M8: OLE2 shared helper (_scan_vba_for_autoexec)
 - T2: Integration-style pipeline tests
 - T4: Security bypass attempts
@@ -572,34 +571,6 @@ class TestGIFPixelBudget:
         gif_bytes = _make_gif(100, 100, 1)
         result = _strip_image_metadata(gif_bytes)
         assert len(result) > 0
-
-
-# =============================================================================
-# M5: SSE event log cap
-# =============================================================================
-
-
-class TestSSEEventLogCap:
-    """Verify that the event log list is trimmed when it exceeds 200 entries."""
-
-    @pytest.fixture
-    def fake_redis(self):
-        from tests.conftest import FakeRedis
-
-        return FakeRedis()
-
-    async def test_ltrim_called_when_list_exceeds_200(self, fake_redis):
-        """After 200+ entries, LTRIM should cap the list."""
-        key = "upload:eventlog:test-key"
-        # Pre-populate with 200 entries
-        fake_redis.data[key] = [f"event-{i}".encode() for i in range(200)]
-        # Add one more to trigger trim
-        idx = await fake_redis.rpush(key, "event-200")
-        assert idx == 201
-        await fake_redis.ltrim(key, -200, -1)
-        assert len(fake_redis.data[key]) == 200
-        # First event should have been trimmed
-        assert fake_redis.data[key][0] == b"event-1"
 
 
 # =============================================================================

@@ -107,8 +107,6 @@ class UploadPipeline:
         self.mime_category = _mime_cat(mime_type)
 
         self.status_key = f"upload:status:{quarantine_key}"
-        self.event_channel = f"upload:events:{quarantine_key}"
-        self.event_log_key = f"upload:eventlog:{quarantine_key}"
 
         self.tmp_path: Path | None = None
         self.pf: ProcessingFile | None = None
@@ -156,9 +154,7 @@ class UploadPipeline:
             payload["overall_percent"] = _overall(stage_index, stage_percent)
 
         payload_json = json.dumps(payload)
-        await self.cache.emit_event(
-            self.status_key, self.event_channel, self.event_log_key, payload_json
-        )
+        await self.cache.emit_event(self.status_key, self.user_id, payload_json)
 
     async def _fail_upload(
         self,

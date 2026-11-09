@@ -194,7 +194,6 @@ export function useAnnotations(materialId: string | null) {
                 },
             },
             onResync: () => fetchAnnotations(true),
-            startupDelay: 50,
         });
 
         return () => connection.close();

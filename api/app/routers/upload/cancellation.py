@@ -76,16 +76,8 @@ async def _clear_cached_upload_state(
     *,
     quarantine_key: str | None,
 ) -> None:
-    keys: list[str] = []
     if quarantine_key:
-        keys.extend(
-            (
-                f"{_STATUS_CACHE_PREFIX}{quarantine_key}",
-                f"upload:eventlog:{quarantine_key}",
-            )
-        )
-    if keys:
-        await redis.delete(*keys)
+        await redis.delete(f"{_STATUS_CACHE_PREFIX}{quarantine_key}")
 
 
 async def _release_quota_members(

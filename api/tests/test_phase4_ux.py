@@ -3,7 +3,6 @@
 Covers:
 - 4A: POST /api/upload/status/batch, GET /api/upload/mine
 - 4B: GET /api/upload/config fields (recommended_path, direct_threshold_mb)
-- 4C: SSE rate limiting (max 10 concurrent per user), keepalive set to 15s
 """
 
 import json
@@ -170,41 +169,3 @@ async def test_upload_mine_empty_for_new_user(client: AsyncClient, db_session: A
     data = response.json()
     assert data["total"] == 0
     assert data["items"] == []
-
-
-# ── 4C: SSE rate limiting ─────────────────────────────────────────────────────
-
-
-def test_sse_keepalive_is_15s():
-    """SSE keepalive interval must be 15 seconds (issue 4.10)."""
-    from app.routers.upload.sse import _SSE_KEEPALIVE
-
-    assert _SSE_KEEPALIVE == 15.0
-
-
-def test_sse_max_per_user_is_10():
-    """SSE max concurrent streams per user must be 10 (issue 1.14)."""
-    from app.routers.upload.sse import _SSE_MAX_PER_USER
-
-    assert _SSE_MAX_PER_USER == 10
-
-
-@pytest.mark.asyncio
-async def test_sse_rate_limit_blocks_at_11th_connection(
-    client: AsyncClient, db_session: AsyncSession, mock_redis: AsyncMock
-):
-    """The 11th concurrent SSE stream from the same user gets a 429."""
-    user = await _create_user(db_session)
-    await db_session.commit()
-
-    user_id = str(user.id)
-    file_key = f"quarantine/{user_id}/upload1/file.pdf"
-
-    # Simulate that 10 streams are already active
-    mock_redis.incr.return_value = 11
-
-    response = await client.get(
-        f"/api/upload/events/{file_key}",
-        headers=_auth_headers(user),
-    )
-    assert response.status_code == 429

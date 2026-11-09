@@ -82,11 +82,14 @@ async def test_post_scan_preserves_immutable_cas_metadata_in_db_and_cache():
         assert mock_upload.processing_status == "complete"
 
         # Verify Redis cache update
-        # emit_event calls rpush and publish
-        assert mock_redis.publish.called
-        published_payload = json.loads(mock_redis.publish.call_args[0][1])
-        assert published_payload["result"]["size"] == 10000
-        assert published_payload["result"]["processing_status"] == "complete"
+        status_payloads = [
+            json.loads(call.args[1])
+            for call in mock_redis.set.call_args_list
+            if str(call.args[0]).startswith("upload:status:")
+        ]
+        assert status_payloads
+        assert status_payloads[-1]["result"]["size"] == 10000
+        assert status_payloads[-1]["result"]["processing_status"] == "complete"
 
 
 @pytest.mark.asyncio

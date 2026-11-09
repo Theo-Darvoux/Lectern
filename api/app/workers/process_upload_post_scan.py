@@ -323,8 +323,6 @@ async def process_upload_post_scan(
                     # excluded by the same upload lifecycle lock.
                     cache = UploadCacheRepository(worker_ctx.redis)
                     status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
-                    event_channel = f"upload:events:{quarantine_key}"
-                    event_log_key = f"upload:eventlog:{quarantine_key}"
 
                     cached_json = await worker_ctx.redis.get(status_key)
                     if isinstance(cached_json, (str, bytes, bytearray)) and cached_json:
@@ -336,12 +334,7 @@ async def process_upload_post_scan(
                             payload["stage_index"] = _STAGE_TOTAL - 1
                             payload["stage_percent"] = 1.0
                             payload["overall_percent"] = 100
-                            await cache.emit_event(
-                                status_key,
-                                event_channel,
-                                event_log_key,
-                                json.dumps(payload),
-                            )
+                            await cache.emit_event(status_key, user_id, json.dumps(payload))
 
                     await repo.maybe_dispatch_webhook(upload_id)
 

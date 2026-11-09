@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.routers.upload.batch_zip import router as batch_zip_router
 from app.routers.upload.direct import upload_file
+from app.routers.upload.file_status import router as file_status_router
 from app.routers.upload.groups import router as groups_router
 from app.routers.upload.helpers import (
     _FAST_QUEUE_NAME,
@@ -20,8 +21,6 @@ from app.routers.upload.helpers import (
     _enqueue_processing,
 )
 from app.routers.upload.presigned import router as presigned_router
-from app.routers.upload.sse import router as sse_router
-from app.routers.upload.sse import upload_events
 from app.routers.upload.status import router as status_router
 from app.routers.upload.validators import (
     _check_per_type_size,
@@ -44,7 +43,6 @@ __all__ = [
     "_create_upload_row",
     "_enqueue_processing",
     "_validate_filename",
-    "upload_events",
 ]
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
@@ -62,5 +60,5 @@ router.add_api_route(
 router.include_router(batch_zip_router)
 router.include_router(groups_router)
 router.include_router(presigned_router)
-router.include_router(sse_router)
+router.include_router(file_status_router)
 router.include_router(status_router)
