@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { apiFetch } from "@/lib/api-client";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { uploadPreviewQuery } from "@/lib/upload-preview";
 import { getMaterialThumbnail } from "@/lib/material-preview-source";
 import { getFileTypeStyle } from "@/components/home/file-type-display";
 import { getDirectoryIcon } from "@/lib/directory-icons";
@@ -9,7 +10,7 @@ import { getDirectoryColor } from "@/lib/directory-colors";
 import { getFileBadgeLabel, getFileBadgeColor, getFileExtension } from "@/lib/file-utils";
 import { isExternalUrl } from "@/lib/url-utils";
 import { cn } from "@/lib/utils";
-import { Folder, ExternalLink, Link2, File, Image as ImageIcon } from "lucide-react";
+import { ExternalLink, Link2, File } from "lucide-react";
 
 interface PROperationThumbnailProps {
     className?: string;
@@ -40,47 +41,26 @@ export function PROperationThumbnail({
     directoryIcon,
     directoryColor,
 }: PROperationThumbnailProps) {
-    const [imgUrl, setImgUrl] = useState<string | null>(null);
-    const [imgError, setImgError] = useState(false);
+    const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
     const ext = fileName ? getFileExtension(fileName) : "";
     const isImage = IMAGE_EXTENSIONS.has(ext) || (mimeType?.startsWith("image/") ?? false);
     const isLink = materialType === "link" || materialType === "internal_link" || Boolean(targetUrl);
     const isInternalLink = isLink && targetUrl && !isExternalUrl(targetUrl);
 
-    useEffect(() => {
-        let cancelled = false;
-        setImgUrl(null);
-        setImgError(false);
-
-        if (isDirectory || isLink) return;
-
-        // 1. If staged image file key
-        if (stagedFileKey && isImage) {
-            apiFetch<{ url: string }>(`/upload/preview?file_key=${encodeURIComponent(stagedFileKey)}`)
-                .then((res) => {
-                    if (!cancelled && res?.url) setImgUrl(res.url);
-                })
-                .catch(() => {
-                    if (!cancelled) setImgError(true);
-                });
-            return () => { cancelled = true; };
-        }
-
-        // 2. If existing material with ID
-        if (materialId && !materialId.startsWith("$")) {
-            getMaterialThumbnail(materialId)
-                .then((thumb) => {
-                    if (!cancelled && thumb?.url) {
-                        setImgUrl(thumb.url);
-                    }
-                })
-                .catch(() => {
-                    // Ignore thumbnail fetch errors; fallback icon will show
-                });
-            return () => { cancelled = true; };
-        }
-    }, [stagedFileKey, materialId, isImage, isDirectory, isLink]);
+    // Thumbnails are optional: on failure the type icon below stands in.
+    const canPreview = !isDirectory && !isLink;
+    const stagedKey = canPreview && stagedFileKey && isImage ? stagedFileKey : null;
+    const publishedId =
+        canPreview && !stagedKey && materialId && !materialId.startsWith("$") ? materialId : null;
+    const staged = useQuery({ ...uploadPreviewQuery(stagedKey ?? ""), enabled: !!stagedKey });
+    const published = useQuery({
+        queryKey: ["material-thumbnail", publishedId],
+        queryFn: async () => (await getMaterialThumbnail(publishedId!))?.url ?? null,
+        enabled: !!publishedId,
+    });
+    const imgUrl = (stagedKey ? staged.data : publishedId ? published.data : null) ?? null;
+    const imgError = staged.isError || (imgUrl !== null && imgUrl === failedUrl);
 
     // Directory Rendering
     if (isDirectory) {
@@ -171,7 +151,7 @@ export function PROperationThumbnail({
                     src={imgUrl}
                     alt={fileName ?? "Thumbnail"}
                     className="absolute inset-0 h-full w-full object-cover animate-in fade-in duration-200"
-                    onError={() => setImgError(true)}
+                    onError={() => setFailedUrl(imgUrl)}
                     loading="lazy"
                 />
             ) : (

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, X, Shield, ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +15,9 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api-client";
 import { toast } from "sonner";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
+import { QueryError } from "@/components/query-error";
+import { translateDynamic } from "@/lib/i18n-dynamic";
 
 interface FlagData {
   id: string;
@@ -57,56 +60,33 @@ export default function StaffFlagsPage() {
   const t = useTranslations("Moderator.flags");
   const tFlags = useTranslations("Flags");
   const tCommon = useTranslations("Common");
-  const [flags, setFlags] = useState<FlagData[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
+  const locale = useLocale();
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
-  const [pages, setPages] = useState(1);
   const [statusFilter, setStatusFilter] = useState("open");
   const [targetTypeFilter, setTargetTypeFilter] = useState("all");
-  const [loading, setLoading] = useState(false);
-  const loadRequestRef = useRef(0);
 
-  const fetchFlags = useCallback(
-    async (p: number) => {
-      const requestId = ++loadRequestRef.current;
-      setLoading(true);
-      try {
-        const params = new URLSearchParams({ page: String(p), limit: "20" });
-        if (statusFilter && statusFilter !== "all")
-          params.set("status", statusFilter);
-        if (targetTypeFilter && targetTypeFilter !== "all")
-          params.set("targetType", targetTypeFilter);
-
-        const data = await apiFetch<PaginatedFlags>(`/flags?${params}`);
-        if (requestId !== loadRequestRef.current) return;
-        setFlags(data.items);
-        setHasLoaded(true);
-        setPage(data.page);
-        setPages(data.pages);
-      } catch {
-        if (requestId !== loadRequestRef.current) return;
-        toast.error(t("loadError"));
-      } finally {
-        if (requestId === loadRequestRef.current) setLoading(false);
-      }
+  const flagsQuery = useQuery({
+    queryKey: ["flags", { page, statusFilter, targetTypeFilter }],
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({ page: String(page), limit: "20" });
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      if (targetTypeFilter !== "all") params.set("targetType", targetTypeFilter);
+      return apiFetch<PaginatedFlags>(`/flags?${params}`, { signal });
     },
-    [statusFilter, targetTypeFilter, t],
-  );
-
-  useEffect(() => {
-    fetchFlags(1);
-  }, [fetchFlags]);
+    placeholderData: keepPreviousData,
+  });
+  const flags = flagsQuery.data?.items ?? [];
+  const pages = flagsQuery.data?.pages ?? 1;
 
   const changeStatusFilter = (value: string) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
     setStatusFilter(value);
+    setPage(1);
   };
 
   const changeTargetTypeFilter = (value: string) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
     setTargetTypeFilter(value);
+    setPage(1);
   };
 
   const handleAction = async (
@@ -119,7 +99,7 @@ export default function StaffFlagsPage() {
         body: JSON.stringify({ status }),
       });
       toast.success(status === "resolved" ? t("resolved") : t("dismissed"));
-      fetchFlags(page);
+      void queryClient.invalidateQueries({ queryKey: ["flags"] });
     } catch {
       toast.error(t("updateError"));
     }
@@ -156,11 +136,15 @@ export default function StaffFlagsPage() {
         </Select>
       </div>
 
-      {loading && !hasLoaded && (
+      {flagsQuery.isPending && (
         <p className="text-sm text-muted-foreground">{tCommon("loading")}</p>
       )}
 
-      {hasLoaded && flags.length === 0 && (
+      {flagsQuery.isError && (
+        <QueryError message={t("loadError")} onRetry={() => void flagsQuery.refetch()} />
+      )}
+
+      {flagsQuery.isSuccess && flags.length === 0 && (
         <Card>
           <CardContent className="py-12 text-center">
             <Shield className="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" />
@@ -169,7 +153,7 @@ export default function StaffFlagsPage() {
         </Card>
       )}
 
-      <div className="space-y-3" aria-busy={loading}>
+      <div className="space-y-3" aria-busy={flagsQuery.isFetching}>
         {flags.map((flag) => (
           <Card key={flag.id}>
             <CardHeader className="pb-2">
@@ -185,13 +169,11 @@ export default function StaffFlagsPage() {
                     {t(`status.${flag.status}` as Parameters<typeof t>[0])}
                   </Badge>
                   <Badge variant="outline">
-                    {tFlags.has(`reasons.${flag.reason}`)
-                      ? tFlags(`reasons.${flag.reason}` as any)
-                      : flag.reason}
+                    {translateDynamic(tFlags, `reasons.${flag.reason}`, flag.reason)}
                   </Badge>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {new Date(flag.created_at).toLocaleDateString()}
+                  {new Date(flag.created_at).toLocaleDateString(locale)}
                 </span>
               </div>
             </CardHeader>
@@ -202,7 +184,7 @@ export default function StaffFlagsPage() {
                     name:
                       flag.reporter?.display_name ??
                       flag.reporter?.email ??
-                      "Unknown",
+                      tCommon("deletedUser"),
                   })}
                 </p>
                 {flag.target?.exists ? (
@@ -269,7 +251,7 @@ export default function StaffFlagsPage() {
             variant="outline"
             size="sm"
             disabled={page <= 1}
-            onClick={() => fetchFlags(page - 1)}
+            onClick={() => setPage(page - 1)}
           >
             <ChevronLeft className="h-4 w-4" />
             {tCommon("previous")}
@@ -281,7 +263,7 @@ export default function StaffFlagsPage() {
             variant="outline"
             size="sm"
             disabled={page >= pages}
-            onClick={() => fetchFlags(page + 1)}
+            onClick={() => setPage(page + 1)}
           >
             {tCommon("next")}
             <ChevronRight className="h-4 w-4" />

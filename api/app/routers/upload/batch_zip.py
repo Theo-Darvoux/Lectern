@@ -23,7 +23,6 @@ from typing import Annotated
 from uuid import UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, Header, UploadFile
-from redis.asyncio import Redis
 
 from app.config import settings
 from app.core.common.batch_upload_limits import (
@@ -34,12 +33,13 @@ from app.core.common.batch_upload_limits import (
     BATCH_MAX_TOTAL_EXTRACTED_BYTES,
     BATCH_MAX_ZIP_SIZE_BYTES,
 )
-from app.core.common.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
+from app.core.common.constants import MAGIC_HEADER_SIZE
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.database.database import async_session_factory
 from app.core.database.post_commit import dispatch_post_commit_actions, persist_post_commit_jobs
-from app.core.database.redis import get_redis
+from app.core.database.redis import RedisClient, get_redis
 from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import MimeRegistry, guess_mime_from_bytes
 from app.core.security.async_utils import shielded_to_thread
@@ -49,6 +49,7 @@ from app.core.security.processing_paths import make_processing_temp_dir
 from app.core.storage.facade import delete_object, get_s3_client
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
+from app.models.user import MODERATOR_ROLES
 from app.routers.upload.direct import _claim_direct_upload_idempotency
 from app.routers.upload.helpers import (
     _check_pending_cap,
@@ -115,11 +116,6 @@ def _canonical_zip_path(path: str) -> str | None:
         return None
     canonical = "/".join(parts)
     return canonical + "/" if is_directory else canonical
-
-
-def _is_safe_zip_path(path: str) -> bool:
-    """Return whether a ZIP path has one unambiguous canonical form."""
-    return _canonical_zip_path(path) is not None
 
 
 def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:
@@ -346,7 +342,7 @@ async def _extract_zip_bounded(
 async def upload_batch_zip(
     file: UploadFile,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     _: Annotated[None, Depends(rate_limit_uploads)],
     requested_batch_id: Annotated[str | None, Header(alias="X-Upload-ID")] = None,
 ) -> BatchZipResponse:
@@ -368,7 +364,7 @@ async def upload_batch_zip(
             batch_id = str(UUID(requested_batch_id))
         except ValueError:
             raise BadRequestError("X-Upload-ID must be a valid UUID")
-    privileged = user.role in PRIVILEGED_ROLES
+    privileged = user.role in MODERATOR_ROLES
     max_members = BATCH_MAX_FILES_PRIVILEGED if privileged else BATCH_MAX_FILES
 
     allowed_exts: set[str] | None = None
@@ -601,7 +597,7 @@ async def upload_batch_zip(
                                 await delete_object(quarantine_key)
                         if quota_reserved and quarantine_key is not None:
                             with contextlib.suppress(Exception):
-                                await redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+                                await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", quarantine_key)
                         if storage_reserved:
                             with contextlib.suppress(Exception):
                                 await _release_storage_reservation(upload_id, redis)

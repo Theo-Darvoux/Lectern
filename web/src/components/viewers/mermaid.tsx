@@ -72,7 +72,7 @@ export function Mermaid({ chart }: MermaidProps) {
         return () => {
             isMounted = false;
         };
-    }, [chart, resolvedTheme, componentId]);
+    }, [chart, resolvedTheme, componentId, t]);
 
     if (error) {
         return (

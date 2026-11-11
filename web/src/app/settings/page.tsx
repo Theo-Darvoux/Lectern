@@ -39,6 +39,8 @@ import type { components } from "@/lib/api-types";
 import { performLogout } from "@/lib/auth-sync";
 import { useAuthStore, useConfigStore } from "@/lib/stores";
 import { cn } from "@/lib/utils";
+import { isStaffRole } from "@/lib/guest";
+import { saveBlob } from "@/lib/file-utils";
 
 const commitSha = process.env.NEXT_PUBLIC_COMMIT_SHA;
 type SetPasswordRequest = components["schemas"]["SetPasswordIn"];
@@ -93,7 +95,7 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [creatingPassword, setCreatingPassword] = useState(false);
 
-  const isStaff = user?.role === "bureau" || user?.role === "vieux" || user?.role === "moderator";
+  const isStaff = isStaffRole(user?.role);
   const canCreatePassword = config?.classic_enabled === true && user?.has_password === false;
   const navItems = [
     { id: "general", label: t("navigation.general"), icon: SlidersHorizontal },
@@ -132,12 +134,7 @@ export default function SettingsPage() {
     try {
       const data = await apiFetch<Record<string, unknown>>("/users/me/data-export");
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "my-data-export.json";
-      anchor.click();
-      URL.revokeObjectURL(url);
+      saveBlob(blob, "my-data-export.json");
       toast.success(t("export.success"));
     } catch {
       toast.error(t("export.error"));

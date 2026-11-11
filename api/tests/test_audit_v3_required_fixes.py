@@ -16,14 +16,11 @@ from app.core.security.file_security._concurrency import (
     _get_concurrency_guard,
     run_managed_subprocess,
 )
-from app.core.security.file_security._image import (
-    _strip_image_metadata,
-)
 from app.core.security.sandbox import (
     SubprocessOutputLimitError,
     async_sandboxed_run,
-    sandboxed_run,
 )
+from tests.image_helpers import strip_image_metadata
 
 
 # =============================================================================
@@ -99,17 +96,6 @@ async def test_reader_cleanup_one_stream_exceeds_limit():
 
 
 # =============================================================================
-# 3. Synchronous runner output limit
-# =============================================================================
-def test_sync_sandboxed_run_output_limit():
-    """Verify sandboxed_run cannot capture unbounded output."""
-    script = "import sys; sys.stdout.buffer.write(b'Z' * 2000000); sys.stdout.flush()"
-    with patch("app.core.security.sandbox._MAX_SUBPROCESS_OUTPUT_BYTES", 100 * 1024):
-        with pytest.raises(SubprocessOutputLimitError):
-            sandboxed_run(["python3", "-c", script], timeout=2)
-
-
-# =============================================================================
 # 4. Animated-format policy test
 # =============================================================================
 def test_animated_format_policy():
@@ -121,19 +107,19 @@ def test_animated_format_policy():
     buf_gif = io.BytesIO()
     gif_img.save(buf_gif, format="GIF", save_all=True, append_images=[gif_img2])
     with pytest.raises(ValueError, match="Animated and multi-frame images are not supported"):
-        _strip_image_metadata(buf_gif.getvalue())
+        strip_image_metadata(buf_gif.getvalue())
 
     # 2. Multi-frame WebP
     buf_webp = io.BytesIO()
     gif_img.save(buf_webp, format="WEBP", save_all=True, append_images=[gif_img2])
     with pytest.raises(ValueError, match="Animated and multi-frame images are not supported"):
-        _strip_image_metadata(buf_webp.getvalue())
+        strip_image_metadata(buf_webp.getvalue())
 
     # 3. Multi-page TIFF
     buf_tiff = io.BytesIO()
     gif_img.save(buf_tiff, format="TIFF", save_all=True, append_images=[gif_img2])
     with pytest.raises(ValueError, match="Unsupported image format"):
-        _strip_image_metadata(buf_tiff.getvalue())
+        strip_image_metadata(buf_tiff.getvalue())
 
 
 # =============================================================================
@@ -149,7 +135,7 @@ def test_palette_transparency_and_orientation():
     buf_gif = io.BytesIO()
     gif_transparent.save(buf_gif, format="GIF", transparency=1)
 
-    stripped_gif_bytes = _strip_image_metadata(buf_gif.getvalue())
+    stripped_gif_bytes = strip_image_metadata(buf_gif.getvalue())
     with Image.open(io.BytesIO(stripped_gif_bytes)) as out_gif:
         out_rgba = out_gif.convert("RGBA")
         assert out_rgba.getpixel((1, 1))[3] == 0
@@ -161,7 +147,7 @@ def test_palette_transparency_and_orientation():
     buf_png = io.BytesIO()
     png_palette.save(buf_png, format="PNG")
 
-    stripped_png_bytes = _strip_image_metadata(buf_png.getvalue())
+    stripped_png_bytes = strip_image_metadata(buf_png.getvalue())
     with Image.open(io.BytesIO(stripped_png_bytes)) as out_png:
         out_rgba = out_png.convert("RGBA")
         assert out_rgba.getpixel((0, 0))[3] == 0
@@ -171,7 +157,7 @@ def test_palette_transparency_and_orientation():
     buf_rgba = io.BytesIO()
     rgba_img.save(buf_rgba, format="PNG")
 
-    stripped_rgba_bytes = _strip_image_metadata(buf_rgba.getvalue())
+    stripped_rgba_bytes = strip_image_metadata(buf_rgba.getvalue())
     with Image.open(io.BytesIO(stripped_rgba_bytes)) as out_rgba_png:
         assert out_rgba_png.mode in {"RGBA", "PA", "P"}
         px = out_rgba_png.convert("RGBA").getpixel((5, 5))
@@ -184,7 +170,7 @@ def test_palette_transparency_and_orientation():
     buf_jpeg = io.BytesIO()
     jpeg_img.save(buf_jpeg, format="JPEG", exif=exif)
 
-    stripped_jpeg_bytes = _strip_image_metadata(buf_jpeg.getvalue())
+    stripped_jpeg_bytes = strip_image_metadata(buf_jpeg.getvalue())
     with Image.open(io.BytesIO(stripped_jpeg_bytes)) as out_jpeg:
         assert out_jpeg.size == (10, 20)
         assert "exif" not in out_jpeg.info

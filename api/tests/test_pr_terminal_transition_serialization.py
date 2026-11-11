@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.common.exceptions import BadRequestError
 from app.models.pull_request import PRStatus, PullRequest
 from app.models.user import User
-from app.services import pr as pr_service
+from app.services.pr import transitions as pr_service
 
 
 class _SharedState:

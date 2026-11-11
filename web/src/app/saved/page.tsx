@@ -7,30 +7,19 @@ import {
   Bookmark,
   CheckSquare,
   Compass,
-  FileText,
-  Filter,
-  Folder,
   FolderHeart,
   FolderPlus,
-  Grid2X2,
-  HelpCircle,
   LayoutGrid,
   LayoutList,
-  Layers,
-  ListFilter,
   Loader2,
   MoreHorizontal,
   Pencil,
   Plus,
   Search,
-  SlidersHorizontal,
-  Sparkles,
   Square,
-  Star,
   Trash2,
   X,
 } from "lucide-react";
-import { useSavedTranslations } from "@/lib/saved-i18n";
 import { toast } from "sonner";
 
 import { SavedCard } from "@/components/saved/saved-card";
@@ -71,13 +60,15 @@ import {
   type SavedLibrary,
 } from "@/lib/collections";
 import { cn } from "@/lib/utils";
+import { useTranslations } from "next-intl";
+import { useViewMode } from "@/hooks/use-view-mode";
 
 type NameDialogMode = "create" | "rename" | null;
 type TypeFilter = "all" | "material" | "directory" | "qcm" | "media" | "link";
 type SortOption = "recent" | "oldest" | "name_asc" | "name_desc";
 
 export default function SavedPage() {
-  const t = useSavedTranslations();
+  const t = useTranslations("Saved");
   const { show } = useConfirmDialog();
 
   // Data state
@@ -89,7 +80,7 @@ export default function SavedPage() {
   const [detailLoading, setDetailLoading] = useState(false);
 
   // View & Filter state
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const { mode: viewMode, setMode: handleSetViewMode } = useViewMode("saved-view-mode");
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
@@ -103,23 +94,6 @@ export default function SavedPage() {
   const [nameDialog, setNameDialog] = useState<NameDialogMode>(null);
   const [name, setName] = useState("");
   const [savingName, setSavingName] = useState(false);
-
-  // Load view mode preference from localStorage
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("saved-view-mode");
-      if (stored === "grid" || stored === "list") {
-        setViewMode(stored);
-      }
-    } catch {}
-  }, []);
-
-  const handleSetViewMode = (mode: "grid" | "list") => {
-    setViewMode(mode);
-    try {
-      localStorage.setItem("saved-view-mode", mode);
-    } catch {}
-  };
 
   const refreshCollections = useCallback(async () => {
     const data = await fetchCollections();
@@ -177,7 +151,10 @@ export default function SavedPage() {
     [collections, selectedId],
   );
 
-  const rawItems = selectedId ? detail?.items ?? [] : library?.items ?? [];
+  const rawItems = useMemo(
+    () => (selectedId ? detail?.items ?? [] : library?.items ?? []),
+    [selectedId, detail, library],
+  );
 
   // Filtered & Sorted items
   const filteredItems = useMemo(() => {
@@ -409,11 +386,6 @@ export default function SavedPage() {
   // Stats calculation
   const totalSavedCount = library?.items.length ?? 0;
   const totalCollectionsCount = collections.length;
-  const totalFoldersCount =
-    library?.items.filter((item) => item.target_type === "directory").length ?? 0;
-  const totalMaterialsCount =
-    library?.items.filter((item) => item.target_type === "material").length ?? 0;
-
   const isCurrentViewLoading = loading || (selectedId !== null && detailLoading);
 
   return (

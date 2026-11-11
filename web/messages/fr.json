@@ -1,7 +1,6 @@
 {
   "Login": {
     "title": "",
-    "descEmail": "Connectez-vous pour accéder aux matériels de cours",
     "descCode": "Entrez le code de vérification",
     "descPassword": "Entrez votre mot de passe",
     "googleFailed": "Échec de la connexion Google",
@@ -9,11 +8,9 @@
     "or": "Ou",
     "emailLabel": "Email",
     "emailPlaceholder": "prenom.nom@exemple.org",
-    "sendCode": "Envoyer le code",
     "password": "Mot de passe",
     "sending": "Envoi en cours...",
     "sendVerificationCode": "Envoyer le code de vérification",
-    "continueWithPassword": "Continuer avec le mot de passe",
     "continueAsGuest": "Continuer en tant qu'invité",
     "guestFailed": "Impossible de démarrer la session invité",
     "noMethods": "Aucune méthode d'authentification n'est actuellement activée.",
@@ -27,7 +24,6 @@
     "codeSent": "Code envoyé ! Vérifiez vos emails.",
     "codeAriaLabel": "Code de vérification à 8 caractères",
     "codeHelp": "Vérifiez vos emails pour un lien de connexion ou entrez le code à 8 caractères.",
-    "codeHelp2": "Valide pendant 10 minutes. Maximum 5 tentatives.",
     "verifying": "Vérification...",
     "verify": "Vérifier",
     "openZimbra": "Ouvrir la boîte email (Zimbra)",
@@ -36,7 +32,6 @@
     "passwordTab": "Mot de passe",
     "changeEmail": "Modifier",
     "enterCodeSentTo": "Nous avons envoyé un code de vérification à",
-    "exploreAsGuest": "Explorer les matériels de cours en tant qu'invité",
     "showPassword": "Afficher le mot de passe",
     "hidePassword": "Masquer le mot de passe",
     "invalidCode": "Code invalide",
@@ -126,7 +121,8 @@
     "tryAgain": "Réessayer",
     "refresh": "Actualiser",
     "deletedAccount": "Compte supprimé",
-    "deletedUser": "Utilisateur supprimé"
+    "deletedUser": "Utilisateur supprimé",
+    "loadFailed": "Impossible de charger ce contenu."
   },
   "Onboarding": {
     "welcome": "Bienvenue sur {siteName} !",
@@ -239,8 +235,6 @@
     "viewAll": "Tout voir",
     "markAllRead": "Tout marquer comme lu",
     "markRead": "Marquer comme lu",
-    "noNewNotifications": "Aucune nouvelle notification",
-    "goToNotifications": "Aller aux notifications",
     "profile": "Profil",
     "leaderboard": "Classement",
     "settings": "Paramètres",
@@ -256,25 +250,17 @@
     "home": "Accueil",
     "seeAll": "Tout voir",
     "viewAll": "Voir profil",
-    "seeAllFavourites": "Voir tous les favoris",
-    "viewYourProfile": "Voir votre profil",
-    "recentlyFavourited": "Documents récemment mis en favoris",
     "yourFavourites": "Vos Favoris",
-    "recentlySaved": "Documents que vous avez récemment sauvegardés",
-    "noFavouritesYet": "Aucun favori pour l'instant — parcourez et sauvegardez les documents que vous aimez !",
     "featured": "En vedette",
     "viewMaterial": "Voir le document",
     "featuredMaterials": "Documents en vedette",
     "highlightedMaterials": "Documents mis en évidence, sélectionnés pour vous",
     "totalViews": "Vues totales",
     "likes": "J'aime",
-    "seeAllMaterials": "Voir tous les documents",
-    "more": "plus",
     "nothingHereYet": "Rien ici pour le moment — revenez bientôt !",
     "open": "Ouvert",
     "recentContributions": "Contributions récentes",
     "noOpenContributions": "Aucune contribution ouverte pour le moment.",
-    "helpReviewContributions": "Aidez à réviser ces contributions ouvertes de la communauté",
     "allContributions": "Toutes les contributions",
     "greetings": {
       "morning": "Bonjour",
@@ -286,10 +272,6 @@
     "errorTitle": "Impossible de charger les données d'accueil",
     "loadError": "Échec du chargement des données d'accueil",
     "retry": "Réessayer",
-    "popularTodayTitle": "Populaire aujourd'hui",
-    "popularTodaySubtitle": "Matériels les plus consultés ces dernières 24 heures",
-    "trendingFortnightTitle": "Tendances de la quinzaine",
-    "trendingFortnightSubtitle": "Matériels les plus consultés ces 14 derniers jours",
     "viewFolder": "Voir le dossier",
     "untitled": "Sans titre",
     "unknownAuthor": "Inconnu",
@@ -308,8 +290,7 @@
     "quickBrowse": "Explorer",
     "quickSaved": "Enregistrés",
     "openSaved": "Ouvrir les enregistrés",
-    "quickFeatured": "Mettre en avant",
-    "quickNotifications": "Notifications"
+    "quickFeatured": "Mettre en avant"
   },
   "PendingApproval": {
     "title": "En attente d'approbation",
@@ -328,14 +309,11 @@
     "delete": "Supprimer",
     "exit": "Quitter",
     "attachments": "Pièces jointes",
-    "supplementaryFiles": "Fichiers supplémentaires liés à ce document",
     "uploadAttachment": "Téléverser une pièce jointe",
     "back": "Retour",
     "stagedFolderTitle": "Ce dossier est en attente de création",
     "stagedFolderDesc": "Téléversez des fichiers ou créez des sous-dossiers ici. Tout sera soumis ensemble lorsque vous créerez la PR.",
     "uploadFiles": "Téléverser des fichiers",
-    "noAttachmentsYet": "Aucune pièce jointe pour le moment",
-    "attachmentsDesc": "Les pièces jointes sont des fichiers supplémentaires liés à ce document. Elles peuvent être ajoutées via des contributions.",
     "deleteItemsTitle": "{count, plural, =1 {Supprimer 1 élément} other {Supprimer # éléments}}",
     "deleteItemsConfirm": "Voulez-vous supprimer ces éléments ? Vous pouvez soumettre la suppression immédiatement ou l'ajouter à votre brouillon.",
     "cancel": "Annuler",
@@ -372,13 +350,8 @@
     "moving": "Déplacement en cours",
     "contribution": "Contribution",
     "edited": "Modifié",
-    "chatAbout": "Discuter de {title}",
-    "viewDetailsFor": "Voir les détails de {title}",
     "view": "Voir",
     "preview": "Aperçu",
-    "viewOrPreviewFor": "{action} {title}",
-    "openItem": "Ouvrir",
-    "openItemFor": "Ouvrir {title}",
     "like": "J'aime",
     "liked": "Aimé",
     "thisDocument": "ce document",
@@ -390,7 +363,6 @@
     "collapseFolder": "Réduire le dossier",
     "creationCancelled": "Création annulée et supprimée du brouillon",
     "addedDeletionToDraft": "Suppression ajoutée au brouillon actuel",
-    "itemDeletedSuccessfully": "{type} supprimé avec succès",
     "failedToDeleteItem": "Échec de la suppression de l'élément",
     "linkCopied": "Lien copié dans le presse-papiers",
     "addAttachment": "Ajouter une pièce jointe",
@@ -402,7 +374,6 @@
     "loadFailedTitle": "Impossible de charger cet emplacement",
     "backToBrowse": "Retour à la bibliothèque",
     "home": "Accueil",
-    "courseMaterials": "Supports de cours",
     "contributionPreview": "Aperçu de la contribution",
     "exitPreview": "Quitter l'aperçu",
     "selectAll": "Tout sélectionner",
@@ -414,7 +385,6 @@
     "allSelectedAlreadyStagedForDeletion": "Tous les éléments sélectionnés sont déjà en attente de suppression",
     "someSelectedAlreadyStagedForDeletion": "Certains éléments sélectionnés sont déjà en attente de suppression — retirez d'abord la suppression",
     "itemsCut": "{count, plural, =1 {1 élément prêt à être déplacé} other {# éléments prêts à être déplacés}} — ouvrez le dossier de destination",
-    "itemsAlreadyInFolder": "Les éléments sont déjà dans ce dossier",
     "cannotMoveFolderIntoItself": "Impossible de déplacer un dossier dans lui-même ou dans l'un de ses sous-dossiers",
     "itemsAddedToDraft": "{count, plural, =1 {1 élément ajouté} other {# éléments ajoutés}} au brouillon",
     "failedToUpdateLike": "failedToUpdateLike",
@@ -427,9 +397,6 @@
     "clear": "Effacer",
     "navigateTo": "Accéder au dossier",
     "downloadZipTooltip": "Télécharger tous les fichiers de ce répertoire en archive ZIP",
-    "downloadZipTooLarge": "Ce répertoire est trop volumineux pour être téléchargé en ZIP",
-    "downloadZipPart": "Téléchargement de « {dirName} » — partie {part} sur {total}",
-    "downloadZipAllStarted": "{total} parties en file — dézippez-les toutes pour obtenir le dossier complet",
     "materialActions": "Actions sur le document",
     "folderActions": "Actions sur le dossier",
     "downloadZip": "Télécharger en ZIP",
@@ -454,14 +421,14 @@
     "clipboardNavigateHint": "Ouvrez le dossier de destination, puis cliquez sur « Déplacer ici ».",
     "clipboardMoveHint": "Cliquez sur « Déplacer ici » pour les placer dans « {folder} ».",
     "moveHere": "Déplacer ici",
-    "moveItemsDestination": "Destination : « {folder} »"
+    "moveItemsDestination": "Destination : « {folder} »",
+    "downloadZipEmpty": "Ce dossier ne contient aucun fichier à télécharger",
+    "downloadZipFailed": "Impossible de lancer le téléchargement ZIP"
   },
   "Search": {
-    "searchMaterials": "Rechercher des ressources et des dossiers...",
     "noResults": "Aucun résultat trouvé.",
     "noResultsHint": "Vérifiez l’orthographe, essayez moins de mots ou modifiez le filtre actif.",
     "searching": "Recherche en cours...",
-    "typeCommandOrSearch": "Commencez à saisir votre recherche...",
     "results": "Résultats de recherche",
     "searchMaterialsDirs": "Rechercher des ressources et des dossiers...",
     "startTyping": "Que recherchez-vous ?",
@@ -711,7 +678,8 @@
     "loadMore": "Charger plus d'annotations",
     "loading": "Chargement…",
     "failedToLoadAnnotations": "Impossible de charger les annotations.",
-    "retry": "Réessayer"
+    "retry": "Réessayer",
+    "failedToDeleteComment": "Impossible de supprimer le commentaire"
   },
   "Annotations": {
     "addAnnotation": "Ajoutez votre annotation...",
@@ -797,7 +765,6 @@
     "fileTypeNotSupported": "{name} : le type de fichier « {type} » n'est pas supporté.",
     "errorProcessing": "Échec du traitement",
     "folderUploadFailed": "Le téléversement du dossier a échoué",
-    "errorReferenceLost": "Référence du fichier perdue après rafraîchissement de la page. Veuillez retirer et ré-ajouter ce fichier.",
     "mbPerSec": "Mo/s",
     "secondsShort": "s",
     "untitled": "Sans titre",
@@ -837,9 +804,11 @@
       "ERR_QUOTA_EXCEEDED": "Vous avez trop de téléversements récents. Ils se libèrent lorsque vos contributions sont traitées, ou après 25 heures.",
       "ERR_STORAGE_FULL": "L'espace de stockage est plein. Contactez un administrateur.",
       "ERR_PROCESSING_FAILED": "Le traitement a échoué. Réessayez, et contactez le support si le problème persiste.",
-      "ERR_FILE_UNREADABLE": "Ce fichier est endommagé et n'a pas pu être lu."
+      "ERR_FILE_UNREADABLE": "Ce fichier est endommagé et n'a pas pu être lu.",
+      "ERR_PROCESSING_TIMEOUT": "Le traitement prend trop de temps. Consultez l'historique des envois pour connaître son état."
     },
-    "reAttachMismatch": "Ce n'est pas le même fichier. Choisissez le fichier d'origine."
+    "reAttachMismatch": "Ce n'est pas le même fichier. Choisissez le fichier d'origine.",
+    "uploadFailed": "Échec de l'envoi"
   },
   "PRWizard": {
     "createDirectory": "Créer un dossier",
@@ -881,7 +850,6 @@
     "searchPlaceholder": "Rechercher par titre, auteur ou #id...",
     "filterAll": "Toutes les contributions",
     "filterMine": "Mes contributions",
-    "filterType": "Opération",
     "allTypes": "Toutes les opérations",
     "filterDocuments": "Nouveaux documents",
     "filterEdits": "Modifications",
@@ -889,7 +857,6 @@
     "filterFolders": "Dossiers",
     "filterMoves": "Déplacements",
     "filterReverts": "Rétablissements",
-    "sortBy": "Trier par",
     "sortNewest": "Plus récents d'abord",
     "sortOldest": "Plus anciens d'abord",
     "sortChanges": "Plus de changements",
@@ -903,11 +870,8 @@
     "viewMode": "Mode d'affichage",
     "viewList": "Liste",
     "viewGraph": "Graphe",
-    "graphTitle": "Arbre des contributions",
     "branchMain": "main",
     "branchPending": "en attente",
-    "mergedIntoMain": "Fusionné dans main",
-    "pendingReview": "En attente de révision",
     "copyHash": "Copier l'identifiant",
     "hashCopied": "Identifiant copié dans le presse-papiers",
     "browseLibrary": "Parcourir & Contribuer",
@@ -915,7 +879,7 @@
     "clearSearch": "Effacer la recherche",
     "noResultsMatching": "Aucune contribution ne correspond à vos critères",
     "noResultsDesc": "Essayez d'ajuster votre recherche ou d'effacer les filtres actifs.",
-    "showingCount": "Affichage de {count} sur {total} {total, plural, =1 {contribution} other {contributions}}",
+    "matchingCount": "{count, plural, =0 {Aucune contribution correspondante} =1 {1 contribution correspondante} other {# contributions correspondantes}}",
     "review": "Examiner",
     "view": "Voir",
     "anonymous": "Anonyme",
@@ -954,21 +918,15 @@
     "link": "Lien externe",
     "internal_link": "Lien interne",
     "folder": "Dossier",
-    "file": "Fichier",
-    "statusOpen": "statusOpen",
-    "statusMerged": "statusMerged",
-    "statusClosed": "statusClosed",
-    "noContributionsYet": "noContributionsYet",
-    "noMaterialsYet": "noMaterialsYet",
-    "noAnnotationsYet": "noAnnotationsYet",
-    "totalContributions": "totalContributions",
-    "totalAnnotations": "totalAnnotations",
-    "totalMaterials": "totalMaterials"
+    "file": "Fichier"
+  },
+  "DirectoryTypes": {
+    "folder": "Dossier",
+    "module": "Module"
   },
   "PRDetails": {
     "summary": {
       "create_material": "Ajout de « {name} »",
-      "create_link": "Ajout du lien « {name} »",
       "edit_material": "Modification de « {name} »",
       "edit_link": "Modification du lien « {name} »",
       "delete_material": "Suppression de « {name} »",
@@ -1055,28 +1013,14 @@
     "fieldDescription": "Description",
     "fieldUrl": "URL de destination",
     "fieldFileName": "Nom de fichier",
-    "fieldFileSize": "Taille de fichier",
-    "fieldFileType": "Type de fichier",
     "fileDetails": "Détails du fichier",
-    "fieldLocation": "Emplacement",
-    "fieldOrigin": "Origine",
-    "fieldDestination": "Destination",
     "fieldAttachments": "Pièces jointes",
-    "fieldPreviousName": "Ancien nom",
-    "fieldNewName": "Nouveau nom",
-    "fieldPreviousType": "Ancien type",
-    "fieldNewType": "Nouveau type",
-    "fieldFolderIcon": "Icône du dossier",
-    "fieldFolderColor": "Couleur du dossier",
     "rename": "Renommage",
     "fileReplaced": "Fichier remplacé",
-    "noAttachments": "Aucune pièce jointe",
     "deleteWarningMaterial": "Ce document sera définitivement supprimé de l'arbre du wiki lors de la publication.",
     "deleteWarningDirectory": "Ce dossier et tout son contenu seront définitivement supprimés lors de la publication.",
-    "newFolderInPR": "Nouveau dossier (créé dans cette contribution)",
     "quickPreview": "Aperçu rapide",
     "openFullPreview": "Aperçu complet",
-    "testLink": "Visiter le lien",
     "locationInTree": "Emplacement dans l'arbre du wiki",
     "originLocation": "Emplacement d'origine",
     "destinationLocation": "Emplacement de destination",
@@ -1127,7 +1071,8 @@
     "backToContribution": "Retour à la contribution",
     "contribution": "Contribution",
     "pending": "En attente",
-    "previewUnavailableTitle": "Aperçu non disponible"
+    "previewUnavailableTitle": "Aperçu non disponible",
+    "linkBadge": "Lien"
   },
   "Viewers": {
     "notebook": {
@@ -1152,12 +1097,15 @@
       "nextPage": "Page suivante"
     },
     "pdf": {
-      "failedToParse": "Échec de l'analyse du PDF",
       "toggleTwoPage": "Basculer la vue sur deux pages",
       "page": "Page {current} sur {total}",
       "zoomOut": "Dézoomer (Ctrl+-)",
       "resetZoom": "Réinitialiser le zoom (Ctrl+0)",
-      "zoomIn": "Zoomer (Ctrl++)"
+      "zoomIn": "Zoomer (Ctrl++)",
+      "initTimeout": "Le lecteur PDF a mis trop de temps à démarrer. Réessayez.",
+      "initFailed": "Le lecteur PDF n'a pas pu démarrer.",
+      "loadTimeout": "Ce PDF a mis trop de temps à charger. Réessayez.",
+      "loadFailed": "Impossible d'ouvrir ce PDF."
     },
     "zoomControls": {
       "out": "Dézoomer",
@@ -1182,15 +1130,17 @@
       "scriptError": "Le script de l'API Office n'a pas pu être chargé",
       "engineError": "Erreur du moteur Office",
       "initFailed": "Échec de l'initialisation : {message}",
-      "configError": "Échec de la récupération de la configuration de l'éditeur : {message}",
-      "loadScriptError": "Échec du chargement du script de l'API Office",
       "startupError": "Euro-Office n'a pas pu démarrer : {message}",
-      "readyTimeout": "Euro-Office met trop de temps à ouvrir ce document. Veuillez réessayer."
+      "readyTimeout": "Euro-Office met trop de temps à ouvrir ce document. Veuillez réessayer.",
+      "unknownError": "erreur inconnue"
     },
     "retry": "Réessayer",
     "imageLoadFailed": "Cette image n'a pas pu être affichée. Elle n'a peut-être pas été téléchargée entièrement.",
     "rotateCcw": "Pivoter de -90°",
-    "rotateCw": "Pivoter de +90°"
+    "rotateCw": "Pivoter de +90°",
+    "epub": {
+      "renderFailed": "Impossible d'afficher cet EPUB."
+    }
   },
   "MissingImage": {
     "title": "Télécharger l'image manquante",
@@ -1245,7 +1195,6 @@
     "draft": "Brouillon",
     "createDirectly": "Créer directement",
     "addedToDraft": "Lien « {name} » ajouté au brouillon",
-    "invalidUrl": "Veuillez saisir une URL valide",
     "targetUrl": "URL de destination"
   },
   "ExternalLinkDialog": {
@@ -1261,9 +1210,7 @@
     "openLink": "Ouvrir le lien",
     "copyLink": "Copier l'URL",
     "linkCopied": "URL copiée dans le presse-papiers",
-    "noUrl": "Aucune URL de destination configurée pour ce lien.",
-    "externalSite": "Site externe",
-    "internalLink": "Lien interne"
+    "noUrl": "Aucune URL de destination configurée pour ce lien."
   },
   "Staging": {
     "title": "Vérifier les modifications",
@@ -1359,7 +1306,10 @@
     "saveSuccess": "Changements ajoutés au brouillon",
     "saveError": "Échec de l'enregistrement du contenu texte",
     "material": "le document",
-    "folder": "le dossier"
+    "folder": "le dossier",
+    "replaceDesc": "Envoyez un nouveau fichier pour remplacer la version actuelle. Il passe les mêmes contrôles de sécurité que tout envoi.",
+    "dropActive": "Déposez le fichier pour remplacer la version actuelle",
+    "dropDefault": "Glissez un fichier ici, ou cliquez pour en choisir un"
   },
   "Languages": {
     "en": "Anglais",
@@ -1378,9 +1328,6 @@
     "dashboard": {
       "stats": {
         "userCount": "Utilisateurs totaux",
-        "materialCount": "Matériels",
-        "openPrCount": "PRs ouvertes",
-        "openFlagCount": "Signalements ouverts",
         "loadError": "Échec du chargement des statistiques"
       }
     },
@@ -1478,7 +1425,8 @@
         "priorityDesc": "Les nombres plus élevés apparaissent en premier lorsque plusieurs éléments sont actifs.",
         "adding": "Ajout en cours…",
         "usesMaterialTitle": "— (utilise le titre du matériel)",
-        "cancel": "cancel"
+        "cancel": "cancel",
+        "editDesc": "Modifiez les détails de cette mise en avant"
       },
       "delete": {
         "confirmTitle": "Supprimer l'élément mis en avant ?",
@@ -1496,7 +1444,11 @@
       "success": {
         "added": "Élément mis en avant ajouté avec succès"
       },
-      "view": "Voir"
+      "view": "Voir",
+      "toast": {
+        "selectTarget": "Sélectionnez un fichier ou un dossier à mettre en avant",
+        "updated": "Mise en avant modifiée"
+      }
     }
   },
   "Notifications": {
@@ -1504,7 +1456,6 @@
     "description": "Restez informé de vos contributions, commentaires et actualités de la communauté.",
     "statsTotal": "Total",
     "statsUnread": "Non lues",
-    "statsCaughtUp": "À jour",
     "markAllRead": "Tout marquer comme lu",
     "markRead": "Marquer comme lu",
     "noNotifications": "Aucune notification pour le moment.",
@@ -1537,9 +1488,7 @@
     "noFilteredResultsDesc": "Essayez de modifier votre recherche ou vos filtres.",
     "clearFilters": "Réinitialiser les filtres",
     "allCaughtUpTitle": "Vous êtes à jour !",
-    "allCaughtUpDesc": "Aucune notification non lue en attente de consultation.",
     "emptyInboxTitle": "Aucune notification pour l'instant",
-    "emptyInboxDesc": "Dès qu'une activité aura lieu sur vos contributions, commentaires ou matériels, elle apparaîtra ici.",
     "loadMore": "Charger plus"
   },
   "Popular": {
@@ -1679,8 +1628,7 @@
         "totalMaterials": "Documents",
         "openPrs": "PRs ouvertes",
         "openFlags": "Signalements ouverts",
-        "pendingJobs": "Tâches en attente",
-        "systemStatus": "État système"
+        "pendingJobs": "Tâches en attente"
       },
       "recent": {
         "title": "Files d'attente",
@@ -1758,8 +1706,52 @@
         "sending": "Envoi en cours...",
         "success": "E-mail test envoyé avec succès à {email}",
         "error": "Échec de l'envoi de l'e-mail test. Vérifiez votre configuration SMTP."
-      }
-    }
+      },
+      "recipientEmail": "Adresse e-mail destinataire",
+      "timestamp": "Horodatage : ",
+      "currentSmtpServiceDetails": "Détails du service SMTP actuel",
+      "host": "Hôte : ",
+      "port": "Port : ",
+      "from": "Expéditeur : "
+    },
+    "overview": {
+      "lifecycleOverview": "Cycle de vie",
+      "total": "Total",
+      "healthy": "Opérationnel",
+      "degraded": "Dégradé",
+      "unhealthy": "Critique"
+    },
+    "content": {
+      "title": "Cycle de vie & Statuts",
+      "description": "Signalez clairement ce qui est essentiel, à jour, obsolète ou archivé.",
+      "search": "Rechercher un contenu…",
+      "all": "Tous les états",
+      "selected": "{count, plural, one {# sélectionné} other {# sélectionnés}}",
+      "setStatus": "Définir l'état",
+      "clear": "Effacer",
+      "content": "Contenu",
+      "type": "Type",
+      "status": "État",
+      "updated": "Mis à jour",
+      "signals": "Signaux",
+      "views": "vues",
+      "likes": "j'aime",
+      "empty": "Aucun contenu ne correspond aux filtres.",
+      "previous": "Précédent",
+      "next": "Suivant",
+      "updatedToast": "{count, plural, one {# contenu mis à jour} other {# contenus mis à jour}}",
+      "failed": "Impossible de mettre à jour l'état du contenu",
+      "loadFailed": "Impossible de charger le contenu",
+      "folder": "Dossier",
+      "file": "Fichier",
+      "usesFolderName": "Utilise le nom du dossier",
+      "contentManagement": "Gestion du contenu",
+      "overseeMaterialLifecycleStatusesExploreDirectories": "Supervisez le cycle de vie des ressources, explorez les dossiers et mettez en avant les documents clés.",
+      "lifecycle": "Cycle de vie",
+      "directories": "Dossiers",
+      "featured": "Mis en avant"
+    },
+    "adminOnly": "Accès réservé aux administrateurs."
   },
   "Admin": {
     "Config": {
@@ -1767,14 +1759,6 @@
         "visualIdentity": {
           "title": "Identité visuelle",
           "description": "Personnalisez le nom, la description et les couleurs du thème principal de votre plateforme.",
-          "siteName": "Nom du site",
-          "primaryColor": "Couleur principale du thème",
-          "siteDescription": "Description du site",
-          "logo": "Logo",
-          "favicon": "Favicon",
-          "placeholders": {
-            "siteDescription": "Plateforme collaborative de partage de supports de cours"
-          },
           "wordmarkBuilder": {
             "title": "Générateur de logo textuel",
             "description": "Créez un logo textuel personnalisé avec plusieurs couleurs ou polices. Copiez la ligne générée dans votre fichier .env pour l'appliquer.",
@@ -1799,67 +1783,33 @@
         },
         "footerLinks": {
           "title": "Liens du pied de page",
-          "description": "Configurez les liens et textes affichés en bas de chaque page.",
-          "footerLogo": "Logo du pied de page",
-          "footerText": "Texte du pied de page",
-          "organizationUrl": "URL de l'organisation",
-          "placeholders": {
-            "footerText": "© 2026 Lectern",
-            "organizationUrl": "https://www.example.com"
-          }
+          "description": "Configurez les liens et textes affichés en bas de chaque page."
         },
         "legal": {
           "title": "Mentions légales & RGPD",
-          "description": "Informations obligatoires pour la conformité légale et la transparence du traitement des données.",
-          "legalName": "Nom de l'entité légale",
-          "contactEmail": "Email de contact",
-          "legalAddress": "Adresse légale",
-          "legalSiret": "Numéro SIRET",
-          "dpoEmail": "Email du DPO",
-          "dpoAddress": "Adresse du DPO",
-          "dataTransfers": "Transferts de données (RGPD)",
-          "legalVersion": "Version des documents",
-          "placeholders": {
-            "legalName": "Nom de l'entité légale",
-            "contactEmail": "contact@example.com",
-            "legalAddress": "Adresse physique complète",
-            "legalSiret": "SIRET ou équivalent",
-            "dpoEmail": "dpo@example.com",
-            "dpoAddress": "Adresse physique du DPO (si différente)",
-            "dataTransfers": "Description des transferts de données hors UE",
-            "legalVersion": "ex: 1.0"
-          }
+          "description": "Informations obligatoires pour la conformité légale et la transparence du traitement des données."
         },
         "save": "Enregistrer les modifications",
         "discard": "Annuler les changements",
         "success": "Branding mis à jour",
         "seo": {
           "title": "SEO & Partage social",
-          "description": "Configurez l'apparence de votre site lors de partages sur les réseaux sociaux et les aperçus de liens.",
-          "ogImageUrl": "Image de prévisualisation sociale (OG Image)",
-          "ogImageUrlHint": "Affichée en miniature lors du partage de votre site sur les réseaux sociaux (recommandé : 1200×630 px)."
+          "description": "Configurez l'apparence de votre site lors de partages sur les réseaux sociaux et les aperçus de liens."
         },
         "watermark": {
           "title": "Filigrane de fond",
           "description": "Affiche une grande image semi-transparente derrière tout le contenu des pages.",
-          "image": "Image du filigrane",
-          "opacityLight": "Opacité (mode clair)",
-          "opacityDark": "Opacité (mode sombre)",
-          "opacityHint": "Des valeurs basses (5–15 %) donnent un filigrane discret ; des valeurs plus élevées le rendent plus visible."
+          "image": "Image du filigrane"
         }
       },
       "tabs": {
-        "authentication": "Authentification",
         "email": "Email",
-        "storage": "Stockage",
-        "files": "Fichiers",
-        "branding": "Branding"
+        "storage": "Stockage"
       },
       "errors": {
         "load": "Échec du chargement de la configuration",
         "save": "Échec de l'enregistrement de la configuration"
       },
-      "envBanner": "Configuration définie via variables d'environnement — modifiez .env et redéployez pour changer.",
       "Authentication": {
         "description": "La configuration est définie via les variables d'environnement et est en lecture seule ici. La liste des domaines autorisés reste gérée ci-dessous.",
         "methods": {
@@ -1871,10 +1821,7 @@
           },
           "google": {
             "label": "Google OAuth",
-            "description": "Permettre aux utilisateurs de se connecter avec leur compte Google.",
-            "clientId": "ID Client Google",
-            "clientIdPlaceholder": "votre-id-client.apps.googleusercontent.com",
-            "clientIdRequired": "Vous devez définir un ID Client Google avant d'activer cette fonctionnalité."
+            "description": "Permettre aux utilisateurs de se connecter avec leur compte Google."
           },
           "classic": {
             "label": "Email + mot de passe (classique)",
@@ -1887,17 +1834,12 @@
         },
         "session": {
           "title": "Politique de session",
-          "description": "Déterminez la durée de validité des sessions utilisateurs.",
-          "accessExpiry": "Expiration du Token d'Accès (Jours)",
-          "accessExpiryHelp": "Token de courte durée pour les requêtes API. Généralement 7 jours.",
-          "refreshExpiry": "Expiration du Token de Rafraîchissement (Jours)",
-          "refreshExpiryHelp": "Session de longue durée. Généralement 31 jours."
+          "description": "Déterminez la durée de validité des sessions utilisateurs."
         },
         "domains": {
           "title": "Domaines email autorisés",
           "description": "Les emails provenant de ces domaines peuvent demander l'accès. Activez <strong>Auto-approbation</strong> pour permettre aux utilisateurs de ces domaines d'éviter la file d'attente.",
           "empty": "Aucun domaine configuré — repli sur les domaines par défaut.",
-          "envOverrideBanner": "La liste de domaines est définie par ALLOWED_DOMAINS dans .env — les modifications ci-dessous ne mettent à jour que la base de données de repli.",
           "allowAll": {
             "label": "Autoriser tous les domaines",
             "description": "Ignorer la liste blanche pour tous les fournisseurs"
@@ -1906,17 +1848,13 @@
             "label": "Auto-approuver tous les utilisateurs",
             "description": "Activer immédiatement tout utilisateur, quel que soit son domaine e-mail"
           },
-          "autoApprove": "Auto-approbation",
-          "manualReview": "Revue manuelle",
           "add": {
             "title": "Ajouter un domaine",
             "placeholder": "exemple.com",
-            "button": "Ajouter",
-            "autoApproveLabel": "Approuver automatiquement les utilisateurs de ce domaine"
+            "button": "Ajouter"
           },
           "success": {
-            "added": "Domaine @{domain} ajouté",
-            "removed": "Domaine @{domain} supprimé"
+            "added": "Domaine @{domain} ajouté"
           },
           "errors": {
             "alreadyExists": "Le domaine existe déjà",
@@ -1932,14 +1870,11 @@
       "Email": {
         "title": "Configuration SMTP",
         "description": "Configurez les paramètres SMTP pour activer les notifications par email et les codes de vérification.",
-        "descriptionCard": "Ces paramètres sont utilisés pour tous les emails sortants. Si vide, la plateforme utilise les variables d'environnement.",
         "host": "Hôte SMTP",
-        "ip": "Adresse IP SMTP (Optionnel)",
         "port": "Port SMTP",
         "user": "Utilisateur SMTP",
         "password": "Mot de passe SMTP",
         "from": "Adresse email d'expédition",
-        "tls": "Utiliser TLS / STARTTLS",
         "test": {
           "title": "Tester la connexion",
           "description": "Envoyez un email de test pour vérifier vos paramètres SMTP. Enregistrez vos modifications avant de tester.",
@@ -1953,49 +1888,30 @@
         "discard": "Annuler les modifications",
         "placeholders": {
           "host": "ex: smtp.gmail.com",
-          "ip": "ex: 1.2.3.4",
           "port": "ex: 587",
           "user": "ex: utilisateur@gmail.com",
           "password": "••••••••",
-          "from": "ex: noreply@example.com",
-          "senderName": "ex: Mon App"
+          "from": "ex: noreply@example.com"
         },
-        "senderName": "Nom affiché de l'expéditeur",
-        "senderNameDescription": "Affiché comme nom d'expéditeur dans les clients mail, ex: \"Mon App\". Apparaît sous la forme : Nom <email@domaine.com>",
-        "avatar": "Avatar de l'expéditeur",
-        "avatarDescription": "Image circulaire affichée dans le corps de l'email au-dessus du nom de l'application."
+        "avatar": "Avatar de l'expéditeur"
       },
       "Storage": {
         "title": "Configuration Stockage S3",
         "description": "Configurez l'endroit où les fichiers sont stockés. Supporte AWS S3, Cloudflare R2, MinIO, etc.",
-        "endpoint": "Endpoint S3",
-        "endpointHelp": "N'incluez pas http:// ou https://",
         "region": "Région",
         "bucket": "Nom du Bucket",
-        "publicEndpoint": "Endpoint Public (Optionnel)",
-        "accessKey": "Clé d'accès (Access Key)",
-        "secretKey": "Clé secrète (Secret Key)",
-        "maxStorage": "Limite de stockage globale (Go)",
-        "maxStorageHelp": "Empêche les nouveaux uploads quand l'utilisation totale dépasse cette valeur. Mettez 0 ou laissez vide pour aucune limite.",
-        "useSsl": "Utiliser SSL",
-        "useSslDescription": "Utiliser HTTPS pour les opérations S3.",
         "save": "Enregistrer les paramètres Stockage",
         "success": "Configuration de stockage mise à jour",
         "discard": "Annuler les modifications",
         "placeholders": {
-          "endpoint": "ex: s3.amazonaws.com",
           "region": "ex: us-east-1",
-          "bucket": "mon-bucket",
-          "publicEndpoint": "ex: mon-cdn.exemple.com",
-          "maxStorage": "ex: 10"
+          "bucket": "mon-bucket"
         }
       },
       "Files": {
         "limits": {
           "title": "Limites de téléchargement",
           "description": "Définissez les tailles maximales de fichiers (Mo) par type de contenu.",
-          "global": "Limite globale max",
-          "images": "Fichiers images",
           "video": "Fichiers vidéo",
           "audio": "Fichiers audio",
           "document": "PDF / ePUB",
@@ -2004,42 +1920,14 @@
         },
         "processing": {
           "title": "Traitement & Compression",
-          "description": "Optimisez la qualité et les performances des conversions de fichiers.",
-          "pdfQuality": "Qualité des vignettes PDF",
-          "pdfQualityTooltip": "Une qualité plus élevée donne des aperçus plus nets mais augmente le stockage et le temps de traitement.",
-          "videoProfile": "Profil de compression vidéo",
-          "videoProfileTooltip": "Détermine le compromis entre vitesse d'encodage et taille de fichier finale.",
-          "videoProfiles": {
-            "fast": "Rapide & Léger (Qualité basse, plus rapide)",
-            "balanced": "Équilibré (Recommandé)",
-            "thorough": "Haute Qualité (Meilleure compression, plus lent)"
-          },
-          "thumbnailQuality": "Qualité des vignettes image",
-          "thumbnailQualityTooltip": "Contrôle la compression JPEG/WebP des vignettes générées.",
-          "thumbnailSize": "Bord max des vignettes",
-          "thumbnailSizeTooltip": "Résolution maximale (px) pour la largeur ou la hauteur des vignettes."
+          "description": "Optimisez la qualité et les performances des conversions de fichiers."
         },
         "whitelist": {
           "title": "Liste blanche des formats",
           "description": "Sélectionnez les formats de fichiers autorisés au téléchargement.",
           "search": "Rechercher des extensions...",
           "selectAll": "Tout sélectionner",
-          "deselectAll": "Tout désélectionner",
-          "selectCategory": "Sélectionner la catégorie",
-          "deselectCategory": "Désélectionner la catégorie",
-          "overrides": "Surcharges manuelles / Formats personnalisés",
-          "overridesTooltip": "Utilisez ceci pour les formats exotiques non listés ci-dessus. Les modifications ici se synchronisent avec les cases à cocher.",
-          "extensions": "Extensions",
-          "extensionsPlaceholder": "Ajouter des extensions personnalisées...",
-          "mimes": "Types MIME",
-          "mimesPlaceholder": "Ajouter des types MIME personnalisés...",
-          "groups": {
-            "Images": "Images",
-            "Documents": "Documents",
-            "Office": "Bureautique",
-            "Code & Development": "Code & Développement",
-            "Audio & Video": "Audio & Vidéo"
-          }
+          "deselectAll": "Tout désélectionner"
         },
         "save": "Enregistrer les paramètres de fichiers",
         "success": "Configuration des fichiers mise à jour",
@@ -2050,7 +1938,6 @@
       "title": "Espace Administration",
       "noPermission": "Vous n'avez pas l'autorisation d'accéder à l'espace administration.",
       "nav": {
-        "health": "Santé du Système",
         "users": "Utilisateurs",
         "dlq": "File d'attente (DLQ)",
         "config": "Configuration",
@@ -2241,7 +2128,8 @@
         "previous": "Précédent",
         "next": "Suivant"
       },
-      "userCount": "{count, plural, =1 {# utilisateur} other {# utilisateurs}}"
+      "userCount": "{count, plural, =1 {# utilisateur} other {# utilisateurs}}",
+      "bulkManage": "Gestion en masse"
     },
     "DLQ": {
       "title": "File d'attente (Dead Letter Queue)",
@@ -2337,6 +2225,35 @@
         "delete": "Échec de la suppression.",
         "restore": "La restauration a échoué."
       }
+    },
+    "BulkUsers": {
+      "title": "Gestion des utilisateurs en masse",
+      "description": "Sélectionnez plusieurs comptes puis appliquez une action cohérente en une fois.",
+      "back": "Gestion classique",
+      "search": "Rechercher par nom ou e-mail…",
+      "allRoles": "Tous les rôles",
+      "selected": "{count, plural, one {# sélectionné} other {# sélectionnés}}",
+      "selectPage": "Sélectionner la page",
+      "clear": "Effacer",
+      "approve": "Approuver",
+      "reject": "Rejeter",
+      "setRole": "Définir le rôle",
+      "delete": "Supprimer",
+      "export": "Exporter CSV",
+      "confirmReject": "Rejeter les comptes sélectionnés ? Les comptes en attente seront supprimés.",
+      "confirmDelete": "Supprimer les comptes sélectionnés ? Cette action est définitive.",
+      "confirmTitle": "Confirmer l'action en masse",
+      "updated": "{count, plural, one {# compte mis à jour} other {# comptes mis à jour}}",
+      "skipped": "{count, plural, one {# compte ignoré} other {# comptes ignorés}}",
+      "loadError": "Impossible de charger les utilisateurs",
+      "actionError": "L'action en masse a échoué",
+      "email": "E-mail",
+      "name": "Nom",
+      "role": "Rôle",
+      "joined": "Créé",
+      "empty": "Aucun utilisateur ne correspond aux filtres.",
+      "previous": "Précédent",
+      "next": "Suivant"
     }
   },
   "Terms": {
@@ -2733,5 +2650,137 @@
         }
       }
     }
+  },
+  "ContentStatus": {
+    "labels": {
+      "important": "Important",
+      "current": "À jour",
+      "deprecated": "Obsolète",
+      "archived": "Archivé"
+    },
+    "descriptions": {
+      "important": "Ressource essentielle / clé",
+      "current": "Document actuel et valide",
+      "deprecated": "Programme ou version antérieur",
+      "archived": "Document historique archivé"
+    },
+    "updated": "Statut mis à jour : {status}",
+    "updateFailed": "Impossible de modifier le statut",
+    "change": "Modifier le statut",
+    "changeFolder": "Modifier le statut du dossier",
+    "changeMaterial": "Modifier le statut du document",
+    "folderStatus": "Statut du dossier",
+    "documentStatus": "Statut du document",
+    "status": "Statut"
+  },
+  "Register": {
+    "pageTitle": "Inscription",
+    "subtitle": "Créez votre compte",
+    "disabled": "L'inscription classique est désactivée.",
+    "registeringAs": "Inscription en tant que",
+    "displayNameLabel": "Nom d'affichage (facultatif)",
+    "displayNamePlaceholder": "Comment voulez-vous être appelé ?",
+    "passwordPlaceholder": "Choisissez un mot de passe",
+    "creating": "Création du compte...",
+    "submit": "S'inscrire",
+    "failed": "L'inscription a échoué",
+    "haveAccount": "Vous avez déjà un compte ?"
+  },
+  "Saved": {
+    "title": "Bibliothèque d'enregistrés",
+    "description": "Vos favoris et collections personnalisées, réunis au même endroit.",
+    "allSaved": "Tous les enregistrés",
+    "collections": "Collections",
+    "createCollection": "Nouvelle collection",
+    "createFirstCollection": "Créez votre première collection pour organiser les documents et dossiers enregistrés.",
+    "renameCollection": "Renommer la collection",
+    "deleteCollection": "Supprimer la collection",
+    "deleteCollectionTitle": "Supprimer la collection ?",
+    "deleteCollectionDescription": "Supprimer « {name} » ? Les documents et dossiers eux-mêmes ne seront pas supprimés.",
+    "collectionDeleted": "Collection supprimée",
+    "collectionRenamed": "Collection renommée",
+    "collectionCreated": "Collection « {name} » créée",
+    "collectionNameDescription": "Choisissez un nom court que vous reconnaîtrez facilement.",
+    "collectionNamePlaceholder": "ex. Révisions d'examen",
+    "collectionActions": "Actions de la collection",
+    "collectionPickerTitle": "Ajouter aux collections",
+    "collectionPickerDescription": "Les collections organisent le contenu sans modifier son statut de favori.",
+    "addToCollection": "Ajouter à une collection",
+    "manageCollections": "Gérer les collections",
+    "noCollectionsYet": "Aucune collection. Créez-en une ci-dessous.",
+    "itemCount": "{count, plural, one {# élément} other {# éléments}}",
+    "emptySaved": "Aucun élément enregistré",
+    "emptySavedDescription": "Ajoutez des étoiles aux documents, dossiers ou modules lors de votre navigation pour les retrouver ici.",
+    "emptyCollection": "Cette collection est vide",
+    "emptyCollectionDescription": "Ajoutez des documents, dossiers ou modules depuis leur volet de détails ou en sélectionnant des éléments dans votre bibliothèque.",
+    "removeSaved": "Retirer des enregistrés",
+    "removeFromCollection": "Retirer de la collection",
+    "loading": "Chargement...",
+    "create": "Créer",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "searchPlaceholder": "Rechercher dans les enregistrés...",
+    "filterAll": "Tout",
+    "filterMaterials": "Documents",
+    "filterDirectories": "Dossiers & Modules",
+    "filterQcm": "QCMs",
+    "filterMedia": "Médias & Vidéos",
+    "filterLinks": "Liens",
+    "sortRecent": "Récemment ajoutés",
+    "sortOldest": "Plus anciens",
+    "sortNameAsc": "Nom (A–Z)",
+    "sortNameDesc": "Nom (Z–A)",
+    "selectAll": "Tout sélectionner",
+    "deselectAll": "Tout désélectionner",
+    "selectedCount": "{count, plural, one {# sélectionné} other {# sélectionnés}}",
+    "batchAddToCollection": "Ajouter à une collection",
+    "batchRemoveFromCollection": "Retirer de la collection",
+    "batchRemoveFromSaved": "Retirer des enregistrés",
+    "batchSuccessAdded": "{count, plural, one {# élément ajouté} other {# éléments ajoutés}} à « {name} »",
+    "batchSuccessRemoved": "{count, plural, one {# élément retiré} other {# éléments retirés}}",
+    "batchRemoveFromCollectionConfirm": "Retirer {count, plural, one {# élément sélectionné} other {# éléments sélectionnés}} de « {name} » ?",
+    "batchRemoveFromSavedConfirm": "Retirer {count, plural, one {# élément sélectionné} other {# éléments sélectionnés}} de vos enregistrés ?",
+    "batchPartialFailure": "{count, plural, one {# élément n'a pas pu être modifié} other {# éléments n'ont pas pu être modifiés}}",
+    "noSearchResults": "Aucun résultat trouvé",
+    "noSearchResultsDescription": "Essayez de modifier votre recherche ou vos filtres.",
+    "clearSearch": "Effacer la recherche",
+    "clearFilters": "Réinitialiser les filtres",
+    "browseMaterials": "Explorer la bibliothèque",
+    "viewGrid": "Vue en grille",
+    "viewList": "Vue en liste",
+    "copyLink": "Copier le lien",
+    "linkCopied": "Lien copié dans le presse-papiers",
+    "openInNewTab": "Ouvrir dans un nouvel onglet",
+    "statsSavedCount": "Enregistrés",
+    "statsCollectionsCount": "Collections",
+    "selectItem": "Sélectionner l'élément",
+    "actions": "Actions",
+    "searchCollections": "Filtrer les collections...",
+    "errors": {
+      "load": "Impossible de charger vos éléments enregistrés",
+      "loadCollections": "Impossible de charger les collections",
+      "loadCollection": "Impossible de charger cette collection",
+      "createCollection": "Impossible de créer la collection",
+      "saveCollection": "Impossible d'enregistrer la collection",
+      "deleteCollection": "Impossible de supprimer la collection",
+      "updateCollection": "Impossible de modifier l'appartenance à la collection",
+      "removeFromCollection": "Impossible de retirer l'élément de la collection",
+      "removeSaved": "Impossible de retirer l'élément des enregistrés"
+    }
+  },
+  "Feedback": {
+    "downloadFailed": "Impossible de lancer le téléchargement. Veuillez réessayer.",
+    "qcmExportFailed": "Impossible d'exporter le QCM. Veuillez réessayer.",
+    "qcmPdfExportFailed": "Impossible d'exporter le QCM en PDF. Veuillez réessayer.",
+    "popupBlocked": "Pop-up bloquée. Autorisez les pop-ups pour imprimer.",
+    "openMarkdownFirst": "Ouvrez le document Markdown avant de l'exporter en PDF.",
+    "documentLoading": "Le document est encore en cours de chargement. Réessayez dans un instant.",
+    "printUnsupported": "L'impression n'est pas disponible pour ce type de fichier.",
+    "printSaveAsPdf": "Choisissez « Enregistrer au format PDF » dans le menu de destination.",
+    "printOpened": "Fenêtre d'impression ouverte",
+    "printFailed": "Impossible de préparer le document pour l'impression.",
+    "copyLinkFailed": "Impossible de copier le lien",
+    "copyIdFailed": "Impossible de copier l'identifiant",
+    "storageFull": "Stockage local plein. Certaines modifications pourraient ne pas être enregistrées."
   }
 }

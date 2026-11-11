@@ -9,6 +9,8 @@ import { AuthBootstrap } from "@/components/auth-bootstrap";
 import { RuntimeRouter } from "@/components/runtime-router";
 import { CookieBanner } from "@/components/cookie-banner";
 import { ExternalLinkDialog } from "@/components/external-link-dialog";
+import { QueryProvider } from "@/components/query-provider";
+import { StorageFullNotice } from "@/components/storage-full-notice";
 import { installToastGuard } from "@/lib/toast-guard";
 import type { AbstractIntlMessages } from "next-intl";
 import {
@@ -56,11 +58,14 @@ export function ClientProviders({ children }: { children: ReactNode }) {
         enableSystem
         disableTransitionOnChange
       >
-        <ConfigProvider>
-          <AuthBootstrap />
-          <RuntimeRouter>{children}</RuntimeRouter>
-        </ConfigProvider>
+        <QueryProvider>
+          <ConfigProvider>
+            <AuthBootstrap />
+            <RuntimeRouter>{children}</RuntimeRouter>
+          </ConfigProvider>
+        </QueryProvider>
         <ExternalLinkDialog />
+        <StorageFullNotice />
         <CookieBanner />
         <Toaster position="bottom-left" expand richColors />
       </ThemeProvider>

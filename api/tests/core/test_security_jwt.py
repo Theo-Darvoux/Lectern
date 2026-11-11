@@ -18,7 +18,6 @@ from app.core.security.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    get_jti,
 )
 
 _SECRET = settings.secret_key.get_secret_value()
@@ -139,11 +138,3 @@ def test_decode_token_wrong_key_raises() -> None:
     )
     with pytest.raises(jwt.InvalidSignatureError):
         decode_token(token)
-
-
-# ── get_jti ──────────────────────────────────────────────────────────────────
-
-
-def test_get_jti_extracts_correct_jti() -> None:
-    token, jti = create_access_token("uid", "student", "a@example.com")
-    assert get_jti(token) == jti

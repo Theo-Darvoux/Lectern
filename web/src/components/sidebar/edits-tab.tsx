@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2, Inbox } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
 import { PRCard } from "@/components/pr/pr-card";
+import { QueryError } from "@/components/query-error";
 import { useTranslations } from "next-intl";
 import { type PullRequestOut } from "@/components/home/types";
 
@@ -19,36 +20,31 @@ interface EditsTabProps {
 
 export function EditsTab({ target }: EditsTabProps) {
     const t = useTranslations("Sidebar");
-    const [prs, setPrs] = useState<PullRequestOut[]>([]);
-    const [loading, setLoading] = useState(true);
-
-    useEffect(() => {
-        if (!target) return;
-
-        let isActive = true;
-        Promise.resolve().then(() => { if (isActive) setLoading(true); });
-        apiFetch<PullRequestOut[]>(`/pull-requests/for-item?targetType=${target.type}&targetId=${target.id}`)
-            .then(data => {
-                if (isActive) setPrs(data);
-            })
-            .catch(console.error)
-            .finally(() => {
-                if (isActive) setLoading(false);
-            });
-
-        return () => { isActive = false; };
-    }, [target]);
+    const query = useQuery({
+        queryKey: ["pull-requests", "for-item", target?.type, target?.id],
+        queryFn: ({ signal }) =>
+            apiFetch<PullRequestOut[]>(
+                `/pull-requests/for-item?targetType=${target!.type}&targetId=${target!.id}`,
+                { signal },
+            ),
+        enabled: !!target,
+    });
+    const prs = query.data ?? [];
 
     if (!target) {
         return <p className="text-sm text-muted-foreground p-4">{t("selectItemToViewEdits")}</p>;
     }
 
-    if (loading) {
+    if (query.isPending) {
         return (
             <div className="flex justify-center py-12">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
         );
+    }
+
+    if (query.isError) {
+        return <QueryError onRetry={() => void query.refetch()} className="py-12" />;
     }
 
     if (prs.length === 0) {

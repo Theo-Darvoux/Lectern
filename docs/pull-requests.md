@@ -118,6 +118,8 @@ When submitting from the review drawer, the author can tick **Submit anonymously
   `materials/{user_id}/…`, so the storage key doesn't reveal the author either.
 - For non-moderators, `GET /api/pull-requests?author_id=X` leaves out X's anonymous PRs,
   unless X is the person asking. The same goes for the profile contribution lists and counters.
+- The `search` parameter of the PR list never matches an anonymous PR by its author's name,
+  except for moderators and the author.
 - Anonymous PRs don't count in reputation or on the leaderboard.
 - Comments are unchanged: if the author comments on their own anonymous PR, the comment
   shows their name.
@@ -129,7 +131,8 @@ When submitting from the review drawer, the author can tick **Submit anonymously
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/pull-requests` | Create a PR |
-| `GET` | `/api/pull-requests` | List PRs (filter by status, author, type) |
+| `GET` | `/api/pull-requests` | List PRs, paginated (`page`, `limit`; total in `X-Total-Count`). See [Listing filters](#listing-filters) |
+| `GET` | `/api/pull-requests/counts` | Number of PRs per status, plus the caller's own |
 | `GET` | `/api/pull-requests/{id}` | Fetch a single PR |
 | `GET` | `/api/pull-requests/for-item` | PRs affecting a specific material or directory |
 | `GET` | `/api/pull-requests/{id}/diff` | Compute the diff |
@@ -141,6 +144,18 @@ When submitting from the review drawer, the author can tick **Submit anonymously
 | `GET` | `/api/pull-requests/{id}/comments` | List comments |
 | `POST` | `/api/pull-requests/{id}/comments` | Add a comment (supports threading via `parent_id`) |
 | `GET` | `/api/events/sse` | Master SSE stream for notifications, PRs, and selected entity topics |
+
+### Listing filters
+
+`GET /api/pull-requests` applies every filter to the whole list before paginating:
+
+| Parameter | Values | Effect |
+|---|---|---|
+| `status` | `open`, `approved`, `rejected`, `cancelled` | Keep PRs in that state |
+| `author_id` | user ID | Keep that user's PRs (see anonymity rules above) |
+| `search` | text, up to 200 characters | Match the title, the author's display name, or the start of the PR ID (`#1a2b3c4d`) |
+| `op_type` | `create_material`, `edit_material`, `delete_material`, `directory`, `move_item`, `revert` | Keep PRs containing that operation. `directory` covers every folder operation; `revert` covers revert PRs and the PRs they undid |
+| `sort` | `newest` (default), `oldest`, `changes` | `changes` puts the PRs with the most operations first |
 
 ### File previews
 

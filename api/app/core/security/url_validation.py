@@ -87,10 +87,6 @@ async def resolve_safe_url_async(url: str) -> ResolvedHttpsUrl | None:
     return await asyncio.to_thread(resolve_safe_url, url)
 
 
-async def is_safe_url_async(url: str) -> bool:
-    return await asyncio.to_thread(is_safe_url, url)
-
-
 class _PinnedResolver(AbstractResolver):
     def __init__(self, target: ResolvedHttpsUrl) -> None:
         self._target = target

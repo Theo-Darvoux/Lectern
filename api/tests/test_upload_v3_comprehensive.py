@@ -5,7 +5,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.routers.upload import _QUOTA_KEY_PREFIX
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from tests.test_tus import _auth_headers, _create_user
 
 
@@ -78,7 +78,7 @@ async def test_presigned_multipart_flow(
             assert m_complete.called
             assert m_enqueue.called
             # Verify quota was updated
-            quota_key = f"{_QUOTA_KEY_PREFIX}{user.id}"
+            quota_key = f"{UPLOAD_QUOTA_PREFIX}{user.id}"
             assert await fake_redis_setup.zcard(quota_key) == 1
 
 

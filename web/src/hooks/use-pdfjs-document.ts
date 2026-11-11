@@ -13,7 +13,7 @@ import type {
 // `Promise.withResolvers()` at evaluation time, which throws under Next SSR — so
 // it is imported dynamically inside the effect below.
 import "pdfjs-dist/web/pdf_viewer.css";
-import { createPdfWorker } from "@/lib/pdf-worker";
+import { createPdfWorker, loadPdfjs } from "@/lib/pdf-worker";
 import { useConfigStore } from "@/lib/stores";
 import type { PDFWorker as PdfJsWorker } from "pdfjs-dist";
 
@@ -60,13 +60,16 @@ interface UsePdfjsDocumentOptions {
     onTextLayerRendered?: (pageNumber: number, pageDiv: HTMLDivElement) => void;
 }
 
+/** Why the viewer failed; components map it to a translated message. */
+export type PdfErrorCode = "initTimeout" | "initFailed" | "loadTimeout" | "loadFailed";
+
 interface UsePdfjsDocumentReturn {
     /** Attach to the scroll container. MUST be `position: absolute` (pdf.js throws otherwise). */
     containerRef: React.RefObject<HTMLDivElement | null>;
     /** Attach to the inner `.pdfViewer` element. */
     viewerElRef: React.RefObject<HTMLDivElement | null>;
     status: PdfStatus;
-    error: string | null;
+    error: PdfErrorCode | null;
     numPages: number;
     currentPage: number;
     /** Current zoom as a whole percentage (currentScale * 100). */
@@ -124,7 +127,7 @@ export function usePdfjsDocument({
 
     const [modulesReady, setModulesReady] = useState(false);
     const [status, setStatus] = useState<PdfStatus>("loading");
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<PdfErrorCode | null>(null);
     const [numPages, setNumPages] = useState(0);
     const [currentPage, setCurrentPage] = useState(1);
     const [scalePercent, setScalePercent] = useState(100);
@@ -142,19 +145,13 @@ export function usePdfjsDocument({
         setError(null);
         const initTimeout = window.setTimeout(() => {
             if (destroyed) return;
-            setError("PDF viewer initialization timed out. Please retry.");
+            setError("initTimeout");
             setStatus("error");
         }, PDF_ENGINE_TIMEOUT_MS);
 
         (async () => {
-            const pdfjs = await import("pdfjs-dist");
+            const pdfjs = await loadPdfjs();
             if (destroyed) return;
-
-            // pdf.js v4 components (like PDFViewer) and its "fake worker" fallback
-            // expect `pdfjsLib` to be available on the global scope in many
-            // environments. If a worker fails to start, the fallback engine
-            // crashes immediately without this.
-            (globalThis as any).pdfjsLib = pdfjs;
 
             const viewerMod = await import("pdfjs-dist/web/pdf_viewer.mjs");
             if (destroyed) return;
@@ -207,7 +204,8 @@ export function usePdfjsDocument({
             window.clearTimeout(initTimeout);
             if (destroyed) return;
             setModulesReady(false);
-            setError(err instanceof Error ? err.message : "Failed to initialize PDF viewer");
+            console.error("PDF viewer initialization failed:", err);
+            setError("initFailed");
             setStatus("error");
         });
 
@@ -250,7 +248,7 @@ export function usePdfjsDocument({
         const loadTimeout = window.setTimeout(() => {
             if (cancelled) return;
             timedOut = true;
-            setError("PDF document loading timed out. Please retry.");
+            setError("loadTimeout");
             setStatus("error");
             void task.destroy();
         }, PDF_DOCUMENT_TIMEOUT_MS);
@@ -269,7 +267,8 @@ export function usePdfjsDocument({
             (err: Error) => {
                 window.clearTimeout(loadTimeout);
                 if (cancelled || timedOut || err?.name === "AbortException") return;
-                setError(err?.message ?? "Failed to load PDF");
+                console.error("PDF loading failed:", err);
+                setError("loadFailed");
                 setStatus("error");
             },
         );

@@ -249,29 +249,7 @@ class UploadGroupOut(BaseModel):
     expires_in: int
 
 
-# ── V2 endpoints ──────────────────────────────────────────────────────────────
-
-
-# ── V3 endpoints ──────────────────────────────────────────────────────────────
-
-
-# ── Phase 4 UX schemas ───────────────────────────────────────────────────────
-
-
-class BatchStatusRequest(BaseModel):
-    """Body for POST /upload/status/batch — poll multiple upload statuses at once."""
-
-    file_keys: list[str] = Field(..., min_length=1, max_length=50)
-
-    @field_validator("file_keys")
-    @classmethod
-    def validate_file_keys(cls, v: list[str]) -> list[str]:
-        for key in v:
-            if len(key) > 512:
-                raise ValueError("Each file_key must be at most 512 characters")
-            if "\x00" in key or ".." in key:
-                raise ValueError("Invalid file_key")
-        return v
+# ── Upload history ───────────────────────────────────────────────────────────
 
 
 class UploadHistoryItem(BaseModel):

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { apiFetch, apiFetchBlob, fetchMaterialFile } from "@/lib/api-client";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 
 function triggerBlobDownload(blob: Blob, filename: string) {
     const url = URL.createObjectURL(blob);
@@ -17,6 +18,7 @@ function triggerBlobDownload(blob: Blob, filename: string) {
 
 export function useDownload() {
     const [isDownloading, setIsDownloading] = useState(false);
+    const t = useTranslations("Feedback");
 
     const downloadMaterial = async (materialId: string, versionNumber?: number) => {
         setIsDownloading(true);
@@ -41,7 +43,7 @@ export function useDownload() {
             }
         } catch (error) {
             console.error("Download failed:", error);
-            toast.error("Failed to start download. Please try again.");
+            toast.error(t("downloadFailed"));
         } finally {
             setIsDownloading(false);
         }
@@ -54,7 +56,7 @@ export function useDownload() {
             triggerBlobDownload(blob, `qcm-${materialId}.xml`);
         } catch (error) {
             console.error("QCM XML export failed:", error);
-            toast.error("Failed to export QCM. Please try again.");
+            toast.error(t("qcmExportFailed"));
         } finally {
             setIsDownloading(false);
         }
@@ -76,7 +78,7 @@ export function useDownload() {
             setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
         } catch (error) {
             console.error("QCM PDF export failed:", error);
-            toast.error("Failed to export QCM as PDF. Please try again.");
+            toast.error(t("qcmPdfExportFailed"));
         } finally {
             setIsDownloading(false);
         }

@@ -5,7 +5,7 @@ import { PRCommitGraph } from "./pr-commit-graph";
 import type { PullRequestOut } from "@/components/home/types";
 
 vi.mock("next-intl", () => {
-  const translate = (key: string) => key;
+  const translate = Object.assign((key: string) => key, { has: () => true });
   return { useTranslations: () => translate, useLocale: () => "en" };
 });
 

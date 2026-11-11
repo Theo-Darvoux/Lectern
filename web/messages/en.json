@@ -1,7 +1,6 @@
 {
   "Login": {
     "title": "",
-    "descEmail": "Sign in to access course materials",
     "descCode": "Enter the verification code",
     "descPassword": "Enter your password",
     "googleFailed": "Google login failed",
@@ -9,11 +8,9 @@
     "or": "Or",
     "emailLabel": "Email",
     "emailPlaceholder": "firstname.lastname@example.org",
-    "sendCode": "Send code",
     "password": "Password",
     "sending": "Sending...",
     "sendVerificationCode": "Send verification code",
-    "continueWithPassword": "Continue with password",
     "continueAsGuest": "Continue as guest",
     "guestFailed": "Could not start guest session",
     "noMethods": "No authentication methods are currently enabled.",
@@ -27,7 +24,6 @@
     "codeSent": "Code sent! Check your email.",
     "codeAriaLabel": "8-character verification code",
     "codeHelp": "Check your email for a sign-in link or enter the 8-character code.",
-    "codeHelp2": "Valid for 10 minutes. Maximum 5 attempts.",
     "verifying": "Verifying...",
     "verify": "Verify",
     "openZimbra": "Open email box (Zimbra)",
@@ -36,7 +32,6 @@
     "passwordTab": "Password",
     "changeEmail": "Change",
     "enterCodeSentTo": "We sent a verification code to",
-    "exploreAsGuest": "Explore course materials with guest access",
     "showPassword": "Show password",
     "hidePassword": "Hide password",
     "invalidCode": "Invalid code",
@@ -126,7 +121,8 @@
     "tryAgain": "Try Again",
     "refresh": "Refresh",
     "deletedAccount": "Deleted account",
-    "deletedUser": "Deleted user"
+    "deletedUser": "Deleted user",
+    "loadFailed": "This content could not be loaded."
   },
   "Onboarding": {
     "welcome": "Welcome to {siteName}!",
@@ -239,8 +235,6 @@
     "viewAll": "View all",
     "markAllRead": "Mark all read",
     "markRead": "Mark as read",
-    "noNewNotifications": "No new notifications",
-    "goToNotifications": "Go to Notifications",
     "profile": "Profile",
     "leaderboard": "Leaderboard",
     "settings": "Settings",
@@ -256,25 +250,17 @@
     "home": "Home",
     "seeAll": "See all",
     "viewAll": "View all",
-    "seeAllFavourites": "See all favourites",
-    "viewYourProfile": "View your profile",
-    "recentlyFavourited": "Recently favourited materials",
     "yourFavourites": "Your Favourites",
-    "recentlySaved": "Materials you've recently saved",
-    "noFavouritesYet": "No favourites yet — browse and save materials you like!",
     "featured": "Featured",
     "viewMaterial": "View material",
     "featuredMaterials": "Featured materials",
     "highlightedMaterials": "Highlighted materials curated for you",
     "totalViews": "Total views",
     "likes": "Likes",
-    "seeAllMaterials": "See all materials",
-    "more": "more",
     "nothingHereYet": "Nothing here yet — check back soon!",
     "open": "Open",
     "recentContributions": "Recent contributions",
     "noOpenContributions": "No open contributions right now.",
-    "helpReviewContributions": "Help review these open contributions from the community",
     "allContributions": "All contributions",
     "greetings": {
       "morning": "Good morning",
@@ -286,10 +272,6 @@
     "errorTitle": "Could not load home data",
     "loadError": "Failed to load home data",
     "retry": "Try again",
-    "popularTodayTitle": "Popular Today",
-    "popularTodaySubtitle": "Most viewed materials in the last 24 hours",
-    "trendingFortnightTitle": "Trending This Fortnight",
-    "trendingFortnightSubtitle": "Most viewed materials over the last 14 days",
     "viewFolder": "View folder",
     "untitled": "Untitled",
     "unknownAuthor": "Unknown",
@@ -308,8 +290,7 @@
     "quickBrowse": "Browse",
     "quickSaved": "Saved",
     "openSaved": "Open saved library",
-    "quickFeatured": "Featured",
-    "quickNotifications": "Notifications"
+    "quickFeatured": "Featured"
   },
   "PendingApproval": {
     "title": "Awaiting Approval",
@@ -328,14 +309,11 @@
     "delete": "Delete",
     "exit": "Exit",
     "attachments": "Attachments",
-    "supplementaryFiles": "Supplementary files linked to this material",
     "uploadAttachment": "Upload Attachment",
     "back": "Back",
     "stagedFolderTitle": "This folder is staged for creation",
     "stagedFolderDesc": "Upload files or create sub-folders here. Everything will be submitted together when you create the pull request.",
     "uploadFiles": "Upload Files",
-    "noAttachmentsYet": "No attachments yet",
-    "attachmentsDesc": "Attachments are supplementary files linked to this material. They can be added via contributions.",
     "deleteItemsTitle": "{count, plural, =1 {Delete 1 item} other {Delete # items}}",
     "deleteItemsConfirm": "Do you want to delete these items? You can submit the deletion immediately or add it to your draft.",
     "cancel": "Cancel",
@@ -372,13 +350,8 @@
     "moving": "Moving",
     "contribution": "Contribution",
     "edited": "Edited",
-    "chatAbout": "Chat about {title}",
-    "viewDetailsFor": "View details for {title}",
     "view": "View",
     "preview": "Preview",
-    "viewOrPreviewFor": "{action} {title}",
-    "openItem": "Open",
-    "openItemFor": "Open {title}",
     "like": "Like",
     "liked": "Liked",
     "thisDocument": "this document",
@@ -390,7 +363,6 @@
     "collapseFolder": "Collapse folder",
     "creationCancelled": "Creation cancelled and removed from draft",
     "addedDeletionToDraft": "Added deletion to current draft",
-    "itemDeletedSuccessfully": "{type} deleted successfully",
     "failedToDeleteItem": "Failed to delete item",
     "linkCopied": "Link copied to clipboard",
     "addAttachment": "Add Attachment",
@@ -402,7 +374,6 @@
     "loadFailedTitle": "This location could not be loaded",
     "backToBrowse": "Back to library",
     "home": "Home",
-    "courseMaterials": "Course Materials",
     "contributionPreview": "Contribution preview",
     "exitPreview": "Exit preview",
     "selectAll": "Select All",
@@ -414,7 +385,6 @@
     "allSelectedAlreadyStagedForDeletion": "All selected items are already staged for deletion",
     "someSelectedAlreadyStagedForDeletion": "Some selected items are already staged for deletion — remove the delete first",
     "itemsCut": "{count, plural, =1 {1 item} other {# items}} ready to move — open the destination folder",
-    "itemsAlreadyInFolder": "Items are already in this folder",
     "cannotMoveFolderIntoItself": "Cannot move a folder into itself or its own subfolder",
     "itemsAddedToDraft": "{count, plural, =1 {1 item} other {# items}} added to draft",
     "failedToUpdateLike": "failedToUpdateLike",
@@ -427,9 +397,6 @@
     "clear": "Clear",
     "navigateTo": "Navigate to folder",
     "downloadZipTooltip": "Download all files in this directory as a ZIP archive",
-    "downloadZipTooLarge": "This directory is too large to download as a ZIP",
-    "downloadZipPart": "Downloading \"{dirName}\" — part {part} of {total}",
-    "downloadZipAllStarted": "All {total} parts queued — unzip each one to get the complete directory",
     "materialActions": "Material actions",
     "folderActions": "Folder actions",
     "downloadZip": "Download as ZIP",
@@ -454,14 +421,14 @@
     "clipboardNavigateHint": "Open the destination folder, then click “Move here”.",
     "clipboardMoveHint": "Click “Move here” to put them in “{folder}”.",
     "moveHere": "Move here",
-    "moveItemsDestination": "Destination: “{folder}”"
+    "moveItemsDestination": "Destination: “{folder}”",
+    "downloadZipEmpty": "This folder has no files to download",
+    "downloadZipFailed": "The ZIP download could not start"
   },
   "Search": {
-    "searchMaterials": "Search materials and folders...",
     "noResults": "No results found.",
     "noResultsHint": "Check the spelling, try fewer words, or change the active filter.",
     "searching": "Searching...",
-    "typeCommandOrSearch": "Start typing to search...",
     "results": "Search results",
     "searchMaterialsDirs": "Search materials and folders...",
     "startTyping": "What are you looking for?",
@@ -711,7 +678,8 @@
     "loadMore": "Load more annotations",
     "loading": "Loading…",
     "failedToLoadAnnotations": "Failed to load annotations.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "failedToDeleteComment": "Failed to delete comment"
   },
   "Annotations": {
     "addAnnotation": "Add your annotation...",
@@ -797,7 +765,6 @@
     "fileTypeNotSupported": "{name}: file type “{type}” is not supported.",
     "errorProcessing": "Processing failed",
     "folderUploadFailed": "Folder upload failed",
-    "errorReferenceLost": "File reference lost after page refresh. Please remove and re-add this file.",
     "mbPerSec": "MB/s",
     "secondsShort": "s",
     "untitled": "Untitled",
@@ -837,9 +804,11 @@
       "ERR_QUOTA_EXCEEDED": "You have too many recent uploads. They are released once your contributions are reviewed, or after 25 hours.",
       "ERR_STORAGE_FULL": "Storage is full. Contact an administrator.",
       "ERR_PROCESSING_FAILED": "Processing failed. Retry, and contact support if it continues.",
-      "ERR_FILE_UNREADABLE": "This file is damaged and could not be read."
+      "ERR_FILE_UNREADABLE": "This file is damaged and could not be read.",
+      "ERR_PROCESSING_TIMEOUT": "Processing is taking too long. Check your upload history for its status."
     },
-    "reAttachMismatch": "This is not the same file. Choose the original file."
+    "reAttachMismatch": "This is not the same file. Choose the original file.",
+    "uploadFailed": "Upload failed"
   },
   "PRWizard": {
     "createDirectory": "Create Folder",
@@ -881,7 +850,6 @@
     "searchPlaceholder": "Search contributions by title, author, or #id...",
     "filterAll": "All contributions",
     "filterMine": "My contributions",
-    "filterType": "Operation",
     "allTypes": "All operations",
     "filterDocuments": "New documents",
     "filterEdits": "Edits",
@@ -889,7 +857,6 @@
     "filterFolders": "Folders",
     "filterMoves": "Moves",
     "filterReverts": "Reverts",
-    "sortBy": "Sort by",
     "sortNewest": "Newest first",
     "sortOldest": "Oldest first",
     "sortChanges": "Most changes",
@@ -898,7 +865,7 @@
     "clearSearch": "Clear search",
     "noResultsMatching": "No contributions match your criteria",
     "noResultsDesc": "Try adjusting your search query or clearing active filters.",
-    "showingCount": "Showing {count} of {total} {total, plural, =1 {contribution} other {contributions}}",
+    "matchingCount": "{count, plural, =0 {No matching contributions} =1 {1 matching contribution} other {# matching contributions}}",
     "review": "Review",
     "view": "View",
     "anonymous": "Anonymous",
@@ -917,11 +884,8 @@
     "viewMode": "View mode",
     "viewList": "List",
     "viewGraph": "Graph",
-    "graphTitle": "Contribution Tree",
     "branchMain": "main",
     "branchPending": "incoming",
-    "mergedIntoMain": "Merged into main",
-    "pendingReview": "Pending review",
     "copyHash": "Copy ID",
     "hashCopied": "ID copied to clipboard",
     "operations": {
@@ -954,21 +918,15 @@
     "link": "External Link",
     "internal_link": "Internal Link",
     "folder": "Folder",
-    "file": "File",
-    "statusOpen": "statusOpen",
-    "statusMerged": "statusMerged",
-    "statusClosed": "statusClosed",
-    "noContributionsYet": "noContributionsYet",
-    "noMaterialsYet": "noMaterialsYet",
-    "noAnnotationsYet": "noAnnotationsYet",
-    "totalContributions": "totalContributions",
-    "totalAnnotations": "totalAnnotations",
-    "totalMaterials": "totalMaterials"
+    "file": "File"
+  },
+  "DirectoryTypes": {
+    "folder": "Folder",
+    "module": "Module"
   },
   "PRDetails": {
     "summary": {
       "create_material": "Added « {name} »",
-      "create_link": "Added link « {name} »",
       "edit_material": "Edited « {name} »",
       "edit_link": "Edited link « {name} »",
       "delete_material": "Deleted « {name} »",
@@ -1055,28 +1013,14 @@
     "fieldDescription": "Description",
     "fieldUrl": "Destination URL",
     "fieldFileName": "File name",
-    "fieldFileSize": "File size",
-    "fieldFileType": "File type",
     "fileDetails": "File details",
-    "fieldLocation": "Location",
-    "fieldOrigin": "Origin",
-    "fieldDestination": "Destination",
     "fieldAttachments": "Attachments",
-    "fieldPreviousName": "Previous name",
-    "fieldNewName": "New name",
-    "fieldPreviousType": "Previous type",
-    "fieldNewType": "New type",
-    "fieldFolderIcon": "Folder icon",
-    "fieldFolderColor": "Folder color",
     "rename": "Rename",
     "fileReplaced": "File replaced",
-    "noAttachments": "No attachments",
     "deleteWarningMaterial": "This document will be permanently removed from the wiki tree upon approval.",
     "deleteWarningDirectory": "This folder and all items inside it will be permanently deleted upon approval.",
-    "newFolderInPR": "New folder (created in this contribution)",
     "quickPreview": "Quick preview",
     "openFullPreview": "Full preview",
-    "testLink": "Visit link",
     "locationInTree": "Location in wiki tree",
     "originLocation": "Origin location",
     "destinationLocation": "Destination location",
@@ -1127,7 +1071,8 @@
     "backToContribution": "Back to contribution",
     "contribution": "Contribution",
     "pending": "Pending",
-    "previewUnavailableTitle": "Preview unavailable"
+    "previewUnavailableTitle": "Preview unavailable",
+    "linkBadge": "Link"
   },
   "Viewers": {
     "notebook": {
@@ -1152,12 +1097,15 @@
       "nextPage": "Next page"
     },
     "pdf": {
-      "failedToParse": "Failed to parse PDF",
       "toggleTwoPage": "Toggle two page view",
       "page": "Page {current} of {total}",
       "zoomOut": "Zoom out (Ctrl+-)",
       "resetZoom": "Reset zoom (Ctrl+0)",
-      "zoomIn": "Zoom in (Ctrl++)"
+      "zoomIn": "Zoom in (Ctrl++)",
+      "initTimeout": "The PDF viewer took too long to start. Please retry.",
+      "initFailed": "The PDF viewer could not start.",
+      "loadTimeout": "This PDF took too long to load. Please retry.",
+      "loadFailed": "This PDF could not be opened."
     },
     "zoomControls": {
       "out": "Zoom out",
@@ -1182,15 +1130,17 @@
       "scriptError": "Office API script failed to load",
       "engineError": "Office Engine Error",
       "initFailed": "Initialization failed: {message}",
-      "configError": "Failed to fetch editor configuration: {message}",
-      "loadScriptError": "Failed to load Office API script",
       "startupError": "Euro-Office could not start: {message}",
-      "readyTimeout": "Euro-Office took too long to open this document. Please try again."
+      "readyTimeout": "Euro-Office took too long to open this document. Please try again.",
+      "unknownError": "unknown error"
     },
     "retry": "Retry",
     "imageLoadFailed": "This image could not be displayed. It may not have downloaded fully.",
     "rotateCcw": "Rotate -90°",
-    "rotateCw": "Rotate +90°"
+    "rotateCw": "Rotate +90°",
+    "epub": {
+      "renderFailed": "This EPUB could not be displayed."
+    }
   },
   "MissingImage": {
     "title": "Upload missing image",
@@ -1245,7 +1195,6 @@
     "draft": "Draft",
     "createDirectly": "Create directly",
     "addedToDraft": "Added link \"{name}\" to draft",
-    "invalidUrl": "Please enter a valid URL",
     "targetUrl": "Destination URL"
   },
   "ExternalLinkDialog": {
@@ -1261,9 +1210,7 @@
     "openLink": "Open Link",
     "copyLink": "Copy URL",
     "linkCopied": "URL copied to clipboard",
-    "noUrl": "No destination URL configured for this link.",
-    "externalSite": "External Website",
-    "internalLink": "Internal Link"
+    "noUrl": "No destination URL configured for this link."
   },
   "Staging": {
     "title": "Review Changes",
@@ -1359,7 +1306,10 @@
     "saveSuccess": "Changes added to draft",
     "saveError": "Failed to save text content",
     "material": "document",
-    "folder": "folder"
+    "folder": "folder",
+    "replaceDesc": "Upload a new file to replace the current version. It goes through the same security checks as any upload.",
+    "dropActive": "Drop the file to replace the current version",
+    "dropDefault": "Drag a file here, or click to choose one"
   },
   "Languages": {
     "en": "English",
@@ -1378,9 +1328,6 @@
     "dashboard": {
       "stats": {
         "userCount": "Total Users",
-        "materialCount": "Materials",
-        "openPrCount": "Open PRs",
-        "openFlagCount": "Open Flags",
         "loadError": "Failed to load stats"
       }
     },
@@ -1478,7 +1425,8 @@
         "priorityDesc": "Higher numbers appear first when multiple items are active.",
         "adding": "Adding…",
         "usesMaterialTitle": "— (uses material title)",
-        "cancel": "cancel"
+        "cancel": "cancel",
+        "editDesc": "Update the details for this featured boost"
       },
       "delete": {
         "confirmTitle": "Remove featured item?",
@@ -1496,7 +1444,11 @@
       "success": {
         "added": "Featured item added successfully"
       },
-      "view": "View"
+      "view": "View",
+      "toast": {
+        "selectTarget": "Please select a file or folder to boost",
+        "updated": "Featured item updated"
+      }
     }
   },
   "Notifications": {
@@ -1504,7 +1456,6 @@
     "description": "Stay up to date with your contributions, comments, and community updates.",
     "statsTotal": "Total",
     "statsUnread": "Unread",
-    "statsCaughtUp": "Caught up",
     "markAllRead": "Mark all as read",
     "markRead": "Mark as read",
     "noNotifications": "No notifications yet.",
@@ -1537,9 +1488,7 @@
     "noFilteredResultsDesc": "Try adjusting your search query or category filter.",
     "clearFilters": "Clear filters",
     "allCaughtUpTitle": "You're all caught up!",
-    "allCaughtUpDesc": "There are no unread notifications waiting for your review.",
     "emptyInboxTitle": "No notifications yet",
-    "emptyInboxDesc": "When activity happens with your contributions, comments, or materials, you'll see it here.",
     "loadMore": "Load more"
   },
   "Popular": {
@@ -1679,8 +1628,7 @@
         "totalMaterials": "Materials",
         "openPrs": "Open PRs",
         "openFlags": "Open Reports",
-        "pendingJobs": "Pending Jobs",
-        "systemStatus": "System Health"
+        "pendingJobs": "Pending Jobs"
       },
       "recent": {
         "title": "Active Queues",
@@ -1758,8 +1706,52 @@
         "sending": "Sending...",
         "success": "Test email successfully sent to {email}",
         "error": "Failed to deliver test email. Check your SMTP configuration."
-      }
-    }
+      },
+      "recipientEmail": "Recipient Email",
+      "timestamp": "Timestamp: ",
+      "currentSmtpServiceDetails": "Current SMTP Service Details",
+      "host": "Host: ",
+      "port": "Port: ",
+      "from": "From: "
+    },
+    "overview": {
+      "lifecycleOverview": "Lifecycle overview",
+      "total": "Total",
+      "healthy": "Healthy",
+      "degraded": "Degraded",
+      "unhealthy": "Unhealthy"
+    },
+    "content": {
+      "title": "Lifecycle & Status",
+      "description": "Make it obvious what is essential, current, deprecated, or archived.",
+      "search": "Search content…",
+      "all": "All statuses",
+      "selected": "{count} selected",
+      "setStatus": "Set status",
+      "clear": "Clear",
+      "content": "Content",
+      "type": "Type",
+      "status": "Status",
+      "updated": "Updated",
+      "signals": "Signals",
+      "views": "views",
+      "likes": "likes",
+      "empty": "No content matches these filters.",
+      "previous": "Previous",
+      "next": "Next",
+      "updatedToast": "{count, plural, one {# item updated} other {# items updated}}",
+      "failed": "Could not update content status",
+      "loadFailed": "Could not load content",
+      "folder": "Folder",
+      "file": "File",
+      "usesFolderName": "Uses folder name",
+      "contentManagement": "Content Management",
+      "overseeMaterialLifecycleStatusesExploreDirectories": "Oversee material lifecycle statuses, explore directories, and spotlight essential resources.",
+      "lifecycle": "Lifecycle",
+      "directories": "Directories",
+      "featured": "Featured"
+    },
+    "adminOnly": "Access restricted to administrators."
   },
   "Admin": {
     "Config": {
@@ -1767,14 +1759,6 @@
         "visualIdentity": {
           "title": "Visual Identity",
           "description": "Customize your platform's name, description, and primary theme colors.",
-          "siteName": "Site Name",
-          "primaryColor": "Primary Theme Color",
-          "siteDescription": "Site Description",
-          "logo": "Logo",
-          "favicon": "Favicon",
-          "placeholders": {
-            "siteDescription": "Collaborative course materials platform"
-          },
           "wordmarkBuilder": {
             "title": "Wordmark Builder",
             "description": "Design a custom multi-color or multi-font brand wordmark. Copy the generated line into your .env file to apply it.",
@@ -1799,67 +1783,33 @@
         },
         "footerLinks": {
           "title": "Footer Links",
-          "description": "Configure the links and text displayed at the bottom of every page.",
-          "footerLogo": "Footer Logo",
-          "footerText": "Footer Text",
-          "organizationUrl": "Organization URL",
-          "placeholders": {
-            "footerText": "© 2026 Lectern",
-            "organizationUrl": "https://www.example.com"
-          }
+          "description": "Configure the links and text displayed at the bottom of every page."
         },
         "legal": {
           "title": "Legal & GDPR",
-          "description": "Information required for legal compliance and data processing transparency.",
-          "legalName": "Legal Entity Name",
-          "contactEmail": "Contact Email",
-          "legalAddress": "Legal Address",
-          "legalSiret": "SIRET Number",
-          "dpoEmail": "DPO Email",
-          "dpoAddress": "DPO Address",
-          "dataTransfers": "Data Transfers (GDPR)",
-          "legalVersion": "Documents version",
-          "placeholders": {
-            "legalName": "Legal Entity Name",
-            "contactEmail": "contact@example.com",
-            "legalAddress": "Full physical address",
-            "legalSiret": "SIRET or equivalent",
-            "dpoEmail": "dpo@example.com",
-            "dpoAddress": "DPO physical address (if different)",
-            "dataTransfers": "Description of data transfers outside EU",
-            "legalVersion": "e.g. 1.0"
-          }
+          "description": "Information required for legal compliance and data processing transparency."
         },
         "save": "Save Branding Changes",
         "discard": "Discard Changes",
         "success": "Branding updated",
         "seo": {
           "title": "SEO & Social Sharing",
-          "description": "Configure how your site appears when shared on social media and in link previews.",
-          "ogImageUrl": "Social Preview Image (OG Image)",
-          "ogImageUrlHint": "Shown as the thumbnail when your site is shared on social media (recommended: 1200×630 px)."
+          "description": "Configure how your site appears when shared on social media and in link previews."
         },
         "watermark": {
           "title": "Background Watermark",
           "description": "Display a large semi-transparent image behind all page content.",
-          "image": "Watermark Image",
-          "opacityLight": "Opacity (Light mode)",
-          "opacityDark": "Opacity (Dark mode)",
-          "opacityHint": "Low values (5–15%) give a subtle watermark; higher values make it more prominent."
+          "image": "Watermark Image"
         }
       },
       "tabs": {
-        "authentication": "Authentication",
         "email": "Email",
-        "storage": "Storage",
-        "files": "Files",
-        "branding": "Branding"
+        "storage": "Storage"
       },
       "errors": {
         "load": "Failed to load configuration",
         "save": "Failed to save configuration"
       },
-      "envBanner": "Configured via environment variables — edit .env and redeploy to change.",
       "Authentication": {
         "description": "Configuration is set via environment variables and is read-only here. Domain allow-list can still be managed below.",
         "methods": {
@@ -1871,10 +1821,7 @@
           },
           "google": {
             "label": "Google OAuth",
-            "description": "Allow users to sign in with their Google account.",
-            "clientId": "Google Client ID",
-            "clientIdPlaceholder": "your-client-id.apps.googleusercontent.com",
-            "clientIdRequired": "You must set a Google Client ID before enabling this feature."
+            "description": "Allow users to sign in with their Google account."
           },
           "classic": {
             "label": "Email + password (classic)",
@@ -1887,17 +1834,12 @@
         },
         "session": {
           "title": "Session Policy",
-          "description": "Determine how long user sessions remain valid.",
-          "accessExpiry": "Access Token Expiry (Days)",
-          "accessExpiryHelp": "Short-lived token for API requests. Usually 7 days.",
-          "refreshExpiry": "Refresh Token Expiry (Days)",
-          "refreshExpiryHelp": "Long-lived session token. Usually 31 days."
+          "description": "Determine how long user sessions remain valid."
         },
         "domains": {
           "title": "Allowed Email Domains",
           "description": "Emails from these domains can request access. Toggle <strong>Auto-approve</strong> to let users from that domain skip the pending queue.",
           "empty": "No domains configured — fallback to default domains.",
-          "envOverrideBanner": "Domain list is set by ALLOWED_DOMAINS in .env — changes below update the database fallback only.",
           "allowAll": {
             "label": "Allow all domains",
             "description": "Bypass whitelist for all providers"
@@ -1906,17 +1848,13 @@
             "label": "Auto-approve all users",
             "description": "Immediately activate any user, regardless of their email domain"
           },
-          "autoApprove": "Auto-approve",
-          "manualReview": "Manual review",
           "add": {
             "title": "Add a domain",
             "placeholder": "example.com",
-            "button": "Add",
-            "autoApproveLabel": "Auto-approve users from this domain"
+            "button": "Add"
           },
           "success": {
-            "added": "Domain @{domain} added",
-            "removed": "Domain @{domain} removed"
+            "added": "Domain @{domain} added"
           },
           "errors": {
             "alreadyExists": "Domain already exists",
@@ -1932,14 +1870,11 @@
       "Email": {
         "title": "SMTP Configuration",
         "description": "Configure SMTP settings to enable email notifications and verification codes.",
-        "descriptionCard": "These settings are used for all outgoing emails. If left empty, the platform defaults to environment variables.",
         "host": "SMTP Host",
-        "ip": "SMTP IP Address (Optional Override)",
         "port": "SMTP Port",
         "user": "SMTP User",
         "password": "SMTP Password",
         "from": "From Email Address",
-        "tls": "Use TLS / STARTTLS",
         "test": {
           "title": "Test Connection",
           "description": "Send a test email to verify your SMTP settings. Save your changes before testing.",
@@ -1953,49 +1888,30 @@
         "discard": "Discard Changes",
         "placeholders": {
           "host": "e.g. smtp.gmail.com",
-          "ip": "e.g. 1.2.3.4",
           "port": "e.g. 587",
           "user": "e.g. user@gmail.com",
           "password": "••••••••",
-          "from": "e.g. noreply@example.com",
-          "senderName": "e.g. My App Team"
+          "from": "e.g. noreply@example.com"
         },
-        "senderName": "Sender Display Name",
-        "senderNameDescription": "Shown as the sender name in email clients, e.g. \"My App Team\". Appears as: Sender Name <from@email.com>",
-        "avatar": "Sender Avatar",
-        "avatarDescription": "Circular image shown in the email body above the app name."
+        "avatar": "Sender Avatar"
       },
       "Storage": {
         "title": "S3 Storage Configuration",
         "description": "Configure where files are stored. Supports AWS S3, Cloudflare R2, MinIO, etc.",
-        "endpoint": "S3 Endpoint",
-        "endpointHelp": "Do not include http:// or https://",
         "region": "Region",
         "bucket": "Bucket Name",
-        "publicEndpoint": "Public Endpoint (Optional)",
-        "accessKey": "Access Key",
-        "secretKey": "Secret Key",
-        "maxStorage": "Global Storage Limit (GB)",
-        "maxStorageHelp": "Prevents new uploads when total storage usage exceeds this value. Set to 0 or leave empty for no limit.",
-        "useSsl": "Use SSL",
-        "useSslDescription": "Whether to use HTTPS for S3 operations.",
         "save": "Save Storage Settings",
         "success": "Storage configuration updated",
         "discard": "Discard Changes",
         "placeholders": {
-          "endpoint": "e.g. s3.amazonaws.com",
           "region": "e.g. us-east-1",
-          "bucket": "my-bucket",
-          "publicEndpoint": "e.g. my-cdn.example.com",
-          "maxStorage": "e.g. 10"
+          "bucket": "my-bucket"
         }
       },
       "Files": {
         "limits": {
           "title": "File Upload Limits",
           "description": "Set maximum file sizes (MB) for different content types.",
-          "global": "Global Max Limit",
-          "images": "Image Files",
           "video": "Video Files",
           "audio": "Audio Files",
           "document": "PDF / ePUB",
@@ -2004,42 +1920,14 @@
         },
         "processing": {
           "title": "Processing & Compression",
-          "description": "Optimize quality and performance for file conversions.",
-          "pdfQuality": "PDF Thumbnail Quality",
-          "pdfQualityTooltip": "Higher quality results in sharper PDF previews but increases storage usage and processing time.",
-          "videoProfile": "Video Compression Profile",
-          "videoProfileTooltip": "Determines the trade-off between encoding speed and final file size.",
-          "videoProfiles": {
-            "fast": "Fast & Light (Lower quality, fastest)",
-            "balanced": "Balanced (Recommended)",
-            "thorough": "High Quality (Best compression, slowest)"
-          },
-          "thumbnailQuality": "Image Thumbnail Quality",
-          "thumbnailQualityTooltip": "Controls the JPEG/WebP compression of generated thumbnails.",
-          "thumbnailSize": "Thumbnail Max Edge",
-          "thumbnailSizeTooltip": "Maximum resolution (px) for either width or height of thumbnails."
+          "description": "Optimize quality and performance for file conversions."
         },
         "whitelist": {
           "title": "Format Whitelisting",
           "description": "Select which file formats are allowed for upload.",
           "search": "Search extensions...",
           "selectAll": "Select All",
-          "deselectAll": "Deselect All",
-          "selectCategory": "Select Category",
-          "deselectCategory": "Deselect Category",
-          "overrides": "Manual Overrides / Custom Formats",
-          "overridesTooltip": "Use this for exotic formats not listed above. Changes here sync with the toggles.",
-          "extensions": "Extensions",
-          "extensionsPlaceholder": "Add custom extensions...",
-          "mimes": "MIME Types",
-          "mimesPlaceholder": "Add custom MIME types...",
-          "groups": {
-            "Images": "Images",
-            "Documents": "Documents",
-            "Office": "Office",
-            "Code & Development": "Code & Development",
-            "Audio & Video": "Audio & Video"
-          }
+          "deselectAll": "Deselect All"
         },
         "save": "Save File Settings",
         "success": "File configuration updated",
@@ -2050,7 +1938,6 @@
       "title": "Admin Area",
       "noPermission": "You do not have permission to access the admin area.",
       "nav": {
-        "health": "System Health",
         "users": "Users",
         "dlq": "Dead Letter Queue",
         "config": "Configuration",
@@ -2241,7 +2128,8 @@
         "previous": "Previous",
         "next": "Next"
       },
-      "userCount": "{count, plural, =1 {# user} other {# users}}"
+      "userCount": "{count, plural, =1 {# user} other {# users}}",
+      "bulkManage": "Bulk manage"
     },
     "DLQ": {
       "title": "Dead Letter Queue",
@@ -2337,6 +2225,35 @@
         "delete": "Failed to delete backup.",
         "restore": "Restore failed."
       }
+    },
+    "BulkUsers": {
+      "title": "Bulk user administration",
+      "description": "Select accounts and apply one consistent administrative action at a time.",
+      "back": "Standard user management",
+      "search": "Search by name or email…",
+      "allRoles": "All roles",
+      "selected": "{count} selected",
+      "selectPage": "Select page",
+      "clear": "Clear",
+      "approve": "Approve",
+      "reject": "Reject",
+      "setRole": "Set role",
+      "delete": "Delete",
+      "export": "Export CSV",
+      "confirmReject": "Reject selected accounts? Pending accounts will be deleted.",
+      "confirmDelete": "Delete selected accounts? This action is permanent.",
+      "confirmTitle": "Confirm bulk action",
+      "updated": "{count, plural, one {# account updated} other {# accounts updated}}",
+      "skipped": "{count, plural, one {# account skipped} other {# accounts skipped}}",
+      "loadError": "Could not load users",
+      "actionError": "Bulk action failed",
+      "email": "Email",
+      "name": "Name",
+      "role": "Role",
+      "joined": "Created",
+      "empty": "No users match these filters.",
+      "previous": "Previous",
+      "next": "Next"
     }
   },
   "Terms": {
@@ -2733,5 +2650,137 @@
         }
       }
     }
+  },
+  "ContentStatus": {
+    "labels": {
+      "important": "Important",
+      "current": "Current",
+      "deprecated": "Deprecated",
+      "archived": "Archived"
+    },
+    "descriptions": {
+      "important": "Essential key reference",
+      "current": "Current valid resource",
+      "deprecated": "Previous edition / curriculum",
+      "archived": "Historical archive"
+    },
+    "updated": "Status updated to {status}",
+    "updateFailed": "Failed to update status",
+    "change": "Change status",
+    "changeFolder": "Change folder status",
+    "changeMaterial": "Change material status",
+    "folderStatus": "Folder status",
+    "documentStatus": "Document status",
+    "status": "Status"
+  },
+  "Register": {
+    "pageTitle": "Sign up",
+    "subtitle": "Create your account",
+    "disabled": "Classic registration is disabled.",
+    "registeringAs": "Registering as",
+    "displayNameLabel": "Display name (optional)",
+    "displayNamePlaceholder": "How should we call you?",
+    "passwordPlaceholder": "Create a password",
+    "creating": "Creating account...",
+    "submit": "Sign up",
+    "failed": "Registration failed",
+    "haveAccount": "Already have an account?"
+  },
+  "Saved": {
+    "title": "Saved Library",
+    "description": "Your favourites and curated collections, in one place.",
+    "allSaved": "All saved",
+    "collections": "Collections",
+    "createCollection": "New collection",
+    "createFirstCollection": "Create your first collection to organize saved materials and folders.",
+    "renameCollection": "Rename collection",
+    "deleteCollection": "Delete collection",
+    "deleteCollectionTitle": "Delete collection?",
+    "deleteCollectionDescription": "Delete “{name}”? The materials and folders themselves will not be deleted.",
+    "collectionDeleted": "Collection deleted",
+    "collectionRenamed": "Collection renamed",
+    "collectionCreated": "Collection “{name}” created",
+    "collectionNameDescription": "Choose a short name you will recognize easily.",
+    "collectionNamePlaceholder": "e.g. Exam revision",
+    "collectionActions": "Collection actions",
+    "collectionPickerTitle": "Add to collections",
+    "collectionPickerDescription": "Collections organize content without changing its favourite status.",
+    "addToCollection": "Add to collection",
+    "manageCollections": "Manage collections",
+    "noCollectionsYet": "No collections yet. Create one below.",
+    "itemCount": "{count, plural, one {# item} other {# items}}",
+    "emptySaved": "Nothing saved yet",
+    "emptySavedDescription": "Star any material, folder, or module while browsing to keep it here for quick access.",
+    "emptyCollection": "This collection is empty",
+    "emptyCollectionDescription": "Add materials, folders, or modules from their details panel or by selecting items in your Saved library.",
+    "removeSaved": "Remove from Saved",
+    "removeFromCollection": "Remove from collection",
+    "loading": "Loading...",
+    "create": "Create",
+    "save": "Save",
+    "cancel": "Cancel",
+    "searchPlaceholder": "Search saved items...",
+    "filterAll": "All",
+    "filterMaterials": "Documents",
+    "filterDirectories": "Folders & Modules",
+    "filterQcm": "QCMs",
+    "filterMedia": "Media & Videos",
+    "filterLinks": "Links",
+    "sortRecent": "Recently added",
+    "sortOldest": "Oldest added",
+    "sortNameAsc": "Name (A–Z)",
+    "sortNameDesc": "Name (Z–A)",
+    "selectAll": "Select all",
+    "deselectAll": "Deselect all",
+    "selectedCount": "{count} selected",
+    "batchAddToCollection": "Add to collection",
+    "batchRemoveFromCollection": "Remove from collection",
+    "batchRemoveFromSaved": "Remove from Saved",
+    "batchSuccessAdded": "Added {count, plural, one {# item} other {# items}} to “{name}”",
+    "batchSuccessRemoved": "Removed {count, plural, one {# item} other {# items}}",
+    "batchRemoveFromCollectionConfirm": "Remove {count, plural, one {# selected item} other {# selected items}} from “{name}”?",
+    "batchRemoveFromSavedConfirm": "Remove {count, plural, one {# selected item} other {# selected items}} from your Saved library?",
+    "batchPartialFailure": "{count, plural, one {# item} other {# items}} could not be updated",
+    "noSearchResults": "No items match your search",
+    "noSearchResultsDescription": "Try adjusting your search terms or active filters.",
+    "clearSearch": "Clear search",
+    "clearFilters": "Reset filters",
+    "browseMaterials": "Browse library",
+    "viewGrid": "Grid view",
+    "viewList": "List view",
+    "copyLink": "Copy link",
+    "linkCopied": "Link copied to clipboard",
+    "openInNewTab": "Open in new tab",
+    "statsSavedCount": "Saved items",
+    "statsCollectionsCount": "Collections",
+    "selectItem": "Select item",
+    "actions": "Actions",
+    "searchCollections": "Filter collections...",
+    "errors": {
+      "load": "Could not load your Saved library",
+      "loadCollections": "Could not load collections",
+      "loadCollection": "Could not load this collection",
+      "createCollection": "Could not create collection",
+      "saveCollection": "Could not save collection",
+      "deleteCollection": "Could not delete collection",
+      "updateCollection": "Could not update collection membership",
+      "removeFromCollection": "Could not remove item from collection",
+      "removeSaved": "Could not remove item from Saved"
+    }
+  },
+  "Feedback": {
+    "downloadFailed": "Failed to start download. Please try again.",
+    "qcmExportFailed": "Failed to export QCM. Please try again.",
+    "qcmPdfExportFailed": "Failed to export QCM as PDF. Please try again.",
+    "popupBlocked": "Pop-up blocked. Please allow pop-ups to print.",
+    "openMarkdownFirst": "Open the Markdown document before exporting it as PDF.",
+    "documentLoading": "Document is still loading. Please try again in a moment.",
+    "printUnsupported": "Printing is not supported for this file type.",
+    "printSaveAsPdf": "Choose “Save as PDF” in the destination menu.",
+    "printOpened": "Print dialog opened",
+    "printFailed": "Failed to prepare document for printing.",
+    "copyLinkFailed": "Failed to copy link",
+    "copyIdFailed": "Failed to copy ID",
+    "storageFull": "Storage limit reached. Some changes might not be saved."
   }
 }

@@ -52,11 +52,35 @@ export const ACCEPTED_FILE_TYPES = [
     ".qcm",
 ].join(",");
 
+const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"];
+
 export function formatFileSize(bytes: number): string {
-    if (bytes === 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+    if (!(bytes > 0)) return "0 B";
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), SIZE_UNITS.length - 1);
+    return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${SIZE_UNITS[i]}`;
+}
+
+/**
+ * Rows as CSV text. Every cell is quoted, and a cell starting with =, +, -, @,
+ * tab or CR gets a leading apostrophe so spreadsheets do not run it as a formula.
+ */
+export function toCsv(rows: readonly (readonly string[])[]): string {
+    const cell = (value: string) =>
+        `"${(/^[=+\-@\t\r]/.test(value) ? `'${value}` : value).replaceAll('"', '""')}"`;
+    return rows.map((row) => row.map(cell).join(",")).join("\n");
+}
+
+/** Hand a blob to the browser as a file download. */
+export function saveBlob(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    // Revoking in the same task can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 export function getFileExtension(filename: string): string {

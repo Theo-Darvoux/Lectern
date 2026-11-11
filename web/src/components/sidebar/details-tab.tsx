@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useExternalLinkStore } from "@/lib/external-link-store";
 import {
-  Folder,
   FileText,
   Download,
   Calendar,
@@ -35,15 +34,10 @@ import {
   getFileBadgeLabel,
   isThumbnailEligible,
 } from "@/lib/file-utils";
-import {
-  ContentStatusBadge,
-  CONTENT_STATUSES,
-  CONTENT_STATUS_ICONS,
-  CONTENT_STATUS_LABELS,
-  normalizeContentStatus,
-  type ContentStatus,
-} from "@/components/content-status-badge";
+import { ContentStatusBadge, ContentStatusPicker } from "@/components/content-status-badge";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
+import { QueryError } from "@/components/query-error";
 import { ExpandableText } from "@/components/ui/expandable-text";
 import { useUIStore, useBrowseRefreshStore, useLikeOverrides, useDirectoryIconOverrides, useDirectoryColorOverrides } from "@/lib/stores";
 import { isGuest, isStaff } from "@/lib/guest";
@@ -58,10 +52,12 @@ import { CollectionPicker } from "@/components/saved/collection-picker";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { isRestrictedTarget } from "@/lib/utils";
 import { isExternalUrl } from "@/lib/url-utils";
+import { setFavourite } from "@/lib/collections";
+import { translateDynamic } from "@/lib/i18n-dynamic";
 
 /* -------------------------------------------------------------------------- */
 /*  Reusable primitives for a card-sectioned sidebar                          */
@@ -232,11 +228,7 @@ function InteractionBar({
     setIsFavourited(next);
     setIsFavouriting(true);
     try {
-      const endpoint =
-        targetType === "material"
-          ? `/materials/${targetId}/favourite`
-          : `/directories/${targetId}/favourite`;
-      await apiFetch(endpoint, { method: "POST" });
+      await setFavourite(targetType, targetId, next);
       updateSidebarData({ is_favourited: next });
       triggerBrowseRefresh();
     } catch {
@@ -313,9 +305,6 @@ function InteractionBar({
 
 function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations("Sidebar");
-  const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
-  const lang: "fr" | "en" = fr ? "fr" : "en";
   const { user } = useAuth();
   const updateSidebarData = useUIStore((state) => state.updateSidebarData);
   const setIconOverride = useDirectoryIconOverrides((s) => s.setIconOverride);
@@ -354,7 +343,6 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
   const [iconUpdating, setIconUpdating] = useState(false);
   const [colorUpdating, setColorUpdating] = useState(false);
   const dirId = String(data.id ?? "");
-  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const handleSetIcon = async (iconId: string | null) => {
     if (iconUpdating) return;
@@ -580,66 +568,15 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
       {/* Staff Actions */}
       {isStaff(user) && !isRestricted && (
         <SidebarSection className="space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-              {t("staffActions")}
-            </span>
-            <span className="text-[10px] text-muted-foreground font-medium">
-              {fr ? "Statut du dossier" : "Folder status"}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-1.5">
-            {CONTENT_STATUSES.map((st) => {
-              const StIcon = CONTENT_STATUS_ICONS[st];
-              const isSelected = normalizeContentStatus(data.status) === st;
-              return (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={async () => {
-                    if (isSelected) return;
-                    try {
-                      await apiFetch("/admin/content/status", {
-                        method: "PATCH",
-                        body: JSON.stringify({ directory_ids: [dirId], status: st }),
-                      });
-                      updateSidebarData({ status: st });
-                      triggerBrowseRefresh();
-                      toast.success(
-                        fr
-                          ? `Statut mis à jour : ${CONTENT_STATUS_LABELS.fr[st]}`
-                          : `Status updated to ${CONTENT_STATUS_LABELS.en[st]}`,
-                      );
-                    } catch {
-                      toast.error(
-                        fr
-                          ? "Impossible de modifier le statut"
-                          : "Failed to update status",
-                      );
-                    }
-                  }}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition-all text-left",
-                    isSelected
-                      ? "border-primary/50 bg-primary/10 font-bold text-foreground shadow-2xs"
-                      : "border-border/60 bg-muted/20 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                  )}
-                >
-                  <StIcon
-                    className={cn(
-                      "h-3.5 w-3.5 shrink-0",
-                      st === "important" && "text-amber-500",
-                      st === "current" && "text-emerald-500",
-                      st === "deprecated" && "text-stone-500",
-                      st === "archived" && "text-slate-400",
-                    )}
-                  />
-                  <span className="truncate">{CONTENT_STATUS_LABELS[lang][st]}</span>
-                </button>
-              );
-            })}
-          </div>
+          <ContentStatusPicker
+            target={{ type: "directory", id: dirId }}
+            status={data.status}
+            heading={
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                {t("staffActions")}
+              </span>
+            }
+          />
         </SidebarSection>
       )}
     </div>
@@ -650,11 +587,6 @@ function DirectoryDetails({ data }: { data: Record<string, unknown> }) {
 /*  Material details                                                           */
 /* -------------------------------------------------------------------------- */
 
-// Module-level cache keyed by authorId so repeated sidebar opens don't
-// re-fetch the same user. In-flight requests are deduplicated.
-const authorNameCache = new Map<string, string>();
-const authorNameInflight = new Map<string, Promise<string>>();
-
 function AuthorName({
   authorId,
   isAnonymous = false,
@@ -664,39 +596,14 @@ function AuthorName({
 }) {
   const t = useTranslations("Sidebar");
   const tPRs = useTranslations("PRs");
-  const [name, setName] = useState<string | null>(
-    authorId ? (authorNameCache.get(authorId) ?? null) : null,
-  );
-
-  useEffect(() => {
-    if (!authorId) return;
-    const cached = authorNameCache.get(authorId);
-    if (cached !== undefined) {
-      if (name !== cached) {
-        setName(cached);
-      }
-      return;
-    }
-    let active = true;
-    let promise = authorNameInflight.get(authorId);
-    if (!promise) {
-      promise = apiFetch<{ display_name: string | null }>(`/users/${authorId}`)
-        .then((u) => u.display_name ?? t("unknown"))
-        .catch(() => t("unknown"))
-        .then((resolved) => {
-          authorNameCache.set(authorId, resolved);
-          authorNameInflight.delete(authorId);
-          return resolved;
-        });
-      authorNameInflight.set(authorId, promise);
-    }
-    promise.then((resolved) => {
-      if (active) setName(resolved);
-    });
-    return () => {
-      active = false;
-    };
-  }, [authorId, t]);
+  const author = useQuery({
+    queryKey: ["users", authorId],
+    queryFn: ({ signal }) =>
+      apiFetch<{ display_name: string | null }>(`/users/${authorId}`, { signal }),
+    enabled: !!authorId,
+    staleTime: 5 * 60_000,
+  });
+  const name = author.isError ? t("unknown") : author.data && (author.data.display_name ?? t("unknown"));
 
   if (!authorId) return <span>{isAnonymous ? tPRs("anonymous") : t("deletedUser")}</span>;
   if (!name)
@@ -714,10 +621,6 @@ function AuthorName({
 function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations("Sidebar");
   const tTypes = useTranslations("MaterialTypes");
-  const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
-  const lang: "fr" | "en" = fr ? "fr" : "en";
-  const updateSidebarData = useUIStore((state) => state.updateSidebarData);
   const router = useRouter();
   const openLink = useExternalLinkStore((s) => s.openLink);
   const metadata = (data.metadata ?? {}) as Record<string, unknown>;
@@ -744,23 +647,19 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const { downloadMaterial } = useDownload();
   const { user } = useAuth();
   const [attachmentsOpen, setAttachmentsOpen] = useState(attachmentCount > 0);
-  const [attachments, setAttachments] = useState<Record<string, unknown>[] | null>(null);
-  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [previewAtt, setPreviewAtt] = useState<Record<string, unknown> | null>(null);
   const [editAtt, setEditAtt] = useState<Record<string, unknown> | null>(null);
-  const [fetchRevision, setFetchRevision] = useState(0);
-
-  const refreshAttachments = () => setFetchRevision((r) => r + 1);
-
-  useEffect(() => {
-    if (!attachmentsOpen || parentMaterialId) return;
-    setAttachmentsLoading(true);
-    apiFetch<Record<string, unknown>[]>(`/materials/${id}/attachments`)
-      .then(setAttachments)
-      .catch(() => setAttachments([]))
-      .finally(() => setAttachmentsLoading(false));
-  }, [attachmentsOpen, id, parentMaterialId, fetchRevision]);
+  const queryClient = useQueryClient();
+  const attachmentsKey = ["materials", id, "attachments"];
+  const attachmentsQuery = useQuery({
+    queryKey: attachmentsKey,
+    queryFn: ({ signal }) =>
+      apiFetch<Record<string, unknown>[]>(`/materials/${id}/attachments`, { signal }),
+    enabled: attachmentsOpen && !parentMaterialId && !!id,
+  });
+  const attachments = attachmentsQuery.data;
+  const refreshAttachments = () => void queryClient.invalidateQueries({ queryKey: attachmentsKey });
 
   const versionInfo = data.current_version_info as Record<
     string,
@@ -833,10 +732,10 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
               {fileName || fileMimeType
                 ? getFileBadgeLabel(fileName, fileMimeType)
                 : isInternalLink
-                  ? (tTypes.has("internal_link" as any) ? tTypes("internal_link" as any) : "Internal Link")
+                  ? tTypes("internal_link")
                   : isLink
-                    ? (tTypes.has("link" as any) ? tTypes("link" as any) : "External Link")
-                    : (tTypes.has(type as any) ? tTypes(type as any) : type)}
+                    ? tTypes("link")
+                    : translateDynamic(tTypes, String(type))}
             </span>
           </div>
         </div>
@@ -903,7 +802,7 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
         {isLink && targetUrl && (
           <MetaRow
             icon={isInternalLink ? Link2 : ExternalLink}
-            label={isInternalLink ? (tTypes.has("internal_link" as any) ? tTypes("internal_link" as any) : "Internal Link") : t("targetUrl")}
+            label={isInternalLink ? tTypes("internal_link") : t("targetUrl")}
             value={
               <button
                 type="button"
@@ -943,66 +842,15 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
       {/* Staff Actions */}
       {isStaff(user) && !isRestricted && (
         <SidebarSection className="space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-              {t("staffActions")}
-            </span>
-            <span className="text-[10px] text-muted-foreground font-medium">
-              {fr ? "Statut du document" : "Document status"}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-1.5">
-            {CONTENT_STATUSES.map((st) => {
-              const StIcon = CONTENT_STATUS_ICONS[st];
-              const isSelected = normalizeContentStatus(data.status) === st;
-              return (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={async () => {
-                    if (isSelected) return;
-                    try {
-                      await apiFetch("/admin/content/status", {
-                        method: "PATCH",
-                        body: JSON.stringify({ material_ids: [id], status: st }),
-                      });
-                      updateSidebarData({ status: st });
-                      triggerBrowseRefresh();
-                      toast.success(
-                        fr
-                          ? `Statut mis à jour : ${CONTENT_STATUS_LABELS.fr[st]}`
-                          : `Status updated to ${CONTENT_STATUS_LABELS.en[st]}`,
-                      );
-                    } catch {
-                      toast.error(
-                        fr
-                          ? "Impossible de modifier le statut"
-                          : "Failed to update status",
-                      );
-                    }
-                  }}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition-all text-left",
-                    isSelected
-                      ? "border-primary/50 bg-primary/10 font-bold text-foreground shadow-2xs"
-                      : "border-border/60 bg-muted/20 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                  )}
-                >
-                  <StIcon
-                    className={cn(
-                      "h-3.5 w-3.5 shrink-0",
-                      st === "important" && "text-amber-500",
-                      st === "current" && "text-emerald-500",
-                      st === "deprecated" && "text-stone-500",
-                      st === "archived" && "text-slate-400",
-                    )}
-                  />
-                  <span className="truncate">{CONTENT_STATUS_LABELS[lang][st]}</span>
-                </button>
-              );
-            })}
-          </div>
+          <ContentStatusPicker
+            target={{ type: "material", id: id }}
+            status={data.status}
+            heading={
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                {t("staffActions")}
+              </span>
+            }
+          />
 
           {isThumbnailEligible(fileMimeType, fileName || title) && (
             <button
@@ -1100,10 +948,12 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
           </div>
           {attachmentsOpen && (
             <div className="border-t border-violet-200 dark:border-violet-800/50">
-              {attachmentsLoading ? (
+              {attachmentsQuery.isLoading ? (
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 </div>
+              ) : attachmentsQuery.isError ? (
+                <QueryError onRetry={() => void attachmentsQuery.refetch()} />
               ) : attachments && attachments.length > 0 ? (
                 <ul className="divide-y divide-violet-100 dark:divide-violet-900/30">
                   {attachments.map((att) => {

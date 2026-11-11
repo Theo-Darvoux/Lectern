@@ -4,12 +4,13 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import uuid4
 
+from app.core.database.redis import RedisClient
+
 logger = logging.getLogger(__name__)
 
 import google.auth.transport.requests
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from google.oauth2 import id_token
-from redis.asyncio import Redis
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -109,7 +110,7 @@ def _set_browser_read_cookie(
 
 
 async def _blacklist_token_string(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     token: str | None,
     *,
     expected_type: str,
@@ -131,7 +132,7 @@ async def _blacklist_token_string(
 
 
 async def _blacklist_browser_read_cookie(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     request: Request,
 ) -> dict[str, Any] | None:
     return await _blacklist_token_string(
@@ -231,7 +232,7 @@ async def guest_session(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     response: Response,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> TokenResponse:
     """Start a read-only guest session when an admin has enabled guest access."""
     if not settings.guest_access_enabled:
@@ -283,7 +284,7 @@ async def request_code(
     data: RequestCodeIn,
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> dict[str, str]:
     email = data.email
 
@@ -329,7 +330,7 @@ async def request_code(
 async def verify_code(
     data: VerifyCodeIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     response: Response,
 ) -> TokenResponse:
     email = data.email.strip().lower()
@@ -371,7 +372,7 @@ async def verify_magic_link(
     request: Request,
     data: VerifyMagicLinkIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     response: Response,
 ) -> TokenResponse:
     consumed = await auth_service.consume_magic_token(redis, data.token)
@@ -470,7 +471,7 @@ async def register(
     data: RegisterIn,
     db: Annotated[AsyncSession, Depends(get_db)],
     response: Response,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> TokenResponse:
     if not settings.classic_auth_enabled:
         raise UnauthorizedError("Classic authentication (email + password) is disabled")
@@ -530,7 +531,7 @@ async def login(
     data: LoginIn,
     db: Annotated[AsyncSession, Depends(get_db)],
     response: Response,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> TokenResponse:
     if not settings.classic_auth_enabled:
         raise UnauthorizedError("Classic authentication (email + password) is disabled")
@@ -573,7 +574,7 @@ async def request_password_reset(
     request: Request,
     data: PasswordResetRequestIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> dict[str, str]:
     if not settings.classic_auth_enabled:
         raise UnauthorizedError("Classic authentication (email + password) is disabled")
@@ -607,7 +608,7 @@ async def confirm_password_reset(
     request: Request,
     data: PasswordResetConfirmIn,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> dict[str, str]:
     if not settings.classic_auth_enabled:
         raise UnauthorizedError("Classic authentication (email + password) is disabled")
@@ -657,7 +658,7 @@ async def refresh_token(
     request: Request,
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> RefreshResponse:
     token = request.cookies.get("refresh_token")
     if not token:
@@ -755,7 +756,7 @@ async def refresh_token(
 @router.post("/logout", dependencies=[Depends(require_client_id)])
 async def logout(
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     request: Request,
     response: Response,
 ) -> dict[str, str]:

@@ -12,7 +12,6 @@ import { GoogleOAuthProvider, GoogleLogin, CredentialResponse } from "@react-oau
 import { useConfigStore } from "@/lib/stores";
 import { cn, sanitizeNext } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { SiteName } from "@/components/site-name";
 import { Eye, EyeOff, ExternalLink } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { ShaderText } from "@/components/shader-text";

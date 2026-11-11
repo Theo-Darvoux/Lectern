@@ -58,8 +58,6 @@ export function buildGoogleFontsUrl(fonts: FontDef[]): string {
     return `https://fonts.googleapis.com/css2?${params}&display=swap`;
 }
 
-export const ALL_FONTS_URL = buildGoogleFontsUrl(AVAILABLE_FONTS);
-
 export function buildFontsUrlForNames(names: string[]): string {
     const defs = AVAILABLE_FONTS.filter((f) => names.includes(f.name));
     return buildGoogleFontsUrl(defs);

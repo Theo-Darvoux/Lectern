@@ -3,6 +3,9 @@ import { operationName, type Operation } from "@/lib/staging-store";
 import { useAuthStore, useBrowseRefreshStore, useConfigStore } from "@/lib/stores";
 import { usePendingContributionsStore } from "@/lib/pending-contributions";
 import { toast } from "sonner";
+import type { useTranslations } from "next-intl";
+
+type AutoTitleTranslator = ReturnType<typeof useTranslations<"AutoTitle">>;
 
 export async function fetchOpenPRCount(): Promise<number> {
     try {
@@ -80,7 +83,7 @@ export async function reconcilePendingContribution(id: string): Promise<void> {
 }
 
 /** Generate a sensible auto-title from one or multiple operations. */
-export function autoTitle(ops: Operation[], t: any): string {
+export function autoTitle(ops: Operation[], t: AutoTitleTranslator): string {
     if (ops.length === 0) return t("draft");
     if (ops.length > 1) {
         // e.g. "Deleted 3 items", "Moved 5 items"
@@ -191,7 +194,7 @@ export async function submitDirectOperations(
     ops: Operation[],
     manualTitle: string | undefined,
     manualDescription: string | null | undefined,
-    t: any,
+    t: AutoTitleTranslator,
     isAnonymous = false
 ): Promise<{ id: string; status: string } | null> {
     if (ops.length === 0) return null;

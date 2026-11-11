@@ -18,7 +18,7 @@ from app.models.directory import Directory
 from app.models.flag import Flag, FlagStatus
 from app.models.material import Material
 from app.models.pull_request import PRStatus, PullRequest
-from app.models.user import User, UserRole
+from app.models.user import ADMIN_ROLES, User, UserRole
 from app.services.auth import ensure_admin_removal_safe, lock_admin_authority_change
 from app.services.directory import get_directory_paths
 from app.services.notification import notify_user
@@ -26,8 +26,7 @@ from app.services.user import hard_delete_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-ADMIN_ROLES = (UserRole.BUREAU, UserRole.VIEUX)
-AdminUser = Annotated[User, Depends(require_role(UserRole.BUREAU, UserRole.VIEUX))]
+AdminUser = Annotated[User, Depends(require_role(*ADMIN_ROLES))]
 StaffUser = Annotated[User, Depends(require_moderator())]
 
 

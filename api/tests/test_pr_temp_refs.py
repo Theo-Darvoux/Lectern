@@ -1,7 +1,7 @@
 import pytest
 
 from app.core.common.exceptions import BadRequestError
-from app.services.pr import _assert_temp_refs_defined
+from app.services.pr.operations import _assert_temp_refs_defined
 
 
 def test_accepts_references_to_ops_in_the_same_batch() -> None:

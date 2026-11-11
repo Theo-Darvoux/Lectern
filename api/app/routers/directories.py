@@ -8,7 +8,6 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
-from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +16,7 @@ from app.core.common.exceptions import (
     ForbiddenError,
 )
 from app.core.database.database import get_db
-from app.core.database.redis import get_redis, redis_client
+from app.core.database.redis import RedisClient, get_redis, redis_client
 from app.core.events.limiter import limiter
 from app.core.events.sse import broadcast_to_topic
 from app.core.storage.facade import stream_object
@@ -33,18 +32,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/directories", tags=["directories"])
 
 
-_CHUNK_SIZE = 50
 _MAX_RESOLVE_PATH_IDS = 250
-
-
-class DownloadChunk(BaseModel):
-    url: str
-    filename: str
-
-
-class DownloadChunksResponse(BaseModel):
-    dir_name: str
-    chunks: list[DownloadChunk]
 
 
 class ResolvePathsRequest(BaseModel):
@@ -226,58 +214,30 @@ async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes,
             zf.close()
 
 
-@router.get("/root/download-chunks", response_model=DownloadChunksResponse)
-async def download_root_chunks(
-    request: Request,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-    redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
-) -> DownloadChunksResponse:
-    """Return Worker ZIP chunk URLs for the entire root level (all top-level directories)."""
-    if redis is None:
-        redis = redis_client
-
+async def _download_entries(
+    db: AsyncSession, directory_id: uuid.UUID
+) -> tuple[str, list[tuple[str, str]]]:
     try:
-        dir_name, entries = await directory_service.get_root_download_entries(db)
+        dir_name, entries = await directory_service.get_directory_download_entries(db, directory_id)
     except ValueError as exc:
         raise BadRequestError(str(exc))
-
     if not entries:
         raise BadRequestError("This directory contains no downloadable files.")
-
-    await rate_limit_downloads(request, current_user, db, redis)
-    return DownloadChunksResponse(dir_name=dir_name, chunks=[])
+    return dir_name, entries
 
 
-@router.get("/{id}/download-chunks", response_model=DownloadChunksResponse)
-async def download_directory_chunks(
+@router.get("/{id}/download/check", status_code=204)
+async def check_directory_download(
     id: uuid.UUID,
-    request: Request,
+    current_user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-    redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
-) -> DownloadChunksResponse:
-    """Return a list of Worker URLs for downloading a directory as one or more ZIP files.
+) -> None:
+    """Report whether the directory ZIP can be built, without counting a download.
 
-    Each chunk covers at most ``_CHUNK_SIZE`` files, keeping the Worker within the
-    free-plan subrequest cap (50) and URL-length limit.  When the Worker is not
-    configured the response contains an empty ``chunks`` list; the client should
-    fall back to the streaming ``/download`` endpoint in that case.
+    Browsers start the ZIP by following a link, which would replace the page with a
+    JSON error. They call this first so the error can be shown in place.
     """
-    if redis is None:
-        redis = redis_client
-
-    try:
-        dir_name, entries = await directory_service.get_directory_download_entries(db, id)
-    except ValueError as exc:
-        raise BadRequestError(str(exc))
-
-    if not entries:
-        raise BadRequestError("This directory contains no downloadable files.")
-
-    # Rate-limit as a single download before falling back.
-    await rate_limit_downloads(request, current_user, db, redis)
-    return DownloadChunksResponse(dir_name=dir_name, chunks=[])
+    await _download_entries(db, id)
 
 
 @router.get("/{id}/download")
@@ -286,7 +246,7 @@ async def download_directory_zip(
     request: Request,
     current_user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
+    redis: Annotated[RedisClient | None, Depends(get_redis)] = None,
 ) -> StreamingResponse:
     """Stream a directory ZIP for bearer API clients or cookie-authenticated browsers."""
     if redis is None:
@@ -294,13 +254,7 @@ async def download_directory_zip(
 
     await rate_limit_downloads(request, current_user, db, redis)
 
-    try:
-        dir_name, entries = await directory_service.get_directory_download_entries(db, id)
-    except ValueError as exc:
-        raise BadRequestError(str(exc))
-
-    if not entries:
-        raise BadRequestError("This directory contains no downloadable files.")
+    dir_name, entries = await _download_entries(db, id)
 
     safe_name = dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
     encoded_name = quote(dir_name)
@@ -360,12 +314,23 @@ async def like_directory(
     return {"liked": liked}
 
 
-@router.post("/{id}/favourite")
+@router.put("/{id}/favourite")
 async def favourite_directory(
     id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
-) -> dict[str, Any]:
-    favourited = await directory_service.toggle_directory_favourite(db, user.id, id)
+) -> dict[str, bool]:
+    await directory_service.set_directory_favourite(db, user.id, id, favourited=True)
     await db.commit()
-    return {"favourited": favourited}
+    return {"favourited": True}
+
+
+@router.delete("/{id}/favourite")
+async def unfavourite_directory(
+    id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, bool]:
+    await directory_service.set_directory_favourite(db, user.id, id, favourited=False)
+    await db.commit()
+    return {"favourited": False}

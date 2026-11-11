@@ -4,12 +4,20 @@
  * 2. Provides a way to sync state across tabs (O11).
  */
 
-import { toast } from "sonner";
+const QUOTA_NOTICE_INTERVAL_MS = 10_000;
+const quotaListeners = new Set<() => void>();
+let lastQuotaNotice = 0;
 
-declare global {
-    interface Window {
-        _lastQuotaToast?: number;
-    }
+/** Subscribe to "local storage is full" events, throttled; returns the unsubscribe. */
+export function onStorageFull(listener: () => void): () => void {
+    quotaListeners.add(listener);
+    return () => quotaListeners.delete(listener);
+}
+
+function reportStorageFull(): void {
+    if (Date.now() - lastQuotaNotice < QUOTA_NOTICE_INTERVAL_MS) return;
+    lastQuotaNotice = Date.now();
+    for (const listener of quotaListeners) listener();
 }
 
 export const safeLocalStorage = {
@@ -29,12 +37,7 @@ export const safeLocalStorage = {
                 err.name === "NS_ERROR_DOM_QUOTA_REACHED"
             )) {
                 console.error("Storage quota exceeded!", err);
-                // Throttle toast to avoid spamming
-                const lastToast = window._lastQuotaToast || 0;
-                if (Date.now() - lastToast > 10000) {
-                    toast.error("Storage limit reached. Some changes might not be saved.");
-                    window._lastQuotaToast = Date.now();
-                }
+                reportStorageFull();
             }
         }
     },

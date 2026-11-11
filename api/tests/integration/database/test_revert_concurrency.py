@@ -20,15 +20,13 @@ from app.models.pull_request import PRStatus, PullRequest
 from app.models.user import User, UserRole
 from app.routers.admin import retry_dead_letter_job
 from app.schemas.pull_request import PullRequestCreate
-from app.services.pr import (
+from app.services.pr import apply_pr, create_pull_request_service, revert_pr_service
+from app.services.pr.executors import (
     _exec_create_directory,
     _exec_create_material,
     _exec_delete_directory,
     _exec_delete_material,
     _exec_move_item,
-    apply_pr,
-    create_pull_request_service,
-    revert_pr_service,
 )
 from app.workers.year_rollover import year_rollover
 
@@ -716,7 +714,7 @@ async def test_mixed_pr_takes_hierarchy_lock_before_early_row_lock(
 ) -> None:
     """A mixed PR must not invert target-row and hierarchy advisory lock order."""
     assert DATABASE_URL is not None
-    from app.services import pr as pr_service
+    from app.services.pr import apply as pr_service
 
     engine = create_async_engine(DATABASE_URL)
     sessions = async_sessionmaker(engine, expire_on_commit=False)

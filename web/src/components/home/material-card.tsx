@@ -39,8 +39,8 @@ export function MaterialCard({ material, className }: MaterialCardProps) {
   let badgeLabel = getFileBadgeLabel(fileName ?? "", mimeType ?? undefined);
   if (isLink) {
     badgeLabel = isInternal
-      ? (tTypes.has("internal_link" as any) ? tTypes("internal_link" as any) : "Internal Link")
-      : (tTypes.has("link" as any) ? tTypes("link" as any) : "External Link");
+      ? tTypes("internal_link")
+      : tTypes("link");
     badgeColor = isInternal
       ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300"
       : "bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300";

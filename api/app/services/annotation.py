@@ -10,7 +10,7 @@ from sqlalchemy.orm import joinedload
 from app.core.common.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.annotation import Annotation
 from app.models.material import Material, MaterialVersion
-from app.models.user import User, UserRole
+from app.models.user import MODERATOR_ROLES, User
 from app.services.notification import notify_material_subscribers, notify_user
 
 logger = logging.getLogger(__name__)
@@ -272,7 +272,7 @@ async def delete_annotation(
     if not annotation:
         raise NotFoundError("Annotation not found")
 
-    is_moderator = user.role in (UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX)
+    is_moderator = user.role in MODERATOR_ROLES
     if annotation.author_id != user.id and not is_moderator:
         raise ForbiddenError("Only the author or a moderator can delete this annotation")
 

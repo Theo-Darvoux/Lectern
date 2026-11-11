@@ -79,6 +79,41 @@ async def test_saved_library_contains_material_and_directory_favourites(
     assert directory_item["href"] == "/browse/algorithms"
 
 
+async def test_favourite_put_and_delete_are_idempotent(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user = await _create_user(db_session)
+    directory, material = await _create_targets(db_session, user)
+    await db_session.commit()
+    headers = _auth_headers(user)
+
+    async def saved_titles() -> set[str]:
+        response = await client.get("/api/users/me/saved", headers=headers)
+        assert response.status_code == 200
+        return {item["title"] for item in response.json()["items"]}
+
+    for path in (
+        f"/api/materials/{material.id}/favourite",
+        f"/api/directories/{directory.id}/favourite",
+    ):
+        # Adding twice keeps the item; removing twice (e.g. from a stale list) never re-adds it.
+        for _ in range(2):
+            response = await client.put(path, headers=headers)
+            assert response.status_code == 200
+            assert response.json() == {"favourited": True}
+    assert await saved_titles() == {"Algorithms", "Graph theory notes"}
+
+    for path in (
+        f"/api/materials/{material.id}/favourite",
+        f"/api/directories/{directory.id}/favourite",
+    ):
+        for _ in range(2):
+            response = await client.delete(path, headers=headers)
+            assert response.status_code == 200
+            assert response.json() == {"favourited": False}
+    assert await saved_titles() == set()
+
+
 async def test_collection_crud_and_mixed_membership(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

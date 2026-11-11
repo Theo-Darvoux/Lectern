@@ -180,7 +180,7 @@ export function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: A
 
   const handleSubmit = async () => {
     if (!itemId.trim()) {
-      toast.error("Please select a file or folder to boost");
+      toast.error(t("toast.selectTarget"));
       return;
     }
     if (!startAt) { toast.error(t("errors.startRequired")); return; }
@@ -214,7 +214,7 @@ export function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: A
           method: "PATCH",
           body: JSON.stringify(payload),
         });
-        toast.success("Successfully updated featured item");
+        toast.success(t("toast.updated"));
       } else {
         await apiFetch("/moderator/featured", {
           method: "POST",
@@ -238,7 +238,7 @@ export function AddFeaturedDialog({ open, onOpenChange, onSuccess, editItem }: A
         <DialogHeader>
           <DialogTitle>{editItem ? "Edit Featured Boost" : t("dialog.addTitle")}</DialogTitle>
           <DialogDescription>
-            {editItem ? "Update the details for this featured boost" : t("dialog.addDesc")}
+            {editItem ? t("dialog.editDesc") : t("dialog.addDesc")}
           </DialogDescription>
         </DialogHeader>
 

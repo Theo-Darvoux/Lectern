@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.common.exceptions import ConflictError
 from app.models.directory import Directory, DirectoryType
 from app.models.pull_request import PullRequest
-from app.services.pr import _exec_undelete_directory
+from app.services.pr.revert import _exec_undelete_directory
 
 
 def test_directory_model_declares_live_root_slug_unique_index() -> None:

@@ -12,28 +12,13 @@
  * crypto.subtle). The two runtime-specific concerns — where bytes come from and
  * whether there is an in-process edge cache — are injected via {@link HandlerDeps}.
  *
- * The HMAC token contract is identical to the API's app/core/worker_token.py, so
- * switching the API's WORKER_ZIP_URL between the two deployments needs no code
- * change.
+ * The HMAC token contract is identical to the API's
+ * app/core/security/worker_token.py, so switching the API's WORKER_ZIP_URL
+ * between the two deployments needs no code change.
  */
-
-import { downloadZip } from "client-zip";
-
-interface ZipEntry {
-  arcname: string;
-  r2_key: string;
-}
 
 export interface TokenPayload {
   exp: number;
-
-  // ZIP fields
-  dir_name?: string;
-  entries?: ZipEntry[];
-  part?: number;
-  total?: number;
-
-  // Single file fields
   r2_key?: string;
   force_download?: boolean;
   filename?: string;
@@ -188,11 +173,7 @@ export async function handleRequest(
   const url = new URL(request.url);
 
   const isBranding = url.pathname.startsWith("/branding/");
-  if (
-    !url.pathname.startsWith("/zip") &&
-    !url.pathname.startsWith("/file/") &&
-    !isBranding
-  ) {
+  if (!url.pathname.startsWith("/file/") && !isBranding) {
     return new Response("Not found", { status: 404 });
   }
 
@@ -349,62 +330,6 @@ export async function handleRequest(
       status: response.status,
       statusText: response.statusText,
       headers,
-    });
-  }
-
-  // ==========================================
-  // ZIP Generation
-  // ==========================================
-  if (url.pathname === "/zip") {
-    if (!payload.entries || !payload.dir_name) {
-      return new Response("Invalid token payload for zip", { status: 400 });
-    }
-
-    const entries = payload.entries;
-    const dirName = payload.dir_name;
-
-    // Async generator so object fetches happen one at a time (lazy) but each
-    // yielded item has a concrete ReadableStream — client-zip does not accept
-    // functions.
-    async function* streamFiles() {
-      for (const { arcname, r2_key } of entries) {
-        const obj = await source.get(r2_key);
-        if (!obj) {
-          // Key missing — skip rather than yielding a corrupt empty file.
-          console.error(`ZIP: missing key ${r2_key}, skipping ${arcname}`);
-          continue;
-        }
-        let input = obj.body;
-        let size: number | undefined = obj.size;
-        if (obj.contentEncoding === "gzip") {
-          input = obj.body.pipeThrough(new DecompressionStream("gzip"));
-          size = undefined;
-        }
-        yield { name: arcname, input, size };
-      }
-    }
-
-    const files = streamFiles();
-
-    // Part suffix is omitted for part 1 so a single-part download has a clean
-    // filename; subsequent parts append " (N)" for disambiguation.
-    const suffix =
-      payload.part && payload.total && payload.total > 1 && payload.part > 1
-        ? ` (${payload.part})`
-        : "";
-    const baseName = asciiFilenameFallback(dirName).replace(/\//g, "_") || "directory";
-    const asciiFallback = baseName + suffix;
-    const encodedName = encodeURIComponent(dirName + suffix);
-    const disposition = `attachment; filename="${asciiFallback}.zip"; filename*=UTF-8''${encodedName}.zip`;
-
-    const zipResponse = downloadZip(files);
-
-    return new Response(zipResponse.body, {
-      headers: {
-        "Content-Type": "application/zip",
-        "Content-Disposition": disposition,
-        "Access-Control-Allow-Origin": "*",
-      },
     });
   }
 

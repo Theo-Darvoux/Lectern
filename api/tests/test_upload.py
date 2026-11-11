@@ -129,16 +129,3 @@ async def test_upload_svg_xss_rejected(
         "script" in response.json()["detail"].lower()
         or "active content" in response.json()["detail"].lower()
     )
-
-
-async def test_deprecated_request_url(client: AsyncClient, db_session: AsyncSession) -> None:
-    user = await _create_user(db_session)
-    await db_session.commit()
-
-    response = await client.post(
-        "/api/upload/request-url",
-        json={"filename": "test.pdf", "size": 1024, "mime_type": "application/pdf"},
-        headers=_auth_headers(user),
-    )
-    assert response.status_code == 400
-    assert "removed" in response.json()["detail"]

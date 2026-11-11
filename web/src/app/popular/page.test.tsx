@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { apiFetch } from "@/lib/api-client";
 import PopularPage from "./page";
 import type { MaterialDetail } from "@/components/home/types";
+import { settleQueries, withQueryClient } from "@/test/query";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
@@ -48,9 +49,9 @@ describe("PopularPage", () => {
       .mockReturnValueOnce(fortnight);
 
     await act(async () => {
-      root.render(<PopularPage />);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      root.render(withQueryClient(<PopularPage />));
     });
+    await settleQueries();
 
     const fortnightButton = Array.from(container.querySelectorAll("button"))
       .find((button) => button.textContent?.includes("last14Days"));
@@ -59,10 +60,10 @@ describe("PopularPage", () => {
     await act(async () => {
       fortnightButton?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
       fortnightButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    await settleQueries();
 
-    expect(apiFetch).toHaveBeenLastCalledWith(expect.stringContaining("period=14d"));
+    expect(apiFetch).toHaveBeenLastCalledWith(expect.stringContaining("period=14d"), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(container.textContent).toContain("Algorithms");
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
 
@@ -70,6 +71,7 @@ describe("PopularPage", () => {
       resolveFortnight?.([material("Databases")]);
       await fortnight;
     });
+    await settleQueries();
     expect(container.textContent).toContain("Databases");
   });
 
@@ -84,9 +86,9 @@ describe("PopularPage", () => {
       .mockResolvedValueOnce([material("Fortnight result")]);
 
     await act(async () => {
-      root.render(<PopularPage />);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      root.render(withQueryClient(<PopularPage />));
     });
+    await settleQueries();
 
     const loadMoreButton = Array.from(container.querySelectorAll("button"))
       .find((button) => button.textContent?.includes("loadMore"));
@@ -99,14 +101,15 @@ describe("PopularPage", () => {
     await act(async () => {
       fortnightButton?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
       fortnightButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    await settleQueries();
     expect(container.textContent).toContain("Fortnight result");
 
     await act(async () => {
       resolveOldPage?.([material("Late today result")]);
       await oldPage;
     });
+    await settleQueries();
     expect(container.textContent).not.toContain("Late today result");
   });
 });

@@ -3,17 +3,15 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Request
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.common.constants import PRIVILEGED_ROLES
 from app.core.common.exceptions import BadRequestError, ForbiddenError, RateLimitError
 from app.core.database.database import get_db
-from app.core.database.redis import get_redis
+from app.core.database.redis import RedisClient, get_redis
 from app.core.security.security import BROWSER_READ_COOKIE, decode_token
 from app.dependencies.auth import CurrentUser
-from app.models.user import User, UserRole
+from app.models.user import MODERATOR_ROLES, User, UserRole
 from app.services.audit import flag_user_account
 
 logger = logging.getLogger(__name__)
@@ -74,7 +72,7 @@ async def rate_limit_downloads(
     request: Request,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     count: int = 1,
 ) -> None:
     minute_limit = 100 if settings.is_dev else 10
@@ -144,7 +142,7 @@ return 1
 """
 
 
-async def _consume_upload_group(request: Request, user: User, redis: Redis) -> bool:  # type: ignore[type-arg]
+async def _consume_upload_group(request: Request, user: User, redis: RedisClient) -> bool:
     group_id = request.headers.get("X-Upload-Group-ID")
     if (
         not group_id
@@ -185,12 +183,12 @@ async def rate_limit_uploads(
     request: Request,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> None:
     if await _consume_upload_group(request, user, redis):
         return
 
-    tier = "privileged" if user.role in PRIVILEGED_ROLES else "default"
+    tier = "privileged" if user.role in MODERATOR_ROLES else "default"
     minute_limit, daily_limit = _UPLOAD_LIMITS[tier]
 
     subjects = _rate_limit_subjects(request, user)
@@ -225,7 +223,7 @@ async def rate_limit_uploads(
 async def rate_limit_views(
     request: Request,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> None:
     """Rate limit for view tracking.
 
@@ -260,7 +258,7 @@ async def rate_limit_views(
 async def rate_limit_search(
     request: Request,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> None:
     """Rate limit for the authenticated search endpoint: 120/min (300 in dev)."""
     subjects = _rate_limit_subjects(request, user)

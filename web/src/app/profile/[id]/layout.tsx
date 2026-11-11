@@ -1,5 +1,6 @@
 import { ProfilePageContent } from "@/components/profile/profile-page-content";
 
-export default function ProfileLayout({ children }: { children: React.ReactNode }) {
+// Renders the client page itself, so the persisted layout keeps its state across ids.
+export default function ProfileLayout() {
   return <ProfilePageContent />;
 }

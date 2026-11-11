@@ -1,39 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { ProfileView, ProfileSkeleton, type UserProfile } from "@/components/profile/profile-view";
-import { apiFetch } from "@/lib/api-client";
-import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
+import { ProfileView, ProfileSkeleton, type UserProfile } from "@/components/profile/profile-view";
+import { QueryError } from "@/components/query-error";
+import { ApiError, apiFetch } from "@/lib/api-client";
 
 export function ProfilePageContent() {
     const t = useTranslations("Profile");
     const pathname = usePathname();
     const id = pathname.replace(/^\/profile\//, "").replace(/\/$/, "");
-    const [profile, setProfile] = useState<UserProfile | null>(null);
-    const [notFound, setNotFound] = useState(false);
+    const profile = useQuery({
+        queryKey: ["users", id],
+        queryFn: ({ signal }) => apiFetch<UserProfile>(`/users/${id}`, { signal }),
+    });
 
-    useEffect(() => {
-        const controller = new AbortController();
-        setProfile(null);
-        setNotFound(false);
-        const timer = window.setTimeout(() => {
-            apiFetch<UserProfile>(`/users/${id}`, { signal: controller.signal })
-                .then((data) => setProfile(data))
-                .catch(() => {
-                    if (controller.signal.aborted) return;
-                    setNotFound(true);
-                    toast.error(t("notFound"));
-                });
-        }, 0);
-        return () => {
-            window.clearTimeout(timer);
-            controller.abort();
-        };
-    }, [id, t]);
-
-    if (notFound) {
+    // A malformed id (422) names no user either.
+    if (profile.isError && profile.error instanceof ApiError && [404, 422].includes(profile.error.status)) {
         return (
             <div className="flex flex-col items-center justify-center p-20 text-center">
                 <p className="text-lg font-medium text-muted-foreground">{t("notFound")}</p>
@@ -43,8 +27,10 @@ export function ProfilePageContent() {
             </div>
         );
     }
+    if (profile.isError) {
+        return <QueryError onRetry={() => void profile.refetch()} className="p-20" />;
+    }
+    if (!profile.data) return <ProfileSkeleton />;
 
-    if (!profile) return <ProfileSkeleton />;
-
-    return <ProfileView key={profile.id} profile={profile} isOwn={false} />;
+    return <ProfileView key={profile.data.id} profile={profile.data} isOwn={false} />;
 }

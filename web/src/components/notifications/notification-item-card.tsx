@@ -13,6 +13,7 @@ import {
 } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
+import { useDateLocale } from "@/hooks/use-date-locale";
 
 interface NotificationItemCardProps {
   notification: NotificationItem;
@@ -30,7 +31,8 @@ export function NotificationItemCard({
   selectable = false,
 }: NotificationItemCardProps) {
   const t = useTranslations("Notifications");
-  const styles = getNotificationStyle(notification.type, notification.read);
+  const dateLocale = useDateLocale();
+  const styles = getNotificationStyle(notification.type);
   const category = getNotificationCategory(notification.type);
 
   const getCategoryLabel = () => {
@@ -49,7 +51,7 @@ export function NotificationItemCard({
   };
 
   const createdDate = new Date(notification.created_at);
-  const formattedDistance = formatDistanceToNow(createdDate, { addSuffix: true });
+  const formattedDistance = formatDistanceToNow(createdDate, { addSuffix: true, locale: dateLocale });
   const formattedFullDate = createdDate.toLocaleString();
 
   const handleCardClick = (e: React.MouseEvent) => {

@@ -4,7 +4,6 @@ Each test is named after its audit ID and is written to FAIL when the bug
 exists.  Once the corresponding fix is applied the test should turn green.
 """
 
-import json
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -45,13 +44,13 @@ def _auth_headers(user: User) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_high1_batch_status_idor_via_substring(
+async def test_high1_status_idor_via_substring(
     client: AsyncClient,
     db_session: AsyncSession,
     mock_redis: AsyncMock,
 ):
-    """batch_upload_status must NOT leak statuses across users when one user_id
-    is a substring of another.
+    """The upload status route must NOT leak statuses across users when one
+    user_id is a substring of another.
 
     User A (id=abc) must NOT be able to query files belonging to User B
     (id=xyzabcdef) just because 'abc' is in 'xyzabcdef'.
@@ -67,26 +66,10 @@ async def test_high1_batch_status_idor_via_substring(
     # but could be a substring match (the old bug)
     # We test the ownership logic directly.
 
-    # Store a status for victim's key
-    status_data = json.dumps({"file_key": victim_key, "status": "clean"})
-    mock_redis.mget.side_effect = AsyncMock(return_value=[status_data.encode()])
-    mock_redis.get.side_effect = AsyncMock(return_value=None)
-
-    resp = await client.post(
-        "/api/upload/status/batch",
-        json={"file_keys": [victim_key]},
-        headers=headers_a,
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    statuses = body.get("statuses", {})
+    resp = await client.get(f"/api/upload/status/{victim_key}", headers=headers_a)
 
     # User A must NOT see user B's file status
-    assert victim_key not in statuses, (
-        f"IDOR: user {user_a.id} can see file belonging to {user_b.id}. "
-        "Ownership check uses substring instead of prefix."
-    )
+    assert resp.status_code == 403, f"IDOR: user {user_a.id} can see file belonging to {user_b.id}."
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -206,27 +189,3 @@ async def test_low1_octet_stream_still_has_size_limit():
     over_limit = (settings.max_file_size_mb * 1024 * 1024) + 1
     with pytest.raises(BadRequestError):
         _check_per_type_size("application/octet-stream", over_limit)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Integration: ownership check consistency
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_batch_status_ownership_uses_prefix_not_substring():
-    """Ownership filtering in batch_upload_status must use startswith,
-    not `in` (substring match).
-    """
-    import inspect
-
-    from app.routers.upload import status as status_mod
-
-    source = inspect.getsource(status_mod.batch_upload_status)
-
-    # The fixed code should use startswith for ownership
-    # The buggy code had: `if user_id_str in fk_str`
-    assert "user_id_str in fk_str" not in source, (
-        "batch_upload_status still uses 'in' for ownership check — "
-        "this is an IDOR vulnerability (substring match)."
-    )

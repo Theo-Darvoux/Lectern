@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Sparkles, Trophy } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionHeader } from "@/components/home/section-header";
+import { QueryError } from "@/components/query-error";
 import { useAuth } from "@/hooks/use-auth";
 import { API_BASE, apiFetch } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
@@ -15,32 +16,21 @@ import type { LeaderboardResponse } from "./types";
 export function LeaderboardPreview() {
   const t = useTranslations("Leaderboard");
   const { user } = useAuth();
-  const [data, setData] = useState<LeaderboardResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    apiFetch<LeaderboardResponse>("/leaderboard?period=month&limit=5&page=1", { signal: controller.signal })
-      .then(setData)
-      .catch(() => {
-        if (!controller.signal.aborted) setFailed(true);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, []);
+  const { data, isPending, isError, refetch } = useQuery({
+    queryKey: ["leaderboard", "month", { limit: 5, page: 1 }],
+    queryFn: ({ signal }) =>
+      apiFetch<LeaderboardResponse>("/leaderboard?period=month&limit=5&page=1", { signal }),
+  });
 
   return (
     <section aria-label={t("homeTitle")}>
       <SectionHeader title={t("homeTitle")} icon={<Trophy className="h-4 w-4" />} seeAllHref="/leaderboard" />
       <div className="mt-3 overflow-hidden rounded-2xl border bg-card shadow-sm">
-        {loading ? (
+        {isPending ? (
           <div className="space-y-1 p-2">{Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-12 rounded-xl" />)}</div>
-        ) : failed ? (
-          <p className="p-6 text-center text-xs text-muted-foreground">{t("loadError")}</p>
-        ) : !data || data.items.length === 0 ? (
+        ) : isError ? (
+          <QueryError message={t("loadError")} onRetry={() => void refetch()} className="p-6" />
+        ) : data.items.length === 0 ? (
           <p className="p-6 text-center text-xs text-muted-foreground">{t("empty")}</p>
         ) : (
           <div className="divide-y">

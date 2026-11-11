@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,10 +9,12 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { apiFetch } from "@/lib/api-client";
+import { isAdminRole } from "@/lib/guest";
 import { useConfirmDialog } from "@/components/confirm-dialog";
+import { QueryError } from "@/components/query-error";
 import { toast } from "sonner";
-import { useTranslations } from "next-intl";
-
+import { useLocale, useTranslations } from "next-intl";
+import { AdminOnlyNotice } from "@/components/staff/admin-only-notice";
 interface FailedJob {
   id: string;
   job_name: string;
@@ -32,93 +35,50 @@ interface PaginatedJobs {
 
 export default function StaffDLQPage() {
   const t = useTranslations("Admin.DLQ");
+  const locale = useLocale();
   const { user } = useAuth();
-  const isAdmin = user?.role === "bureau" || user?.role === "vieux";
+  const isAdmin = isAdminRole(user?.role);
   const { show } = useConfirmDialog();
+  const queryClient = useQueryClient();
 
-  const [jobs, setJobs] = useState<FailedJob[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
   const [page, setPage] = useState(1);
-  const [pages, setPages] = useState(1);
-  const [total, setTotal] = useState(0);
   const [showResolved, setShowResolved] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const loadRequestRef = useRef(0);
 
-  const fetchJobs = async (p = page) => {
-    if (!isAdmin) return;
-    const requestId = ++loadRequestRef.current;
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ page: String(p), limit: "50" });
+  const jobsQuery = useQuery({
+    queryKey: ["admin", "dlq", { page, showResolved }],
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({ page: String(page), limit: "50" });
       if (showResolved) params.append("resolved", "true");
-
-      const data = await apiFetch<PaginatedJobs>(`/admin/dlq?${params}`);
-      if (requestId !== loadRequestRef.current) return;
-      setJobs(data.items);
-      setHasLoaded(true);
-      setPage(data.page);
-      setPages(data.pages);
-      setTotal(data.total);
-    } catch {
-      if (requestId !== loadRequestRef.current) return;
-      toast.error(t("errors.load"));
-    } finally {
-      if (requestId === loadRequestRef.current) setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchJobs(1);
-  }, [showResolved]);
-
-  const changeShowResolved = (value: boolean) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
-    setShowResolved(value);
-  };
+      return apiFetch<PaginatedJobs>(`/admin/dlq?${params}`, { signal });
+    },
+    enabled: isAdmin,
+    placeholderData: keepPreviousData,
+  });
+  const jobs = jobsQuery.data?.items ?? [];
+  const pages = jobsQuery.data?.pages ?? 1;
+  const total = jobsQuery.data?.total ?? 0;
 
   if (!isAdmin) {
-    return (
-      <div className="flex items-center justify-center p-12 text-muted-foreground">
-        Access restricted to administrators.
-      </div>
-    );
+    return <AdminOnlyNotice />;
   }
 
-  const handleRetry = async (job: FailedJob) => {
-    show(
-      t("actions.retry.title"),
-      t("actions.retry.description", { name: job.job_name }),
-      async () => {
-        try {
-          await apiFetch(`/admin/dlq/${job.id}/retry`, { method: "POST" });
-          setJobs((prev) => prev.filter((j) => j.id !== job.id));
-          toast.success(t("actions.retry.success"));
-        } catch {
-          toast.error(t("actions.retry.error"));
-        }
-      },
-    );
+  const changeShowResolved = (value: boolean) => {
+    setShowResolved(value);
+    setPage(1);
   };
 
-  const handleDismiss = async (job: FailedJob) => {
+  const runAction = (job: FailedJob, action: "retry" | "dismiss") => {
     show(
-      t("actions.dismiss.title"),
-      t("actions.dismiss.description", { name: job.job_name }),
+      t(`actions.${action}.title`),
+      t(`actions.${action}.description`, { name: job.job_name }),
       async () => {
         try {
-          await apiFetch(`/admin/dlq/${job.id}/dismiss`, { method: "POST" });
-          setJobs((prev) =>
-            prev.map((j) =>
-              j.id === job.id
-                ? { ...j, resolved_at: new Date().toISOString() }
-                : j,
-            ),
-          );
-          toast.success(t("actions.dismiss.success"));
+          await apiFetch(`/admin/dlq/${job.id}/${action}`, { method: "POST" });
+          toast.success(t(`actions.${action}.success`));
         } catch {
-          toast.error(t("actions.dismiss.error"));
+          toast.error(t(`actions.${action}.error`));
+        } finally {
+          void queryClient.invalidateQueries({ queryKey: ["admin", "dlq"] });
         }
       },
     );
@@ -151,21 +111,28 @@ export default function StaffDLQPage() {
             <thead className="border-b bg-muted/50 text-muted-foreground">
               <tr>
                 <th className="p-4 font-medium">{t("table.job")}</th>
-                <th className="p-4 font-medium">{t("table.attempts")}</th>
-                <th className="p-4 font-medium">{t("table.error")}</th>
-                <th className="p-4 font-medium">{t("table.created")}</th>
+                <th className="p-4 font-medium hidden sm:table-cell">{t("table.attempts")}</th>
+                <th className="p-4 font-medium hidden md:table-cell">{t("table.error")}</th>
+                <th className="p-4 font-medium hidden sm:table-cell">{t("table.created")}</th>
                 <th className="p-4 font-medium text-right">{t("table.actions")}</th>
               </tr>
             </thead>
-            <tbody className="divide-y" aria-busy={loading}>
-              {loading && !hasLoaded && (
+            <tbody className="divide-y" aria-busy={jobsQuery.isFetching}>
+              {jobsQuery.isPending && (
                 <tr>
                   <td colSpan={5} className="p-8 text-center text-muted-foreground">
                     {t("state.loading")}
                   </td>
                 </tr>
               )}
-              {hasLoaded && jobs.length === 0 && (
+              {jobsQuery.isError && (
+                <tr>
+                  <td colSpan={5} className="p-8">
+                    <QueryError message={t("errors.load")} onRetry={() => void jobsQuery.refetch()} />
+                  </td>
+                </tr>
+              )}
+              {jobsQuery.isSuccess && jobs.length === 0 && (
                 <tr>
                   <td colSpan={5} className="p-8 text-center text-muted-foreground">
                     {showResolved ? t("state.noFound") : t("state.empty")}
@@ -211,7 +178,7 @@ export default function StaffDLQPage() {
                   </td>
                   <td className="p-4 text-muted-foreground text-xs hidden sm:table-cell">
                     {job.created_at
-                      ? new Date(job.created_at).toLocaleString()
+                      ? new Date(job.created_at).toLocaleString(locale)
                       : "—"}
                   </td>
                   <td className="p-4 text-right">
@@ -221,7 +188,7 @@ export default function StaffDLQPage() {
                           variant="ghost"
                           size="sm"
                           className="h-8 text-xs gap-1.5"
-                          onClick={() => handleRetry(job)}
+                          onClick={() => runAction(job, "retry")}
                         >
                           <RotateCw className="h-3 w-3" />
                           {t("actions.retry.label")}
@@ -230,7 +197,7 @@ export default function StaffDLQPage() {
                           variant="ghost"
                           size="sm"
                           className="h-8 text-xs gap-1.5 text-muted-foreground"
-                          onClick={() => handleDismiss(job)}
+                          onClick={() => runAction(job, "dismiss")}
                         >
                           <XCircle className="h-3 w-3" />
                           {t("actions.dismiss.label")}
@@ -251,7 +218,7 @@ export default function StaffDLQPage() {
             variant="ghost"
             size="sm"
             disabled={page <= 1}
-            onClick={() => fetchJobs(page - 1)}
+            onClick={() => setPage(page - 1)}
           >
             {t("pagination.previous")}
           </Button>
@@ -262,7 +229,7 @@ export default function StaffDLQPage() {
             variant="ghost"
             size="sm"
             disabled={page >= pages}
-            onClick={() => fetchJobs(page + 1)}
+            onClick={() => setPage(page + 1)}
           >
             {t("pagination.next")}
           </Button>

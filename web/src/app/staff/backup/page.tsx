@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Download,
   HardDrive,
@@ -14,8 +15,12 @@ import { useAuth } from "@/hooks/use-auth";
 import { apiFetch, apiFetchBlob, apiRequest } from "@/lib/api-client";
 import { useConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
+import { isAdminRole } from "@/lib/guest";
+import { AdminOnlyNotice } from "@/components/staff/admin-only-notice";
+import { QueryError } from "@/components/query-error";
+import { formatFileSize, saveBlob } from "@/lib/file-utils";
 
 interface BackupEntry {
   id: string;
@@ -31,63 +36,40 @@ interface BackupManifest {
   db_row_counts: Record<string, number>;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
 export default function StaffBackupPage() {
   const t = useTranslations("Admin.Backup");
   const { user } = useAuth();
-  const isAdmin = user?.role === "bureau" || user?.role === "vieux";
+  const isAdmin = isAdminRole(user?.role);
   const { show } = useConfirmDialog();
 
-  const [backups, setBackups] = useState<BackupEntry[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const locale = useLocale();
+  const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchBackups = async () => {
-    if (!isAdmin) return;
-    setLoading(true);
-    try {
-      const data = await apiFetch<BackupEntry[]>("/admin/backup");
-      setBackups(data.slice().reverse()); // newest first in UI
-      setHasLoaded(true);
-    } catch {
-      toast.error(t("errors.load"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchBackups();
-  }, []);
+  const backupsQuery = useQuery({
+    queryKey: ["admin", "backups"],
+    queryFn: ({ signal }) => apiFetch<BackupEntry[]>("/admin/backup", { signal }),
+    select: (data) => [...data].reverse(), // newest first in UI
+    enabled: isAdmin,
+  });
+  const backups = backupsQuery.data ?? [];
+  const loading = backupsQuery.isFetching;
+  const refreshBackups = () => queryClient.invalidateQueries({ queryKey: ["admin", "backups"] });
+  const formatDate = (iso: string) =>
+    new Date(iso).toLocaleString(locale, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
 
   if (!isAdmin) {
-    return (
-      <div className="flex items-center justify-center p-12 text-muted-foreground">
-        Access restricted to administrators.
-      </div>
-    );
+    return <AdminOnlyNotice />;
   }
 
   const handleSave = async () => {
@@ -107,7 +89,7 @@ export default function StaffBackupPage() {
           if (data.rotated.length > 0) {
             toast.info(t("save.rotated", { count: data.rotated.length }));
           }
-          await fetchBackups();
+          await refreshBackups();
         } catch {
           toast.error(t("errors.save"));
         } finally {
@@ -127,12 +109,7 @@ export default function StaffBackupPage() {
       const disposition = response.headers.get("content-disposition") ?? "";
       const match = disposition.match(/filename="?([^"]+)"?/);
       const filename = match?.[1] ?? "backup.zip";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlob(blob, filename);
       toast.success(t("export.success"));
     } catch {
       toast.error(t("errors.export"));
@@ -144,12 +121,7 @@ export default function StaffBackupPage() {
   const handleDownload = async (backup: BackupEntry) => {
     try {
       const blob = await apiFetchBlob(`/admin/backup/${backup.id}/download`);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = backup.filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlob(blob, backup.filename);
     } catch {
       toast.error(t("errors.download"));
     }
@@ -163,7 +135,7 @@ export default function StaffBackupPage() {
         try {
           await apiFetch(`/admin/backup/${backup.id}`, { method: "DELETE" });
           toast.success(t("delete.success"));
-          await fetchBackups();
+          await refreshBackups();
         } catch {
           toast.error(t("errors.delete"));
         }
@@ -180,6 +152,7 @@ export default function StaffBackupPage() {
         try {
           await apiFetch(`/admin/backup/${backup.id}/restore`, { method: "POST" });
           toast.success(t("restore.success"));
+          void queryClient.invalidateQueries();
         } catch {
           toast.error(t("errors.restore"));
         } finally {
@@ -191,6 +164,8 @@ export default function StaffBackupPage() {
 
   const handleUploadRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    // Clear now so picking the same file again (e.g. after cancelling) fires onChange.
+    e.target.value = "";
     if (!file) return;
 
     show(
@@ -206,13 +181,13 @@ export default function StaffBackupPage() {
             body: formData,
           });
           toast.success(t("restore.success"));
+          void queryClient.invalidateQueries();
         } catch (err: unknown) {
           const message =
             err instanceof Error ? err.message : t("errors.restore");
           toast.error(message);
         } finally {
           setRestoring(null);
-          if (fileInputRef.current) fileInputRef.current.value = "";
         }
       },
     );
@@ -245,7 +220,7 @@ export default function StaffBackupPage() {
           <Button
             variant="outline"
             onClick={() => fileInputRef.current?.click()}
-            disabled={restoring === "upload"}
+            disabled={restoring !== null}
             className="gap-2"
           >
             <Upload className="h-4 w-4" />
@@ -270,8 +245,10 @@ export default function StaffBackupPage() {
       <div className="space-y-3">
         <h3 className="font-medium">{t("list.title")}</h3>
 
-        {loading && !hasLoaded ? (
+        {backupsQuery.isPending ? (
           <p className="text-sm text-muted-foreground">{t("list.loading")}</p>
+        ) : backupsQuery.isError ? (
+          <QueryError message={t("errors.load")} onRetry={() => void backupsQuery.refetch()} />
         ) : backups.length === 0 ? (
           <div
             className={cn(
@@ -301,7 +278,7 @@ export default function StaffBackupPage() {
                     {backup.filename}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {formatDate(backup.created_at)} · {formatBytes(backup.size_bytes)}
+                    {formatDate(backup.created_at)} · {formatFileSize(backup.size_bytes)}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -318,7 +295,7 @@ export default function StaffBackupPage() {
                     size="sm"
                     variant="outline"
                     className="gap-1"
-                    disabled={restoring === backup.id}
+                    disabled={restoring !== null}
                     onClick={() => handleRestoreLocal(backup)}
                   >
                     <RotateCw className="h-3.5 w-3.5" />

@@ -1,12 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { apiFetchWithResponse } from "@/lib/api-client";
+import { apiFetch, apiFetchWithResponse } from "@/lib/api-client";
 import { subscribeToSSE } from "@/lib/sse-client";
 import { PRCard } from "./pr-card";
 import { PRCommitGraph } from "./pr-commit-graph";
 import { type PullRequestOut } from "@/components/home/types";
+import type { components } from "@/lib/api-types";
+
+type PullRequestCounts = components["schemas"]["PullRequestCounts"];
 import { usePRStore, useAuthStore } from "@/lib/stores";
 import {
   Inbox,
@@ -22,7 +26,6 @@ import {
   Sparkles,
   GitPullRequest,
   Layers,
-  FilePlus,
   Folder,
   ArrowUpDown,
   SearchX,
@@ -43,9 +46,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 
 type StatusFilter = "open" | "approved" | "rejected" | "cancelled" | null;
-type OpFilter = "all" | "create_material" | "edit_material" | "delete_material" | "create_directory" | "move_item" | "revert";
+type OpFilter = "all" | "create_material" | "edit_material" | "delete_material" | "directory" | "move_item" | "revert";
+
+const OP_FILTER_LABELS = {
+  create_material: "filterDocuments",
+  edit_material: "filterEdits",
+  delete_material: "filterDeletions",
+  directory: "filterFolders",
+  move_item: "filterMoves",
+  revert: "filterReverts",
+} as const;
 type SortOption = "newest" | "oldest" | "changes";
 
 const PAGE_SIZE = 20;
@@ -55,7 +68,11 @@ export function PRList() {
   const user = useAuthStore((state) => state.user);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
-  const TABS: { value: StatusFilter; labelKey: string; icon: React.ElementType }[] =
+  const TABS: {
+    value: StatusFilter;
+    labelKey: "all" | "pending" | "approved" | "rejected" | "cancelled";
+    icon: React.ElementType;
+  }[] =
     [
       { value: null, labelKey: "all", icon: Layers },
       { value: "open", labelKey: "pending", icon: Inbox },
@@ -64,10 +81,6 @@ export function PRList() {
       { value: "cancelled", labelKey: "cancelled", icon: Ban },
     ];
 
-  const [prs, setPrs] = useState<PullRequestOut[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
   const [page, setPage] = useState(1);
   const [filterStatus, setFilterStatus] = useState<StatusFilter>(null);
   const [filterScope, setFilterScope] = useState<"all" | "mine">("all");
@@ -75,182 +88,97 @@ export function PRList() {
   const [sortBy, setSortBy] = useState<SortOption>("newest");
   const [viewMode, setViewMode] = useState<"list" | "graph">("graph");
   const [searchQuery, setSearchQuery] = useState("");
-  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const debouncedSearch = useDebouncedValue(searchQuery.trim(), 300);
+  const userId = user?.id;
+  const queryClient = useQueryClient();
 
   // Status counts for tab badges and hero stats
-  const [counts, setCounts] = useState<Record<string, number | null>>({
+  const countsQuery = useQuery({
+    queryKey: ["pull-requests", "counts"],
+    queryFn: ({ signal }) => apiFetch<PullRequestCounts>("/pull-requests/counts", { signal }),
+  });
+  const counts: Record<string, number | null> = countsQuery.data ?? {
     open: null,
     approved: null,
     rejected: null,
     cancelled: null,
     mine: null,
+  };
+  const openCount = countsQuery.data?.open;
+  useEffect(() => {
+    if (openCount !== undefined) usePRStore.getState().setOpenPRCount(openCount);
+  }, [openCount]);
+
+  const listQuery = useQuery({
+    queryKey: [
+      "pull-requests",
+      "list",
+      { page, filterStatus, filterScope, userId, debouncedSearch, filterOpType, sortBy },
+    ],
+    queryFn: async ({ signal }) => {
+      const params = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) });
+      if (filterStatus) params.set("status", filterStatus);
+      if (filterScope === "mine" && userId) params.set("author_id", userId);
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      if (filterOpType !== "all") params.set("op_type", filterOpType);
+      if (sortBy !== "newest") params.set("sort", sortBy);
+      const { data, response } = await apiFetchWithResponse<PullRequestOut[]>(
+        `/pull-requests?${params}`,
+        { signal },
+      );
+      const total = response.headers.get("X-Total-Count");
+      return { items: data, total: total ? parseInt(total, 10) : null };
+    },
+    // Keep the current page dimmed while another page or tab loads.
+    placeholderData: keepPreviousData,
   });
+  const prs = useMemo(() => listQuery.data?.items ?? [], [listQuery.data]);
+  const totalCount = listQuery.data?.total ?? null;
+  const hasLoaded = listQuery.data !== undefined;
+  const loading = listQuery.isFetching;
+  const error = listQuery.isError;
 
-  // Bumped by SSE events or retries
-  const [refreshKey, setRefreshKey] = useState(0);
-  const userId = user?.id;
-
-  const fetchCounts = useCallback(() => {
-    const statuses = ["open", "approved", "rejected", "cancelled"] as const;
-    const fetchStatuses = statuses.map((s) =>
-      apiFetchWithResponse<PullRequestOut[]>(
-        `/pull-requests?status=${s}&page=1&limit=1`,
-      ).then((res) => {
-        const total = res.response.headers.get("X-Total-Count");
-        return total ? parseInt(total, 10) : 0;
-      }),
-    );
-
-    // If user is logged in, also fetch count for "mine"
-    const fetchMine = userId
-      ? apiFetchWithResponse<PullRequestOut[]>(
-          `/pull-requests?author_id=${userId}&page=1&limit=1`,
-        )
-          .then((res) => {
-            const total = res.response.headers.get("X-Total-Count");
-            return total ? parseInt(total, 10) : 0;
-          })
-          .catch(() => null)
-      : Promise.resolve(null);
-
-    Promise.allSettled([...fetchStatuses, fetchMine]).then((results) => {
-      const next: Record<string, number | null> = {};
-      statuses.forEach((s, i) => {
-        const r = results[i];
-        next[s] = r.status === "fulfilled" ? r.value : null;
-      });
-      const mineRes = results[statuses.length];
-      next.mine = mineRes.status === "fulfilled" ? mineRes.value : null;
-
-      setCounts(next);
-      if (next["open"] !== null) {
-        usePRStore.getState().setOpenPRCount(next["open"]);
-      }
-    });
-  }, [userId]);
-
+  // Live updates: any PR change invalidates the list and the counts.
   useEffect(() => {
-    fetchCounts();
-  }, [fetchCounts, refreshKey]);
-
-  useEffect(() => {
-    let active = true;
-    Promise.resolve().then(() => {
-      if (active) {
-        setLoading(true);
-        setError(false);
-      }
-    });
-
-    const params = new URLSearchParams();
-    params.set("page", String(page));
-    params.set("limit", String(PAGE_SIZE));
-    if (filterStatus) params.set("status", filterStatus);
-    if (filterScope === "mine" && user?.id) params.set("author_id", user.id);
-
-    apiFetchWithResponse<PullRequestOut[]>(`/pull-requests?${params}`)
-      .then(({ data, response }) => {
-        if (!active) return;
-        setPrs(data);
-        setHasLoaded(true);
-        const total = response.headers.get("X-Total-Count");
-        setTotalCount(total ? parseInt(total, 10) : null);
-      })
-      .catch(() => {
-        if (active) setError(true);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [page, filterStatus, filterScope, refreshKey, user?.id]);
-
-  // Subscribe to SSE
-  useEffect(() => {
+    const refresh = () => void queryClient.invalidateQueries({ queryKey: ["pull-requests"] });
     const connection = subscribeToSSE({
       channel: "pull_requests",
-      listeners: {
-        pr_opened: () => setRefreshKey((k) => k + 1),
-        pr_closed: () => setRefreshKey((k) => k + 1),
-      },
-      onResync: () => setRefreshKey((k) => k + 1),
+      listeners: { pr_opened: refresh, pr_closed: refresh },
+      onResync: refresh,
     });
     return () => connection.close();
-  }, []);
+  }, [queryClient]);
 
   const switchTab = (status: StatusFilter) => {
     if (status === filterStatus) return;
-    setLoading(true);
-    setError(false);
     setFilterStatus(status);
     setPage(1);
   };
 
-  const changePage = (nextPage: number) => {
-    setLoading(true);
-    setError(false);
-    setPage(nextPage);
-  };
+  const changePage = (nextPage: number) => setPage(nextPage);
 
   const retry = () => {
-    setLoading(true);
-    setError(false);
-    setRefreshKey((key) => key + 1);
+    void listQuery.refetch();
+    void countsQuery.refetch();
   };
 
-  // Client-side filtering for Search, Operation Type, and Sorting
-  const filteredAndSortedPrs = useMemo(() => {
-    let list = [...prs];
-
-    // Filter by search query (title, author display name, #id)
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim().replace(/^#/, "");
-      list = list.filter((pr) => {
-        const titleMatch = pr.title.toLowerCase().includes(q);
-        const authorMatch = pr.author?.display_name?.toLowerCase().includes(q);
-        const idMatch = pr.id.toLowerCase().includes(q);
-        return titleMatch || authorMatch || idMatch;
-      });
-    }
-
-    // Filter by operation type
-    if (filterOpType !== "all") {
-      list = list.filter((pr) => {
-        if (filterOpType === "revert") {
-          return pr.type === "revert" || Boolean(pr.reverts_pr_id) || Boolean(pr.reverted_by_pr_id);
-        }
-        if (filterOpType === "create_directory") {
-          return (
-            pr.summary_types?.some((st) => st.includes("directory")) ||
-            pr.type.includes("directory")
-          );
-        }
-        return (
-          pr.summary_types?.includes(filterOpType) ||
-          pr.type === filterOpType
-        );
-      });
-    }
-
-    // Sort
-    if (sortBy === "oldest") {
-      list.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    } else if (sortBy === "changes") {
-      list.sort((a, b) => {
-        const aCount = a.summary_types?.length || 1;
-        const bCount = b.summary_types?.length || 1;
-        return bCount - aCount;
-      });
-    } else {
-      // Default: newest first
-      list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    }
-
-    return list;
-  }, [prs, searchQuery, filterOpType, sortBy]);
+  // Every filter change starts again from the first page.
+  const changeSearch = (value: string) => {
+    setSearchQuery(value);
+    setPage(1);
+  };
+  const changeOpType = (value: OpFilter) => {
+    setFilterOpType(value);
+    setPage(1);
+  };
+  const changeSort = (value: SortOption) => {
+    setSortBy(value);
+    setPage(1);
+  };
+  const changeScope = (value: "all" | "mine") => {
+    setFilterScope(value);
+    setPage(1);
+  };
 
   const hasActiveFilters = searchQuery.trim() !== "" || filterOpType !== "all" || filterScope !== "all";
 
@@ -258,11 +186,12 @@ export function PRList() {
     setSearchQuery("");
     setFilterOpType("all");
     setFilterScope("all");
+    setPage(1);
   };
 
   const emptyStatusMessage = filterStatus
     ? t("noContributions", {
-        status: t(TABS.find((tab) => tab.value === filterStatus)?.labelKey as any).toLowerCase(),
+        status: t(TABS.find((tab) => tab.value === filterStatus)?.labelKey ?? "all").toLowerCase(),
       })
     : t("noContributionsYet");
 
@@ -331,10 +260,7 @@ export function PRList() {
             {isAuthenticated && counts.mine !== null && (
               <button
                 type="button"
-                onClick={() => {
-                  setFilterScope(filterScope === "mine" ? "all" : "mine");
-                  setPage(1);
-                }}
+                onClick={() => changeScope(filterScope === "mine" ? "all" : "mine")}
                 className={cn(
                   "w-full flex items-center justify-between p-2 rounded-xl text-xs transition-colors border text-left",
                   filterScope === "mine"
@@ -401,7 +327,7 @@ export function PRList() {
                       : "opacity-70",
                   )}
                 />
-                <span>{t(labelKey as any)}</span>
+                <span>{t(labelKey)}</span>
                 {count !== null && count > 0 && (
                   <span
                     className={cn(
@@ -428,13 +354,13 @@ export function PRList() {
               type="text"
               placeholder={t("searchPlaceholder")}
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => changeSearch(e.target.value)}
               className="pl-9 pr-8 h-9 rounded-xl bg-card border-border/60 text-sm focus-visible:ring-primary/30"
             />
             {searchQuery && (
               <button
                 type="button"
-                onClick={() => setSearchQuery("")}
+                onClick={() => changeSearch("")}
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded-md"
                 aria-label={t("clearSearch")}
               >
@@ -449,10 +375,7 @@ export function PRList() {
             {isAuthenticated && (
               <Select
                 value={filterScope}
-                onValueChange={(val: "all" | "mine") => {
-                  setFilterScope(val);
-                  setPage(1);
-                }}
+                onValueChange={(val: "all" | "mine") => changeScope(val)}
               >
                 <SelectTrigger className="h-9 w-auto min-w-[130px] rounded-xl text-xs font-medium border-border/60 bg-card">
                   <SelectValue />
@@ -467,7 +390,7 @@ export function PRList() {
             {/* Operation Type Filter */}
             <Select
               value={filterOpType}
-              onValueChange={(val: OpFilter) => setFilterOpType(val)}
+              onValueChange={(val: OpFilter) => changeOpType(val)}
             >
               <SelectTrigger className="h-9 w-auto min-w-[140px] rounded-xl text-xs font-medium border-border/60 bg-card">
                 <SelectValue />
@@ -477,7 +400,7 @@ export function PRList() {
                 <SelectItem value="create_material">{t("filterDocuments")}</SelectItem>
                 <SelectItem value="edit_material">{t("filterEdits")}</SelectItem>
                 <SelectItem value="delete_material">{t("filterDeletions")}</SelectItem>
-                <SelectItem value="create_directory">{t("filterFolders")}</SelectItem>
+                <SelectItem value="directory">{t("filterFolders")}</SelectItem>
                 <SelectItem value="move_item">{t("filterMoves")}</SelectItem>
                 <SelectItem value="revert">{t("filterReverts")}</SelectItem>
               </SelectContent>
@@ -486,7 +409,7 @@ export function PRList() {
             {/* Sort Options */}
             <Select
               value={sortBy}
-              onValueChange={(val: SortOption) => setSortBy(val)}
+              onValueChange={(val: SortOption) => changeSort(val)}
             >
               <SelectTrigger className="h-9 w-auto min-w-[130px] rounded-xl text-xs font-medium border-border/60 bg-card">
                 <div className="flex items-center gap-1.5">
@@ -541,13 +464,13 @@ export function PRList() {
         {/* Active Filter Chips */}
         {hasActiveFilters && (
           <div className="flex items-center gap-2 flex-wrap pt-1 text-xs text-muted-foreground">
-            <span>{t("showingCount", { count: filteredAndSortedPrs.length, total: prs.length })}</span>
+            <span>{t("matchingCount", { count: totalCount ?? prs.length })}</span>
             {searchQuery && (
               <Badge variant="secondary" className="gap-1 text-[11px] h-6 font-normal">
                 &quot;{searchQuery}&quot;
                 <button
                   type="button"
-                  onClick={() => setSearchQuery("")}
+                  onClick={() => changeSearch("")}
                   className="hover:text-foreground"
                 >
                   <X className="h-3 w-3" />
@@ -559,7 +482,7 @@ export function PRList() {
                 {t("filterMine")}
                 <button
                   type="button"
-                  onClick={() => setFilterScope("all")}
+                  onClick={() => changeScope("all")}
                   className="hover:text-foreground"
                 >
                   <X className="h-3 w-3" />
@@ -568,10 +491,10 @@ export function PRList() {
             )}
             {filterOpType !== "all" && (
               <Badge variant="secondary" className="gap-1 text-[11px] h-6 font-normal">
-                {filterOpType}
+                {t(OP_FILTER_LABELS[filterOpType])}
                 <button
                   type="button"
-                  onClick={() => setFilterOpType("all")}
+                  onClick={() => changeOpType("all")}
                   className="hover:text-foreground"
                 >
                   <X className="h-3 w-3" />
@@ -638,7 +561,7 @@ export function PRList() {
             </Link>
           </Button>
         </div>
-      ) : filteredAndSortedPrs.length === 0 ? (
+      ) : prs.length === 0 ? (
         /* Filter / Search yielded 0 results */
         <div
           className="flex flex-col items-center justify-center rounded-2xl border border-dashed py-16 px-4 text-center text-muted-foreground bg-card/40"
@@ -666,7 +589,7 @@ export function PRList() {
           className={cn(loading && "opacity-60 transition-opacity")}
           aria-busy={loading}
         >
-          <PRCommitGraph prs={filteredAndSortedPrs} loading={loading} />
+          <PRCommitGraph prs={prs} loading={loading} />
         </div>
       ) : (
         /* List View Mode */
@@ -677,7 +600,7 @@ export function PRList() {
           )}
           aria-busy={loading}
         >
-          {filteredAndSortedPrs.map((pr) => (
+          {prs.map((pr) => (
             <PRCard key={pr.id} pr={pr} />
           ))}
         </div>

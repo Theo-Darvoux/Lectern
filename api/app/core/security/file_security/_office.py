@@ -19,7 +19,7 @@ from app.core.security.file_security._concurrency import (
     image_guard,
     subprocess_guard,
 )
-from app.core.security.file_security._svg import check_svg_safety
+from app.core.security.file_security._svg import _decode_css_escapes, check_svg_safety
 from app.core.security.file_security._zip import (
     _ZIP_MAX_ENTRIES,
     _ZIP_MAX_ENTRY_BYTES,
@@ -176,7 +176,6 @@ _DANGEROUS_URI_RE = re.compile(
     r"^(?:javascript|vbscript|data\s*:\s*(?:text/html|application/))",
     re.IGNORECASE,
 )
-_CSS_ESCAPE_RE = re.compile(r"\\([0-9a-fA-F]{1,6})(?:\s)?|\\(.)", re.DOTALL)
 
 
 def _validate_external_hyperlink_target(target: str, *, context: str) -> None:
@@ -265,18 +264,6 @@ def _strip_epub_package_metadata(
             raise SanitizationError(f"EPUB spine references unknown manifest id '{idref}'")
 
     return StdET.tostring(root, encoding="utf-8", xml_declaration=True), manifest
-
-
-def _decode_css_escapes(value: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        if match.group(1):
-            try:
-                return chr(int(match.group(1), 16))
-            except (ValueError, OverflowError):
-                return ""
-        return match.group(2) or ""
-
-    return _CSS_ESCAPE_RE.sub(replace, value)
 
 
 def _validate_epub_css(data: bytes, entry_name: str) -> None:

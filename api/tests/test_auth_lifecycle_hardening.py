@@ -138,15 +138,11 @@ def test_production_magic_link_paths_use_atomic_fragment_only_contract() -> None
     assert "/login/verify#token=" in router
     assert "/login/verify#token=" in cli
 
-    service_path = root / "api/app/services/auth.py"
-    forbidden_callers = []
-    for path in (root / "api/app").rglob("*.py"):
-        if path == service_path:
-            continue
-        source = path.read_text(encoding="utf-8")
-        if "store_code(" in source or "store_magic_token(" in source:
-            forbidden_callers.append(str(path.relative_to(root)))
-    assert forbidden_callers == []
+    # The non-atomic per-part writers are gone, so nothing can bypass the binding.
+    from app.services import auth as auth_service
+
+    assert not hasattr(auth_service, "store_code")
+    assert not hasattr(auth_service, "store_magic_token")
 
 
 async def test_offline_recovery_invalidates_pre_recovery_verification_code(

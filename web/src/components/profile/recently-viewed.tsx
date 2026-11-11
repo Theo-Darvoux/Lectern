@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Clock } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { MaterialCard } from "@/components/home/material-card";
@@ -11,6 +12,7 @@ import {
 } from "@/components/profile/profile-material";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useQueryOutcome } from "@/hooks/use-query-outcome";
 import { apiFetch } from "@/lib/api-client";
 
 const PAGE_SIZE = 8;
@@ -36,28 +38,14 @@ function SkeletonCard() {
 
 export function RecentlyViewed({ onReady, onError }: { onReady?: () => void; onError?: () => void } = {}) {
   const t = useTranslations("Profile");
-  const [materials, setMaterials] = useState<RecentMaterial[]>([]);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const onReadyRef = useRef(onReady);
-  const onErrorRef = useRef(onError);
-
-  useEffect(() => {
-    onReadyRef.current = onReady;
-    onErrorRef.current = onError;
-  }, [onError, onReady]);
-
-  useEffect(() => {
-    apiFetch<RecentMaterial[]>("/users/me/recently-viewed")
-      .then((data) => {
-        setMaterials(data);
-        onReadyRef.current?.();
-      })
-      .catch(() => onErrorRef.current?.())
-      .finally(() => {
-        setLoading(false);
-      });
-  }, []);
+  const query = useQuery({
+    queryKey: ["users", "me", "recently-viewed"],
+    queryFn: ({ signal }) => apiFetch<RecentMaterial[]>("/users/me/recently-viewed", { signal }),
+  });
+  useQueryOutcome(query, onReady, onError);
+  const materials = useMemo(() => query.data ?? [], [query.data]);
+  const loading = query.isPending;
 
   const pages = Math.max(1, Math.ceil(materials.length / PAGE_SIZE));
   const visibleMaterials = useMemo(

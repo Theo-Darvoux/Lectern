@@ -46,7 +46,7 @@ describe("OfficeViewer", () => {
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
-    delete (window as typeof window & { DocsAPI?: unknown }).DocsAPI;
+    delete window.DocsAPI;
     document.querySelectorAll("script[data-eurooffice-api]").forEach((script) => script.remove());
   });
 
@@ -85,7 +85,7 @@ describe("OfficeViewer", () => {
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).not.toBe(firstScript);
 
-    (window as typeof window & { DocsAPI: unknown }).DocsAPI = {
+    (window as unknown as { DocsAPI: unknown }).DocsAPI = {
       DocEditor,
     };
 

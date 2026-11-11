@@ -13,10 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common.exceptions import ConflictError, ServiceUnavailableError
+from app.core.common.upload_keys import (
+    UPLOAD_CANCEL_PREFIX,
+    UPLOAD_QUOTA_PREFIX,
+    UPLOAD_STATUS_PREFIX,
+)
 from app.core.security.cas import CasReferenceMissingError, decrement_cas_ref
 from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
 from app.models.upload import Upload
-from app.routers.upload.helpers import _QUOTA_KEY_PREFIX, _STATUS_CACHE_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +44,7 @@ class UploadCancellationResult:
 
 
 def upload_cancel_key(upload_id: str) -> str:
-    return f"upload:cancel:{upload_id}"
+    return f"{UPLOAD_CANCEL_PREFIX}{upload_id}"
 
 
 def upload_lifecycle_lock_name(upload_id: str) -> str:
@@ -77,7 +81,7 @@ async def _clear_cached_upload_state(
     quarantine_key: str | None,
 ) -> None:
     if quarantine_key:
-        await redis.delete(f"{_STATUS_CACHE_PREFIX}{quarantine_key}")
+        await redis.delete(f"{UPLOAD_STATUS_PREFIX}{quarantine_key}")
 
 
 async def _release_quota_members(
@@ -87,7 +91,7 @@ async def _release_quota_members(
     user_id: str,
     object_keys: set[str],
 ) -> None:
-    quota_key = f"{_QUOTA_KEY_PREFIX}{user_id}"
+    quota_key = f"{UPLOAD_QUOTA_PREFIX}{user_id}"
     staging_key = f"staging:{user_id}:{upload_id}"
     raw_members = await redis.zrange(quota_key, 0, -1)
     members = {value.decode() if isinstance(value, bytes) else str(value) for value in raw_members}

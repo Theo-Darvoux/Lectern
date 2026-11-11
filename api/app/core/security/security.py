@@ -91,8 +91,3 @@ def decode_token(token: str, expected_type: str | None = None) -> dict[str, Any]
             f"Invalid token type: expected {expected_type!r}, got {payload.get('type')!r}"
         )
     return payload
-
-
-def get_jti(token: str) -> str:
-    payload = decode_token(token)
-    return str(payload["jti"])

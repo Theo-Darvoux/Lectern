@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -12,7 +13,7 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import { useLocale } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { useConfirmDialog } from "@/components/confirm-dialog";
@@ -28,8 +29,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAuth } from "@/hooks/use-auth";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { QueryError } from "@/components/query-error";
 import { apiFetch } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
+import { isAdminRole } from "@/lib/guest";
+import { AdminOnlyNotice } from "@/components/staff/admin-only-notice";
+import { saveBlob, toCsv } from "@/lib/file-utils";
 
 interface AdminUser {
   id: string;
@@ -66,141 +72,59 @@ const ROLE_BADGE: Record<string, string> = {
 
 export default function StaffBulkUsersPage() {
   const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
   const params = useSearchParams();
   const { user: actor } = useAuth();
-  const isAdmin = actor?.role === "bureau" || actor?.role === "vieux";
+  const isAdmin = isAdminRole(actor?.role);
   const { show } = useConfirmDialog();
 
-  const copy = fr
-    ? {
-        title: "Gestion des utilisateurs en masse",
-        description: "Sélectionnez plusieurs comptes puis appliquez une action cohérente en une fois.",
-        back: "Gestion classique",
-        search: "Rechercher par nom ou e-mail…",
-        allRoles: "Tous les rôles",
-        selected: "{count} sélectionné(s)",
-        selectPage: "Sélectionner la page",
-        clear: "Effacer",
-        approve: "Approuver",
-        reject: "Rejeter",
-        setRole: "Définir le rôle",
-        delete: "Supprimer",
-        export: "Exporter CSV",
-        confirmReject: "Rejeter les comptes sélectionnés ? Les comptes en attente seront supprimés.",
-        confirmDelete: "Supprimer les comptes sélectionnés ? Cette action est définitive.",
-        confirmTitle: "Confirmer l'action en masse",
-        updated: "{count} compte(s) mis à jour",
-        skipped: "{count} compte(s) ignoré(s)",
-        loadError: "Impossible de charger les utilisateurs",
-        actionError: "L'action en masse a échoué",
-        email: "E-mail",
-        name: "Nom",
-        role: "Rôle",
-        joined: "Créé",
-        empty: "Aucun utilisateur ne correspond aux filtres.",
-        previous: "Précédent",
-        next: "Suivant",
-        noPermission: "Accès réservé aux administrateurs.",
-      }
-    : {
-        title: "Bulk user administration",
-        description: "Select accounts and apply one consistent administrative action at a time.",
-        back: "Standard user management",
-        search: "Search by name or email…",
-        allRoles: "All roles",
-        selected: "{count} selected",
-        selectPage: "Select page",
-        clear: "Clear",
-        approve: "Approve",
-        reject: "Reject",
-        setRole: "Set role",
-        delete: "Delete",
-        export: "Export CSV",
-        confirmReject: "Reject selected accounts? Pending accounts will be deleted.",
-        confirmDelete: "Delete selected accounts? This action is permanent.",
-        confirmTitle: "Confirm bulk action",
-        updated: "{count} account(s) updated",
-        skipped: "{count} account(s) skipped",
-        loadError: "Could not load users",
-        actionError: "Bulk action failed",
-        email: "Email",
-        name: "Name",
-        role: "Role",
-        joined: "Created",
-        empty: "No users match these filters.",
-        previous: "Previous",
-        next: "Next",
-        noPermission: "Access restricted to administrators.",
-      };
+  const t = useTranslations("Admin.BulkUsers");
+  const tRoles = useTranslations("Admin.Users.roleLabels");
 
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [total, setTotal] = useState(0);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [cursorStack, setCursorStack] = useState<string[]>([]);
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [role, setRole] = useState(params.get("role") || "all");
+  // Cursors of the pages before the current one; the last entry is the current page.
+  const [cursorStack, setCursorStack] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
-  const loadRequestRef = useRef(0);
+  const debouncedSearch = useDebouncedValue(search.trim(), 250);
+  const cursor = cursorStack.at(-1) ?? null;
 
-  const fetchUsers = useCallback(
-    async (cursor: string | null = null) => {
-      if (!isAdmin) return;
-      const requestId = ++loadRequestRef.current;
-      setLoading(true);
-      try {
-        const query = new URLSearchParams({ limit: "100" });
-        if (cursor) query.set("cursor", cursor);
-        if (search.trim()) query.set("search", search.trim());
-        if (role !== "all") query.set("role", role);
-        const result = await apiFetch<PaginatedUsers>(`/admin/users?${query}`);
-        if (requestId !== loadRequestRef.current) return;
-        setUsers(result.items);
-        setHasLoaded(true);
-        setTotal(result.total);
-        setNextCursor(result.next_cursor);
-        setSelected(new Set());
-      } catch {
-        if (requestId !== loadRequestRef.current) return;
-        toast.error(copy.loadError);
-      } finally {
-        if (requestId === loadRequestRef.current) setLoading(false);
-      }
+  const usersQuery = useQuery({
+    queryKey: ["admin", "users", { search: debouncedSearch, roleFilter: role, cursor, limit: 100 }],
+    queryFn: ({ signal }) => {
+      const query = new URLSearchParams({ limit: "100" });
+      if (cursor) query.set("cursor", cursor);
+      if (debouncedSearch) query.set("search", debouncedSearch);
+      if (role !== "all") query.set("role", role);
+      return apiFetch<PaginatedUsers>(`/admin/users?${query}`, { signal });
     },
-    [copy.loadError, isAdmin, role, search],
-  );
+    enabled: isAdmin,
+    placeholderData: keepPreviousData,
+  });
+  const users = usersQuery.data?.items ?? [];
+  const total = usersQuery.data?.total ?? 0;
+  const nextCursor = usersQuery.data?.next_cursor ?? null;
+  const loading = usersQuery.isFetching;
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setCursorStack([]);
-      void fetchUsers(null);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [fetchUsers]);
+  // The selection only covers the rows on screen.
+  const goToPage = (stack: string[]) => {
+    setCursorStack(stack);
+    setSelected(new Set());
+  };
 
   const changeSearch = (value: string) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
-    setCursorStack([]);
     setSearch(value);
+    goToPage([]);
   };
 
   const changeRole = (value: string) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
-    setCursorStack([]);
     setRole(value);
+    goToPage([]);
   };
 
   if (!isAdmin) {
-    return (
-      <div className="flex items-center justify-center p-12 text-muted-foreground">
-        {copy.noPermission}
-      </div>
-    );
+    return <AdminOnlyNotice />;
   }
 
   const selectable = users.filter((candidate) => candidate.id !== actor?.id);
@@ -245,11 +169,11 @@ export default function StaffBulkUsersPage() {
         }),
       });
       toast.success(
-        copy.updated.replace("{count}", String(result.updated_count)),
+        t("updated", { count: result.updated_count }),
       );
       if (result.skipped_count > 0) {
         toast.warning(
-          copy.skipped.replace("{count}", String(result.skipped_count)),
+          t("skipped", { count: result.skipped_count }),
           {
             description: result.skipped
               .slice(0, 3)
@@ -258,11 +182,10 @@ export default function StaffBulkUsersPage() {
           },
         );
       }
-      await fetchUsers(
-        cursorStack.length ? cursorStack[cursorStack.length - 1] : null,
-      );
+      setSelected(new Set());
+      await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
     } catch {
-      toast.error(copy.actionError);
+      toast.error(t("actionError"));
     } finally {
       setActing(false);
     }
@@ -270,14 +193,13 @@ export default function StaffBulkUsersPage() {
 
   const confirmAction = (action: "reject" | "delete") => {
     const description =
-      action === "reject" ? copy.confirmReject : copy.confirmDelete;
-    show(copy.confirmTitle, description, async () => {
+      action === "reject" ? t("confirmReject") : t("confirmDelete");
+    show(t("confirmTitle"), description, async () => {
       await runAction(action);
     });
   };
 
   const exportCsv = () => {
-    const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
     const rows = [
       ["email", "display_name", "role", "created_at"],
       ...selectedUsers.map((candidate) => [
@@ -287,46 +209,27 @@ export default function StaffBulkUsersPage() {
         candidate.created_at,
       ]),
     ];
-    const csv = rows
-      .map((row) => row.map((value) => quote(String(value))).join(","))
-      .join("\n");
-    const url = URL.createObjectURL(
-      new Blob([csv], { type: "text/csv;charset=utf-8" }),
-    );
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "users-selection.csv";
-    anchor.click();
-    URL.revokeObjectURL(url);
+    const csv = toCsv(rows);
+    saveBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), "users-selection.csv");
   };
 
   const next = () => {
-    if (!nextCursor) return;
-    setCursorStack((current) => [...current, nextCursor]);
-    void fetchUsers(nextCursor);
+    if (nextCursor) goToPage([...cursorStack, nextCursor]);
   };
 
-  const previous = () => {
-    setCursorStack((current) => {
-      const nextStack = [...current];
-      nextStack.pop();
-      const cursor = nextStack.length ? nextStack[nextStack.length - 1] : null;
-      void fetchUsers(cursor);
-      return nextStack;
-    });
-  };
+  const previous = () => goToPage(cursorStack.slice(0, -1));
 
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">{copy.title}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{copy.description}</p>
+          <h2 className="text-2xl font-bold tracking-tight">{t("title")}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t("description")}</p>
         </div>
         <Button asChild variant="outline" size="sm" className="gap-2 self-start">
           <Link href="/staff/users">
             <ArrowLeft className="h-4 w-4" />
-            {copy.back}
+            {t("back")}
           </Link>
         </Button>
       </div>
@@ -337,7 +240,7 @@ export default function StaffBulkUsersPage() {
           <Input
             value={search}
             onChange={(event) => changeSearch(event.target.value)}
-            placeholder={copy.search}
+            placeholder={t("search")}
             className="pl-9"
           />
         </div>
@@ -346,13 +249,13 @@ export default function StaffBulkUsersPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{copy.allRoles}</SelectItem>
-            <SelectItem value="pending">⏳ {fr ? "En attente" : "Pending"}</SelectItem>
-            <SelectItem value="student">{fr ? "Étudiant" : "Student"}</SelectItem>
-            <SelectItem value="moderator">{fr ? "Modérateur" : "Moderator"}</SelectItem>
-            <SelectItem value="bureau">{fr ? "Bureau" : "Bureau"}</SelectItem>
-            <SelectItem value="vieux">{fr ? "Vieux" : "Vieux"}</SelectItem>
-            <SelectItem value="guest">{fr ? "Invité" : "Guest"}</SelectItem>
+            <SelectItem value="all">{t("allRoles")}</SelectItem>
+            <SelectItem value="pending">⏳ {tRoles("pending")}</SelectItem>
+            <SelectItem value="student">{tRoles("student")}</SelectItem>
+            <SelectItem value="moderator">{tRoles("moderator")}</SelectItem>
+            <SelectItem value="bureau">{tRoles("bureau")}</SelectItem>
+            <SelectItem value="vieux">{tRoles("vieux")}</SelectItem>
+            <SelectItem value="guest">{tRoles("guest")}</SelectItem>
           </SelectContent>
         </Select>
         <Badge
@@ -366,7 +269,7 @@ export default function StaffBulkUsersPage() {
       {selected.size > 0 && (
         <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-xl border bg-background/95 p-3 shadow-lg backdrop-blur">
           <Badge className="mr-1">
-            {copy.selected.replace("{count}", String(selected.size))}
+            {t("selected", { count: selected.size })}
           </Badge>
           <Button
             size="sm"
@@ -375,7 +278,7 @@ export default function StaffBulkUsersPage() {
             disabled={acting || pendingSelected === 0}
             onClick={() => void runAction("approve")}
           >
-            <CheckCircle2 className="h-4 w-4" /> {copy.approve}
+            <CheckCircle2 className="h-4 w-4" /> {t("approve")}
           </Button>
           <Button
             size="sm"
@@ -384,7 +287,7 @@ export default function StaffBulkUsersPage() {
             disabled={acting || pendingSelected === 0}
             onClick={() => confirmAction("reject")}
           >
-            <XCircle className="h-4 w-4" /> {copy.reject}
+            <XCircle className="h-4 w-4" /> {t("reject")}
           </Button>
           <Select
             disabled={acting}
@@ -392,14 +295,14 @@ export default function StaffBulkUsersPage() {
           >
             <SelectTrigger className="h-9 w-40">
               <Shield className="mr-2 h-4 w-4" />
-              <SelectValue placeholder={copy.setRole} />
+              <SelectValue placeholder={t("setRole")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="student">{fr ? "Étudiant" : "Student"}</SelectItem>
-              <SelectItem value="moderator">{fr ? "Modérateur" : "Moderator"}</SelectItem>
-              <SelectItem value="bureau">{fr ? "Bureau" : "Bureau"}</SelectItem>
-              <SelectItem value="vieux">{fr ? "Vieux" : "Vieux"}</SelectItem>
-              <SelectItem value="guest">{fr ? "Invité" : "Guest"}</SelectItem>
+              <SelectItem value="student">{tRoles("student")}</SelectItem>
+              <SelectItem value="moderator">{tRoles("moderator")}</SelectItem>
+              <SelectItem value="bureau">{tRoles("bureau")}</SelectItem>
+              <SelectItem value="vieux">{tRoles("vieux")}</SelectItem>
+              <SelectItem value="guest">{tRoles("guest")}</SelectItem>
             </SelectContent>
           </Select>
           <Button
@@ -409,7 +312,7 @@ export default function StaffBulkUsersPage() {
             disabled={acting}
             onClick={exportCsv}
           >
-            <Download className="h-4 w-4" /> {copy.export}
+            <Download className="h-4 w-4" /> {t("export")}
           </Button>
           <Button
             size="sm"
@@ -418,7 +321,7 @@ export default function StaffBulkUsersPage() {
             disabled={acting}
             onClick={() => confirmAction("delete")}
           >
-            <Trash2 className="h-4 w-4" /> {copy.delete}
+            <Trash2 className="h-4 w-4" /> {t("delete")}
           </Button>
           <Button
             size="sm"
@@ -426,7 +329,7 @@ export default function StaffBulkUsersPage() {
             className="ml-auto"
             onClick={() => setSelected(new Set())}
           >
-            {copy.clear}
+            {t("clear")}
           </Button>
         </div>
       )}
@@ -440,13 +343,13 @@ export default function StaffBulkUsersPage() {
                   <Checkbox
                     checked={allPageSelected}
                     onCheckedChange={toggleAll}
-                    aria-label={copy.selectPage}
+                    aria-label={t("selectPage")}
                   />
                 </th>
-                <th className="p-3 font-medium">{copy.email}</th>
-                <th className="p-3 font-medium">{copy.name}</th>
-                <th className="p-3 font-medium">{copy.role}</th>
-                <th className="p-3 font-medium">{copy.joined}</th>
+                <th className="p-3 font-medium">{t("email")}</th>
+                <th className="p-3 font-medium">{t("name")}</th>
+                <th className="p-3 font-medium">{t("role")}</th>
+                <th className="p-3 font-medium">{t("joined")}</th>
               </tr>
             </thead>
             <tbody className="divide-y" aria-busy={loading}>
@@ -481,17 +384,17 @@ export default function StaffBulkUsersPage() {
                         )}
                       >
                         {candidate.role === "pending"
-                          ? `⏳ ${fr ? "En attente" : "Pending"}`
+                          ? `⏳ ${tRoles("pending")}`
                           : candidate.role === "student"
-                            ? (fr ? "Étudiant" : "Student")
+                            ? tRoles("student")
                             : candidate.role === "moderator"
-                              ? (fr ? "Modérateur" : "Moderator")
+                              ? tRoles("moderator")
                               : candidate.role === "bureau"
                                 ? "Bureau"
                                 : candidate.role === "vieux"
                                   ? "Vieux"
                                   : candidate.role === "guest"
-                                    ? (fr ? "Invité" : "Guest")
+                                    ? tRoles("guest")
                                     : (candidate.role || "student")}
                       </Badge>
                     </td>
@@ -501,14 +404,21 @@ export default function StaffBulkUsersPage() {
                   </tr>
                 );
               })}
-              {hasLoaded && users.length === 0 && (
+              {usersQuery.isError && (
                 <tr>
-                  <td colSpan={5} className="p-10 text-center text-muted-foreground">
-                    {copy.empty}
+                  <td colSpan={5} className="p-10">
+                    <QueryError message={t("loadError")} onRetry={() => void usersQuery.refetch()} />
                   </td>
                 </tr>
               )}
-              {loading && !hasLoaded && (
+              {usersQuery.isSuccess && users.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="p-10 text-center text-muted-foreground">
+                    {t("empty")}
+                  </td>
+                </tr>
+              )}
+              {usersQuery.isPending && (
                 <tr>
                   <td colSpan={5} className="p-10 text-center text-muted-foreground">
                     …
@@ -527,7 +437,7 @@ export default function StaffBulkUsersPage() {
           disabled={cursorStack.length === 0 || loading}
           onClick={previous}
         >
-          {copy.previous}
+          {t("previous")}
         </Button>
         <Button
           variant="outline"
@@ -535,7 +445,7 @@ export default function StaffBulkUsersPage() {
           disabled={!nextCursor || loading}
           onClick={next}
         >
-          {copy.next}
+          {t("next")}
         </Button>
       </div>
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api-client";
 import { formatDistanceToNow } from "date-fns";
@@ -10,12 +11,14 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Edit2, MessageSquare, Send } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/lib/stores";
+import { isStaff } from "@/lib/guest";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { FlagButton } from "@/components/flags/flag-button";
 import { ExpandableText } from "@/components/ui/expandable-text";
-import { useTranslations, useLocale } from "next-intl";
-import { fr, enUS } from "date-fns/locale";
+import { QueryError } from "@/components/query-error";
+import { useTranslations } from "next-intl";
+import { useDateLocale } from "@/hooks/use-date-locale";
 
 interface PRComment {
     id: string;
@@ -30,29 +33,23 @@ const MAX_COMMENT_LENGTH = 1000;
 export function PRComments({ prId }: { prId: string }) {
     const t = useTranslations("Comments");
     const tCommon = useTranslations("Common");
-    const locale = useLocale();
-    const dateLocale = locale === "fr" ? fr : enUS;
+    const dateLocale = useDateLocale();
     const isMobile = useIsMobile();
     const user = useAuthStore((state) => state.user);
-    const [comments, setComments] = useState<PRComment[]>([]);
     const [body, setBody] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editBody, setEditBody] = useState("");
 
-    const fetchComments = async () => {
-        try {
-            const res = await apiFetch<PRComment[]>(
-                `/pull-requests/${prId}/comments`,
-            );
-            setComments(res);
-        } catch {}
-    };
-
-    useEffect(() => {
-        fetchComments();
-         
-    }, [prId]);
+    const queryClient = useQueryClient();
+    const commentsKey = ["pull-requests", prId, "comments"];
+    const commentsQuery = useQuery({
+        queryKey: commentsKey,
+        queryFn: ({ signal }) => apiFetch<PRComment[]>(`/pull-requests/${prId}/comments`, { signal }),
+    });
+    const comments = useMemo(() => commentsQuery.data ?? [], [commentsQuery.data]);
+    const updateComments = (update: (current: PRComment[]) => PRComment[]) =>
+        queryClient.setQueryData<PRComment[]>(commentsKey, (current) => update(current ?? []));
 
     const handleSubmit = async () => {
         if (!body.trim()) return;
@@ -67,7 +64,7 @@ export function PRComments({ prId }: { prId: string }) {
                 body: JSON.stringify({ body }),
             });
             setBody("");
-            setComments((prev) => [...prev, newComment]);
+            updateComments((prev) => [...prev, newComment]);
         } catch (err) {
             toast.error(err instanceof Error ? err.message : t("failedToPost"));
         } finally {
@@ -88,7 +85,7 @@ export function PRComments({ prId }: { prId: string }) {
             });
             setEditingId(null);
             setEditBody("");
-            setComments((prev) => prev.map((c) => (c.id === id ? updated : c)));
+            updateComments((prev) => prev.map((c) => (c.id === id ? updated : c)));
         } catch (err) {
             toast.error(err instanceof Error ? err.message : t("failedToEdit"));
         }
@@ -97,7 +94,7 @@ export function PRComments({ prId }: { prId: string }) {
     const handleDelete = async (id: string) => {
         try {
             await apiFetch(`/pr-comments/${id}`, { method: "DELETE" });
-            setComments((prev) => prev.filter((c) => c.id !== id));
+            updateComments((prev) => prev.filter((c) => c.id !== id));
         } catch (err) {
             toast.error(err instanceof Error ? err.message : t("failedToDelete"));
         }
@@ -117,15 +114,15 @@ export function PRComments({ prId }: { prId: string }) {
             .toUpperCase();
 
     const currentUserId = user?.id ?? null;
-    const currentUserRole = user?.role ?? null;
-    const isModerator =
-        currentUserRole === "moderator" ||
-        currentUserRole === "bureau" ||
-        currentUserRole === "vieux";
+    const isModerator = isStaff(user);
 
     return (
         <div className="space-y-4">
-            {comments.length === 0 && (
+            {commentsQuery.isError && (
+                <QueryError onRetry={() => void commentsQuery.refetch()} className="py-6" />
+            )}
+
+            {commentsQuery.isSuccess && comments.length === 0 && (
                 <div className="flex flex-col items-center gap-2 py-6 text-muted-foreground">
                     <MessageSquare className="h-8 w-8 opacity-40" />
                     <p className="text-sm">

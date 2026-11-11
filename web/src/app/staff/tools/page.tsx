@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Mail, Send, Sparkles, Wrench, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Mail, Send, Sparkles, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +13,10 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
 import { apiFetch } from "@/lib/api-client";
-import { WordmarkBuilder } from "@/app/admin/config/components/WordmarkBuilder";
+import { WordmarkBuilder } from "@/components/staff/wordmark-builder";
+import { isAdminRole } from "@/lib/guest";
+import { AdminOnlyNotice } from "@/components/staff/admin-only-notice";
+import { QueryError } from "@/components/query-error";
 
 interface AuthConfigResponse {
   site_name?: string;
@@ -25,13 +29,9 @@ interface AuthConfigResponse {
 
 export default function StaffToolsPage() {
   const t = useTranslations("Staff.tools");
-  const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
   const { user } = useAuth();
-  const isAdmin = user?.role === "bureau" || user?.role === "vieux";
+  const isAdmin = isAdminRole(user?.role);
 
-  const [config, setConfig] = useState<AuthConfigResponse | null>(null);
-  const [loading, setLoading] = useState(true);
   const [testEmail, setTestEmail] = useState("");
   const [testingEmail, setTestingEmail] = useState(false);
   const [lastTestResult, setLastTestResult] = useState<{
@@ -40,25 +40,15 @@ export default function StaffToolsPage() {
     timestamp: string;
   } | null>(null);
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    apiFetch<AuthConfigResponse>("/admin/auth-config")
-      .then((data) => {
-        setConfig(data);
-      })
-      .catch(() => {
-        // Fallback with empty config if endpoint fails
-        setConfig({});
-      })
-      .finally(() => setLoading(false));
-  }, [isAdmin]);
+  const configQuery = useQuery({
+    queryKey: ["admin", "auth-config"],
+    queryFn: ({ signal }) => apiFetch<AuthConfigResponse>("/admin/auth-config", { signal }),
+    enabled: isAdmin,
+  });
+  const config = configQuery.data;
 
   if (!isAdmin) {
-    return (
-      <div className="flex items-center justify-center p-12 text-muted-foreground">
-        Access restricted to administrators.
-      </div>
-    );
+    return <AdminOnlyNotice />;
   }
 
   const handleTestEmail = async (e: React.FormEvent) => {
@@ -88,7 +78,11 @@ export default function StaffToolsPage() {
     }
   };
 
-  if (loading) {
+  if (configQuery.isError) {
+    return <QueryError onRetry={() => void configQuery.refetch()} className="py-12" />;
+  }
+
+  if (configQuery.isPending) {
     return (
       <div className="space-y-6">
         <div className="h-20 w-full animate-pulse rounded-2xl bg-muted/50" />
@@ -136,7 +130,7 @@ export default function StaffToolsPage() {
               <form onSubmit={handleTestEmail} className="space-y-4 max-w-xl">
                 <div className="space-y-2">
                   <Label htmlFor="test-email-address">
-                    {fr ? "Adresse e-mail destinataire" : "Recipient Email"}
+                    {t("recipientEmail")}
                   </Label>
                   <div className="flex gap-2">
                     <Input
@@ -186,7 +180,7 @@ export default function StaffToolsPage() {
                         : t("emailTest.error")}
                     </p>
                     <p className="opacity-70">
-                      {fr ? "Horodatage : " : "Timestamp: "}
+                      {t("timestamp")}
                       {lastTestResult.timestamp}
                     </p>
                   </div>
@@ -196,22 +190,22 @@ export default function StaffToolsPage() {
               {config?.smtp_host && (
                 <div className="rounded-xl border bg-muted/30 p-4 text-xs space-y-2">
                   <p className="font-bold uppercase tracking-wider text-muted-foreground text-[10px]">
-                    {fr ? "Détails du service SMTP actuel" : "Current SMTP Service Details"}
+                    {t("currentSmtpServiceDetails")}
                   </p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-muted-foreground">
                     <div>
-                      <span className="font-medium text-foreground">{fr ? "Hôte : " : "Host: "}</span>
+                      <span className="font-medium text-foreground">{t("host")}</span>
                       {config.smtp_host}
                     </div>
                     {config.smtp_port && (
                       <div>
-                        <span className="font-medium text-foreground">{fr ? "Port : " : "Port: "}</span>
+                        <span className="font-medium text-foreground">{t("port")}</span>
                         {config.smtp_port}
                       </div>
                     )}
                     {config.smtp_from && (
                       <div>
-                        <span className="font-medium text-foreground">{fr ? "Expéditeur : " : "From: "}</span>
+                        <span className="font-medium text-foreground">{t("from")}</span>
                         {config.smtp_from}
                       </div>
                     )}

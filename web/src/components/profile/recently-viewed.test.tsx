@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { apiFetch } from "@/lib/api-client";
 import { RecentlyViewed } from "./recently-viewed";
+import { settleQueries, withQueryClient } from "@/test/query";
 
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
@@ -51,9 +52,9 @@ describe("RecentlyViewed", () => {
 
   it("renders recently viewed materials as paginated shared responsive cards", async () => {
     await act(async () => {
-      root.render(<RecentlyViewed />);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      root.render(withQueryClient(<RecentlyViewed />));
     });
+    await settleQueries();
 
     const grid = container.querySelector<HTMLElement>("[data-recent-material-grid]");
     expect(grid?.className).toContain("grid-cols-2");

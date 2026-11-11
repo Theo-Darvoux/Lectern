@@ -48,12 +48,8 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isLoading || bootstrapError) return;
 
-    const isPublic = isPublicPage;
-    const isOnboarding = isOnboardingPage;
-    const isPending = isPendingPage;
-
     if (!isAuthenticated) {
-      if (!isPublic) {
+      if (!isPublicPage) {
         const search = typeof window !== "undefined" ? window.location.search : "";
         const next = sanitizeNext(pathname + search);
         router.push(next ? `/login?next=${encodeURIComponent(next)}` : "/login");
@@ -72,20 +68,20 @@ export function LayoutShell({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (user.role === "pending" && !isPending) {
+    if (user.role === "pending" && !isPendingPage) {
       router.push("/pending-approval");
       return;
     }
 
-    if (user.role !== "pending" && !user.onboarded && !isOnboarding && !isPublic) {
+    if (user.role !== "pending" && !user.onboarded && !isOnboardingPage && !isPublicPage) {
       router.push("/onboarding");
       return;
     }
 
-    if (user.onboarded && isOnboarding) {
+    if (user.onboarded && isOnboardingPage) {
       router.push("/");
     }
-  }, [isLoading, bootstrapError, isAuthenticated, user, pathname, router]);
+  }, [isLoading, bootstrapError, isAuthenticated, user, pathname, router, isPublicPage, isOnboardingPage, isPendingPage]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {

@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -23,9 +24,11 @@ import {
 } from "@/components/profile/profile-material";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useQueryOutcome } from "@/hooks/use-query-outcome";
 import { apiFetch } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { AnonymousBadge } from "@/components/pr/anonymous-badge";
+import { useDateLocale } from "@/hooks/use-date-locale";
 
 interface ContributionItem {
   id: string;
@@ -106,10 +109,11 @@ function getPRVisuals(status: string | undefined) {
 
 function PRCard({ item }: { item: ContributionItem }) {
   const t = useTranslations("Profile");
+  const dateLocale = useDateLocale();
   const visuals = getPRVisuals(item.status);
   const Icon = visuals.icon;
   const timeAgo = item.created_at
-    ? formatDistanceToNow(new Date(item.created_at), { addSuffix: true })
+    ? formatDistanceToNow(new Date(item.created_at), { addSuffix: true, locale: dateLocale })
     : null;
   const statusLabel = visuals.labelKey
     ? t(visuals.labelKey as "statusOpen" | "statusMerged" | "statusClosed")
@@ -148,9 +152,10 @@ function PRCard({ item }: { item: ContributionItem }) {
 
 function AnnotationCard({ item }: { item: ContributionItem }) {
   const t = useTranslations("Profile");
+  const dateLocale = useDateLocale();
   const body = item.body ?? item.title ?? item.id;
   const timeAgo = item.created_at
-    ? formatDistanceToNow(new Date(item.created_at), { addSuffix: true })
+    ? formatDistanceToNow(new Date(item.created_at), { addSuffix: true, locale: dateLocale })
     : null;
 
   const slug = item.material_slug ?? item.slug;
@@ -201,50 +206,38 @@ function SkeletonCard() {
 
 export function ContributionList({ userId, type, onReady, onError }: ContributionListProps) {
   const t = useTranslations("Profile");
-  const [items, setItems] = useState<ContributionItem[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
-  const [pages, setPages] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const onReadyRef = useRef(onReady);
-  const onErrorRef = useRef(onError);
+  const [turningPage, setTurningPage] = useState(false);
+  const pageQuery = (requestedPage: number) => ({
+    queryKey: ["users", userId, "contributions", type, requestedPage],
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      apiFetch<PaginatedContributions>(
+        `/users/${userId}/contributions?${new URLSearchParams({ page: String(requestedPage), limit: "8", type })}`,
+        { signal },
+      ),
+  });
+  const query = useQuery(pageQuery(page));
+  useQueryOutcome(query, onReady, onError);
+  const items = query.data?.items ?? [];
+  const pages = query.data?.pages ?? 1;
+  const total = query.data?.total ?? 0;
+  const loading = query.isFetching || turningPage;
 
-  useEffect(() => {
-    onReadyRef.current = onReady;
-    onErrorRef.current = onError;
-  }, [onError, onReady]);
-
-  const fetchContributions = useCallback(async (requestedPage: number) => {
-    setLoading(true);
+  // Load the target page before switching, so a failure keeps the current page visible.
+  const goToPage = async (requestedPage: number) => {
+    setTurningPage(true);
     try {
-      const params = new URLSearchParams({
-        page: String(requestedPage),
-        limit: "8",
-        type,
-      });
-      const data = await apiFetch<PaginatedContributions>(
-        `/users/${userId}/contributions?${params}`,
-      );
-      setItems(data.items);
-      setHasLoaded(true);
-      setPage(data.page);
-      setPages(data.pages);
-      setTotal(data.total);
-      onReadyRef.current?.();
+      await queryClient.fetchQuery(pageQuery(requestedPage));
+      setPage(requestedPage);
     } catch {
-      // Keep the last successful page visible when a refresh fails.
-      onErrorRef.current?.();
+      onError?.();
     } finally {
-      setLoading(false);
+      setTurningPage(false);
     }
-  }, [type, userId]);
+  };
 
-  useEffect(() => {
-    void fetchContributions(1);
-  }, [fetchContributions]);
-
-  if (loading && !hasLoaded) {
+  if (query.isPending) {
     return (
       <div className={PROFILE_MATERIAL_GRID} data-contribution-grid>
         {Array.from({ length: 8 }, (_, index) => <SkeletonCard key={index} />)}
@@ -297,7 +290,7 @@ export function ContributionList({ userId, type, onReady, onError }: Contributio
               variant="outline"
               size="icon"
               disabled={page <= 1 || loading}
-              onClick={() => void fetchContributions(page - 1)}
+              onClick={() => void goToPage(page - 1)}
               className="h-8 w-8"
               aria-label={t("previousPage")}
             >
@@ -310,7 +303,7 @@ export function ContributionList({ userId, type, onReady, onError }: Contributio
               variant="outline"
               size="icon"
               disabled={page >= pages || loading}
-              onClick={() => void fetchContributions(page + 1)}
+              onClick={() => void goToPage(page + 1)}
               className="h-8 w-8"
               aria-label={t("nextPage")}
             >

@@ -6,10 +6,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.security.security import create_access_token
 from app.models.upload import Upload
 from app.models.user import User, UserRole
-from app.routers.upload.helpers import _QUOTA_KEY_PREFIX
 
 
 async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> User:
@@ -29,7 +29,7 @@ async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> U
 @pytest.fixture
 def mock_storage(mock_redis):
     with (
-        patch("app.services.pr.object_exists", new_callable=AsyncMock) as m,
+        patch("app.services.pr.create.object_exists", new_callable=AsyncMock) as m,
         patch("app.core.database.redis.redis_client", mock_redis),
     ):
         m.return_value = True
@@ -58,8 +58,8 @@ async def test_quota_released_on_pr_approval(
     staging_key = f"staging:{user.id}:{upload_id}"
 
     # 1. Add to quota
-    await fake_redis_setup.zadd(f"{_QUOTA_KEY_PREFIX}{user.id}", {quarantine_key: time.time()})
-    await fake_redis_setup.zadd(f"{_QUOTA_KEY_PREFIX}{user.id}", {staging_key: time.time()})
+    await fake_redis_setup.zadd(f"{UPLOAD_QUOTA_PREFIX}{user.id}", {quarantine_key: time.time()})
+    await fake_redis_setup.zadd(f"{UPLOAD_QUOTA_PREFIX}{user.id}", {staging_key: time.time()})
 
     # 2. Create Upload record
     up = Upload(
@@ -100,7 +100,7 @@ async def test_quota_released_on_pr_approval(
     pr_id = pr_resp.json()["id"]
 
     # Verify quota is still there
-    assert await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}") == 2
+    assert await fake_redis_setup.zcard(f"{UPLOAD_QUOTA_PREFIX}{user.id}") == 2
 
     # 4. Approve PR
     url = f"/api/pull-requests/{pr_id}/approve"
@@ -118,7 +118,7 @@ async def test_quota_released_on_pr_approval(
     await release_upload_quota({"redis": fake_redis_setup}, *cleanup_call.args[1:])
 
     # 6. Verify quota released
-    assert await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}") == 0
+    assert await fake_redis_setup.zcard(f"{UPLOAD_QUOTA_PREFIX}{user.id}") == 0
 
     # 7. Verify Upload status updated to 'applied'
     await db_session.refresh(up)
@@ -141,7 +141,7 @@ async def test_quota_released_on_pr_rejection(
     upload_id = str(uuid.uuid4())
     quarantine_key = f"quarantine/{user.id}/{upload_id}/test.pdf"
 
-    await fake_redis_setup.zadd(f"{_QUOTA_KEY_PREFIX}{user.id}", {quarantine_key: time.time()})
+    await fake_redis_setup.zadd(f"{UPLOAD_QUOTA_PREFIX}{user.id}", {quarantine_key: time.time()})
 
     up = Upload(
         upload_id=upload_id,
@@ -194,4 +194,4 @@ async def test_quota_released_on_pr_rejection(
     await release_upload_quota({"redis": fake_redis_setup}, *cleanup_call.args[1:])
 
     # Verify quota released after the durable cleanup runs.
-    assert await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}") == 0
+    assert await fake_redis_setup.zcard(f"{UPLOAD_QUOTA_PREFIX}{user.id}") == 0

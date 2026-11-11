@@ -16,8 +16,8 @@ vi.mock("next/link", () => ({
   ),
 }));
 vi.mock("next-intl", () => {
-  const translate = (key: string) => key;
-  return { useTranslations: () => translate };
+  const translate = Object.assign((key: string) => key, { has: () => true });
+  return { useTranslations: () => translate, useLocale: () => "en" };
 });
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock("@/lib/stores", () => {
@@ -34,7 +34,6 @@ vi.mock("@/lib/notifications", async (importOriginal) => {
     fetchUnreadCount: vi.fn(),
     markAllNotificationsRead: vi.fn(),
     markNotificationRead: vi.fn(),
-    notificationIcon: () => () => <span />,
   };
 });
 

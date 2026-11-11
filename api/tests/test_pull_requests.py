@@ -82,7 +82,7 @@ def _auth_headers(user: User) -> dict[str, str]:
 @pytest.fixture(autouse=True)
 def mock_pr_deps(mock_redis):
     """Mock external dependencies for PR creation (MinIO check and Redis scan cache)."""
-    with patch("app.services.pr.object_exists", new_callable=AsyncMock) as m_exists:
+    with patch("app.services.pr.create.object_exists", new_callable=AsyncMock) as m_exists:
         m_exists.return_value = True
 
         # Mock redis.get to return something for scan checks (meaning scanned clean)
@@ -389,7 +389,7 @@ class TestApproveReject:
         res = await db_session.execute(select(Material).where(Material.title == "NewMat"))
         assert res.scalar_one().directory_id == d.id
 
-    @patch("app.services.pr.object_exists", new_callable=AsyncMock)
+    @patch("app.services.pr.create.object_exists", new_callable=AsyncMock)
     @patch("app.core.storage.facade.delete_object", new_callable=AsyncMock)
     async def test_reject_cleans_up_files(
         self,
@@ -447,6 +447,90 @@ class TestApproveReject:
 
         jobs = db_session.info.get("post_commit_jobs", [])
         assert any(j[0] == "delete_storage_objects" and j[1] == [file_key] for j in jobs)
+
+
+class TestListFilters:
+    """Search, operation filter and sort apply to the whole list, not one page."""
+
+    async def _seed(self, db: AsyncSession) -> tuple[User, User, User]:
+        from datetime import UTC, datetime, timedelta
+
+        from app.models.pull_request import PullRequest
+
+        alice = await _create_user(db)
+        alice.display_name = "Alice Martin"
+        bob = await _create_user(db)
+        bob.display_name = "Bob Durand"
+        mod = await _create_user(db, UserRole.MODERATOR)
+        now = datetime.now(UTC)
+        rows = [
+            ("Linear algebra notes", alice, False, ["create_material"], 1, now - timedelta(days=3)),
+            ("Rename chapter folders", alice, True, ["edit_directory"], 1, now - timedelta(days=2)),
+            ("Big reorganisation", bob, False, ["create_directory", "move_item"], 5, now),
+        ]
+        for title, author, anonymous, types, op_count, created in rows:
+            db.add(
+                PullRequest(
+                    title=title,
+                    author_id=author.id,
+                    is_anonymous=anonymous,
+                    summary_types=types,
+                    payload=[{"op": types[0]}] * op_count,
+                    created_at=created,
+                )
+            )
+        await db.commit()
+        return alice, bob, mod
+
+    async def _titles(self, client: AsyncClient, user: User, query: str) -> list[str]:
+        resp = await client.get(f"/api/pull-requests?{query}", headers=_auth_headers(user))
+        assert resp.status_code == 200
+        return [pr["title"] for pr in resp.json()]
+
+    async def test_search_matches_title_and_author_across_pages(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        _, bob, _ = await self._seed(db_session)
+
+        # limit=1: the match must be found even though it is not on the first page.
+        resp = await client.get(
+            "/api/pull-requests?search=algebra&limit=1", headers=_auth_headers(bob)
+        )
+        assert [pr["title"] for pr in resp.json()] == ["Linear algebra notes"]
+        assert resp.headers["X-Total-Count"] == "1"
+        assert await self._titles(client, bob, "search=durand") == ["Big reorganisation"]
+
+    async def test_author_search_does_not_reveal_anonymous_authors(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        alice, bob, mod = await self._seed(db_session)
+
+        assert await self._titles(client, bob, "search=alice") == ["Linear algebra notes"]
+        assert set(await self._titles(client, alice, "search=alice")) == {
+            "Linear algebra notes",
+            "Rename chapter folders",
+        }
+        assert set(await self._titles(client, mod, "search=alice")) == {
+            "Linear algebra notes",
+            "Rename chapter folders",
+        }
+
+    async def test_op_type_filter_and_sort(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        _, bob, _ = await self._seed(db_session)
+
+        assert await self._titles(client, bob, "op_type=directory&sort=oldest") == [
+            "Rename chapter folders",
+            "Big reorganisation",
+        ]
+        assert await self._titles(client, bob, "op_type=create_material") == [
+            "Linear algebra notes"
+        ]
+        assert (await self._titles(client, bob, "sort=changes"))[0] == "Big reorganisation"
+        assert (await self._titles(client, bob, "sort=oldest"))[0] == "Linear algebra notes"
+        resp = await client.get("/api/pull-requests?op_type=bogus", headers=_auth_headers(bob))
+        assert resp.status_code == 422
 
 
 class TestListAndGet:
@@ -706,3 +790,26 @@ class TestModeratorAutoApprove:
         data = resp.json()
         assert data["status"] == "approved"
         assert data["author_id"] == str(user.id)
+
+
+@pytest.mark.asyncio
+async def test_pull_request_counts_by_status_and_author(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from app.models.pull_request import PRStatus, PullRequest
+
+    author = await _create_user(db_session)
+    other = await _create_user(db_session)
+    for owner, status in [
+        (author, PRStatus.OPEN),
+        (author, PRStatus.APPROVED),
+        (other, PRStatus.OPEN),
+        (other, PRStatus.REJECTED),
+    ]:
+        db_session.add(PullRequest(title="t", payload=[], author_id=owner.id, status=status))
+    await db_session.commit()
+
+    response = await client.get("/api/pull-requests/counts", headers=_auth_headers(author))
+
+    assert response.status_code == 200
+    assert response.json() == {"open": 2, "approved": 1, "rejected": 1, "cancelled": 0, "mine": 2}

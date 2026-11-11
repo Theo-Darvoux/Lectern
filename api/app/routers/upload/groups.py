@@ -5,20 +5,18 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends
-from redis.asyncio import Redis
 
 from app.core.common.batch_upload_limits import (
     BATCH_MAX_FILES,
     BATCH_MAX_FILES_PRIVILEGED,
     UPLOAD_GROUP_TTL_SECONDS,
 )
-from app.core.common.constants import PRIVILEGED_ROLES
 from app.core.common.exceptions import BadRequestError, ForbiddenError
 from app.core.common.upload_errors import UploadErrorCode
-from app.core.database.redis import get_redis
+from app.core.database.redis import RedisClient, get_redis
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import UPLOAD_GROUP_KEY_PREFIX, rate_limit_uploads
-from app.models.user import UserRole
+from app.models.user import MODERATOR_ROLES, UserRole
 from app.schemas.material import UploadGroupOut, UploadGroupRequest
 
 router = APIRouter()
@@ -28,14 +26,14 @@ router = APIRouter()
 async def create_upload_group(
     data: UploadGroupRequest,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     _: Annotated[None, Depends(rate_limit_uploads)],
 ) -> UploadGroupOut:
     """Admit one folder while keeping every contained upload independently retryable."""
     if user.role == UserRole.GUEST:
         raise ForbiddenError("Guest uploads cannot use folder admission groups")
 
-    limit = BATCH_MAX_FILES_PRIVILEGED if user.role in PRIVILEGED_ROLES else BATCH_MAX_FILES
+    limit = BATCH_MAX_FILES_PRIVILEGED if user.role in MODERATOR_ROLES else BATCH_MAX_FILES
     if data.file_count > limit:
         raise BadRequestError(
             f"Folder contains {data.file_count} files; maximum allowed is {limit}.",

@@ -15,3 +15,14 @@ const PDF_WORKER_URL = "/pdf.worker.min.mjs";
 export function createPdfWorker(): Worker {
     return new Worker(PDF_WORKER_URL, { type: "module" });
 }
+
+/**
+ * Import pdf.js and expose it as `globalThis.pdfjsLib`: pdf.js v4 viewer
+ * components and its fake-worker fallback read it from there, and crash
+ * immediately without it if the real worker fails to start.
+ */
+export async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
+    const pdfjs = await import("pdfjs-dist");
+    (globalThis as typeof globalThis & { pdfjsLib?: typeof pdfjs }).pdfjsLib = pdfjs;
+    return pdfjs;
+}

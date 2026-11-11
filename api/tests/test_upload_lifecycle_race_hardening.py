@@ -1085,12 +1085,11 @@ async def test_post_scan_holds_lifecycle_lock_through_clean_event_and_followups(
 
 
 @pytest.mark.asyncio
-async def test_batch_status_does_not_resurrect_cached_clean_after_cancellation(
+async def test_status_does_not_resurrect_cached_clean_after_cancellation(
     db_session: AsyncSession,
     fake_redis_setup: Any,
 ) -> None:
-    from app.routers.upload.status import batch_upload_status
-    from app.schemas.material import BatchStatusRequest
+    from app.routers.upload.file_status import upload_status
 
     upload_id = str(uuid.uuid4())
     user = await _create_user_and_upload(
@@ -1121,15 +1120,11 @@ async def test_batch_status_does_not_resurrect_cached_clean_after_cancellation(
         ),
     )
 
-    response = await batch_upload_status(
-        BatchStatusRequest(file_keys=[quarantine_key]),
-        user,
-        fake_redis_setup,
-    )
+    response = await upload_status(quarantine_key, user, fake_redis_setup, db_session)
 
-    assert response["statuses"][quarantine_key]["status"] == "failed"
-    assert response["statuses"][quarantine_key]["detail"] == "Cancelled by user"
-    assert await fake_redis_setup.get(status_key) is None
+    assert response.status == "failed"
+    assert response.detail == "Cancelled by user"
+    assert response.result is None
 
 
 @pytest.mark.asyncio
@@ -1256,7 +1251,7 @@ async def test_duplicate_upload_rows_cannot_satisfy_missing_pr_key(
     from app.core.common.exceptions import ConflictError
     from app.models.pull_request import PRFileClaim, PRStatus, PullRequest
     from app.models.security import VirusScanResult
-    from app.services.pr import _lock_and_validate_pr_cas_files
+    from app.services.pr.resources import _lock_and_validate_pr_cas_files
 
     user = User(
         id=uuid.uuid4(),
@@ -1792,7 +1787,7 @@ async def test_pr_quota_cleanup_never_revives_malicious_upload(
 ) -> None:
     from app.models.pull_request import PRStatus, PullRequest
     from app.models.security import VirusScanResult
-    from app.services.pr import _release_pr_upload_quota
+    from app.services.pr.resources import _release_pr_upload_quota
 
     upload_id = str(uuid.uuid4())
     user = await _create_user_and_upload(
@@ -2047,7 +2042,7 @@ async def test_cancellation_winning_lifecycle_lock_suppresses_deferred_webhook(
 async def test_thumbnail_resolution_uses_contribution_owner_upload(
     db_session: AsyncSession,
 ) -> None:
-    from app.services.pr import _resolve_thumbnail_info
+    from app.services.pr.versions import _resolve_thumbnail_info
 
     key = "cas/shared-thumbnail-content"
     owner_upload_id = str(uuid.uuid4())

@@ -6,44 +6,11 @@ from app.routers.upload.batch_zip import router as batch_zip_router
 from app.routers.upload.direct import upload_file
 from app.routers.upload.file_status import router as file_status_router
 from app.routers.upload.groups import router as groups_router
-from app.routers.upload.helpers import (
-    _FAST_QUEUE_NAME,
-    _FAST_QUEUE_THRESHOLD,
-    _QUOTA_KEY_PREFIX,
-    _SLOW_QUEUE_NAME,
-    _STATUS_CACHE_PREFIX,
-    _UPLOAD_INTENT_PREFIX,
-    LARGE_FILE_THRESHOLD,
-    LARGE_SVG_THRESHOLD,
-    MAX_PENDING_UPLOADS,
-    _check_pending_cap,
-    _create_upload_row,
-    _enqueue_processing,
-)
 from app.routers.upload.presigned import router as presigned_router
 from app.routers.upload.status import router as status_router
-from app.routers.upload.validators import (
-    _check_per_type_size,
-    _validate_filename,
-)
 from app.schemas.material import UploadPendingOut
 
-__all__ = [
-    "LARGE_FILE_THRESHOLD",
-    "LARGE_SVG_THRESHOLD",
-    "MAX_PENDING_UPLOADS",
-    "_FAST_QUEUE_NAME",
-    "_FAST_QUEUE_THRESHOLD",
-    "_QUOTA_KEY_PREFIX",
-    "_SLOW_QUEUE_NAME",
-    "_STATUS_CACHE_PREFIX",
-    "_UPLOAD_INTENT_PREFIX",
-    "_check_pending_cap",
-    "_check_per_type_size",
-    "_create_upload_row",
-    "_enqueue_processing",
-    "_validate_filename",
-]
+__all__ = ["router"]
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 

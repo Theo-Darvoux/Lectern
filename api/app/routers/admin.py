@@ -8,18 +8,17 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Query, Request
 from pydantic import BaseModel, EmailStr
-from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.common.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.database.database import get_db
-from app.core.database.redis import get_redis
+from app.core.database.redis import RedisClient, get_redis
 from app.dependencies.auth import require_role
 from app.models.auth_config import AllowedDomain
 from app.models.dead_letter import DeadLetterJob
-from app.models.user import User, UserRole
+from app.models.user import ADMIN_ROLES, User, UserRole
 from app.schemas.common import DetailedHealthResponse, ServiceStatus
 from app.services.auth import (
     ensure_admin_removal_safe,
@@ -32,9 +31,7 @@ from app.services.user import hard_delete_user
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-ADMIN_ROLES = (UserRole.BUREAU, UserRole.VIEUX)
-
-AdminUser = Annotated[User, Depends(require_role(UserRole.BUREAU, UserRole.VIEUX))]
+AdminUser = Annotated[User, Depends(require_role(*ADMIN_ROLES))]
 
 
 # ── User management ───────────────────────────────────────────────────────────
@@ -306,7 +303,7 @@ async def get_detailed_health(
     _user: AdminUser,
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> DetailedHealthResponse:
     from sqlalchemy import text
 

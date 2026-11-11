@@ -1,36 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { apiFetchRetry } from "./api-client";
+import { apiFetch } from "./api-client";
 import {
-  browseCache,
   fetchBrowsePath,
   invalidateBrowseEntity,
   invalidateBrowsePath,
   prefetchBrowsePath,
 } from "./browse-prefetch";
+import { getQueryClient } from "./query-client";
 
 vi.mock("./api-client", () => ({
   apiFetch: vi.fn(),
-  apiFetchRetry: vi.fn(),
+  isRetriableError: () => false,
 }));
 
-// browse-prefetch fetches through apiFetchRetry (timeout + transient retry).
-const mockApiFetch = vi.mocked(apiFetchRetry);
+const mockApiFetch = vi.mocked(apiFetch);
 
 /** A promise whose resolution we control, to overlap concurrent requests. */
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  let reject!: (err: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
+  const promise = new Promise<T>((res) => {
     resolve = res;
-    reject = rej;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
+
+const isInvalidated = (path: string) =>
+  getQueryClient().getQueryState(["browse", path])?.isInvalidated ?? false;
 
 describe("browse-prefetch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    browseCache.clear();
+    getQueryClient().clear();
   });
 
   it("maps the empty path to /browse and a path to /browse/<path>", async () => {
@@ -39,155 +39,70 @@ describe("browse-prefetch", () => {
     await fetchBrowsePath("");
     await fetchBrowsePath("a/b");
 
-    const timeoutOpts = expect.objectContaining({ timeoutMs: expect.any(Number) });
-    expect(mockApiFetch).toHaveBeenNthCalledWith(1, "/browse", timeoutOpts);
-    expect(mockApiFetch).toHaveBeenNthCalledWith(2, "/browse/a/b", timeoutOpts);
+    const options = expect.objectContaining({
+      timeoutMs: expect.any(Number),
+      signal: expect.any(AbortSignal),
+    });
+    expect(mockApiFetch).toHaveBeenNthCalledWith(1, "/browse", options);
+    expect(mockApiFetch).toHaveBeenNthCalledWith(2, "/browse/a/b", options);
   });
 
-  it("caches the result and serves subsequent reads from cache", async () => {
+  it("serves a recent copy from cache", async () => {
     const payload = { type: "directory_listing" };
     mockApiFetch.mockResolvedValue(payload);
 
-    const first = await fetchBrowsePath("maths");
-    expect(first).toBe(payload);
-    expect(browseCache.get("maths")).toBe(payload);
-
-    const second = await fetchBrowsePath("maths");
-    expect(second).toBe(payload);
-    // Cache hit — no second network call.
+    expect(await fetchBrowsePath("maths")).toBe(payload);
+    expect(await fetchBrowsePath("maths")).toBe(payload);
     expect(mockApiFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("de-duplicates concurrent requests for the same path", async () => {
-    const d = deferred<unknown>();
-    mockApiFetch.mockReturnValue(d.promise);
-
-    const p1 = fetchBrowsePath("physique");
-    const p2 = fetchBrowsePath("physique");
-
-    expect(mockApiFetch).toHaveBeenCalledTimes(1);
-
-    const payload = { type: "directory_listing" };
-    d.resolve(payload);
-
-    expect(await p1).toBe(payload);
-    expect(await p2).toBe(payload);
   });
 
   it("joins an in-flight prefetch instead of issuing a second request (hover then click)", async () => {
     const d = deferred<unknown>();
-    mockApiFetch.mockReturnValue(d.promise);
+    mockApiFetch.mockReturnValue(d.promise as never);
 
-    // Hover starts a prefetch...
     const hover = prefetchBrowsePath("chimie");
-    // ...then the user clicks before it resolves.
     const click = fetchBrowsePath("chimie");
-
-    expect(mockApiFetch).toHaveBeenCalledTimes(1);
-
     d.resolve({ ok: true });
     await Promise.all([hover, click]);
-  });
 
-  it("force bypasses the cache to revalidate", async () => {
-    const stale = { v: 1 };
-    const fresh = { v: 2 };
-    mockApiFetch.mockResolvedValueOnce(stale).mockResolvedValueOnce(fresh);
-
-    await fetchBrowsePath("info");
-    expect(browseCache.get("info")).toBe(stale);
-
-    const revalidated = await fetchBrowsePath("info", { force: true });
-    expect(revalidated).toBe(fresh);
-    expect(browseCache.get("info")).toBe(fresh);
-    expect(mockApiFetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves the cached object identity when a revalidation is unchanged", async () => {
-    const original = { type: "directory_listing", directories: [{ id: "1" }] };
-    // Server returns a structurally-equal but distinct object on revalidation.
-    const equalCopy = { type: "directory_listing", directories: [{ id: "1" }] };
-    mockApiFetch.mockResolvedValueOnce(original).mockResolvedValueOnce(equalCopy);
-
-    await fetchBrowsePath("svt");
-    expect(browseCache.get("svt")).toBe(original);
-
-    const revalidated = await fetchBrowsePath("svt", { force: true });
-    // Identity is kept so downstream memoized rows can bail out of re-rendering.
-    expect(revalidated).toBe(original);
-    expect(browseCache.get("svt")).toBe(original);
-    expect(mockApiFetch).toHaveBeenCalledTimes(2);
+    expect(mockApiFetch).toHaveBeenCalledTimes(1);
   });
 
   it("prefetch is a no-op when the path is already cached", async () => {
     mockApiFetch.mockResolvedValue({ ok: true });
     await fetchBrowsePath("bio");
-    expect(mockApiFetch).toHaveBeenCalledTimes(1);
-
     await prefetchBrowsePath("bio");
+
     expect(mockApiFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("swallows prefetch errors and leaves the path uncached", async () => {
-    mockApiFetch.mockRejectedValue(new Error("boom"));
-
+  it("swallows prefetch errors, and a later fetch tries again", async () => {
+    mockApiFetch.mockRejectedValueOnce(new Error("boom"));
     await expect(prefetchBrowsePath("broken")).resolves.toBeUndefined();
-    expect(browseCache.has("broken")).toBe(false);
-  });
 
-  it("propagates errors from a foreground fetch", async () => {
-    mockApiFetch.mockRejectedValue(new Error("network"));
-    await expect(fetchBrowsePath("nope")).rejects.toThrow("network");
-    expect(browseCache.has("nope")).toBe(false);
-  });
-
-  // Regression: a failed request must clear the in-flight entry, otherwise a
-  // later navigation to the same path would re-join the dead promise and hang
-  // the listing skeleton until a full page reload.
-  it("clears the in-flight entry after a failure so a later fetch can recover", async () => {
-    mockApiFetch.mockRejectedValueOnce(new Error("stalled"));
-    await expect(fetchBrowsePath("flaky")).rejects.toThrow("stalled");
-
-    // A fresh attempt for the same path issues a brand-new request (not a
-    // re-join of the failed one) and succeeds.
     const payload = { type: "directory_listing" };
     mockApiFetch.mockResolvedValueOnce(payload);
-    const recovered = await fetchBrowsePath("flaky");
-
-    expect(recovered).toBe(payload);
+    expect(await fetchBrowsePath("broken")).toBe(payload);
     expect(mockApiFetch).toHaveBeenCalledTimes(2);
-    expect(browseCache.get("flaky")).toBe(payload);
   });
 
-  it("bounds retained browse responses", () => {
-    for (let index = 0; index < 65; index += 1) {
-      browseCache.set(`path-${index}`, { index });
-    }
-
-    expect(browseCache.size).toBe(64);
-    expect(browseCache.has("path-0")).toBe(false);
+  it("propagates errors from a direct fetch", async () => {
+    mockApiFetch.mockRejectedValue(new Error("network"));
+    await expect(fetchBrowsePath("nope")).rejects.toThrow("network");
   });
 
-  it("does not let a request invalidated by SSE overwrite a fresh response", async () => {
-    const stale = deferred<unknown>();
-    const fresh = deferred<unknown>();
-    mockApiFetch.mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
+  it("invalidates exactly one path", async () => {
+    mockApiFetch.mockResolvedValue({ ok: true });
+    await fetchBrowsePath("live");
+    await fetchBrowsePath("other");
 
-    const first = fetchBrowsePath("live");
     invalidateBrowsePath("live");
-    const second = fetchBrowsePath("live", { force: true });
 
-    expect(mockApiFetch).toHaveBeenCalledTimes(2);
-    stale.resolve({ version: 1 });
-    await first;
-    expect(browseCache.has("live")).toBe(false);
-
-    fresh.resolve({ version: 2 });
-    await second;
-    expect(browseCache.get("live")).toEqual({ version: 2 });
+    expect(isInvalidated("live")).toBe(true);
+    expect(isInvalidated("other")).toBe(false);
   });
 
-  it("invalidates every cached representation of an SSE entity", async () => {
+  it("invalidates every cached representation of an SSE entity, and the current path", async () => {
     mockApiFetch
       .mockResolvedValueOnce({
         type: "directory_listing",
@@ -195,15 +110,18 @@ describe("browse-prefetch", () => {
         materials: [{ id: "material-1" }],
       })
       .mockResolvedValueOnce({ type: "material", material: { id: "material-1" } })
-      .mockResolvedValueOnce({ type: "material", material: { id: "material-2" } });
+      .mockResolvedValueOnce({ type: "material", material: { id: "material-2" } })
+      .mockResolvedValueOnce({ type: "material", material: { id: "material-3" } });
 
     await fetchBrowsePath("");
     await fetchBrowsePath("material-1");
     await fetchBrowsePath("material-2");
-    invalidateBrowseEntity("material:material-1");
+    await fetchBrowsePath("material-3");
+    invalidateBrowseEntity("material:material-1", "material-3");
 
-    expect(browseCache.has("")).toBe(false);
-    expect(browseCache.has("material-1")).toBe(false);
-    expect(browseCache.has("material-2")).toBe(true);
+    expect(isInvalidated("")).toBe(true);
+    expect(isInvalidated("material-1")).toBe(true);
+    expect(isInvalidated("material-2")).toBe(false);
+    expect(isInvalidated("material-3")).toBe(true);
   });
 });

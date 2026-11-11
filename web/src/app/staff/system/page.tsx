@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { QueryError } from "@/components/query-error";
 import {
   Activity,
   AlertTriangle,
@@ -12,7 +14,7 @@ import {
   Search,
   ShieldCheck,
 } from "lucide-react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -37,7 +39,11 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/hooks/use-auth";
 import { apiFetch } from "@/lib/api-client";
-import { cn, formatBytes } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { formatFileSize } from "@/lib/file-utils";
+import { isAdminRole } from "@/lib/guest";
+import { translateDynamic } from "@/lib/i18n-dynamic";
+import { AdminOnlyNotice } from "@/components/staff/admin-only-notice";
 
 // Types
 interface ServiceStatus {
@@ -193,7 +199,7 @@ function StorageReconciliationModal() {
                   {t("stats.s3Total")}
                 </p>
                 <p className="text-lg sm:text-xl font-black">
-                  {formatBytes(data.stats.total_s3_bytes)}
+                  {formatFileSize(data.stats.total_s3_bytes)}
                 </p>
                 <p className="text-[10px] font-bold text-muted-foreground opacity-70">
                   {t("stats.objects", { count: data.stats.total_s3_objects })}
@@ -216,7 +222,7 @@ function StorageReconciliationModal() {
                     totalOrphans > 0 && "text-amber-500",
                   )}
                 >
-                  {formatBytes(data.stats.orphaned_bytes)}
+                  {formatFileSize(data.stats.orphaned_bytes)}
                 </p>
                 <p className="text-[10px] font-bold text-muted-foreground opacity-70">
                   {t("stats.unused", { count: totalOrphans })}
@@ -279,7 +285,7 @@ function StorageReconciliationModal() {
                           variant="outline"
                           className="h-5 sm:h-6 text-[10px] font-black bg-background/50 border-muted/50 tabular-nums self-start sm:self-auto shrink-0"
                         >
-                          {formatBytes(o.size)}
+                          {formatFileSize(o.size)}
                         </Badge>
                       </div>
                     ))}
@@ -300,7 +306,7 @@ function StorageReconciliationModal() {
                           variant="outline"
                           className="h-5 sm:h-6 text-[10px] font-black bg-background/50 border-muted/50 tabular-nums self-start sm:self-auto shrink-0"
                         >
-                          {formatBytes(o.size)}
+                          {formatFileSize(o.size)}
                         </Badge>
                       </div>
                     ))}
@@ -362,44 +368,35 @@ function StorageReconciliationModal() {
 
 export default function StaffSystemPage() {
   const t = useTranslations("Admin.Dashboard");
+  const locale = useLocale();
   const { user } = useAuth();
-  const isAdmin = user?.role === "bureau" || user?.role === "vieux";
+  const isAdmin = isAdminRole(user?.role);
 
-  const [health, setHealth] = useState<HealthData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const healthQuery = useQuery({
+    queryKey: ["admin", "health"],
+    queryFn: ({ signal }) => apiFetch<HealthData>("/admin/health", { signal }),
+    enabled: isAdmin,
+    refetchInterval: 30_000,
+  });
+  const health = healthQuery.data;
+  const refreshing = healthQuery.isFetching;
 
-  const fetchHealth = async (showToast = false) => {
-    if (!isAdmin) return;
-    setRefreshing(true);
-    try {
-      const data = await apiFetch<HealthData>("/admin/health");
-      setHealth(data);
-      if (showToast) toast.success(t("status.updated"));
-    } catch (err) {
-      console.error("Failed to fetch health", err);
-      if (showToast) toast.error(t("status.refreshFailed"));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+  const refreshHealth = async () => {
+    const result = await healthQuery.refetch();
+    if (result.isError) toast.error(t("status.refreshFailed"));
+    else toast.success(t("status.updated"));
   };
 
-  useEffect(() => {
-    fetchHealth();
-    const interval = setInterval(() => fetchHealth(false), 30000);
-    return () => clearInterval(interval);
-  }, []);
-
   if (!isAdmin) {
-    return (
-      <div className="flex items-center justify-center p-12 text-muted-foreground">
-        Access restricted to administrators.
-      </div>
-    );
+    return <AdminOnlyNotice />;
   }
 
-  if (loading) {
+  // Never draw the status banner without data: it would read as healthy.
+  if (!health && healthQuery.isError) {
+    return <QueryError onRetry={() => void healthQuery.refetch()} className="py-12" />;
+  }
+
+  if (!health) {
     return (
       <div className="space-y-6">
         <div className="h-[180px] w-full animate-pulse rounded-2xl bg-muted/50" />
@@ -434,7 +431,7 @@ export default function StaffSystemPage() {
       <div
         className={cn(
           "relative overflow-hidden rounded-2xl border p-6 sm:p-8 transition-all duration-500",
-          getStatusBg(health?.status || "healthy"),
+          getStatusBg(health.status),
         )}
       >
         <div className="absolute -right-12 -top-12 h-64 w-64 opacity-[0.03] dark:opacity-[0.05]">
@@ -477,14 +474,14 @@ export default function StaffSystemPage() {
             <div className="flex items-center gap-4">
               <p className="text-muted-foreground font-medium text-xs sm:text-sm">
                 {t("status.lastUpdated", {
-                  time: new Date(health?.timestamp || "").toLocaleTimeString(),
+                  time: new Date(health.timestamp).toLocaleTimeString(locale),
                 })}
               </p>
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-8 gap-2 rounded-full px-3 text-xs font-bold hover:bg-background/50"
-                onClick={() => fetchHealth(true)}
+                onClick={() => void refreshHealth()}
                 disabled={refreshing}
               >
                 <RefreshCw
@@ -691,7 +688,7 @@ function ServiceCard({
             }
             className="h-5 text-[10px] font-black uppercase tracking-tighter"
           >
-            {data?.status ? t(data.status as any) : t("unknown")}
+            {data?.status ? translateDynamic(t, data.status) : t("unknown")}
           </Badge>
         </div>
 
@@ -727,7 +724,7 @@ function ServiceCard({
                   {t("storageUsage")}
                 </p>
                 <p className="text-xs font-bold">
-                  {formatBytes(data.metadata.usage_bytes)}
+                  {formatFileSize(data.metadata.usage_bytes)}
                 </p>
               </div>
             )}

@@ -1,29 +1,29 @@
 "use client";
 
-import { apiFetchRetry } from "./api-client";
-import { ResourceCache } from "./resource-cache";
+import { queryOptions } from "@tanstack/react-query";
+import { apiFetch } from "./api-client";
+import { getQueryClient } from "./query-client";
 
 // A directory listing is a small JSON payload, so it should return quickly.
-// Cap each attempt so a stalled connection can't leave the request pending
-// forever — which would otherwise pin the in-flight entry below and hang the
-// listing skeleton until a full page reload.
+// Cap each attempt so a stalled connection cannot leave the listing skeleton
+// pending forever.
 const BROWSE_TIMEOUT_MS = 15_000;
+// Hover prefetches and link resolution reuse a recent copy instead of refetching.
+const PREFETCH_FRESH_MS = 5 * 60 * 1000;
 
-// Shared in-memory cache for browse API responses, keyed by browse path
-// (the part after /browse/, e.g. "category/subcategory" or "").
-// Typed as unknown so callers can cast to their own BrowseResponse type.
-export const browseCache = new ResourceCache<string, unknown>({
-    maxEntries: 64,
-    ttlMs: 5 * 60 * 1000,
-});
-export let previousBrowsePath: string | null = null;
-export function setPreviousBrowsePath(p: string) { previousBrowsePath = p; }
+/** Browse API response for a path (the part after /browse/, "" for the root). */
+export function browseQuery(browsePath: string) {
+    return queryOptions({
+        queryKey: ["browse", browsePath],
+        queryFn: ({ signal }) =>
+            apiFetch<unknown>(browsePath ? `/browse/${browsePath}` : "/browse", {
+                signal,
+                timeoutMs: BROWSE_TIMEOUT_MS,
+            }),
+    });
+}
 
-// In-flight requests keyed by browse path. Shared between hover-prefetch and
-// the active navigation fetch so a hover-then-click only hits the network once.
-const inflight = new Map<string, Promise<unknown>>();
-let invalidationEpoch = 0;
-
+/** The directory and material entities a browse payload shows, as `kind:id` tags. */
 function browseResourceTags(payload: unknown): string[] {
     if (!payload || typeof payload !== "object") return [];
     const data = payload as Record<string, unknown>;
@@ -46,86 +46,29 @@ function browseResourceTags(payload: unknown): string[] {
 }
 
 export function invalidateBrowsePath(browsePath: string): void {
-    invalidationEpoch += 1;
-    browseCache.delete(browsePath);
-    // Detach rather than cancel: callers of the old request still settle, but a
-    // post-event revalidation starts immediately and owns the in-flight slot.
-    inflight.delete(browsePath);
-}
-
-export function invalidateBrowseEntity(entityTag: string, currentPath?: string): void {
-    invalidationEpoch += 1;
-    const invalidated = browseCache.invalidateTag(entityTag);
-    if (currentPath !== undefined && !invalidated.includes(currentPath)) {
-        browseCache.delete(currentPath);
-        invalidated.push(currentPath);
-    }
-    for (const browsePath of invalidated) inflight.delete(browsePath);
-}
-
-// Cheap structural equality used to decide whether a background revalidation
-// actually changed anything. When it didn't, we keep the previous object's
-// identity so React (and every memo'd row) can bail out of re-rendering.
-function payloadsEqual(a: unknown, b: unknown): boolean {
-    if (a === b) return true;
-    if (a === undefined || b === undefined) return false;
-    try {
-        return JSON.stringify(a) === JSON.stringify(b);
-    } catch {
-        return false;
-    }
+    void getQueryClient().invalidateQueries({ queryKey: ["browse", browsePath], exact: true });
 }
 
 /**
- * Fetch a browse path, populating browseCache and de-duplicating concurrent
- * requests for the same path.
- *
- * - `force: false` (default) returns the cached value if present, otherwise
- *   joins any in-flight request or starts a new one. Used by navigation so a
- *   prefetch already in flight is reused instead of duplicated.
- * - `force: true` bypasses the cache (but still joins an in-flight request) to
- *   revalidate a path whose cached copy is being shown optimistically.
+ * Invalidate every cached browse path showing an entity, plus the current
+ * path. Paths on screen refetch at once; a fetch already in flight restarts,
+ * so a snapshot taken before the change is never kept.
  */
-export function fetchBrowsePath(
-    browsePath: string,
-    { force = false }: { force?: boolean } = {},
-): Promise<unknown> {
-    if (!force && browseCache.has(browsePath)) {
-        return Promise.resolve(browseCache.get(browsePath));
-    }
-    const existing = inflight.get(browsePath);
-    if (existing) return existing;
+export function invalidateBrowseEntity(entityTag: string, currentPath?: string): void {
+    void getQueryClient().invalidateQueries({
+        predicate: (query) =>
+            query.queryKey[0] === "browse" &&
+            (query.queryKey[1] === currentPath ||
+                browseResourceTags(query.state.data).includes(entityTag)),
+    });
+}
 
-    const endpoint = browsePath ? `/browse/${browsePath}` : "/browse";
-    const requestEpoch = invalidationEpoch;
-    const request = apiFetchRetry<unknown>(endpoint, { timeoutMs: BROWSE_TIMEOUT_MS })
-        .then((result) => {
-            // An SSE event after this request began makes its snapshot unsafe to
-            // retain. The initiating screen may still use it, but the cache will
-            // only accept the post-event revalidation.
-            if (requestEpoch !== invalidationEpoch) return result;
-            // Preserve the previous object identity on an unchanged revalidation
-            // so the cache-first render path doesn't trigger a second full
-            // re-render of the listing with fresh (memo-defeating) identities.
-            const prev = browseCache.get(browsePath);
-            if (prev !== undefined && payloadsEqual(prev, result)) {
-                return prev;
-            }
-            browseCache.set(browsePath, result, { tags: browseResourceTags(result) });
-            return result;
-        })
-        .finally(() => {
-            if (inflight.get(browsePath) === request) inflight.delete(browsePath);
-        });
-    inflight.set(browsePath, request);
-    return request;
+/** Fetch a browse path, reusing a recent cached copy. */
+export function fetchBrowsePath(browsePath: string): Promise<unknown> {
+    return getQueryClient().fetchQuery({ ...browseQuery(browsePath), staleTime: PREFETCH_FRESH_MS });
 }
 
 export async function prefetchBrowsePath(browsePath: string): Promise<void> {
-    if (browseCache.has(browsePath) || inflight.has(browsePath)) return;
-    try {
-        await fetchBrowsePath(browsePath);
-    } catch {
-        // silently ignore — if the prefetch fails the normal fetch will handle it
-    }
+    // prefetchQuery never throws: a failed prefetch leaves navigation to fetch again.
+    await getQueryClient().prefetchQuery({ ...browseQuery(browsePath), staleTime: PREFETCH_FRESH_MS });
 }

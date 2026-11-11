@@ -10,6 +10,7 @@ import { prepareMarkdownForPrint, waitForMarkdownRender } from "@/lib/markdown-p
 import { ViewerShell } from "./viewer-shell";
 import { ZoomControls } from "./zoom-controls";
 import { AnnotationInlinePopover } from "@/components/annotations/annotation-inline-popover";
+import { useTranslations } from "next-intl";
 
 const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
@@ -134,6 +135,7 @@ export function MarkdownViewer({
     annotations = [],
     targetAnnotationId,
 }: MarkdownViewerProps) {
+    const tPreview = useTranslations("Preview");
     const proseRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -280,7 +282,7 @@ export function MarkdownViewer({
         <ViewerShell
             scrollRef={scrollRef}
             loading={loading}
-            error={error ? "Failed to load markdown content." : null}
+            error={error ? tPreview("failedToLoad") : null}
             onRetry={reload}
             toolbarRight={
                 <ZoomControls

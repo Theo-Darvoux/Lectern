@@ -7,7 +7,6 @@ import { useTranslations } from "next-intl";
 import { useConfigStore } from "@/lib/stores";
 
 interface GenericViewerProps {
-    fileKey: string;
     materialId: string;
     fileName: string;
 }
@@ -16,7 +15,7 @@ interface GenericViewerProps {
  * Fallback viewer for file types that don't have a specialized renderer.
  * Offers a download button and displays the file name.
  */
-export function GenericViewer({ materialId, fileName, fileKey }: GenericViewerProps) {
+export function GenericViewer({ materialId, fileName }: GenericViewerProps) {
     const t = useTranslations("Preview");
     const config = useConfigStore((state) => state.config);
     const { downloadMaterial, isDownloading } = useDownload();

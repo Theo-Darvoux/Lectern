@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns/formatDistanceToNow";
 import { Search, ExternalLink } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { QueryError } from "@/components/query-error";
 import { apiFetch } from "@/lib/api-client";
-import { toast } from "sonner";
 import { useTranslations } from "next-intl";
 import { AnonymousBadge } from "@/components/pr/anonymous-badge";
+import { useDateLocale } from "@/hooks/use-date-locale";
 
 interface PRItem {
   id: string;
@@ -24,32 +26,28 @@ interface PRItem {
   is_anonymous?: boolean;
 }
 
+const COLUMN_COUNT = 4;
+
 export default function StaffPRQueuePage() {
   const t = useTranslations("Moderator.pullRequests");
-  const [prs, setPrs] = useState<PRItem[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const tCommon = useTranslations("Common");
+  const tPRs = useTranslations("PRs");
+  const dateLocale = useDateLocale();
   const [search, setSearch] = useState("");
+  const { data: prs, isPending, isError, refetch } = useQuery({
+    queryKey: ["pull-requests", "staff-queue"],
+    queryFn: ({ signal }) => apiFetch<PRItem[]>("/pull-requests?status=open&limit=50", { signal }),
+  });
 
-  const fetchPRs = async () => {
-    setLoading(true);
-    try {
-      const data = await apiFetch<PRItem[]>("/pull-requests?status=open&limit=50");
-      setPrs(data ?? []);
-      setHasLoaded(true);
-    } catch {
-      toast.error(t("loadError"));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const needle = search.toLowerCase();
+  const filtered = (prs ?? []).filter((pr) => pr.title.toLowerCase().includes(needle));
 
-  useEffect(() => {
-    fetchPRs();
-  }, []);
-
-  const filtered = prs.filter((pr) =>
-    pr.title.toLowerCase().includes(search.toLowerCase()),
+  const messageRow = (content: React.ReactNode) => (
+    <tr>
+      <td colSpan={COLUMN_COUNT} className="p-8 text-center text-muted-foreground">
+        {content}
+      </td>
+    </tr>
   );
 
   return (
@@ -74,21 +72,10 @@ export default function StaffPRQueuePage() {
               <th className="p-4 font-medium text-right">{t("columnAction")}</th>
             </tr>
           </thead>
-          <tbody className="divide-y relative" aria-busy={loading}>
-            {loading && !hasLoaded && (
-              <tr>
-                <td colSpan={5} className="p-8 text-center text-muted-foreground">
-                  {t("loading")}
-                </td>
-              </tr>
-            )}
-            {hasLoaded && filtered.length === 0 && (
-              <tr>
-                <td colSpan={5} className="p-8 text-center text-muted-foreground">
-                  {t("empty")}
-                </td>
-              </tr>
-            )}
+          <tbody className="divide-y relative" aria-busy={isPending}>
+            {isPending && messageRow(t("loading"))}
+            {isError && messageRow(<QueryError message={t("loadError")} onRetry={() => void refetch()} />)}
+            {prs && filtered.length === 0 && messageRow(t("empty"))}
             {filtered.map((pr) => (
               <tr key={pr.id} className="transition-colors hover:bg-muted/30 group">
                 <td className="p-4 font-medium">
@@ -98,30 +85,35 @@ export default function StaffPRQueuePage() {
                       {pr.is_anonymous && <AnonymousBadge className="shrink-0" />}
                     </div>
                     <div className="text-xs font-normal text-muted-foreground sm:hidden">
-                      {t(("types." + pr.type) as Parameters<typeof t>[0])} •{" "}
-                      {pr.author?.display_name || "[deleted]"}
+                      {t(`types.${pr.type}`)} •{" "}
+                      {pr.author?.display_name ??
+                        (pr.is_anonymous ? tPRs("anonymous") : tCommon("deletedUser"))}
                     </div>
                   </div>
                 </td>
                 <td className="p-4 capitalize text-muted-foreground hidden sm:table-cell">
                   <span className="bg-muted px-2 py-0.5 rounded text-xs font-medium">
-                    {t(("types." + pr.type) as Parameters<typeof t>[0])}
+                    {t(`types.${pr.type}`)}
                   </span>
                 </td>
                 <td className="p-4 text-muted-foreground hidden sm:table-cell">
-                  {formatDistanceToNow(new Date(pr.created_at), { addSuffix: true })}
+                  {formatDistanceToNow(new Date(pr.created_at), {
+                    addSuffix: true,
+                    locale: dateLocale,
+                  })}
                 </td>
                 <td className="p-4 text-right">
-                  <Link href={`/pull-requests/${pr.id}`}>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 gap-2 text-primary hover:text-primary hover:bg-primary/10"
-                    >
+                  <Button
+                    asChild
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-2 text-primary hover:text-primary hover:bg-primary/10"
+                  >
+                    <Link href={`/pull-requests/${pr.id}`}>
                       {t("review")}
                       <ExternalLink className="h-3.5 w-3.5" />
-                    </Button>
-                  </Link>
+                    </Link>
+                  </Button>
                 </td>
               </tr>
             ))}

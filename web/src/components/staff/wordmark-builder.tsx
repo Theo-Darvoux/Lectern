@@ -47,9 +47,10 @@ export function WordmarkBuilder({ siteName, siteNameStyle }: WordmarkBuilderProp
 
     // Auto-update starting segment text if the main siteName changes and there is only 1 segment
     useEffect(() => {
-        if (segments.length === 1 && segments[0].text === "" && siteName) {
-            setSegments([{ ...segments[0], text: siteName }]);
-        }
+        if (!siteName) return;
+        setSegments((current) =>
+            current.length === 1 && current[0].text === "" ? [{ ...current[0], text: siteName }] : current,
+        );
     }, [siteName]);
 
     const handleAddSegment = () => {

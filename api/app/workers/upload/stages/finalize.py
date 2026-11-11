@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import MimeRegistry
 from app.core.security.cas import hmac_cas_key, increment_cas_ref
@@ -117,7 +118,9 @@ async def run_finalize_storage(
     # Quota tracking: use a synthetic staging key (no S3 object) so quota
     # cleanup doesn't interfere with shared CAS objects.
     staging_quota_key = f"staging:{input_data.user_id}:{input_data.upload_id}"
-    await redis_client.zadd(f"quota:uploads:{input_data.user_id}", {staging_quota_key: time.time()})
+    await redis_client.zadd(
+        f"{UPLOAD_QUOTA_PREFIX}{input_data.user_id}", {staging_quota_key: time.time()}
+    )
 
     return FinalizeResult(
         final_key=cas_s3_key,

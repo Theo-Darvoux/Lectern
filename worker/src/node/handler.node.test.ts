@@ -4,7 +4,7 @@
  * These run on plain Node (not workerd) with a fake in-memory ObjectSource,
  * proving the self-hosted path (server.ts) exercises the same logic the
  * Cloudflare Worker does — token verification, branding, single-file serving,
- * gzip decompression and ZIP streaming — using Node's global Web APIs.
+ * and gzip decompression — using Node's global Web APIs.
  */
 
 import { createHmac } from "node:crypto";
@@ -262,43 +262,3 @@ describe("self-hosted handler — /file", () => {
   });
 });
 
-describe("self-hosted handler — /zip", () => {
-  it("streams a ZIP with the right headers", async () => {
-    const token = signToken({
-      dir_name: "Mon Cours",
-      entries: [
-        { arcname: "a.txt", r2_key: "z/a.txt" },
-        { arcname: "b.txt", r2_key: "z/b.txt" },
-      ],
-    });
-    const res = await handleRequest(req(`/zip?token=${token}`), {
-      source: source({
-        "z/a.txt": { bytes: utf8("A") },
-        "z/b.txt": { bytes: utf8("B") },
-      }),
-      secret: SECRET,
-    });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Type")).toBe("application/zip");
-    const disposition = res.headers.get("Content-Disposition") ?? "";
-    expect(disposition).toContain('"Mon Cours.zip"');
-    expect(disposition).toContain("filename*=UTF-8''Mon%20Cours.zip");
-    expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
-  });
-
-  it("skips missing keys and still produces a ZIP", async () => {
-    const token = signToken({
-      dir_name: "Cours",
-      entries: [
-        { arcname: "a.txt", r2_key: "z/a.txt" },
-        { arcname: "missing.txt", r2_key: "z/nope.txt" },
-      ],
-    });
-    const res = await handleRequest(req(`/zip?token=${token}`), {
-      source: source({ "z/a.txt": { bytes: utf8("A") } }),
-      secret: SECRET,
-    });
-    expect(res.status).toBe(200);
-    expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
-  });
-});

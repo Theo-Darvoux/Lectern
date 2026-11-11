@@ -9,7 +9,7 @@ import type { MaterialDetail } from "./types";
 import { Loader2 } from "lucide-react";
 import { useInView } from "@/hooks/use-in-view";
 import { MIME_QCM } from "@/lib/file-utils";
-import { createPdfWorker } from "@/lib/pdf-worker";
+import { createPdfWorker, loadPdfjs } from "@/lib/pdf-worker";
 import {
   getMaterialThumbnail,
   subscribeMaterialThumbnail,
@@ -64,9 +64,8 @@ function PdfThumbnailCanvas({
     };
     (async () => {
       try {
-        const pdfjs = await import("pdfjs-dist");
+        const pdfjs = await loadPdfjs();
         if (cancelled) return;
-        (globalThis as any).pdfjsLib = pdfjs;
 
         rawWorker = createPdfWorker();
         pdfWorker = pdfjs.PDFWorker.fromPort({ port: rawWorker });
@@ -145,13 +144,14 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     setPdfReady(false);
   }, [material.id]);
 
+  const resolvedTargetId = resolvedTargetMat?.id;
   useEffect(() => {
     return subscribeMaterialThumbnail((id, ts) => {
-      if (id === String(material.id) || (resolvedTargetMat && id === String(resolvedTargetMat.id))) {
+      if (id === String(material.id) || (resolvedTargetId && id === String(resolvedTargetId))) {
         setCacheBust(ts || Date.now());
       }
     });
-  }, [material.id, resolvedTargetMat?.id]);
+  }, [material.id, resolvedTargetId]);
 
   const inView = useInView(containerRef);
   // In lazy mode, gate loading on viewport intersection. In non-lazy mode we
@@ -321,6 +321,9 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
       controller.abort();
       clearTimeout(timer);
     };
+    // Keyed on the id and the derived flags: parents pass a fresh `material`
+    // object on each render, and refetching for the same id would flash the preview.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     material.id,
     isText,

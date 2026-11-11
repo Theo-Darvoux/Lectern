@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useEffectEvent, useRef, useCallback, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useTutorialMenuOpen } from "@/lib/tutorials/tutorial-store";
 import { DirectoryLineItem } from "@/components/browse/directory-line-item";
@@ -75,6 +75,7 @@ import { useViewMode } from "@/hooks/use-view-mode";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { MaterialGridCard } from "@/components/browse/material-grid-card";
 import { DirectoryGridCard } from "@/components/browse/directory-grid-card";
+import { useDirectoryZipDownload } from "@/hooks/use-directory-zip-download";
 import {
   VirtualizedDirectoryGrid,
   VirtualizedDirectoryList,
@@ -113,7 +114,6 @@ export function DirectoryListing({
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const tutorialCreateOpen = useTutorialMenuOpen("create-menu");
   const [editFolderOpen, setEditFolderOpen] = useState(false);
-  const requestUpload = useDropZoneStore((s) => s.requestUpload);
   const setBrowseContext = useDropZoneStore((s) => s.setBrowseContext);
 
   const {
@@ -256,74 +256,7 @@ export function DirectoryListing({
     setUploadOpen(true);
   }, [setUploadOpen, setUploadParentMat]);
 
-  const [isDownloading, setIsDownloading] = useState(false);
-  const downloadCancelRef = useRef(false);
-
-  // Dismiss any in-progress download toast and signal the loop to stop when
-  // the component unmounts (e.g. the user navigates away mid-sequence).
-  useEffect(() => {
-    return () => {
-      downloadCancelRef.current = true;
-      toast.dismiss("dir-zip-download");
-    };
-  }, []);
-
-  const handleDownloadZip = useCallback(async () => {
-    if (isDownloading) return;
-    downloadCancelRef.current = false;
-    setIsDownloading(true);
-    const toastId = "dir-zip-download";
-    const endpoint = realDirId ? `/directories/${realDirId}/download-chunks` : `/directories/root/download-chunks`;
-    try {
-      const data = await apiFetch<{ dir_name: string; chunks: Array<{ url: string; filename: string }> }>(
-        endpoint,
-      );
-
-      const triggerLink = (url: string) => {
-        const a = document.createElement("a");
-        a.href = url;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      };
-
-      if (data.chunks.length === 0) {
-        // Worker not configured — fall back to backend streaming endpoint (root has no streaming fallback).
-        if (realDirId) {
-          triggerLink(`/api/directories/${realDirId}/download`);
-        } else {
-          toast.error(t("downloadZipTooLarge"));
-        }
-      } else if (data.chunks.length === 1) {
-        triggerLink(data.chunks[0].url);
-      } else {
-        // Multiple parts: trigger sequentially so the browser registers each
-        // download separately, and keep the user informed via a live toast.
-        for (let i = 0; i < data.chunks.length; i++) {
-          if (downloadCancelRef.current) break;
-          toast.loading(
-            t("downloadZipPart", { dirName: data.dir_name, part: i + 1, total: data.chunks.length }),
-            { id: toastId, duration: Infinity },
-          );
-          triggerLink(data.chunks[i].url);
-          if (i < data.chunks.length - 1) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-          }
-        }
-        if (!downloadCancelRef.current) {
-          toast.success(
-            t("downloadZipAllStarted", { total: data.chunks.length }),
-            { id: toastId, duration: 6000 },
-          );
-        }
-      }
-    } catch {
-      toast.dismiss(toastId);
-      toast.error(t("downloadZipTooLarge"));
-    } finally {
-      setTimeout(() => setIsDownloading(false), 1500);
-    }
-  }, [realDirId, isDownloading, t]);
+  const zipDownload = useDirectoryZipDownload();
 
   const selectMode = useSelectionStore((s) => s.selectMode);
   const selected = useSelectionStore((s) => s.selected);
@@ -432,45 +365,48 @@ export function DirectoryListing({
       ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [focusedIndex]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement).tagName;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
-      if ((e.target as HTMLElement).isContentEditable) return;
-      if (selectMode) return;
-      if (flatItems.length === 0) return;
+  // Keyboard navigation reads the latest listing through an effect event, so
+  // the document listener is installed once instead of on every render.
+  const onKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
+    if ((e.target as HTMLElement).isContentEditable) return;
+    if (selectMode) return;
+    if (flatItems.length === 0) return;
 
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setFocusedIndex((prev) =>
-          prev === null ? 0 : Math.min(prev + 1, flatItems.length - 1),
-        );
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setFocusedIndex((prev) =>
-          prev === null ? flatItems.length - 1 : Math.max(prev - 1, 0),
-        );
-      } else if (e.key === "Enter") {
-        const idx = focusedIndexRef.current;
-        if (idx === null) return;
-        const item = flatItems[idx];
-        if (!item) return;
-        e.preventDefault();
-        if (item.type === "dir") {
-          navigateBrowse(buildItemPath(String(item.dir.slug ?? "")));
-        } else if (item.type === "ghost-dir") {
-          void openGhostDir(item.op, item.tempId, item.name);
-        } else if (item.type === "mat") {
-          navigateBrowse(buildItemPath(String(item.mat.slug ?? "")));
-        } else if (item.type === "ghost-mat") {
-          openGhostMaterial(item.op);
-        }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setFocusedIndex((prev) =>
+        prev === null ? 0 : Math.min(prev + 1, flatItems.length - 1),
+      );
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setFocusedIndex((prev) =>
+        prev === null ? flatItems.length - 1 : Math.max(prev - 1, 0),
+      );
+    } else if (e.key === "Enter") {
+      const idx = focusedIndexRef.current;
+      if (idx === null) return;
+      const item = flatItems[idx];
+      if (!item) return;
+      e.preventDefault();
+      if (item.type === "dir") {
+        navigateBrowse(buildItemPath(String(item.dir.slug ?? "")));
+      } else if (item.type === "ghost-dir") {
+        void openGhostDir(item.op, item.tempId, item.name);
+      } else if (item.type === "mat") {
+        navigateBrowse(buildItemPath(String(item.mat.slug ?? "")));
+      } else if (item.type === "ghost-mat") {
+        openGhostMaterial(item.op);
       }
-    };
+    }
+  });
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => onKeyDown(e);
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-
-  }, [flatItems, selectMode, router, pathBase, previewPrId, enterGhostDir, setReviewOpen, buildItemPath, setFocusedIndex, openGhostDir, openGhostMaterial]);
+  }, []);
 
   const selectedCount = selected.size;
   const allSelected =
@@ -793,9 +729,12 @@ export function DirectoryListing({
                         {t("select")}
                       </DropdownMenuItem>
                     )}
-                    {!activeGhostDir && (
-                      <DropdownMenuItem onClick={handleDownloadZip} disabled={isDownloading}>
-                        {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                    {realDirId && !activeGhostDir && (
+                      <DropdownMenuItem
+                        onClick={() => void zipDownload.download(realDirId)}
+                        disabled={zipDownload.isDownloading}
+                      >
+                        {zipDownload.isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
                         {t("downloadZipTooltip")}
                       </DropdownMenuItem>
                     )}

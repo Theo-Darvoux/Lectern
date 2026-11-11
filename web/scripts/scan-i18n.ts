@@ -1,4 +1,4 @@
-import { Project, SyntaxKind, Node } from "ts-morph";
+import { Project, Node } from "ts-morph";
 import * as fs from "fs";
 
 const project = new Project({

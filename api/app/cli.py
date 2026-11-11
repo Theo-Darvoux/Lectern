@@ -3,6 +3,8 @@ from pathlib import Path
 
 import typer
 
+from app.models.user import ADMIN_ROLES
+
 app = typer.Typer(help="Lectern CLI")
 
 
@@ -162,7 +164,7 @@ async def _seed(email: str, role: str) -> None:
             .execution_options(populate_existing=True)
         )
         if user is not None:
-            if user.is_admin and role_enum not in (UserRole.BUREAU, UserRole.VIEUX):
+            if user.is_admin and role_enum not in ADMIN_ROLES:
                 await ensure_admin_removal_safe(session, user.id)
             user.role = role_enum
             typer.echo(f"Updated {email} to role '{role}'")
@@ -171,7 +173,7 @@ async def _seed(email: str, role: str) -> None:
             session.add(user)
             typer.echo(f"Created user {email} with role '{role}'")
 
-        if role_enum in (UserRole.BUREAU, UserRole.VIEUX):
+        if role_enum in ADMIN_ROLES:
             await mark_installation_bootstrapped(session)
 
         await session.commit()

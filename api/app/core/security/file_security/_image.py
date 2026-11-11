@@ -84,26 +84,6 @@ def _save_stripped_image(
         clean.save(dest, format=img_format)
 
 
-def _strip_image_metadata(file_bytes: bytes) -> bytes:
-    """Remove EXIF data, comments, and auxiliary chunks from images by re-saving clean pixel data."""
-    try:
-        with io.BytesIO(file_bytes) as source, Image.open(source) as img:
-            _validate_image_size(img)
-            img_format = _validate_image_format_and_frames(img)
-            clean = _normalize_clean_image(img)
-            try:
-                with io.BytesIO() as output:
-                    _save_stripped_image(clean, img_format, output)
-                    return output.getvalue()
-            finally:
-                clean.close()
-    except SanitizationError:
-        raise
-    except Exception as exc:
-        logger.warning("Image metadata strip failed: %s", exc)
-        raise UnreadableFileError("Failed to sanitize image metadata") from exc
-
-
 def _strip_image_from_path(file_path: Path) -> Path:
     """Remove EXIF data from images by re-saving clean pixel data from a file path after EXIF orientation."""
     new_path = None

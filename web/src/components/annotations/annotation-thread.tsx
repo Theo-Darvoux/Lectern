@@ -26,6 +26,7 @@ function getInitials(name: string | null): string {
 }
 
 import { ExpandableText } from "@/components/ui/expandable-text";
+import { isStaffRole } from "@/lib/guest";
 
 function AnnotationItem({
     annotation,
@@ -57,10 +58,7 @@ function AnnotationItem({
     isTargeted?: boolean;
 }) {
     const isAuthor = !!currentUserId && annotation.author_id === currentUserId;
-    const isModerator =
-        currentUserRole === "moderator" ||
-        currentUserRole === "bureau" ||
-        currentUserRole === "vieux";
+    const isModerator = isStaffRole(currentUserRole);
     const canEdit = isAuthor;
     const canDelete = isAuthor || isModerator;
     const t = useTranslations("Annotations");

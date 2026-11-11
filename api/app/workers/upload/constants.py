@@ -6,7 +6,6 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_STATUS_CACHE_PREFIX = "upload:status:"
 _SCAN_CACHE_PREFIX = "upload:scanned:"
 
 # Pipeline stage definitions
@@ -20,7 +19,6 @@ _STAGE_BASES = [sum(w for _, _, w in _STAGES[:i]) for i in range(_STAGE_TOTAL)]
 # Longer than the pipeline's own deadline so the pipeline can report its timeout.
 UPLOAD_JOB_TIMEOUT_SECONDS = settings.upload_pipeline_max_seconds + 60
 
-_CANCEL_KEY_PREFIX = "upload:cancel:"
 _MAX_ARQ_RETRIES = 3
 
 

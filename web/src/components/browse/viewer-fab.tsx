@@ -46,7 +46,7 @@ import {
   DrawerClose,
 } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 
 // ─── Action cell ──────────────────────────────────────────────────────────────
 
@@ -146,8 +146,7 @@ export function ViewerFab({
   onOpenChange,
 }: ViewerFabProps) {
   const t = useTranslations("Browse");
-  const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
+  const tStatus = useTranslations("ContentStatus");
   const pathname = usePathname();
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const searchParams = useSearchParams();
@@ -242,7 +241,7 @@ export function ViewerFab({
     } catch {
       setMaterialLike(materialId, !next, likeCount);
       updateSidebarData({ is_liked: !next, like_count: likeCount });
-      toast.error(t("failedToUpdateLike") || "Failed to update like");
+      toast.error(t("failedToUpdateLike"));
     } finally {
       setIsLiking(false);
     }
@@ -508,7 +507,7 @@ export function ViewerFab({
           {staff && !isRestricted && (
             <ActionCell
               icon={<BookOpenCheck className="h-5 w-5" />}
-              label={fr ? "Statut" : "Status"}
+              label={tStatus("status")}
               onClick={() => {
                 close();
                 openSidebar("details", {

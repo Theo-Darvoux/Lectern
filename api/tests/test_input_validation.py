@@ -814,7 +814,7 @@ class TestCreateDirectoryOp:
 
 
 # ===========================================================================
-# 8. schemas/material — UploadInitRequest, BatchStatusRequest
+# 8. schemas/material — UploadInitRequest
 # ===========================================================================
 
 
@@ -877,41 +877,6 @@ class TestUploadInitRequest:
     def test_rejects_mime_type_too_long(self):
         with pytest.raises(ValidationError):
             self._make(mime_type="a" * 201)
-
-
-class TestBatchStatusRequest:
-    def _make(self, file_keys: list):
-        from app.schemas.material import BatchStatusRequest
-
-        return BatchStatusRequest(file_keys=file_keys)
-
-    def test_valid(self):
-        m = self._make(["uploads/file1.pdf", "cas/abc"])
-        assert len(m.file_keys) == 2
-
-    def test_rejects_empty_list(self):
-        with pytest.raises(ValidationError):
-            self._make([])
-
-    def test_rejects_list_too_long(self):
-        with pytest.raises(ValidationError):
-            self._make([f"uploads/f{i}.pdf" for i in range(51)])
-
-    def test_list_at_max_ok(self):
-        m = self._make([f"uploads/f{i}.pdf" for i in range(50)])
-        assert len(m.file_keys) == 50
-
-    def test_rejects_key_too_long(self):
-        with pytest.raises(ValidationError):
-            self._make(["uploads/" + "a" * 505])
-
-    def test_rejects_key_with_null(self):
-        with pytest.raises(ValidationError):
-            self._make(["uploads/file\x00.pdf"])
-
-    def test_rejects_key_with_traversal(self):
-        with pytest.raises(ValidationError):
-            self._make(["uploads/../etc/passwd"])
 
 
 # ===========================================================================

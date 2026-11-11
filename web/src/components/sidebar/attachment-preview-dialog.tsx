@@ -162,7 +162,7 @@ export function AttachmentPreviewDialog({
                         <DjvuViewer fileKey={fileKey} materialId={materialId} />
                     )}
                     {(viewerType === "generic" || viewerType === "qcm") && (
-                        <GenericViewer fileName={fileName} materialId={materialId} fileKey={fileKey} />
+                        <GenericViewer fileName={fileName} materialId={materialId} />
                     )}
                 </div>
             </DialogContent>

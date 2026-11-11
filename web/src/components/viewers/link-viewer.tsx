@@ -22,6 +22,7 @@ interface LinkViewerProps {
 
 export function LinkViewer({ material }: LinkViewerProps) {
     const t = useTranslations("LinkViewer");
+    const tFeedback = useTranslations("Feedback");
     const router = useRouter();
     const openLink = useExternalLinkStore((s) => s.openLink);
     const [copied, setCopied] = useState(false);
@@ -47,7 +48,7 @@ export function LinkViewer({ material }: LinkViewerProps) {
             toast.success(t("linkCopied"));
             setTimeout(() => setCopied(false), 2000);
         } catch {
-            toast.error("Failed to copy link");
+            toast.error(tFeedback("copyLinkFailed"));
         }
     };
 

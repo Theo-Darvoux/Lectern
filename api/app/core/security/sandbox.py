@@ -12,7 +12,6 @@ Sandbox policy:
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import contextlib
 import logging
 import os
@@ -20,10 +19,8 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -268,130 +265,6 @@ def _sandbox_command(
         *_resource_limit_prefix(file_size_limit_bytes=file_size_limit_bytes),
         *cmd,
     ]
-
-
-def _read_sync_bounded_stream(stream: Any, max_bytes: int) -> bytes:
-    """Read a synchronous stream incrementally and enforce a memory bound."""
-    if stream is None:
-        return b""
-    buffer = bytearray()
-    try:
-        while chunk := stream.read(65536):
-            buffer.extend(chunk)
-            if len(buffer) > max_bytes:
-                raise SubprocessOutputLimitError(
-                    f"Subprocess output limit exceeded ({max_bytes:,} bytes)"
-                )
-        return bytes(buffer)
-    finally:
-        with contextlib.suppress(Exception):
-            stream.close()
-
-
-def _kill_and_reap_sync(proc: subprocess.Popen[bytes], pgid: int) -> None:
-    """Best-effort process-group termination with bounded reaping."""
-    with contextlib.suppress(ProcessLookupError, OSError):
-        os.killpg(pgid, signal.SIGKILL)
-    with contextlib.suppress(ProcessLookupError, OSError):
-        proc.kill()
-    try:
-        proc.wait(timeout=_CLEANUP_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        logger.error("Failed to reap sandboxed process %s after SIGKILL", proc.pid)
-
-
-def sandboxed_run(
-    cmd: list[str],
-    *,
-    rw_paths: Sequence[Path | str] | None = None,
-    ro_paths: Sequence[Path | str] | None = None,
-    timeout: int = 60,
-    capture_output: bool = True,
-    python_runtime: bool = False,
-    file_size_limit_bytes: int | None = None,
-) -> subprocess.CompletedProcess[bytes]:
-    """Run a sandboxed process with one end-to-end deadline."""
-    wrapped = _sandbox_command(
-        cmd,
-        rw_paths=rw_paths,
-        ro_paths=ro_paths,
-        python_runtime=python_runtime,
-        file_size_limit_bytes=file_size_limit_bytes,
-    )
-    deadline = time.monotonic() + timeout
-
-    def remaining_timeout() -> float:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise subprocess.TimeoutExpired(wrapped, timeout)
-        return remaining
-
-    proc = subprocess.Popen(
-        wrapped,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE if capture_output else subprocess.DEVNULL,
-        stderr=subprocess.PIPE if capture_output else subprocess.DEVNULL,
-        env=_sandbox_environment(python_runtime=python_runtime),
-        start_new_session=True,
-    )
-    pgid = proc.pid
-
-    if not capture_output:
-        try:
-            proc.wait(timeout=remaining_timeout())
-        except BaseException:
-            _kill_and_reap_sync(proc, pgid)
-            raise
-        return subprocess.CompletedProcess(wrapped, proc.returncode or 0, b"", b"")
-
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-    stdout_future = executor.submit(
-        _read_sync_bounded_stream, proc.stdout, _MAX_SUBPROCESS_OUTPUT_BYTES
-    )
-    stderr_future = executor.submit(
-        _read_sync_bounded_stream, proc.stderr, _MAX_SUBPROCESS_OUTPUT_BYTES
-    )
-    try:
-        done, pending = concurrent.futures.wait(
-            [stdout_future, stderr_future],
-            timeout=remaining_timeout(),
-            return_when=concurrent.futures.FIRST_EXCEPTION,
-        )
-        for future in done:
-            exception = future.exception()
-            if exception is not None:
-                raise exception
-
-        if pending:
-            done, still_pending = concurrent.futures.wait(
-                pending,
-                timeout=remaining_timeout(),
-            )
-            for future in done:
-                exception = future.exception()
-                if exception is not None:
-                    raise exception
-            if still_pending:
-                raise subprocess.TimeoutExpired(wrapped, timeout)
-
-        stdout = stdout_future.result()
-        stderr = stderr_future.result()
-        proc.wait(timeout=remaining_timeout())
-    except BaseException:
-        _kill_and_reap_sync(proc, pgid)
-        raise
-    finally:
-        if proc.stdout is not None:
-            with contextlib.suppress(Exception):
-                proc.stdout.close()
-        if proc.stderr is not None:
-            with contextlib.suppress(Exception):
-                proc.stderr.close()
-        executor.shutdown(wait=True, cancel_futures=True)
-
-    returncode = proc.returncode or 0
-    _raise_if_sandbox_launcher_failed(returncode, stderr)
-    return subprocess.CompletedProcess(wrapped, returncode, stdout, stderr)
 
 
 async def _read_bounded_stream(

@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ExternalLink, Plus, Send, Loader2, Link as LinkIcon } from "lucide-react";
 import { toast } from "sonner";
-import { useStagingStore, type Operation, type CreateMaterialOp } from "@/lib/staging-store";
+import { useStagingStore, type CreateMaterialOp } from "@/lib/staging-store";
 import { TagInput } from "@/components/ui/tag-input";
 import { submitDirectOperations } from "@/lib/pr-client";
 import { useAuthStore } from "@/lib/stores";

@@ -33,27 +33,22 @@ function browseChannel(data: BrowseData | null): SSEChannel | null {
  * The logical subscription is keyed on the entity ID, NOT on the `data` object
  * reference. This means background revalidations that return new data objects
  * for the same directory/material do not churn the master topic set.
- * Mutable values (path, fetchData, etc.) are held in refs so
- * listeners always call the latest version without triggering reconnects.
+ * Mutable values (path, router, breadcrumbs) are held in refs so listeners
+ * always see the latest version without triggering reconnects. Invalidating a
+ * path on screen refetches it.
  */
-export function useBrowseSSE(
-    data: BrowseData | null,
-    path: string,
-    fetchData: (background: boolean) => void,
-): void {
+export function useBrowseSSE(data: BrowseData | null, path: string): void {
     const router = useRouter();
 
     const channel = browseChannel(data);
 
     // Mutable refs — updated after each render so listeners always see fresh values.
     const pathRef = useRef(path);
-    const fetchDataRef = useRef(fetchData);
     const routerRef = useRef(router);
     const breadcrumbSlugsRef = useRef<string[]>([]);
 
     useEffect(() => {
         pathRef.current = path;
-        fetchDataRef.current = fetchData;
         routerRef.current = router;
         breadcrumbSlugsRef.current = data?.breadcrumbs?.map((b) => b.slug) ?? [];
     });
@@ -61,13 +56,9 @@ export function useBrowseSSE(
     useEffect(() => {
         if (!channel) return;
         const [kind, id] = channel.split(":");
-        const invalidate = () => invalidateBrowseEntity(channel, pathRef.current);
-        const refresh = () => {
-            invalidate();
-            fetchDataRef.current(true);
-        };
+        const refresh = () => invalidateBrowseEntity(channel, pathRef.current);
         const redirectTo = (parentPath: string) => {
-            invalidate();
+            refresh();
             routerRef.current.replace(parentPath);
         };
         const browsePath = (slugs: string[]) =>

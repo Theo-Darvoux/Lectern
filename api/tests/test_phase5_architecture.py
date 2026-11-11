@@ -331,7 +331,7 @@ async def test_edit_material_conflict_raises_on_version_lock_mismatch(
     from app.models.directory import Directory
     from app.models.material import Material, MaterialVersion
     from app.models.security import VirusScanResult
-    from app.services.pr import _exec_edit_material
+    from app.services.pr.executors import _exec_edit_material
 
     # Create minimal fixtures
     dir_ = Directory(
@@ -389,10 +389,10 @@ async def test_edit_material_conflict_raises_on_version_lock_mismatch(
 
     with (
         patch(
-            "app.services.pr.get_object_info",
+            "app.services.pr.versions.get_object_info",
             AsyncMock(return_value={"size": 1024, "content_type": "application/pdf"}),
         ),
-        patch("app.services.pr.copy_object", AsyncMock()),
+        patch("app.services.pr.versions.copy_object", AsyncMock()),
         pytest.raises(ConflictError),
     ):
         await _exec_edit_material(db_session, op, pr, {})

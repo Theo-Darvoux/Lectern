@@ -11,7 +11,3 @@ class UnsafeFileError(SanitizationError):
 
 class UnreadableFileError(SanitizationError):
     """Raised when a file is too damaged to parse, without any sign of hostile content."""
-
-
-class CompressionError(ValueError):
-    """Base exception for file compression errors."""

@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.models.directory import Directory, DirectoryFavourite, DirectoryLike, DirectoryType
 from app.models.material import Material, MaterialFavourite, MaterialLike
 from app.models.user import User, UserRole
-from app.services.directory import toggle_directory_favourite, toggle_directory_like
-from app.services.material import toggle_favourite, toggle_like
+from app.services.directory import set_directory_favourite, toggle_directory_like
+from app.services.material import set_favourite, toggle_like
 
 DATABASE_URL = os.environ.get("REVERT_TEST_DATABASE_URL")
 pytestmark = [
@@ -126,7 +126,7 @@ async def test_concurrent_directory_toggles_keep_membership_and_counter_consiste
 
 
 @pytest.mark.asyncio
-async def test_concurrent_material_favourite_toggles_are_linearizable() -> None:
+async def test_concurrent_material_favourite_adds_keep_one_membership() -> None:
     assert DATABASE_URL is not None
     engine = create_async_engine(DATABASE_URL)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -143,12 +143,14 @@ async def test_concurrent_material_favourite_toggles_are_linearizable() -> None:
         material_id = material.id
 
     async with sessions() as first, sessions() as second:
-        assert await toggle_favourite(first, user_id, material_id) is True
-        competing = asyncio.create_task(toggle_favourite(second, user_id, material_id))
+        await set_favourite(first, user_id, material_id, favourited=True)
+        competing = asyncio.create_task(
+            set_favourite(second, user_id, material_id, favourited=True)
+        )
         await asyncio.sleep(0.2)
         assert not competing.done(), "competing material favourite did not wait for the pair lock"
         await first.commit()
-        assert await asyncio.wait_for(competing, timeout=5) is False
+        await asyncio.wait_for(competing, timeout=5)
         await second.commit()
 
     async with sessions() as check:
@@ -160,13 +162,13 @@ async def test_concurrent_material_favourite_toggles_are_linearizable() -> None:
                 MaterialFavourite.material_id == material_id,
             )
         )
-        assert membership_count == 0
+        assert membership_count == 1
 
     await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_concurrent_directory_favourite_toggles_are_linearizable() -> None:
+async def test_concurrent_directory_favourite_removals_leave_no_membership() -> None:
     assert DATABASE_URL is not None
     engine = create_async_engine(DATABASE_URL)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -185,12 +187,14 @@ async def test_concurrent_directory_favourite_toggles_are_linearizable() -> None
         directory_id = directory.id
 
     async with sessions() as first, sessions() as second:
-        assert await toggle_directory_favourite(first, user_id, directory_id) is False
-        competing = asyncio.create_task(toggle_directory_favourite(second, user_id, directory_id))
+        await set_directory_favourite(first, user_id, directory_id, favourited=False)
+        competing = asyncio.create_task(
+            set_directory_favourite(second, user_id, directory_id, favourited=False)
+        )
         await asyncio.sleep(0.2)
         assert not competing.done(), "competing directory favourite did not wait for the pair lock"
         await first.commit()
-        assert await asyncio.wait_for(competing, timeout=5) is True
+        await asyncio.wait_for(competing, timeout=5)
         await second.commit()
 
     async with sessions() as check:
@@ -202,6 +206,6 @@ async def test_concurrent_directory_favourite_toggles_are_linearizable() -> None
                 DirectoryFavourite.directory_id == directory_id,
             )
         )
-        assert membership_count == 1
+        assert membership_count == 0
 
     await engine.dispose()

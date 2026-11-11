@@ -1,5 +1,6 @@
 import logging
 
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.database.post_commit import (
     acknowledge_outbox_completion,
     record_outbox_execution_failure,
@@ -158,7 +159,7 @@ async def release_upload_quota(ctx: dict, user_id: str, members: list[str]) -> N
 
         redis = redis_client
     if members:
-        await redis.zrem(f"quota:uploads:{user_id}", *members)
+        await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", *members)
 
 
 async def release_storage_reservations(

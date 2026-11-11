@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-import { apiFetchRetry } from "@/lib/api-client";
+import { apiFetch } from "@/lib/api-client";
 import { useAuth } from "@/hooks/use-auth";
 import { isGuest } from "@/lib/guest";
 import { FeaturedSection } from "@/components/home/featured-section";
@@ -37,36 +38,19 @@ export default function HomePage() {
   const { user } = useAuth();
   const config = useConfigStore((state) => state.config);
   const guest = isGuest(user);
-  const [data, setData] = useState<HomeData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-
-  const retry = useCallback(() => setReloadToken((token) => token + 1), []);
+  const home = useQuery({
+    queryKey: ["home"],
+    queryFn: ({ signal }) => apiFetch<HomeData>("/home", { signal, timeoutMs: 15_000 }),
+  });
+  const data = home.data ?? null;
+  const isLoading = home.isFetching;
+  const { refetch } = home;
+  const retry = () => void refetch();
   const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || "Lectern";
 
   useEffect(() => {
     document.title = `${t("home")} • ${siteName}`;
   }, [siteName, t]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setIsLoading(true);
-    setError(null);
-    apiFetchRetry<HomeData>("/home", {
-      signal: controller.signal,
-      timeoutMs: 15_000,
-    })
-      .then((nextData) => setData(nextData))
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setError(err instanceof Error ? err.message : t("loadError"));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setIsLoading(false);
-      });
-    return () => controller.abort();
-  }, [reloadToken, t]);
 
   const greeting = t(`greetings.${getGreetingKey()}` as Parameters<typeof t>[0]);
   const displayName =
@@ -90,12 +74,12 @@ export default function HomePage() {
           />
 
           {/* ── Error banner ──────────────────────────────────── */}
-          {error && !data && (
+          {home.isError && !data && (
             <div className="flex flex-col gap-4 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive sm:flex-row sm:items-center">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <div className="min-w-0 flex-1">
                 <p className="font-medium">{t("errorTitle")}</p>
-                <p className="mt-0.5 text-destructive/80">{error}</p>
+                <p className="mt-0.5 text-destructive/80">{t("loadError")}</p>
               </div>
               <Button variant="outline" size="sm" className="shrink-0 gap-2" onClick={retry}>
                 <RefreshCw className="h-3.5 w-3.5" />

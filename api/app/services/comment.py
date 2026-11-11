@@ -10,7 +10,7 @@ from app.core.common.exceptions import BadRequestError, ForbiddenError, NotFound
 from app.models.comment import Comment
 from app.models.directory import Directory
 from app.models.material import Material
-from app.models.user import User, UserRole
+from app.models.user import MODERATOR_ROLES, User
 from app.services.notification import notify_material_subscribers
 
 logger = logging.getLogger(__name__)
@@ -142,7 +142,7 @@ async def delete_comment(
     if not comment:
         raise NotFoundError("Comment not found")
 
-    is_moderator = user.role in (UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX)
+    is_moderator = user.role in MODERATOR_ROLES
     if comment.author_id != user.id and not is_moderator:
         raise ForbiddenError("Only the author or a moderator can delete this comment")
 

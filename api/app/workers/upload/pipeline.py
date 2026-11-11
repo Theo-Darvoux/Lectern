@@ -14,6 +14,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.config import settings
 from app.core.common.exceptions import ServiceUnavailableError
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_keys import (
+    UPLOAD_CANCEL_PREFIX,
+    UPLOAD_QUOTA_PREFIX,
+    UPLOAD_STATUS_PREFIX,
+)
 from app.core.database.redis import redis_lock
 from app.core.events.processing import ProcessingFile
 from app.core.observability.metrics import mime_category as _mime_cat
@@ -36,13 +41,7 @@ from app.core.storage.liveness import storage_lifecycle_lock
 from app.routers.upload.cancellation import upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
 from app.workers.upload.cache_repo import UploadCacheRepository
-from app.workers.upload.constants import (
-    _CANCEL_KEY_PREFIX,
-    _MAX_ARQ_RETRIES,
-    _STAGE_TOTAL,
-    _STAGES,
-    _overall,
-)
+from app.workers.upload.constants import _MAX_ARQ_RETRIES, _STAGE_TOTAL, _STAGES, _overall
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.exceptions import UploadError
 from app.workers.upload.repository import UploadWorkerRepository
@@ -106,7 +105,7 @@ class UploadPipeline:
         self.pipeline_start = time.monotonic()
         self.mime_category = _mime_cat(mime_type)
 
-        self.status_key = f"upload:status:{quarantine_key}"
+        self.status_key = f"{UPLOAD_STATUS_PREFIX}{quarantine_key}"
 
         self.tmp_path: Path | None = None
         self.pf: ProcessingFile | None = None
@@ -180,7 +179,7 @@ class UploadPipeline:
     async def _release_quarantine_quota(self) -> None:
         """Stop counting the quarantine object against the pending-upload cap."""
         try:
-            await self.redis.zrem(f"quota:uploads:{self.user_id}", self.quarantine_key)
+            await self.redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{self.user_id}", self.quarantine_key)
         except Exception as exc:
             logger.warning(
                 "Failed to release quota membership for %s: %s",
@@ -277,7 +276,7 @@ class UploadPipeline:
             )
 
     async def _check_cancellation(self, where: str) -> None:
-        cancel_key = f"{_CANCEL_KEY_PREFIX}{self.upload_id}"
+        cancel_key = f"{UPLOAD_CANCEL_PREFIX}{self.upload_id}"
         redis_cancelled = await self.cache.is_cancelled(cancel_key)
         db_cancelled = False
         session_factory = self.ctx.db_sessionmaker
@@ -400,7 +399,7 @@ class UploadPipeline:
                 except CasReferenceMissingError:
                     pass
                 await self.redis.zrem(
-                    f"quota:uploads:{self.user_id}",
+                    f"{UPLOAD_QUOTA_PREFIX}{self.user_id}",
                     f"staging:{self.user_id}:{self.upload_id}",
                 )
                 raise UploadError(UploadStatus.FAILED, "Upload cancelled by user")

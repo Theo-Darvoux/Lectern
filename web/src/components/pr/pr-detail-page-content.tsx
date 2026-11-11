@@ -2,7 +2,9 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { usePathname } from "next/navigation";
-import { apiFetch } from "@/lib/api-client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ApiError, apiFetch } from "@/lib/api-client";
+import { QueryError } from "@/components/query-error";
 import {
     Loader2,
     ArrowLeft,
@@ -30,10 +32,7 @@ import {
     Inbox,
     Undo2,
     ShieldAlert,
-    FileText,
     Paperclip,
-    Folder,
-    Sparkles,
     AlertTriangle,
     Tag,
 } from "lucide-react";
@@ -69,13 +68,14 @@ import { ExpandableText } from "@/components/ui/expandable-text";
 import Link from "next/link";
 import { useAuthStore } from "@/lib/stores";
 import { toast } from "sonner";
-import { useTranslations, useLocale } from "next-intl";
-import { fr, enUS } from "date-fns/locale";
+import { useTranslations } from "next-intl";
 import { type Operation } from "@/lib/staging-store";
 import { PROperationThumbnail } from "./pr-operation-thumbnail";
 import { PRLocationBreadcrumb, PRMoveTransition, type PathSegment } from "./pr-location-breadcrumb";
-import { formatFileSize, getFileBadgeColor, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
-import { TYPE_COLORS, TYPE_ICONS } from "@/lib/material-icons";
+import { formatFileSize, getFileBadgeColor, getFileBadgeLabel } from "@/lib/file-utils";
+import { translateDynamic } from "@/lib/i18n-dynamic";
+import { useDateLocale } from "@/hooks/use-date-locale";
+import { isAdminRole, isStaffRole } from "@/lib/guest";
 
 /* ── Types ──────────────────────────────────────────── */
 
@@ -177,7 +177,12 @@ const OP_LABELS_KEYS: Record<string, string> = {
 
 const STATUS_CONFIG_KEYS: Record<
     string,
-    { Icon: React.ElementType; color: string; bg: string; labelKey: string }
+    {
+        Icon: React.ElementType;
+        color: string;
+        bg: string;
+        labelKey: `status.${"open" | "approved" | "rejected" | "cancelled"}`;
+    }
 > = {
     open: {
         Icon: Inbox,
@@ -380,7 +385,10 @@ function OperationRow({
     })();
 
     // Resolve item information and tree locations
+    const rootLabel = t("root");
     useEffect(() => {
+        // Read the fields from `op` itself so the dependency list stays exact.
+        const rawOp = op as unknown as Record<string, unknown>;
         let cancelled = false;
 
         async function resolveAll() {
@@ -388,7 +396,7 @@ function OperationRow({
                 // 1. New Creations (create_material, create_directory, create_link)
                 if (opType.startsWith("create_")) {
                     const dirId = rawOp.directory_id ? String(rawOp.directory_id) : (rawOp.parent_id ? String(rawOp.parent_id) : null);
-                    const destInfo = await resolveDirectoryPath(dirId, allOperations, t("root"));
+                    const destInfo = await resolveDirectoryPath(dirId, allOperations, rootLabel);
                     if (cancelled) return;
                     setItemDetails({
                         itemName: String(rawOp.title || rawOp.name || ""),
@@ -433,7 +441,7 @@ function OperationRow({
                             if (cancelled) return;
 
                             if (mat) {
-                                const srcInfo = await resolveDirectoryPath(mat.directory_id, allOperations, t("root"));
+                                const srcInfo = await resolveDirectoryPath(mat.directory_id, allOperations, rootLabel);
                                 if (cancelled) return;
 
                                 const matTargetUrl = String((mat.metadata as Record<string, unknown> | undefined)?.url || "").trim();
@@ -480,11 +488,11 @@ function OperationRow({
                         ]);
                         if (cancelled) return;
 
-                        const itemName = dir?.name || (path.length > 0 ? path[path.length - 1].name : t("root"));
+                        const itemName = dir?.name || (path.length > 0 ? path[path.length - 1].name : rootLabel);
                         const parentSegs = path.slice(0, -1);
                         const sourcePath = parentSegs.length > 0
                             ? parentSegs.map((p) => p.name).join(" › ")
-                            : t("root");
+                            : rootLabel;
                         const parentSlugs = parentSegs.map((p) => p.slug).join("/");
 
                         setItemDetails({
@@ -514,7 +522,7 @@ function OperationRow({
                     let fileName: string | undefined;
                     let fileSize: number | undefined;
                     let mimeType: string | undefined;
-                    let sourcePath: string = t("root");
+                    let sourcePath: string = rootLabel;
                     let sourceUrl: string = "/browse";
                     let sourceSegments: PathSegment[] = [];
 
@@ -534,7 +542,7 @@ function OperationRow({
                                 fileSize = typeof mat.current_version_info?.file_size === "number" ? mat.current_version_info.file_size : undefined;
                                 mimeType = mat.current_version_info?.file_mime_type ?? undefined;
 
-                                const srcInfo = await resolveDirectoryPath(mat.directory_id, allOperations, t("root"));
+                                const srcInfo = await resolveDirectoryPath(mat.directory_id, allOperations, rootLabel);
                                 sourcePath = srcInfo.label;
                                 sourceUrl = srcInfo.url;
                                 sourceSegments = srcInfo.segments;
@@ -551,7 +559,7 @@ function OperationRow({
                                 itemType = dir?.type || "folder";
                                 directoryId = targetId;
                                 const parentSegs = path.slice(0, -1);
-                                sourcePath = parentSegs.length > 0 ? parentSegs.map((p) => p.name).join(" › ") : t("root");
+                                sourcePath = parentSegs.length > 0 ? parentSegs.map((p) => p.name).join(" › ") : rootLabel;
                                 const parentSlugs = parentSegs.map((p) => p.slug).join("/");
                                 sourceUrl = parentSlugs ? `/browse/${parentSlugs}` : "/browse";
                                 sourceSegments = parentSegs.map((p) => ({ name: p.name, slug: p.slug }));
@@ -559,7 +567,7 @@ function OperationRow({
                         } catch { /* ignore */ }
                     }
 
-                    const destInfo = await resolveDirectoryPath(newParentId, allOperations, t("root"));
+                    const destInfo = await resolveDirectoryPath(newParentId, allOperations, rootLabel);
                     if (cancelled) return;
 
                     setItemDetails({
@@ -586,7 +594,7 @@ function OperationRow({
 
         resolveAll();
         return () => { cancelled = true; };
-    }, [op, opType, prId, allOperations.length]);
+    }, [op, opType, prId, allOperations, rootLabel]);
 
     // Handle Quick Preview action
     const handleQuickPreview = async (e?: React.MouseEvent) => {
@@ -767,7 +775,7 @@ function OperationRow({
                                     className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium border ${colorClass}`}
                                 >
                                     <Icon className="h-3 w-3 shrink-0" />
-                                    {t(OP_LABELS_KEYS[opType] as any) ?? opType}
+                                    {translateDynamic(t, OP_LABELS_KEYS[opType] ?? "", opType)}
                                 </span>
                             </div>
 
@@ -789,7 +797,7 @@ function OperationRow({
 
                                 {activeMaterialType && !isDirectoryOp && (
                                     <Badge variant="outline" className="text-[10px] h-4.5 px-1.5 py-0 font-normal">
-                                        {String(mt.has?.(activeMaterialType as any) ? mt(activeMaterialType as any) : activeMaterialType)}
+                                        {translateDynamic(mt, String(activeMaterialType))}
                                     </Badge>
                                 )}
 
@@ -941,13 +949,13 @@ function OperationRow({
 
                                         {activeMaterialType && !isDirectoryOp && (
                                             <Badge variant="secondary" className="text-[10px] font-normal">
-                                                {String(mt.has?.(activeMaterialType as any) ? mt(activeMaterialType as any) : activeMaterialType)}
+                                                {translateDynamic(mt, String(activeMaterialType))}
                                             </Badge>
                                         )}
 
                                         {isDirectoryOp && (
                                             <Badge variant="secondary" className="text-[10px] font-normal">
-                                                {String(dt.has?.(String(rawOp.type || itemDetails?.itemType || "folder") as any) ? dt(String(rawOp.type || itemDetails?.itemType || "folder") as any) : (rawOp.type || itemDetails?.itemType || "Folder"))}
+                                                {translateDynamic(dt, String(rawOp.type || itemDetails?.itemType || "folder"))}
                                             </Badge>
                                         )}
                                     </div>
@@ -1107,11 +1115,11 @@ function OperationRow({
                                         <div className="flex items-center gap-2 p-2 rounded-md bg-accent/40 text-xs flex-wrap">
                                             <span className="font-semibold text-muted-foreground uppercase text-[10px]">{t("fieldType")}:</span>
                                             <Badge variant="outline" className="line-through opacity-70 text-xs">
-                                                {oldType ? String(mt.has?.(oldType as any) ? mt(oldType as any) : oldType) : "—"}
+                                                {oldType ? translateDynamic(mt, String(oldType)) : "—"}
                                             </Badge>
                                             <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
                                             <Badge variant="secondary" className="text-xs font-semibold">
-                                                {newType ? String(mt.has?.(newType as any) ? mt(newType as any) : newType) : "—"}
+                                                {newType ? translateDynamic(mt, String(newType)) : "—"}
                                             </Badge>
                                         </div>
                                     )}
@@ -1211,16 +1219,25 @@ function OperationRow({
 /* ── Main Page ──────────────────────────────────────── */
 
 function PRDetailContent() {
+    // When the page was opened; the "expires soon" hint does not need to tick live.
+    const [openedAt] = useState(() => Date.now());
     const pathname = usePathname();
     const id = pathname.replace(/^\/pull-requests\//, "").replace(/\/$/, "");
     const t = useTranslations("PRDetails");
     const tPRs = useTranslations("PRs");
     const tCommon = useTranslations("Common");
-    const locale = useLocale();
-    const dateLocale = locale === "fr" ? fr : enUS;
+    const dateLocale = useDateLocale();
     const user = useAuthStore((state) => state.user);
-    const [pr, setPr] = useState<PullRequestDetail | null>(null);
-    const [loading, setLoading] = useState(true);
+    const queryClient = useQueryClient();
+    const prQuery = useQuery({
+        queryKey: ["pull-requests", id],
+        queryFn: ({ signal }) => apiFetch<PullRequestDetail>(`/pull-requests/${id}`, { signal }),
+    });
+    const pr = prQuery.data ?? null;
+    const updatePr = (update: (current: PullRequestDetail) => PullRequestDetail) =>
+        queryClient.setQueryData<PullRequestDetail>(["pull-requests", id], (current) =>
+            current ? update(current) : current,
+        );
     const [acting, setActing] = useState<"approve" | "reject" | "cancel" | "revert" | null>(null);
     const [showRejectDialog, setShowRejectDialog] = useState(false);
     const [showCancelDialog, setShowCancelDialog] = useState(false);
@@ -1252,7 +1269,7 @@ function PRDetailContent() {
                 return;
             }
         }
-    }, [pr]);
+    }, [pr, operations]);
 
     useEffect(() => {
         if (previewDirId) {
@@ -1263,27 +1280,11 @@ function PRDetailContent() {
     const allItemValues = useMemo(() => operations.map((_, i) => `op-${i}`), [operations]);
     const allExpanded = useMemo(() => expandedItems.length === allItemValues.length, [expandedItems, allItemValues]);
 
-    useEffect(() => {
-        let active = true;
-        setLoading(true);
-        apiFetch<PullRequestDetail>(`/pull-requests/${id}`)
-            .then((data) => {
-                if (active) setPr(data);
-            })
-            .catch(console.error)
-            .finally(() => {
-                if (active) setLoading(false);
-            });
-        return () => {
-            active = false;
-        };
-    }, [id]);
-
     const handleApprove = async () => {
         setActing("approve");
         try {
             await apiFetch(`/pull-requests/${id}/approve`, { method: "POST" });
-            setPr((prev) => prev ? { ...prev, status: "approved" } : prev);
+            updatePr((prev) => ({ ...prev, status: "approved" }));
             toast.success(t("publishedToast"));
         } catch (e) {
             toast.error(e instanceof Error ? e.message : t("publishFailed"));
@@ -1301,7 +1302,7 @@ function PRDetailContent() {
                 method: "POST",
                 body: JSON.stringify({ reason: rejectReason.trim() }),
             });
-            setPr((prev) => prev ? { ...prev, status: "rejected", rejection_reason: rejectReason.trim() } : prev);
+            updatePr((prev) => ({ ...prev, status: "rejected", rejection_reason: rejectReason.trim() }));
             setRejectReason("");
             toast(t("rejectedToast"));
         } catch (e) {
@@ -1316,7 +1317,7 @@ function PRDetailContent() {
         setShowCancelDialog(false);
         try {
             await apiFetch(`/pull-requests/${id}/cancel`, { method: "POST" });
-            setPr((prev) => prev ? { ...prev, status: "cancelled" } : prev);
+            updatePr((prev) => ({ ...prev, status: "cancelled" }));
             toast.success(t("cancelledToast"));
         } catch (e) {
             toast.error(e instanceof Error ? e.message : t("cancelFailed"));
@@ -1330,7 +1331,7 @@ function PRDetailContent() {
         setShowRevertDialog(false);
         try {
             const revertPr = await apiFetch<PullRequestDetail>(`/pull-requests/${id}/revert`, { method: "POST" });
-            setPr((prev) => prev ? { ...prev, reverted_by_pr_id: revertPr.id, can_revert: false } : prev);
+            updatePr((prev) => ({ ...prev, reverted_by_pr_id: revertPr.id, can_revert: false }));
             setRevertConfirmText("");
             setRevertUnderstood(false);
             toast.success(t("revertedToast"));
@@ -1341,12 +1342,18 @@ function PRDetailContent() {
         }
     };
 
-    if (loading) {
+    if (prQuery.isPending) {
         return (
             <div className="flex items-center justify-center py-20">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
         );
+    }
+
+    const notFound =
+        prQuery.isError && prQuery.error instanceof ApiError && [404, 422].includes(prQuery.error.status);
+    if (prQuery.isError && !notFound) {
+        return <QueryError onRetry={() => void prQuery.refetch()} className="py-20" />;
     }
 
     if (!pr) {
@@ -1368,11 +1375,8 @@ function PRDetailContent() {
         typeCounts[tKey] = (typeCounts[tKey] || 0) + 1;
     }
 
-    const isModerator =
-        user?.role === "moderator" ||
-        user?.role === "bureau" ||
-        user?.role === "vieux";
-    const isAdmin = user?.role === "bureau" || user?.role === "vieux";
+    const isModerator = isStaffRole(user?.role);
+    const isAdmin = isAdminRole(user?.role);
     // Anonymous PRs hide `author` from their own author too; `is_own` still says who it is.
     const isAuthor = !!user && (pr.is_own === true || (!!pr.author?.id && pr.author.id === user.id));
     const canCancel = pr.status === "open" && isAuthor;
@@ -1386,7 +1390,7 @@ function PRDetailContent() {
 
     const updatedDate = new Date(pr.updated_at);
     const expiresDate = new Date(updatedDate.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const isExpiringSoon = pr.status === "open" && (expiresDate.getTime() - Date.now() < 24 * 60 * 60 * 1000);
+    const isExpiringSoon = pr.status === "open" && (expiresDate.getTime() - openedAt < 24 * 60 * 60 * 1000);
 
     const isApproved = pr.status === "approved";
     const previewUrl = isApproved
@@ -1432,7 +1436,7 @@ function PRDetailContent() {
                         </p>
                         <p className="mt-1 text-xs leading-relaxed text-blue-700/90 dark:text-blue-400/80">
                             {t.rich("revertOfBannerDesc", {
-                                link: (chunks) => (
+                                link: () => (
                                     <Link
                                         href={`/pull-requests/${pr.reverts_pr_id}`}
                                         className="underline font-medium hover:text-blue-800 dark:hover:text-blue-200"
@@ -1469,7 +1473,7 @@ function PRDetailContent() {
                                     className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${status.color} ${status.bg}`}
                                 >
                                     <StatusIcon className="h-3.5 w-3.5" />
-                                    {t(status.labelKey as any)}
+                                    {t(status.labelKey)}
                                 </span>
                             </div>
 
@@ -1563,7 +1567,7 @@ function PRDetailContent() {
                                     className="gap-1 text-xs font-normal"
                                 >
                                     <Icon className="h-3 w-3" />
-                                    {count} {t(OP_LABELS_KEYS[type] as any) ?? type}
+                                    {count} {translateDynamic(t, OP_LABELS_KEYS[type] ?? "", type)}
                                 </Badge>
                             );
                         })}
@@ -1838,7 +1842,7 @@ function PRDetailContent() {
                         <div className="space-y-2">
                             <Label htmlFor="revert-confirm" className="text-sm text-muted-foreground">
                                 {t.rich("revertConfirmLabel", {
-                                    text: (chunks) => <span className="font-mono font-semibold text-foreground">{t("revertConfirmText")}</span>,
+                                    text: () => <span className="font-mono font-semibold text-foreground">{t("revertConfirmText")}</span>,
                                 })}
                             </Label>
                             <Input

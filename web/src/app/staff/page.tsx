@@ -1,27 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { QueryError } from "@/components/query-error";
 import Link from "next/link";
 import {
   AlertTriangle,
   ArrowRight,
   BookOpenCheck,
   CheckCircle2,
-  Crown,
-  FileBox,
   Flag,
   FolderTree,
   GitPullRequest,
-  HardDrive,
   RefreshCw,
   ServerCog,
-  ShieldCheck,
   Star,
   Users,
   Wrench,
-  Activity,
   FileText,
-  BadgeAlert,
   Archive,
   History,
 } from "lucide-react";
@@ -40,6 +35,8 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { apiFetch } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
+import { isAdminRole } from "@/lib/guest";
+import { useContentStatusText } from "@/components/content-status-badge";
 
 interface Overview {
   attention: {
@@ -95,60 +92,58 @@ interface HealthSummary {
   };
 }
 
+const REFRESH_INTERVAL_MS = 30_000;
+
 export default function StaffDashboard() {
   const t = useTranslations("Staff.dashboard");
   const tStaff = useTranslations("Staff");
   const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
+  const tOverview = useTranslations("Staff.overview");
+  const { label: statusLabel } = useContentStatusText();
   const { user } = useAuth();
-  const isAdmin = user?.role === "bureau" || user?.role === "vieux";
+  const isAdmin = isAdminRole(user?.role);
 
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [modStats, setModStats] = useState<ModeratorStats | null>(null);
-  const [health, setHealth] = useState<HealthSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const hasLoadedRef = useRef(false);
+  const overviewQuery = useQuery({
+    queryKey: ["admin", "overview"],
+    queryFn: ({ signal }) => apiFetch<Overview>("/admin/overview", { signal }),
+    refetchInterval: REFRESH_INTERVAL_MS,
+  });
+  const healthQuery = useQuery({
+    queryKey: ["admin", "health"],
+    queryFn: ({ signal }) => apiFetch<HealthSummary>("/admin/health", { signal }),
+    enabled: isAdmin,
+    refetchInterval: REFRESH_INTERVAL_MS,
+  });
+  const modStatsQuery = useQuery({
+    queryKey: ["moderator", "stats"],
+    queryFn: ({ signal }) => apiFetch<ModeratorStats>("/moderator/stats", { signal }),
+    enabled: !isAdmin,
+    refetchInterval: REFRESH_INTERVAL_MS,
+  });
+  const overview = overviewQuery.data ?? null;
+  const health = healthQuery.data ?? null;
+  const modStats = modStatsQuery.data ?? null;
+  const activeQueries = isAdmin ? [overviewQuery, healthQuery] : [overviewQuery, modStatsQuery];
+  const refreshing = activeQueries.some((query) => query.isFetching);
 
-  const loadData = useCallback(
-    async (showToast = false) => {
-      setRefreshing(true);
-      try {
-        if (isAdmin) {
-          const [ovData, healthData] = await Promise.all([
-            apiFetch<Overview>("/admin/overview"),
-            apiFetch<HealthSummary>("/admin/health").catch(() => null),
-          ]);
-          setOverview(ovData);
-          if (healthData) setHealth(healthData);
-        } else {
-          // Moderator role
-          const [ovData, statsData] = await Promise.all([
-            apiFetch<Overview>("/admin/overview").catch(() => null),
-            apiFetch<ModeratorStats>("/moderator/stats").catch(() => null),
-          ]);
-          if (ovData) setOverview(ovData);
-          if (statsData) setModStats(statsData);
-        }
-        if (showToast) toast.success(t("updated"));
-      } catch {
-        if (showToast || !hasLoadedRef.current) toast.error(t("failed"));
-      } finally {
-        hasLoadedRef.current = true;
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [isAdmin, t],
-  );
+  const refresh = async () => {
+    const results = await Promise.all(activeQueries.map((query) => query.refetch()));
+    if (results.some((result) => result.isError)) toast.error(t("failed"));
+    else toast.success(t("updated"));
+  };
 
-  useEffect(() => {
-    void loadData(false);
-    const interval = setInterval(() => void loadData(false), 30_000);
-    return () => clearInterval(interval);
-  }, [loadData]);
+  // Admins need the overview; moderators can make do with either source.
+  if (!overview && !modStats && overviewQuery.isError && (isAdmin || modStatsQuery.isError)) {
+    return (
+      <QueryError
+        message={t("failed")}
+        onRetry={() => activeQueries.forEach((query) => void query.refetch())}
+        className="py-12"
+      />
+    );
+  }
 
-  if (loading && !overview && !modStats) {
+  if (!overview && !modStats) {
     return (
       <div className="space-y-6">
         <div className="h-28 animate-pulse rounded-2xl bg-muted/60" />
@@ -234,7 +229,7 @@ export default function StaffDashboard() {
   const contentStatuses = [
     {
       key: "important" as const,
-      label: fr ? "Important" : "Important",
+      label: statusLabel("important"),
       Icon: Star,
       iconColor: "text-amber-500 dark:text-amber-400",
       iconBg: "bg-amber-500/10",
@@ -243,7 +238,7 @@ export default function StaffDashboard() {
     },
     {
       key: "current" as const,
-      label: fr ? "À jour" : "Current",
+      label: statusLabel("current"),
       Icon: CheckCircle2,
       iconColor: "text-emerald-500 dark:text-emerald-400",
       iconBg: "bg-emerald-500/10",
@@ -252,7 +247,7 @@ export default function StaffDashboard() {
     },
     {
       key: "deprecated" as const,
-      label: fr ? "Obsolète" : "Deprecated",
+      label: statusLabel("deprecated"),
       Icon: History,
       iconColor: "text-stone-500 dark:text-stone-400",
       iconBg: "bg-stone-500/10",
@@ -261,7 +256,7 @@ export default function StaffDashboard() {
     },
     {
       key: "archived" as const,
-      label: fr ? "Archivé" : "Archived",
+      label: statusLabel("archived"),
       Icon: Archive,
       iconColor: "text-slate-400 dark:text-slate-500",
       iconBg: "bg-slate-500/10",
@@ -289,7 +284,7 @@ export default function StaffDashboard() {
           variant="outline"
           size="sm"
           className="gap-2 self-start rounded-full"
-          onClick={() => void loadData(true)}
+          onClick={() => void refresh()}
           disabled={refreshing}
         >
           <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
@@ -453,7 +448,7 @@ export default function StaffDashboard() {
                       {tStaff("nav.content")}
                     </CardTitle>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {fr ? "Cycle de vie" : "Lifecycle overview"}
+                      {tOverview("lifecycleOverview")}
                     </p>
                   </div>
                   <div className="text-right">
@@ -461,7 +456,7 @@ export default function StaffDashboard() {
                       {overview.content.total}
                     </p>
                     <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                      {fr ? "Total" : "Total"}
+                      {tOverview("total")}
                     </p>
                   </div>
                 </div>
@@ -520,10 +515,10 @@ export default function StaffDashboard() {
                     className="text-[10px] uppercase font-bold"
                   >
                     {health.status === "healthy"
-                      ? (fr ? "Opérationnel" : "Healthy")
+                      ? tOverview("healthy")
                       : health.status === "degraded"
-                        ? (fr ? "Dégradé" : "Degraded")
-                        : (fr ? "Critique" : "Unhealthy")}
+                        ? tOverview("degraded")
+                        : tOverview("unhealthy")}
                   </Badge>
                 </div>
               </CardHeader>

@@ -5,6 +5,7 @@ import { PRLocationBreadcrumb, PRMoveTransition } from "./pr-location-breadcrumb
 import { PROperationThumbnail } from "./pr-operation-thumbnail";
 import { PRDetailPageContent } from "./pr-detail-page-content";
 import { apiFetch } from "@/lib/api-client";
+import { withQueryClient } from "@/test/query";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -31,6 +32,7 @@ vi.mock("next-intl", () => ({
     };
     t.rich = (key: string) => `${ns}.${key}`;
     t.raw = (key: string) => `${ns}.${key}`;
+    t.has = () => true;
     return t;
   },
   useLocale: () => "en",
@@ -123,12 +125,14 @@ describe("PROperationThumbnail", () => {
   it("renders folder thumbnail for directories", async () => {
     await act(async () => {
       root.render(
-        <PROperationThumbnail
-          isDirectory={true}
-          directoryIcon="calculator"
-          directoryColor="blue"
-          size="md"
-        />,
+        withQueryClient(
+          <PROperationThumbnail
+            isDirectory={true}
+            directoryIcon="calculator"
+            directoryColor="blue"
+            size="md"
+          />,
+        ),
       );
     });
 
@@ -138,11 +142,13 @@ describe("PROperationThumbnail", () => {
   it("renders link thumbnail for links", async () => {
     await act(async () => {
       root.render(
-        <PROperationThumbnail
-          materialType="link"
-          targetUrl="https://example.com"
-          size="md"
-        />,
+        withQueryClient(
+          <PROperationThumbnail
+            materialType="link"
+            targetUrl="https://example.com"
+            size="md"
+          />,
+        ),
       );
     });
 
@@ -152,12 +158,14 @@ describe("PROperationThumbnail", () => {
   it("renders file styled badge with extension label", async () => {
     await act(async () => {
       root.render(
-        <PROperationThumbnail
-          fileName="course_notes.pdf"
-          mimeType="application/pdf"
-          materialType="polycopie"
-          size="lg"
-        />,
+        withQueryClient(
+          <PROperationThumbnail
+            fileName="course_notes.pdf"
+            mimeType="application/pdf"
+            materialType="polycopie"
+            size="lg"
+          />,
+        ),
       );
     });
 
@@ -261,7 +269,7 @@ describe("PRDetailPageContent with rich operations", () => {
     });
 
     await act(async () => {
-      root.render(<PRDetailPageContent />);
+      root.render(withQueryClient(<PRDetailPageContent />));
     });
 
     await act(async () => {

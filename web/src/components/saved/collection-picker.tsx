@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, FolderPlus, Loader2, Plus, Settings2 } from "lucide-react";
-import { useSavedTranslations } from "@/lib/saved-i18n";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -22,6 +21,7 @@ import {
   type SavedTargetType,
 } from "@/lib/collections";
 import { cn } from "@/lib/utils";
+import { useTranslations } from "next-intl";
 
 interface CollectionPickerProps {
   targetType: SavedTargetType;
@@ -38,7 +38,7 @@ export function CollectionPicker({
   className,
   onChanged,
 }: CollectionPickerProps) {
-  const t = useSavedTranslations();
+  const t = useTranslations("Saved");
   const [open, setOpen] = useState(false);
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
   const [loading, setLoading] = useState(false);

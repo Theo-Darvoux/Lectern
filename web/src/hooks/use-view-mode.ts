@@ -2,23 +2,22 @@
 
 import { useState, useEffect } from "react";
 
-const STORAGE_KEY = "browse-view-mode";
-
 export type ViewMode = "list" | "grid";
 
-export function useViewMode() {
+/** Grid or list layout, remembered per screen in localStorage. */
+export function useViewMode(storageKey = "browse-view-mode") {
   const [mode, setModeState] = useState<ViewMode>("grid");
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(storageKey);
       if (stored === "grid" || stored === "list") setModeState(stored);
     } catch {}
-  }, []);
+  }, [storageKey]);
 
   const setMode = (m: ViewMode) => {
     try {
-      localStorage.setItem(STORAGE_KEY, m);
+      localStorage.setItem(storageKey, m);
     } catch {}
     setModeState(m);
   };

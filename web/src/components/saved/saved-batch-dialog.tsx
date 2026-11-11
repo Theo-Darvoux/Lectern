@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, FolderPlus, Loader2, Plus } from "lucide-react";
+import { FolderPlus, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -16,13 +16,14 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   addCollectionItem,
+  countFailures,
   createCollection,
   fetchCollections,
   type CollectionSummary,
   type SavedItem,
 } from "@/lib/collections";
-import { useSavedTranslations } from "@/lib/saved-i18n";
 import { cn } from "@/lib/utils";
+import { useTranslations } from "next-intl";
 
 interface SavedBatchDialogProps {
   open: boolean;
@@ -37,7 +38,7 @@ export function SavedBatchDialog({
   selectedItems,
   onSuccess,
 }: SavedBatchDialogProps) {
-  const t = useSavedTranslations();
+  const t = useTranslations("Saved");
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -95,19 +96,16 @@ export function SavedBatchDialog({
 
       if (!targetCollectionId) return;
 
-      // Add each item in parallel
-      await Promise.all(
-        selectedItems.map((item) =>
-          addCollectionItem(targetCollectionId!, item.target_type, item.target_id).catch(() => null),
-        ),
+      const collectionId = targetCollectionId;
+      const failed = await countFailures(selectedItems, (item) =>
+        addCollectionItem(collectionId, item.target_type, item.target_id),
       );
-
-      toast.success(
-        t("batchSuccessAdded", {
-          count: selectedItems.length,
-          name: targetCollectionName,
-        }),
-      );
+      const added = selectedItems.length - failed;
+      if (added > 0) {
+        toast.success(t("batchSuccessAdded", { count: added, name: targetCollectionName }));
+      }
+      if (failed === selectedItems.length) toast.error(t("errors.updateCollection"));
+      else if (failed > 0) toast.error(t("batchPartialFailure", { count: failed }));
       onSuccess();
       onOpenChange(false);
     } catch {
@@ -127,7 +125,7 @@ export function SavedBatchDialog({
               {t("batchAddToCollection")}
             </DialogTitle>
             <DialogDescription>
-              {t("collectionPickerDescription")} ({selectedItems.length} items selected)
+              {t("collectionPickerDescription")} ({t("selectedCount", { count: selectedItems.length })})
             </DialogDescription>
           </DialogHeader>
 

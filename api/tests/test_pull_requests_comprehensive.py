@@ -88,7 +88,7 @@ def mock_pr_deps(
     mock_redis: AsyncMock,
 ) -> typing.Generator[tuple[AsyncMock, AsyncMock], None, None]:
     """Mock external dependencies for PR creation."""
-    with patch("app.services.pr.object_exists", new_callable=AsyncMock) as m_exists:
+    with patch("app.services.pr.create.object_exists", new_callable=AsyncMock) as m_exists:
         m_exists.return_value = True
 
         async def mock_get(key: str) -> str | None:

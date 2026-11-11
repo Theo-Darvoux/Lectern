@@ -9,16 +9,13 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX, UPLOAD_STATUS_PREFIX
 from app.core.security.security import create_access_token
 from app.models.cas_staging_claim import CasStagingClaim
 from app.models.outbox import OutboxJob
 from app.models.upload import Upload
 from app.models.user import User, UserRole
-from app.routers.upload.helpers import (
-    _QUOTA_KEY_PREFIX,
-    _STATUS_CACHE_PREFIX,
-    _UPLOAD_INTENT_PREFIX,
-)
+from app.routers.upload.helpers import _UPLOAD_INTENT_PREFIX
 
 
 async def _create_user(db: AsyncSession, role: UserRole = UserRole.STUDENT) -> User:
@@ -121,7 +118,7 @@ async def test_presigned_multipart_abort_cleans_db_and_quota(
         "size": 1024,
     }
     await fake_redis_setup.set(f"{_UPLOAD_INTENT_PREFIX}{upload_id}", json.dumps(intent))
-    await fake_redis_setup.zadd(f"{_QUOTA_KEY_PREFIX}{user.id}", {quarantine_key: time.time()})
+    await fake_redis_setup.zadd(f"{UPLOAD_QUOTA_PREFIX}{user.id}", {quarantine_key: time.time()})
 
     up = Upload(
         upload_id=upload_id,
@@ -149,7 +146,7 @@ async def test_presigned_multipart_abort_cleans_db_and_quota(
         m_abort.assert_called_once()
 
     # Check quota removed
-    quota_len = await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}")
+    quota_len = await fake_redis_setup.zcard(f"{UPLOAD_QUOTA_PREFIX}{user.id}")
     assert quota_len == 0
 
     # Check DB status is cancelled
@@ -178,19 +175,19 @@ async def test_cancel_upload_finds_uploads_prefix(
     db_session.add(up)
     await db_session.commit()
 
-    await fake_redis_setup.zadd(f"{_QUOTA_KEY_PREFIX}{user.id}", {final_key: time.time()})
+    await fake_redis_setup.zadd(f"{UPLOAD_QUOTA_PREFIX}{user.id}", {final_key: time.time()})
 
     headers = _auth_headers(user)
     response = await client.delete(f"/api/upload/{upload_id}", headers=headers)
     assert response.status_code == 204
 
     mock_storage_audit["delete_status"].assert_called_once_with(final_key)
-    quota_len = await fake_redis_setup.zcard(f"{_QUOTA_KEY_PREFIX}{user.id}")
+    quota_len = await fake_redis_setup.zcard(f"{UPLOAD_QUOTA_PREFIX}{user.id}")
     assert quota_len == 0
 
 
 @pytest.mark.asyncio
-async def test_batch_upload_status_multiple_keys(
+async def test_upload_status_per_key(
     client: AsyncClient, db_session: AsyncSession, fake_redis_setup
 ):
     user = await _create_user(db_session)
@@ -201,26 +198,24 @@ async def test_batch_upload_status_multiple_keys(
     k3 = f"uploads/{user.id}/3/c.txt"  # Not found
 
     await fake_redis_setup.set(
-        f"{_STATUS_CACHE_PREFIX}{k1}", json.dumps({"status": "clean", "file_key": k1})
+        f"{UPLOAD_STATUS_PREFIX}{k1}", json.dumps({"status": "clean", "file_key": k1})
     )
     await fake_redis_setup.set(
-        f"{_STATUS_CACHE_PREFIX}{k2}", json.dumps({"status": "processing", "file_key": k2})
+        f"{UPLOAD_STATUS_PREFIX}{k2}", json.dumps({"status": "processing", "file_key": k2})
     )
 
     headers = _auth_headers(user)
-    response = await client.post(
-        "/api/upload/status/batch", headers=headers, json={"file_keys": [k1, k2, k3, "invalid/key"]}
-    )
-    assert response.status_code == 200
 
-    data = response.json()["statuses"]
-    assert k1 in data
-    assert data[k1]["status"] == "clean"
-    assert k2 in data
-    assert data[k2]["status"] == "processing"
-    assert k3 in data
-    assert data[k3]["status"] == "pending"
-    assert "invalid/key" not in data
+    async def status_of(key: str) -> dict:
+        response = await client.get(f"/api/upload/status/{key}", headers=headers)
+        assert response.status_code == 200
+        return response.json()
+
+    assert (await status_of(k1))["status"] == "clean"
+    assert (await status_of(k2))["status"] == "processing"
+    assert (await status_of(k3))["status"] == "pending"
+    response = await client.get("/api/upload/status/invalid/key", headers=headers)
+    assert response.status_code == 403
 
 
 @pytest.mark.integration  # needs a live S3/MinIO endpoint

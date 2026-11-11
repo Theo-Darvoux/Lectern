@@ -1081,8 +1081,8 @@ async def test_pr_creation_defers_auto_merge_when_files_pending() -> None:
     mock_data.description = ""
 
     with (
-        patch("app.services.pr.object_exists", AsyncMock(return_value=True)),
-        patch("app.services.pr.get_or_create_tags", AsyncMock()),
+        patch("app.services.pr.create.object_exists", AsyncMock(return_value=True)),
+        patch("app.services.pr.executors.get_or_create_tags", AsyncMock()),
     ):
         # We can't easily run the full service without a real DB, so just test
         # the logic by checking the SQL call counts. This is a structural test.
@@ -1094,7 +1094,7 @@ async def test_pr_creation_defers_auto_merge_when_files_pending() -> None:
     # code directly via the structural assertion below.
     import inspect
 
-    from app.services import pr as pr_module
+    from app.services.pr import create as pr_module
 
     source = inspect.getsource(pr_module.create_pull_request_service)
     assert "processing_status" in source, (
@@ -1109,7 +1109,7 @@ def test_pr_creation_checks_processing_status_in_source() -> None:
     """Structural: create_pull_request_service source must contain auto-merge guard."""
     import inspect
 
-    from app.services import pr as pr_module
+    from app.services.pr import create as pr_module
 
     src = inspect.getsource(pr_module.create_pull_request_service)
     assert "processing_status" in src

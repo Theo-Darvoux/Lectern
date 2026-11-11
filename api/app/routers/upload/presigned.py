@@ -8,13 +8,11 @@ from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.common.constants import PRIVILEGED_ROLES
 from app.core.common.exceptions import (
     BadRequestError,
     ConflictError,
@@ -22,9 +20,10 @@ from app.core.common.exceptions import (
     ServiceUnavailableError,
 )
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.common.upload_limits import configured_allowed_extensions, configured_allowed_mimes
 from app.core.database.database import get_db
-from app.core.database.redis import get_redis, redis_lock
+from app.core.database.redis import RedisClient, get_redis, redis_lock
 from app.core.media.mimetypes import MimeRegistry, guess_mime_from_bytes
 from app.core.storage.facade import (
     abort_multipart_upload,
@@ -42,6 +41,7 @@ from app.core.storage.multipart_completion import (
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
 from app.models.upload import Upload
+from app.models.user import MODERATOR_ROLES
 from app.routers.upload.cancellation import (
     cancel_upload_lifecycle,
     upload_cancel_key,
@@ -49,7 +49,6 @@ from app.routers.upload.cancellation import (
 )
 from app.routers.upload.helpers import (
     _MULTIPART_INTENT_TTL,
-    _QUOTA_KEY_PREFIX,
     _UPLOAD_INTENT_PREFIX,
     _UPLOAD_INTENT_TTL,
     _check_pending_cap,
@@ -100,20 +99,20 @@ async def _reserve_or_release_quota(
     upload_id: str,
     user_id: str,
     quarantine_key: str,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
 ) -> None:
     """Reserve storage, giving back the pending-upload slot when storage is full."""
     try:
         await _reserve_storage_limit(size, upload_id, redis, db)
     except Exception:
-        await redis.zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", quarantine_key)
+        await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", quarantine_key)
         raise
 
 
 async def _presigned_upload_is_cancelled(
     intent: dict[str, Any],
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
 ) -> bool:
     if intent.get("cancelled"):
@@ -131,7 +130,7 @@ async def _presigned_upload_is_cancelled(
 
 async def _ensure_presigned_upload_active(
     intent: dict[str, Any],
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
 ) -> None:
     if await _presigned_upload_is_cancelled(intent, redis, db):
@@ -176,7 +175,7 @@ def _validated_multipart_manifest(
 async def _discard_multipart_intent(
     intent: dict[str, Any],
     *,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
     reason: str,
 ) -> None:
@@ -195,7 +194,7 @@ async def _discard_multipart_intent(
     await redis.delete(f"{_UPLOAD_INTENT_PREFIX}{intent['upload_id']}")
     await _release_storage_reservation(intent["upload_id"], redis)
     await redis.zrem(
-        f"{_QUOTA_KEY_PREFIX}{intent['user_id']}",
+        f"{UPLOAD_QUOTA_PREFIX}{intent['user_id']}",
         intent["quarantine_key"],
     )
     await db.execute(
@@ -210,7 +209,7 @@ async def _discard_multipart_intent(
 async def init_upload(
     data: UploadInitRequest,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[None, Depends(rate_limit_uploads)],
     response: Response,
@@ -244,7 +243,7 @@ async def init_upload(
         user_id,
         redis,
         db,
-        privileged=user.role in PRIVILEGED_ROLES,
+        privileged=user.role in MODERATOR_ROLES,
         reserve_key=quarantine_key,
     )
     await _reserve_or_release_quota(data.size, upload_id, user_id, quarantine_key, redis, db)
@@ -279,7 +278,7 @@ async def init_upload(
         )
     except Exception:
         await _release_storage_reservation(upload_id, redis)
-        await redis.zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", quarantine_key)
+        await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", quarantine_key)
         raise
 
     return PresignedUploadOut(
@@ -297,7 +296,7 @@ async def init_upload(
 async def complete_upload(
     data: UploadCompleteRequest,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadPendingOut:
     """Confirm a presigned upload and enqueue background processing."""
@@ -343,7 +342,7 @@ async def complete_upload(
 
         _check_per_type_size(intent["mime_type"], info["size"])
         await _reserve_storage_limit(info["size"], data.upload_id, redis, db)
-        await redis.zadd(f"{_QUOTA_KEY_PREFIX}{user_id}", {data.quarantine_key: time.time()})
+        await redis.zadd(f"{UPLOAD_QUOTA_PREFIX}{user_id}", {data.quarantine_key: time.time()})
         await _enqueue_processing(
             user_id,
             intent["upload_id"],
@@ -372,7 +371,7 @@ async def complete_upload(
 async def presigned_multipart_init(
     data: UploadInitRequest,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[None, Depends(rate_limit_uploads)],
 ) -> PresignedMultipartInitOut:
@@ -403,7 +402,7 @@ async def presigned_multipart_init(
         user_id,
         redis,
         db,
-        privileged=user.role in PRIVILEGED_ROLES,
+        privileged=user.role in MODERATOR_ROLES,
         reserve_key=quarantine_key,
     )
     await _reserve_or_release_quota(data.size, upload_id, user_id, quarantine_key, redis, db)
@@ -469,7 +468,7 @@ async def presigned_multipart_init(
                     abort_exc,
                 )
         await _release_storage_reservation(upload_id, redis)
-        await redis.zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", quarantine_key)
+        await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", quarantine_key)
         raise
 
     return PresignedMultipartInitOut(
@@ -485,7 +484,7 @@ async def presigned_multipart_init(
 async def presigned_multipart_resume(
     upload_id: str,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> PresignedMultipartInitOut:
     """Return stored ETags and fresh part URLs so a client can continue an upload."""
@@ -565,7 +564,7 @@ async def presigned_multipart_resume(
 async def presigned_multipart_complete(
     data: PresignedMultipartCompleteRequest,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadPendingOut:
     """Finalise a presigned multipart upload under the cancellation lock."""
@@ -693,7 +692,7 @@ async def presigned_multipart_complete(
         await _ensure_presigned_upload_active(intent, redis, db)
         await _reserve_storage_limit(actual_size, data.upload_id, redis, db)
         await redis.zadd(
-            f"{_QUOTA_KEY_PREFIX}{user_id}",
+            f"{UPLOAD_QUOTA_PREFIX}{user_id}",
             {intent["quarantine_key"]: time.time()},
         )
         await _ensure_presigned_upload_active(intent, redis, db)
@@ -724,7 +723,7 @@ async def presigned_multipart_complete(
 async def presigned_multipart_abort(
     upload_id: str,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     """Cancel multipart state and CAS ownership through one lifecycle operation."""

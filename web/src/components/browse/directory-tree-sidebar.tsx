@@ -35,7 +35,7 @@ import { apiFetch, apiFetchRetry } from "@/lib/api-client";
 // leave a node spinner (loadingIds) or the root spinner stuck until reload.
 const TREE_TIMEOUT_MS = 15_000;
 import { cn } from "@/lib/utils";
-import { useAuthStore, useBrowseRefreshStore, useUIStore } from "@/lib/stores";
+import { useBrowseRefreshStore, useUIStore } from "@/lib/stores";
 import { subscribeToSSE } from "@/lib/sse-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,11 +43,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslations } from "next-intl";
 import { useExternalLinkStore } from "@/lib/external-link-store";
 import { isExternalUrl } from "@/lib/url-utils";
-import {
-  pendingCreatesForParent,
-  pendingOperations,
-  usePendingContributionsStore,
-} from "@/lib/pending-contributions";
+import { pendingCreatesForParent } from "@/lib/pending-contributions";
 import { EXT_ICONS, TYPE_ICONS } from "@/lib/material-icons";
 import {
   getFileExtension,
@@ -55,6 +51,7 @@ import {
   MATERIAL_TYPE_ICON_COLORS,
   MIME_QCM,
 } from "@/lib/file-utils";
+import { useSubmittedOperations } from "@/hooks/use-submitted-operations";
 
 interface DirNode {
   id: string;
@@ -571,15 +568,7 @@ export function DirectoryTreeSidebar() {
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loadingRoots, setLoadingRoots] = useState(!rootsCache.dirs);
-  const pendingContributions = usePendingContributionsStore((s) => s.contributions);
-  const pendingOwnerId = usePendingContributionsStore((s) => s.ownerId);
-  const currentOwnerId = useAuthStore((s) => s.user?.id ? String(s.user.id) : null);
-  const submittedOperations = useMemo(
-    () => pendingOwnerId === currentOwnerId
-      ? pendingOperations(usePendingContributionsStore.getState())
-      : [],
-    [currentOwnerId, pendingContributions, pendingOwnerId],
-  );
+  const submittedOperations = useSubmittedOperations();
 
   const pendingNodesFor = useCallback((parentId: string | null) => {
     const projected = pendingCreatesForParent(submittedOperations, parentId);

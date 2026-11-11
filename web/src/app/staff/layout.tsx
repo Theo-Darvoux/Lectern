@@ -7,8 +7,6 @@ import {
   LayoutDashboard,
   GitPullRequest,
   Flag,
-  Star,
-  FolderTree,
   BookOpenCheck,
   Users,
   AlertTriangle,
@@ -21,6 +19,7 @@ import {
 import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { isAdminRole } from "@/lib/guest";
 
 export default function StaffLayout({
   children,
@@ -34,7 +33,7 @@ export default function StaffLayout({
   if (!isAuthenticated) return null;
 
   const isModerator = user?.role === "moderator";
-  const isAdmin = user?.role === "bureau" || user?.role === "vieux";
+  const isAdmin = isAdminRole(user?.role);
   const isStaff = isModerator || isAdmin;
 
   if (!isStaff) {

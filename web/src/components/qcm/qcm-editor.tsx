@@ -622,7 +622,6 @@ function QuestionEditor({
 
 interface ChapterEditorProps {
   chapter: QCMChapter;
-  chapterIndex: number;
   globalOffset: number; // question number offset before this chapter
   onChange: (updated: QCMChapter) => void;
   onDelete: () => void;
@@ -633,7 +632,6 @@ interface ChapterEditorProps {
 
 function ChapterEditor({
   chapter,
-  chapterIndex,
   globalOffset,
   onChange,
   onDelete,
@@ -766,17 +764,16 @@ export function QCMEditor({
     initialData ?? { version: 1, chapters: [createEmptyChapter(t("defaultChapter", { number: 1 }))] },
   );
 
-  // Stable ref so addImage can read the current image count without re-creating.
-  const qcmRef = useRef(qcm);
-  qcmRef.current = qcm;
-
-  const addImage = useCallback((dataUrl: string): string => {
-    const current = qcmRef.current.images ?? {};
-    if (Object.keys(current).length >= MAX_IMAGES_PER_QCM) return "";
-    const id = generateQcmImageId();
-    setQcm((prev) => ({ ...prev, images: { ...(prev.images ?? {}), [id]: dataUrl } }));
-    return id;
-  }, []);
+  const images = qcm.images;
+  const addImage = useCallback(
+    (dataUrl: string): string => {
+      if (Object.keys(images ?? {}).length >= MAX_IMAGES_PER_QCM) return "";
+      const id = generateQcmImageId();
+      setQcm((prev) => ({ ...prev, images: { ...(prev.images ?? {}), [id]: dataUrl } }));
+      return id;
+    },
+    [images],
+  );
 
   const imagesContextValue = useMemo<QCMImagesContextValue>(
     () => ({ images: qcm.images ?? {}, addImage }),
@@ -987,7 +984,6 @@ export function QCMEditor({
           <ChapterEditor
             key={ch.id}
             chapter={ch}
-            chapterIndex={ci}
             globalOffset={chapterOffsets[ci]}
             onChange={(updated) => updateChapter(ci, updated)}
             onDelete={() => deleteChapter(ci)}

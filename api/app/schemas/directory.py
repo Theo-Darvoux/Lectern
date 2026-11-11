@@ -29,14 +29,6 @@ class DirectoryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class DirectoryWithCounts(DirectoryOut):
-    child_directory_count: int = 0
-    child_material_count: int = 0
-    like_count: int = 0
-    is_liked: bool = False
-    is_favourited: bool = False
-
-
 class DirectoryBreadcrumb(BaseModel):
     id: uuid.UUID
     name: str

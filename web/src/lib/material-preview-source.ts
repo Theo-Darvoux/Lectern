@@ -165,11 +165,6 @@ export function clearMaterialPreviewCache(): void {
     materialGenerations.clear();
 }
 
-export function invalidateMaterialThumbnail(materialId: string, timestamp: number = Date.now()): void {
-    dropMaterialThumbnailCache(materialId);
-    notifyMaterialThumbnail(materialId, timestamp);
-}
-
 async function waitForPublishedRegeneration(
     materialId: string,
     previous: MaterialThumbnail | null,

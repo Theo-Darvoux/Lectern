@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { ContributionList } from "./contribution-list";
 import { apiFetch } from "@/lib/api-client";
+import { settleQueries, withQueryClient } from "@/test/query";
 
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
@@ -12,6 +13,7 @@ vi.mock("next/link", () => ({
 
 vi.mock("next-intl", () => ({
   useTranslations: () => Object.assign((key: string) => key, { has: () => true }),
+  useLocale: () => "en",
 }));
 
 vi.mock("@/lib/api-client", () => ({ apiFetch: vi.fn() }));
@@ -66,9 +68,9 @@ describe("ContributionList cards", () => {
 
   it("renders material cards in a responsive grid and keeps server pagination", async () => {
     await act(async () => {
-      root.render(<ContributionList userId="user-1" type="materials" />);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      root.render(withQueryClient(<ContributionList userId="user-1" type="materials" />));
     });
+    await settleQueries();
 
     const grid = container.querySelector<HTMLElement>("[data-contribution-grid]");
     expect(grid?.className).toContain("grid-cols-2");
@@ -85,11 +87,12 @@ describe("ContributionList cards", () => {
 
     await act(async () => {
       next?.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    await settleQueries();
 
     expect(mockedApiFetch).toHaveBeenLastCalledWith(
       expect.stringContaining("page=2"),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(container.textContent).toContain("Graphs");
   });
@@ -114,9 +117,9 @@ describe("ContributionList cards", () => {
     });
 
     await act(async () => {
-      root.render(<ContributionList userId="user-1" type="annotations" />);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      root.render(withQueryClient(<ContributionList userId="user-1" type="annotations" />));
     });
+    await settleQueries();
 
     const link = container.querySelector<HTMLAnchorElement>("a[data-annotation-card]");
     expect(link).not.toBeNull();

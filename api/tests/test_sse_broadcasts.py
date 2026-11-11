@@ -8,7 +8,7 @@ from app.models.directory import Directory
 from app.models.material import Material
 from app.models.pull_request import PRStatus, PullRequest
 from app.models.user import User, UserRole
-from app.services.pr import (
+from app.services.pr.executors import (
     _exec_create_directory,
     _exec_create_material,
     _exec_edit_material,

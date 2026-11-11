@@ -38,7 +38,7 @@ def _auth_headers(user: User) -> dict[str, str]:
 
 @pytest.fixture(autouse=True)
 def mock_pr_deps(mock_redis: AsyncMock) -> typing.Generator[AsyncMock, None, None]:
-    with patch("app.services.pr.object_exists", new_callable=AsyncMock) as m_exists:
+    with patch("app.services.pr.create.object_exists", new_callable=AsyncMock) as m_exists:
         m_exists.return_value = True
         mock_redis.get.return_value = None
         yield m_exists

@@ -184,17 +184,17 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
         await db.commit()
         await dispatch_post_commit_actions(db)
 
-        from app.routers.upload.helpers import _QUOTA_KEY_PREFIX
+        from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 
         for upload_id, user_id, quarantine_key in pending_rows:
             await release_storage_reservation(upload_id, ctx["redis"])
-            await ctx["redis"].zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", quarantine_key)
+            await ctx["redis"].zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", quarantine_key)
 
     # ── 2. Expire old Pull Requests (7 days) ─────────────────────────────────
     pr_cutoff = datetime.now(UTC) - timedelta(days=7)
 
     async with async_session_factory() as db:
-        from app.services.pr import _cleanup_pr_resources
+        from app.services.pr.resources import _cleanup_pr_resources
 
         db.info[PostCommitKey.JOBS] = []
         stale_prs = list(
@@ -300,7 +300,7 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
     redis = ctx["redis"]
     for upload in quota_uploads_to_release:
         staging_key = f"staging:{upload.user_id}:{upload.upload_id}"
-        await redis.zrem(f"quota:uploads:{upload.user_id}", staging_key)
+        await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{upload.user_id}", staging_key)
 
     # Clean quarantine/ files older than quarantine_cutoff via S3 scan.
     async with get_s3_client() as client:

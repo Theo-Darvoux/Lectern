@@ -542,7 +542,7 @@ async def test_pr_cleanup_releases_storage_reservations_loop(
     from app.models.pull_request import PRStatus, PullRequest
     from app.models.upload import Upload
     from app.routers.upload.helpers import _reserve_storage_limit
-    from app.services.pr import _cleanup_pr_resources
+    from app.services.pr.resources import _cleanup_pr_resources
     from app.workers.storage_ops import delete_storage_objects
     from tests.test_materials import _create_user
 

@@ -9,6 +9,27 @@ import { useTranslations } from "next-intl";
 import { useConfigStore } from "@/lib/stores";
 import { loadEuroofficeApi } from "@/lib/eurooffice-api";
 
+interface DocEditor {
+    destroyEditor: () => void;
+}
+
+/** Payload of the editor's onError event; its shape differs between versions. */
+interface DocsApiError {
+    data?: { errorCode?: number; errorDescription?: string } | number;
+    errorCode?: number;
+    description?: string;
+}
+
+declare global {
+    interface Window {
+        /** Global set by the Euro-Office (OnlyOffice) API script. */
+        DocsAPI?: { DocEditor: new (containerId: string, config: Record<string, unknown>) => DocEditor };
+    }
+}
+
+const errorMessage = (err: unknown, fallback: string) =>
+    err instanceof Error && err.message ? err.message : fallback;
+
 interface OfficeViewerProps {
     fileKey: string;
     materialId: string;
@@ -20,7 +41,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
     const config = useConfigStore((state) => state.config);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const editorRef = useRef<any>(null);
+    const editorRef = useRef<DocEditor | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const readyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [loadAttempt, setLoadAttempt] = useState(0);
@@ -29,6 +50,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
     const retry = useCallback(() => setLoadAttempt((attempt) => attempt + 1), []);
 
     useEffect(() => {
+        const container = containerRef.current;
         let isMounted = true;
         let isReady = false;
         const controller = new AbortController();
@@ -42,8 +64,9 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
             if (isMounted) setLoading(false);
         };
 
-        const loadEditor = (editorConfig: any) => {
-            if (!(window as any).DocsAPI) {
+        const loadEditor = (editorConfig: Record<string, unknown>) => {
+            const docsApi = window.DocsAPI;
+            if (!docsApi) {
                 setError(t("scriptError"));
                 setLoading(false);
                 return;
@@ -52,7 +75,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
             try {
                 // Cleanup existing editor if any
                 if (editorRef.current) {
-                    try { editorRef.current.destroyEditor(); } catch (e) {}
+                    try { editorRef.current.destroyEditor(); } catch {}
                     editorRef.current = null;
                 }
 
@@ -79,7 +102,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 }, 30000);
 
                 // Initialize the editor with the backend-provided config
-                editorRef.current = new (window as any).DocsAPI.DocEditor(editorContainerId, {
+                editorRef.current = new docsApi.DocEditor(editorContainerId, {
                     ...editorConfig,
                     height: "100%",
                     width: "100%",
@@ -97,9 +120,10 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                                 }
                             });
                         },
-                        onError: (e: any) => {
-                            const code = e?.data?.errorCode ?? e?.data ?? e?.errorCode;
-                            const desc = e?.data?.errorDescription ?? e?.description ?? "";
+                        onError: (e: DocsApiError | undefined) => {
+                            const data = e?.data;
+                            const code = (typeof data === "object" ? data.errorCode : data) ?? e?.errorCode;
+                            const desc = (typeof data === "object" ? data.errorDescription : undefined) ?? e?.description ?? "";
                             console.error("OnlyOffice Editor Error:", { code, desc, raw: e });
                             isReady = true;
                             if (readyTimeoutRef.current) {
@@ -117,10 +141,10 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                         }
                     }
                 });
-            } catch (err: any) {
+            } catch (err) {
                 console.error("Exception during editor init:", err);
                 if (isMounted) {
-                    setError(t("initFailed", { message: err.message || "Unknown error" }));
+                    setError(t("initFailed", { message: errorMessage(err, t("unknownError")) }));
                     setLoading(false);
                 }
             }
@@ -153,7 +177,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 };
 
                 const [editorConfig] = await Promise.all([
-                    apiFetchRetry<any>(`/eurooffice/config/${materialId}`, {
+                    apiFetchRetry<Record<string, unknown>>(`/eurooffice/config/${materialId}`, {
                         signal: controller.signal,
                         timeoutMs: 15_000,
                     }),
@@ -162,13 +186,13 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
 
                 if (!isMounted) return;
                 loadEditor(editorConfig);
-            } catch (err: any) {
+            } catch (err) {
                 // Navigating to another document aborts the previous signed-config
                 // request by design. Treat that lifecycle cancellation as silent;
                 // logging it makes Next's development overlay report a false error.
                 if (!isMounted || controller.signal.aborted) return;
                 console.error("EuroOffice startup error:", err);
-                setError(t("startupError", { message: err.message || "Unknown error" }));
+                setError(t("startupError", { message: errorMessage(err, t("unknownError")) }));
                 setLoading(false);
             }
         };
@@ -183,11 +207,11 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 readyTimeoutRef.current = null;
             }
             if (editorRef.current) {
-                try { editorRef.current.destroyEditor(); } catch (e) {}
+                try { editorRef.current.destroyEditor(); } catch {}
                 editorRef.current = null;
             }
-            if (containerRef.current) {
-                containerRef.current.innerHTML = '';
+            if (container) {
+                container.innerHTML = '';
             }
             unregisterViewerPrint(materialId);
         };

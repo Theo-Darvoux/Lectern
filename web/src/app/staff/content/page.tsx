@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryError } from "@/components/query-error";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  Archive,
   BookOpenCheck,
   CalendarRange,
   ExternalLink,
@@ -68,6 +70,12 @@ interface ContentResponse {
 
 type FeaturedStatus = "active" | "scheduled" | "expired";
 
+const FEATURED_STATUS_ORDER: Record<FeaturedStatus, number> = {
+  active: 0,
+  scheduled: 1,
+  expired: 2,
+};
+
 function getFeaturedStatus(item: FeaturedItem): FeaturedStatus {
   const now = new Date();
   const start = new Date(item.start_at);
@@ -113,60 +121,10 @@ function ContentLifecycleTab({
   initialStatus: string | null;
 }) {
   const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
 
-  const copy = fr
-    ? {
-        title: "Cycle de vie & Statuts",
-        description:
-          "Signalez clairement ce qui est essentiel, à jour, obsolète ou archivé.",
-        search: "Rechercher un contenu…",
-        all: "Tous les états",
-        selected: "{count} sélectionné(s)",
-        setStatus: "Définir l'état",
-        clear: "Effacer",
-        content: "Contenu",
-        type: "Type",
-        status: "État",
-        updated: "Mis à jour",
-        signals: "Signaux",
-        views: "vues",
-        likes: "j'aime",
-        empty: "Aucun contenu ne correspond aux filtres.",
-        previous: "Précédent",
-        next: "Suivant",
-        updatedToast: "{count} contenu(s) mis à jour",
-        failed: "Impossible de mettre à jour l'état du contenu",
-        loadFailed: "Impossible de charger le contenu",
-      }
-    : {
-        title: "Lifecycle & Status",
-        description:
-          "Make it obvious what is essential, current, deprecated, or archived.",
-        search: "Search content…",
-        all: "All statuses",
-        selected: "{count} selected",
-        setStatus: "Set status",
-        clear: "Clear",
-        content: "Content",
-        type: "Type",
-        status: "Status",
-        updated: "Updated",
-        signals: "Signals",
-        views: "views",
-        likes: "likes",
-        empty: "No content matches these filters.",
-        previous: "Previous",
-        next: "Next",
-        updatedToast: "{count} item(s) updated",
-        failed: "Could not update content status",
-        loadFailed: "Could not load content",
-      };
+  const tContent = useTranslations("Staff.content");
 
-  const [rows, setRows] = useState<ContentRow[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [total, setTotal] = useState(0);
-  const [pages, setPages] = useState(1);
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState(
@@ -175,55 +133,38 @@ function ContentLifecycleTab({
       : "all",
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
-  const loadRequestRef = useRef(0);
+  const debouncedSearch = useDebouncedValue(search.trim(), 250);
 
-  const load = useCallback(async () => {
-    const requestId = ++loadRequestRef.current;
-    setLoading(true);
-    try {
+  const contentQuery = useQuery({
+    queryKey: ["admin", "content", { page, search: debouncedSearch, status }],
+    queryFn: ({ signal }) => {
       const query = new URLSearchParams({ page: String(page), limit: "50" });
-      if (search.trim()) query.set("search", search.trim());
+      if (debouncedSearch) query.set("search", debouncedSearch);
       if (status !== "all") query.set("status", status);
-      const data = await apiFetch<ContentResponse>(`/admin/content?${query}`);
-      if (requestId !== loadRequestRef.current) return;
-      setRows(data.items);
-      setHasLoaded(true);
-      setTotal(data.total);
-      setPages(data.pages);
-      setSelected(new Set());
-    } catch {
-      if (requestId !== loadRequestRef.current) return;
-      toast.error(copy.loadFailed);
-    } finally {
-      if (requestId === loadRequestRef.current) setLoading(false);
-    }
-  }, [copy.loadFailed, page, search, status]);
+      return apiFetch<ContentResponse>(`/admin/content?${query}`, { signal });
+    },
+    placeholderData: keepPreviousData,
+  });
+  const rows = contentQuery.data?.items ?? [];
+  const total = contentQuery.data?.total ?? 0;
+  const pages = contentQuery.data?.pages ?? 1;
+  const loading = contentQuery.isFetching;
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 250);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+  // The selection only covers the rows on screen.
+  const changePage = (value: number) => {
+    setPage(value);
+    setSelected(new Set());
+  };
 
   const changeSearch = (value: string) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
-    setPage(1);
     setSearch(value);
+    changePage(1);
   };
 
   const changeStatus = (value: string) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
-    setPage(1);
     setStatus(value);
-  };
-
-  const changePage = (value: number) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
-    setPage(value);
+    changePage(1);
   };
 
   const allSelected =
@@ -252,17 +193,14 @@ function ContentLifecycleTab({
           body: JSON.stringify({ material_ids: ids, status: nextStatus }),
         },
       );
-      setRows((current) =>
-        current.map((row) =>
-          ids.includes(row.id) ? { ...row, status: nextStatus } : row,
-        ),
-      );
       setSelected(new Set());
+      // Refetch: with a status filter, updated rows may leave the list.
+      void queryClient.invalidateQueries({ queryKey: ["admin", "content"] });
       toast.success(
-        copy.updatedToast.replace("{count}", String(result.updated_count)),
+        tContent("updatedToast", { count: result.updated_count }),
       );
     } catch {
-      toast.error(copy.failed);
+      toast.error(tContent("failed"));
     } finally {
       setActing(false);
     }
@@ -276,7 +214,7 @@ function ContentLifecycleTab({
           <Input
             value={search}
             onChange={(event) => changeSearch(event.target.value)}
-            placeholder={copy.search}
+            placeholder={tContent("search")}
             className="pl-9"
           />
         </div>
@@ -285,7 +223,7 @@ function ContentLifecycleTab({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{copy.all}</SelectItem>
+            <SelectItem value="all">{tContent("all")}</SelectItem>
             {CONTENT_STATUSES.map((value) => (
               <SelectItem key={value} value={value}>
                 <ContentStatusBadge status={value} />
@@ -303,7 +241,7 @@ function ContentLifecycleTab({
 
       {selected.size > 0 && (
         <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-xl border bg-background/95 p-3 shadow-lg backdrop-blur">
-          <Badge>{copy.selected.replace("{count}", String(selected.size))}</Badge>
+          <Badge>{tContent("selected", { count: selected.size })}</Badge>
           <Select
             disabled={acting}
             onValueChange={(value) =>
@@ -314,7 +252,7 @@ function ContentLifecycleTab({
             }
           >
             <SelectTrigger className="h-9 w-44">
-              <SelectValue placeholder={copy.setStatus} />
+              <SelectValue placeholder={tContent("setStatus")} />
             </SelectTrigger>
             <SelectContent>
               {CONTENT_STATUSES.map((value) => (
@@ -330,7 +268,7 @@ function ContentLifecycleTab({
             className="ml-auto"
             onClick={() => setSelected(new Set())}
           >
-            {copy.clear}
+            {tContent("clear")}
           </Button>
         </div>
       )}
@@ -343,11 +281,11 @@ function ContentLifecycleTab({
                 <th className="w-12 p-3">
                   <Checkbox checked={allSelected} onCheckedChange={toggleAll} />
                 </th>
-                <th className="p-3 font-medium">{copy.content}</th>
-                <th className="p-3 font-medium">{copy.type}</th>
-                <th className="p-3 font-medium">{copy.status}</th>
-                <th className="p-3 font-medium">{copy.updated}</th>
-                <th className="p-3 font-medium">{copy.signals}</th>
+                <th className="p-3 font-medium">{tContent("content")}</th>
+                <th className="p-3 font-medium">{tContent("type")}</th>
+                <th className="p-3 font-medium">{tContent("status")}</th>
+                <th className="p-3 font-medium">{tContent("updated")}</th>
+                <th className="p-3 font-medium">{tContent("signals")}</th>
               </tr>
             </thead>
             <tbody className="divide-y" aria-busy={loading}>
@@ -406,19 +344,26 @@ function ContentLifecycleTab({
                     {new Date(row.updated_at).toLocaleDateString(locale)}
                   </td>
                   <td className="p-3 text-xs text-muted-foreground">
-                    {row.total_views} {copy.views} · {row.like_count}{" "}
-                    {copy.likes}
+                    {row.total_views} {tContent("views")} · {row.like_count}{" "}
+                    {tContent("likes")}
                   </td>
                 </tr>
               ))}
-              {hasLoaded && rows.length === 0 && (
+              {contentQuery.isError && (
                 <tr>
-                  <td colSpan={6} className="p-10 text-center text-muted-foreground">
-                    {copy.empty}
+                  <td colSpan={6} className="p-10">
+                    <QueryError message={tContent("loadFailed")} onRetry={() => void contentQuery.refetch()} />
                   </td>
                 </tr>
               )}
-              {loading && !hasLoaded && (
+              {contentQuery.isSuccess && rows.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-10 text-center text-muted-foreground">
+                    {tContent("empty")}
+                  </td>
+                </tr>
+              )}
+              {contentQuery.isPending && (
                 <tr>
                   <td colSpan={6} className="p-10 text-center text-muted-foreground">
                     …
@@ -437,7 +382,7 @@ function ContentLifecycleTab({
           disabled={page <= 1 || loading}
           onClick={() => changePage(Math.max(1, page - 1))}
         >
-          {copy.previous}
+          {tContent("previous")}
         </Button>
         <span className="text-xs text-muted-foreground">
           {page} / {pages}
@@ -448,7 +393,7 @@ function ContentLifecycleTab({
           disabled={page >= pages || loading}
           onClick={() => changePage(page + 1)}
         >
-          {copy.next}
+          {tContent("next")}
         </Button>
       </div>
     </div>
@@ -461,20 +406,11 @@ function ContentLifecycleTab({
 
 function ContentDirectoriesTab() {
   const t = useTranslations("Moderator.directories");
-  const [directories, setDirectories] = useState<DirectoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const fetchDirectories = useCallback(() => {
-    setLoading(true);
-    apiFetch<DirectoryItem[]>("/moderator/directories")
-      .then(setDirectories)
-      .catch(() => toast.error(t("loadError")))
-      .finally(() => setLoading(false));
-  }, [t]);
-
-  useEffect(() => {
-    fetchDirectories();
-  }, [fetchDirectories]);
+  const directoriesQuery = useQuery({
+    queryKey: ["moderator", "directories"],
+    queryFn: ({ signal }) => apiFetch<DirectoryItem[]>("/moderator/directories", { signal }),
+  });
+  const directories = directoriesQuery.data ?? [];
 
   const buildTree = (
     items: DirectoryItem[],
@@ -506,7 +442,11 @@ function ContentDirectoriesTab() {
     ));
   };
 
-  if (loading) {
+  if (directoriesQuery.isError) {
+    return <QueryError message={t("loadError")} onRetry={() => void directoriesQuery.refetch()} />;
+  }
+
+  if (directoriesQuery.isPending) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -541,54 +481,38 @@ function ContentDirectoriesTab() {
 
 function ContentFeaturedTab() {
   const t = useTranslations("Moderator.featured");
-  const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
-  const [items, setItems] = useState<FeaturedItem[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const tContentUi = useTranslations("Staff.content");
+  const tHome = useTranslations("Home");
+  const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editItem, setEditItem] = useState<FeaturedItem | null>(null);
   const { show } = useConfirmDialog();
 
-  const fetchItems = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await apiFetch<FeaturedItem[]>("/moderator/featured");
-      const order: Record<FeaturedStatus, number> = {
-        active: 0,
-        scheduled: 1,
-        expired: 2,
-      };
-      data.sort((a, b) => {
-        const statusDiff =
-          order[getFeaturedStatus(a)] - order[getFeaturedStatus(b)];
-        if (statusDiff !== 0) return statusDiff;
-        return b.priority - a.priority;
-      });
-      setItems(data);
-      setHasLoaded(true);
-    } catch {
-      toast.error(t("errors.loadFailed"));
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
-
-  useEffect(() => {
-    void fetchItems();
-  }, [fetchItems]);
+  const featuredQuery = useQuery({
+    queryKey: ["moderator", "featured"],
+    queryFn: ({ signal }) => apiFetch<FeaturedItem[]>("/moderator/featured", { signal }),
+    select: (data) =>
+      [...data].sort(
+        (a, b) =>
+          FEATURED_STATUS_ORDER[getFeaturedStatus(a)] - FEATURED_STATUS_ORDER[getFeaturedStatus(b)] ||
+          b.priority - a.priority,
+      ),
+  });
+  const items = featuredQuery.data ?? [];
+  const loading = featuredQuery.isFetching;
+  const refreshItems = () => queryClient.invalidateQueries({ queryKey: ["moderator", "featured"] });
 
   const handleDelete = (item: FeaturedItem) => {
     const itemTitle =
       item.title ??
-      (item.directory ? item.directory.name : item.material?.title || "Untitled");
+      (item.directory ? item.directory.name : item.material?.title || tHome("untitled"));
     show(
       t("delete.confirmTitle"),
       t("delete.confirmDesc", { title: itemTitle }),
       async () => {
         try {
           await apiFetch(`/moderator/featured/${item.id}`, { method: "DELETE" });
-          setItems((prev) => prev.filter((i) => i.id !== item.id));
+          void refreshItems();
           toast.success(t("delete.success"));
         } catch {
           toast.error(t("delete.error"));
@@ -628,7 +552,7 @@ function ContentFeaturedTab() {
       <AddFeaturedDialog
         open={dialogOpen}
         onOpenChange={handleDialogOpenChange}
-        onSuccess={fetchItems}
+        onSuccess={refreshItems}
         editItem={editItem}
       />
 
@@ -651,14 +575,21 @@ function ContentFeaturedTab() {
               </tr>
             </thead>
             <tbody className="divide-y" aria-busy={loading}>
-              {loading && !hasLoaded && (
+              {featuredQuery.isError && (
+                <tr>
+                  <td colSpan={6} className="p-8">
+                    <QueryError message={t("errors.loadFailed")} onRetry={() => void featuredQuery.refetch()} />
+                  </td>
+                </tr>
+              )}
+              {featuredQuery.isPending && (
                 <tr>
                   <td colSpan={6} className="p-10 text-center text-muted-foreground">
                     {t("loading")}
                   </td>
                 </tr>
               )}
-              {hasLoaded && items.length === 0 && (
+              {featuredQuery.isSuccess && items.length === 0 && (
                 <tr>
                   <td colSpan={6} className="p-10 text-center">
                     <Star className="mx-auto mb-3 h-9 w-9 text-muted-foreground/20" />
@@ -678,8 +609,8 @@ function ContentFeaturedTab() {
                   ? item.directory.name
                   : item.material?.title || "Untitled";
                 const itemTypeLabel = isDir
-                  ? (fr ? "Dossier" : "Folder")
-                  : (fr ? "Fichier" : "File");
+                  ? tContentUi("folder")
+                  : tContentUi("file");
                 const itemId = item.directory ? item.directory.id : item.material?.id;
 
                 let browseUrl = "";
@@ -755,7 +686,7 @@ function ContentFeaturedTab() {
                       ) : (
                         <span className="italic text-muted-foreground/50 text-xs">
                           {isDir
-                            ? (fr ? "Utilise le nom du dossier" : "Uses folder name")
+                            ? tContentUi("usesFolderName")
                             : t("dialog.usesMaterialTitle")}
                         </span>
                       )}
@@ -816,7 +747,7 @@ function ContentFeaturedTab() {
         </div>
       </div>
 
-      {!loading && items.length > 0 && (
+      {items.length > 0 && (
         <p className="text-xs text-muted-foreground text-right">
           {t("stats", {
             active: items.filter((i) => getFeaturedStatus(i) === "active").length,
@@ -837,8 +768,7 @@ function ContentFeaturedTab() {
 export default function StaffContentPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
+  const tContentUi = useTranslations("Staff.content");
 
   const tabParam = searchParams.get("tab");
   const initialStatus = searchParams.get("status");
@@ -885,12 +815,10 @@ export default function StaffContentPage() {
     <div className="space-y-6 pb-12">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">
-          {fr ? "Gestion du contenu" : "Content Management"}
+          {tContentUi("contentManagement")}
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          {fr
-            ? "Supervisez le cycle de vie des ressources, explorez les dossiers et mettez en avant les documents clés."
-            : "Oversee material lifecycle statuses, explore directories, and spotlight essential resources."}
+          {tContentUi("overseeMaterialLifecycleStatusesExploreDirectories")}
         </p>
       </div>
 
@@ -898,15 +826,15 @@ export default function StaffContentPage() {
         <TabsList className="grid w-full grid-cols-3 max-w-lg">
           <TabsTrigger value="lifecycle" className="gap-2">
             <BookOpenCheck className="h-4 w-4" />
-            {fr ? "Cycle de vie" : "Lifecycle"}
+            {tContentUi("lifecycle")}
           </TabsTrigger>
           <TabsTrigger value="directories" className="gap-2">
             <FolderTree className="h-4 w-4" />
-            {fr ? "Dossiers" : "Directories"}
+            {tContentUi("directories")}
           </TabsTrigger>
           <TabsTrigger value="featured" className="gap-2">
             <Star className="h-4 w-4" />
-            {fr ? "Mis en avant" : "Featured"}
+            {tContentUi("featured")}
           </TabsTrigger>
         </TabsList>
 

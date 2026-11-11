@@ -2,12 +2,12 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from app.config import settings
-from app.core.security.sandbox import _resolve_bwrap, sandboxed_run
+from app.core.security.sandbox import _resolve_bwrap, _sandbox_command, async_sandboxed_run
 
 # ── Command Construction Unit Tests (Mocked) ────────────────────────────────
 
@@ -25,7 +25,7 @@ def test_resolve_bwrap_missing():
                 _resolve_bwrap()
 
 
-def test_sandboxed_run_basic_command(tmp_path: Path):
+def test_sandbox_command_construction(tmp_path: Path):
     test_dir = tmp_path / "test"
     test_dir.mkdir(parents=True, exist_ok=True)
     # Mock external launchers and keep binds under an explicit processing root.
@@ -34,37 +34,23 @@ def test_sandboxed_run_basic_command(tmp_path: Path):
         patch("app.core.security.sandbox._resolve_bwrap", return_value="/usr/bin/bwrap"),
         patch("app.core.security.sandbox._resolve_prlimit", return_value="/usr/bin/prlimit"),
     ):
-        # Mock subprocess.Popen to avoid actual execution
-        with patch("app.core.security.sandbox.subprocess.Popen") as mock_popen:
-            proc = MagicMock()
-            proc.returncode = 0
-            proc.stdout.read.side_effect = [b"ffmpeg version 5.1", b""]
-            proc.stderr.read.side_effect = [b"", b""]
-            proc.wait.return_value = 0
-            mock_popen.return_value = proc
+        bwrap_cmd = _sandbox_command(["ffmpeg", "-version"], rw_paths=[test_dir])
 
-            cmd = ["ffmpeg", "-version"]
-            sandboxed_run(cmd, rw_paths=[test_dir], timeout=10)
+        assert bwrap_cmd[0] == "/usr/bin/bwrap"
+        assert "--unshare-all" in bwrap_cmd or "--unshare-user" in bwrap_cmd
 
-            # Verify the bwrap command construction
-            args, kwargs = mock_popen.call_args
-            bwrap_cmd = args[0]
+        if os.path.exists("/.dockerenv"):
+            assert "--unshare-pid" in bwrap_cmd
+            assert bwrap_cmd[bwrap_cmd.index("--tmpfs") + 1] in ("/proc", "/tmp")
 
-            assert bwrap_cmd[0] == "/usr/bin/bwrap"
-            assert "--unshare-all" in bwrap_cmd or "--unshare-user" in bwrap_cmd
+        assert "--bind" in bwrap_cmd
+        assert str(test_dir) in bwrap_cmd
 
-            if os.path.exists("/.dockerenv"):
-                assert "--unshare-pid" in bwrap_cmd
-                assert bwrap_cmd[bwrap_cmd.index("--tmpfs") + 1] in ("/proc", "/tmp")
+        assert "/proc" in bwrap_cmd or "--proc" in bwrap_cmd
 
-            assert "--bind" in bwrap_cmd
-            assert str(test_dir) in bwrap_cmd
-
-            assert "/proc" in bwrap_cmd or "--proc" in bwrap_cmd
-
-            assert "--" in bwrap_cmd
-            assert bwrap_cmd[-2] == "ffmpeg"
-            assert bwrap_cmd[-1] == "-version"
+        assert "--" in bwrap_cmd
+        assert bwrap_cmd[-2] == "ffmpeg"
+        assert bwrap_cmd[-1] == "-version"
 
 
 # ── Real Environment Smoke Tests (Functional) ───────────────────────────────
@@ -72,7 +58,7 @@ def test_sandboxed_run_basic_command(tmp_path: Path):
 
 @pytest.mark.integration
 @pytest.mark.skipif(shutil.which("bwrap") is None, reason="bwrap not installed on this host")
-def test_sandboxed_run_smoke_test(tmp_path: Path):
+async def test_sandboxed_run_smoke_test(tmp_path: Path):
     """Wait! This test actually runs bwrap on the current host.
 
     This is intended to catch environment-specific failures like the 'mount proc'
@@ -88,7 +74,7 @@ def test_sandboxed_run_smoke_test(tmp_path: Path):
 
     try:
         with patch.object(settings, "processing_root", str(tmp_path)):
-            result = sandboxed_run(cmd, rw_paths=[test_dir], timeout=5)
+            result = await async_sandboxed_run(cmd, rw_paths=[test_dir], timeout=5)
 
         # If we got here, bwrap didn't crash or return error due to mount failures
         assert result.returncode == 0
@@ -104,13 +90,13 @@ def test_sandboxed_run_smoke_test(tmp_path: Path):
 
 @pytest.mark.integration
 @pytest.mark.skipif(shutil.which("bwrap") is None, reason="bwrap not installed on this host")
-def test_sandboxed_run_isolation_check():
+async def test_sandboxed_run_isolation_check():
     """Verify that the sandbox actually blocks something (e.g. network/IPC)."""
     # Trying to touch a file outside our allowed rw_paths should fail or be blocked
     # In bwrap's --unshare-all, the root filesystem is empty/minimal by default.
     # We'll just verify that 'ls /' returns a restricted view.
 
-    result = sandboxed_run(["/bin/ls", "/"])
+    result = await async_sandboxed_run(["/bin/ls", "/"])
     output = result.stdout.decode()
 
     # In our sandbox.py, we only --ro-bind /usr, /lib, /bin, etc.

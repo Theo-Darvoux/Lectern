@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api-client";
@@ -13,8 +13,10 @@ import { useTranslations } from "next-intl";
 import { AlertCircle, Eye, X } from "lucide-react";
 import { useBrowseSSE } from "@/hooks/use-browse-sse";
 import type { Operation } from "@/lib/staging-store";
-import { browseCache, setPreviousBrowsePath, fetchBrowsePath, invalidateBrowsePath } from "@/lib/browse-prefetch";
+import { browseQuery, invalidateBrowsePath } from "@/lib/browse-prefetch";
+import { useQuery } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
+import { useViewMode } from "@/hooks/use-view-mode";
 
 interface BrowseResponse {
   type: "directory_listing" | "material";
@@ -26,13 +28,7 @@ interface BrowseResponse {
 }
 
 function BrowseSkeleton({ isMaterial = false }: { isMaterial?: boolean }) {
-  const [viewMode, setViewMode] = useState<"list" | "grid">("grid");
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("browse-view-mode");
-      if (stored === "grid" || stored === "list") setViewMode(stored);
-    } catch {}
-  }, []);
+  const { mode: viewMode } = useViewMode();
 
   if (isMaterial) {
     return (
@@ -151,7 +147,6 @@ function BrowseContent() {
   const pathname = usePathname();
   const isDesktop = useIsDesktop();
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
-  const sidebarTarget = useUIStore((s) => s.sidebarTarget);
   const setSidebarTarget = useUIStore((s) => s.setSidebarTarget);
   const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
 
@@ -159,89 +154,25 @@ function BrowseContent() {
   const config = useConfigStore((state) => state.config);
   const path = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
 
-  // Track the path each fetched payload belongs to so a stale payload from the
-  // previous directory is never rendered against the new path (no flash).
-  const [fetched, setFetched] = useState<{ path: string; data: BrowseResponse } | null>(
-    () => (browseCache.has(path) ? { path, data: browseCache.get(path) as BrowseResponse } : null),
-  );
-  const [isFetching, setIsFetching] = useState(!browseCache.has(path));
-  const [error, setError] = useState<string | null>(null);
-
-  // Cache-first: a freshly prefetched/cached path renders instantly, even on the
-  // first frame after navigation (before the effect below runs). Falls back to
-  // the fetched payload only when it matches the current path.
-  const data: BrowseResponse | null = browseCache.has(path)
-    ? (browseCache.get(path) as BrowseResponse)
-    : fetched?.path === path
-      ? fetched.data
-      : null;
+  // A path already cached (e.g. by a hover prefetch) renders at once and
+  // revalidates in the background; another path shows a skeleton, never the
+  // previous directory's payload.
+  const browse = useQuery(browseQuery(path));
+  const data = (browse.data as BrowseResponse | undefined) ?? null;
+  const isFetching = browse.isPending;
+  const error = browse.isError && !data ? t("loadError") : null;
 
   const searchParams = useSearchParams();
   const previewPrId = searchParams.get("preview_pr");
-  const [previewPr, setPreviewPr] = useState<{
-    id: string;
-    title: string;
-    payload: Operation[];
-  } | null>(null);
-
-  useEffect(() => {
-    if (previewPrId) {
-      apiFetch<{ id: string; title: string; payload: Operation[] }>(`/pull-requests/${previewPrId}`)
-        .then((pr) => {
-          setPreviewPr({
-            id: pr.id,
-            title: pr.title,
-            payload: pr.payload,
-          });
-        })
-        .catch(() => setPreviewPr(null));
-    } else {
-      setPreviewPr(null);
-    }
-  }, [previewPrId]);
-
-  const fetchData = useCallback(
-    async (isBackground = false) => {
-      if (!isBackground) setIsFetching(true);
-      setError(null);
-      try {
-        // Background fetches revalidate (bypass cache); foreground fetches join
-        // any in-flight prefetch for this path instead of duplicating it.
-        const result = (await fetchBrowsePath(path, {
-          force: isBackground,
-        })) as BrowseResponse;
-        setPreviousBrowsePath(path);
-        // Bail out of the state update when a background revalidation returned
-        // the same (identity-preserved) payload — avoids a redundant full
-        // re-render of the listing on every cache-hit navigation.
-        setFetched((prev) =>
-          prev && prev.path === path && prev.data === result
-            ? prev
-            : { path, data: result },
-        );
-      } catch (err) {
-        if (!isBackground) {
-          setError(err instanceof Error ? err.message : t("loadError"));
-        }
-      } finally {
-        if (!isBackground) setIsFetching(false);
-      }
-    },
-    [path],
-  );
-
-  // On path change: if the target is already cached (e.g. via hover-prefetch),
-  // render it instantly (via the cache-first `data` above) and revalidate in the
-  // background. Otherwise show a skeleton while we fetch the target.
-  useEffect(() => {
-    if (browseCache.has(path)) {
-      setError(null);
-      setIsFetching(false);
-      fetchData(true);
-    } else {
-      fetchData(false);
-    }
-  }, [path, fetchData]);
+  // The preview banner is optional: if the PR cannot load, the listing shows as is.
+  const { data: previewPr = null } = useQuery({
+    queryKey: ["pull-requests", previewPrId],
+    queryFn: ({ signal }) =>
+      apiFetch<{ id: string; title: string; payload: Operation[] }>(`/pull-requests/${previewPrId}`, {
+        signal,
+      }),
+    enabled: !!previewPrId,
+  });
 
   const isDirectoryListing = data?.type === "directory_listing";
   const seededPathRef = useRef<string | null>(null);
@@ -285,6 +216,9 @@ function BrowseContent() {
     const dir = data.directory;
     const currentDirId = dir ? String(dir.id) : path === "" ? "root" : null;
     if (!currentDirId) return;
+    // Read the target without subscribing: this effect sets it, so depending
+    // on it would loop. It only refreshes the counts when the listing changes.
+    const sidebarTarget = useUIStore.getState().sidebarTarget;
     if (
       sidebarTarget?.type === "directory" &&
       sidebarTarget.id === currentDirId
@@ -326,11 +260,10 @@ function BrowseContent() {
     if (refreshCount > prevRefreshCountRef.current) {
       prevRefreshCountRef.current = refreshCount;
       invalidateBrowsePath(path);
-      fetchData(true);
     }
-  }, [path, refreshCount, fetchData]);
+  }, [path, refreshCount]);
 
-  useBrowseSSE(data, path, fetchData);
+  useBrowseSSE(data, path);
 
   const isLikelyMaterial = path.split("/").filter(Boolean).length >= 3;
 
@@ -353,7 +286,7 @@ function BrowseContent() {
           <Button variant="outline" size="sm" asChild>
             <Link href="/browse">{t("backToBrowse")}</Link>
           </Button>
-          <Button size="sm" onClick={() => fetchData(false)}>{t("retry")}</Button>
+          <Button size="sm" onClick={() => void browse.refetch()}>{t("retry")}</Button>
         </div>
       </div>
     );

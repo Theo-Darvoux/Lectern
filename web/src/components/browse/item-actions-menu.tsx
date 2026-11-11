@@ -23,13 +23,14 @@ import {
   Scissors,
   Undo2,
 } from "lucide-react";
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import {
   CONTENT_STATUSES,
   CONTENT_STATUS_ICONS,
-  CONTENT_STATUS_LABELS,
   normalizeContentStatus,
+  useContentStatusText,
+  useUpdateContentStatus,
   type ContentStatus,
 } from "@/components/content-status-badge";
 import {
@@ -79,6 +80,7 @@ import {
 import { FlagButton } from "@/components/flags/flag-button";
 import { getViewerType } from "@/lib/file-utils";
 import { cn } from "@/lib/utils";
+import { useDirectoryZipDownload } from "@/hooks/use-directory-zip-download";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -235,62 +237,9 @@ function useItemActions(item: ItemData, itemPath?: string) {
 
   const { downloadMaterial, downloadQcmAsXml, downloadQcmAsPdf, isDownloading } = useDownload();
 
-  const [isDirDownloading, setIsDirDownloading] = useState(false);
-  const dirDownloadCancelRef = useRef(false);
-  const dirToastId = `dir-zip-download-${item.id}`;
-
-  useEffect(() => {
-    return () => {
-      dirDownloadCancelRef.current = true;
-      toast.dismiss(dirToastId);
-    };
-  }, []);
-
-  const handleDownloadDirectory = useCallback(async () => {
-    if (isDirDownloading) return;
-    dirDownloadCancelRef.current = false;
-    setIsDirDownloading(true);
-    try {
-      const data = await apiFetch<{ dir_name: string; chunks: Array<{ url: string; filename: string }> }>(
-        `/directories/${item.id}/download-chunks`,
-      );
-      const triggerLink = (url: string) => {
-        const a = document.createElement("a");
-        a.href = url;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      };
-      if (data.chunks.length === 0) {
-        triggerLink(`/api/directories/${item.id}/download`);
-      } else if (data.chunks.length === 1) {
-        triggerLink(data.chunks[0].url);
-      } else {
-        for (let i = 0; i < data.chunks.length; i++) {
-          if (dirDownloadCancelRef.current) break;
-          toast.loading(
-            t("downloadZipPart", { dirName: data.dir_name, part: i + 1, total: data.chunks.length }),
-            { id: dirToastId, duration: Infinity },
-          );
-          triggerLink(data.chunks[i].url);
-          if (i < data.chunks.length - 1) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-          }
-        }
-        if (!dirDownloadCancelRef.current) {
-          toast.success(
-            t("downloadZipAllStarted", { total: data.chunks.length }),
-            { id: dirToastId, duration: 6000 },
-          );
-        }
-      }
-    } catch {
-      toast.dismiss(dirToastId);
-      toast.error(t("downloadZipTooLarge"));
-    } finally {
-      setTimeout(() => setIsDirDownloading(false), 1500);
-    }
-  }, [item.id, isDirDownloading, t, dirToastId]);
+  const zipDownload = useDirectoryZipDownload();
+  const handleDownloadDirectory = () => void zipDownload.download(item.id);
+  const isDirDownloading = zipDownload.isDownloading;
   const { print, isPrinting, canPrint } = usePrint({
     viewerType,
     materialId: item.id,
@@ -390,9 +339,9 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
   const guest = isGuest(user);
   const staff = isStaff(user);
   const openSidebar = useUIStore((s) => s.openSidebar);
-  const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
-  const lang = fr ? "fr" : "en";
+  const tStatus = useTranslations("ContentStatus");
+  const { label: statusLabel } = useContentStatusText();
+  const updateContentStatus = useUpdateContentStatus();
   if (!context) return null;
   const { item, actions } = context;
   const { t } = actions;
@@ -406,31 +355,8 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
   const isCreated = item.staged === "created";
 
-  const handleUpdateStatus = async (nextStatus: ContentStatus) => {
-    try {
-      const payload = item.type === "directory"
-        ? { directory_ids: [item.id], status: nextStatus }
-        : { material_ids: [item.id], status: nextStatus };
-
-      await apiFetch("/admin/content/status", {
-        method: "PATCH",
-        body: JSON.stringify(payload),
-      });
-      useUIStore.getState().updateSidebarData({ status: nextStatus });
-      useBrowseRefreshStore.getState().triggerBrowseRefresh();
-      toast.success(
-        fr
-          ? `Statut mis à jour : ${CONTENT_STATUS_LABELS.fr[nextStatus]}`
-          : `Status updated to ${CONTENT_STATUS_LABELS.en[nextStatus]}`,
-      );
-    } catch {
-      toast.error(
-        fr
-          ? "Impossible de modifier le statut"
-          : "Failed to update status",
-      );
-    }
-  };
+  const handleUpdateStatus = (nextStatus: ContentStatus) =>
+    void updateContentStatus({ type: item.type, id: item.id }, nextStatus);
 
   const handleDetailsClick = () => {
     openSidebar("details", {
@@ -586,13 +512,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
                 <ContextMenuSubTrigger className="cursor-pointer">
                   <BookOpenCheck className="mr-2 h-4 w-4" />
                   <span>
-                    {fr
-                      ? item.type === "directory"
-                        ? "Statut du dossier"
-                        : "Statut du document"
-                      : item.type === "directory"
-                        ? "Folder status"
-                        : "Document status"}
+                    {tStatus(item.type === "directory" ? "folderStatus" : "documentStatus")}
                   </span>
                 </ContextMenuSubTrigger>
                 <ContextMenuSubContent className="w-48">
@@ -610,7 +530,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
                       >
                         <div className="flex items-center gap-2">
                           <StIcon className="h-3.5 w-3.5" />
-                          <span>{CONTENT_STATUS_LABELS[lang][st]}</span>
+                          <span>{statusLabel(st)}</span>
                         </div>
                         {isSelected && <span className="text-xs text-primary font-bold">✓</span>}
                       </ContextMenuItem>
@@ -623,13 +543,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
                 <DropdownMenuSubTrigger className="cursor-pointer">
                   <BookOpenCheck className="mr-2 h-4 w-4" />
                   <span>
-                    {fr
-                      ? item.type === "directory"
-                        ? "Statut du dossier"
-                        : "Statut du document"
-                      : item.type === "directory"
-                        ? "Folder status"
-                        : "Document status"}
+                    {tStatus(item.type === "directory" ? "folderStatus" : "documentStatus")}
                   </span>
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="w-48">
@@ -647,7 +561,7 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
                       >
                         <div className="flex items-center gap-2">
                           <StIcon className="h-3.5 w-3.5" />
-                          <span>{CONTENT_STATUS_LABELS[lang][st]}</span>
+                          <span>{statusLabel(st)}</span>
                         </div>
                         {isSelected && <span className="text-xs text-primary font-bold">✓</span>}
                       </DropdownMenuItem>
@@ -703,7 +617,6 @@ function MenuItemsList({ isContextMenu = false }: { isContextMenu?: boolean }) {
 
 interface ArmedMenuBodyProps {
   item: ItemData;
-  onAddAttachment?: () => void;
   itemPath?: string;
   // Ref that always points to the latest actions object so context consumers
   // never read a stale snapshot without re-rendering the whole parent.
@@ -712,7 +625,7 @@ interface ArmedMenuBodyProps {
   onReady: () => void;
 }
 
-function ArmedMenuBody({ item, onAddAttachment, itemPath, actionsRef, onReady }: ArmedMenuBodyProps) {
+function ArmedMenuBody({ item, itemPath, actionsRef, onReady }: ArmedMenuBodyProps) {
   const actions = useItemActions(item, itemPath);
   const editTarget = useEditTargetData(item, actions.editDialogOpen);
   const { setEditDialogOpen, t } = actions;
@@ -731,7 +644,7 @@ function ArmedMenuBody({ item, onAddAttachment, itemPath, actionsRef, onReady }:
 
   // Signal the parent to flip its "ready" flag once, before the first paint,
   // so ItemActionsDropdownTrigger renders the real dropdown on the same frame.
-  useLayoutEffect(onReady, []);
+  useLayoutEffect(() => onReady(), [onReady]);
 
   return (
     <>
@@ -823,8 +736,8 @@ export function ItemActionsMenu({
   // on every render, so context consumers always read current state.
   const actionsRef = useRef<ReturnType<typeof useItemActions> | null>(null);
 
-  // Stable context-value object: its identity is fixed after arming so React
-  // never re-renders all context consumers on unrelated re-renders.
+  // Context value: rebuilt only when the item or its callbacks change, so a
+  // renamed or moved item never leaves the menu acting on stale data.
   // The `actions` getter reads through actionsRef to avoid stale closures.
   const stableCtxValue = useMemo<ActionsContextValue | null>(() => {
     if (!contextReady) return null;
@@ -834,7 +747,7 @@ export function ItemActionsMenu({
       onAddAttachment,
       itemPath,
     };
-  }, [contextReady]); // intentionally omit item/onAddAttachment/itemPath — they're read via closure/getter
+  }, [contextReady, item, onAddAttachment, itemPath]);
 
   const arm = useCallback(() => {
     if (armTimer.current) {
@@ -888,7 +801,6 @@ export function ItemActionsMenu({
           {armed && (
             <ArmedMenuBody
               item={item}
-              onAddAttachment={onAddAttachment}
               itemPath={itemPath}
               actionsRef={actionsRef}
               onReady={onReady}

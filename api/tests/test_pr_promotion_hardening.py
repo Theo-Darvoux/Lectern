@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.services.pr as pr_service
+import app.services.pr.versions as pr_service
 from app.core.common.exceptions import BadRequestError, ConflictError
 from app.core.database.post_commit import PostCommitKey
 from app.models.upload import Upload

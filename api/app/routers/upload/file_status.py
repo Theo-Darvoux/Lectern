@@ -1,7 +1,9 @@
 """Authoritative processing status for one uploaded file.
 
 Live progress reaches the browser on the ``uploads`` channel of the master SSE
-stream. This endpoint is the source of truth that clients reconcile against.
+stream. This endpoint is the source of truth that clients reconcile against:
+the database decides terminal states, and the Redis cache only supplies live
+progress for uploads still in flight.
 """
 
 import json
@@ -9,132 +11,114 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
-from redis.asyncio import Redis
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common.exceptions import ForbiddenError
+from app.core.common.upload_keys import UPLOAD_STATUS_PREFIX
 from app.core.database.database import get_db
-from app.core.database.redis import get_redis
+from app.core.database.redis import RedisClient, get_redis
 from app.dependencies.auth import CurrentUser
 from app.models.upload import Upload
-from app.routers.upload.helpers import _STATUS_CACHE_PREFIX
-from app.schemas.material import UploadStatus, UploadStatusOut
+from app.schemas.material import UploadCompleteOut, UploadStatus, UploadStatusOut
 
 router = APIRouter()
 
-
-async def _check_file_ownership(file_key: str, user_id: str, db: AsyncSession) -> None:
-    """Raise ForbiddenError if the file_key doesn't belong to the user."""
-    # V1 keys: quarantine/{user_id}/... or uploads/{user_id}/...
-    if file_key.startswith(f"quarantine/{user_id}/") or file_key.startswith(f"uploads/{user_id}/"):
-        return
-
-    # V2 keys: cas/{hmac} (ownership verified via Upload table)
-    if file_key.startswith("cas/"):
-        # Check if this user has any upload record pointing to this CAS key.
-        # Ensure user_id is a UUID object for SQLAlchemy type processing.
-        uid = uuid.UUID(str(user_id))
-        exists = await db.scalar(
-            select(Upload.id).where(Upload.final_key == file_key, Upload.user_id == uid).limit(1)
-        )
-        if exists:
-            return
-
-    raise ForbiddenError("File does not belong to you")
+_TERMINAL_STATUSES = {"clean", "failed", "malicious", "applied", "cancelled"}
 
 
-async def _load_authoritative_upload(
-    file_key: str, user_id: uuid.UUID, db: AsyncSession
+def _backs_a_file(row: Upload) -> bool:
+    """A CAS upload whose last reference was released no longer backs a file."""
+    return not (row.final_key or "").startswith("cas/") or (row.cas_ref_count or 0) > 0
+
+
+async def _load_upload(
+    file_key: str, user_id: uuid.UUID, db: AsyncSession, *, own_prefix: bool
 ) -> Upload | None:
+    """Return the user's upload row that best describes ``file_key``.
+
+    Several rows can share a CAS key. An applied row wins, then a clean row that
+    still backs a file, then the most recently updated row.
+    """
     rows = list(
-        (
-            await db.scalars(
-                select(Upload)
-                .where(
-                    Upload.user_id == user_id,
-                    (Upload.final_key == file_key) | (Upload.quarantine_key == file_key),
-                )
-                .order_by(Upload.updated_at.desc())
+        await db.scalars(
+            select(Upload)
+            .where(
+                Upload.user_id == user_id,
+                (Upload.final_key == file_key) | (Upload.quarantine_key == file_key),
             )
-        ).all()
+            .order_by(Upload.updated_at.desc())
+        )
     )
-    if not rows and "/" in file_key:
-        parts = file_key.split("/")
-        if len(parts) >= 3:
-            row = await db.scalar(
-                select(Upload).where(Upload.upload_id == parts[2], Upload.user_id == user_id)
-            )
-            if row is not None:
-                rows.append(row)
+    if not rows and own_prefix:
+        # quarantine/{user_id}/{upload_id}/...: the row may still hold a provisional key.
+        upload_id = file_key.split("/")[2] if file_key.count("/") >= 2 else None
+        row = await db.scalar(
+            select(Upload).where(Upload.upload_id == upload_id, Upload.user_id == user_id)
+        )
+        rows = [row] if row is not None else []
     if not rows:
         return None
-    applied = next((row for row in rows if row.status == "applied"), None)
-    if applied is not None:
-        return applied
-    return next(
-        (
-            row
-            for row in rows
-            if row.status == "clean"
-            and (not (row.final_key or "").startswith("cas/") or int(row.cas_ref_count or 0) > 0)
-        ),
-        rows[0],
+    return (
+        next((r for r in rows if r.status == "applied"), None)
+        or next((r for r in rows if r.status == "clean" and _backs_a_file(r)), None)
+        or rows[0]
     )
 
 
-def _authoritative_terminal_payload(row: Upload, file_key: str) -> dict[str, Any] | None:
-    status = row.status
-    uses_cas = bool(row.final_key and row.final_key.startswith("cas/"))
-    has_active_owner = not uses_cas or int(row.cas_ref_count or 0) > 0
-    if status == "cancelled" or (status == "clean" and not has_active_owner):
-        status = "failed"
-    if status not in ("clean", "failed", "malicious", "applied"):
-        return None
-    has_result = status == "applied" or (status == "clean" and has_active_owner)
-    return {
-        "upload_id": row.upload_id,
-        "file_key": file_key,
-        "status": status,
-        "detail": row.error_detail or ("Success" if has_result else "Upload is no longer active"),
-        "result": {
-            "file_key": row.final_key or file_key,
-            "size": row.size_bytes,
-            "original_size": row.size_bytes,
-            "mime_type": row.mime_type,
-            "file_name": row.filename,
-        }
+def _terminal_status(row: Upload, file_key: str, error_code: str | None) -> UploadStatusOut:
+    has_result = row.status == "applied" or (row.status == "clean" and _backs_a_file(row))
+    status = row.status if row.status in ("applied", "malicious") or has_result else "failed"
+    return UploadStatusOut(
+        upload_id=row.upload_id,
+        file_key=file_key,
+        status=UploadStatus(status),
+        detail=row.error_detail or ("Success" if has_result else "Upload is no longer active"),
+        result=UploadCompleteOut(
+            file_key=row.final_key or file_key,
+            size=row.size_bytes or 0,
+            original_size=row.size_bytes or 0,
+            mime_type=row.mime_type or "application/octet-stream",
+            file_name=row.filename,
+        )
         if has_result
         else None,
-    }
+        error_code=error_code,
+    )
+
+
+async def _cached_event(redis: RedisClient, file_key: str) -> dict[str, Any] | None:
+    raw = await redis.get(f"{UPLOAD_STATUS_PREFIX}{file_key}")
+    try:
+        cached = json.loads(raw) if raw else None
+    except ValueError:
+        return None
+    return cached if isinstance(cached, dict) else None
 
 
 @router.get("/status/{file_key:path}", response_model=UploadStatusOut)
 async def upload_status(
     file_key: str,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadStatusOut:
     """Return upload status with the database overriding stale terminal cache state."""
-    await _check_file_ownership(file_key, str(user.id), db)
+    own_prefix = file_key.startswith((f"quarantine/{user.id}/", f"uploads/{user.id}/"))
+    row = await _load_upload(file_key, user.id, db, own_prefix=own_prefix)
+    # A CAS key is shared by identical content, so only an upload row proves ownership.
+    if row is None and not own_prefix:
+        raise ForbiddenError("File does not belong to you")
 
-    row = await _load_authoritative_upload(file_key, user.id, db)
-    authoritative = _authoritative_terminal_payload(row, file_key) if row else None
-    cached = await redis.get(f"{_STATUS_CACHE_PREFIX}{file_key}")
-    try:
-        cached_payload = json.loads(cached) if cached else None
-    except ValueError:
-        cached_payload = None
-
-    if authoritative is not None:
+    cached = await _cached_event(redis, file_key)
+    if row is not None and row.status in _TERMINAL_STATUSES:
         # The row stores only the message; the structured code lives in the event.
-        error_code = cached_payload.get("error_code") if cached_payload else None
-        return UploadStatusOut(**authoritative, error_code=error_code)
+        return _terminal_status(row, file_key, cached.get("error_code") if cached else None)
 
-    if not cached_payload:
-        return UploadStatusOut(file_key=file_key, status=UploadStatus.PENDING)
-    try:
-        return UploadStatusOut(**cached_payload)
-    except Exception:
-        return UploadStatusOut(file_key=file_key, status=UploadStatus.PENDING)
+    if cached is not None:
+        try:
+            return UploadStatusOut(**cached)
+        except (ValidationError, TypeError):
+            pass
+    return UploadStatusOut(file_key=file_key, status=UploadStatus.PENDING)

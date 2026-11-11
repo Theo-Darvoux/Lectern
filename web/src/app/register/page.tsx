@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { useTranslations } from "next-intl";
 import { useConfigStore, useUIStore } from "@/lib/stores";
 import { cn, sanitizeNext } from "@/lib/utils";
 import { Eye, EyeOff } from "lucide-react";
@@ -36,6 +37,8 @@ export default function RegisterPage() {
     const setNavbarVisible = useUIStore((state) => state.setNavbarVisible);
     const router = useRouter();
     const inputRef = useRef<HTMLInputElement>(null);
+    const t = useTranslations("Register");
+    const tLogin = useTranslations("Login");
 
     useEffect(() => {
         setHideFooter(true);
@@ -57,8 +60,8 @@ export default function RegisterPage() {
     const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || "Lectern";
 
     useEffect(() => {
-        document.title = `Sign Up • ${siteName}`;
-    }, [siteName]);
+        document.title = `${t("pageTitle")} • ${siteName}`;
+    }, [siteName, t]);
 
     const handleRequestCode = async (e?: FormEvent) => {
         if (e) e.preventDefault();
@@ -68,10 +71,10 @@ export default function RegisterPage() {
             await requestCode(email.trim());
             setStep("code_and_password");
             setCode("");
-            toast.success("Verification code sent");
+            toast.success(tLogin("codeSent"));
             setTimeout(() => inputRef.current?.focus(), 150);
         } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to send code");
+            toast.error(err instanceof Error ? err.message : tLogin("sendFailed"));
         } finally {
             setLoading(false);
         }
@@ -82,9 +85,9 @@ export default function RegisterPage() {
         setResending(true);
         try {
             await requestCode(email.trim());
-            toast.success("Verification code sent");
+            toast.success(tLogin("codeSent"));
         } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to resend code");
+            toast.error(err instanceof Error ? err.message : tLogin("sendFailed"));
         } finally {
             setResending(false);
         }
@@ -116,7 +119,7 @@ export default function RegisterPage() {
                 router.push(getNext() ?? "/");
             }
         } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Registration failed");
+            toast.error(err instanceof Error ? err.message : t("failed"));
         } finally {
             setLoading(false);
         }
@@ -125,7 +128,7 @@ export default function RegisterPage() {
     if (!config?.classic_enabled) {
         return (
             <div className="flex min-h-screen items-center justify-center p-4">
-                <p className="text-[#828096]">Classic registration is disabled.</p>
+                <p className="text-[#828096]">{t("disabled")}</p>
             </div>
         );
     }
@@ -144,7 +147,7 @@ export default function RegisterPage() {
                         className="text-3xl font-extrabold tracking-tight text-[#f8f7fc]"
                     />
                     <p className="-mt-4 sm:-mt-5 text-xs sm:text-[0.8125rem] font-medium tracking-[0.015em] text-[#918da6] leading-relaxed max-w-[310px] mx-auto mb-1">
-                        Create your account
+                        {t("subtitle")}
                     </p>
                 </div>
 
@@ -154,7 +157,7 @@ export default function RegisterPage() {
                     <form onSubmit={handleRequestCode} className="space-y-4">
                         <div className="space-y-2">
                             <Label htmlFor="email" className="login-overline">
-                                Email
+                                {tLogin("emailLabel")}
                             </Label>
                             <Input
                                 id="email"
@@ -177,10 +180,10 @@ export default function RegisterPage() {
                             {loading ? (
                                 <>
                                     <span className="inline-block h-4 w-4 rounded-full border-2 border-current border-r-transparent animate-spin mr-2" />
-                                    Sending...
+                                    {tLogin("sending")}
                                 </>
                             ) : (
-                                "Send Verification Code"
+                                tLogin("sendVerificationCode")
                             )}
                         </Button>
                     </form>
@@ -189,7 +192,7 @@ export default function RegisterPage() {
                         <div className="flex items-center justify-between p-3 rounded-md bg-[#12131d] border border-[#1e2030] mb-2">
                             <div className="min-w-0">
                                 <p className="text-[11px] text-[#6a667d] tracking-wider uppercase font-mono font-semibold">
-                                    Registering as
+                                    {t("registeringAs")}
                                 </p>
                                 <p className="text-sm font-medium truncate text-[#f0eef5] mt-0.5">
                                     {email}
@@ -203,13 +206,13 @@ export default function RegisterPage() {
                                 }}
                                 className="text-xs text-[#828096] hover:text-[#f0eef5] font-medium px-2 py-1 shrink-0 transition-colors"
                             >
-                                Change
+                                {tLogin("changeEmail")}
                             </button>
                         </div>
                         <div className="space-y-3">
                             <div className="flex justify-between items-center px-0.5">
                                 <Label htmlFor="code" className="login-overline">
-                                    Verification Code
+                                    {tLogin("verificationCode")}
                                 </Label>
                                 <button
                                     type="button"
@@ -220,7 +223,7 @@ export default function RegisterPage() {
                                     {resending && (
                                         <span className="inline-block h-3 w-3 rounded-full border-[1.5px] border-current border-r-transparent animate-spin" />
                                     )}
-                                    Resend Code
+                                    {tLogin("resendCode")}
                                 </button>
                             </div>
 
@@ -240,7 +243,7 @@ export default function RegisterPage() {
                                     autoFocus
                                     required
                                     autoComplete="one-time-code"
-                                    aria-label="Verification Code"
+                                    aria-label={tLogin("codeAriaLabel")}
                                     disabled={loading}
                                 />
 
@@ -265,12 +268,12 @@ export default function RegisterPage() {
 
                         <div className="space-y-2 pt-2">
                             <Label htmlFor="displayName" className="login-overline">
-                                Display Name (Optional)
+                                {t("displayNameLabel")}
                             </Label>
                             <Input
                                 id="displayName"
                                 type="text"
-                                placeholder="How should we call you?"
+                                placeholder={t("displayNamePlaceholder")}
                                 value={displayName}
                                 onChange={(e) => setDisplayName(e.target.value)}
                                 disabled={loading}
@@ -280,13 +283,13 @@ export default function RegisterPage() {
 
                         <div className="space-y-2">
                             <Label htmlFor="password" className="login-overline">
-                                Password
+                                {tLogin("passwordLabel")}
                             </Label>
                             <div className="relative">
                                 <Input
                                     id="password"
                                     type={showPassword ? "text" : "password"}
-                                    placeholder="Create a password"
+                                    placeholder={t("passwordPlaceholder")}
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
                                     required
@@ -299,7 +302,7 @@ export default function RegisterPage() {
                                     type="button"
                                     onClick={() => setShowPassword(!showPassword)}
                                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[#524f64] hover:text-[#f0eef5] transition-colors p-0.5"
-                                    aria-label={showPassword ? "Hide password" : "Show password"}
+                                    aria-label={tLogin(showPassword ? "hidePassword" : "showPassword")}
                                 >
                                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                                 </button>
@@ -313,19 +316,19 @@ export default function RegisterPage() {
                             {loading ? (
                                 <>
                                     <span className="inline-block h-4 w-4 rounded-full border-2 border-current border-r-transparent animate-spin mr-2" />
-                                    Creating account...
+                                    {t("creating")}
                                 </>
                             ) : (
-                                "Sign Up"
+                                t("submit")
                             )}
                         </Button>
                     </form>
                 )}
 
                 <div className="mt-4 text-center text-sm">
-                    <span className="text-[#828096]">Already have an account? </span>
+                    <span className="text-[#828096]">{t("haveAccount")} </span>
                     <Link href="/login?tab=password" className="text-[#f0eef5] hover:underline transition-colors">
-                        Sign In
+                        {tLogin("signIn")}
                     </Link>
                 </div>
             </div>

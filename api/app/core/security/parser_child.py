@@ -9,8 +9,24 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.core.security.file_security.errors import UnreadableFileError
+
+if TYPE_CHECKING:
+    from PIL import Image
+
+
+def is_blank_image(image: Image.Image) -> bool:
+    """Whether a rendered page is near-uniform white, with nothing worth showing."""
+    from PIL import ImageStat
+
+    gray = image.convert("L")
+    try:
+        stat = ImageStat.Stat(gray)
+        return stat.mean[0] >= 252.0 and stat.stddev[0] <= 4.0
+    finally:
+        gray.close()
 
 
 def _inspect(arguments: list[str]) -> dict[str, object]:
@@ -133,7 +149,7 @@ def _render_thumbnail(arguments: list[str]) -> dict[str, object]:
         raise ValueError(
             "thumbnail requires input, output, width, height, quality and flatten flag"
         )
-    from PIL import Image, ImageOps, ImageStat
+    from PIL import Image, ImageOps
 
     from app.core.security.file_security._image import _validate_image_size
 
@@ -158,12 +174,7 @@ def _render_thumbnail(arguments: list[str]) -> dict[str, object]:
                     background.paste(rgba, mask=alpha)
                     rendered = background
                     rendered.save(output_path, "WEBP", quality=quality)
-                    gray = rendered.convert("L")
-                    try:
-                        stat = ImageStat.Stat(gray)
-                        blank = stat.mean[0] >= 252.0 and stat.stddev[0] <= 4.0
-                    finally:
-                        gray.close()
+                    blank = is_blank_image(rendered)
                 finally:
                     background.close()
                     alpha.close()
@@ -171,12 +182,7 @@ def _render_thumbnail(arguments: list[str]) -> dict[str, object]:
                         rgba.close()
             else:
                 rendered.save(output_path, "WEBP", quality=quality)
-                gray = rendered.convert("L")
-                try:
-                    stat = ImageStat.Stat(gray)
-                    blank = stat.mean[0] >= 252.0 and stat.stddev[0] <= 4.0
-                finally:
-                    gray.close()
+                blank = is_blank_image(rendered)
         finally:
             if oriented is not base_img:
                 oriented.close()

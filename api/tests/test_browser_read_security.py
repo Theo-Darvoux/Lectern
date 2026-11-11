@@ -70,7 +70,7 @@ def test_nginx_access_log_omits_request_arguments_and_referer() -> None:
 def test_directory_zip_generator_has_no_archive_or_object_sized_buffer() -> None:
     source = (REPO_ROOT / "api/app/routers/directories.py").read_text(encoding="utf-8")
     function = source.split("async def _generate_zip", 1)[1].split(
-        '@router.get("/root/download-chunks"', 1
+        "async def _download_entries", 1
     )[0]
     assert "io.BytesIO" not in function
     assert "data = bytearray()" not in function

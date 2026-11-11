@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
@@ -13,90 +13,19 @@ import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu
 import { useLikeOverrides } from "@/lib/stores";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
 import { TYPE_COLORS } from "@/lib/material-icons";
-import { getFileTypeStyle } from "@/components/home/file-type-display";
 import { isExternalUrl } from "@/lib/url-utils";
 import { useExternalLinkStore } from "@/lib/external-link-store";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { ContentStatusBadge, normalizeContentStatus } from "@/components/content-status-badge";
-import { apiFetch } from "@/lib/api-client";
-import { useInView } from "@/hooks/use-in-view";
-import { cn } from "@/lib/utils";
 import type { MaterialDetail } from "@/components/home/types";
+import { GhostMaterialPreview } from "@/components/browse/ghost-material-preview";
+import { translateDynamic } from "@/lib/i18n-dynamic";
 
 const MaterialPreview = dynamic(
   () => import("@/components/home/material-preview").then((module) => module.MaterialPreview),
   { ssr: false },
 );
-
-// ---------------------------------------------------------------------------
-// Ghost preview: for staged "created" materials that have a file_key
-// ---------------------------------------------------------------------------
-
-function GhostMaterialPreview({
-  fileKey,
-  fileName,
-  mimeType,
-  containerRef,
-}: {
-  fileKey: string;
-  fileName?: string | null;
-  mimeType?: string | null;
-  containerRef: React.RefObject<Element | null>;
-}) {
-  const [imgUrl, setImgUrl] = useState<string | null>(null);
-  const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName ?? null, mimeType ?? null);
-  const inView = useInView(containerRef);
-
-  const isImage =
-    (mimeType?.startsWith("image/") ?? false) ||
-    /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName ?? "");
-
-  useEffect(() => {
-    if (!inView || !fileKey || !isImage) return;
-    let cancelled = false;
-    const schedule =
-      typeof window !== "undefined" && "requestIdleCallback" in window
-        ? (cb: () => void) => (window as unknown as { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(cb)
-        : (cb: () => void) => window.setTimeout(cb, 200);
-    schedule(() => {
-      if (cancelled) return;
-      apiFetch<{ url: string }>(`/upload/preview?file_key=${encodeURIComponent(fileKey)}`)
-        .then((res) => {
-          if (!cancelled && res && res.url) setImgUrl(res.url);
-        })
-        .catch(() => {});
-    });
-    return () => { cancelled = true; };
-  }, [inView, fileKey, isImage]);
-
-  return (
-    <div
-      className={cn(
-        "relative w-full h-full flex items-center justify-center overflow-hidden bg-linear-to-br",
-        gradient,
-      )}
-    >
-      <Icon
-        className={cn(
-          "h-6 w-6 z-10",
-          iconColorClass,
-          imgUrl ? "opacity-0" : "opacity-80",
-        )}
-      />
-      {imgUrl && (
-        /* eslint-disable-next-line @next/next/no-img-element */
-        <img
-          src={imgUrl}
-          alt={fileName ?? "Staged file preview"}
-          className="absolute inset-0 h-full w-full object-cover animate-in fade-in duration-300"
-          loading="lazy"
-          decoding="async"
-        />
-      )}
-    </div>
-  );
-}
 
 interface MaterialLineItemProps {
     material: Record<string, unknown>;
@@ -187,11 +116,7 @@ function MaterialLineItemImpl({
     const effectiveType = isInternalLink ? "internal_link" : type;
     let badgeColor = TYPE_COLORS[effectiveType] ?? TYPE_COLORS[type] ?? TYPE_COLORS.other;
 
-    let badgeLabel = tTypes.has(effectiveType as any)
-        ? tTypes(effectiveType as any)
-        : tTypes.has(type as any)
-            ? tTypes(type as any)
-            : type;
+    let badgeLabel = translateDynamic(tTypes, effectiveType, translateDynamic(tTypes, type));
 
     if (type === "document") {
         const fallbackLabel = getFileBadgeLabel(fileName, mimeType);
@@ -319,6 +244,7 @@ function MaterialLineItemImpl({
                 <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted/50 transition-transform group-hover:scale-105">
                     {useGhostPreview ? (
                         <GhostMaterialPreview
+                            iconClassName="h-6 w-6"
                             fileKey={ghostFileKey!}
                             fileName={fileName || undefined}
                             mimeType={ghostFileMimeType || mimeType || undefined}

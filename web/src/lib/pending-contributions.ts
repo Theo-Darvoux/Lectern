@@ -90,7 +90,9 @@ function namespaceOperation(operation: Operation, contributionId: string): Opera
   return operation;
 }
 
-export function pendingOperations(state: PendingContributionsState): Operation[] {
+export function pendingOperations(
+  state: Pick<PendingContributionsState, "contributions">,
+): Operation[] {
   return Object.entries(state.contributions).flatMap(([id, contribution]) =>
     contribution.operations.map((operation) => namespaceOperation(operation, id)),
   );

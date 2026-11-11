@@ -7,6 +7,7 @@ import { getViewerPrint } from "@/lib/viewer-print-registry";
 import { getMarkdownPdfTitle, MARKDOWN_PDF_CSS } from "@/lib/markdown-print";
 import { toast } from "sonner";
 import type { QCMFile } from "@/lib/qcm-types";
+import { useTranslations } from "next-intl";
 
 const ANSWER_LETTERS = ["A", "B", "C", "D"];
 
@@ -106,6 +107,7 @@ interface UsePrintOptions {
 
 export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) {
   const [isPrinting, setIsPrinting] = useState(false);
+  const t = useTranslations("Feedback");
   const canPrint = isPrintable(viewerType);
 
   const print = useCallback(async (intent: "print" | "pdf" = "print") => {
@@ -119,7 +121,7 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
           const blobUrl = URL.createObjectURL(blob);
           const win = window.open(blobUrl, "_blank");
           if (!win) {
-            toast.error("Pop-up blocked. Please allow pop-ups to print the PDF.");
+            toast.error(t("popupBlocked"));
             URL.revokeObjectURL(blobUrl);
             return;
           }
@@ -187,7 +189,7 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
               copyStyles: true,
             });
           } else {
-            toast.info("Open the Markdown document before exporting it as PDF.");
+            toast.info(t("openMarkdownFirst"));
             return;
           }
           break;
@@ -198,7 +200,7 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
           if (entry?.print) {
             entry.print();
           } else {
-            toast.info("Document is still loading. Please try again in a moment.");
+            toast.info(t("documentLoading"));
             return;
           }
           break;
@@ -210,7 +212,7 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
           const html = buildQcmPrintHtml(json, fileName);
           const win = window.open("", "_blank");
           if (!win) {
-            toast.error("Pop-up bloqué. Autorisez les pop-ups pour imprimer le QCM.");
+            toast.error(t("popupBlocked"));
             return;
           }
           win.document.write(html);
@@ -219,22 +221,18 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
         }
 
         default:
-          toast.info("Printing is not supported for this file type.");
+          toast.info(t("printUnsupported"));
           return;
       }
 
-      toast.success(
-        intent === "pdf"
-          ? "Choose “Save as PDF” in the destination menu."
-          : "Print dialog opened",
-      );
+      toast.success(t(intent === "pdf" ? "printSaveAsPdf" : "printOpened"));
     } catch (error) {
       console.error("Print failed:", error);
-      toast.error("Failed to prepare document for printing.");
+      toast.error(t("printFailed"));
     } finally {
       setIsPrinting(false);
     }
-  }, [viewerType, materialId, fileName, canPrint]);
+  }, [viewerType, materialId, fileName, canPrint, t]);
 
   const downloadPdf = useCallback(() => print("pdf"), [print]);
 

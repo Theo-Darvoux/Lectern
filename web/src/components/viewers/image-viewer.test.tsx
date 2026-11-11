@@ -8,7 +8,7 @@ import { ImageViewer } from "./image-viewer";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
 
-const translate = (key: string) => key;
+const translate = Object.assign((key: string) => key, { has: () => true });
 
 vi.mock("next-intl", () => ({
   useTranslations: () => translate,

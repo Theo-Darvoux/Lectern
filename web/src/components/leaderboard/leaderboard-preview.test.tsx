@@ -2,6 +2,7 @@ import React, { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { apiFetch } from "@/lib/api-client";
+import { settleQueries, withQueryClient } from "@/test/query";
 import { LeaderboardPreview } from "./leaderboard-preview";
 
 vi.mock("next/link", () => ({
@@ -51,9 +52,9 @@ describe("LeaderboardPreview", () => {
 
   it("loads a compact monthly ranking with links to the full board and profiles", async () => {
     await act(async () => {
-      root.render(<LeaderboardPreview />);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      root.render(withQueryClient(<LeaderboardPreview />));
     });
+    await settleQueries();
 
     expect(apiFetch).toHaveBeenCalledWith(
       "/leaderboard?period=month&limit=5&page=1",

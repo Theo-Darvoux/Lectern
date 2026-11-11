@@ -44,6 +44,15 @@ async def redis() -> Redis:  # type: ignore[type-arg]
         await client.aclose()
 
 
+async def _code_valid(redis: Redis, email: str, code: str) -> bool:  # type: ignore[type-arg]
+    return await auth_service.consume_verification_code(redis, email, code) is not None
+
+
+async def _magic_email(redis: Redis, token: str) -> str | None:  # type: ignore[type-arg]
+    consumed = await auth_service.consume_magic_token(redis, token)
+    return consumed[0] if consumed is not None else None
+
+
 async def test_refresh_jti_has_exactly_one_atomic_consumer(redis: Redis) -> None:  # type: ignore[type-arg]
     async def consume() -> bool:
         return await auth_service.consume_token_once(redis, "refresh-jti", 300)
@@ -109,9 +118,7 @@ async def test_verification_code_has_exactly_one_concurrent_redeemer(
     await auth_service.store_login_challenge(redis, email, code, token, auth_generation=7)
     assert await redis.get(f"auth:challenge_gen:{email}") == "7"
 
-    winners = await asyncio.gather(
-        *(auth_service.verify_code(redis, email, code) for _ in range(32))
-    )
+    winners = await asyncio.gather(*(_code_valid(redis, email, code) for _ in range(32)))
     assert winners.count(True) == 1
     assert winners.count(False) == 31
     assert await redis.get(f"auth:code:{email}") is None
@@ -127,9 +134,7 @@ async def test_magic_link_has_exactly_one_concurrent_redeemer(
     await auth_service.store_login_challenge(redis, email, "H2J3K4M5", token, auth_generation=11)
     assert await redis.get(f"auth:challenge_gen:{email}") == "11"
 
-    results = await asyncio.gather(
-        *(auth_service.verify_magic_token(redis, token) for _ in range(32))
-    )
+    results = await asyncio.gather(*(_magic_email(redis, token) for _ in range(32)))
     assert results.count(email) == 1
     assert results.count(None) == 31
     assert await redis.get(f"auth:magic:{token}") is None
@@ -174,8 +179,8 @@ async def test_code_and_magic_link_are_one_shared_single_use_challenge(
     await auth_service.store_login_challenge(redis, email, code, token, auth_generation=0)
 
     code_result, magic_result = await asyncio.gather(
-        auth_service.verify_code(redis, email, code),
-        auth_service.verify_magic_token(redis, token),
+        _code_valid(redis, email, code),
+        _magic_email(redis, token),
     )
     assert int(code_result is True) + int(magic_result == email) == 1
 
@@ -185,8 +190,8 @@ async def test_new_challenge_invalidates_previous_magic_link(redis: Redis) -> No
     await auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a", auth_generation=0)
     await auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b", auth_generation=0)
 
-    assert await auth_service.verify_magic_token(redis, "magic-a") is None
-    assert await auth_service.verify_magic_token(redis, "magic-b") == email
+    assert await _magic_email(redis, "magic-a") is None
+    assert await _magic_email(redis, "magic-b") == email
 
 
 async def test_concurrent_challenge_issuance_leaves_one_coherent_generation(
@@ -222,9 +227,9 @@ async def test_redeeming_current_code_invalidates_all_magic_generations(
     await auth_service.store_login_challenge(redis, email, "A2B3C4D5", "magic-a", auth_generation=0)
     await auth_service.store_login_challenge(redis, email, "H2J3K4M5", "magic-b", auth_generation=0)
 
-    assert await auth_service.verify_code(redis, email, "H2J3K4M5")
-    assert await auth_service.verify_magic_token(redis, "magic-a") is None
-    assert await auth_service.verify_magic_token(redis, "magic-b") is None
+    assert await _code_valid(redis, email, "H2J3K4M5")
+    assert await _magic_email(redis, "magic-a") is None
+    assert await _magic_email(redis, "magic-b") is None
 
 
 async def test_session_family_revocation_round_trip(redis: Redis) -> None:  # type: ignore[type-arg]

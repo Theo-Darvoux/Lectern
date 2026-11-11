@@ -6,8 +6,6 @@ from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
-
 from app.core.events.processing import ProcessingFile
 from app.core.observability.telemetry import get_tracer
 from app.core.security.async_utils import shielded_to_thread as _shielded_to_thread
@@ -155,24 +153,6 @@ async def run_thumbnail_stage(
 
 
 # ── Office MIME type helpers ─────────────────────────────────────────────────
-
-
-def _is_blank_thumbnail(
-    path: Path, brightness_threshold: float = 252.0, stddev_threshold: float = 4.0
-) -> bool:
-    """Measure generated/test images; production hostile inputs use the child result."""
-    try:
-        from PIL import ImageStat
-
-        with Image.open(path) as image:
-            gray = image.convert("L")
-            try:
-                stat = ImageStat.Stat(gray)
-                return stat.mean[0] >= brightness_threshold and stat.stddev[0] <= stddev_threshold
-            finally:
-                gray.close()
-    except Exception:
-        return False
 
 
 # OOXML and ODF MIME types both contain one of these substrings.

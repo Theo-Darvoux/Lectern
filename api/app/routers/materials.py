@@ -14,13 +14,13 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.common.constants import PRIVILEGED_ROLES
 from app.core.common.exceptions import AppError, BadRequestError, NotFoundError
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.common.upload_limits import enforce_upload_size_limit
 from app.core.database.database import get_db
 from app.core.database.post_commit import register_transaction_callbacks
-from app.core.database.redis import get_redis, redis_client
+from app.core.database.redis import RedisClient, get_redis, redis_client
 from app.core.storage.facade import (
     generate_presigned_get,
     generate_presigned_get_cached,
@@ -36,7 +36,7 @@ from app.dependencies.rate_limit import (
     rate_limit_views,
 )
 from app.models.upload import Upload
-from app.models.user import User, UserRole
+from app.models.user import MODERATOR_ROLES, User, UserRole
 from app.routers.upload.helpers import (
     _check_pending_cap,
     _processing_queue_name,
@@ -58,7 +58,7 @@ from app.services.material import (
     get_material_with_version,
     increment_download_count,
     record_view,
-    toggle_favourite,
+    set_favourite,
     toggle_like,
 )
 
@@ -451,7 +451,7 @@ async def stream_material_file(
     request: Request,
     user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis | None, Depends(get_redis)] = None,  # type: ignore[type-arg]
+    redis: Annotated[RedisClient | None, Depends(get_redis)] = None,
 ) -> Any:
     """Redirect a read-authenticated client to an immutable presigned object URL."""
     if redis is None:
@@ -595,19 +595,26 @@ async def like_material(
     return {"liked": liked}
 
 
-@router.post("/{material_id}/favourite")
+@router.put("/{material_id}/favourite")
 async def favourite_material(
-    material_id: str,
+    material_id: uuid.UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> dict[str, Any]:
-    try:
-        uid = uuid.UUID(material_id)
-    except ValueError:
-        raise BadRequestError(f"Invalid material ID: {material_id}")
-    favourited = await toggle_favourite(db, user.id, uid)
+) -> dict[str, bool]:
+    await set_favourite(db, user.id, material_id, favourited=True)
     await db.commit()
-    return {"favourited": favourited}
+    return {"favourited": True}
+
+
+@router.delete("/{material_id}/favourite")
+async def unfavourite_material(
+    material_id: uuid.UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, bool]:
+    await set_favourite(db, user.id, material_id, favourited=False)
+    await db.commit()
+    return {"favourited": False}
 
 
 # ---------------------------------------------------------------------------
@@ -752,7 +759,7 @@ async def save_material_text_content(
         await delete_object(file_key)
 
     async def rollback_quota() -> None:
-        await redis_inst.zrem(f"quota:uploads:{user_id_str}", staging_quota_key)
+        await redis_inst.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id_str}", staging_quota_key)
 
     async def rollback_storage_reservation() -> None:
         await _release_storage_reservation(upload_id, redis_inst)
@@ -776,7 +783,7 @@ async def save_material_text_content(
         user_id_str,
         redis_inst,
         db,
-        privileged=user_role in PRIVILEGED_ROLES,
+        privileged=user_role in MODERATOR_ROLES,
         reserve_key=staging_quota_key,
     )
 

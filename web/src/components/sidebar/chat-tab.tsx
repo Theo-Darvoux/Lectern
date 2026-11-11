@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Edit2, Send } from "lucide-react";
 import { FlagButton } from "@/components/flags/flag-button";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
@@ -9,9 +10,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import Link from "next/link";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ExpandableText } from "@/components/ui/expandable-text";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { QueryError } from "@/components/query-error";
 import { apiFetch, API_BASE } from "@/lib/api-client";
 import { useAuthStore } from "@/lib/stores";
-import { isGuest } from "@/lib/guest";
+import { isGuest, isStaffRole } from "@/lib/guest";
 import { useIsMobile } from "@/hooks/use-media-query";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
@@ -56,7 +60,6 @@ function getInitials(name: string | null): string {
     .slice(0, 2);
 }
 
-import { ExpandableText } from "@/components/ui/expandable-text";
 
 function CommentItem({
   comment,
@@ -74,10 +77,7 @@ function CommentItem({
   onDelete: (id: string) => void;
 }) {
   const isAuthor = currentUserId && comment.author_id === currentUserId;
-  const isModerator =
-    currentUserRole === "member" ||
-    currentUserRole === "bureau" ||
-    currentUserRole === "vieux";
+  const isModerator = isStaffRole(currentUserRole);
   const canEdit = isAuthor;
   const canDelete = isAuthor || isModerator;
   const t = useTranslations("Sidebar");
@@ -167,20 +167,34 @@ interface ChatTabProps {
   disabled?: boolean;
 }
 
-import { ScrollArea } from "@/components/ui/scroll-area";
 
 export function ChatTab({ target, disabled = false }: ChatTabProps) {
   const t = useTranslations("Sidebar");
   const isMobile = useIsMobile();
   const user = useAuthStore((state) => state.user);
   const guest = isGuest(user);
-  const [comments, setComments] = useState<Comment[]>([]);
-  const [loading, setLoading] = useState(false);
   const [body, setBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
+  const commentsKey = ["comments", target?.type, target?.id];
+  const commentsQuery = useQuery({
+    queryKey: commentsKey,
+    queryFn: async ({ signal }) =>
+      (
+        await apiFetch<PaginatedComments>(
+          `/comments?targetType=${target!.type}&targetId=${target!.id}&page=1&limit=1000`,
+          { signal },
+        )
+      ).items,
+    enabled: !!target,
+  });
+  const comments = useMemo(() => commentsQuery.data ?? [], [commentsQuery.data]);
+  const loading = commentsQuery.isLoading;
+  const updateComments = (update: (current: Comment[]) => Comment[]) =>
+    queryClient.setQueryData<Comment[]>(commentsKey, (current) => update(current ?? []));
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -192,28 +206,6 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
     }
   }, [comments, loading]);
 
-  const fetchComments = useCallback(
-    async () => {
-      if (!target) return;
-      setLoading(true);
-      try {
-        const data = await apiFetch<PaginatedComments>(
-          `/comments?targetType=${target.type}&targetId=${target.id}&page=1&limit=1000`,
-        );
-        setComments(data.items);
-      } catch {
-        // silent
-      } finally {
-        setLoading(false);
-      }
-    },
-    [target],
-  );
-
-  useEffect(() => {
-    setComments([]);
-    if (target) fetchComments();
-  }, [target, fetchComments]);
 
   const handleSubmit = async () => {
     if (!target || !body.trim() || disabled) return;
@@ -234,7 +226,7 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
         }),
       });
       setBody("");
-      setComments((prev) => [...prev, newComment]);
+      updateComments((prev) => [...prev, newComment]);
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : t("failedToPostComment"),
@@ -259,9 +251,7 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
       });
       setEditingId(null);
       setEditBody("");
-      setComments((prev) =>
-        prev.map((c) => (c.id === id ? updatedComment : c)),
-      );
+      updateComments((prev) => prev.map((c) => (c.id === id ? updatedComment : c)));
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : t("failedToEditComment"),
@@ -273,9 +263,9 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
     if (disabled) return;
     try {
       await apiFetch<void>(`/comments/${id}`, { method: "DELETE" });
-      setComments((prev) => prev.filter((c) => c.id !== id));
-    } catch {
-      // silent
+      updateComments((prev) => prev.filter((c) => c.id !== id));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("failedToDeleteComment"));
     }
   };
 
@@ -313,7 +303,11 @@ export function ChatTab({ target, disabled = false }: ChatTabProps) {
             </div>
           )}
 
-          {!loading && comments.length === 0 && (
+          {commentsQuery.isError && (
+            <QueryError onRetry={() => void commentsQuery.refetch()} className="py-12" />
+          )}
+
+          {commentsQuery.isSuccess && comments.length === 0 && (
             <p className="py-12 text-center text-sm text-muted-foreground italic px-4">
               {t("noCommentsYet", { type: t(target.type) })}
             </p>

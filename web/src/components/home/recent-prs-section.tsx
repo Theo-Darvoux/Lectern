@@ -8,6 +8,7 @@ import { formatDistanceToNow } from "date-fns/formatDistanceToNow";
 import type { PullRequestOut } from "./types";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
+import { useDateLocale } from "@/hooks/use-date-locale";
 
 interface RecentPRsSectionProps {
     prs: PullRequestOut[];
@@ -33,11 +34,13 @@ function PRRowSkeleton() {
 function PRRow({ pr }: { pr: PullRequestOut }) {
     const t = useTranslations("Home");
     const tPRs = useTranslations("PRs");
+    const dateLocale = useDateLocale();
     const authorLabel =
         pr.author?.display_name ?? (pr.is_anonymous ? tPRs("anonymous") : t("unknownAuthor"));
 
     const timeAgo = formatDistanceToNow(new Date(pr.created_at), {
         addSuffix: true,
+        locale: dateLocale,
     });
 
     return (

@@ -164,7 +164,7 @@ export function AnnotationSelectionTooltip({
             text,
             positionData: { page: pageNum, textContent: text, occurrenceIndex },
         });
-    }, [containerRef, showForm]);
+    }, [containerRef, showForm, disabled]);
 
     useEffect(() => {
         const container = containerRef.current;

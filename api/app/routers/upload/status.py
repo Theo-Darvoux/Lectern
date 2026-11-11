@@ -1,11 +1,9 @@
-"""Upload status endpoints: config, batch-status, history, cancel."""
+"""Upload endpoints: config, history, cancel."""
 
-import json
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +22,7 @@ from app.core.common.upload_limits import (
     upload_size_limit,
 )
 from app.core.database.database import get_db
-from app.core.database.redis import get_redis, redis_lock
+from app.core.database.redis import RedisClient, get_redis, redis_lock
 from app.core.media.mimetypes import ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES
 from app.core.storage.facade import delete_object, generate_presigned_get
 from app.dependencies.auth import CurrentUser
@@ -34,14 +32,11 @@ from app.routers.upload.cancellation import (
     upload_lifecycle_lock_name,
 )
 from app.routers.upload.helpers import (
-    _STATUS_CACHE_PREFIX,
     _release_storage_reservation,
 )
 from app.schemas.material import (
-    BatchStatusRequest,
     UploadHistoryItem,
     UploadHistoryOut,
-    UploadStatus,
 )
 
 router = APIRouter()
@@ -98,7 +93,7 @@ async def get_upload_config() -> UploadConfigOut:
 async def cancel_upload(
     upload_id: str,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     """Cancel any upload through the shared CAS-aware lifecycle operation."""
@@ -117,158 +112,6 @@ async def cancel_upload(
             delete_object_fn=delete_object,
             release_reservation_fn=_release_storage_reservation,
         )
-
-
-# ── POST /api/upload/status/batch ────────────────────────────────────────────
-
-
-@router.post("/status/batch")
-async def batch_upload_status(
-    data: BatchStatusRequest,
-    user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-) -> dict[str, Any]:
-    """Poll the processing status for up to 50 file keys in a single request."""
-    user_id_str = str(user.id)
-
-    # Filter keys to only those belonging to the user.
-    # V1 keys: quarantine/{user_id}/... or uploads/{user_id}/...
-    # V2 keys: cas/{hmac} (ownership verified via Upload table below)
-    owned_keys: list[str] = []
-    cas_keys_to_verify: list[str] = []
-    for fk in data.file_keys:
-        fk_str = str(fk)
-        if fk_str.startswith(f"quarantine/{user_id_str}/") or fk_str.startswith(
-            f"uploads/{user_id_str}/"
-        ):
-            owned_keys.append(fk_str)
-        elif fk_str.startswith("cas/"):
-            cas_keys_to_verify.append(fk_str)
-
-    # Verify CAS key ownership via Upload table
-    if cas_keys_to_verify:
-        from app.core.database.database import async_session_factory
-
-        async with async_session_factory() as _db:
-            verified = set(
-                await _db.scalars(
-                    select(Upload.final_key).where(
-                        Upload.final_key.in_(cas_keys_to_verify),
-                        Upload.user_id == user.id,
-                        Upload.status == "clean",
-                        Upload.cas_ref_count > 0,
-                    )
-                )
-            )
-        owned_keys.extend(k for k in cas_keys_to_verify if k in verified)
-
-    results: dict[str, dict] = {}  # type: ignore[type-arg]
-    if not owned_keys:
-        return {"statuses": results}
-
-    # Fetch statuses from Redis
-    cache_keys = [f"{_STATUS_CACHE_PREFIX}{k}" for k in owned_keys]
-    values = await redis.mget(*cache_keys)
-
-    # Always load authoritative rows for the requested keys. Redis is a
-    # presentation cache and must not resurrect a database-cancelled upload.
-    fallback_data: dict[str, dict[str, Any]] = {}
-    authoritative_rows: dict[str, Upload] = {}
-    from app.core.database.database import async_session_factory
-
-    async with async_session_factory() as _db:
-        db_res = await _db.execute(
-            select(Upload)
-            .where(
-                Upload.user_id == user.id,
-                (Upload.final_key.in_(owned_keys)) | (Upload.quarantine_key.in_(owned_keys)),
-            )
-            .order_by(Upload.created_at.desc())
-        )
-        for row in db_res.scalars().all():
-            for key in (row.final_key, row.quarantine_key):
-                if key in owned_keys:
-                    authoritative_rows.setdefault(key, row)
-            has_active_cas_ref = int(row.cas_ref_count or 0) > 0
-            response_status = row.status
-            if response_status == "cancelled" or (
-                response_status == "clean" and not has_active_cas_ref
-            ):
-                response_status = "failed"
-            for key in (row.final_key, row.quarantine_key):
-                if key in owned_keys and row.status in (
-                    "clean",
-                    "failed",
-                    "malicious",
-                    "cancelled",
-                    "applied",
-                ):
-                    fallback_data[key] = {
-                        "upload_id": row.upload_id,
-                        "file_key": key,
-                        "status": response_status,
-                        "detail": row.error_detail
-                        or (
-                            "Success"
-                            if row.status == "clean" and has_active_cas_ref
-                            else "Upload is no longer active"
-                        ),
-                        "result": {
-                            "file_key": row.final_key or key,
-                            "size": row.size_bytes,
-                            "original_size": row.size_bytes,
-                            "mime_type": row.mime_type,
-                            "file_name": row.filename,
-                        }
-                        if row.status == "clean" and has_active_cas_ref
-                        else None,
-                        "overall_percent": 1.0,
-                    }
-
-    for file_key, cached in zip(owned_keys, values, strict=False):
-        if cached:
-            try:
-                cached_data = json.loads(cached)
-                authoritative_row = authoritative_rows.get(file_key)
-                if (
-                    cached_data.get("status") == "clean"
-                    and authoritative_row is not None
-                    and (
-                        authoritative_row.status != "clean"
-                        or int(authoritative_row.cas_ref_count or 0) <= 0
-                    )
-                ):
-                    await redis.delete(f"{_STATUS_CACHE_PREFIX}{file_key}")
-                    results[file_key] = fallback_data.get(file_key) or {
-                        "file_key": file_key,
-                        "status": UploadStatus.PENDING,
-                    }
-                    continue
-                # Apply fallback fields if needed
-                if cached_data.get("status") == "clean" and cached_data.get("result"):
-                    if not cached_data["result"].get("file_name") or not cached_data["result"].get(
-                        "original_size"
-                    ):
-                        fb_entry = fallback_data.get(file_key)
-                        fb = fb_entry.get("result") if fb_entry else None
-                        if fb:
-                            if not cached_data["result"].get("file_name"):
-                                cached_data["result"]["file_name"] = fb["file_name"]
-                            if not cached_data["result"].get("original_size"):
-                                cached_data["result"]["original_size"] = fb["original_size"]
-                results[file_key] = cached_data
-            except Exception:
-                results[file_key] = fallback_data.get(file_key) or {
-                    "file_key": file_key,
-                    "status": UploadStatus.PENDING,
-                }
-        else:
-            results[file_key] = fallback_data.get(file_key) or {
-                "file_key": file_key,
-                "status": UploadStatus.PENDING,
-            }
-
-    return {"statuses": results}
 
 
 # ── GET /api/upload/mine ─────────────────────────────────────────────────────
@@ -368,11 +211,3 @@ async def get_upload_preview(
 
 
 # ── Deprecated stubs ─────────────────────────────────────────────────────────
-
-
-@router.post("/request-url", deprecated=True)
-async def request_upload_url_deprecated() -> None:
-    raise BadRequestError(
-        "This endpoint has been removed. Use POST /api/upload/init for presigned uploads "
-        "or POST /api/upload for direct uploads."
-    )

@@ -20,7 +20,6 @@ import { uploadFile, logicalFileSize } from "@/lib/upload-client";
 import type { Operation } from "@/lib/staging-store";
 import { useTranslations } from "next-intl";
 import { Loader2, CheckCircle2, UploadCloud, X, FileIcon, ExternalLink } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { normalizeTargetUrl } from "@/lib/url-utils";
 import { localizeUploadError } from "@/lib/upload-errors";
 
@@ -76,7 +75,6 @@ export function StagedItemEditDialog({ stagedId, onClose }: StagedItemEditDialog
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const isMaterialOp = op?.op === "create_material" || op?.op === "edit_material";
-    const isDirectoryOp = op?.op === "create_directory" || op?.op === "edit_directory";
     const isCreate = op?.op === "create_material" || op?.op === "create_directory";
     const isLink = isMaterialOp && (op.type === "link" || !!op.metadata?.url);
     // An edit only carries what the user changed; empty fields keep the live value.

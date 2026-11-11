@@ -11,11 +11,7 @@ import type {
   Operation,
 } from "@/lib/staging-store";
 import type { SelectedItem } from "@/lib/selection-store";
-import {
-  pendingOperations,
-  usePendingContributionsStore,
-} from "@/lib/pending-contributions";
-import { useAuthStore } from "@/lib/stores";
+import { useSubmittedOperations } from "@/hooks/use-submitted-operations";
 
 export type StagedState = "edited" | "deleted" | "moved";
 
@@ -121,15 +117,7 @@ export function useAugmentedListing({
   previewOperations,
 }: UseAugmentedListingProps) {
   const operations = useStagingStore((s) => s.operations);
-  const pendingContributions = usePendingContributionsStore((s) => s.contributions);
-  const pendingOwnerId = usePendingContributionsStore((s) => s.ownerId);
-  const currentOwnerId = useAuthStore((s) => s.user?.id ? String(s.user.id) : null);
-  const submittedOperations = useMemo(
-    () => pendingOwnerId === currentOwnerId
-      ? pendingOperations(usePendingContributionsStore.getState())
-      : [],
-    [currentOwnerId, pendingContributions, pendingOwnerId],
-  );
+  const submittedOperations = useSubmittedOperations();
 
   const [ghostDirStack, setGhostDirStack] = useState<GhostDirEntry[]>([]);
   const activeGhostDir =

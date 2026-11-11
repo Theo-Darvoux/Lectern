@@ -1,4 +1,4 @@
-from app.services.pr import _operation_uses_directory_tree_lock
+from app.services.pr.operations import _operation_uses_directory_tree_lock
 
 
 def test_hierarchy_lock_predicate_covers_namespace_and_revert_mutations() -> None:

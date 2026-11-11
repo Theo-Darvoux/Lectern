@@ -710,6 +710,9 @@ const PROCESSING_TOTAL_TIMEOUT_MS = 15 * 60 * 1000;
 // Live events carry progress. Polling is only the safety net for missed events.
 const STATUS_POLL_MIN_MS = 5_000;
 const STATUS_POLL_MAX_MS = 30_000;
+// A reconnect resyncs every watched upload; spread their status requests so a
+// large batch does not hit the API all at once.
+const RESYNC_SPREAD_MS = 2_000;
 
 type WatchOptions = {
     onProgress?: (p: number) => void;
@@ -734,11 +737,13 @@ async function _waitForUploadCompletion(
         let highWaterMark = 0;
         let pollDelay = STATUS_POLL_MIN_MS;
         let pollTimer: ReturnType<typeof setTimeout> | undefined;
+        let resyncTimer: ReturnType<typeof setTimeout> | undefined;
 
         const finish = (settle: () => void) => {
             if (settled) return;
             settled = true;
             clearTimeout(pollTimer);
+            clearTimeout(resyncTimer);
             clearTimeout(deadlineTimer);
             signal?.removeEventListener("abort", onAbort);
             subscription.close();
@@ -796,12 +801,17 @@ async function _waitForUploadCompletion(
                     if (payload.file_key === fileKey) apply(payload);
                 },
             },
-            onResync: () => void poll(),
+            onResync: () => {
+                clearTimeout(resyncTimer);
+                resyncTimer = setTimeout(() => void poll(), Math.random() * RESYNC_SPREAD_MS);
+            },
         });
 
         const deadlineTimer = setTimeout(() => {
             void poll().finally(() =>
-                finish(() => reject(new Error("Upload processing timed out. Check upload history for status."))),
+                finish(() =>
+                    reject(new ApiError(408, "Upload processing timed out", "ERR_PROCESSING_TIMEOUT")),
+                ),
             );
         }, PROCESSING_TOTAL_TIMEOUT_MS);
 

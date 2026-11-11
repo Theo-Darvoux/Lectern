@@ -3,13 +3,11 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-import { fr, enUS } from "date-fns/locale";
-import { useTranslations, useLocale } from "next-intl";
+import { useTranslations } from "next-intl";
 import {
   Copy,
   Check,
   ChevronRight,
-  GitPullRequest,
   Undo2,
   FilePlus,
   FilePenLine,
@@ -28,6 +26,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import type { PullRequestOut } from "@/components/home/types";
 import { cn } from "@/lib/utils";
 import { AnonymousBadge } from "@/components/pr/anonymous-badge";
+import { translateDynamic } from "@/lib/i18n-dynamic";
+import { useDateLocale } from "@/hooks/use-date-locale";
 
 const LANE_WIDTH = 16;
 const ROW_HEIGHT = 36;
@@ -90,8 +90,8 @@ interface GraphPath {
 
 export function PRCommitGraph({ prs, loading }: PRCommitGraphProps) {
   const t = useTranslations("PRs");
-  const locale = useLocale();
-  const dateLocale = locale === "fr" ? fr : enUS;
+  const tFeedback = useTranslations("Feedback");
+  const dateLocale = useDateLocale();
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -104,7 +104,7 @@ export function PRCommitGraph({ prs, loading }: PRCommitGraphProps) {
       toast.success(t("hashCopied"));
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
-      toast.error("Failed to copy ID");
+      toast.error(tFeedback("copyIdFailed"));
     }
   };
 
@@ -569,12 +569,11 @@ export function PRCommitGraph({ prs, loading }: PRCommitGraphProps) {
                 {/* Operation Chip */}
                 {derivedOpTypes.slice(0, 1).map((st) => {
                   const Icon = OP_ICONS[st] ?? FilePlus;
-                  const hasKey = typeof (t as unknown as { has?: (k: string) => boolean }).has === "function"
-                    ? (t as unknown as { has: (k: string) => boolean }).has(`operations.${st}`)
-                    : true;
-                  const label = hasKey
-                    ? t(`operations.${st}` as any)
-                    : st.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+                  const label = translateDynamic(
+                    t,
+                    `operations.${st}`,
+                    st.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+                  );
                   return (
                     <span
                       key={st}

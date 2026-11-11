@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { ArrowRight, Sparkles, Trophy } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -9,15 +9,13 @@ import type { LeaderboardEntry, LeaderboardResponse } from "./types";
 
 export function ProfileLeaderboardRank() {
   const t = useTranslations("Leaderboard");
-  const [standing, setStanding] = useState<LeaderboardEntry | null>(null);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    apiFetch<LeaderboardResponse>("/leaderboard?period=month&limit=1&page=1", { signal: controller.signal })
-      .then((response) => setStanding(response.current_user))
-      .catch(() => undefined);
-    return () => controller.abort();
-  }, []);
+  // Secondary to the profile: on failure the rank simply shows as unknown.
+  const { data } = useQuery({
+    queryKey: ["leaderboard", "month", { limit: 1, page: 1 }],
+    queryFn: ({ signal }) =>
+      apiFetch<LeaderboardResponse>("/leaderboard?period=month&limit=1&page=1", { signal }),
+  });
+  const standing: LeaderboardEntry | null = data?.current_user ?? null;
 
   return (
     <Link href="/leaderboard" className="mt-4 flex items-center gap-3 rounded-xl border bg-background/70 p-3 transition-colors hover:bg-accent/50" data-profile-leaderboard>

@@ -68,7 +68,7 @@ function DirectoryGridCardImpl({
     ? (directory.preview_material_ids as string[])
     : [];
   const { Icon: ThumbnailIcon } = getDirectoryIcon(thumbnailIconId);
-  const { gradient: customGradient, iconClass: customIconClass, folderBodyClass: customFolderBody, folderTabClass: customFolderTab } = getDirectoryColor(thumbnailColorId);
+  const { iconClass: customIconClass, folderBodyClass: customFolderBody, folderTabClass: customFolderTab } = getDirectoryColor(thumbnailColorId);
   const showCollage = !thumbnailIconId && previewMaterialIds.length > 0;
 
   // Folder body and tab use same-hue pairs (tab is darker) so they read as
@@ -116,16 +116,6 @@ function DirectoryGridCardImpl({
           ? `text-${themeColor}-400`
           : customIconClass;
 
-  const bgGradient =
-    staged === "deleted"
-      ? "from-red-100 to-rose-200 dark:from-red-950/40 dark:to-rose-900/30"
-      : staged === "moved"
-        ? "from-amber-100 to-orange-200 dark:from-amber-950/40 dark:to-orange-900/30"
-        : staged === "created" || staged === "edited"
-          ? isExternal
-            ? "from-blue-100 to-indigo-200 dark:from-blue-950/40 dark:to-indigo-900/30"
-            : "from-green-100 to-emerald-200 dark:from-green-950/40 dark:to-emerald-900/30"
-          : customGradient;
 
   const textColor =
     staged === "deleted"

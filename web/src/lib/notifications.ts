@@ -25,10 +25,6 @@ const NOTIFICATION_ICONS: Record<string, ElementType> = {
   access_approved: UserCheck,
 };
 
-export function notificationIcon(type: string): ElementType {
-  return NOTIFICATION_ICONS[type] ?? MessageSquare;
-}
-
 export function NotificationIcon({
   type,
   className,
@@ -66,7 +62,7 @@ export function getNotificationCategory(type: string): "pr" | "comment" | "moder
   return "pr";
 }
 
-export function getNotificationStyle(type: string, isRead: boolean) {
+export function getNotificationStyle(type: string) {
   switch (type) {
     case "pr_approved":
     case "access_approved":

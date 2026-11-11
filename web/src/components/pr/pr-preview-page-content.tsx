@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import Link from "next/link";
@@ -52,19 +52,17 @@ const LinkViewerPreview = dynamic(
 
 function TextPreview({ url, type }: { url: string; type: "markdown" | "code" | "csv" | "notebook" }) {
     const t = useTranslations("Preview");
-    const [content, setContent] = useState("");
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(false);
-
-    useEffect(() => {
-        let cancelled = false;
-        fetch(url)
-            .then((r) => r.text())
-            .then((t) => { if (!cancelled) setContent(t); })
-            .catch(() => { if (!cancelled) setError(true); })
-            .finally(() => { if (!cancelled) setLoading(false); });
-        return () => { cancelled = true; };
-    }, [url]);
+    const query = useQuery({
+        queryKey: ["file-text", url],
+        queryFn: async ({ signal }) => {
+            const response = await fetch(url, { signal });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.text();
+        },
+    });
+    const content = query.data ?? "";
+    const loading = query.isPending;
+    const error = query.isError;
 
     if (loading) return <div className="flex h-full items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
     if (error) return <div className="flex h-full items-center justify-center text-sm text-destructive">{t("failedToLoad")}</div>;
@@ -137,7 +135,7 @@ const VIEWER_ICON_COLORS: Record<string, string> = {
 
 const STATUS_CONFIG: Record<
     string,
-    { className: string; labelKey: string }
+    { className: string; labelKey: `status.${"open" | "approved" | "rejected" | "cancelled"}` }
 > = {
     open: {
         className: "text-amber-600 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-400",
@@ -157,6 +155,48 @@ const STATUS_CONFIG: Record<
     },
 };
 
+interface PreviewFile {
+    fileName: string;
+    mimeType: string;
+    url: string | null;
+}
+
+/** Find what a PR operation previews: its link target or a presigned file URL. */
+async function resolvePreviewFile(
+    prId: string,
+    opIndex: number,
+    op: Record<string, unknown>,
+    signal: AbortSignal,
+): Promise<PreviewFile> {
+    const targetUrl = String((op.metadata as Record<string, unknown> | undefined)?.url || op.url || "").trim();
+    const isLink = op.type === "link" || op.material_type === "link" || Boolean(targetUrl);
+    let fileName = String(op.title || op.name || "");
+    let mimeType = "";
+
+    // Edits of an existing material may carry no name of their own.
+    if (!fileName && op.material_id && !String(op.material_id).startsWith("$")) {
+        const material = await apiFetch<{
+            title: string;
+            current_version_info?: { file_name?: string; file_mime_type?: string };
+        }>(`/materials/${op.material_id}`, { signal }).catch(() => null);
+        fileName = material?.title || material?.current_version_info?.file_name || "";
+        mimeType = material?.current_version_info?.file_mime_type ?? "";
+    }
+
+    if (isLink && targetUrl) {
+        return { fileName, mimeType: "application/x-external-link", url: targetUrl };
+    }
+    const preview = await apiFetch<{ url: string; file_name?: string; file_mime_type?: string }>(
+        `/pull-requests/${prId}/preview?opIndex=${opIndex}`,
+        { signal },
+    );
+    return {
+        fileName: fileName || preview.file_name || String(op.file_name ?? ""),
+        mimeType: mimeType || preview.file_mime_type || String(op.file_mime_type ?? ""),
+        url: preview.url,
+    };
+}
+
 export function PRPreviewPageContent() {
     const t = useTranslations("Preview");
     const tPR = useTranslations("PRDetails");
@@ -167,72 +207,27 @@ export function PRPreviewPageContent() {
     const opIndex = previewMatch ? Number(previewMatch[2]) : 0;
     const router = useRouter();
 
-    const [presignedUrl, setPresignedUrl] = useState<string | null>(null);
-    const [fileName, setFileName] = useState<string>("");
-    const [mimeType, setMimeType] = useState<string>("");
-    const [prTitle, setPrTitle] = useState<string>("");
-    const [prStatus, setPrStatus] = useState<string>("open");
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-
-    useEffect(() => {
-        let cancelled = false;
-
-        async function load() {
-            try {
-                const pr = await apiFetch<{ title: string; payload: Record<string, unknown>[]; status?: string }>(`/pull-requests/${prId}`);
-                if (cancelled) return;
-
-                const op = pr.payload?.[opIndex] ?? {};
-                const targetUrl = String((op.metadata as Record<string, unknown> | undefined)?.url || op.url || "").trim();
-                const isLink = op.type === "link" || op.material_type === "link" || Boolean(targetUrl);
-
-                setPrTitle(pr.title);
-                if (pr.status) {
-                    setPrStatus(pr.status);
-                }
-
-                if (!op.title && !op.name && op.material_id && !String(op.material_id).startsWith("$")) {
-                    try {
-                        const mat = await apiFetch<{ title: string; current_version_info?: { file_name?: string; file_mime_type?: string } }>(`/materials/${op.material_id}`).catch(() => null);
-                        if (!cancelled && mat) {
-                            setFileName(mat.title || mat.current_version_info?.file_name || "File");
-                            if (mat.current_version_info?.file_mime_type) {
-                                setMimeType(mat.current_version_info.file_mime_type);
-                            }
-                        }
-                    } catch {
-                        setFileName(String(op.title || op.name || "File"));
-                    }
-                } else {
-                    setFileName(String(op.title || op.name || "Link"));
-                }
-
-                if (isLink && targetUrl) {
-                    setPresignedUrl(targetUrl);
-                    setMimeType("application/x-external-link");
-                } else {
-                    try {
-                        const preview = await apiFetch<{ url: string; file_name?: string; file_mime_type?: string }>(`/pull-requests/${prId}/preview?opIndex=${opIndex}`);
-                        if (!cancelled && preview) {
-                            setFileName((prev) => prev || String(preview.file_name ?? op.file_name ?? "File"));
-                            setMimeType((prev) => prev || String(preview.file_mime_type ?? op.file_mime_type ?? ""));
-                            setPresignedUrl(preview.url);
-                        }
-                    } catch (err) {
-                        if (!cancelled) setError(err instanceof Error ? err.message : t("failedToLoadPreview"));
-                    }
-                }
-            } catch (e: unknown) {
-                if (!cancelled) setError(e instanceof Error ? e.message : t("failedToLoadPreview"));
-            } finally {
-                if (!cancelled) setLoading(false);
-            }
-        }
-
-        load();
-        return () => { cancelled = true; };
-    }, [prId, opIndex, t]);
+    const prQuery = useQuery({
+        queryKey: ["pull-requests", prId],
+        queryFn: ({ signal }) =>
+            apiFetch<{ title: string; payload: Record<string, unknown>[]; status?: string }>(
+                `/pull-requests/${prId}`,
+                { signal },
+            ),
+    });
+    const fileQuery = useQuery({
+        queryKey: ["pull-requests", prId, "preview", opIndex],
+        // An out-of-range index still asks the server, which explains the refusal.
+        queryFn: ({ signal }) =>
+            resolvePreviewFile(prId, opIndex, prQuery.data?.payload?.[opIndex] ?? {}, signal),
+        enabled: prQuery.isSuccess,
+    });
+    const prTitle = prQuery.data?.title ?? "";
+    const prStatus = prQuery.data?.status ?? "open";
+    const { fileName = "", mimeType = "", url: presignedUrl = null } = fileQuery.data ?? {};
+    const loading = prQuery.isPending || (prQuery.isSuccess && fileQuery.isPending);
+    const failure = prQuery.error ?? fileQuery.error;
+    const error = failure ? failure.message || t("failedToLoadPreview") : null;
 
     const isLinkViewer = mimeType === "application/x-external-link";
     const viewerType = isLinkViewer ? "link" : presignedUrl ? getContributionPreviewViewerType(mimeType, fileName) : "generic";
@@ -263,7 +258,7 @@ export function PRPreviewPageContent() {
                     )}
                     {isLinkViewer && (
                         <span className="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300">
-                            Link
+                            {t("linkBadge")}
                         </span>
                     )}
                 </div>
@@ -278,7 +273,7 @@ export function PRPreviewPageContent() {
                         </Badge>
                     )}
                     <Badge variant="outline" className={`text-xs ${statusInfo.className}`}>
-                        {tPR(statusInfo.labelKey as any)}
+                        {tPR(statusInfo.labelKey)}
                     </Badge>
                 </div>
             </div>

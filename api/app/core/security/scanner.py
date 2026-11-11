@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from collections.abc import Awaitable
 from pathlib import Path
@@ -88,16 +87,6 @@ class MalwareScanner:
         if yara_result is not None:
             raise BadRequestError(f"ERR_MALWARE_DETECTED: {yara_result}")
 
-    async def scan_file(
-        self,
-        file_bytes: bytes,
-        filename: str,
-    ) -> None:
-        """Run the local YARA gate; the pipeline applies the configured Bazaar policy."""
-        if not settings.malware_scan_enabled:
-            return
-        await self._run_scan_gate(self._scan_yara(file_bytes, filename), filename)
-
     async def scan_file_path(
         self,
         file_path: Path,
@@ -107,21 +96,6 @@ class MalwareScanner:
         if not settings.malware_scan_enabled:
             return
         await self._run_scan_gate(self._scan_yara_path(file_path, filename), filename)
-
-    async def _scan_yara(self, file_bytes: bytes, filename: str) -> str | None:
-        """Match bytes in a disposable isolated parser process."""
-        if self.rules is None or self._compiled_rules_path is None:
-            raise RuntimeError("Scanner YARA rules not initialized")
-        file_path = make_processing_temp_path(suffix=Path(filename).suffix, prefix="yara-input-")
-        try:
-            await asyncio.to_thread(file_path.write_bytes, file_bytes)
-            return await scan_yara_isolated(
-                file_path,
-                compiled_rules_path=self._compiled_rules_path,
-                timeout=settings.yara_scan_timeout,
-            )
-        finally:
-            file_path.unlink(missing_ok=True)
 
     async def _scan_yara_path(self, file_path: Path, filename: str) -> str | None:
         """Match a file in a disposable isolated parser process."""

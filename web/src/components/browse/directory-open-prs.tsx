@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { apiFetchWithResponse } from "@/lib/api-client";
 import { subscribeToSSE } from "@/lib/sse-client";
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useTranslations } from "next-intl";
+import { useDateLocale } from "@/hooks/use-date-locale";
 
 const OP_ICONS: Record<string, React.ElementType> = {
     create_material: FilePlus,
@@ -51,90 +53,61 @@ interface DirectoryOpenPRsProps {
 export function DirectoryOpenPRs({ directoryId }: DirectoryOpenPRsProps) {
     const t = useTranslations("Browse");
     const tPRs = useTranslations("PRs");
-    const [prs, setPrs] = useState<PR[]>([]);
-    const [totalCount, setTotalCount] = useState(0);
-    const [page, setPage] = useState(1);
-    const [loading, setLoading] = useState(true);
-    const [isNavigating, setIsNavigating] = useState(false);
+    const dateLocale = useDateLocale();
+    const queryClient = useQueryClient();
     const [isExpanded, setIsExpanded] = useState(false);
-    const pageRef = useRef(page);
+    // The page belongs to one directory: another directory starts on page 1.
+    const [pageState, setPageState] = useState({ directoryId, page: 1 });
+    const page = pageState.directoryId === directoryId ? pageState.page : 1;
+    const setPage = (next: number) => setPageState({ directoryId, page: next });
 
-    useEffect(() => {
-        pageRef.current = page;
-    }, [page]);
-
-    const fetchPRs = useCallback(
-        async (p: number) => {
-            if (!directoryId) return null;
-
-            try {
-                const { data, response } = await apiFetchWithResponse<PR[]>(
-                    `/pull-requests/for-item?targetType=directory&targetId=${directoryId}&page=${p}&limit=10`,
-                );
-
-                const total = parseInt(
-                    response.headers.get("X-Total-Count") || "0",
-                    10,
-                );
-                setTotalCount(total);
-                setPrs(data);
-                return data.length;
-            } catch {
-                // Silently ignore — not critical
-                return null;
-            }
+    // Not critical to the folder view: on failure the section stays hidden.
+    const query = useQuery({
+        queryKey: ["pull-requests", "for-item", "directory", directoryId, page],
+        queryFn: async ({ signal }) => {
+            const { data, response } = await apiFetchWithResponse<PR[]>(
+                `/pull-requests/for-item?targetType=directory&targetId=${directoryId}&page=${page}&limit=10`,
+                { signal },
+            );
+            return { items: data, total: parseInt(response.headers.get("X-Total-Count") || "0", 10) };
         },
-        [directoryId],
-    );
+        enabled: !!directoryId,
+        placeholderData: keepPreviousData,
+    });
+    const prs = query.data?.items ?? [];
+    const totalCount = query.data?.total ?? 0;
+    const isNavigating = query.isPlaceholderData && query.isFetching;
 
+    // A page emptied by a closed contribution sends the reader back to the first one.
+    const pageEmptied = !query.isPlaceholderData && query.data?.items.length === 0 && page > 1;
     useEffect(() => {
-        let cancelled = false;
-
-        async function initialFetch() {
-            setLoading(true);
-            setPage(1);
-            await fetchPRs(1);
-            if (!cancelled) setLoading(false);
-        }
-
-        initialFetch();
-        return () => {
-            cancelled = true;
-        };
-    }, [directoryId, fetchPRs]);
+        if (pageEmptied) setPageState({ directoryId, page: 1 });
+    }, [pageEmptied, directoryId]);
 
     useEffect(() => {
         if (!directoryId) return;
-        // A gap must not move the reader off the page they are on, unless that
-        // page no longer exists.
-        const refreshCurrentPage = async () => {
-            const currentPage = pageRef.current;
-            const rowCount = await fetchPRs(currentPage);
-            if (rowCount === 0 && currentPage > 1) {
-                setPage(1);
-                await fetchPRs(1);
-            }
+        const refresh = () =>
+            void queryClient.invalidateQueries({
+                queryKey: ["pull-requests", "for-item", "directory", directoryId],
+            });
+        const showNewest = () => {
+            setPageState({ directoryId, page: 1 });
+            refresh();
         };
         const connection = subscribeToSSE({
             channel: `directory:${directoryId}`,
-            listeners: {
-                pr_opened: () => { setPage(1); fetchPRs(1); },
-                pr_closed: () => { setPage(1); fetchPRs(1); },
-            },
-            onResync: () => { void refreshCurrentPage(); },
+            listeners: { pr_opened: showNewest, pr_closed: showNewest },
+            onResync: refresh,
         });
         return () => connection.close();
-    }, [directoryId, fetchPRs]);
+    }, [directoryId, queryClient]);
 
-    const handlePageChange = async (newPage: number) => {
+    const handlePageChange = (newPage: number) => {
         if (isNavigating || newPage < 1) return;
-        setIsNavigating(true);
-        await fetchPRs(newPage);
         setPage(newPage);
-        setIsNavigating(false);
     };
 
-    if (loading || prs.length === 0) return null;
+    if (prs.length === 0) return null;
 
     const totalPages = Math.ceil(totalCount / 10);
 
@@ -204,7 +177,7 @@ export function DirectoryOpenPRs({ directoryId }: DirectoryOpenPRsProps) {
                                             #{pr.id.slice(0, 8)} &middot;{" "}
                                             {formatDistanceToNow(
                                                 new Date(pr.created_at),
-                                                { addSuffix: true },
+                                                { addSuffix: true, locale: dateLocale },
                                             )}{" "}
                                             {t("by")}{" "}
                                             {pr.author?.display_name ||

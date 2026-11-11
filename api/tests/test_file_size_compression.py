@@ -95,7 +95,7 @@ async def test_post_scan_preserves_immutable_cas_metadata_in_db_and_cache():
 @pytest.mark.asyncio
 async def test_exec_create_material_fetches_db_size():
     """Directly test _exec_create_material uses Upload table size."""
-    from app.services.pr import _exec_create_material
+    from app.services.pr.executors import _exec_create_material
 
     mock_db = AsyncMock()
     mock_db.info = {}
@@ -122,11 +122,14 @@ async def test_exec_create_material_fetches_db_size():
     mock_db.execute = AsyncMock(return_value=result)
 
     with (
-        patch("app.services.pr.Material", return_value=MagicMock(id=uuid.uuid4())) as mock_mat,
-        patch("app.services.pr.MaterialVersion") as mock_ver,
-        patch("app.services.pr._unique_material_slug", AsyncMock(return_value="slug")),
-        patch("app.services.pr.Tag", MagicMock()),
-        patch("app.services.pr.select", MagicMock()),
+        patch(
+            "app.services.pr.executors.Material", return_value=MagicMock(id=uuid.uuid4())
+        ) as mock_mat,
+        patch("app.services.pr.versions.MaterialVersion") as mock_ver,
+        patch("app.services.pr.executors._unique_material_slug", AsyncMock(return_value="slug")),
+        patch("app.services.pr.executors.Tag", MagicMock()),
+        patch("app.services.pr.executors.select", MagicMock()),
+        patch("app.services.pr.versions.select", MagicMock()),
         patch("app.core.security.cas.increment_cas_ref", AsyncMock()),
     ):
         await _exec_create_material(mock_db, payload, MagicMock(), id_map={})
@@ -139,7 +142,8 @@ async def test_exec_create_material_fetches_db_size():
 @pytest.mark.asyncio
 async def test_apply_pr_prepares_files_before_hierarchy_lock():
     """External file preparation must precede the transaction-scoped tree lock."""
-    from app.services import pr as pr_service
+    from app.services.pr import apply as pr_apply
+    from app.services.pr import versions as pr_versions
 
     events: list[str] = []
     result_id = uuid.uuid4()
@@ -155,8 +159,8 @@ async def test_apply_pr_prepares_files_before_hierarchy_lock():
         assert operations
         assert prepared_author_id == author_id
         events.append("prepare")
-        db.info[pr_service._PR_PREPARED_VERSION_FILES_KEY] = {}
-        db.info[pr_service._PR_PREPARED_VERSION_FILES_ACTIVE_KEY] = True
+        db.info[pr_versions._PR_PREPARED_VERSION_FILES_KEY] = {}
+        db.info[pr_versions._PR_PREPARED_VERSION_FILES_ACTIVE_KEY] = True
 
     async def fake_lock(_db: Any) -> None:
         events.append("lock")
@@ -183,12 +187,12 @@ async def test_apply_pr_prepares_files_before_hierarchy_lock():
     )
 
     with (
-        patch.object(pr_service, "_prepare_pr_version_files", fake_prepare),
-        patch.object(pr_service, "_acquire_directory_tree_lock", fake_lock),
-        patch.dict(pr_service._EXECUTORS, {"create_material": fake_executor}),
-        patch.object(pr_service, "_build_browse_path", AsyncMock(return_value=None)),
-        patch.object(pr_service, "flag_modified"),
+        patch.object(pr_apply, "_prepare_pr_version_files", fake_prepare),
+        patch.object(pr_apply, "_acquire_directory_tree_lock", fake_lock),
+        patch.dict(pr_apply._EXECUTORS, {"create_material": fake_executor}),
+        patch.object(pr_apply, "_build_browse_path", AsyncMock(return_value=None)),
+        patch.object(pr_apply, "flag_modified"),
     ):
-        await pr_service.apply_pr(db, contribution)
+        await pr_apply.apply_pr(db, contribution)
 
     assert events == ["prepare", "lock", "execute"]

@@ -7,18 +7,18 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request, UploadFile
-from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.common.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
+from app.core.common.constants import MAGIC_HEADER_SIZE
 from app.core.common.exceptions import BadRequestError, ForbiddenError
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.common.upload_limits import configured_allowed_extensions, configured_allowed_mimes
 from app.core.database.database import get_db
 from app.core.database.post_commit import register_transaction_callbacks
-from app.core.database.redis import get_redis
+from app.core.database.redis import RedisClient, get_redis
 from app.core.events.processing import ProcessingFile
 from app.core.media.mimetypes import MimeRegistry, guess_mime_from_bytes
 from app.core.security.file_security import SvgSecurityError, check_svg_safety_stream
@@ -26,6 +26,7 @@ from app.core.storage.facade import delete_object, get_s3_client
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
 from app.models.upload import Upload
+from app.models.user import MODERATOR_ROLES
 from app.routers.upload.helpers import (
     _IDEM_KEY_PREFIX,
     _IDEM_TTL,
@@ -108,7 +109,7 @@ async def _claim_direct_upload_idempotency(
 
 
 async def _validated_idempotency_cache_hit(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
     cache_key: str,
     user_id: str,
@@ -138,7 +139,7 @@ async def _validated_idempotency_cache_hit(
 
 def _cache_idempotency_after_commit(
     db: AsyncSession,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     cache_key: str,
     result: UploadPendingOut,
 ) -> bool:
@@ -163,7 +164,7 @@ def _cache_idempotency_after_commit(
 async def upload_file(
     file: UploadFile,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
     request: Request,
     _: Annotated[None, Depends(rate_limit_uploads)],
@@ -270,7 +271,7 @@ async def upload_file(
             user_id,
             redis,
             db,
-            privileged=user.role in PRIVILEGED_ROLES,
+            privileged=user.role in MODERATOR_ROLES,
             reserve_key=quarantine_key,
         )
         quota_reserved = True
@@ -329,7 +330,7 @@ async def upload_file(
                 await delete_object(quarantine_key)
         if quota_reserved and quarantine_key is not None:
             with contextlib.suppress(Exception):
-                await redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+                await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", quarantine_key)
         if storage_reserved:
             with contextlib.suppress(Exception):
                 await _release_storage_reservation(upload_id, redis)

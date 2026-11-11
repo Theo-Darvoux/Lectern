@@ -84,7 +84,8 @@ async def test_upload_idempotency(
 @pytest.mark.asyncio
 async def test_atomic_pr_application_copy_not_move(db_session: AsyncSession):
     """Verify approval copies legacy files and couples deletion to reservation release."""
-    from app.services.pr import _cleanup_pr_resources, apply_pr
+    from app.services.pr import apply_pr
+    from app.services.pr.resources import _cleanup_pr_resources
 
     student = await _create_user(db_session, UserRole.STUDENT)
     await _create_user(db_session, UserRole.BUREAU)
@@ -128,8 +129,8 @@ async def test_atomic_pr_application_copy_not_move(db_session: AsyncSession):
     db_session.info["post_commit_jobs"] = []
 
     with (
-        patch("app.services.pr.copy_object", new_callable=AsyncMock) as mock_copy,
-        patch("app.services.pr.get_object_info", new_callable=AsyncMock) as mock_info,
+        patch("app.services.pr.versions.copy_object", new_callable=AsyncMock) as mock_copy,
+        patch("app.services.pr.versions.get_object_info", new_callable=AsyncMock) as mock_info,
     ):
         mock_info.return_value = {"size": 100, "content_type": "application/pdf"}
 
@@ -156,7 +157,7 @@ async def test_atomic_pr_application_copy_not_move(db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_slug_generation_no_race(db_session: AsyncSession):
     """Verify slug generation doesn't skip locks."""
-    from app.services.pr import _unique_material_slug
+    from app.services.pr.hierarchy import _unique_material_slug
 
     user = await _create_user(db_session)
     d = await _create_directory(db_session, "Dir", user_id=user.id)

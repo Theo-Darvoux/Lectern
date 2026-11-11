@@ -107,10 +107,6 @@ def get_s3_client(cfg: dict[str, Any] | None = None) -> AbstractAsyncContextMana
     return get_storage().get_s3_client(cfg)
 
 
-def _get_s3_settings() -> dict[str, Any]:
-    return get_storage()._settings()
-
-
 def _is_cas_key(file_key: str) -> bool:
     return file_key.startswith("cas/")
 

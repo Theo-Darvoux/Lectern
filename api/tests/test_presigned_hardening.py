@@ -567,7 +567,7 @@ async def test_error_response_always_has_error_code(client: AsyncClient, db_sess
     response = await client.get("/api/upload/does-not-exist-endpoint-xyz")
     # 404 from FastAPI itself won't trigger our handler, so hit a known AppError path
     # Upload config always returns 200, so let's use a bad auth path
-    response = await client.post("/api/upload/status/batch", json={"file_keys": ["a"]})
+    response = await client.get("/api/upload/status/quarantine/x/y/z")
     assert response.status_code == 401
     data = response.json()
     assert "error_code" in data

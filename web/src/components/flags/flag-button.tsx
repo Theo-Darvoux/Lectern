@@ -164,7 +164,7 @@ function FlagForm({ targetType, targetId, onClose, isDrawer }: FlagFormProps) {
                         <SelectContent className="z-[80]">
                             {REASONS.map((r) => (
                                 <SelectItem key={r.value} value={r.value}>
-                                    {t(r.labelKey as any)}
+                                    {t(r.labelKey)}
                                 </SelectItem>
                             ))}
                         </SelectContent>

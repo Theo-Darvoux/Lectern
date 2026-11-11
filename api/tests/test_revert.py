@@ -13,9 +13,7 @@ from app.models.directory import Directory
 from app.models.material import Material, MaterialVersion
 from app.models.pull_request import PRStatus, PullRequest
 from app.models.user import User, UserRole
-from app.services.pr import (
-    _build_reverse_ops,
-)
+from app.services.pr.revert import _build_reverse_ops
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -134,7 +132,7 @@ async def _create_and_approve_pr(
 @pytest.fixture(autouse=True)
 def mock_pr_deps(mock_redis):
     """Mock external dependencies for PR creation."""
-    with patch("app.services.pr.object_exists", new_callable=AsyncMock) as m_exists:
+    with patch("app.services.pr.create.object_exists", new_callable=AsyncMock) as m_exists:
         m_exists.return_value = True
 
         async def mock_get(key: str) -> str | None:
@@ -1658,7 +1656,9 @@ class TestRevertEdgeCases:
             [{"op": "create_directory", "name": "Notified"}],
         )
 
-        with patch("app.services.pr.notify_user", new_callable=AsyncMock) as mock_notify:
+        with patch(
+            "app.services.pr.transitions.notify_user", new_callable=AsyncMock
+        ) as mock_notify:
             resp = await client.post(
                 f"/api/pull-requests/{pr_data['id']}/revert",
                 headers=_auth_headers(admin),

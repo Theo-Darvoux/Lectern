@@ -16,7 +16,7 @@ import {
   Paperclip,
   RefreshCw,
 } from "lucide-react";
-import { useIsMobile, useIsDesktop } from "@/hooks/use-media-query";
+import { useIsMobile } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -229,7 +229,6 @@ export function MaterialViewer({
       : "/browse";
   })();
   const isMobile = useIsMobile();
-  const isDesktop = useIsDesktop();
   const openSidebar = useUIStore((state) => state.openSidebar);
   const setSidebarTarget = useUIStore((state) => state.setSidebarTarget);
   const closeSidebar = useUIStore((state) => state.closeSidebar);
@@ -735,7 +734,6 @@ export function MaterialViewer({
               <GenericViewer
                 fileName={fileName}
                 materialId={materialId}
-                fileKey={fileKey}
               />
             )}
             <AnnotationSelectionTooltip

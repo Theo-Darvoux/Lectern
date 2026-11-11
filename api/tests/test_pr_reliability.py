@@ -62,9 +62,11 @@ async def test_apply_pr_idempotency(db_session: AsyncSession):
 
     # Mock storage info and copy
     with (
-        patch("app.services.pr.get_object_info", new_callable=AsyncMock) as mock_info,
-        patch("app.services.pr.copy_object", new_callable=AsyncMock) as mock_copy,
-        patch("app.services.pr._unique_material_slug", new_callable=AsyncMock) as mock_slug,
+        patch("app.services.pr.versions.get_object_info", new_callable=AsyncMock) as mock_info,
+        patch("app.services.pr.versions.copy_object", new_callable=AsyncMock) as mock_copy,
+        patch(
+            "app.services.pr.executors._unique_material_slug", new_callable=AsyncMock
+        ) as mock_slug,
     ):
         mock_info.return_value = {"size": 100, "content_type": "application/pdf"}
         mock_slug.return_value = "idempotent-mat"
@@ -119,13 +121,13 @@ async def test_legacy_file_copy_is_removed_when_database_transaction_rolls_back(
 
     with (
         patch(
-            "app.services.pr.get_object_info",
+            "app.services.pr.versions.get_object_info",
             new=AsyncMock(return_value={"size": 100, "content_type": "application/pdf"}),
         ),
-        patch("app.services.pr.copy_object", new_callable=AsyncMock),
-        patch("app.services.pr.delete_object", new_callable=AsyncMock) as delete_object,
+        patch("app.services.pr.versions.copy_object", new_callable=AsyncMock),
+        patch("app.services.pr.versions.delete_object", new_callable=AsyncMock) as delete_object,
         patch(
-            "app.services.pr._unique_material_slug",
+            "app.services.pr.executors._unique_material_slug",
             new=AsyncMock(return_value="rollback-mat"),
         ),
     ):

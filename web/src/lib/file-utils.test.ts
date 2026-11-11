@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ACCEPTED_FILE_TYPES, formatFileSize, getFileExtension, getViewerType, guessFileMime, sniffFileType, MIME_TO_EXT, MIME_QCM, isThumbnailEligible } from "./file-utils";
+import { ACCEPTED_FILE_TYPES, formatFileSize, toCsv, getFileExtension, getViewerType, guessFileMime, sniffFileType, MIME_TO_EXT, MIME_QCM, isThumbnailEligible } from "./file-utils";
 
 describe("file-utils", () => {
   describe("formatFileSize", () => {
@@ -7,6 +7,25 @@ describe("file-utils", () => {
       expect(formatFileSize(0)).toBe("0 B");
       expect(formatFileSize(1024)).toBe("1.0 KB");
       expect(formatFileSize(1024 * 1024)).toBe("1.0 MB");
+    });
+  });
+
+  describe("toCsv", () => {
+    it("quotes cells and escapes quotes", () => {
+      expect(toCsv([["a", 'say "hi"'], ["b,c", ""]])).toBe('"a","say ""hi"""\n"b,c",""');
+    });
+
+    it("neutralises cells a spreadsheet would run as formulas", () => {
+      expect(toCsv([["=HYPERLINK(\"x\")", "+1", "-1", "@SUM(A1)", "safe"]])).toBe(
+        '"\'=HYPERLINK(""x"")","\'+1","\'-1","\'@SUM(A1)","safe"',
+      );
+    });
+  });
+
+  describe("formatFileSize large values", () => {
+    it("uses TB and handles non-positive sizes", () => {
+      expect(formatFileSize(1024 ** 4)).toBe("1.0 TB");
+      expect(formatFileSize(-5)).toBe("0 B");
     });
   });
 

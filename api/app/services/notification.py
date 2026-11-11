@@ -11,12 +11,9 @@ from app.models.annotation import Annotation
 from app.models.comment import Comment
 from app.models.material import Material, MaterialFavourite, MaterialLike
 from app.models.notification import Notification
-from app.models.user import User, UserRole
+from app.models.user import ADMIN_ROLES, MODERATOR_ROLES, User
 
 logger = logging.getLogger(__name__)
-
-MODERATOR_ROLES = (UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX)
-ADMIN_ROLES = (UserRole.BUREAU, UserRole.VIEUX)
 
 
 def _live_event(notif: Notification) -> dict[str, Any]:

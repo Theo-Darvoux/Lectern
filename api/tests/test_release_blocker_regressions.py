@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.routers.materials as materials_router
-import app.services.pr as pr_service
+import app.services.pr.versions as pr_versions
 import app.workers.cleanup_uploads as cleanup_module
 from app.config import settings
 from app.core.common.exceptions import ConflictError
@@ -19,6 +19,7 @@ from app.core.storage import capacity
 from app.models.material import Material, MaterialVersion
 from app.models.pull_request import PullRequest
 from app.models.upload import Upload
+from app.services.pr.resources import _cleanup_pr_resources
 from tests.test_materials import _create_directory, _create_user
 
 
@@ -44,7 +45,7 @@ async def test_cas_upload_missing_authoritative_mime_fails_closed(
     await db_session.flush()
 
     with pytest.raises(ConflictError, match="metadata is incomplete"):
-        await pr_service._make_version_for_file(
+        await pr_versions._make_version_for_file(
             db_session,
             file_key=key,
             payload={"file_mime_type": "text/plain", "content_sha256": "a" * 64},
@@ -78,7 +79,7 @@ async def test_cas_upload_missing_authoritative_hash_fails_closed(
     await db_session.flush()
 
     with pytest.raises(ConflictError, match="metadata is incomplete"):
-        await pr_service._make_version_for_file(
+        await pr_versions._make_version_for_file(
             db_session,
             file_key=key,
             payload={"file_mime_type": "text/plain", "content_sha256": "c" * 64},
@@ -107,12 +108,12 @@ async def test_legacy_material_version_never_gets_payload_cas_hash(
     await db_session.flush()
 
     monkeypatch.setattr(
-        pr_service,
+        pr_versions,
         "get_object_info",
         AsyncMock(return_value={"size": 100, "content_type": "text/plain"}),
     )
-    monkeypatch.setattr(pr_service, "copy_object", AsyncMock())
-    mv = await pr_service._make_version_for_file(
+    monkeypatch.setattr(pr_versions, "copy_object", AsyncMock())
+    mv = await pr_versions._make_version_for_file(
         db_session,
         file_key=f"uploads/{user.id}/{uuid.uuid4()}/file.txt",
         payload={
@@ -356,7 +357,7 @@ async def test_pr_cleanup_releases_cas_ref_without_payload_hash(
     await db_session.flush()
     db_session.info[PostCommitKey.JOBS] = []
 
-    await pr_service._cleanup_pr_resources(db_session, pr, redis=fake_redis_setup)
+    await _cleanup_pr_resources(db_session, pr, redis=fake_redis_setup)
 
     assert upload.cas_ref_count == 0
     release_job = next(

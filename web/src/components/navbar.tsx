@@ -25,7 +25,7 @@ import { SearchInline } from "@/components/search/search-inline";
 import { useNotificationStore, useConfigStore, usePRStore, useUIStore } from "@/lib/stores";
 import { useTutorialMenuOpen } from "@/lib/tutorials/tutorial-store";
 import { tutorialsEnabled } from "@/lib/tutorials/use-tutorial";
-import { isGuest } from "@/lib/guest";
+import { isGuest, isStaff } from "@/lib/guest";
 import { useSSE } from "@/hooks/use-sse";
 import { usePathname } from "next/navigation";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -293,7 +293,7 @@ export function Navbar() {
                       </Link>
                     </DropdownMenuItem>
                   )}
-                  {(user.role === "moderator" || user.role === "bureau" || user.role === "vieux") && (
+                  {isStaff(user) && (
                     <DropdownMenuItem asChild className="cursor-pointer">
                       <Link href="/staff">
                         <Shield className="mr-2 h-4 w-4 text-purple-600 dark:text-purple-400" />

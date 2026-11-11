@@ -1,11 +1,12 @@
 """Unit tests for app.core.security.sandbox — sandboxed subprocess execution."""
 
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.config import settings
-from app.core.security.sandbox import _sandbox_environment, sandboxed_run
+from app.core.security.sandbox import _sandbox_command, _sandbox_environment
 
 
 def _reset_bwrap_cache() -> None:
@@ -23,34 +24,16 @@ def _mock_launcher_path(name: str) -> str:
     return f"/usr/bin/{name}"
 
 
-def _make_mock_popen(stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0) -> MagicMock:
-    proc = MagicMock()
-    proc.pid = 12345
-    proc.returncode = returncode
-    proc.stdout.read.side_effect = [stdout, b""]
-    proc.stderr.read.side_effect = [stderr, b""]
-    proc.wait.return_value = returncode
-    return proc
-
-
-@patch("app.core.security.sandbox.subprocess.Popen")
 @patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
-def test_sandboxed_run_with_bwrap(
+def test_sandbox_command_wraps_with_bwrap(
     _mock_which: MagicMock,
-    mock_popen: MagicMock,
     monkeypatch,
 ) -> None:
     """When bwrap is available, commands should be wrapped with bwrap."""
     _reset_bwrap_cache()
-    proc = _make_mock_popen(stdout=b"hello\n")
-    mock_popen.return_value = proc
 
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-cross-sandbox-boundary")
-    result = sandboxed_run(["echo", "hello"], timeout=10)
-
-    assert result.returncode == 0
-    call_args = mock_popen.call_args
-    cmd = call_args[0][0]
+    cmd = _sandbox_command(["echo", "hello"])
 
     # The command should contain the bwrap binary
     assert "/usr/bin/bwrap" in cmd
@@ -65,31 +48,26 @@ def test_sandboxed_run_with_bwrap(
     # The original command should appear after the last "--"
     separator_idx = len(cmd) - 1 - cmd[::-1].index("--")
     assert cmd[separator_idx + 1 :] == ["echo", "hello"]
-    assert mock_popen.call_args.kwargs["env"] == {
+    assert _sandbox_environment() == {
         "HOME": "/tmp",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "PATH": "/usr/local/bin:/usr/bin:/bin",
     }
-    assert "AWS_SECRET_ACCESS_KEY" not in mock_popen.call_args.kwargs["env"]
+    assert "AWS_SECRET_ACCESS_KEY" not in _sandbox_environment()
     _reset_bwrap_cache()
 
 
 @patch("app.core.security.sandbox._running_in_container", return_value=True)
-@patch("app.core.security.sandbox.subprocess.Popen")
 @patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
 def test_container_sandbox_exposes_only_safe_proc_version(
     _mock_which: MagicMock,
-    mock_popen: MagicMock,
     _mock_container: MagicMock,
 ) -> None:
     """Converters get the static proc marker without access to worker processes."""
     _reset_bwrap_cache()
-    mock_popen.return_value = _make_mock_popen()
 
-    sandboxed_run(["echo", "hello"], timeout=10)
-
-    command = mock_popen.call_args.args[0]
+    command = _sandbox_command(["echo", "hello"])
     proc_index = command.index("/proc")
     assert command[proc_index - 3 : proc_index + 1] == [
         "--size",
@@ -109,18 +87,15 @@ def test_container_sandbox_exposes_only_safe_proc_version(
     _reset_bwrap_cache()
 
 
-@patch("app.core.security.sandbox.subprocess.Popen")
 @patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
 def test_python_runtime_mount_does_not_expose_the_project_root(
     _mock_which: MagicMock,
-    mock_popen: MagicMock,
 ) -> None:
     _reset_bwrap_cache()
-    mock_popen.return_value = _make_mock_popen()
 
-    sandboxed_run(["python", "-m", "app.core.security.parser_child"], python_runtime=True)
-
-    command = mock_popen.call_args.args[0]
+    command = _sandbox_command(
+        ["python", "-m", "app.core.security.parser_child"], python_runtime=True
+    )
     project_root = str(Path(__file__).resolve().parents[1])
     bind_triples = [
         tuple(command[index : index + 3])
@@ -146,45 +121,32 @@ def test_python_runtime_mount_does_not_expose_the_project_root(
     _reset_bwrap_cache()
 
 
-@patch("app.core.security.sandbox.subprocess.Popen")
 @patch("app.core.security.sandbox.shutil.which", return_value=None)
-def test_sandboxed_run_raises_without_bwrap(
+def test_sandbox_command_raises_without_bwrap(
     _mock_which: MagicMock,
-    mock_popen: MagicMock,
 ) -> None:
-    """When bwrap is not found, sandboxed_run must raise RuntimeError (no fallback)."""
-    import pytest
-
+    """When bwrap is not found, building the command must fail (no unsandboxed fallback)."""
     _reset_bwrap_cache()
 
     with pytest.raises(RuntimeError, match="bwrap"):
-        sandboxed_run(["echo", "fallback"], timeout=5)
-
-    # subprocess.Popen should never be called
-    mock_popen.assert_not_called()
+        _sandbox_command(["echo", "fallback"])
     _reset_bwrap_cache()
 
 
-@patch("app.core.security.sandbox.subprocess.Popen")
 @patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
-def test_sandboxed_run_rw_paths(
+def test_sandbox_command_rw_paths(
     _mock_which: MagicMock,
-    mock_popen: MagicMock,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     """rw_paths should produce --bind arguments in the bwrap command."""
     _reset_bwrap_cache()
     monkeypatch.setattr(settings, "processing_root", str(tmp_path))
-    proc = _make_mock_popen()
-    mock_popen.return_value = proc
 
     rw_dir = tmp_path / "workdir"
     rw_dir.mkdir()
 
-    sandboxed_run(["gs", "--version"], rw_paths=[rw_dir], timeout=5)
-
-    cmd = mock_popen.call_args[0][0]
+    cmd = _sandbox_command(["gs", "--version"], rw_paths=[rw_dir])
     # Find the --bind pair for our rw_path
     rw_str = str(rw_dir)
     bind_indices = [i for i, v in enumerate(cmd) if v == "--bind"]
@@ -195,26 +157,20 @@ def test_sandboxed_run_rw_paths(
     _reset_bwrap_cache()
 
 
-@patch("app.core.security.sandbox.subprocess.Popen")
 @patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
-def test_sandboxed_run_ro_paths(
+def test_sandbox_command_ro_paths(
     _mock_which: MagicMock,
-    mock_popen: MagicMock,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     """ro_paths should produce --ro-bind arguments in the bwrap command."""
     _reset_bwrap_cache()
     monkeypatch.setattr(settings, "processing_root", str(tmp_path))
-    proc = _make_mock_popen()
-    mock_popen.return_value = proc
 
     ro_dir = tmp_path / "readonly"
     ro_dir.mkdir()
 
-    sandboxed_run(["ffmpeg", "-version"], ro_paths=[ro_dir], timeout=5)
-
-    cmd = mock_popen.call_args[0][0]
+    cmd = _sandbox_command(["ffmpeg", "-version"], ro_paths=[ro_dir])
     ro_str = str(ro_dir)
     ro_indices = [i for i, v in enumerate(cmd) if v == "--ro-bind"]
     found = any(
@@ -224,38 +180,14 @@ def test_sandboxed_run_ro_paths(
     _reset_bwrap_cache()
 
 
-@patch("app.core.security.sandbox.subprocess.Popen")
 @patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
-def test_sandboxed_run_accepts_an_operation_specific_output_limit(
+def test_sandbox_command_accepts_an_operation_specific_output_limit(
     _mock_which: MagicMock,
-    mock_popen: MagicMock,
 ) -> None:
     """A parser may widen only its output-file limit without changing global policy."""
     _reset_bwrap_cache()
-    mock_popen.return_value = _make_mock_popen()
 
-    sandboxed_run(["echo", "hello"], file_size_limit_bytes=512 * 1024 * 1024)
-
-    command = mock_popen.call_args.args[0]
+    command = _sandbox_command(["echo", "hello"], file_size_limit_bytes=512 * 1024 * 1024)
     assert "--fsize=536870912" in command
     assert f"--as={settings.sandbox_memory_limit_mb * 1024 * 1024}" in command
-    _reset_bwrap_cache()
-
-
-@patch("app.core.security.sandbox.subprocess.Popen")
-@patch("app.core.security.sandbox.shutil.which", side_effect=_mock_launcher_path)
-def test_sandboxed_run_timeout_propagates(
-    _mock_which: MagicMock,
-    mock_popen: MagicMock,
-) -> None:
-    """TimeoutExpired / exception from process wait should propagate through sandboxed_run."""
-    _reset_bwrap_cache()
-    import pytest
-
-    proc = _make_mock_popen()
-    proc.wait.side_effect = subprocess.TimeoutExpired(cmd=["sleep"], timeout=1)
-    mock_popen.return_value = proc
-
-    with pytest.raises(subprocess.TimeoutExpired):
-        sandboxed_run(["sleep", "999"], timeout=1)
     _reset_bwrap_cache()

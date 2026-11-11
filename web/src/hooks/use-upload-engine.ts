@@ -22,10 +22,10 @@ import {
     resumeProcessingAfterReload,
     scheduleUpload,
 } from "@/lib/upload-runtime";
+import { isStaffRole } from "@/lib/guest";
 
 const maxFilesPerBatch_DEFAULT = 50;
 const maxFilesPerBatch_PRIVILEGED_DEFAULT = 2_000;
-const PRIVILEGED_ROLES = new Set(["moderator", "bureau", "vieux"]);
 
 const OFFLINE_UPLOAD_CONFIG: UploadConfig = {
     allowed_extensions: ACCEPTED_FILE_TYPES.split(","),
@@ -96,7 +96,7 @@ export function useUploadEngine({
 }: UseUploadEngineProps) {
     const t = useTranslations("Upload");
     const { user } = useAuth();
-    const isPrivileged = PRIVILEGED_ROLES.has(user?.role ?? "");
+    const isPrivileged = isStaffRole(user?.role);
 
     const addOperations = useStagingStore((s) => s.addOperations);
     const nextTempId = useStagingStore((s) => s.nextTempId);

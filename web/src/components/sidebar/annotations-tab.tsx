@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { MessageCircle, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -43,7 +43,7 @@ export function AnnotationsTab({ target, disabled = false }: AnnotationsTabProps
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
   const scrolledTargetRef = useRef<string | null>(null);
-  const threads = ctx?.threads ?? [];
+  const threads = useMemo(() => ctx?.threads ?? [], [ctx?.threads]);
 
   useEffect(() => {
     if (!ctx || !target || target.type !== "material") return;

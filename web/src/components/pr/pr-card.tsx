@@ -19,10 +19,11 @@ import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { type PullRequestOut } from "@/components/home/types";
-import { useTranslations, useLocale } from "next-intl";
-import { fr, enUS } from "date-fns/locale";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { AnonymousBadge } from "@/components/pr/anonymous-badge";
+import { translateDynamic } from "@/lib/i18n-dynamic";
+import { useDateLocale } from "@/hooks/use-date-locale";
 
 const OP_ICONS: Record<string, React.ElementType> = {
   create_material: FilePlus,
@@ -45,14 +46,12 @@ interface PullRequestProps {
 
 export function PRCard({ pr }: PullRequestProps) {
   const t = useTranslations("PRs");
-  const locale = useLocale();
-  const dateLocale = locale === "fr" ? fr : enUS;
+  const dateLocale = useDateLocale();
   const router = useRouter();
 
   const isApproved = pr.status === "approved";
   const isOpen = pr.status === "open";
   const isRejected = pr.status === "rejected";
-  const isCancelled = pr.status === "cancelled";
 
   // Extract distinct operations from payload if present, or fallback to summary_types
   const rawPayload = (pr as unknown as { payload?: Array<Record<string, unknown>> }).payload;
@@ -79,24 +78,24 @@ export function PRCard({ pr }: PullRequestProps) {
 
   const statusConfig = isOpen
     ? {
-        labelKey: "pending",
+        labelKey: "pending" as const,
         iconColor: "text-emerald-500",
         pill: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
       }
     : isApproved
       ? {
-          labelKey: "approved",
+          labelKey: "approved" as const,
           iconColor: "text-purple-500",
           pill: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
         }
       : isRejected
         ? {
-            labelKey: "rejected",
+            labelKey: "rejected" as const,
             iconColor: "text-rose-500",
             pill: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
           }
         : {
-            labelKey: "cancelled",
+            labelKey: "cancelled" as const,
             iconColor: "text-muted-foreground",
             pill: "bg-muted text-muted-foreground border-border",
           };
@@ -130,7 +129,7 @@ export function PRCard({ pr }: PullRequestProps) {
                 statusConfig.pill,
               )}
             >
-              {t(statusConfig.labelKey as any)}
+              {t(statusConfig.labelKey)}
             </span>
 
             {/* Revert Badges */}
@@ -156,12 +155,11 @@ export function PRCard({ pr }: PullRequestProps) {
             {/* Operation Chips */}
             {derivedOpTypes.map((st) => {
               const Icon = OP_ICONS[st] ?? FilePlus;
-              const hasKey = typeof (t as unknown as { has?: (k: string) => boolean }).has === "function"
-                ? (t as unknown as { has: (k: string) => boolean }).has(`operations.${st}`)
-                : true;
-              const label = hasKey
-                ? t(`operations.${st}` as any)
-                : st.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+              const label = translateDynamic(
+                t,
+                `operations.${st}`,
+                st.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+              );
               return (
                 <span
                   key={st}

@@ -31,13 +31,12 @@ from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request, Response
-from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.common.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
+from app.core.common.constants import MAGIC_HEADER_SIZE
 from app.core.common.exceptions import (
     AppError,
     BadRequestError,
@@ -47,9 +46,11 @@ from app.core.common.exceptions import (
     ServiceUnavailableError,
 )
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.common.upload_limits import configured_allowed_extensions, configured_allowed_mimes
 from app.core.database.database import get_db
 from app.core.database.redis import (
+    RedisClient,
     RedisConcurrencyError,
     RedisSemaphoreTimeoutError,
     get_redis,
@@ -70,6 +71,7 @@ from app.core.storage.multipart_completion import (
 from app.dependencies.auth import CurrentUser
 from app.dependencies.rate_limit import rate_limit_uploads
 from app.models.upload import Upload
+from app.models.user import MODERATOR_ROLES
 from app.routers.upload.cancellation import (
     cancel_upload_lifecycle,
     upload_cancel_key,
@@ -111,7 +113,7 @@ def _tus_lock_name(tus_id: str) -> str:
 
 async def _upload_is_cancelled(
     state: dict[str, str],
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
 ) -> bool:
     if state.get("cancelled") == "1":
@@ -129,7 +131,7 @@ async def _upload_is_cancelled(
 
 async def _ensure_upload_active(
     state: dict[str, str],
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
 ) -> None:
     if await _upload_is_cancelled(state, redis, db):
@@ -140,7 +142,7 @@ async def _cleanup_failed_completion(
     *,
     tus_id: str,
     state: dict[str, str],
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
 ) -> None:
     """Make a failed final S3 completion terminal and release its resources."""
@@ -153,8 +155,8 @@ async def _cleanup_failed_completion(
         await abort_multipart_upload(quarantine_key, state["s3_upload_id"])
     await redis.delete(state_key)
     await redis.srem(_TUS_ACTIVE_SESSIONS, tus_id)  # type: ignore[misc]
-    await redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
-    await redis.zrem(f"quota:uploads:{user_id}", f"staging:{user_id}:{upload_id}")
+    await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", quarantine_key)
+    await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", f"staging:{user_id}:{upload_id}")
     await _release_storage_reservation(upload_id, redis)
     await db.execute(
         sql_update(Upload)
@@ -168,7 +170,7 @@ async def _finalize_tus_upload(
     *,
     tus_id: str,
     state: dict[str, str],
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
 ) -> Response:
     """Verify multipart completion, persist it, and enqueue exactly once."""
@@ -242,7 +244,7 @@ async def _finalize_tus_upload(
         state["finalizing"] = "0"
 
     await _ensure_upload_active(state, redis, db)
-    await redis.zadd(f"quota:uploads:{state['user_id']}", {quarantine_key: time.time()})
+    await redis.zadd(f"{UPLOAD_QUOTA_PREFIX}{state['user_id']}", {quarantine_key: time.time()})
     await _enqueue_processing(
         user_id=state["user_id"],
         upload_id=state["upload_id"],
@@ -306,7 +308,7 @@ def _decode_upload_metadata(header: str | None) -> dict[str, str]:
 @router.options("", include_in_schema=False)
 @router.options("/", include_in_schema=False)
 async def tus_options(
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> Response:
     max_size = settings.tus_max_size_bytes
 
@@ -328,7 +330,7 @@ async def tus_options(
 async def tus_create(
     request: Request,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
     _rl: Annotated[None, Depends(rate_limit_uploads)],
 ) -> Response:
@@ -390,7 +392,7 @@ async def tus_create(
             user_id,
             redis,
             db,
-            privileged=user.role in PRIVILEGED_ROLES,
+            privileged=user.role in MODERATOR_ROLES,
             reserve_key=quarantine_key,
         )
 
@@ -433,7 +435,7 @@ async def tus_create(
         with contextlib.suppress(Exception):
             await redis.delete(state_key)
             await redis.srem(_TUS_ACTIVE_SESSIONS, tus_id)  # type: ignore[misc]
-            await redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+            await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", quarantine_key)
         with contextlib.suppress(Exception):
             await _release_storage_reservation(upload_id, redis)
         raise
@@ -449,7 +451,7 @@ async def tus_create(
 async def tus_head(
     tus_id: uuid.UUID,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Return current offset and reconcile a finalizing upload when needed."""
@@ -492,7 +494,7 @@ async def _tus_patch_admitted(
     tus_id_str: str,
     request: Request,
     user: CurrentUser,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
     client_offset: int,
     chunk_size: int,
@@ -665,7 +667,7 @@ async def tus_patch(
     tus_id: uuid.UUID,
     request: Request,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Append a chunk while holding renewable global and per-user leases."""
@@ -746,7 +748,7 @@ async def tus_patch(
 async def tus_delete(
     tus_id: uuid.UUID,
     user: CurrentUser,
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Cancel through the shared CAS-aware lifecycle operation."""
@@ -797,13 +799,13 @@ async def tus_delete(
 async def _load_state(
     tus_id: str,
     user: CurrentUser,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     *,
     allow_cancelled: bool = False,
 ) -> dict[str, str]:
     """Load TUS state, enforcing ownership and terminal cancellation."""
     state_key = f"{_TUS_STATE_PREFIX}{tus_id}"
-    state: dict[bytes | str, bytes | str] = await redis.hgetall(state_key)  # type: ignore[misc]
+    state = await redis.hgetall(state_key)  # type: ignore[misc]
     if not state:
         raise NotFoundError(
             "Upload not found or expired.", code=UploadErrorCode.TUS_UPLOAD_NOT_FOUND

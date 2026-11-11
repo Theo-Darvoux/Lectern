@@ -2,100 +2,27 @@
 
 
 import { ContentStatusBadge, normalizeContentStatus } from "@/components/content-status-badge";
-import { memo, useState, useEffect, useRef } from "react";
+import { memo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { prefetchBrowsePath } from "@/lib/browse-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
-import { Paperclip, File } from "lucide-react";
+import { Paperclip } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
 import { EXT_BADGE_COLORS, getFileBadgeLabel, getFileExtension } from "@/lib/file-utils";
 import { isExternalUrl } from "@/lib/url-utils";
 import { useTranslations } from "next-intl";
-import { TYPE_COLORS, TYPE_ICONS, EXT_ICONS } from "@/lib/material-icons";
-import { getFileTypeStyle } from "@/components/home/file-type-display";
-import { apiFetch } from "@/lib/api-client";
+import { TYPE_COLORS } from "@/lib/material-icons";
 import { useExternalLinkStore } from "@/lib/external-link-store";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import type { MaterialDetail } from "@/components/home/types";
-import { useInView } from "@/hooks/use-in-view";
+import { GhostMaterialPreview } from "@/components/browse/ghost-material-preview";
 
 const MaterialPreview = dynamic(
   () => import("@/components/home/material-preview").then((module) => module.MaterialPreview),
   { ssr: false },
 );
-
-// ---------------------------------------------------------------------------
-// Ghost preview: for staged "created" materials that have a file_key
-// ---------------------------------------------------------------------------
-
-function GhostMaterialPreview({
-  fileKey,
-  fileName,
-  mimeType,
-  containerRef,
-}: {
-  fileKey: string;
-  fileName?: string | null;
-  mimeType?: string | null;
-  containerRef: React.RefObject<Element | null>;
-}) {
-  const [imgUrl, setImgUrl] = useState<string | null>(null);
-  const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName ?? null, mimeType ?? null);
-  const inView = useInView(containerRef);
-
-  const isImage =
-    (mimeType?.startsWith("image/") ?? false) ||
-    /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName ?? "");
-
-  useEffect(() => {
-    if (!inView || !fileKey || !isImage) return;
-    let cancelled = false;
-    // Defer the fetch to idle time so it doesn't compete with the initial
-    // grid paint. The card already shows a styled icon placeholder.
-    const schedule =
-      typeof window !== "undefined" && "requestIdleCallback" in window
-        ? (cb: () => void) => (window as unknown as { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(cb)
-        : (cb: () => void) => window.setTimeout(cb, 200);
-    schedule(() => {
-      if (cancelled) return;
-      apiFetch<{ url: string }>(`/upload/preview?file_key=${encodeURIComponent(fileKey)}`)
-        .then((res) => {
-          if (!cancelled && res && res.url) setImgUrl(res.url);
-        })
-        .catch(() => {});
-    });
-    return () => { cancelled = true; };
-  }, [inView, fileKey, isImage]);
-
-  return (
-    <div
-      className={cn(
-        "relative w-full h-full flex items-center justify-center overflow-hidden bg-linear-to-br",
-        gradient,
-      )}
-    >
-      <Icon
-        className={cn(
-          "h-12 w-12 z-10",
-          iconColorClass,
-          imgUrl ? "opacity-0" : "opacity-80",
-        )}
-      />
-      {imgUrl && (
-        /* eslint-disable-next-line @next/next/no-img-element */
-        <img
-          src={imgUrl}
-          alt={fileName ?? "Staged file preview"}
-          className="absolute inset-0 h-full w-full object-cover animate-in fade-in duration-300"
-          loading="lazy"
-          decoding="async"
-        />
-      )}
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -305,6 +232,7 @@ function MaterialGridCardImpl({
         <div className="aspect-[4/3] relative overflow-hidden shrink-0">
           {useGhostPreview ? (
             <GhostMaterialPreview
+              iconClassName="h-12 w-12"
               fileKey={ghostFileKey!}
               fileName={fileName || undefined}
               mimeType={ghostFileMimeType || mimeType || undefined}

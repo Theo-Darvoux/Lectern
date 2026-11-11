@@ -29,6 +29,7 @@ from sqlalchemy import func as sa_func
 from sqlalchemy import select, update
 
 from app.config import settings
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX, UPLOAD_STATUS_PREFIX
 from app.core.database.post_commit import (
     PostCommitKey,
     dispatch_post_commit_actions,
@@ -45,9 +46,7 @@ from app.workers.upload.context import WorkerContext
 logger = logging.getLogger(__name__)
 
 # Redis key prefix for the quota tracking sorted set (mirrors upload worker logic).
-_QUOTA_KEY_PREFIX = "quota:uploads:"
 # Redis prefix for the upload status cache (mirrors pipeline.py).
-_STATUS_KEY_PREFIX = "upload:status:"
 
 
 async def retroactive_quarantine(
@@ -140,7 +139,7 @@ async def retroactive_quarantine(
 
         staging_key = f"staging:{user_id}:{upload_id}"
         try:
-            await redis.zrem(f"{_QUOTA_KEY_PREFIX}{user_id}", staging_key)
+            await redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", staging_key)
         except Exception as exc:
             logger.warning(
                 "retroactive_quarantine: quota cleanup failed for %s: %s", upload_id, exc
@@ -253,7 +252,7 @@ async def _emit_malicious_sse(
     if quarantine_key is None:
         return
 
-    status_key = f"{_STATUS_KEY_PREFIX}{quarantine_key}"
+    status_key = f"{UPLOAD_STATUS_PREFIX}{quarantine_key}"
 
     payload: dict[str, Any] = {
         "upload_id": upload_id,

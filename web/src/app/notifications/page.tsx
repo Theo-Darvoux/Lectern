@@ -21,7 +21,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -313,8 +312,6 @@ export default function NotificationsPage() {
     setSearchQuery("");
     setCategoryFilter("all");
   };
-
-  const hasActiveFilters = searchQuery !== "" || categoryFilter !== "all";
 
   return (
     <div className="w-full px-4 py-6 pb-12 sm:px-6 sm:py-8 lg:px-8">

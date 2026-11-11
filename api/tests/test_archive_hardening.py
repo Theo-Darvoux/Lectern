@@ -19,10 +19,10 @@ from app.config import settings
 from app.core.security.file_security._zip import (
     _gzip_compress_path,
     _recompress_zip_path,
-    _register_zip_name,
     _sanitize_embedded_image,
     _sanitize_zip_entry_name,
     _validate_zip_info,
+    _validate_zip_name_conflicts,
 )
 
 
@@ -68,11 +68,10 @@ def test_zip_name_unicode_and_hierarchy_conflicts() -> None:
     assert _sanitize_zip_entry_name("folder\\") == "folder/"
     assert _sanitize_zip_entry_name("．．／secret.txt") == "_/secret.txt"
 
-    registry: dict[str, bool] = {}
-    _register_zip_name(registry, "folder/", is_dir=True)
-    _register_zip_name(registry, "folder/file.txt", is_dir=False)
     with pytest.raises(ValueError, match="conflicts|duplicate"):
-        _register_zip_name(registry, "FOLDER", is_dir=False)
+        _validate_zip_name_conflicts(
+            [("folder/", True), ("folder/file.txt", False), ("FOLDER", False)]
+        )
 
 
 def test_encrypted_and_extreme_ratio_entries_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

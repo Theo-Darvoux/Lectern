@@ -143,7 +143,7 @@ function MissingImageUploadDialog({
                 abortRef.current = null;
             }
         },
-        [addOperations, nextTempId, setReviewOpen, material, expectedFileName, onClose],
+        [addOperations, nextTempId, setReviewOpen, material, expectedFileName, onClose, t],
     );
 
     return (
@@ -203,7 +203,7 @@ function MissingImageUploadDialog({
                         <UploadCloud className="h-7 w-7 mx-auto text-muted-foreground mb-2" />
                         <p className="text-sm text-muted-foreground">
                             {t.rich("dropHere", {
-                                ext: (chunks) => <span className="font-semibold text-foreground">.{expectedExt}</span>
+                                ext: () => <span className="font-semibold text-foreground">.{expectedExt}</span>
                             })}
                         </p>
                         <input

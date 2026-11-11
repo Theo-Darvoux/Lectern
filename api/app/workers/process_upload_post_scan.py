@@ -26,6 +26,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.common.exceptions import ConflictError
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX, UPLOAD_STATUS_PREFIX
 from app.core.database.post_commit import (
     PostCommitKey,
     dispatch_post_commit_actions,
@@ -46,16 +47,12 @@ from app.models.upload import Upload
 from app.routers.upload.cancellation import upload_cancel_key, upload_lifecycle_lock_name
 from app.schemas.material import UploadStatus
 from app.services.notification import notify_user
-from app.services.pr import (
-    _AUTO_MERGE_SETTLED_STATUSES,
-    _cleanup_pr_resources,
-    _lock_and_validate_pr_cas_files,
-    _pr_directory_topics,
-    apply_pr,
-    get_pr_all_file_keys,
-)
+from app.services.pr import apply_pr, get_pr_all_file_keys
+from app.services.pr.create import _AUTO_MERGE_SETTLED_STATUSES
+from app.services.pr.operations import _pr_directory_topics
+from app.services.pr.resources import _cleanup_pr_resources, _lock_and_validate_pr_cas_files
 from app.workers.upload.cache_repo import UploadCacheRepository
-from app.workers.upload.constants import _STAGE_TOTAL, _STATUS_CACHE_PREFIX
+from app.workers.upload.constants import _STAGE_TOTAL
 from app.workers.upload.context import WorkerContext
 from app.workers.upload.repository import UploadWorkerRepository
 from app.workers.upload.stages.download import run_download_and_validate
@@ -322,7 +319,7 @@ async def process_upload_post_scan(
                     # Read and publish the derived CLEAN payload while cancellation is
                     # excluded by the same upload lifecycle lock.
                     cache = UploadCacheRepository(worker_ctx.redis)
-                    status_key = f"{_STATUS_CACHE_PREFIX}{quarantine_key}"
+                    status_key = f"{UPLOAD_STATUS_PREFIX}{quarantine_key}"
 
                     cached_json = await worker_ctx.redis.get(status_key)
                     if isinstance(cached_json, (str, bytes, bytearray)) and cached_json:
@@ -356,7 +353,7 @@ async def process_upload_post_scan(
         try:
             await delete_object(quarantine_key)
             try:
-                await worker_ctx.redis.zrem(f"quota:uploads:{user_id}", quarantine_key)
+                await worker_ctx.redis.zrem(f"{UPLOAD_QUOTA_PREFIX}{user_id}", quarantine_key)
             except Exception as exc:
                 logger.warning(
                     "Deleted quarantine %s but failed to release quota membership: %s",

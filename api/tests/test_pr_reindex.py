@@ -20,7 +20,8 @@ from app.models.directory import Directory
 from app.models.material import Material
 from app.models.pull_request import PRStatus, PullRequest
 from app.models.user import User, UserRole
-from app.services.pr import _enqueue_reindex_directory_recursive, apply_pr
+from app.services.pr import apply_pr
+from app.services.pr.hierarchy import _enqueue_reindex_directory_recursive
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -183,7 +184,7 @@ async def test_edit_directory_name_change_subtree_reindexed(db_session: AsyncSes
     )
 
     with patch(
-        "app.services.pr._enqueue_reindex_directory_recursive",
+        "app.services.pr.executors._enqueue_reindex_directory_recursive",
         wraps=_enqueue_reindex_directory_recursive,
     ) as spy:
         await apply_pr(db_session, pr)
@@ -263,7 +264,7 @@ async def test_move_directory_subtree_reindexed(db_session: AsyncSession):
     )
 
     with patch(
-        "app.services.pr._enqueue_reindex_directory_recursive",
+        "app.services.pr.executors._enqueue_reindex_directory_recursive",
         wraps=_enqueue_reindex_directory_recursive,
     ) as spy:
         await apply_pr(db_session, pr)

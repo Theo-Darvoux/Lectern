@@ -1,15 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { FolderPlus, Loader2, StarOff, Trash2, X } from "lucide-react";
+import { FolderPlus, StarOff, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/confirm-dialog";
-import { apiFetch } from "@/lib/api-client";
-import { removeCollectionItem, type SavedItem } from "@/lib/collections";
-import { useSavedTranslations } from "@/lib/saved-i18n";
+import { countFailures, removeCollectionItem, setFavourite, type SavedItem } from "@/lib/collections";
 import { SavedBatchDialog } from "@/components/saved/saved-batch-dialog";
+import { useTranslations } from "next-intl";
 
 interface SavedBatchBarProps {
   selectedItems: SavedItem[];
@@ -26,7 +25,7 @@ export function SavedBatchBar({
   onClearSelection,
   onActionComplete,
 }: SavedBatchBarProps) {
-  const t = useSavedTranslations();
+  const t = useTranslations("Saved");
   const { show } = useConfirmDialog();
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [operating, setOperating] = useState(false);
@@ -34,57 +33,47 @@ export function SavedBatchBar({
   const selectedCount = selectedItems.length;
   if (selectedCount === 0) return null;
 
+  // Report the outcome of a batch: full success, partial failure, or total failure.
+  const runBatch = async (action: (item: SavedItem) => Promise<unknown>, errorMessage: string) => {
+    setOperating(true);
+    try {
+      const failed = await countFailures(selectedItems, action);
+      const succeeded = selectedCount - failed;
+      if (succeeded > 0) toast.success(t("batchSuccessRemoved", { count: succeeded }));
+      if (failed === selectedCount) toast.error(errorMessage);
+      else if (failed > 0) toast.error(t("batchPartialFailure", { count: failed }));
+      onClearSelection();
+      onActionComplete();
+    } finally {
+      setOperating(false);
+    }
+  };
+
   const handleBatchRemoveFromCollection = () => {
-    if (!collectionId || selectedCount === 0) return;
+    if (!collectionId) return;
     show(
       t("removeFromCollection"),
-      `Remove ${selectedCount} selected item${selectedCount > 1 ? "s" : ""} from “${collectionName || "Collection"}”?`,
-      async () => {
-        setOperating(true);
-        try {
-          await Promise.all(
-            selectedItems.map((item) =>
-              removeCollectionItem(collectionId, item.target_type, item.target_id).catch(() => null),
-            ),
-          );
-          toast.success(t("batchSuccessRemoved", { count: selectedCount }));
-          onClearSelection();
-          onActionComplete();
-        } catch {
-          toast.error(t("errors.removeFromCollection"));
-        } finally {
-          setOperating(false);
-        }
-      },
+      t("batchRemoveFromCollectionConfirm", {
+        count: selectedCount,
+        name: collectionName ?? t("collections"),
+      }),
+      () =>
+        runBatch(
+          (item) => removeCollectionItem(collectionId, item.target_type, item.target_id),
+          t("errors.removeFromCollection"),
+        ),
     );
   };
 
   const handleBatchRemoveFromSaved = () => {
-    if (selectedCount === 0) return;
     show(
       t("removeSaved"),
-      `Remove ${selectedCount} selected item${selectedCount > 1 ? "s" : ""} from your Saved library?`,
-      async () => {
-        setOperating(true);
-        try {
-          await Promise.all(
-            selectedItems.map((item) => {
-              const endpoint =
-                item.target_type === "material"
-                  ? `/materials/${item.target_id}/favourite`
-                  : `/directories/${item.target_id}/favourite`;
-              return apiFetch(endpoint, { method: "POST" }).catch(() => null);
-            }),
-          );
-          toast.success(t("batchSuccessRemoved", { count: selectedCount }));
-          onClearSelection();
-          onActionComplete();
-        } catch {
-          toast.error(t("errors.removeSaved"));
-        } finally {
-          setOperating(false);
-        }
-      },
+      t("batchRemoveFromSavedConfirm", { count: selectedCount }),
+      () =>
+        runBatch(
+          (item) => setFavourite(item.target_type, item.target_id, false),
+          t("errors.removeSaved"),
+        ),
     );
   };
 

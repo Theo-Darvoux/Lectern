@@ -208,12 +208,12 @@ interface BinaryReplaceTabProps {
         fileMimeType: string;
     }) => void;
     onClear: () => void;
-    t: any;
-    tCommon: any;
-    tUpload: any;
 }
 
-function BinaryReplaceTab({ onFileReady, onClear, t, tCommon, tUpload }: BinaryReplaceTabProps) {
+function BinaryReplaceTab({ onFileReady, onClear }: BinaryReplaceTabProps) {
+    const t = useTranslations("FileEdit");
+    const tCommon = useTranslations("Common");
+    const tUpload = useTranslations("Upload");
     const [isDragging, setIsDragging] = useState(false);
     const [uploadState, setUploadState] = useState<
         "idle" | "uploading" | "done" | "error"
@@ -248,12 +248,12 @@ function BinaryReplaceTab({ onFileReady, onClear, t, tCommon, tUpload }: BinaryR
             } catch (err) {
                 if ((err as Error)?.message === "Upload cancelled") return;
                 setUploadState("error");
-                setErrorMsg((err as Error)?.message ?? "Upload failed");
+                setErrorMsg((err as Error)?.message || tUpload("uploadFailed"));
             } finally {
                 abortRef.current = null;
             }
         },
-        [onFileReady],
+        [onFileReady, tUpload],
     );
 
     const handleDrop = (e: React.DragEvent) => {
@@ -396,7 +396,6 @@ export function FileEditDialog({
     const tCommon = useTranslations("Common");
     const tWizard = useTranslations("PRWizard");
     const tAuto = useTranslations("AutoTitle");
-    const tUpload = useTranslations("Upload");
     const tLink = useTranslations("NewLink");
 
     const addOperation = useStagingStore((s) => s.addOperation);
@@ -448,7 +447,8 @@ export function FileEditDialog({
     const [loadError, setLoadError] = useState("");
     const [diffSummary, setDiffSummary] = useState("");
     const [savingText, setSavingText] = useState(false);
-    const originalTextRef = useRef<string>("");
+    // The file text as loaded from the server; null until it has loaded.
+    const [originalText, setOriginalText] = useState<string | null>(null);
 
     // ── Binary replacement state ──────────────────────────────────────────
     const [replacementFile, setReplacementFile] = useState<{
@@ -473,7 +473,7 @@ export function FileEditDialog({
             setLoadError("");
             setDiffSummary("");
             setReplacementFile(null);
-            originalTextRef.current = "";
+            setOriginalText(null);
         }
         onOpenChange(next);
     };
@@ -481,19 +481,19 @@ export function FileEditDialog({
     // ── Load text when content tab is selected ────────────────────────────
     useEffect(() => {
         if (!open || activeTab !== "content" || !canEditText) return;
-        if (originalTextRef.current !== "") return; // already loaded
+        if (originalText !== null) return; // already loaded
 
         setLoadingText(true);
         setLoadError("");
         apiRequest(`/materials/${target.id}/text-content`)
             .then((res) => res.text())
             .then((text) => {
-                originalTextRef.current = text;
+                setOriginalText(text);
                 setEditorText(text);
             })
             .catch((e: Error) => setLoadError(e.message))
             .finally(() => setLoadingText(false));
-    }, [open, activeTab, canEditText, target.id]);
+    }, [open, activeTab, canEditText, target.id, originalText]);
 
     // ── Metadata dirty check ──────────────────────────────────────────────
     const hasTagsChanged = () => {
@@ -509,8 +509,8 @@ export function FileEditDialog({
     // ── Content dirty check ───────────────────────────────────────────────
     const textChanged =
         canEditText &&
-        originalTextRef.current !== "" &&
-        editorText !== originalTextRef.current;
+        originalText !== null &&
+        editorText !== originalText;
     const binaryChanged = !canEditText && replacementFile !== null;
     const contentChanged = textChanged || binaryChanged;
 
@@ -820,7 +820,7 @@ export function FileEditDialog({
                                                 size="sm"
                                                 variant="outline"
                                                 onClick={() => {
-                                                    originalTextRef.current = "";
+                                                    setOriginalText(null);
                                                     setLoadError("");
                                                     setActiveTab("metadata");
                                                     setTimeout(
@@ -898,9 +898,6 @@ export function FileEditDialog({
                                         onClear={() =>
                                             setReplacementFile(null)
                                         }
-                                        t={t}
-                                        tCommon={tCommon}
-                                        tUpload={tUpload}
                                     />
                                     <div className="space-y-1.5">
                                         <label

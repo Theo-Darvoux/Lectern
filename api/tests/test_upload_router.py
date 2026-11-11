@@ -284,14 +284,14 @@ async def test_svg_too_large_rejected(
     client: AsyncClient, db_session: AsyncSession, mock_redis: AsyncMock
 ) -> None:
     """SVG files over the threshold are rejected before any parsing."""
-    from app.routers.upload import LARGE_SVG_THRESHOLD
+    from app.core.common.upload_limits import upload_size_limit
+
+    svg_limit = upload_size_limit("image/svg+xml")[0]
 
     user = await _create_user(db_session)
     await db_session.commit()
 
-    svg_content = (
-        b'<svg xmlns="http://www.w3.org/2000/svg">' + b"x" * (LARGE_SVG_THRESHOLD + 1) + b"</svg>"
-    )
+    svg_content = b'<svg xmlns="http://www.w3.org/2000/svg">' + b"x" * (svg_limit + 1) + b"</svg>"
     files = {"file": ("huge.svg", io.BytesIO(svg_content), "image/svg+xml")}
 
     resp = await client.post("/api/upload", files=files, headers=_auth_headers(user))
@@ -349,7 +349,7 @@ async def test_processing_job_enqueued_after_upload(
     assert resp.status_code == 202
 
     # A short PDF is routed by size, so it goes to the fast queue.
-    from app.routers.upload import _FAST_QUEUE_NAME
+    from app.routers.upload.helpers import _FAST_QUEUE_NAME
 
     mock_arq_pool.enqueue_job.assert_called_once_with(
         "process_upload",

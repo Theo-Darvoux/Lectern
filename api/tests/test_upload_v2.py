@@ -25,7 +25,7 @@ from app.core.security.file_security import SvgSecurityError, check_pdf_safety, 
 from app.core.security.scanner import MalwareScanner
 from app.models.upload import Upload
 from app.models.user import User, UserRole
-from app.routers.upload import (
+from app.routers.upload.helpers import (
     _FAST_QUEUE_NAME,
     _FAST_QUEUE_THRESHOLD,
     _SLOW_QUEUE_NAME,

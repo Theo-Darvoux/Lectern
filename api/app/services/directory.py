@@ -754,10 +754,10 @@ async def toggle_directory_like(
     return True
 
 
-async def toggle_directory_favourite(
-    db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID
-) -> bool:
-    """Toggle a favourite atomically for one user/directory pair."""
+async def set_directory_favourite(
+    db: AsyncSession, user_id: uuid.UUID, directory_id: uuid.UUID, favourited: bool
+) -> None:
+    """Add or remove one user's favourite on a directory; repeating a call changes nothing."""
     await acquire_reaction_toggle_lock(
         db,
         kind="directory-favourite",
@@ -775,18 +775,12 @@ async def toggle_directory_favourite(
     )
     favourite = result.scalar_one_or_none()
 
-    if favourite:
+    if favourite and not favourited:
         await db.delete(favourite)
-        favourited = False
-    else:
-        new_favourite = DirectoryFavourite(
-            id=uuid.uuid4(), user_id=user_id, directory_id=directory_id
-        )
-        db.add(new_favourite)
-        favourited = True
+    elif not favourite and favourited:
+        db.add(DirectoryFavourite(id=uuid.uuid4(), user_id=user_id, directory_id=directory_id))
 
     await db.flush()
-    return favourited
 
 
 def _validate_zip_arcname(arcname: str) -> str:
@@ -965,28 +959,3 @@ async def get_directory_download_entries(
 
     cte = base_case.union_all(recursive_case)
     return root.name, await _build_zip_entries(db, cte)
-
-
-async def get_root_download_entries(
-    db: AsyncSession,
-) -> tuple[str, list[tuple[str, str]]]:
-    """Return ("root", [(arcname, file_key), ...]) for downloading the entire root level."""
-    base_case = (
-        select(
-            Directory.id,
-            Directory.name.cast(String).label("rel_path"),
-        )
-        .where(Directory.parent_id.is_(None))
-        .cte(name="dir_tree", recursive=True)
-    )
-
-    base_alias = aliased(base_case, name="p")
-    dir_alias = aliased(Directory, name="d")
-
-    recursive_case = select(
-        dir_alias.id,
-        (base_alias.c.rel_path + "/" + dir_alias.name).label("rel_path"),
-    ).join(base_alias, dir_alias.parent_id == base_alias.c.id)
-
-    cte = base_case.union_all(recursive_case)
-    return "root", await _build_zip_entries(db, cte)

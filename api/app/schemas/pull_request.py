@@ -419,6 +419,24 @@ class PullRequestOut(BaseModel):
         return instance
 
 
+# Listing filters. "directory" matches any folder operation; "revert" matches
+# revert PRs and the PRs they undid.
+PROperationFilter = Literal[
+    "create_material", "edit_material", "delete_material", "directory", "move_item", "revert"
+]
+PRSort = Literal["newest", "oldest", "changes"]
+
+
+class PullRequestCounts(BaseModel):
+    """Pull requests per status, plus the viewer's own, for list tabs and badges."""
+
+    open: int
+    approved: int
+    rejected: int
+    cancelled: int
+    mine: int
+
+
 class RejectRequest(BaseModel):
     reason: SanitizedStr = Field(..., min_length=10, max_length=1000)
 

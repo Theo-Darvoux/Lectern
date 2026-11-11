@@ -28,7 +28,6 @@ import { MaterialGridCard } from "@/components/browse/material-grid-card";
 import type { SearchResult } from "@/components/search/use-search";
 import { Badge } from "@/components/ui/badge";
 import { getFileBadgeLabel } from "@/lib/file-utils";
-import { cn } from "@/lib/utils";
 
 export function getMaterialTypeIcon(type: string): React.ReactNode {
   switch (type) {

@@ -118,7 +118,6 @@ async def test_stale_student_delete_cannot_remove_newly_promoted_final_admin() -
         await seed.commit()
         admin_a_id, user_b_id = admin_a.id, user_b.id
 
-    from app.services.auth import lock_user_for_authority_change
     from app.services.user import hard_delete_user
 
     async with sessions() as stale_delete:
@@ -127,14 +126,14 @@ async def test_stale_student_delete_cannot_remove_newly_promoted_final_admin() -
         assert stale_b.role == UserRole.STUDENT
 
         async with sessions() as promote:
-            current_b = await lock_user_for_authority_change(promote, user_b_id)
+            current_b = await promote.get(User, user_b_id)
             assert current_b is not None
             assert current_b.role == UserRole.STUDENT
             current_b.role = UserRole.BUREAU
             await promote.commit()
 
         async with sessions() as demote_a:
-            current_a = await lock_user_for_authority_change(demote_a, admin_a_id)
+            current_a = await demote_a.get(User, admin_a_id)
             assert current_a is not None
             await ensure_admin_removal_safe(demote_a, current_a.id)
             current_a.role = UserRole.STUDENT

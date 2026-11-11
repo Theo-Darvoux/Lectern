@@ -9,7 +9,6 @@ from typing import Any
 from uuid import uuid4
 
 from passlib.context import CryptContext
-from redis.asyncio import Redis
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,10 +19,11 @@ from app.core.common.exceptions import (
     ServiceUnavailableError,
     UnauthorizedError,
 )
+from app.core.database.redis import RedisClient
 from app.core.security.security import create_access_token, create_refresh_token
 from app.models.auth_config import AllowedDomain
 from app.models.installation import InstallationState
-from app.models.user import User, UserRole
+from app.models.user import ADMIN_ROLES, User, UserRole
 
 CODE_TTL_SECONDS = 900
 RATE_LIMIT_TTL_SECONDS = 900
@@ -287,14 +287,6 @@ async def validate_email_for_auth(email: str, db: AsyncSession) -> bool:
     raise ValueError(f"Email domain @{domain} is not allowed")
 
 
-def validate_email_format(email: str) -> str:
-    """Synchronous format-only validation (no domain policy check)."""
-    email = email.strip().lower()
-    if "+" in email:
-        raise ValueError("Email aliases with '+' are not allowed")
-    return email
-
-
 def generate_code() -> str:
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     return "".join(secrets.choice(alphabet) for _ in range(8))
@@ -309,7 +301,7 @@ def _token_digest(token: str) -> str:
 
 
 async def store_password_reset_token(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     email: str,
     token: str,
     *,
@@ -332,7 +324,7 @@ async def store_password_reset_token(
 
 
 async def consume_password_reset_token(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     token: str,
 ) -> tuple[str, int] | None:
     digest = _token_digest(token)
@@ -379,7 +371,7 @@ async def login_challenge_auth_generation(db: AsyncSession, email: str) -> int:
 
 
 async def store_login_challenge(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     email: str,
     code: str,
     magic_token: str,
@@ -402,26 +394,6 @@ async def store_login_challenge(
         raise RuntimeError("Redis failed to store login challenge atomically")
 
 
-# Low-level compatibility helpers. Production login issuance must use
-# store_login_challenge so code + magic link share one generation binding.
-# Challenges written through these legacy helpers intentionally decode as
-# generation 0 and therefore cannot cross a recovery boundary.
-async def store_code(redis: Redis, email: str, code: str) -> None:  # type: ignore[type-arg]
-    await redis.delete(f"auth:challenge_gen:{email}")
-    await redis.setex(f"auth:code:{email}", CODE_TTL_SECONDS, code)
-
-
-async def store_magic_token(redis: Redis, email: str, token: str) -> None:  # type: ignore[type-arg]
-    previous = await redis.get(f"auth:magic_ref:{email}")
-    if isinstance(previous, bytes):
-        previous = previous.decode()
-    if previous:
-        await redis.delete(f"auth:magic:{previous}")
-    await redis.delete(f"auth:challenge_gen:{email}")
-    await redis.setex(f"auth:magic:{token}", CODE_TTL_SECONDS, email)
-    await redis.setex(f"auth:magic_ref:{email}", CODE_TTL_SECONDS, token)
-
-
 def _challenge_generation_from_script(result: object) -> int | None:
     if not isinstance(result, (list, tuple)) or not result:
         return None
@@ -438,7 +410,7 @@ def _challenge_generation_from_script(result: object) -> int | None:
 
 
 async def consume_verification_code(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     email: str,
     code: str,
     *,
@@ -462,12 +434,7 @@ async def consume_verification_code(
     return _challenge_generation_from_script(result)
 
 
-async def verify_code(redis: Redis, email: str, code: str) -> bool:  # type: ignore[type-arg]
-    """Compatibility wrapper for callers that only need single-use validity."""
-    return await consume_verification_code(redis, email, code) is not None
-
-
-async def consume_magic_token(redis: Redis, token: str) -> tuple[str, int] | None:  # type: ignore[type-arg]
+async def consume_magic_token(redis: RedisClient, token: str) -> tuple[str, int] | None:
     """Consume a magic token once and return ``(email, issuance_generation)``."""
     token_key = f"auth:magic:{token}"
     email = await redis.get(token_key)
@@ -492,14 +459,8 @@ async def consume_magic_token(redis: Redis, token: str) -> tuple[str, int] | Non
     return (email, generation) if generation is not None else None
 
 
-async def verify_magic_token(redis: Redis, token: str) -> str | None:  # type: ignore[type-arg]
-    """Compatibility wrapper returning only the challenge email."""
-    consumed = await consume_magic_token(redis, token)
-    return consumed[0] if consumed is not None else None
-
-
 async def _consume_rate_limit(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     key: str,
     *,
     maximum: int,
@@ -519,7 +480,7 @@ def _normalized_account_rate_key(email: str) -> str:
 
 
 async def consume_guest_session_mint_budget(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     source: str,
 ) -> bool:
     """Consume one distributed guest-session mint attempt for a trusted source."""
@@ -534,7 +495,7 @@ async def consume_guest_session_mint_budget(
 
 
 async def consume_classic_login_budget(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     source: str,
     email: str,
 ) -> bool:
@@ -557,7 +518,7 @@ async def consume_classic_login_budget(
 
 
 async def consume_password_reset_budget(
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     source: str,
     email: str,
 ) -> bool:
@@ -577,7 +538,7 @@ async def consume_password_reset_budget(
     )
 
 
-async def check_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[type-arg]
+async def check_rate_limit(redis: RedisClient, email: str) -> bool:
     if settings.is_dev:
         return True
     return await _consume_rate_limit(
@@ -588,7 +549,7 @@ async def check_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[ty
     )
 
 
-async def check_verify_rate_limit(redis: Redis, email: str) -> bool:  # type: ignore[type-arg]
+async def check_verify_rate_limit(redis: RedisClient, email: str) -> bool:
     if settings.is_dev:
         return True
 
@@ -600,12 +561,12 @@ async def check_verify_rate_limit(redis: Redis, email: str) -> bool:  # type: ig
     )
 
 
-async def increment_verify_rate_limit(redis: Redis, email: str) -> None:  # type: ignore[type-arg]
+async def increment_verify_rate_limit(redis: RedisClient, email: str) -> None:
     """Compatibility no-op: the attempt is consumed before verification."""
     return None
 
 
-async def reset_verify_rate_limit(redis: Redis, email: str) -> None:  # type: ignore[type-arg]
+async def reset_verify_rate_limit(redis: RedisClient, email: str) -> None:
     await redis.delete(f"auth:verify_rate:{email}")
 
 
@@ -663,12 +624,12 @@ def issue_tokens(
     return access_token, refresh_token, jti
 
 
-async def blacklist_token(redis: Redis, jti: str, ttl_seconds: int) -> None:  # type: ignore[type-arg]
+async def blacklist_token(redis: RedisClient, jti: str, ttl_seconds: int) -> None:
     if ttl_seconds > 0:
         await redis.setex(f"auth:blacklist:{jti}", ttl_seconds, "1")
 
 
-async def consume_token_once(redis: Redis, jti: str, ttl_seconds: int) -> bool:  # type: ignore[type-arg]
+async def consume_token_once(redis: RedisClient, jti: str, ttl_seconds: int) -> bool:
     """Atomically consume a JTI.
 
     The consumed marker deliberately shares the blacklist namespace so every
@@ -685,17 +646,17 @@ async def consume_token_once(redis: Redis, jti: str, ttl_seconds: int) -> bool: 
     return bool(result)
 
 
-async def is_token_blacklisted(redis: Redis, jti: str) -> bool:  # type: ignore[type-arg]
+async def is_token_blacklisted(redis: RedisClient, jti: str) -> bool:
     result = await redis.get(f"auth:blacklist:{jti}")
     return result is not None
 
 
-async def revoke_session(redis: Redis, session_id: str, ttl_seconds: int) -> None:  # type: ignore[type-arg]
+async def revoke_session(redis: RedisClient, session_id: str, ttl_seconds: int) -> None:
     if ttl_seconds > 0:
         await redis.setex(f"auth:session_revoked:{session_id}", ttl_seconds, "1")
 
 
-async def is_session_revoked(redis: Redis, session_id: str) -> bool:  # type: ignore[type-arg]
+async def is_session_revoked(redis: RedisClient, session_id: str) -> bool:
     return await redis.get(f"auth:session_revoked:{session_id}") is not None
 
 
@@ -754,7 +715,7 @@ async def get_password_reset_account(db: AsyncSession, email: str) -> User | Non
 
 async def prepare_password_reset(
     db: AsyncSession,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     email: str,
 ) -> PasswordResetDelivery | None:
     """Issue a reset capability for an eligible account without disclosing eligibility."""
@@ -793,7 +754,6 @@ async def reset_password(
 # every mutation that can create or remove the administrative authority boundary
 # (spells "WIKI" — value is irrelevant, just stable).
 _SETUP_LOCK_KEY = 0x57494B49
-_ADMIN_ROLES = (UserRole.BUREAU, UserRole.VIEUX)
 
 
 async def acquire_setup_lock(db: AsyncSession) -> None:
@@ -846,14 +806,6 @@ async def mark_installation_bootstrapped(db: AsyncSession) -> None:
     await db.flush()
 
 
-async def admin_exists(db: AsyncSession) -> bool:
-    """True if at least one live administrative account exists."""
-    result = await db.execute(
-        select(User.id).where(User.role.in_(_ADMIN_ROLES), User.deleted_at.is_(None)).limit(1)
-    )
-    return result.scalar_one_or_none() is not None
-
-
 def token_matches_auth_generation(payload: dict[str, Any], user: User) -> bool:
     """Return whether a JWT belongs to the user's current credential generation.
 
@@ -867,26 +819,6 @@ def token_matches_auth_generation(payload: dict[str, Any], user: User) -> bool:
         and not isinstance(token_generation, bool)
         and token_generation == user.auth_generation
     )
-
-
-async def lock_user_for_authority_change(
-    db: AsyncSession, user_id: object, *, include_deleted: bool = False
-) -> User | None:
-    """Acquire the authority lock, then return a freshly row-locked user.
-
-    ``populate_existing`` is required because AsyncSession identity maps can otherwise
-    hand a caller an ORM object whose role predates the authority lock.
-    """
-    await acquire_setup_lock(db)
-    statement = (
-        select(User)
-        .where(User.id == user_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    if include_deleted:
-        statement = statement.execution_options(include_deleted=True)
-    return await db.scalar(statement)
 
 
 async def lock_admin_authority_change(
@@ -919,7 +851,7 @@ async def lock_admin_authority_change(
     )
     if (
         actor is None
-        or actor.role not in _ADMIN_ROLES
+        or actor.role not in ADMIN_ROLES
         or actor.auth_generation != expected_auth_generation
     ):
         raise ForbiddenError(
@@ -963,14 +895,14 @@ async def ensure_admin_removal_safe(db: AsyncSession, user_id: object) -> None:
         return
 
     current_role, deleted_at = current
-    if current_role not in _ADMIN_ROLES or deleted_at is not None:
+    if current_role not in ADMIN_ROLES or deleted_at is not None:
         return
 
     remaining = await db.scalar(
         select(func.count())
         .select_from(User)
         .where(
-            User.role.in_(_ADMIN_ROLES),
+            User.role.in_(ADMIN_ROLES),
             User.deleted_at.is_(None),
             User.id != user_id,
         )

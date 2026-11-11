@@ -52,8 +52,7 @@ export function PdfViewer({
                 : null,
             threadId: th.root.id,
         })),
-        // annotationsKey captures the meaningful shape; `annotations` ref included for lint.
-        [annotationsKey, annotations],
+        [annotations],
     );
     const allAnnotationsRef = useRef(allAnnotations);
     useEffect(() => { allAnnotationsRef.current = allAnnotations; });
@@ -111,7 +110,7 @@ export function PdfViewer({
     // effect can attach exactly once (ViewerShell otherwise swaps children out
     // while the blob is fetched, leaving pdf.js with no element to bind to).
     // We therefore drive loading/error as overlays here, not via ViewerShell.
-    const combinedError = error || (status === "error" ? pdfError : null);
+    const combinedError = error || (status === "error" && pdfError ? t(`pdf.${pdfError}`) : null);
     const showSpinner = !combinedError && (loading || status === "loading");
     const handleRetry = useCallback(() => {
         if (error) reload();

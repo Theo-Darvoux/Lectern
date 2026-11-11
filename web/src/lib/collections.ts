@@ -99,3 +99,27 @@ export async function removeCollectionItem(
     { method: "DELETE" },
   );
 }
+
+/**
+ * Add or remove a favourite. Both requests are idempotent, so acting on a stale
+ * view (another tab, a double click) can never flip the state the wrong way.
+ */
+export async function setFavourite(
+  targetType: SavedTargetType,
+  targetId: string,
+  favourited: boolean,
+): Promise<void> {
+  const base = targetType === "material" ? "materials" : "directories";
+  await apiFetch<void>(`/${base}/${targetId}/favourite`, {
+    method: favourited ? "PUT" : "DELETE",
+  });
+}
+
+/** Run `action` on every item in parallel and return how many failed. */
+export async function countFailures<T>(
+  items: readonly T[],
+  action: (item: T) => Promise<unknown>,
+): Promise<number> {
+  const results = await Promise.allSettled(items.map(action));
+  return results.filter((result) => result.status === "rejected").length;
+}

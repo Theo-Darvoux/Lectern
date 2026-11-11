@@ -127,8 +127,8 @@ describe("SavedCard", () => {
       );
     });
 
-    const selectButton = container.querySelector('button[aria-label="Select item"]');
-    expect(selectButton).toBeDefined();
+    const selectButton = container.querySelector('button[aria-label="selectItem"]');
+    expect(selectButton).not.toBeNull();
 
     await act(async () => {
       selectButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));

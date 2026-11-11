@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { File } from "lucide-react";
 import { getMaterialThumbnail, subscribeMaterialThumbnail } from "@/lib/material-preview-source";
 import { useInView } from "@/hooks/use-in-view";
@@ -12,7 +12,9 @@ interface DirectoryPreviewCollageProps {
 }
 
 export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollageProps) {
-  const ids = materialIds.slice(0, 4);
+  // Keyed by content so a new array with the same ids does not refetch.
+  const idsKey = materialIds.slice(0, 4).join(",");
+  const ids = useMemo(() => (idsKey ? idsKey.split(",") : []), [idsKey]);
   const [cells, setCells] = useState<CellInfo[]>(Array(ids.length).fill(null));
   const [cacheBust, setCacheBust] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
@@ -24,7 +26,7 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
         setCacheBust(ts || Date.now());
       }
     });
-  }, [ids.join(",")]);
+  }, [ids]);
 
   useEffect(() => {
     if (!visible || ids.length === 0) return;
@@ -49,7 +51,7 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
     return () => {
       cancelled = true;
     };
-  }, [visible, ids.join(","), cacheBust]); // ids is a derived primitive — joining is safe
+  }, [visible, ids, cacheBust]);
 
   const gridClass = ids.length === 1 ? "grid-cols-1" : "grid-cols-2";
 

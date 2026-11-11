@@ -118,47 +118,6 @@ def _canonical_zip_name(name: str) -> str:
     return unicodedata.normalize("NFC", name.rstrip("/")).casefold()
 
 
-def _register_zip_name(
-    registry: dict[str, bool | None],
-    safe_name: str,
-    *,
-    is_dir: bool,
-) -> None:
-    """Register one real member for legacy callers without retaining prefixes.
-
-    Production archive rewriting validates all names together with
-    :func:`_validate_zip_name_conflicts`, which is the scalable path.  This
-    compatibility helper remains for older tests and marginal callers.  It
-    stores only canonical names for real members; implicit parent prefixes are
-    never materialized.
-    """
-
-    canonical = _canonical_zip_name(safe_name)
-    missing = object()
-    existing = registry.get(canonical, missing)
-    if existing is not missing:
-        if existing is None and is_dir:
-            registry[canonical] = True
-            return
-        raise ValueError(f"ZIP contains duplicate sanitized entry '{safe_name}'")
-
-    parent = ""
-    for part in canonical.split("/")[:-1]:
-        parent = part if not parent else f"{parent}/{part}"
-        if registry.get(parent) is False:
-            raise ValueError(f"ZIP entry '{safe_name}' is nested beneath file '{parent}'")
-
-    if not is_dir:
-        descendant_prefix = f"{canonical}/"
-        for registered_name in registry:
-            if registered_name.startswith(descendant_prefix):
-                raise ValueError(
-                    f"ZIP file '{safe_name}' conflicts with descendant entry '{registered_name}'"
-                )
-
-    registry[canonical] = is_dir
-
-
 def _validate_zip_name_conflicts(
     entries: Iterable[tuple[str, bool]],
 ) -> int:

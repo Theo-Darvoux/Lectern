@@ -455,8 +455,10 @@ async def toggle_like(db: AsyncSession, user_id: uuid.UUID, material_id: uuid.UU
     return True
 
 
-async def toggle_favourite(db: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID) -> bool:
-    """Toggle a favourite atomically for one user/material pair."""
+async def set_favourite(
+    db: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID, favourited: bool
+) -> None:
+    """Add or remove one user's favourite on a material; repeating a call changes nothing."""
     await acquire_reaction_toggle_lock(
         db,
         kind="material-favourite",
@@ -474,15 +476,9 @@ async def toggle_favourite(db: AsyncSession, user_id: uuid.UUID, material_id: uu
     )
     favourite = result.scalar_one_or_none()
 
-    if favourite:
-        # Remove favourite
+    if favourite and not favourited:
         await db.delete(favourite)
-        favourited = False
-    else:
-        # Add favourite
-        new_favourite = MaterialFavourite(id=uuid.uuid4(), user_id=user_id, material_id=material_id)
-        db.add(new_favourite)
-        favourited = True
+    elif not favourite and favourited:
+        db.add(MaterialFavourite(id=uuid.uuid4(), user_id=user_id, material_id=material_id))
 
     await db.flush()
-    return favourited

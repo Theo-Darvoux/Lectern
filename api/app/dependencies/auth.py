@@ -3,14 +3,13 @@ from typing import Annotated
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common.exceptions import ForbiddenError, UnauthorizedError
 from app.core.database.database import get_db
-from app.core.database.redis import get_redis
+from app.core.database.redis import RedisClient, get_redis
 from app.core.security.security import BROWSER_READ_COOKIE, decode_token
-from app.models.user import User, UserRole
+from app.models.user import MODERATOR_ROLES, User, UserRole
 from app.services.auth import (
     is_session_revoked,
     is_token_blacklisted,
@@ -27,7 +26,7 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 async def _validate_token_payload(
     payload: dict,  # type: ignore[type-arg]
     db: AsyncSession,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     *,
     expected_type: str,
 ) -> User:
@@ -61,7 +60,7 @@ async def _validate_token_payload(
 async def _validate_access_payload(
     payload: dict,  # type: ignore[type-arg]
     db: AsyncSession,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
 ) -> User:
     return await _validate_token_payload(payload, db, redis, expected_type="access")
 
@@ -69,7 +68,7 @@ async def _validate_access_payload(
 async def _validate_browser_read_payload(
     payload: dict,  # type: ignore[type-arg]
     db: AsyncSession,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
 ) -> User:
     return await _validate_token_payload(payload, db, redis, expected_type="browser_read")
 
@@ -78,7 +77,7 @@ async def get_current_user(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> User:
     if not credentials:
         raise UnauthorizedError()
@@ -104,21 +103,6 @@ async def get_current_user(
     return user
 
 
-async def get_optional_user(
-    request: Request,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
-) -> User | None:
-    if not credentials:
-        return None
-
-    try:
-        return await get_current_user(request, credentials, db, redis)
-    except UnauthorizedError:
-        return None
-
-
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
@@ -141,7 +125,7 @@ def require_onboarded():  # type: ignore[no-untyped-def]
 
 
 def require_moderator():  # type: ignore[no-untyped-def]
-    return require_role(UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX)
+    return require_role(*MODERATOR_ROLES)
 
 
 def require_not_guest(message: str = "Guests cannot access this resource"):  # type: ignore[no-untyped-def]
@@ -162,7 +146,7 @@ async def get_read_user(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> User:
     """Authenticate an explicitly read-only route.
 
@@ -197,7 +181,7 @@ async def get_sse_user(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
 ) -> User:
     """SSE uses the same restricted read authentication as other browser-native GETs."""
     return await get_read_user(request, credentials, db, redis)

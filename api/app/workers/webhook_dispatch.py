@@ -42,7 +42,6 @@ from app.core.observability.metrics import upload_webhook_total
 from app.core.security.url_validation import (
     PinnedRequestError,
     post_pinned_https,
-    resolve_safe_url,
     resolve_safe_url_async,
 )
 from app.routers.upload.cancellation import upload_lifecycle_lock_name
@@ -64,11 +63,6 @@ def _sign(body: bytes) -> str:
     """Compute HMAC-SHA256 signature over ``body``. Returns ``sha256=<hex>``."""
     sig = hmac.new(_signing_secret(), body, hashlib.sha256).hexdigest()
     return f"sha256={sig}"
-
-
-def validate_webhook_url(url: str) -> bool:
-    """Validate a webhook URL to prevent SSRF. Delegates to core/url_validation.py."""
-    return resolve_safe_url(url) is not None
 
 
 async def _deliver_webhook_once(

@@ -40,7 +40,6 @@ vi.mock("@/lib/browse-prefetch", () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
-const noop = () => {};
 /** Render a component that calls the hook, return a cleanup fn. */
 function renderHookWith(
     data: Parameters<typeof useBrowseSSE>[0],
@@ -49,7 +48,7 @@ function renderHookWith(
     document.body.appendChild(container);
 
     function TestComponent() {
-        useBrowseSSE(data, "/browse/test", noop);
+        useBrowseSSE(data, "/browse/test");
         return null;
     }
 
@@ -113,13 +112,12 @@ describe("useBrowseSSE — directory listing", () => {
         cleanup();
     });
 
-    it("child_updated triggers fetchData", () => {
-        const fetchData = vi.fn();
+    it("child_updated refreshes the listing", () => {
         const container = document.createElement("div");
         document.body.appendChild(container);
 
         function TestComponent() {
-            useBrowseSSE(dirData, "/browse/test", fetchData);
+            useBrowseSSE(dirData, "/browse/test");
             return null;
         }
 
@@ -132,7 +130,6 @@ describe("useBrowseSSE — directory listing", () => {
         expect(listenersWithUpdate).toBeDefined();
         act(() => { (listenersWithUpdate!["child_updated"] as () => void)(); });
 
-        expect(fetchData).toHaveBeenCalled();
         expect(invalidateBrowseEntity).toHaveBeenCalledWith(
             "directory:dir-abc",
             "/browse/test",
@@ -143,12 +140,11 @@ describe("useBrowseSSE — directory listing", () => {
     });
 
     it("child_added immediately refreshes the current listing", () => {
-        const fetchData = vi.fn();
         const container = document.createElement("div");
         document.body.appendChild(container);
 
         function TestComponent() {
-            useBrowseSSE(dirData, "/browse/test", fetchData);
+            useBrowseSSE(dirData, "/browse/test");
             return null;
         }
 
@@ -163,7 +159,6 @@ describe("useBrowseSSE — directory listing", () => {
             );
         });
 
-        expect(fetchData).toHaveBeenCalledWith(true);
         expect(invalidateBrowseEntity).toHaveBeenCalledWith(
             "directory:dir-abc",
             "/browse/test",

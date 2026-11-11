@@ -1,6 +1,6 @@
 """Unit tests for core/common submodules and re-export shims."""
 
-from app.core.common.constants import MAGIC_HEADER_SIZE, PRIVILEGED_ROLES
+from app.core.common.constants import MAGIC_HEADER_SIZE
 from app.core.common.exceptions import (
     AppError,
     BadRequestError,
@@ -17,10 +17,6 @@ from app.core.common.upload_errors import UploadErrorCode
 
 def test_constants():
     assert MAGIC_HEADER_SIZE == 2048
-    assert "moderator" in PRIVILEGED_ROLES
-    assert "bureau" in PRIVILEGED_ROLES
-    assert "vieux" in PRIVILEGED_ROLES
-    assert isinstance(PRIVILEGED_ROLES, frozenset)
 
 
 def test_exceptions_hierarchy():

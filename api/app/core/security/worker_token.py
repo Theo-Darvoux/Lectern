@@ -15,30 +15,6 @@ def _encode_and_sign_payload(payload: dict[str, Any], secret: str) -> str:
     return f"{payload_b64}.{sig_b64}"
 
 
-def make_zip_token(
-    dir_name: str,
-    entries: list[tuple[str, str]],
-    secret: str,
-    ttl: int = 300,
-    part: int | None = None,
-    total: int | None = None,
-) -> str:
-    """Return a short-lived HMAC-SHA256 signed token for the Cloudflare Worker ZIP generation.
-
-    Format: ``<base64url(payload_json)>.<base64url(hmac_sha256)>``
-    """
-    payload: dict[str, Any] = {
-        "dir_name": dir_name,
-        "entries": [{"arcname": a, "r2_key": k} for a, k in entries],
-        "exp": int(time.time()) + ttl,
-    }
-    if part is not None:
-        payload["part"] = part
-    if total is not None:
-        payload["total"] = total
-    return _encode_and_sign_payload(payload, secret)
-
-
 def make_file_token(
     r2_key: str,
     secret: str,

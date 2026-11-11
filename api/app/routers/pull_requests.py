@@ -3,14 +3,13 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.core.common.exceptions import BadRequestError, NotFoundError
 from app.core.database.database import get_db
-from app.core.database.redis import get_redis
+from app.core.database.redis import RedisClient, get_redis
 from app.core.events.limiter import limiter
 from app.dependencies.auth import (
     get_current_user,
@@ -24,6 +23,9 @@ from app.models.user import User, UserRole
 from app.schemas.pull_request import (
     PRCommentCreate,
     PRCommentOut,
+    PROperationFilter,
+    PRSort,
+    PullRequestCounts,
     PullRequestCreate,
     PullRequestOut,
     RejectRequest,
@@ -32,6 +34,7 @@ from app.services.notification import notify_user
 from app.services.pr import (
     approve_pr_service,
     cancel_pr_service,
+    count_prs_service,
     create_pull_request_service,
     get_pr_diff_service,
     get_pr_preview_service,
@@ -51,7 +54,7 @@ router = APIRouter(prefix="/api/pull-requests", tags=["pull-requests"])
 async def create_pull_request(
     data: PullRequestCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],  # type: ignore[type-arg]
+    redis: Annotated[RedisClient, Depends(get_redis)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> PullRequestOut:
     pr = await create_pull_request_service(db, data, current_user, redis=redis)
@@ -66,14 +69,34 @@ async def list_pull_requests(
     status: str | None = None,
     type: str | None = None,
     author_id: uuid.UUID | None = None,
+    search: Annotated[str | None, Query(max_length=200)] = None,
+    op_type: PROperationFilter | None = None,
+    sort: PRSort = "newest",
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
 ) -> list[PullRequestOut]:
     prs, total_count = await list_prs_service(
-        db, status, type, author_id, page, limit, viewer=current_user
+        db,
+        status,
+        type,
+        author_id,
+        page,
+        limit,
+        viewer=current_user,
+        search=search,
+        op_type=op_type,
+        sort=sort,
     )
     set_pagination_headers(response, total_count)
     return [project_pr_for_viewer(pr, current_user) for pr in prs]
+
+
+@router.get("/counts", response_model=PullRequestCounts)
+async def count_pull_requests(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_not_guest())],
+) -> PullRequestCounts:
+    return PullRequestCounts(**await count_prs_service(db, current_user))
 
 
 @router.get("/for-item", response_model=list[PullRequestOut])

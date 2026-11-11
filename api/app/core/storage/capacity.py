@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from redis.asyncio import Redis
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
@@ -20,6 +19,7 @@ from app.config import settings
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
 from app.core.database.database import engine
+from app.core.database.redis import RedisClient
 from app.core.security.async_utils import settle_awaitable
 from app.core.security.cas import _STORAGE_USAGE_GENERATION_KEY, _STORAGE_USAGE_KEY
 from app.core.storage.facade import list_objects
@@ -699,11 +699,6 @@ async def cas_storage_mutation(
         yield mutation_id, result
 
 
-async def mark_cas_storage_usage_dirty(redis: Any) -> None:
-    """Mark the aggregate cache unusable before physical CAS I/O begins."""
-    await redis.set(_STORAGE_USAGE_DIRTY_KEY, "1")
-
-
 async def commit_cas_storage_delta(
     redis: Any,
     delta_bytes: int,
@@ -751,7 +746,7 @@ async def reconcile_cas_storage_usage(redis: Any) -> int:
         return await _reconcile_cas_storage_usage_locked(redis)
 
 
-async def get_storage_usage(db: AsyncSession, redis: Redis) -> int:  # type: ignore[type-arg]
+async def get_storage_usage(db: AsyncSession, redis: RedisClient) -> int:
     del db
     usage = await _read_cached_cas_storage_usage(redis)
     if usage is not None:
@@ -787,7 +782,7 @@ async def _legacy_storage_usage_from_database(db: AsyncSession) -> int:
 
 async def refresh_legacy_storage_usage(
     db: AsyncSession,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
 ) -> int:
     """Recompute retained legacy usage and overwrite its Redis cache."""
     usage = await _legacy_storage_usage_from_database(db)
@@ -846,7 +841,7 @@ async def check_storage_limit(
 async def reserve_storage_limit(
     size_bytes: int,
     reservation_id: str,
-    redis: Redis,  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
     *,
     ttl_seconds: int = _STORAGE_RESERVATION_TTL,

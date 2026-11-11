@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2, Search, CheckCircle, XCircle, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +19,12 @@ import { useAuth } from "@/hooks/use-auth";
 import { useConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useTranslations, useLocale } from "next-intl";
+import { useTranslations } from "next-intl";
+import { isAdmin } from "@/lib/guest";
+import { translateDynamic } from "@/lib/i18n-dynamic";
+import { AdminOnlyNotice } from "@/components/staff/admin-only-notice";
+import { QueryError } from "@/components/query-error";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 
 interface AdminUser {
   id: string;
@@ -47,89 +53,56 @@ const ROLE_BADGE: Record<string, string> = {
 
 export default function StaffUsersPage() {
   const t = useTranslations("Admin.Users");
-  const locale = useLocale();
-  const fr = locale.toLowerCase().startsWith("fr");
   const { user } = useAuth();
-  const canManageRoles = user?.role === "bureau" || user?.role === "vieux";
+  const canManageRoles = isAdmin(user);
   const { show } = useConfirmDialog();
 
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [total, setTotal] = useState(0);
-  const [cursorStack, setCursorStack] = useState<string[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
-  const [loading, setLoading] = useState(true);
-  const loadRequestRef = useRef(0);
+  // Cursors of the pages before the current one; the last entry is the current page.
+  const [cursorStack, setCursorStack] = useState<string[]>([]);
+  const debouncedSearch = useDebouncedValue(search.trim(), 300);
+  const cursor = cursorStack.at(-1) ?? null;
 
-  const fetchUsers = async (cursor: string | null = null) => {
-    if (!canManageRoles) return;
-    const requestId = ++loadRequestRef.current;
-    setLoading(true);
-    try {
+  const usersQuery = useQuery({
+    queryKey: ["admin", "users", { search: debouncedSearch, roleFilter, cursor }],
+    queryFn: ({ signal }) => {
       const params = new URLSearchParams({ limit: "50" });
       if (cursor) params.append("cursor", cursor);
-      if (search) params.append("search", search);
+      if (debouncedSearch) params.append("search", debouncedSearch);
       if (roleFilter !== "all") params.append("role", roleFilter);
-
-      const data = await apiFetch<PaginatedUsers>(`/admin/users?${params}`);
-      if (requestId !== loadRequestRef.current) return;
-      setUsers(data.items);
-      setHasLoaded(true);
-      setTotal(data.total);
-      setNextCursor(data.next_cursor);
-    } catch {
-      if (requestId !== loadRequestRef.current) return;
-      toast.error(t("state.loadError"));
-    } finally {
-      if (requestId === loadRequestRef.current) setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    setCursorStack([]);
-    setNextCursor(null);
-    const timer = setTimeout(() => fetchUsers(null), 300);
-    return () => clearTimeout(timer);
-  }, [search, roleFilter]);
+      return apiFetch<PaginatedUsers>(`/admin/users?${params}`, { signal });
+    },
+    enabled: canManageRoles,
+    placeholderData: keepPreviousData,
+  });
+  const users = usersQuery.data?.items ?? [];
+  const total = usersQuery.data?.total ?? 0;
+  const nextCursor = usersQuery.data?.next_cursor ?? null;
+  const loading = usersQuery.isFetching;
+  const refreshUsers = () => queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
 
   const changeSearch = (value: string) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
     setSearch(value);
+    setCursorStack([]);
   };
 
   const changeRoleFilter = (value: string) => {
-    loadRequestRef.current += 1;
-    setLoading(true);
     setRoleFilter(value);
+    setCursorStack([]);
   };
 
   if (!canManageRoles) {
-    return (
-      <div className="flex items-center justify-center p-12 text-muted-foreground">
-        Access restricted to administrators.
-      </div>
-    );
+    return <AdminOnlyNotice />;
   }
 
   const handleNext = () => {
-    if (!nextCursor) return;
-    setCursorStack((prev) => {
-      fetchUsers(nextCursor);
-      return [...prev, nextCursor];
-    });
+    if (nextCursor) setCursorStack((prev) => [...prev, nextCursor]);
   };
 
   const handlePrev = () => {
-    setCursorStack((prev) => {
-      const stack = [...prev];
-      stack.pop();
-      const prevCursor = stack.length > 0 ? stack[stack.length - 1] : null;
-      fetchUsers(prevCursor);
-      return stack;
-    });
+    setCursorStack((prev) => prev.slice(0, -1));
   };
 
   const handleRoleChange = async (userId: string, newRole: string) => {
@@ -137,10 +110,8 @@ export default function StaffUsersPage() {
       await apiFetch(`/admin/users/${userId}/role?role=${newRole}`, {
         method: "PATCH",
       });
-      setUsers((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u)),
-      );
       toast.success(t("actions.roleUpdate.success"));
+      void refreshUsers();
     } catch {
       toast.error(t("actions.roleUpdate.error"));
     }
@@ -152,16 +123,9 @@ export default function StaffUsersPage() {
       t("actions.approve.description", { email }),
       async () => {
         try {
-          const updated = await apiFetch<AdminUser>(
-            `/admin/users/${userId}/approve`,
-            { method: "POST" },
-          );
-          setUsers((prev) =>
-            prev.map((u) =>
-              u.id === userId ? { ...u, role: updated.role } : u,
-            ),
-          );
+          await apiFetch(`/admin/users/${userId}/approve`, { method: "POST" });
           toast.success(t("actions.approve.success"));
+          void refreshUsers();
         } catch {
           toast.error(t("actions.approve.error"));
         }
@@ -176,8 +140,8 @@ export default function StaffUsersPage() {
       async () => {
         try {
           await apiFetch(`/admin/users/${userId}/reject`, { method: "POST" });
-          setUsers((prev) => prev.filter((u) => u.id !== userId));
           toast.success(t("actions.reject.success"));
+          void refreshUsers();
         } catch {
           toast.error(t("actions.reject.error"));
         }
@@ -192,8 +156,8 @@ export default function StaffUsersPage() {
       async () => {
         try {
           await apiFetch(`/admin/users/${userId}`, { method: "DELETE" });
-          setUsers((prev) => prev.filter((u) => u.id !== userId));
           toast.success(t("actions.delete.success"));
+          void refreshUsers();
         } catch {
           toast.error(t("actions.delete.error"));
         }
@@ -257,7 +221,7 @@ export default function StaffUsersPage() {
         <Button asChild variant="outline" className="gap-2 whitespace-nowrap">
           <Link href="/staff/users/bulk">
             <UsersRound className="h-4 w-4" />
-            {fr ? "Gestion en masse" : "Bulk manage"}
+            {t("bulkManage")}
           </Link>
         </Button>
         <span className="text-sm text-muted-foreground whitespace-nowrap">
@@ -326,7 +290,7 @@ export default function StaffUsersPage() {
                         {u.role === "pending"
                           ? `⏳ ${t("roleLabels.pending")}`
                           : u.role
-                            ? t(`roleLabels.${u.role}` as any)
+                            ? translateDynamic(t, `roleLabels.${u.role}`, u.role)
                             : t("roleLabels.student")}
                       </Badge>
                     )}
@@ -375,14 +339,21 @@ export default function StaffUsersPage() {
                   </td>
                 </tr>
               ))}
-              {loading && !hasLoaded && (
+              {usersQuery.isPending && (
                 <tr>
                   <td colSpan={4} className="p-8 text-center text-muted-foreground">
                     {t("state.loading")}
                   </td>
                 </tr>
               )}
-              {hasLoaded && users.length === 0 && (
+              {usersQuery.isError && (
+                <tr>
+                  <td colSpan={4} className="p-8">
+                    <QueryError message={t("state.loadError")} onRetry={() => void usersQuery.refetch()} />
+                  </td>
+                </tr>
+              )}
+              {usersQuery.isSuccess && users.length === 0 && (
                 <tr>
                   <td colSpan={4} className="p-8 text-center text-muted-foreground">
                     {t("state.empty")}

@@ -19,9 +19,25 @@ export function isGuest(user: UserBrief | null | undefined): boolean {
     return user?.role === GUEST_ROLE;
 }
 
-/** Staff members (moderator, bureau, vieux) have content management rights. */
+const ADMIN_ROLES = new Set(["bureau", "vieux"]);
+const STAFF_ROLES = new Set(["moderator", ...ADMIN_ROLES]);
+
+/** Staff roles (moderator, bureau, vieux) have content management rights. */
+export function isStaffRole(role: string | null | undefined): boolean {
+    return !!role && STAFF_ROLES.has(role);
+}
+
+/** Admin roles (bureau, vieux) also manage users and the installation. */
+export function isAdminRole(role: string | null | undefined): boolean {
+    return !!role && ADMIN_ROLES.has(role);
+}
+
 export function isStaff(user: UserBrief | null | undefined): boolean {
-    return user?.role === "moderator" || user?.role === "bureau" || user?.role === "vieux";
+    return isStaffRole(user?.role);
+}
+
+export function isAdmin(user: UserBrief | null | undefined): boolean {
+    return isAdminRole(user?.role);
 }
 
 /**

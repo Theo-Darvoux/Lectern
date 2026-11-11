@@ -14,26 +14,33 @@ import {
     ChevronRight,
 } from "lucide-react";
 import { usePdfjsDocument } from "@/hooks/use-pdfjs-document";
+import { useTranslations } from "next-intl";
 
 export function PdfPreview({ url }: { url: string }) {
     const [blobUrl, setBlobUrl] = useState<string | null>(null);
-    const [fetchError, setFetchError] = useState<string | null>(null);
+    const t = useTranslations("Viewers.pdf");
+    const [fetchFailed, setFetchFailed] = useState(false);
 
     // Fetch the blob so pdf.js doesn't make a cross-origin request itself.
     useEffect(() => {
         let objectUrl: string | null = null;
         let cancelled = false;
         setBlobUrl(null);
-        setFetchError(null);
+        setFetchFailed(false);
         fetch(url)
-            .then((r) => r.blob())
+            .then((r) => {
+                // An error page is not a PDF: never hand it to pdf.js.
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.blob();
+            })
             .then((blob) => {
                 if (cancelled) return;
                 objectUrl = URL.createObjectURL(blob);
                 setBlobUrl(objectUrl);
             })
             .catch((e) => {
-                if (!cancelled) setFetchError(e.message ?? "Failed to load PDF");
+                console.error("PDF preview fetch failed:", e);
+                if (!cancelled) setFetchFailed(true);
             });
         return () => {
             cancelled = true;
@@ -76,7 +83,7 @@ export function PdfPreview({ url }: { url: string }) {
         return () => window.removeEventListener("keydown", handler);
     }, [navigate, zoomIn, zoomOut]);
 
-    const error = fetchError || (status === "error" ? pdfError : null);
+    const error = fetchFailed ? t("loadFailed") : status === "error" && pdfError ? t(pdfError) : null;
     if (error) {
         return (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-destructive">

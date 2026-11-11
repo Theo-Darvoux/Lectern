@@ -12,7 +12,7 @@ Covers (in issue order):
   #9  TestEmailIn rejects malformed / header-injection email
   #10 Corrupt negative storage usage state fails closed
   #11 get_or_create_user accepts explicit auto_approve (no second validate call)
-  #12 get_s3_client receives pre-fetched cfg — only one _get_s3_settings call
+  #12 get_s3_client receives pre-fetched cfg
   #13 TUS OPTIONS reads Redis only, no DB session
   #15 _serialize_config dead code removed
   #17 validate_email_for_auth comment/logic corrected

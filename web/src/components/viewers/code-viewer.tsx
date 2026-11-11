@@ -157,19 +157,56 @@ function getLang(fileName: string): string {
     return EXT_TO_LANG[ext] ?? "";
 }
 
+// Above this size, highlighting the whole file at once would block the page,
+// so lines are highlighted one by one as they scroll into view instead.
+const WHOLE_FILE_HIGHLIGHT_MAX_CHARS = 500_000;
+
+/**
+ * Split highlighted HTML into one fragment per line. Tokens such as block
+ * comments span lines, so open spans are closed at each line end and reopened
+ * on the next line.
+ */
+export function splitHighlightedLines(html: string): string[] {
+    const lines: string[] = [];
+    const open: string[] = [];
+    let current = "";
+    for (const [token, openTag, closeTag, newline] of html.matchAll(
+        /(<span[^>]*>)|(<\/span>)|(\n)|[^<\n]+/g,
+    )) {
+        if (openTag) {
+            open.push(openTag);
+            current += openTag;
+        } else if (closeTag) {
+            open.pop();
+            current += closeTag;
+        } else if (newline) {
+            lines.push(current + "</span>".repeat(open.length));
+            current = open.join("");
+        } else {
+            current += token;
+        }
+    }
+    lines.push(current);
+    return lines;
+}
+
+function highlightLine(line: string, lang: string): string {
+    return lang && hljs.getLanguage(lang)
+        ? hljs.highlight(line, { language: lang, ignoreIllegals: true }).value
+        : escapeHtml(line);
+}
+
 interface CodeRowProps {
     lines: string[];
     lang: string;
     rowHeight: number;
     gutterWidth: number;
     contentWidth: number;
-    /** Per-line highlight cache, keyed by line index. Reset when content/lang change. */
+    /** Highlighted HTML per line index. Filled lazily for files too large to highlight at once. */
     cache: Map<number, string>;
 }
 
 // Top-level component so react-window never remounts rows on parent re-render.
-// Each line is highlighted lazily on first paint and memoised in `cache`, so
-// scrolling back over a line never re-tokenises it.
 function CodeRow({
     index,
     style,
@@ -180,14 +217,9 @@ function CodeRow({
     contentWidth,
     cache,
 }: RowComponentProps<CodeRowProps>) {
-    const line = lines[index] ?? "";
-
     let html = cache.get(index);
     if (html === undefined) {
-        html =
-            lang && hljs.getLanguage(lang)
-                ? hljs.highlight(line, { language: lang, ignoreIllegals: true }).value
-                : escapeHtml(line);
+        html = highlightLine(lines[index] ?? "", lang);
         cache.set(index, html);
     }
 
@@ -235,7 +267,13 @@ export function CodeViewer({ materialId, fileKey, fileName }: CodeViewerProps) {
 
     // Highlight results are independent of zoom, so the cache only needs to be
     // recreated when the source text or the detected language changes.
-    const cache = useMemo<Map<number, string>>(() => new Map(), [content, lang]);
+    const cache = useMemo<Map<number, string>>(() => {
+        if (!lang || !hljs.getLanguage(lang) || content.length > WHOLE_FILE_HIGHLIGHT_MAX_CHARS) {
+            return new Map();
+        }
+        const html = hljs.highlight(content, { language: lang, ignoreIllegals: true }).value;
+        return new Map(splitHighlightedLines(html).map((line, index) => [index, line]));
+    }, [content, lang]);
 
     // Derive sizing from the zoom level. A fixed row height lets react-window
     // place every row without measuring it.

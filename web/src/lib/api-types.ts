@@ -390,6 +390,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Operational Overview */
+        get: operations["admin_operational_overview_api_admin_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin Bulk Users */
+        post: operations["admin_bulk_users_api_admin_users_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin List Content */
+        get: operations["admin_list_content_api_admin_content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/content/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Admin Update Content Status */
+        patch: operations["admin_update_content_status_api_admin_content_status_patch"];
+        trace?: never;
+    };
     "/api/admin/storage/reconcile": {
         parameters: {
             query?: never;
@@ -627,6 +695,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register */
+        post: operations["register_api_auth_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/login": {
         parameters: {
             query?: never;
@@ -708,8 +793,8 @@ export interface paths {
          * Setup First Admin
          * @description First-run bootstrap: create the initial admin account.
          *
-         *     Only works while no admin exists — once one does, this is permanently a 409.
-         *     This replaces the `app.cli seed` command for fresh deployments.
+         *     Only works before the durable installation bootstrap marker is consumed.
+         *     Production additionally requires the out-of-band BOOTSTRAP_TOKEN capability.
          */
         post: operations["setup_first_admin_api_auth_setup_post"];
         delete?: never;
@@ -873,6 +958,77 @@ export interface paths {
         patch: operations["edit_comment_api_comments__comment_id__patch"];
         trace?: never;
     };
+    "/api/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Collections */
+        get: operations["list_collections_api_collections_get"];
+        put?: never;
+        /** Create Collection */
+        post: operations["create_collection_api_collections_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/collections/{collection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Collection */
+        get: operations["get_collection_api_collections__collection_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Collection */
+        delete: operations["delete_collection_api_collections__collection_id__delete"];
+        options?: never;
+        head?: never;
+        /** Rename Collection */
+        patch: operations["rename_collection_api_collections__collection_id__patch"];
+        trace?: never;
+    };
+    "/api/collections/{collection_id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Collection Item */
+        post: operations["add_collection_item_api_collections__collection_id__items_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/collections/{collection_id}/items/{target_type}/{target_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Collection Item */
+        delete: operations["remove_collection_item_api_collections__collection_id__items__target_type___target_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/directories/resolve-paths": {
         parameters: {
             query?: never;
@@ -941,7 +1097,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/directories/root/download-chunks": {
+    "/api/directories/{id}/download/check": {
         parameters: {
             query?: never;
             header?: never;
@@ -949,35 +1105,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Download Root Chunks
-         * @description Return Worker ZIP chunk URLs for the entire root level (all top-level directories).
-         */
-        get: operations["download_root_chunks_api_directories_root_download_chunks_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/directories/{id}/download-chunks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Download Directory Chunks
-         * @description Return a list of Worker URLs for downloading a directory as one or more ZIP files.
+         * Check Directory Download
+         * @description Report whether the directory ZIP can be built, without counting a download.
          *
-         *     Each chunk covers at most ``_CHUNK_SIZE`` files, keeping the Worker within the
-         *     free-plan subrequest cap (50) and URL-length limit.  When the Worker is not
-         *     configured the response contains an empty ``chunks`` list; the client should
-         *     fall back to the streaming ``/download`` endpoint in that case.
+         *     Browsers start the ZIP by following a link, which would replace the page with a
+         *     JSON error. They call this first so the error can be shown in place.
          */
-        get: operations["download_directory_chunks_api_directories__id__download_chunks_get"];
+        get: operations["check_directory_download_api_directories__id__download_check_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1065,10 +1199,11 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
         /** Favourite Directory */
-        post: operations["favourite_directory_api_directories__id__favourite_post"];
-        delete?: never;
+        put: operations["favourite_directory_api_directories__id__favourite_put"];
+        post?: never;
+        /** Unfavourite Directory */
+        delete: operations["unfavourite_directory_api_directories__id__favourite_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1198,6 +1333,29 @@ export interface paths {
         get: operations["thumbnail_material_api_materials__material_id__thumbnail_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/materials/{material_id}/recalculate-thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recalculate Material Thumbnail
+         * @description Force recreate the thumbnail for a material.
+         *
+         *     Moderator or admin privileges required. Dispatches the thumbnail recalculation
+         *     job to a free background worker and waits for completion when possible.
+         */
+        post: operations["recalculate_material_thumbnail_api_materials__material_id__recalculate_thumbnail_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1334,10 +1492,11 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
         /** Favourite Material */
-        post: operations["favourite_material_api_materials__material_id__favourite_post"];
-        delete?: never;
+        put: operations["favourite_material_api_materials__material_id__favourite_put"];
+        post?: never;
+        /** Unfavourite Material */
+        delete: operations["unfavourite_material_api_materials__material_id__favourite_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1442,6 +1601,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/og/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Render Og Image
+         * @description Generate a dynamic 1200x630 Open Graph preview image (PNG).
+         */
+        get: operations["render_og_image_api_og_image_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/og": {
         parameters: {
             query?: never;
@@ -1489,6 +1668,23 @@ export interface paths {
         put?: never;
         /** Create Pull Request */
         post: operations["create_pull_request_api_pull_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pull-requests/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Count Pull Requests */
+        get: operations["count_pull_requests_api_pull_requests_counts_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1705,12 +1901,11 @@ export interface paths {
          * Serve File To Eurooffice
          * @description Serve the raw file bytes to EuroOffice Document Server.
          *     Called internally by EuroOffice (not the browser).
-         *     Authenticated via a short-lived scoped JWT passed as ?token= query param
-         *     (fallback: X-OO-File-Token header).
-         *
-         *     EuroOffice probes the URL with HEAD before downloading and retries failed
-         *     GETs with the same token — both methods must return 2xx.  We rely on the
-         *     JWT expiry (60 s) rather than single-use JTI enforcement so retries work.
+         *     Authorization requires two independent factors: the JWT EuroOffice adds
+         *     to its outgoing Authorization header proves document-server identity, while
+         *     the URL carries a short-lived material/version grant signed with an API-only
+         *     secret that the document server cannot mint. HEAD/GET retries may reuse the
+         *     grant only until its mandatory expiry.
          */
         get: operations["serve_file_to_eurooffice"];
         put?: never;
@@ -1721,12 +1916,11 @@ export interface paths {
          * Serve File To Eurooffice
          * @description Serve the raw file bytes to EuroOffice Document Server.
          *     Called internally by EuroOffice (not the browser).
-         *     Authenticated via a short-lived scoped JWT passed as ?token= query param
-         *     (fallback: X-OO-File-Token header).
-         *
-         *     EuroOffice probes the URL with HEAD before downloading and retries failed
-         *     GETs with the same token — both methods must return 2xx.  We rely on the
-         *     JWT expiry (60 s) rather than single-use JTI enforcement so retries work.
+         *     Authorization requires two independent factors: the JWT EuroOffice adds
+         *     to its outgoing Authorization header proves document-server identity, while
+         *     the URL carries a short-lived material/version grant signed with an API-only
+         *     secret that the document server cannot mint. HEAD/GET retries may reuse the
+         *     grant only until its mandatory expiry.
          */
         head: operations["serve_file_to_eurooffice_head"];
         patch?: never;
@@ -1741,7 +1935,7 @@ export interface paths {
         };
         /**
          * Master Event Stream
-         * @description One authenticated stream multiplexing every live-update channel.
+         * @description One authenticated stream per browser, multiplexing every live-update channel.
          */
         get: operations["master_event_stream_api_events_sse_get"];
         put?: never;
@@ -1860,7 +2054,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Upload Group */
+        /**
+         * Create Upload Group
+         * @description Admit one folder while keeping every contained upload independently retryable.
+         */
         post: operations["create_upload_group_api_upload_groups_post"];
         delete?: never;
         options?: never;
@@ -1928,6 +2125,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/upload/presigned-multipart/{upload_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Presigned Multipart Resume
+         * @description Return stored ETags and fresh part URLs so a client can continue an upload.
+         */
+        post: operations["presigned_multipart_resume_api_upload_presigned_multipart__upload_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/upload/presigned-multipart/complete": {
         parameters: {
             query?: never;
@@ -1942,22 +2159,6 @@ export interface paths {
          * @description Finalise a presigned multipart upload under the cancellation lock.
          */
         post: operations["presigned_multipart_complete_api_upload_presigned_multipart_complete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/upload/presigned-multipart/{upload_id}/resume": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-                post: operations["presigned_multipart_resume_api_upload_presigned_multipart__upload_id__resume_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2047,26 +2248,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/upload/status/batch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Batch Upload Status
-         * @description Poll the processing status for up to 50 file keys in a single request.
-         */
-        post: operations["batch_upload_status_api_upload_status_batch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/upload/mine": {
         parameters: {
             query?: never;
@@ -2104,26 +2285,6 @@ export interface paths {
         get: operations["get_upload_preview_api_upload_preview_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/upload/request-url": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Request Upload Url Deprecated
-         * @deprecated
-         */
-        post: operations["request_upload_url_deprecated_api_upload_request_url_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2211,6 +2372,26 @@ export interface paths {
         };
         /** Get Qcm Limits */
         get: operations["get_qcm_limits_api_qcm_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/qcm/staged": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Staged Qcm
+         * @description Return a QCM the caller saved to their draft and has not submitted yet.
+         */
+        get: operations["get_staged_qcm_api_qcm_staged_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2364,6 +2545,23 @@ export interface paths {
         };
         /** Recently Viewed */
         get: operations["recently_viewed_api_users_me_recently_viewed_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/me/saved": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get My Saved Library */
+        get: operations["get_my_saved_library_api_users_me_saved_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2555,14 +2753,6 @@ export interface components {
             };
         };
         /**
-         * BatchStatusRequest
-         * @description Body for POST /upload/status/batch — poll multiple upload statuses at once.
-         */
-        BatchStatusRequest: {
-            /** File Keys */
-            file_keys: string[];
-        };
-        /**
          * BatchZipEntry
          * @description One successfully extracted file from a batch-zip upload.
          */
@@ -2594,26 +2784,6 @@ export interface components {
             /** Errors */
             errors: string[];
         };
-        /**
-         * UploadGroupOut
-         * @description Server-issued capability for a bounded folder upload.
-         */
-        UploadGroupOut: {
-            /** Group Id */
-            group_id: string;
-            /** Max Files */
-            max_files: number;
-            /** Expires In */
-            expires_in: number;
-        };
-        /**
-         * UploadGroupRequest
-         * @description Reserve a bounded set of per-file admissions for one folder.
-         */
-        UploadGroupRequest: {
-            /** File Count */
-            file_count: number;
-        };
         /** Body_parse_moodle_xml_api_qcm_parse_moodle_post */
         Body_parse_moodle_xml_api_qcm_parse_moodle_post: {
             /** File */
@@ -2633,6 +2803,91 @@ export interface components {
         Body_upload_file_api_upload_post: {
             /** File */
             file: string;
+        };
+        /** BulkUserActionIn */
+        BulkUserActionIn: {
+            /** User Ids */
+            user_ids: string[];
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "approve" | "reject" | "set_role" | "delete";
+            role?: components["schemas"]["UserRole"] | null;
+        };
+        /** CollectionDetailOut */
+        CollectionDetailOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Item Count */
+            item_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Contains Target
+             * @default false
+             */
+            contains_target: boolean;
+            /** Items */
+            items: components["schemas"]["SavedItemOut"][];
+        };
+        /** CollectionItemIn */
+        CollectionItemIn: {
+            /**
+             * Target Type
+             * @enum {string}
+             */
+            target_type: "material" | "directory";
+            /**
+             * Target Id
+             * Format: uuid
+             */
+            target_id: string;
+        };
+        /** CollectionNameIn */
+        CollectionNameIn: {
+            /** Name */
+            name: string;
+        };
+        /** CollectionSummaryOut */
+        CollectionSummaryOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Item Count */
+            item_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Contains Target
+             * @default false
+             */
+            contains_target: boolean;
         };
         /** ColorUpdateBody */
         ColorUpdateBody: {
@@ -2688,6 +2943,19 @@ export interface components {
         CommentUpdateIn: {
             /** Body */
             body: string;
+        };
+        /**
+         * ContentStatus
+         * @enum {string}
+         */
+        ContentStatus: "important" | "current" | "deprecated" | "archived";
+        /** ContentStatusUpdateIn */
+        ContentStatusUpdateIn: {
+            /** Material Ids */
+            material_ids?: string[];
+            /** Directory Ids */
+            directory_ids?: string[];
+            status: components["schemas"]["ContentStatus"];
         };
         /** CreateDirectoryOp */
         CreateDirectoryOp: {
@@ -2840,6 +3108,11 @@ export interface components {
             type: string;
             /** Description */
             description: string | null;
+            /**
+             * Status
+             * @default current
+             */
+            status: string;
             /** Metadata */
             metadata: {
                 [key: string]: unknown;
@@ -2878,20 +3151,6 @@ export interface components {
         DomainPatch: {
             /** Auto Approve */
             auto_approve?: boolean | null;
-        };
-        /** DownloadChunk */
-        DownloadChunk: {
-            /** Url */
-            url: string;
-            /** Filename */
-            filename: string;
-        };
-        /** DownloadChunksResponse */
-        DownloadChunksResponse: {
-            /** Dir Name */
-            dir_name: string;
-            /** Chunks */
-            chunks: components["schemas"]["DownloadChunk"][];
         };
         /** EditDirectoryOp */
         EditDirectoryOp: {
@@ -3148,6 +3407,11 @@ export interface components {
             /** My Contributions */
             my_contributions: number;
         };
+        /** IconUpdateBody */
+        IconUpdateBody: {
+            /** Icon */
+            icon: string | null;
+        };
         /** LeaderboardEntry */
         LeaderboardEntry: {
             /** Rank */
@@ -3189,11 +3453,6 @@ export interface components {
             /** Academic Year */
             academic_year: string | null;
         };
-        /** IconUpdateBody */
-        IconUpdateBody: {
-            /** Icon */
-            icon: string | null;
-        };
         /** LoginIn */
         LoginIn: {
             /** Email */
@@ -3220,6 +3479,8 @@ export interface components {
             description: string | null;
             /** Type */
             type: string;
+            /** @default current */
+            status: components["schemas"]["ContentStatus"];
             /** Current Version */
             current_version: number;
             /** Parent Material Id */
@@ -3230,7 +3491,7 @@ export interface components {
              * Is Anonymous
              * @default false
              */
-            is_anonymous?: boolean;
+            is_anonymous: boolean;
             /** Metadata */
             metadata: {
                 [key: string]: unknown;
@@ -3322,7 +3583,7 @@ export interface components {
              * Is Anonymous
              * @default false
              */
-            is_anonymous?: boolean;
+            is_anonymous: boolean;
             /** Pr Id */
             pr_id: string | null;
             virus_scan_result: components["schemas"]["VirusScanResult"];
@@ -3434,17 +3695,6 @@ export interface components {
             updated_at: string;
             author: components["schemas"]["PublicUserBrief"] | null;
         };
-        /** PaginatedResponse[Any] */
-        PaginatedResponse_Any_: {
-            /** Items */
-            items: unknown[];
-            /** Total */
-            total: number;
-            /** Page */
-            page: number;
-            /** Pages */
-            pages: number;
-        };
         /** PaginatedResponse[CommentOut] */
         PaginatedResponse_CommentOut_: {
             /** Items */
@@ -3471,6 +3721,17 @@ export interface components {
         PaginatedResponse_NotificationOut_: {
             /** Items */
             items: components["schemas"]["NotificationOut"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Pages */
+            pages: number;
+        };
+        /** PaginatedResponse[Union[PublicPRContribution, PublicMaterialContribution, PublicAnnotationContribution]] */
+        PaginatedResponse_Union_PublicPRContribution__PublicMaterialContribution__PublicAnnotationContribution__: {
+            /** Items */
+            items: (components["schemas"]["PublicPRContribution"] | components["schemas"]["PublicMaterialContribution"] | components["schemas"]["PublicAnnotationContribution"])[];
             /** Total */
             total: number;
             /** Page */
@@ -3535,6 +3796,264 @@ export interface components {
             /** Expires In */
             expires_in: number;
         };
+        /** PublicAnnotationContribution */
+        PublicAnnotationContribution: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Material Id
+             * Format: uuid
+             */
+            material_id: string;
+            /** Material Title */
+            material_title?: string | null;
+            /** Material Slug */
+            material_slug?: string | null;
+            /** Directory Path */
+            directory_path?: string | null;
+            /** Body */
+            body: string;
+            author: components["schemas"]["PublicUserBrief"] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** PublicFeaturedItemOut */
+        PublicFeaturedItemOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            material?: components["schemas"]["PublicMaterialDetail"] | null;
+            directory?: components["schemas"]["DirectoryOut"] | null;
+            /** Title */
+            title: string | null;
+            /** Description */
+            description: string | null;
+            /**
+             * Start At
+             * Format: date-time
+             */
+            start_at: string;
+            /**
+             * End At
+             * Format: date-time
+             */
+            end_at: string;
+            /** Priority */
+            priority: number;
+        };
+        /** PublicHomeResponse */
+        PublicHomeResponse: {
+            /** Featured */
+            featured: components["schemas"]["PublicFeaturedItemOut"][];
+            /** Popular Today */
+            popular_today: components["schemas"]["PublicMaterialDetail"][];
+            /** Popular 14D */
+            popular_14d: components["schemas"]["PublicMaterialDetail"][];
+            /** Recent Prs */
+            recent_prs: components["schemas"]["PublicPRContribution"][];
+            /** Recent Favourites */
+            recent_favourites: components["schemas"]["PublicMaterialDetail"][];
+            /** Recently Viewed */
+            recently_viewed: components["schemas"]["PublicMaterialDetail"][];
+            /** Recently Added */
+            recently_added: components["schemas"]["PublicMaterialDetail"][];
+            stats: components["schemas"]["HomeStats"];
+        };
+        /** PublicMaterialContribution */
+        PublicMaterialContribution: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Directory Id */
+            directory_id: string | null;
+            /** Directory Path */
+            directory_path?: string | null;
+            /** Title */
+            title: string;
+            /** Slug */
+            slug: string;
+            /** Description */
+            description: string | null;
+            /** Type */
+            type: string;
+            /** Download Count */
+            download_count: number;
+            /** Total Views */
+            total_views: number;
+            /** Like Count */
+            like_count: number;
+            /**
+             * Is Liked
+             * @default false
+             */
+            is_liked: boolean;
+            /**
+             * Is Favourited
+             * @default false
+             */
+            is_favourited: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** PublicMaterialDetail */
+        PublicMaterialDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Directory Id */
+            directory_id: string | null;
+            /** Directory Path */
+            directory_path?: string | null;
+            /** Title */
+            title: string;
+            /** Slug */
+            slug: string;
+            /** Description */
+            description: string | null;
+            /** Type */
+            type: string;
+            /** @default current */
+            status: components["schemas"]["ContentStatus"];
+            /** Current Version */
+            current_version: number;
+            /** Parent Material Id */
+            parent_material_id: string | null;
+            /** Author Id */
+            author_id: string | null;
+            /**
+             * Is Anonymous
+             * @default false
+             */
+            is_anonymous: boolean;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Download Count */
+            download_count: number;
+            /** Total Views */
+            total_views: number;
+            /** Views Today */
+            views_today: number;
+            /** Like Count */
+            like_count: number;
+            /**
+             * Is Liked
+             * @default false
+             */
+            is_liked: boolean;
+            /**
+             * Is Favourited
+             * @default false
+             */
+            is_favourited: boolean;
+            /**
+             * Attachment Count
+             * @default 0
+             */
+            attachment_count: number;
+            /**
+             * Comment Count
+             * @default 0
+             */
+            comment_count: number;
+            /**
+             * Annotation Count
+             * @default 0
+             */
+            annotation_count: number;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            current_version_info?: components["schemas"]["PublicMaterialVersionOut"] | null;
+        };
+        /** PublicMaterialVersionOut */
+        PublicMaterialVersionOut: {
+            /** Version Number */
+            version_number: number;
+            /** File Name */
+            file_name: string | null;
+            /** File Size */
+            file_size: number | null;
+            /** File Mime Type */
+            file_mime_type: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** PublicPRContribution */
+        PublicPRContribution: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Type */
+            type: string;
+            /** Status */
+            status: string;
+            /** Title */
+            title: string;
+            /** Description */
+            description: string | null;
+            /** Summary Types */
+            summary_types?: string[];
+            author: components["schemas"]["PublicUserBrief"] | null;
+            /**
+             * Is Anonymous
+             * @default false
+             */
+            is_anonymous: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** PublicUserBrief */
         PublicUserBrief: {
             /**
@@ -3595,6 +4114,22 @@ export interface components {
              */
             reputation: number;
         };
+        /**
+         * PullRequestCounts
+         * @description Pull requests per status, plus the viewer's own, for list tabs and badges.
+         */
+        PullRequestCounts: {
+            /** Open */
+            open: number;
+            /** Approved */
+            approved: number;
+            /** Rejected */
+            rejected: number;
+            /** Cancelled */
+            cancelled: number;
+            /** Mine */
+            mine: number;
+        };
         /** PullRequestCreate */
         PullRequestCreate: {
             /** Title */
@@ -3607,7 +4142,7 @@ export interface components {
              * Is Anonymous
              * @default false
              */
-            is_anonymous?: boolean;
+            is_anonymous: boolean;
         };
         /** PullRequestOut */
         PullRequestOut: {
@@ -3646,12 +4181,12 @@ export interface components {
              * Is Anonymous
              * @default false
              */
-            is_anonymous?: boolean;
+            is_anonymous: boolean;
             /**
              * Is Own
              * @default false
              */
-            is_own?: boolean;
+            is_own: boolean;
             /**
              * Created At
              * Format: date-time
@@ -3700,6 +4235,17 @@ export interface components {
             access_token: string;
             user?: components["schemas"]["UserBrief"] | null;
         };
+        /** RegisterIn */
+        RegisterIn: {
+            /** Email */
+            email: string;
+            /** Code */
+            code: string;
+            /** Password */
+            password: string;
+            /** Display Name */
+            display_name?: string | null;
+        };
         /** RejectRequest */
         RejectRequest: {
             /** Reason */
@@ -3712,16 +4258,10 @@ export interface components {
         };
         /** ResolvePathsRequest */
         ResolvePathsRequest: {
-            /**
-             * Directory Ids
-             * @default []
-             */
-            directory_ids: string[];
-            /**
-             * Material Ids
-             * @default []
-             */
-            material_ids: string[];
+            /** Directory Ids */
+            directory_ids?: string[];
+            /** Material Ids */
+            material_ids?: string[];
         };
         /** ResolvePathsResponse */
         ResolvePathsResponse: {
@@ -3746,6 +4286,64 @@ export interface components {
             PartNumber: number;
             /** Etag */
             ETag: string;
+        };
+        /** SavedItemOut */
+        SavedItemOut: {
+            /**
+             * Target Type
+             * @enum {string}
+             */
+            target_type: "material" | "directory";
+            /**
+             * Target Id
+             * Format: uuid
+             */
+            target_id: string;
+            /** Title */
+            title: string;
+            /** Item Type */
+            item_type: string;
+            /** Description */
+            description?: string | null;
+            /** Href */
+            href: string;
+            /**
+             * Added At
+             * Format: date-time
+             */
+            added_at: string;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Status */
+            status?: string | null;
+            /**
+             * Like Count
+             * @default 0
+             */
+            like_count: number | null;
+            /**
+             * Total Views
+             * @default 0
+             */
+            total_views: number | null;
+            /**
+             * Download Count
+             * @default 0
+             */
+            download_count: number | null;
+            /** Slug */
+            slug?: string | null;
+            /** Current Version Info */
+            current_version_info?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** SavedLibraryOut */
+        SavedLibraryOut: {
+            /** Items */
+            items: components["schemas"]["SavedItemOut"][];
         };
         /** ServiceStatus */
         ServiceStatus: {
@@ -3773,6 +4371,8 @@ export interface components {
             password: string;
             /** Display Name */
             display_name?: string | null;
+            /** Bootstrap Token */
+            bootstrap_token?: string | null;
         };
         /** TestEmailIn */
         TestEmailIn: {
@@ -3853,6 +4453,26 @@ export interface components {
             batch_max_files_privileged: number;
             /** Batch Max Path Depth */
             batch_max_path_depth: number;
+        };
+        /**
+         * UploadGroupOut
+         * @description Server-issued capability for a bounded folder upload.
+         */
+        UploadGroupOut: {
+            /** Group Id */
+            group_id: string;
+            /** Max Files */
+            max_files: number;
+            /** Expires In */
+            expires_in: number;
+        };
+        /**
+         * UploadGroupRequest
+         * @description Reserve a bounded set of per-file admissions for one folder.
+         */
+        UploadGroupRequest: {
+            /** File Count */
+            file_count: number;
         };
         /**
          * UploadHistoryItem
@@ -3982,8 +4602,13 @@ export interface components {
             onboarded: boolean;
             /** Auto Approve */
             auto_approve: boolean;
-            /** Has Password */
+            /**
+             * Has Password
+             * @default false
+             */
             has_password: boolean;
+            /** Completed Tutorials */
+            completed_tutorials?: string[];
         };
         /** UserOut */
         UserOut: {
@@ -3992,8 +4617,6 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** Email */
-            email: string;
             /** Display Name */
             display_name: string | null;
             /** Avatar Url */
@@ -4004,6 +4627,13 @@ export interface components {
             bio: string | null;
             /** Academic Year */
             academic_year: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Email */
+            email: string;
             /** Onboarded */
             onboarded: boolean;
             /** Auto Approve */
@@ -4015,11 +4645,6 @@ export interface components {
              * @default []
              */
             completed_tutorials: string[];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
         };
         /** UserProfileOut */
         UserProfileOut: {
@@ -4028,8 +4653,6 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** Email */
-            email: string;
             /** Display Name */
             display_name: string | null;
             /** Avatar Url */
@@ -4040,6 +4663,13 @@ export interface components {
             bio: string | null;
             /** Academic Year */
             academic_year: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Email */
+            email: string;
             /** Onboarded */
             onboarded: boolean;
             /** Auto Approve */
@@ -4051,11 +4681,6 @@ export interface components {
              * @default []
              */
             completed_tutorials: string[];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
             /**
              * Prs Approved
              * @default 0
@@ -4087,6 +4712,11 @@ export interface components {
              */
             reputation: number;
         };
+        /**
+         * UserRole
+         * @enum {string}
+         */
+        UserRole: "pending" | "student" | "moderator" | "bureau" | "vieux" | "guest";
         /** UserUpdateIn */
         UserUpdateIn: {
             /** Display Name */
@@ -4095,7 +4725,7 @@ export interface components {
             bio?: string | null;
             /** Academic Year */
             academic_year?: string | null;
-            /** Avatar Url — null is accepted only to clear the server-owned avatar reference. */
+            /** Avatar Url */
             avatar_url?: null;
             /** Avatar Upload Id */
             avatar_upload_id?: string | null;
@@ -4834,6 +5464,134 @@ export interface operations {
             };
         };
     };
+    admin_operational_overview_api_admin_overview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    admin_bulk_users_api_admin_users_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkUserActionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_content_api_admin_content_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                search?: string | null;
+                page?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_content_status_api_admin_content_status_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContentStatusUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reconcile_storage_api_admin_storage_reconcile_get: {
         parameters: {
             query?: never;
@@ -5273,6 +6031,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["GoogleLoginIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_api_auth_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterIn"];
             };
         };
         responses: {
@@ -5790,6 +6581,230 @@ export interface operations {
             };
         };
     };
+    list_collections_api_collections_get: {
+        parameters: {
+            query?: {
+                target_type?: ("material" | "directory") | null;
+                target_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummaryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_collection_api_collections_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionNameIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummaryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_collection_api_collections__collection_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_collection_api_collections__collection_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_collection_api_collections__collection_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionNameIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummaryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_collection_item_api_collections__collection_id__items_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionItemIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_collection_item_api_collections__collection_id__items__target_type___target_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collection_id: string;
+                target_type: "material" | "directory";
+                target_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     resolve_paths_api_directories_resolve_paths_post: {
         parameters: {
             query?: never;
@@ -5918,27 +6933,7 @@ export interface operations {
             };
         };
     };
-    download_root_chunks_api_directories_root_download_chunks_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DownloadChunksResponse"];
-                };
-            };
-        };
-    };
-    download_directory_chunks_api_directories__id__download_chunks_get: {
+    check_directory_download_api_directories__id__download_check_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -5950,13 +6945,11 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["DownloadChunksResponse"];
-                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -6107,7 +7100,7 @@ export interface operations {
             };
         };
     };
-    favourite_directory_api_directories__id__favourite_post: {
+    favourite_directory_api_directories__id__favourite_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -6125,7 +7118,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unfavourite_directory_api_directories__id__favourite_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
                     };
                 };
             };
@@ -6330,7 +7356,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MaterialDetail"];
+                    "application/json": components["schemas"]["MaterialDetail"] | components["schemas"]["PublicMaterialDetail"];
                 };
             };
             /** @description Validation Error */
@@ -6445,6 +7471,39 @@ export interface operations {
             };
         };
     };
+    recalculate_material_thumbnail_api_materials__material_id__recalculate_thumbnail_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                material_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     stream_material_file_api_materials__material_id__file_get: {
         parameters: {
             query?: never;
@@ -6493,7 +7552,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MaterialVersionOut"][];
+                    "application/json": (components["schemas"]["MaterialVersionOut"] | components["schemas"]["PublicMaterialVersionOut"])[];
                 };
             };
             /** @description Validation Error */
@@ -6525,7 +7584,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MaterialVersionOut"];
+                    "application/json": components["schemas"]["MaterialVersionOut"] | components["schemas"]["PublicMaterialVersionOut"];
                 };
             };
             /** @description Validation Error */
@@ -6592,7 +7651,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MaterialDetail"][];
+                    "application/json": (components["schemas"]["MaterialDetail"] | components["schemas"]["PublicMaterialDetail"])[];
                 };
             };
             /** @description Validation Error */
@@ -6672,7 +7731,7 @@ export interface operations {
             };
         };
     };
-    favourite_material_api_materials__material_id__favourite_post: {
+    favourite_material_api_materials__material_id__favourite_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -6690,7 +7749,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unfavourite_material_api_materials__material_id__favourite_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                material_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
                     };
                 };
             };
@@ -6883,6 +7975,44 @@ export interface operations {
             };
         };
     };
+    render_og_image_api_og_image_get: {
+        parameters: {
+            query?: {
+                /** @description Main title to display */
+                title?: string | null;
+                /** @description Subtitle/description */
+                subtitle?: string | null;
+                /** @description Category or section badge */
+                badge?: string | null;
+                /** @description Theme color hex */
+                theme?: string | null;
+                /** @description Pipe-separated footer tags */
+                tags?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     render_og_api_og_get: {
         parameters: {
             query?: never;
@@ -6977,6 +8107,9 @@ export interface operations {
                 status?: string | null;
                 type?: string | null;
                 author_id?: string | null;
+                search?: string | null;
+                op_type?: ("create_material" | "edit_material" | "delete_material" | "directory" | "move_item" | "revert") | null;
+                sort?: "newest" | "oldest" | "changes";
                 page?: number;
                 limit?: number;
             };
@@ -7035,6 +8168,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    count_pull_requests_api_pull_requests_counts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullRequestCounts"];
                 };
             };
         };
@@ -7380,6 +8533,11 @@ export interface operations {
                 limit?: number;
                 directory_id?: string | null;
                 type?: string | null;
+                kind?: ("material" | "directory") | null;
+                material_type?: string | null;
+                directory_type?: string | null;
+                status?: string | null;
+                recursive?: boolean;
             };
             header?: never;
             path?: never;
@@ -7816,6 +8974,37 @@ export interface operations {
             };
         };
     };
+    presigned_multipart_resume_api_upload_presigned_multipart__upload_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresignedMultipartInitOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     presigned_multipart_complete_api_upload_presigned_multipart_complete_post: {
         parameters: {
             query?: never;
@@ -7836,37 +9025,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UploadPendingOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    presigned_multipart_resume_api_upload_presigned_multipart__upload_id__resume_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                upload_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresignedMultipartInitOut"];
                 };
             };
             /** @description Validation Error */
@@ -7989,41 +9147,6 @@ export interface operations {
             };
         };
     };
-    batch_upload_status_api_upload_status_batch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BatchStatusRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_my_uploads_api_upload_mine_get: {
         parameters: {
             query?: {
@@ -8089,26 +9212,6 @@ export interface operations {
             };
         };
     };
-    request_upload_url_deprecated_api_upload_request_url_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
     get_home_api_home__get: {
         parameters: {
             query?: never;
@@ -8124,7 +9227,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HomeResponse"];
+                    "application/json": components["schemas"]["HomeResponse"] | components["schemas"]["PublicHomeResponse"];
                 };
             };
         };
@@ -8151,7 +9254,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MaterialDetail"][];
+                    "application/json": (components["schemas"]["MaterialDetail"] | components["schemas"]["PublicMaterialDetail"])[];
                 };
             };
             /** @description Validation Error */
@@ -8217,6 +9320,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    get_staged_qcm_api_qcm_staged_get: {
+        parameters: {
+            query: {
+                file_key: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -8492,7 +9628,27 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MaterialDetail"][];
+                    "application/json": (components["schemas"]["MaterialDetail"] | components["schemas"]["PublicMaterialDetail"])[];
+                };
+            };
+        };
+    };
+    get_my_saved_library_api_users_me_saved_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedLibraryOut"];
                 };
             };
         };
@@ -8512,7 +9668,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MaterialDetail"][];
+                    "application/json": (components["schemas"]["MaterialDetail"] | components["schemas"]["PublicMaterialDetail"])[];
                 };
             };
         };
@@ -8620,7 +9776,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PaginatedResponse_Any_"];
+                    "application/json": components["schemas"]["PaginatedResponse_Union_PublicPRContribution__PublicMaterialContribution__PublicAnnotationContribution__"];
                 };
             };
             /** @description Validation Error */

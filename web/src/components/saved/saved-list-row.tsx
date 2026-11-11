@@ -18,8 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { enUS, fr } from "date-fns/locale";
-import { useLocale } from "next-intl";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { CollectionPicker } from "@/components/saved/collection-picker";
@@ -38,11 +37,10 @@ import { isExternalUrl } from "@/lib/url-utils";
 import { getDirectoryIcon } from "@/lib/directory-icons";
 import { getDirectoryColor } from "@/lib/directory-colors";
 import { EXT_BADGE_COLORS, getFileBadgeLabel } from "@/lib/file-utils";
-import { useSavedTranslations } from "@/lib/saved-i18n";
-import { apiFetch } from "@/lib/api-client";
-import { removeCollectionItem, type SavedItem } from "@/lib/collections";
+import { removeCollectionItem, setFavourite, type SavedItem } from "@/lib/collections";
 import type { MaterialDetail } from "@/components/home/types";
 import { cn } from "@/lib/utils";
+import { useDateLocale } from "@/hooks/use-date-locale";
 
 const MaterialPreview = dynamic(
   () => import("@/components/home/material-preview").then((module) => module.MaterialPreview),
@@ -68,14 +66,15 @@ export const SavedListRow = memo(function SavedListRow({
   onRemoved,
   onCollectionsChanged,
 }: SavedListRowProps) {
-  const t = useSavedTranslations();
-  const locale = useLocale();
+  const t = useTranslations("Saved");
+  const tFeedback = useTranslations("Feedback");
+  const dateLocale = useDateLocale();
   const router = useRouter();
   const openExternalLink = useExternalLinkStore((s) => s.openLink);
   const [removing, setRemoving] = useState(false);
 
   const isDirectory = item.target_type === "directory";
-  const metadata = (item.metadata ?? {}) as Record<string, unknown>;
+  const metadata = useMemo(() => (item.metadata ?? {}) as Record<string, unknown>, [item.metadata]);
   const rawStatus = typeof item.status === "string" ? normalizeContentStatus(item.status) : null;
   const targetUrl = String(metadata?.url ?? "").trim();
   const isLink = item.item_type === "link" || !!targetUrl;
@@ -164,7 +163,7 @@ export const SavedListRow = memo(function SavedListRow({
     ? ""
     : formatDistanceToNow(addedDate, {
         addSuffix: true,
-        locale: locale.startsWith("fr") ? fr : enUS,
+        locale: dateLocale,
       });
 
   const handleRowLinkClick = (e: React.MouseEvent) => {
@@ -186,7 +185,7 @@ export const SavedListRow = memo(function SavedListRow({
       await navigator.clipboard.writeText(fullUrl);
       toast.success(t("linkCopied"));
     } catch {
-      toast.error("Failed to copy link");
+      toast.error(tFeedback("copyLinkFailed"));
     }
   };
 
@@ -197,11 +196,7 @@ export const SavedListRow = memo(function SavedListRow({
       if (collectionId) {
         await removeCollectionItem(collectionId, item.target_type, item.target_id);
       } else {
-        const endpoint =
-          item.target_type === "material"
-            ? `/materials/${item.target_id}/favourite`
-            : `/directories/${item.target_id}/favourite`;
-        await apiFetch(endpoint, { method: "POST" });
+        await setFavourite(item.target_type, item.target_id, false);
       }
       onRemoved();
     } catch {

@@ -33,7 +33,6 @@ from app.core.security.file_security import (
     compress_file_path,
     strip_metadata_file,
 )
-from app.core.security.file_security._image import _strip_image_metadata
 from app.core.security.file_security._office import (
     _check_ole2_macros,
     _strip_ooxml_from_path,
@@ -42,6 +41,7 @@ from app.workers.process_upload import (
     _STAGES,
     _overall,
 )
+from tests.image_helpers import strip_image_metadata
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -564,12 +564,12 @@ class TestGIFPixelBudget:
         """An animated multi-frame GIF should be rejected."""
         gif_bytes = _make_gif(10, 10, 3)
         with pytest.raises(ValueError, match="Animated and multi-frame images are not supported"):
-            _strip_image_metadata(gif_bytes)
+            strip_image_metadata(gif_bytes)
 
     def test_single_frame_gif_passes(self):
         """A single-frame GIF should pass metadata stripping."""
         gif_bytes = _make_gif(100, 100, 1)
-        result = _strip_image_metadata(gif_bytes)
+        result = strip_image_metadata(gif_bytes)
         assert len(result) > 0
 
 

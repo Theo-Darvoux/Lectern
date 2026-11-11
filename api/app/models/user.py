@@ -25,6 +25,10 @@ class UserRole(enum.StrEnum):
     GUEST = "guest"
 
 
+ADMIN_ROLES = (UserRole.BUREAU, UserRole.VIEUX)
+MODERATOR_ROLES = (UserRole.MODERATOR, *ADMIN_ROLES)
+
+
 class User(UUIDMixin, Base):
     __tablename__ = "users"
 
@@ -65,11 +69,11 @@ class User(UUIDMixin, Base):
 
     @property
     def is_moderator(self) -> bool:
-        return self.role in (UserRole.MODERATOR, UserRole.BUREAU, UserRole.VIEUX)
+        return self.role in MODERATOR_ROLES
 
     @property
     def is_admin(self) -> bool:
-        return self.role in (UserRole.BUREAU, UserRole.VIEUX)
+        return self.role in ADMIN_ROLES
 
     @property
     def is_staff(self) -> bool:

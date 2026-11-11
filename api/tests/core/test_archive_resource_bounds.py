@@ -7,23 +7,10 @@ from app.core.security.file_security._office import _zip_strip_file
 from app.core.security.file_security._zip import (
     _read_zip_entry_bounded,
     _recompress_zip_path,
-    _register_zip_name,
     _sanitize_zip_entry_name,
     _validate_zip_name_conflicts,
 )
 from app.core.security.file_security.errors import SanitizationError, UnsafeFileError
-
-
-def test_legacy_zip_name_registration_contract_is_preserved() -> None:
-    registry: dict[str, bool | None] = {}
-
-    _register_zip_name(registry, "folder/", is_dir=True)
-    _register_zip_name(registry, "folder/file.txt", is_dir=False)
-
-    with pytest.raises(ValueError, match="conflicts|duplicate"):
-        _register_zip_name(registry, "FOLDER", is_dir=False)
-
-    assert registry == {"folder": True, "folder/file.txt": False}
 
 
 def test_zip_name_validation_retains_one_name_per_real_entry() -> None:

@@ -29,6 +29,7 @@ const TRANSLATED_ERROR_CODES = new Set([
     "ERR_QUOTA_EXCEEDED",
     "ERR_STORAGE_FULL",
     "ERR_PROCESSING_FAILED",
+    "ERR_PROCESSING_TIMEOUT",
 ]);
 
 /** Turn any upload failure into a message for the user's language. */

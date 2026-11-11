@@ -58,7 +58,7 @@ To serve single-file downloads and branding assets through an HMAC-signed
 worker instead of presigned S3 URLs, set `WORKER_ZIP_URL` and
 `WORKER_ZIP_HMAC_SECRET` (the secret must match the worker's). It works with
 both the Cloudflare Worker and the self-hosted Node worker — same token
-contract, so you only change the URL. Authenticated file and ZIP requests are
+contract, so you only change the URL. Authenticated file requests are
 verified on every request and must not be cached ahead of the worker; public
 branding may be cached. Leave `WORKER_ZIP_URL` empty to fall back to presigned
 S3 / server-side streaming. When the self-hosted worker uses an external S3

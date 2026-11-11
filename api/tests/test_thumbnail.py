@@ -8,14 +8,13 @@ import pytest
 from PIL import Image, ImageDraw
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security.parser_child import is_blank_image
 from app.core.security.processing_paths import make_processing_temp_path
-from app.workers.upload.stages.thumbnail import _is_blank_thumbnail
 
 
-def _save(img: Image.Image, suffix: str = ".png") -> Path:
-    path = make_processing_temp_path(suffix=suffix)
-    img.save(path)
-    return path
+def _is_blank_thumbnail(path: Path) -> bool:
+    with Image.open(path) as image:
+        return is_blank_image(image)
 
 
 def _write_minimal_xlsx(path: Path) -> None:
@@ -56,7 +55,7 @@ def _write_minimal_xlsx(path: Path) -> None:
 def test_all_white_is_blank() -> None:
     """A uniform white image has nothing to show → treated as blank."""
     img = Image.new("RGB", (200, 120), "white")
-    assert _is_blank_thumbnail(_save(img)) is True
+    assert is_blank_image(img) is True
 
 
 def test_white_page_with_text_is_not_blank() -> None:
@@ -66,7 +65,7 @@ def test_white_page_with_text_is_not_blank() -> None:
     draw = ImageDraw.Draw(img)
     draw.rectangle([10, 10, 120, 60], fill="black")
     draw.text((10, 80), "Cours 2025", fill="black")
-    assert _is_blank_thumbnail(_save(img)) is False
+    assert is_blank_image(img) is False
 
 
 def test_pale_page_with_title_bar_is_not_blank() -> None:
@@ -75,7 +74,7 @@ def test_pale_page_with_title_bar_is_not_blank() -> None:
     img = Image.new("RGB", (200, 120), (245, 245, 245))
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, 200, 25], fill=(40, 60, 120))
-    assert _is_blank_thumbnail(_save(img)) is False
+    assert is_blank_image(img) is False
 
 
 @pytest.mark.parametrize(

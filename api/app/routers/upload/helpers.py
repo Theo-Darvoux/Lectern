@@ -5,14 +5,15 @@ import time
 from typing import Any, cast
 from uuid import UUID
 
-from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.database.redis as redis_core
 from app.core.common.exceptions import BadRequestError
 from app.core.common.upload_errors import UploadErrorCode
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.database.post_commit import PostCommitKey, outbox_kwargs
+from app.core.database.redis import RedisClient
 from app.core.observability.telemetry import inject_trace_context
 from app.core.storage import capacity as storage_capacity
 from app.models.upload import Upload
@@ -29,20 +30,16 @@ _release_storage_reservation = storage_capacity.release_storage_reservation
 _reserve_storage_limit = storage_capacity.reserve_storage_limit
 
 MAX_PENDING_UPLOADS = 50
-LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MiB
-LARGE_SVG_THRESHOLD = LARGE_FILE_THRESHOLD  # alias used by tests
 
 _FAST_QUEUE_THRESHOLD = 5 * 1024 * 1024  # 5 MiB
 _FAST_QUEUE_NAME = "upload-fast"
 _SLOW_QUEUE_NAME = "upload-slow"
 
-_QUOTA_KEY_PREFIX = "quota:uploads:"
 _IDEM_KEY_PREFIX = "upload:idem:"
 _IDEM_TTL = 25 * 3600  # 25 h -- slightly longer than the 24 h file TTL
 _UPLOAD_INTENT_PREFIX = "upload:intent:"
 _UPLOAD_INTENT_TTL = 3600  # 1 h to complete a presigned single-part upload
 _MULTIPART_INTENT_TTL = 24 * 3600  # resumable, so it matches the tus session lifetime
-_STATUS_CACHE_PREFIX = "upload:status:"
 
 
 async def _create_upload_row(
@@ -71,7 +68,7 @@ async def _create_upload_row(
 
 async def _check_pending_cap(
     user_id: str,
-    redis: "Redis",  # type: ignore[type-arg]
+    redis: RedisClient,
     db: AsyncSession,
     *,
     privileged: bool = False,
@@ -86,7 +83,7 @@ async def _check_pending_cap(
     Optionally reserves ``reserve_key`` atomically to prevent TOCTOU races.
     Fail-closed: if Redis is unreachable, we reject the upload.
     """
-    quota_key = f"{_QUOTA_KEY_PREFIX}{user_id}"
+    quota_key = f"{UPLOAD_QUOTA_PREFIX}{user_id}"
     try:
         cutoff = time.time() - (25 * 3600)
         await redis.zremrangebyscore(quota_key, "-inf", cutoff)

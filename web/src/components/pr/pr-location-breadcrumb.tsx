@@ -18,7 +18,6 @@ interface PRLocationBreadcrumbProps {
     browseUrl?: string;
     rootLabel?: string;
     isNewFolder?: boolean;
-    compact?: boolean;
 }
 
 export function PRLocationBreadcrumb({
@@ -28,7 +27,6 @@ export function PRLocationBreadcrumb({
     browseUrl,
     rootLabel = "Root",
     isNewFolder = false,
-    compact = false,
 }: PRLocationBreadcrumbProps) {
     if (pathSegments && pathSegments.length > 0) {
         const segmentsWithHref = pathSegments.map((seg, i) => {
@@ -106,7 +104,6 @@ export function PRLocationBreadcrumb({
     }
 
     if (pathString) {
-        const segments = pathString.split(" › ");
         return (
             <div
                 className={cn(

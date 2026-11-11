@@ -111,7 +111,7 @@ When set, single-file downloads and branding assets are served through an
 HMAC-signed worker instead of presigned S3 GETs. Point it at
 **either** the Cloudflare Worker **or** the self-hosted Node worker — the token
 contract is identical, so switching is URL-only. Only public branding is
-cacheable; authenticated file and ZIP requests must reach the token verifier.
+cacheable; authenticated file requests must reach the token verifier.
 
 | Variable | Default | Description |
 |---|---|---|

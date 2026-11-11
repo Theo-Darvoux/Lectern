@@ -58,7 +58,7 @@ For a full local dev setup (running components individually, seeding the databas
 ```
 api/                  FastAPI backend, workers, migrations
 web/                  Next.js frontend
-worker/               Cloudflare Worker (HMAC-signed R2 access, ZIP offload)
+worker/               Cloudflare Worker (HMAC-signed file and branding delivery)
 infra/                Nginx configs, Docker init scripts
 compose.yaml          Base service definitions (all environments)
 compose.override.yaml Dev overlay, auto-merged (SeaweedFS, hot reload, source mounts)

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, Suspense } from "react";
+import { useMemo, useState, Suspense } from "react";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Loader2, LayoutGrid, TrendingUp } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -8,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MaterialCard } from "@/components/home/material-card";
 import { SectionHeader } from "@/components/home/section-header";
+import { QueryError } from "@/components/query-error";
 import { apiFetch } from "@/lib/api-client";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
@@ -58,68 +60,34 @@ function PopularContent() {
   const [period, setPeriod] = useState<Period>(
     () => (searchParams.get("period") as Period | null) ?? "today",
   );
-  const [materials, setMaterials] = useState<MaterialDetail[]>([]);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
-  const replaceRequestRef = useRef(0);
-
-  const fetchMaterials = useCallback(
-    async (p: Period, off: number, replace: boolean) => {
-      const requestId = replace ? ++replaceRequestRef.current : replaceRequestRef.current;
-      if (off === 0) {
-        setIsLoading(true);
-      } else {
-        setIsLoadingMore(true);
-      }
-
-      try {
-        const data = await apiFetch<MaterialDetail[]>(
-          `/home/popular?period=${p}&limit=${LIMIT}&offset=${off}`,
-        );
-        if (requestId !== replaceRequestRef.current) return;
-
-        if (replace) {
-          setMaterials(data);
-          setHasLoaded(true);
-        } else {
-          setMaterials((prev) => [...prev, ...data]);
-        }
-
-        setHasMore(data.length === LIMIT);
-        setOffset(off + data.length);
-      } catch {
-        if (requestId !== replaceRequestRef.current) return;
-        toast.error(t("loadError"));
-      } finally {
-        if (requestId === replaceRequestRef.current) {
-          setIsLoading(false);
-          setIsLoadingMore(false);
-        }
-      }
-    },
-    [],
-  );
-
-  // Refetch from scratch whenever period changes
-  useEffect(() => {
-    void fetchMaterials(period, 0, true);
-  }, [period, fetchMaterials]);
+  const query = useInfiniteQuery({
+    queryKey: ["home", "popular", period],
+    queryFn: ({ pageParam, signal }) =>
+      apiFetch<MaterialDetail[]>(
+        `/home/popular?period=${period}&limit=${LIMIT}&offset=${pageParam}`,
+        { signal },
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length === LIMIT ? allPages.reduce((count, page) => count + page.length, 0) : undefined,
+    // Keep the previous period's cards dimmed while the new period loads.
+    placeholderData: keepPreviousData,
+  });
+  const materials = useMemo(() => query.data?.pages.flat() ?? [], [query.data]);
+  const isLoading = query.isPending || (query.isPlaceholderData && query.isFetching);
+  const isLoadingMore = query.isFetchingNextPage;
+  const hasMore = query.hasNextPage;
 
   const handlePeriodChange = (value: string) => {
     const newPeriod = value as Period;
     if (newPeriod === period) return;
-    replaceRequestRef.current += 1;
-    setIsLoadingMore(false);
-    setIsLoading(true);
     setPeriod(newPeriod);
     router.replace(`/popular?period=${newPeriod}`, { scroll: false });
   };
 
-  const handleLoadMore = () => {
-    fetchMaterials(period, offset, false);
+  const handleLoadMore = async () => {
+    const result = await query.fetchNextPage();
+    if (result.isFetchNextPageError) toast.error(t("loadError"));
   };
 
   const subtitle =
@@ -155,8 +123,10 @@ function PopularContent() {
       <p className="mt-4 mb-6 text-sm text-muted-foreground">{subtitle}</p>
 
       {/* ── Content ──────────────────────────────────── */}
-      {isLoading && !hasLoaded ? (
+      {query.isPending ? (
         <SkeletonGrid />
+      ) : query.isError && !query.isFetchNextPageError ? (
+        <QueryError message={t("loadError")} onRetry={() => void query.refetch()} className="py-20" />
       ) : materials.length === 0 ? (
         <div
           className={cn(
@@ -193,7 +163,7 @@ function PopularContent() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleLoadMore}
+                onClick={() => void handleLoadMore()}
                 disabled={isLoadingMore}
                 className="min-w-35"
               >

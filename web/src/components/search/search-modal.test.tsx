@@ -2,9 +2,8 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SearchResultRow, SearchResultThumbnail } from "./search-modal";
+import { SearchResultRow } from "./search-modal";
 import type { SearchResult } from "./use-search";
-import * as previewSource from "@/lib/material-preview-source";
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string, params?: Record<string, unknown>) => {
