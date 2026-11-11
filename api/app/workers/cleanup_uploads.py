@@ -5,6 +5,7 @@ from typing import cast
 from sqlalchemy import delete, select, update
 
 from app.config import settings
+from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.database.database import async_session_factory
 from app.core.database.post_commit import (
     PostCommitKey,
@@ -183,8 +184,6 @@ async def cleanup_uploads(ctx: dict) -> None:  # type: ignore[type-arg]
         await persist_post_commit_jobs(db)
         await db.commit()
         await dispatch_post_commit_actions(db)
-
-        from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 
         for upload_id, user_id, quarantine_key in pending_rows:
             await release_storage_reservation(upload_id, ctx["redis"])

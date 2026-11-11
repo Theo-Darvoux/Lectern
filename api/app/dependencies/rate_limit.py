@@ -68,6 +68,36 @@ def _rate_limit_subjects(request: Request, user: User) -> list[str]:
     return list(dict.fromkeys((primary, _guest_source_subject(request))))
 
 
+def _download_limits() -> tuple[int, int]:
+    """Return (per_minute, per_day) download limits."""
+    return (100, 2000) if settings.is_dev else (10, 200)
+
+
+def _minute_limit_error(minute_limit: int) -> RateLimitError:
+    return RateLimitError(f"You are downloading too fast. Limit: {minute_limit} files per minute.")
+
+
+def _daily_limit_error(daily_limit: int) -> RateLimitError:
+    return RateLimitError(
+        f"Daily download limit reached ({daily_limit} files). Please try again tomorrow."
+    )
+
+
+async def check_download_budget(
+    request: Request, user: User, redis: RedisClient, count: int = 1
+) -> None:
+    """Raise if ``count`` more downloads would exceed a limit, without using any budget."""
+    minute_limit, daily_limit = _download_limits()
+    keys: list[str] = []
+    for subject in _rate_limit_subjects(request, user):
+        keys += [f"ratelimit:downloads:min:{subject}", f"ratelimit:downloads:day:{subject}"]
+    counts = [int(value or 0) for value in await redis.mget(keys)]
+    if max(counts[0::2], default=0) + count > minute_limit:
+        raise _minute_limit_error(minute_limit)
+    if max(counts[1::2], default=0) + count > daily_limit:
+        raise _daily_limit_error(daily_limit)
+
+
 async def rate_limit_downloads(
     request: Request,
     user: CurrentUser,
@@ -75,8 +105,7 @@ async def rate_limit_downloads(
     redis: Annotated[RedisClient, Depends(get_redis)],
     count: int = 1,
 ) -> None:
-    minute_limit = 100 if settings.is_dev else 10
-    daily_limit = 2000 if settings.is_dev else 200
+    minute_limit, daily_limit = _download_limits()
 
     subjects = _rate_limit_subjects(request, user)
 
@@ -96,9 +125,7 @@ async def rate_limit_downloads(
     daily_count = max(daily_counts, default=0)
 
     if minute_count > minute_limit:
-        raise RateLimitError(
-            f"You are downloading too fast. Limit: {minute_limit} files per minute."
-        )
+        raise _minute_limit_error(minute_limit)
 
     if daily_count > daily_limit:
         if user.role != UserRole.GUEST:
@@ -106,9 +133,7 @@ async def rate_limit_downloads(
                 db, user.id, f"Exceeded daily download limit ({daily_count}/{daily_limit})"
             )
             await db.commit()
-        raise RateLimitError(
-            f"Daily download limit reached ({daily_limit} files). Please try again tomorrow."
-        )
+        raise _daily_limit_error(daily_limit)
 
 
 # Per-role rate limit tiers: (per_minute, per_day) for prod / dev

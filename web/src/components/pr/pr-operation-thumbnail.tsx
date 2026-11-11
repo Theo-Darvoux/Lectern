@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { uploadPreviewQuery } from "@/lib/upload-preview";
-import { getMaterialThumbnail } from "@/lib/material-preview-source";
+import { getMaterialThumbnail, subscribeMaterialThumbnail } from "@/lib/material-preview-source";
 import { getFileTypeStyle } from "@/components/home/file-type-display";
 import { getDirectoryIcon } from "@/lib/directory-icons";
 import { getDirectoryColor } from "@/lib/directory-colors";
@@ -59,6 +59,16 @@ export function PROperationThumbnail({
         queryFn: async () => (await getMaterialThumbnail(publishedId!))?.url ?? null,
         enabled: !!publishedId,
     });
+    const queryClient = useQueryClient();
+    // A regenerated thumbnail clears the preview-source cache; drop our copy with it.
+    useEffect(() => {
+        if (!publishedId) return;
+        return subscribeMaterialThumbnail((id) => {
+            if (id === publishedId) {
+                void queryClient.invalidateQueries({ queryKey: ["material-thumbnail", id] });
+            }
+        });
+    }, [publishedId, queryClient]);
     const imgUrl = (stagedKey ? staged.data : publishedId ? published.data : null) ?? null;
     const imgError = staged.isError || (imgUrl !== null && imgUrl === failedUrl);
 

@@ -17,7 +17,7 @@ from app.services.pr.operations import _is_temp_id
 from app.services.pr_visibility import anonymous_material_key, can_see_anonymous_authors
 
 _DIRECTORY_OPS = ("create_directory", "edit_directory", "delete_directory")
-_ID_PREFIX = re.compile(r"[0-9a-f-]{4,36}")
+_ID_PREFIX = re.compile(r"[0-9a-f]{4,32}")
 
 
 def _has_summary_type(op: str) -> ColumnElement[bool]:
@@ -38,19 +38,33 @@ def _op_type_clause(op_type: PROperationFilter) -> ColumnElement[bool]:
     return _has_summary_type(op_type)
 
 
+def _escape_like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _id_prefix_clause(search: str) -> ColumnElement[bool] | None:
+    """Match PR ids starting with ``search`` as a UUID range, so the primary key index is used."""
+    prefix = search.lower().lstrip("#").replace("-", "")
+    if not _ID_PREFIX.fullmatch(prefix):
+        return None
+    low = uuid.UUID(prefix.ljust(32, "0"))
+    high = uuid.UUID(prefix.ljust(32, "f"))
+    return PullRequest.id.between(low, high)
+
+
 def _search_clause(search: str, viewer: User | None) -> ColumnElement[bool]:
-    pattern = f"%{search}%"
-    author_name: ColumnElement[bool] = User.display_name.ilike(pattern)
+    pattern = f"%{_escape_like(search)}%"
+    author_name: ColumnElement[bool] = User.display_name.ilike(pattern, escape="\\")
     if not can_see_anonymous_authors(viewer):
         # Searching by name must not reveal who wrote an anonymous PR.
         visible: ColumnElement[bool] = PullRequest.is_anonymous.is_(False)
         if viewer is not None:
             visible = or_(visible, PullRequest.author_id == viewer.id)
         author_name = and_(author_name, visible)
-    clauses = [PullRequest.title.ilike(pattern), author_name]
-    id_prefix = search.lower().lstrip("#")
-    if _ID_PREFIX.fullmatch(id_prefix):
-        clauses.append(cast(PullRequest.id, String).ilike(f"{id_prefix}%"))
+    clauses = [PullRequest.title.ilike(pattern, escape="\\"), author_name]
+    id_prefix = _id_prefix_clause(search)
+    if id_prefix is not None:
+        clauses.append(id_prefix)
     return or_(*clauses)
 
 

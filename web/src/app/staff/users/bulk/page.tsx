@@ -128,7 +128,10 @@ export default function StaffBulkUsersPage() {
   }
 
   const selectable = users.filter((candidate) => candidate.id !== actor?.id);
-  const selectedUsers = users.filter((candidate) => selected.has(candidate.id));
+  // Only act on rows still on screen: while a search loads, the old rows stay visible
+  // and can be ticked, then get replaced, so `selected` may hold IDs no longer shown.
+  const selectedUsers = selectable.filter((candidate) => selected.has(candidate.id));
+  const selectedIds = selectedUsers.map((candidate) => candidate.id);
   const allPageSelected =
     selectable.length > 0 &&
     selectable.every((candidate) => selected.has(candidate.id));
@@ -157,13 +160,13 @@ export default function StaffBulkUsersPage() {
     action: "approve" | "reject" | "set_role" | "delete",
     roleValue?: string,
   ) => {
-    if (selected.size === 0) return;
+    if (selectedIds.length === 0) return;
     setActing(true);
     try {
       const result = await apiFetch<BulkResult>("/admin/users/bulk", {
         method: "POST",
         body: JSON.stringify({
-          user_ids: Array.from(selected),
+          user_ids: selectedIds,
           action,
           ...(roleValue ? { role: roleValue } : {}),
         }),
@@ -266,10 +269,10 @@ export default function StaffBulkUsersPage() {
         </Badge>
       </div>
 
-      {selected.size > 0 && (
+      {selectedIds.length > 0 && (
         <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-xl border bg-background/95 p-3 shadow-lg backdrop-blur">
           <Badge className="mr-1">
-            {t("selected", { count: selected.size })}
+            {t("selected", { count: selectedIds.length })}
           </Badge>
           <Button
             size="sm"

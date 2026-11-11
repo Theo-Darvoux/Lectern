@@ -45,9 +45,6 @@ from app.workers.upload.context import WorkerContext
 
 logger = logging.getLogger(__name__)
 
-# Redis key prefix for the quota tracking sorted set (mirrors upload worker logic).
-# Redis prefix for the upload status cache (mirrors pipeline.py).
-
 
 async def retroactive_quarantine(
     ctx: WorkerContext,

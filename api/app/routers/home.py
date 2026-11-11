@@ -167,6 +167,9 @@ async def _build_featured_out(
 # Versioned: a payload shape change must not read entries written by older code.
 _HOME_CACHE_KEY = "cache:home_global:v2"
 _HOME_CACHE_TTL_SECONDS = 60
+# Last good payload, kept longer so a slow rebuild never makes every waiter rebuild too.
+_HOME_STALE_KEY = "cache:home_global:v2:stale"
+_HOME_STALE_TTL_SECONDS = 24 * 3600
 
 
 class _HomeGlobal(BaseModel):
@@ -275,10 +278,19 @@ async def _home_global(db: AsyncSession, redis: RedisClient) -> _HomeGlobal:
             if cached:
                 return _HomeGlobal.model_validate_json(cached)
             home = await _build_home_global(db)
-            await redis.setex(_HOME_CACHE_KEY, _HOME_CACHE_TTL_SECONDS, home.model_dump_json())
+            payload = home.model_dump_json()
+            async with redis.pipeline(transaction=False) as pipe:
+                await pipe.setex(_HOME_CACHE_KEY, _HOME_CACHE_TTL_SECONDS, payload)
+                await pipe.setex(_HOME_STALE_KEY, _HOME_STALE_TTL_SECONDS, payload)
+                await pipe.execute()
             return home
     except RedisLockTimeoutError:
-        # Another request is slow to rebuild it. Serve this one fresh instead of failing.
+        # Another request is slow to rebuild it. Serve the last good payload rather than
+        # piling more rebuilds onto a database that is already slow.
+        cached = await redis.get(_HOME_CACHE_KEY) or await redis.get(_HOME_STALE_KEY)
+        if cached:
+            return _HomeGlobal.model_validate_json(cached)
+        # Nothing was ever cached (cold start): build this one fresh instead of failing.
         return await _build_home_global(db)
 
 

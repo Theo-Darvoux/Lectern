@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 import zipfile
@@ -21,7 +22,7 @@ from app.core.events.limiter import limiter
 from app.core.events.sse import broadcast_to_topic
 from app.core.storage.facade import stream_object
 from app.dependencies.auth import ReadUser, get_current_user
-from app.dependencies.rate_limit import rate_limit_downloads
+from app.dependencies.rate_limit import check_download_budget, rate_limit_downloads
 from app.models.material import Material
 from app.models.user import User
 from app.schemas.directory import DirectoryBreadcrumb, DirectoryOut
@@ -214,6 +215,15 @@ async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes,
             zf.close()
 
 
+# The check builds the entry list; the download that follows reuses it once.
+_ZIP_ENTRIES_CACHE_PREFIX = "cache:zip_entries:"
+_ZIP_ENTRIES_CACHE_TTL_SECONDS = 30
+
+
+def _zip_entries_cache_key(user: User, directory_id: uuid.UUID) -> str:
+    return f"{_ZIP_ENTRIES_CACHE_PREFIX}{user.id}:{directory_id}"
+
+
 async def _download_entries(
     db: AsyncSession, directory_id: uuid.UUID
 ) -> tuple[str, list[tuple[str, str]]]:
@@ -229,15 +239,26 @@ async def _download_entries(
 @router.get("/{id}/download/check", status_code=204)
 async def check_directory_download(
     id: uuid.UUID,
+    request: Request,
     current_user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[RedisClient | None, Depends(get_redis)] = None,
 ) -> None:
     """Report whether the directory ZIP can be built, without counting a download.
 
     Browsers start the ZIP by following a link, which would replace the page with a
     JSON error. They call this first so the error can be shown in place.
     """
-    await _download_entries(db, id)
+    if redis is None:
+        redis = redis_client
+
+    await check_download_budget(request, current_user, redis)
+
+    cache_key = _zip_entries_cache_key(current_user, id)
+    if await redis.exists(cache_key):
+        return
+    dir_name, entries = await _download_entries(db, id)
+    await redis.setex(cache_key, _ZIP_ENTRIES_CACHE_TTL_SECONDS, json.dumps([dir_name, entries]))
 
 
 @router.get("/{id}/download")
@@ -254,7 +275,12 @@ async def download_directory_zip(
 
     await rate_limit_downloads(request, current_user, db, redis)
 
-    dir_name, entries = await _download_entries(db, id)
+    cached = await redis.getdel(_zip_entries_cache_key(current_user, id))
+    if cached:
+        dir_name, raw_entries = json.loads(cached)
+        entries = [(arcname, file_key) for arcname, file_key in raw_entries]
+    else:
+        dir_name, entries = await _download_entries(db, id)
 
     safe_name = dir_name.encode("ascii", "replace").decode("ascii").replace("/", "_") or "directory"
     encoded_name = quote(dir_name)
