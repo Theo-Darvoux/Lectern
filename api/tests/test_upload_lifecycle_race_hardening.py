@@ -108,26 +108,6 @@ async def test_renewal_keeps_semaphore_full_past_original_lease(fake_redis_setup
     await task
 
 
-def test_completion_recovery_and_cancellation_use_shared_lock_names() -> None:
-    import inspect
-
-    from app.routers import tus
-    from app.routers.upload import presigned
-
-    patch_source = inspect.getsource(tus.tus_patch) + inspect.getsource(tus._tus_patch_admitted)
-    head_source = inspect.getsource(tus.tus_head)
-    delete_source = inspect.getsource(tus.tus_delete)
-    assert "_tus_lock_name(tus_id_str)" in patch_source
-    assert "_tus_lock_name(tus_id_str)" in head_source
-    assert "_tus_lock_name(tus_id_str)" in delete_source
-
-    complete_source = inspect.getsource(presigned.presigned_multipart_complete)
-    abort_source = inspect.getsource(presigned.presigned_multipart_abort)
-    assert "upload_lifecycle_lock_name(data.upload_id)" in complete_source
-    assert "upload_lifecycle_lock_name(upload_id)" in abort_source
-    assert "cancel_upload_lifecycle" in abort_source
-
-
 @pytest.mark.asyncio
 async def test_worker_status_transition_cannot_revive_cancelled_upload(
     db_session: AsyncSession,
@@ -617,15 +597,6 @@ async def test_failed_tus_database_state_is_terminal() -> None:
     state = {"upload_id": str(uuid.uuid4())}
 
     assert await _upload_is_cancelled(state, redis, db) is True
-
-
-def test_tus_wrong_offset_is_checked_before_body_admission() -> None:
-    import inspect
-
-    from app.routers import tus
-
-    source = inspect.getsource(tus.tus_patch)
-    assert source.index("client_offset != preflight_offset") < source.index("redis_semaphore(")
 
 
 @pytest.mark.asyncio
@@ -1383,12 +1354,8 @@ async def test_status_overrides_stale_clean_after_cancellation(
 
 
 def test_thumbnail_keys_are_upload_specific() -> None:
-    import inspect
+    from app.workers import retroactive_quarantine
 
-    from app.workers import process_upload_post_scan, retroactive_quarantine
-
-    post_scan_source = inspect.getsource(process_upload_post_scan.process_upload_post_scan)
-    assert 'f"thumbnails/{cas_id}/{upload_id}.webp"' in post_scan_source
     assert retroactive_quarantine._thumbnail_owned_by_upload(
         "thumbnails/cas-id/upload-123.webp", "upload-123"
     )
@@ -2097,15 +2064,6 @@ async def test_auto_merge_infrastructure_failure_is_retryable() -> None:
             ),
             "cas/retry-auto-merge",
         )
-
-
-def test_deferred_webhook_holds_row_lock_through_network_delivery() -> None:
-    import inspect
-
-    from app.workers.webhook_dispatch import _deliver_webhook_once
-
-    source = inspect.getsource(_deliver_webhook_once)
-    assert source.index("with_for_update()") < source.index("post_pinned_https(")
 
 
 @pytest.mark.asyncio

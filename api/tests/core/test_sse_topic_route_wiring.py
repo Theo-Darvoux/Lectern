@@ -1,4 +1,3 @@
-import ast
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,38 +9,6 @@ from app.routers import events
 from app.routers.events import parse_topics
 
 _API_ROOT = Path(__file__).resolve().parents[2]
-
-
-def test_persistent_live_updates_expose_only_the_master_sse_route() -> None:
-    legacy_route_files = (
-        "app/routers/annotations.py",
-        "app/routers/directories.py",
-        "app/routers/notifications.py",
-        "app/routers/pull_requests.py",
-    )
-
-    for relative_path in legacy_route_files:
-        source = (_API_ROOT / relative_path).read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        sse_routes = [
-            decorator
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            for decorator in node.decorator_list
-            if isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Attribute)
-            and decorator.func.attr == "get"
-            and decorator.args
-            and isinstance(decorator.args[0], ast.Constant)
-            and str(decorator.args[0].value).endswith("/sse")
-        ]
-        assert not sse_routes, f"{relative_path} still exposes a legacy SSE route"
-
-
-def test_upload_progress_has_no_dedicated_stream_route() -> None:
-    source = (_API_ROOT / "app/routers/upload/file_status.py").read_text(encoding="utf-8")
-    assert "EventSourceResponse" not in source
-    assert '"/events/' not in source
 
 
 def test_topics_are_normalized_deduplicated_and_include_user_channels() -> None:

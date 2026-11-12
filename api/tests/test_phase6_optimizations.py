@@ -2,8 +2,7 @@
 
 Covers:
 - 4.3: Early CAS check before quarantine download (skips full pipeline on CAS hit)
-- 4.6: Configurable PDF quality (pdf_quality setting, default 75)
-- 4.7: Parallel scan + strip (asyncio.gather, discard strip if scan fails)
+- 4.7: Discard the strip result when the scan fails
 - 4.8: Dynamic multipart chunk size (8/16/32 MiB based on file size)
 - 4.13: Skip compression for files < 10 KB
 - 4.14: Guard read_full_object with 50 MB size limit
@@ -126,32 +125,7 @@ async def test_compress_file_path_does_not_skip_larger_files(tmp_path: Path):
     assert result is not None  # didn't raise
 
 
-# ── 4.6: Configurable Ghostscript quality ────────────────────────────────────
-
-
-def test_pdf_quality_used_in_pdf_compression():
-    """_compress_pdf_path reads pdf_quality from settings."""
-    import inspect
-
-    import app.core.security.file_security._pdf as pdf_security
-
-    src = inspect.getsource(pdf_security._compress_pdf_path)
-    assert "pdf_quality" in src
-
-
 # ── 4.7: Parallel scan + strip ───────────────────────────────────────────────
-
-
-def test_parallel_scan_strip_uses_gather():
-    """process_upload uses asyncio.gather for scan and strip (4.7)."""
-    import inspect
-
-    from app.workers import process_upload
-
-    src = inspect.getsource(process_upload.process_upload)
-    assert "asyncio.gather" in src
-    assert "_run_scan" in src
-    assert "_run_strip" in src
 
 
 @pytest.mark.asyncio

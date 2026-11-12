@@ -25,7 +25,6 @@ from app.models.material import Material, MaterialVersion
 from app.models.user import User, UserRole
 from app.services.directory import (
     _DOWNLOAD_MAX_BYTES,
-    _DOWNLOAD_MAX_FILES,
     get_directory_download_entries,
 )
 
@@ -275,10 +274,13 @@ class TestGetDirectoryDownloadEntries:
         assert "notes.pdf" in arcnames
         assert "notes_1.pdf" in arcnames
 
-    async def test_file_count_limit_raises(self, db_session: AsyncSession) -> None:
+    async def test_file_count_limit_raises(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("app.services.directory._DOWNLOAD_MAX_FILES", 3)
         user = await _create_user(db_session)
         directory = await _create_directory(db_session, user)
-        for i in range(_DOWNLOAD_MAX_FILES + 1):
+        for i in range(3 + 1):
             await _create_material_with_version(
                 db_session,
                 directory,

@@ -42,6 +42,31 @@ def _isolate_test_settings():
         settings.allow_all_domains = orig_allow_all
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _fast_password_hashing():
+    """bcrypt's production cost (12 rounds) costs ~250 ms per hash; tests don't need it."""
+    from app.services.auth import pwd_context
+
+    pwd_context.update(bcrypt__rounds=4)
+    yield
+
+
+@pytest.fixture
+def inprocess_zip_extraction():
+    """Run batch ZIP extraction in a thread instead of the sandboxed child process.
+
+    Spawning the isolated parser costs ~2 s per archive. Route tests that only care
+    about admission/session logic use this; isolation itself is tested separately.
+    """
+    from app.routers.upload import batch_zip
+
+    async def _extract(zip_path: str, tmp_dir: str, max_members: int):  # type: ignore[no-untyped-def]
+        return await asyncio.to_thread(batch_zip._extract_zip_sync, zip_path, tmp_dir, max_members)
+
+    with patch.object(batch_zip, "_extract_zip_bounded", _extract):
+        yield
+
+
 @pytest.fixture(scope="session")
 def engine():
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=StaticPool, echo=False)
@@ -67,6 +92,30 @@ async def db_connection(engine) -> AsyncGenerator[Any, None]:
         yield conn
 
 
+_schema_created = False
+
+
+async def _ensure_schema(conn: Any) -> None:
+    """Create the schema once per test session; tables are emptied between tests."""
+    global _schema_created
+    if _schema_created:
+        return
+    async with conn.begin():
+        await conn.run_sync(Base.metadata.create_all)
+    _schema_created = True
+
+
+async def _truncate_all_tables(conn: Any) -> None:
+    """Empty every table. Much cheaper than DROP/CREATE of the whole schema per test."""
+    if conn.in_transaction():
+        await conn.rollback()
+    async with conn.begin():
+        # FK checks run at COMMIT, once every table is empty, so cycles don't matter.
+        await conn.exec_driver_sql("PRAGMA defer_foreign_keys=ON")
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(table.delete())
+
+
 @pytest.fixture
 async def db_session(db_connection, engine) -> AsyncGenerator[AsyncSession, None]:
     import app.core.database.database as c_db
@@ -74,8 +123,7 @@ async def db_session(db_connection, engine) -> AsyncGenerator[AsyncSession, None
     orig_factory = c_db.async_session_factory
     c_db.engine = engine
 
-    async with db_connection.begin():
-        await db_connection.run_sync(Base.metadata.create_all)
+    await _ensure_schema(db_connection)
 
     # Define a factory that always uses the shared connection
     def shared_session_factory(**kwargs: Any) -> AsyncSession:
@@ -90,8 +138,7 @@ async def db_session(db_connection, engine) -> AsyncGenerator[AsyncSession, None
     yield session
 
     await session.close()
-    async with db_connection.begin():
-        await db_connection.run_sync(Base.metadata.drop_all)
+    await _truncate_all_tables(db_connection)
 
     c_db.async_session_factory = orig_factory
 

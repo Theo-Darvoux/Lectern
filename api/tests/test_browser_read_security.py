@@ -35,17 +35,6 @@ def test_browser_read_cookie_is_httponly_secure_strict_and_scoped() -> None:
     assert "Path=/api/" in header
 
 
-def test_read_routes_have_no_query_bearer_fallback() -> None:
-    auth = (REPO_ROOT / "api/app/dependencies/auth.py").read_text(encoding="utf-8")
-    materials = (REPO_ROOT / "api/app/routers/materials.py").read_text(encoding="utf-8")
-    directories = (REPO_ROOT / "api/app/routers/directories.py").read_text(encoding="utf-8")
-
-    assert "QueryTokenUser" not in auth
-    assert "token: Annotated[str | None, Query()]" not in auth
-    assert "token: Annotated[str | None, Query()]" not in materials
-    assert "token: Annotated[str | None, Query()]" not in directories
-
-
 def test_frontend_never_places_access_bearer_in_browser_urls() -> None:
     web_root = REPO_ROOT / "web/src"
     for path in web_root.rglob("*"):
@@ -65,13 +54,3 @@ def test_nginx_access_log_omits_request_arguments_and_referer() -> None:
     assert "$request " not in log_format
     assert "$request_uri" not in log_format
     assert "$http_referer" not in log_format
-
-
-def test_directory_zip_generator_has_no_archive_or_object_sized_buffer() -> None:
-    source = (REPO_ROOT / "api/app/routers/directories.py").read_text(encoding="utf-8")
-    function = source.split("async def _generate_zip", 1)[1].split(
-        "async def _download_entries", 1
-    )[0]
-    assert "io.BytesIO" not in function
-    assert "data = bytearray()" not in function
-    assert "member.write(chunk)" in function

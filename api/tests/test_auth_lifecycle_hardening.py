@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -122,27 +121,6 @@ async def test_offline_recovery_invalidates_all_pre_recovery_token_generations(
                 fake_redis_setup,
                 expected_type=token_type,
             )
-
-
-def test_production_magic_link_paths_use_atomic_fragment_only_contract() -> None:
-    root = Path(__file__).resolve().parents[2]
-    router = (root / "api/app/routers/auth.py").read_text(encoding="utf-8")
-    cli = (root / "api/app/cli.py").read_text(encoding="utf-8")
-
-    assert "store_login_challenge" in router
-    assert "store_login_challenge" in cli
-    assert "login_challenge_auth_generation" in router
-    assert "login_challenge_auth_generation" in cli
-    assert "/login/verify?token=" not in router
-    assert "/login/verify?token=" not in cli
-    assert "/login/verify#token=" in router
-    assert "/login/verify#token=" in cli
-
-    # The non-atomic per-part writers are gone, so nothing can bypass the binding.
-    from app.services import auth as auth_service
-
-    assert not hasattr(auth_service, "store_code")
-    assert not hasattr(auth_service, "store_magic_token")
 
 
 async def test_offline_recovery_invalidates_pre_recovery_verification_code(

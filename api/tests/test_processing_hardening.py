@@ -172,6 +172,8 @@ async def test_async_sandbox_cancellation_during_spawn_reaps_child(
     monkeypatch.setattr(sandbox, "_sandbox_command", lambda command, **_kwargs: command)
     monkeypatch.setattr(sandbox.asyncio, "create_subprocess_exec", fake_spawn)
     monkeypatch.setattr(sandbox.os, "killpg", lambda *_args: None)
+    # The fake readers never reach EOF; skip the 2 s bounded-cleanup wait.
+    monkeypatch.setattr(sandbox, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
 
     task = asyncio.create_task(sandbox.async_sandboxed_run(["fake"]))
     await asyncio.sleep(0)
@@ -232,6 +234,8 @@ async def test_async_sandbox_spawn_timeout_reaps_late_child(
     monkeypatch.setattr(sandbox, "_sandbox_command", lambda command, **_kwargs: command)
     monkeypatch.setattr(sandbox.asyncio, "create_subprocess_exec", fake_spawn)
     monkeypatch.setattr(sandbox.os, "killpg", lambda *_args: None)
+    # The fake readers never reach EOF; skip the 2 s bounded-cleanup wait.
+    monkeypatch.setattr(sandbox, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
 
     releaser = asyncio.create_task(allow_late_spawn())
     with pytest.raises(TimeoutError, match="during creation"):

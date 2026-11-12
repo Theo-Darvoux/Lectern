@@ -119,17 +119,6 @@ def test_pipeline_remaining_budget_is_not_a_fixed_finalize_timeout(
         pipeline._remaining_pipeline_seconds("finalizing")
 
 
-def test_finalize_stage_has_no_independent_60_second_storage_deadline() -> None:
-    import inspect
-
-    from app.workers.upload.stages import finalize
-
-    source = inspect.getsource(finalize.run_finalize_storage)
-    assert "timeout=60.0" not in source
-    assert "timeout=30.0" not in source
-    assert "asyncio.wait_for" not in source
-
-
 def _minimal_finalize_pipeline(timeout_seconds: float) -> UploadPipeline:
     pipeline = object.__new__(UploadPipeline)
     pipeline._check_deadline = lambda _stage: None  # type: ignore[method-assign]

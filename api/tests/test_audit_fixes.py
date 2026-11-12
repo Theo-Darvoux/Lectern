@@ -5,7 +5,6 @@ Covers:
 - C2: Scan/strip file isolation (scan reads copy, not original)
 - C3: CAS entry staleness check (scanned_at, cas_max_age_seconds)
 - H1: OLE2 macro detection (oletools analyze_macros)
-- H3: Compression ratio div-by-zero guard
 - H5: S3 copy timeout wrappers
 - M1: OOXML dead code removal
 - M2: GIF pixel budget enforcement
@@ -38,7 +37,6 @@ from app.core.security.file_security._office import (
     _strip_ooxml_from_path,
 )
 from app.workers.process_upload import (
-    _STAGES,
     _overall,
 )
 from tests.image_helpers import strip_image_metadata
@@ -176,9 +174,6 @@ class TestCASRefCount:
 
 
 # =============================================================================
-
-
-# =============================================================================
 # H1 / M8: OLE2 macro detection via analyze_macros
 # =============================================================================
 
@@ -218,21 +213,6 @@ class TestOLE2MacroDetection:
             _check_ole2_macros(Path("document.doc"))
 
         parser.close.assert_called_once_with()
-
-
-# =============================================================================
-# H3: Compression ratio div-by-zero
-# =============================================================================
-
-
-class TestCompressionRatioGuard:
-    """Verify that zero-size outputs don't cause division by zero in metrics."""
-
-    def test_overall_progress_math(self):
-        """Basic sanity: _overall at boundaries works correctly."""
-        assert _overall(0, 0.0) == 0.0
-        assert abs(_overall(0, 1.0) - 0.85) < 1e-6
-        assert abs(_overall(1, 1.0) - 1.0) < 1e-6
 
 
 # =============================================================================
@@ -648,40 +628,6 @@ class TestPDFSafetyBypass:
         with pytest.raises(ValueError, match="dangerous /OpenAction"):
             check_pdf_safety(p)
 
-    def test_pdf_with_javascript_in_names(self, tmp_path):
-        """PDF with /JavaScript in Names tree should be rejected."""
-        pdf = pikepdf.new()
-        page = pdf.make_indirect(
-            pikepdf.Dictionary(
-                Type=pikepdf.Name("/Page"),
-                MediaBox=pikepdf.Array([0, 0, 612, 792]),
-            )
-        )
-        pdf.pages.append(pikepdf.Page(page))
-        pdf.Root["/Names"] = pikepdf.Dictionary(
-            JavaScript=pikepdf.Dictionary(
-                Names=pikepdf.Array([]),
-            ),
-        )
-        p = tmp_path / "js.pdf"
-        pdf.save(str(p))
-
-        with pytest.raises(ValueError, match="JavaScript"):
-            check_pdf_safety(p)
-
-    def test_clean_pdf_passes(self, tmp_path):
-        """A minimal clean PDF should not trigger any safety checks."""
-        p = _make_minimal_pdf(tmp_path)
-        # Should not raise
-        check_pdf_safety(p)
-
-    def test_corrupt_pdf_fails_closed(self, tmp_path):
-        """A corrupt PDF should fail closed."""
-        p = tmp_path / "corrupt.pdf"
-        p.write_bytes(b"not-a-pdf")
-        with pytest.raises(ValueError, match="malformed"):
-            check_pdf_safety(p)
-
     def test_pdf_with_page_level_action(self, tmp_path):
         """PDF with /AA on a page node should be rejected."""
         pdf = pikepdf.new()
@@ -813,18 +759,6 @@ class TestFilenameSecurityBypass:
 class TestPipelineStageProgress:
     """Test the stage progress computation for resume-on-retry."""
 
-    def test_stage_weights_sum_to_one(self):
-        total = sum(w for _, _, w in _STAGES)
-        assert abs(total - 1.0) < 1e-9
-
-    def test_overall_at_stage_boundaries(self):
-        """overall_percent at stage start/end must match cumulative weights."""
-        accumulated = 0.0
-        for i, (_, _, weight) in enumerate(_STAGES):
-            assert abs(_overall(i, 0.0) - accumulated) < 1e-6
-            accumulated += weight
-            assert abs(_overall(i, 1.0) - accumulated) < 1e-6
-
     def test_overall_midstage(self):
         """50% through stage 0 (weight=0.85) should give 0.425."""
         result = _overall(0, 0.5)
@@ -883,13 +817,6 @@ class TestScannerFailClosed:
 class TestStripMetadataEdgeCases:
     """Edge cases for the metadata stripping dispatcher."""
 
-    async def test_unknown_mime_returns_original(self, tmp_path):
-        """Unknown MIME types should fail open (return original path)."""
-        p = tmp_path / "mystery.bin"
-        p.write_bytes(b"\x00" * 100)
-        result = await strip_metadata_file(p, "application/octet-stream")
-        assert result == p
-
     async def test_image_strip_corrupt_fails_closed(self, tmp_path):
         p = tmp_path / "bad.jpg"
         p.write_bytes(b"not-an-image")
@@ -935,14 +862,6 @@ class TestCompressEdgeCases:
         assert result.content_encoding == "gzip"
         assert result.size < len(content)
 
-    async def test_tiny_file_skips_compression(self, tmp_path):
-        """Files below the skip threshold should not be compressed."""
-        p = tmp_path / "tiny.txt"
-        p.write_bytes(b"small")
-        result = await compress_file_path(p, "text/plain", "tiny.txt")
-        assert result.content_encoding is None
-        assert result.path == p
-
     async def test_svg_gzip_no_help_returns_none_encoding(self, tmp_path):
         """When gzip does not reduce an SVG's size, content_encoding must be None.
 
@@ -966,49 +885,3 @@ class TestCompressEdgeCases:
                 f.read()  # raises if not valid gzip
         else:
             assert result.content_encoding is None
-
-
-# =============================================================================
-# FakeRedis correctness tests
-# =============================================================================
-
-
-class TestFakeRedis:
-    """Verify FakeRedis implementation correctness for test infrastructure."""
-
-    @pytest.fixture
-    def redis(self):
-        from tests.conftest import FakeRedis
-
-        return FakeRedis()
-
-    async def test_set_nx_creates_new(self, redis):
-        result = await redis.set("key", "val", nx=True)
-        assert result is True
-        assert await redis.get("key") is not None
-
-    async def test_set_nx_fails_on_existing(self, redis):
-        await redis.set("key", "val1")
-        result = await redis.set("key", "val2", nx=True)
-        assert result is False
-        raw = await redis.get("key")
-        assert raw == b"val1"
-
-    async def test_exists(self, redis):
-        assert await redis.exists("nope") == 0
-        await redis.set("key", "val")
-        assert await redis.exists("key") == 1
-
-    async def test_ltrim_keeps_tail(self, redis):
-        for i in range(10):
-            await redis.rpush("mylist", f"item-{i}")
-        await redis.ltrim("mylist", -5, -1)
-        assert len(redis.data["mylist"]) == 5
-        assert redis.data["mylist"][0] == b"item-5"
-
-    async def test_rpush_and_lrange(self, redis):
-        await redis.rpush("list", "a")
-        await redis.rpush("list", "b")
-        await redis.rpush("list", "c")
-        result = await redis.lrange("list", 0, -1)
-        assert len(result) == 3

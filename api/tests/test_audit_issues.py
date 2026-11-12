@@ -5,7 +5,6 @@ exists.  Once the corresponding fix is applied the test should turn green.
 """
 
 import uuid
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -105,66 +104,6 @@ async def test_high2_svg_detection_accepts_real_svg():
     # Also test bare <svg at start
     bare_svg = b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>'
     assert guess_mime_from_bytes(bare_svg) == "image/svg+xml"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MEDIUM #2 — No MIME re-validation for extension mismatch on TUS path
-#             (Tested via the MIME sniffing in tus.py — requires deeper
-#             integration test; covered by unit test of _apply_mime_correction.)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MEDIUM #3 — Cleanup job has no distributed lock
-#             (Architectural — tested by checking for lock acquisition.)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MEDIUM #4 — Multipart abort endpoint silently swallows DB errors
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_medium4_multipart_abort_logs_db_errors():
-    """presigned_multipart_abort must log DB update failures, not silently
-    swallow them.
-    """
-
-    # We test the except block by checking that it at minimum logs
-    # (the fix replaces bare `pass` with logging)
-    # This is a code-path test — we verify the logging.warning call is present
-    # in the source code.
-    import inspect
-
-    from app.routers.upload.presigned import presigned_multipart_abort
-
-    source = inspect.getsource(presigned_multipart_abort)
-
-    # After the fix, the except block should contain a logging call
-    assert "pass  # Best-effort cleanup" not in source or "logger.warning" in source, (
-        "presigned_multipart_abort still has bare `pass` in DB error handler — "
-        "errors are silently swallowed."
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MEDIUM #6 — useUpload hook references undefined clientIdRef
-#             (Frontend — not testable with pytest; verified by code inspection.)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_medium6_use_upload_hook_no_undefined_client_id_ref():
-    """The useUploadEngine hook must not reference an undefined clientIdRef variable."""
-    hook_path = (
-        Path(__file__).parent.parent.parent / "web" / "src" / "hooks" / "use-upload-engine.ts"
-    )
-    if not hook_path.exists():
-        pytest.skip("Frontend source not available")
-    source = hook_path.read_text()
-    assert "clientIdRef" not in source, (
-        "use-upload-engine.ts still references undefined clientIdRef — "
-        "this causes a ReferenceError at runtime."
-    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

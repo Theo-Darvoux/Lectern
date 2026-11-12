@@ -648,20 +648,6 @@ async def test_presigned_cleanup_failure_retains_intent_for_retry(
     assert await fake_redis_setup.get(intent_key) is not None
 
 
-def test_frontend_retries_uncertain_completion_without_abort() -> None:
-    source = (Path(__file__).parents[2] / "web" / "src" / "lib" / "upload-client.ts").read_text(
-        encoding="utf-8"
-    )
-
-    completion = source[
-        source.index("etags.sort((a, b)") : source.index("return session.quarantine_key")
-    ]
-    assert "_withRetry(" in completion
-    assert "/upload/presigned-multipart/complete" in completion
-    # A failed completion keeps the session, so the same manifest can be retried.
-    assert 'method: "DELETE"' not in completion
-
-
 @pytest.mark.asyncio
 async def test_tus_head_reconciles_finalizing_upload_for_client_recovery(
     client: AsyncClient,

@@ -191,14 +191,23 @@ describe("upload-client: uploadFile", () => {
   it("retries a dropped direct upload with the same upload ID", async () => {
     let attempt = 0;
     replyToXhr = () => (attempt++ === 0 ? "network" : DIRECT_OK);
-
-    await uploadFile(fileOfSize(1024), { uploadId: "11111111-1111-4111-8111-111111111111" });
+    // Skip the real ~1 s retry backoff.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const upload = uploadFile(fileOfSize(1024), {
+        uploadId: "11111111-1111-4111-8111-111111111111",
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      await upload;
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(xhrs.map((xhr) => xhr.headers["X-Upload-ID"])).toEqual([
       "11111111-1111-4111-8111-111111111111",
       "11111111-1111-4111-8111-111111111111",
     ]);
-  }, 10_000);
+  });
 
   it("does not retry a rejected file and keeps its error code", async () => {
     replyToXhr = () => ({

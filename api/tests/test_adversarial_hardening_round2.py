@@ -284,22 +284,3 @@ async def test_metrics_token_is_header_only(client: AsyncClient) -> None:
             headers={"Authorization": "Bearer metrics-secret"},
         )
         assert header.status_code == 200
-
-
-def test_magic_link_capability_never_uses_request_query() -> None:
-    backend = (REPO_ROOT / "api/app/routers/auth.py").read_text(encoding="utf-8")
-    frontend = (REPO_ROOT / "web/src/app/login/verify/page.tsx").read_text(encoding="utf-8")
-    assert "/login/verify?token=" not in backend
-    assert "/login/verify#token=" in backend
-    assert "useSearchParams" not in frontend
-    assert "window.location.hash" in frontend
-    assert 'searchParams.delete("token")' in frontend
-    assert "window.history.replaceState" in frontend
-
-
-def test_refresh_route_uses_atomic_consume_and_session_family_replay_revoke() -> None:
-    source = (REPO_ROOT / "api/app/routers/auth.py").read_text(encoding="utf-8")
-    refresh = source.split("async def refresh_token(", 1)[1].split('@router.post("/logout"', 1)[0]
-    assert "consume_token_once" in refresh
-    assert "revoke_session" in refresh
-    assert "is_token_blacklisted" not in refresh

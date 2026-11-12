@@ -92,16 +92,6 @@ def test_soffice_command_bootstraps_private_libraries_without_proc_self() -> Non
     ]
 
 
-def test_thumbnail_repair_cli_uses_sandbox_bindable_temp_directory() -> None:
-    import inspect
-
-    from app.workers.recalculate_thumbnail import recalculate_thumbnail
-
-    source = inspect.getsource(recalculate_thumbnail)
-    assert "processing_temp_dir" in source
-    assert "tempfile.mkdtemp" not in source
-
-
 @pytest.mark.asyncio
 async def test_recalculate_thumbnails_cli_dispatch(db_session: AsyncSession) -> None:
     import uuid

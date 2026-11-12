@@ -189,6 +189,7 @@ async def test_direct_idempotency_key_cannot_cross_users(
 async def test_batch_entries_never_share_an_async_session(
     client: AsyncClient,
     db_session: AsyncSession,
+    inprocess_zip_extraction: None,
 ) -> None:
     user = await _create_user(db_session)
     archive = io.BytesIO()
@@ -236,6 +237,7 @@ async def test_batch_entries_never_share_an_async_session(
 async def test_batch_retry_reuses_committed_entries(
     client: AsyncClient,
     db_session: AsyncSession,
+    inprocess_zip_extraction: None,
 ) -> None:
     """A lost batch response can be retried without uploading every file again."""
     user = await _create_user(db_session)

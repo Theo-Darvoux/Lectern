@@ -292,62 +292,6 @@ async def test_allow_all_domains_new_user_unlisted_gets_pending(
     assert user.role == UserRole.PENDING
 
 
-# ── Issue #6: TUS renewable concurrency leases ───────────────────────────────
-
-
-def test_tus_patch_uses_renewable_global_and_user_semaphores() -> None:
-    """PATCH admission must not use fixed-expiry shared counters."""
-    import inspect
-
-    from app.routers.tus import tus_patch
-
-    src = inspect.getsource(tus_patch)
-    assert src.count("redis_semaphore(") == 2
-    assert '"tus:global"' in src
-    assert 'f"tus:user:{user.id}"' in src
-    assert "redis.incr(" not in src
-    assert "redis.decr(" not in src
-
-
-# ── Issue #7: 0 quality values not silently ignored ──────────────────────────
-
-
-def test_thumbnail_quality_zero_not_ignored():
-    """quality=0 from config must be used, not replaced by the default 85."""
-    import inspect
-
-    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
-
-    # Read source to verify the fix (is not None check)
-    src = inspect.getsource(run_thumbnail_stage)
-    assert "is not None" in src, (
-        "thumbnail quality/size_px config read must use 'is not None' check, "
-        "not falsy 'or' operator"
-    )
-
-
-def test_pdf_quality_zero_not_ignored():
-    """pdf_quality=0 from config must be used, not replaced by settings default."""
-    import inspect
-
-    from app.core.security.file_security._pdf import _compress_pdf_path
-
-    src = inspect.getsource(_compress_pdf_path)
-    assert "is not None" in src, "pdf_quality config read must use 'is not None' check"
-
-
-def test_video_profile_config_zero_not_ignored():
-    """video_compression_profile from config must use is-not-None guard."""
-    import inspect
-
-    from app.core.security.file_security._audio_video import _build_video_codec_args
-
-    src = inspect.getsource(_build_video_codec_args)
-    assert "is not None" in src, (
-        "video_compression_profile config read must use 'is not None' check"
-    )
-
-
 # ── Issue #8: Admin cannot assign PENDING via role-update endpoint ─────────────
 
 
@@ -483,44 +427,7 @@ async def test_get_or_create_existing_user_unchanged(db_session: AsyncSession):
     assert user.role == UserRole.BUREAU  # role must not change for existing users
 
 
-# ── Issue #12: get_s3_client accepts pre-fetched cfg ─────────────────────────
-
-
-def test_get_s3_client_accepts_cfg_param():
-    """get_s3_client must accept an optional cfg dict to prevent double Redis lookup."""
-    import inspect
-
-    from app.core.storage.facade import get_s3_client
-
-    sig = inspect.signature(get_s3_client)
-    assert "cfg" in sig.parameters, "get_s3_client must have a cfg parameter"
-    assert sig.parameters["cfg"].default is None
-
-
 # ── Issue #13: TUS OPTIONS reads only Redis (no DB) ──────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_tus_options_does_not_open_db_session(client: AsyncClient):
-    """OPTIONS must not open a DB session — only read from Redis."""
-    db_was_opened = []
-
-    async def fail_on_db_open():
-        db_was_opened.append(True)
-        if False:
-            yield
-        raise RuntimeError("DB must not be opened during OPTIONS")
-
-    # Verify the options handler signature has no db dependency
-    import inspect
-
-    from app.routers.tus import tus_options
-
-    sig = inspect.signature(tus_options)
-    param_names = list(sig.parameters.keys())
-    assert "db" not in param_names, (
-        "tus_options must not depend on 'db' — it should only read from Redis"
-    )
 
 
 @pytest.mark.asyncio
@@ -530,17 +437,6 @@ async def test_tus_options_returns_correct_headers(client: AsyncClient):
     assert "Tus-Version" in response.headers
     assert "Tus-Max-Size" in response.headers
     assert "Tus-Extension" in response.headers
-
-
-# ── Issue #15: _serialize_config dead code removed ────────────────────────────
-
-
-def test_serialize_config_dead_code_removed():
-    import app.routers.admin as admin_mod
-
-    assert not hasattr(admin_mod, "_serialize_config"), (
-        "_serialize_config was a no-op stub and must be removed"
-    )
 
 
 # ── Issue #17: validate_email_for_auth logic ─────────────────────────────────

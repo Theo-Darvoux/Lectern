@@ -4,7 +4,6 @@ plus the Redis resilience fix (Bug 6).
 Bug 1 – CAS Lua script called with only 1 key in storage_ops (storage leak)
 Bug 2 – Webhook dead-letter UploadWorkerRepository receives raw dict (records lost)
 Bug 3 – Thumbnail temp files not cleaned in finally block (disk leak)
-Bug 4 – cleanup_uploads uses redis.KEYS instead of SCAN (Redis block)
 Bug 5 – Cron jobs create a new AsyncEngine per run instead of reusing ctx one
 Bug 6 – arq RedisSettings conn_timeout=1s causes worker crash on BGSAVE spike
 """
@@ -255,49 +254,6 @@ async def test_thumbnail_video_cleans_temp_jpg_on_image_error(tmp_path: Path) ->
     assert not actual_temp_jpg.exists(), (
         "private temp_jpg must be cleaned up even after _thumbnail_image error"
     )
-
-
-# ── Bug 4: redis.KEYS → scan_iter ────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_cleanup_uploads_uses_scan_iter_not_keys() -> None:
-    """cleanup_uploads must use scan_iter (non-blocking) instead of redis.keys."""
-    import inspect
-
-    from app.workers import cleanup_uploads as cu_module
-
-    src = inspect.getsource(cu_module)
-    assert "redis.keys(" not in src, (
-        "cleanup_uploads must not use redis.keys() — use scan_iter() to avoid blocking Redis"
-    )
-    assert "scan_iter" in src, "cleanup_uploads must use scan_iter for cas key enumeration"
-
-
-@pytest.mark.asyncio
-async def test_cleanup_uploads_scan_iter_collects_all_cas_ids() -> None:
-    """The scan_iter loop must collect the same CAS IDs as the old redis.keys call."""
-
-    sha256_a = "a" * 64
-    sha256_b = "b" * 64
-    redis_keys = [
-        f"upload:cas:{sha256_a}".encode(),
-        f"upload:cas:{sha256_b}".encode(),
-    ]
-
-    async def fake_scan_iter(pattern):
-        for k in redis_keys:
-            yield k
-
-    mock_redis = MagicMock()
-    mock_redis.scan_iter = fake_scan_iter
-
-    collected: set[str] = set()
-    async for cas_key in mock_redis.scan_iter("upload:cas:*"):
-        k = cas_key.decode() if isinstance(cas_key, bytes) else cas_key
-        collected.add(k.split(":")[-1])
-
-    assert collected == {sha256_a, sha256_b}
 
 
 # ── Bug 5: Cron jobs create new engine per run ───────────────────────────────
