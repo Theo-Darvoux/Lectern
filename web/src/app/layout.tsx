@@ -26,6 +26,10 @@ const faviconUrl =
   process.env.SITE_FAVICON_URL ||
   "/favicon.ico";
 
+// The manifest and home-screen icons are served by the API, which reads the
+// branding settings at runtime; this static export is built without them.
+const apiBase = (process.env.NEXT_PUBLIC_API_URL || "/api").replace(/\/$/, "");
+
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
@@ -37,7 +41,11 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: ogTitle,
   description: ogDescription,
-  icons: { icon: faviconUrl },
+  icons: { icon: faviconUrl, apple: `${apiBase}/app/icon-180.png` },
+  manifest: `${apiBase}/app/manifest.webmanifest`,
+  // No `title`: it would be baked at build time, so iOS falls back to the
+  // runtime-branded manifest `name` instead.
+  appleWebApp: { capable: true, statusBarStyle: "default" },
   openGraph: {
     title: ogTitle,
     description: ogDescription,

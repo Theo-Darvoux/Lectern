@@ -40,6 +40,7 @@ from app.routers.notifications import router as notifications_router
 from app.routers.og import router as og_router
 from app.routers.pr_comments import router as pr_comments_router
 from app.routers.pull_requests import router as pull_requests_router
+from app.routers.pwa import router as pwa_router
 from app.routers.qcm import router as qcm_router
 from app.routers.search import router as search_router
 from app.routers.tus import router as tus_router
@@ -360,6 +361,7 @@ app.include_router(material_annotations_router)
 app.include_router(materials_router)
 app.include_router(notifications_router)
 app.include_router(og_router)
+app.include_router(pwa_router)
 app.include_router(pr_comments_router)
 app.include_router(pull_requests_router)
 app.include_router(search_router)

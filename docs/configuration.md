@@ -185,6 +185,27 @@ ORGANIZATION_URL=https://www.myschool.edu
 There's also a background watermark (`BG_WATERMARK_URL` + the two opacity
 values), dynamic social share cards (`/api/og/image` with `OG_THEME_COLOR`, `OG_TITLE`, `OG_TAGLINE`), and an advanced multi-color wordmark (`SITE_NAME_STYLE`).
 
+### Home-screen app (phones)
+
+Users can install the site on their phone's home screen. On Android, open
+Chrome's ⋮ menu and choose **Install app** (or **Add to Home screen**). On
+iOS, tap Safari's Share button and choose **Add to Home Screen**. The site
+then opens full screen, without the browser's address bar.
+
+The API serves the web app manifest and the icons, so no web rebuild is needed
+after a rebrand:
+
+- `GET /api/app/manifest.webmanifest`: the name comes from `OG_SITE_NAME`, or
+  `SITE_NAME` when it is unset. Launchers show at most 12 characters under
+  the icon. The theme color comes from `OG_THEME_COLOR`, or `PRIMARY_COLOR`.
+- `GET /api/app/icon-{180,192,512}.png` and `/api/app/icon-maskable-512.png`:
+  a monogram (the first letter of the name) on the theme color.
+
+Phones keep the icon they downloaded when the app was installed. After a
+rebrand, users must remove the shortcut and add it again to get the new
+icon. This only works when the API is on the same origin as the site, under
+`/api` (the default setup).
+
 ### Designing the wordmark (`SITE_NAME_STYLE`)
 
 `SITE_NAME_STYLE` makes the site name in the navbar render as styled segments —
