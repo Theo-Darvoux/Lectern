@@ -33,7 +33,10 @@ a DjVu file shown in an `<img>`.
    renderer and decides which types have a native fallback. The worker and the API
    both use it.
 3. Text, code, Markdown and notebook files get no thumbnail. The card shows the
-   language or format (`web/src/lib/code-languages.ts`).
+   language or format (`web/src/lib/code-languages.ts`): the language's brand
+   color as background and its official logo as SVG, from the `simple-icons`
+   package (CC0, bundled, no network request). Languages Simple Icons has no logo
+   for (C#, PowerShell, MATLAB, SQL…) show a text mark instead.
 4. A video card shows its WebP thumbnail and requests the video file only when the
    pointer first enters the card, then plays it.
 

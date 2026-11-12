@@ -1,3 +1,59 @@
+import {
+    siApachegroovy,
+    siAsciidoctor,
+    siBazel,
+    siC,
+    siClojure,
+    siCmake,
+    siCplusplus,
+    siCss,
+    siD,
+    siDart,
+    siDocker,
+    siElixir,
+    siElm,
+    siErlang,
+    siFsharp,
+    siGit,
+    siGnubash,
+    siGo,
+    siGradle,
+    siGraphql,
+    siHaskell,
+    siHtml5,
+    siJavascript,
+    siJson,
+    siJulia,
+    siJupyter,
+    siKotlin,
+    siLatex,
+    siLess,
+    siLua,
+    siMarkdown,
+    siNim,
+    siNixos,
+    siOcaml,
+    siOdin,
+    siOpenjdk,
+    siPerl,
+    siPhp,
+    siPython,
+    siR,
+    siRuby,
+    siRust,
+    siSass,
+    siScala,
+    siSvelte,
+    siSwift,
+    siTerraform,
+    siToml,
+    siTypescript,
+    siVuedotjs,
+    siXml,
+    siYaml,
+    siZig,
+    type SimpleIcon,
+} from "simple-icons";
 import { getFileExtension } from "./file-utils";
 
 /**
@@ -7,88 +63,118 @@ import { getFileExtension } from "./file-utils";
 export interface CodeLanguage {
     /** Proper name shown on the card, or null to show the file extension. */
     name: string | null;
-    /** Short mark drawn as the card's watermark. */
+    /** Short mark drawn as the card's watermark when the language has no logo. */
     mark: string;
-    /** Tailwind gradient classes for the card background. */
-    gradient: string;
+    /** Background color that stands for the language (CSS hex). */
+    color: string;
+    /** True when text and logo drawn on `color` must be dark to stay readable. */
+    darkText: boolean;
+    /** Official logo from Simple Icons (CC0), or null to draw `mark` instead. */
+    icon: SimpleIcon | null;
 }
 
-type LanguageSpec = readonly [extensions: readonly string[], name: string | null, mark: string, gradient: string];
-
-// Gradients stay dark enough for white text in both themes.
-const LANGUAGES: readonly LanguageSpec[] = [
-    [["py", "pyw", "pyi"], "Python", "PY", "from-sky-700 to-amber-600"],
-    [["ipynb"], "Jupyter", "NB", "from-orange-500 to-amber-700"],
-    [["js", "mjs", "cjs", "jsx"], "JavaScript", "JS", "from-yellow-500 to-amber-700"],
-    [["ts", "tsx"], "TypeScript", "TS", "from-blue-500 to-blue-800"],
-    [["java"], "Java", "JAVA", "from-orange-600 to-red-800"],
-    [["kt", "kts"], "Kotlin", "KT", "from-violet-500 to-fuchsia-700"],
-    [["scala"], "Scala", "SCALA", "from-red-500 to-rose-800"],
-    [["groovy", "gradle"], "Groovy", "GVY", "from-cyan-600 to-sky-800"],
-    [["c", "h"], "C", "C", "from-slate-500 to-blue-800"],
-    [["cpp", "cxx", "cc", "hpp", "hxx"], "C++", "C++", "from-blue-600 to-indigo-800"],
-    [["cs"], "C#", "C#", "from-purple-600 to-violet-800"],
-    [["rs"], "Rust", "RS", "from-orange-700 to-stone-800"],
-    [["go"], "Go", "GO", "from-cyan-500 to-sky-700"],
-    [["zig"], "Zig", "ZIG", "from-amber-500 to-orange-700"],
-    [["rb"], "Ruby", "RB", "from-red-600 to-rose-800"],
-    [["php"], "PHP", "PHP", "from-indigo-400 to-indigo-700"],
-    [["pl", "pm"], "Perl", "PL", "from-sky-800 to-slate-800"],
-    [["sh", "bash", "zsh", "fish"], "Shell", "SH", "from-emerald-600 to-slate-800"],
-    [["ps1", "psm1", "psd1"], "PowerShell", "PS", "from-blue-700 to-slate-800"],
-    [["lua"], "Lua", "LUA", "from-indigo-600 to-blue-900"],
-    [["swift"], "Swift", "SWIFT", "from-orange-500 to-red-600"],
-    [["dart"], "Dart", "DART", "from-sky-500 to-teal-700"],
-    [["r", "rmd"], "R", "R", "from-blue-500 to-slate-700"],
-    [["jl"], "Julia", "JL", "from-violet-500 to-purple-800"],
-    [["m"], "MATLAB", "M", "from-orange-500 to-red-700"],
-    [["ml", "mli"], "OCaml", "ML", "from-orange-500 to-amber-800"],
-    [["hs", "lhs"], "Haskell", "HS", "from-purple-600 to-indigo-800"],
-    [["ex", "exs"], "Elixir", "EX", "from-purple-500 to-violet-800"],
-    [["erl", "hrl"], "Erlang", "ERL", "from-red-700 to-rose-900"],
-    [["clj", "cljs", "cljc", "edn"], "Clojure", "CLJ", "from-green-600 to-blue-700"],
-    [["elm"], "Elm", "ELM", "from-sky-500 to-cyan-700"],
-    [["fs", "fsx"], "F#", "F#", "from-cyan-600 to-blue-800"],
-    [["vb"], "Visual Basic", "VB", "from-blue-600 to-violet-700"],
-    [["nim"], "Nim", "NIM", "from-yellow-600 to-amber-800"],
-    [["d"], "D", "D", "from-red-600 to-red-800"],
-    [["odin"], "Odin", "ODIN", "from-blue-500 to-indigo-700"],
-    [["v"], null, "V", "from-slate-500 to-slate-700"],
-    [["html", "htm"], "HTML", "HTML", "from-orange-500 to-red-700"],
-    [["css"], "CSS", "CSS", "from-blue-500 to-indigo-700"],
-    [["scss", "sass"], "Sass", "SASS", "from-pink-500 to-rose-700"],
-    [["less"], "Less", "LESS", "from-indigo-500 to-blue-800"],
-    [["vue"], "Vue", "VUE", "from-emerald-500 to-teal-700"],
-    [["svelte"], "Svelte", "SV", "from-orange-500 to-red-600"],
-    [["sql"], "SQL", "SQL", "from-amber-600 to-orange-800"],
-    [["graphql", "gql"], "GraphQL", "GQL", "from-pink-500 to-fuchsia-700"],
-    [["proto", "thrift", "capnp"], null, "IDL", "from-slate-500 to-indigo-800"],
-    [["tex", "latex", "sty", "cls", "dtx", "ins"], "LaTeX", "TEX", "from-teal-600 to-emerald-800"],
-    [["bib"], "BibTeX", "BIB", "from-teal-500 to-cyan-700"],
-    [["md", "markdown"], "Markdown", "MD", "from-slate-600 to-slate-800"],
-    [["rst"], "reStructuredText", "RST", "from-slate-600 to-slate-800"],
-    [["adoc"], "AsciiDoc", "ADOC", "from-slate-600 to-slate-800"],
-    [["json", "json5", "jsonc"], "JSON", "{ }", "from-zinc-600 to-zinc-800"],
-    [["yaml", "yml"], "YAML", "YAML", "from-rose-600 to-red-800"],
-    [["toml"], "TOML", "TOML", "from-stone-500 to-stone-700"],
-    [["xml"], "XML", "XML", "from-orange-600 to-amber-800"],
-    [["csv"], "CSV", "CSV", "from-emerald-500 to-green-700"],
-    [["dockerfile"], "Dockerfile", "DOCKER", "from-sky-500 to-blue-700"],
-    [["tf", "hcl"], "Terraform", "TF", "from-violet-600 to-purple-800"],
-    [["nix"], "Nix", "NIX", "from-sky-600 to-indigo-700"],
-    [["makefile", "cmake", "bazel", "bzl"], null, "BUILD", "from-slate-500 to-stone-700"],
-    [["diff", "patch"], "Diff", "DIFF", "from-emerald-600 to-rose-700"],
+type LanguageSpec = readonly [
+    extensions: readonly string[],
+    name: string | null,
+    mark: string,
+    color: string,
+    icon: SimpleIcon | null,
 ];
 
+// Colors are the language's brand color. Brands whose color is plain black get
+// the color the community associates with them instead (Rust orange, Markdown blue…).
+// Languages without a logo in Simple Icons fall back to their text mark.
+const LANGUAGES: readonly LanguageSpec[] = [
+    [["py", "pyw", "pyi"], "Python", "PY", "#3776AB", siPython],
+    [["ipynb"], "Jupyter", "NB", "#F37626", siJupyter],
+    [["js", "mjs", "cjs", "jsx"], "JavaScript", "JS", "#F7DF1E", siJavascript],
+    [["ts", "tsx"], "TypeScript", "TS", "#3178C6", siTypescript],
+    [["java"], "Java", "JAVA", "#E76F00", siOpenjdk],
+    [["kt", "kts"], "Kotlin", "KT", "#7F52FF", siKotlin],
+    [["scala"], "Scala", "SCALA", "#DC322F", siScala],
+    [["groovy"], "Groovy", "GVY", "#4298B8", siApachegroovy],
+    [["gradle"], "Gradle", "GRADLE", "#02303A", siGradle],
+    [["c", "h"], "C", "C", "#A8B9CC", siC],
+    [["cpp", "cxx", "cc", "hpp", "hxx"], "C++", "C++", "#00599C", siCplusplus],
+    [["cs"], "C#", "C#", "#512BD4", null],
+    [["rs"], "Rust", "RS", "#B7410E", siRust],
+    [["go"], "Go", "GO", "#00ADD8", siGo],
+    [["zig"], "Zig", "ZIG", "#F7A41D", siZig],
+    [["rb"], "Ruby", "RB", "#CC342D", siRuby],
+    [["php"], "PHP", "PHP", "#777BB4", siPhp],
+    [["pl", "pm"], "Perl", "PL", "#0073A1", siPerl],
+    [["sh", "bash", "zsh", "fish"], "Shell", "SH", "#4EAA25", siGnubash],
+    [["ps1", "psm1", "psd1"], "PowerShell", "PS", "#012456", null],
+    [["lua"], "Lua", "LUA", "#000080", siLua],
+    [["swift"], "Swift", "SWIFT", "#F05138", siSwift],
+    [["dart"], "Dart", "DART", "#0175C2", siDart],
+    [["r", "rmd"], "R", "R", "#276DC3", siR],
+    [["jl"], "Julia", "JL", "#9558B2", siJulia],
+    [["m"], "MATLAB", "M", "#E16737", null],
+    [["ml", "mli"], "OCaml", "ML", "#EC6813", siOcaml],
+    [["hs", "lhs"], "Haskell", "HS", "#5D4F85", siHaskell],
+    [["ex", "exs"], "Elixir", "EX", "#4B275F", siElixir],
+    [["erl", "hrl"], "Erlang", "ERL", "#A90533", siErlang],
+    [["clj", "cljs", "cljc", "edn"], "Clojure", "CLJ", "#5881D8", siClojure],
+    [["elm"], "Elm", "ELM", "#1293D8", siElm],
+    [["fs", "fsx"], "F#", "F#", "#378BBA", siFsharp],
+    [["vb"], "Visual Basic", "VB", "#945DB7", null],
+    [["nim"], "Nim", "NIM", "#FFE953", siNim],
+    [["d"], "D", "D", "#B03931", siD],
+    [["odin"], "Odin", "ODIN", "#3882D2", siOdin],
+    // `.v` is both V and Verilog: no name, no logo.
+    [["v"], null, "V", "#475569", null],
+    [["html", "htm"], "HTML", "HTML", "#E34F26", siHtml5],
+    [["css"], "CSS", "CSS", "#663399", siCss],
+    [["scss", "sass"], "Sass", "SASS", "#CC6699", siSass],
+    [["less"], "Less", "LESS", "#1D365D", siLess],
+    [["vue"], "Vue", "VUE", "#4FC08D", siVuedotjs],
+    [["svelte"], "Svelte", "SV", "#FF3E00", siSvelte],
+    [["sql"], "SQL", "SQL", "#C9702A", null],
+    [["graphql", "gql"], "GraphQL", "GQL", "#E10098", siGraphql],
+    [["proto", "thrift", "capnp"], null, "IDL", "#4A5A75", null],
+    [["tex", "latex", "sty", "cls", "dtx", "ins"], "LaTeX", "TEX", "#008080", siLatex],
+    [["bib"], "BibTeX", "BIB", "#00616A", siLatex],
+    [["md", "markdown"], "Markdown", "MD", "#083FA1", siMarkdown],
+    [["rst"], "reStructuredText", "RST", "#3B4A5C", null],
+    [["adoc"], "AsciiDoc", "ADOC", "#E40046", siAsciidoctor],
+    [["json", "json5", "jsonc"], "JSON", "{ }", "#292929", siJson],
+    [["yaml", "yml"], "YAML", "YAML", "#CB171E", siYaml],
+    [["toml"], "TOML", "TOML", "#9C4121", siToml],
+    [["xml"], "XML", "XML", "#005FAD", siXml],
+    [["csv"], "CSV", "CSV", "#217346", null],
+    [["dockerfile"], "Dockerfile", "DOCKER", "#2496ED", siDocker],
+    [["tf", "hcl"], "Terraform", "TF", "#844FBA", siTerraform],
+    [["nix"], "Nix", "NIX", "#5277C3", siNixos],
+    [["cmake"], "CMake", "CMAKE", "#064F8C", siCmake],
+    [["bazel", "bzl"], "Bazel", "BAZEL", "#43A047", siBazel],
+    [["makefile"], "Makefile", "MAKE", "#57534E", null],
+    [["diff", "patch"], "Diff", "DIFF", "#F05032", siGit],
+];
+
+/**
+ * Whether dark text reads better than white on `hex`, by YIQ brightness. The
+ * card adds a darkening overlay, so mid-tone brand colors keep white text.
+ */
+function needsDarkText(hex: string): boolean {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return (r * 299 + g * 587 + b * 114) / 1000 >= 150;
+}
+
 const BY_EXTENSION = new Map<string, CodeLanguage>(
-    LANGUAGES.flatMap(([extensions, name, mark, gradient]) =>
-        extensions.map((ext) => [ext, { name, mark, gradient }] as const),
-    ),
+    LANGUAGES.flatMap(([extensions, name, mark, color, icon]) => {
+        const language: CodeLanguage = { name, mark, color, darkText: needsDarkText(color), icon };
+        return extensions.map((ext) => [ext, language] as const);
+    }),
 );
 
 const PLAIN_TEXT: Omit<CodeLanguage, "mark"> = {
     name: null,
-    gradient: "from-slate-700 to-slate-900",
+    color: "#334155",
+    darkText: false,
+    icon: null,
 };
 
 /** MIME types of text formats outside `text/*` (JSON, scripts, TeX…). */

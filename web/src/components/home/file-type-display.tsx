@@ -1,15 +1,21 @@
 import { FileText, Image as ImageIcon, Video, Music, Code2, File, ExternalLink, Link2, ListChecks } from "lucide-react";
-import type { ElementType } from "react";
+import type { CSSProperties, ElementType } from "react";
 import { getFileExtension, MIME_QCM } from "@/lib/file-utils";
 import { getCodeLanguage } from "@/lib/code-languages";
+import { languageLogoIcon } from "./language-logo";
 
 export interface FileTypeStyle {
     /** Tailwind gradient classes, e.g. "from-red-400 to-rose-600" */
     gradient: string;
     /** Tailwind text color class for the icon rendered on the gradient, e.g. "text-white" */
     iconColorClass: string;
-    /** Lucide icon component */
+    /** Lucide icon component, or the language logo for code files */
     Icon: ElementType;
+    /**
+     * Inline background for colors Tailwind classes cannot express (a language's
+     * brand color). `gradient` then holds a light-to-dark overlay drawn over it.
+     */
+    style?: CSSProperties;
 }
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
@@ -71,8 +77,17 @@ export function getFileTypeStyle(
     // Code, markup, config and plain text: the language's own colors.
     const language = getCodeLanguage(fileName, mimeType);
     if (language) {
-        const Icon = PROSE_EXTENSIONS.has(ext) || !ext ? FileText : Code2;
-        return { gradient: language.gradient, iconColorClass: "text-white", Icon };
+        const Icon = language.icon
+            ? languageLogoIcon(language.icon)
+            : PROSE_EXTENSIONS.has(ext) || !ext
+              ? FileText
+              : Code2;
+        return {
+            gradient: "from-white/10 to-black/20",
+            iconColorClass: language.darkText ? "text-slate-900" : "text-white",
+            Icon,
+            style: { backgroundColor: language.color },
+        };
     }
 
     // Word documents

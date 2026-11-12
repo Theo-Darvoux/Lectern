@@ -315,8 +315,16 @@ describe("MaterialPreview", () => {
     expect(previewSource.getMaterialThumbnail).not.toHaveBeenCalled();
     expect(apiClient.getMaterialFileUrl).not.toHaveBeenCalled();
     expect(container.querySelector("img")).toBeNull();
-    expect(container.textContent).toContain("PY");
     expect(container.textContent).toContain("Python");
+    expect(container.querySelector(`[data-language-logo="python"]`)).not.toBeNull();
+    expect(container.textContent).not.toContain("PY");
+  });
+
+  it("draws the text mark for languages without a logo", async () => {
+    await renderAndSettle(root, fileMaterial("Program.cs", "text/plain"));
+
+    expect(container.querySelector("[data-language-logo]")).toBeNull();
+    expect(container.textContent).toContain("C#");
   });
 
   it("shows the extension for plain text files", async () => {

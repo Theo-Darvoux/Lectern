@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import { getMaterialFileUrl } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { getFileTypeStyle } from "./file-type-display";
+import { LanguageLogo } from "./language-logo";
 import type { MaterialDetail, MaterialVersionInfo } from "./types";
 import { Loader2 } from "lucide-react";
 import { useInView } from "@/hooks/use-in-view";
@@ -130,7 +131,7 @@ function canHover(event: React.PointerEvent): boolean {
   return event.pointerType === "mouse" || event.pointerType === "pen";
 }
 
-/** Generic card for text-like files, which get no rendered thumbnail. */
+/** Generic card for text-like files: the language's color and logo. */
 function CodeCard({ language, title, ext }: { language: CodeLanguage; title: string; ext: string }) {
   const watermarkSize =
     language.mark.length <= 2
@@ -138,25 +139,56 @@ function CodeCard({ language, title, ext }: { language: CodeLanguage; title: str
       : language.mark.length <= 4
         ? "text-3xl @min-[160px]:text-5xl @min-[260px]:text-7xl"
         : "text-xl @min-[160px]:text-4xl @min-[260px]:text-5xl";
+  const label = language.name ?? (ext ? `.${ext}` : language.mark);
   return (
-    <div className="@container absolute inset-0 flex items-center justify-center overflow-hidden p-4 select-none">
-      <div
-        className={cn(
-          "absolute font-mono font-black leading-none tracking-tighter text-black/25 -rotate-12 pointer-events-none",
-          watermarkSize,
-        )}
-      >
-        {language.mark}
-      </div>
+    <div
+      className={cn(
+        "@container absolute inset-0 flex items-center justify-center overflow-hidden p-4 select-none",
+        language.darkText ? "text-slate-900" : "text-white",
+      )}
+      style={{ backgroundColor: language.color }}
+    >
+      <div className="absolute inset-0 bg-linear-to-br from-white/10 to-black/20 pointer-events-none" />
+      {language.icon ? (
+        <>
+          {/* Small cards: the logo alone, centered. */}
+          <LanguageLogo icon={language.icon} className="relative size-1/2 max-h-16 max-w-16 @min-[120px]:hidden" />
+          {/* Larger cards: an oversized faded logo behind the label and title. */}
+          <LanguageLogo
+            icon={language.icon}
+            className="absolute -right-[12%] -bottom-[18%] hidden size-[70%] -rotate-12 opacity-20 pointer-events-none @min-[120px]:block"
+          />
+        </>
+      ) : (
+        <div
+          className={cn(
+            "absolute font-mono font-black leading-none tracking-tighter text-black/25 -rotate-12 pointer-events-none",
+            watermarkSize,
+          )}
+        >
+          {language.mark}
+        </div>
+      )}
       <div className="relative z-10 hidden w-full flex-col items-center text-center @min-[120px]:flex">
-        <span className="mb-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-white/80">
-          {language.name ?? (ext ? `.${ext}` : language.mark)}
-        </span>
-        <h3 className="hidden max-w-[90%] text-sm font-bold leading-snug text-white drop-shadow-sm line-clamp-3 @min-[180px]:block @min-[260px]:text-base">
+        {language.icon && (
+          <LanguageLogo icon={language.icon} className="mb-2 size-8 @min-[180px]:size-10 drop-shadow-sm" />
+        )}
+        <span className="mb-1.5 font-mono text-[10px] font-bold uppercase tracking-widest opacity-80">{label}</span>
+        <h3
+          className={cn(
+            "hidden max-w-[90%] text-sm font-bold leading-snug line-clamp-3 @min-[180px]:block @min-[260px]:text-base",
+            !language.darkText && "drop-shadow-sm",
+          )}
+        >
           {title}
         </h3>
       </div>
-      <div className="absolute inset-1.5 hidden rounded-md border border-white/10 pointer-events-none @min-[120px]:block" />
+      <div
+        className={cn(
+          "absolute inset-1.5 hidden rounded-md border pointer-events-none @min-[120px]:block",
+          language.darkText ? "border-black/10" : "border-white/10",
+        )}
+      />
     </div>
   );
 }
@@ -373,7 +405,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
       ? (isInternal ? "internal_link" : "link")
       : material.type;
 
-  const { gradient, iconColorClass, Icon } = getFileTypeStyle(
+  const { gradient, iconColorClass, Icon, style } = getFileTypeStyle(
     resolvedTargetMat ? fileName : (isLink ? null : fileName),
     resolvedTargetMat ? mimeType : (isLink ? null : mimeType),
     effectiveType,
@@ -449,6 +481,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         gradient,
         className
       )}
+      style={style}
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}
     >

@@ -158,6 +158,7 @@ export function PROperationThumbnail({
                 containerClasses,
                 className,
             )}
+            style={fileStyle.style}
         >
             {imgUrl && !imgError ? (
                 /* eslint-disable-next-line @next/next/no-img-element */

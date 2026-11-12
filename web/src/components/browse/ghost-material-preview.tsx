@@ -22,7 +22,7 @@ export function GhostMaterialPreview({
     containerRef: React.RefObject<Element | null>;
     iconClassName: string;
 }) {
-    const { gradient, iconColorClass, Icon } = getFileTypeStyle(fileName ?? null, mimeType ?? null);
+    const { gradient, iconColorClass, Icon, style } = getFileTypeStyle(fileName ?? null, mimeType ?? null);
     const inView = useInView(containerRef);
     const isImage = (mimeType?.startsWith("image/") ?? false) || IMAGE_NAME.test(fileName ?? "");
 
@@ -38,6 +38,7 @@ export function GhostMaterialPreview({
                 "relative w-full h-full flex items-center justify-center overflow-hidden bg-linear-to-br",
                 gradient,
             )}
+            style={style}
         >
             <Icon className={cn(iconClassName, "z-10", iconColorClass, imgUrl ? "opacity-0" : "opacity-80")} />
             {imgUrl && (
