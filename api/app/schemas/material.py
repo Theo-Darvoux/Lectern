@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
@@ -23,6 +24,11 @@ class MaterialVersionOut(BaseModel):
     virus_scan_result: VirusScanResult
     version_lock: int
     created_at: datetime
+    # Filled by listings (``attach_thumbnail_urls``) so cards need no extra request.
+    # thumbnail_type null: not resolved, ask ``GET /materials/{id}/thumbnail``.
+    # "none": the file has no preview; show the generic card.
+    thumbnail_url: str | None = None
+    thumbnail_type: Literal["webp", "fallback", "none"] | None = None
 
     model_config = {"from_attributes": True}
 

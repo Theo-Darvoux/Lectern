@@ -1,28 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import dynamic from "next/dynamic";
 import { getMaterialFileUrl } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { getFileTypeStyle } from "./file-type-display";
-import type { MaterialDetail } from "./types";
+import type { MaterialDetail, MaterialVersionInfo } from "./types";
 import { Loader2 } from "lucide-react";
 import { useInView } from "@/hooks/use-in-view";
 import { MIME_QCM } from "@/lib/file-utils";
+import { getCodeLanguage, type CodeLanguage } from "@/lib/code-languages";
 import { createPdfWorker, loadPdfjs } from "@/lib/pdf-worker";
 import {
   getMaterialThumbnail,
+  refreshMaterialThumbnail,
   subscribeMaterialThumbnail,
-  type ThumbnailType,
 } from "@/lib/material-preview-source";
 
 import { isExternalUrl, getInternalBrowsePath } from "@/lib/url-utils";
 import { fetchBrowsePath } from "@/lib/browse-prefetch";
-
-const MarkdownRenderer = dynamic(
-  () => import("../viewers/markdown-renderer").then((module) => module.MarkdownRenderer),
-  { ssr: false },
-);
 
 // Renders the first page of a PDF to a canvas via pdf.js. The engine (~1MB of
 // JS) is imported lazily inside the effect, so it only loads when a card
@@ -104,11 +99,67 @@ function PdfThumbnailCanvas({
 
 // A signed worker/presigned URL can transiently fail to load (cold edge cache,
 // brief 5xx, flaky connection) and an <img> that errors never re-attempts on its
-// own. Retry a bounded number of times with backoff, cache-busting the request
-// so the browser doesn't replay its cached failure. The extra query param is
-// safe: the worker only verifies `token` and strips the query string from its
-// cache key, so it neither breaks signature validation nor pollutes the cache.
+// own. The first failure re-signs the URL (it may have expired in a long-lived
+// listing); later ones retry with backoff, cache-busting the request so the
+// browser doesn't replay its cached failure. The extra query param is safe: the
+// worker only verifies `token` and strips the query string from its cache key.
 const MAX_IMG_RETRIES = 3;
+
+interface PreviewSource {
+  url: string;
+  /** "webp": generated thumbnail. "fallback": the original image, video or PDF. */
+  type: "webp" | "fallback";
+}
+
+/**
+ * Preview embedded by the listing that returned this material.
+ * undefined: not resolved there (search results, link targets), so ask the API.
+ * null: the file has no preview.
+ */
+function embeddedPreview(version: MaterialVersionInfo | null | undefined): PreviewSource | null | undefined {
+  if (!version?.thumbnail_type) return undefined;
+  if (version.thumbnail_type === "none" || !version.thumbnail_url) return null;
+  return { url: version.thumbnail_url, type: version.thumbnail_type };
+}
+
+function withQuery(url: string, key: string, value: number): string {
+  return `${url}${url.includes("?") ? "&" : "?"}${key}=${value}`;
+}
+
+function canHover(event: React.PointerEvent): boolean {
+  return event.pointerType === "mouse" || event.pointerType === "pen";
+}
+
+/** Generic card for text-like files, which get no rendered thumbnail. */
+function CodeCard({ language, title, ext }: { language: CodeLanguage; title: string; ext: string }) {
+  const watermarkSize =
+    language.mark.length <= 2
+      ? "text-5xl @min-[160px]:text-7xl @min-[260px]:text-[100px]"
+      : language.mark.length <= 4
+        ? "text-3xl @min-[160px]:text-5xl @min-[260px]:text-7xl"
+        : "text-xl @min-[160px]:text-4xl @min-[260px]:text-5xl";
+  return (
+    <div className="@container absolute inset-0 flex items-center justify-center overflow-hidden p-4 select-none">
+      <div
+        className={cn(
+          "absolute font-mono font-black leading-none tracking-tighter text-black/25 -rotate-12 pointer-events-none",
+          watermarkSize,
+        )}
+      >
+        {language.mark}
+      </div>
+      <div className="relative z-10 hidden w-full flex-col items-center text-center @min-[120px]:flex">
+        <span className="mb-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-white/80">
+          {language.name ?? (ext ? `.${ext}` : language.mark)}
+        </span>
+        <h3 className="hidden max-w-[90%] text-sm font-bold leading-snug text-white drop-shadow-sm line-clamp-3 @min-[180px]:block @min-[260px]:text-base">
+          {title}
+        </h3>
+      </div>
+      <div className="absolute inset-1.5 hidden rounded-md border border-white/10 pointer-events-none @min-[120px]:block" />
+    </div>
+  );
+}
 
 interface MaterialPreviewProps {
   material: MaterialDetail;
@@ -118,11 +169,11 @@ interface MaterialPreviewProps {
 }
 
 export function MaterialPreview({ material, className, lazy }: MaterialPreviewProps) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [thumbnailType, setThumbnailType] = useState<ThumbnailType>(null);
+  const [source, setSource] = useState<PreviewSource | null>(null);
   const [loading, setLoading] = useState(false);
   const [videoLoaded, setVideoLoaded] = useState(false);
-  const [textPreview, setTextPreview] = useState<string | null>(null);
+  const [hoverVideoUrl, setHoverVideoUrl] = useState<string | null>(null);
+  const [hovering, setHovering] = useState(false);
   const [pdfReady, setPdfReady] = useState(false);
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
   const handlePdfError = useCallback(() => setPdfReady(false), []);
@@ -130,17 +181,17 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const [cacheBust, setCacheBust] = useState(0);
   const [resolvedTargetMat, setResolvedTargetMat] = useState<MaterialDetail | null>(null);
   const imgAttemptRef = useRef(0);
+  const urlRefreshedRef = useRef(false);
   const imgRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(300);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    setUrl(null);
-    setThumbnailType(null);
-    setTextPreview(null);
+    setSource(null);
     setResolvedTargetMat(null);
     setVideoLoaded(false);
+    setHoverVideoUrl(null);
     setPdfReady(false);
   }, [material.id]);
 
@@ -178,14 +229,14 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   const versionInfo = effectiveMat.current_version_info;
   const fileName = versionInfo?.file_name ?? "";
   const mimeType = versionInfo?.file_mime_type ?? "";
+  const ext = fileName.includes(".") ? fileName.split(".").pop()!.toLowerCase() : "";
 
-  const isImage = mimeType.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
-  const isVideo = mimeType.startsWith("video/") || /\.(mp4|webm|avi|mkv|mov)$/i.test(fileName);
-  const isMarkdown = mimeType === "text/markdown" || /\.(md|markdown)$/i.test(fileName);
-  const isText = (mimeType.startsWith("text/") || /\.(txt|py|js|ts|json)$/i.test(fileName)) && !isMarkdown;
+  const isVideo = mimeType.startsWith("video/") || /\.(mp4|webm)$/i.test(fileName);
   const isPDF = mimeType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf");
   const isOffice = mimeType.includes("ms-") || mimeType.includes("officedocument") || /\.(docx|xlsx|pptx)$/i.test(fileName);
   const isQCM = mimeType === MIME_QCM || fileName.toLowerCase().endsWith(".qcm");
+  // Links show their own card until the target resolves.
+  const codeLanguage = !isQCM && (!isLink || resolvedTargetMat) ? getCodeLanguage(fileName, mimeType) : null;
 
   // Track container width for PDF canvas sizing — only needed when the PDF thumbnail will render.
   useEffect(() => {
@@ -205,111 +256,49 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     if (!shouldLoad || isLinkWithoutBrowsePath) return;
 
     let mounted = true;
-    const controller = new AbortController();
-    setLoading(true);
     setPdfReady(false);
+    urlRefreshedRef.current = false;
 
     async function fetchPreview() {
-      try {
-        let activeMaterialId = String(material.id);
-        let activeMat: MaterialDetail | Record<string, unknown> = material;
+      let activeMat: MaterialDetail = material;
 
-        // If this is an internal link pointing to a browse path, resolve target material first
-        if (isLink && internalBrowsePath !== null) {
-          try {
-            const browseRes = (await fetchBrowsePath(internalBrowsePath)) as {
-              type?: string;
-              material?: MaterialDetail;
-            } | null;
-            if (!mounted) return;
-            if (browseRes && browseRes.type === "material" && browseRes.material) {
-              activeMat = browseRes.material;
-              activeMaterialId = String(activeMat.id);
-              setResolvedTargetMat(browseRes.material);
-            } else {
-              setLoading(false);
-              return;
-            }
-          } catch {
-            if (mounted) setLoading(false);
-            return;
-          }
-        }
-
-        const activeVer = (activeMat as MaterialDetail).current_version_info;
-        const activeFileName = String(activeVer?.file_name ?? "");
-        const activeMime = String(activeVer?.file_mime_type ?? "");
-        const activeIsImage = activeMime.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(activeFileName);
-        const activeIsVideo = activeMime.startsWith("video/") || /\.(mp4|webm|avi|mkv|mov)$/i.test(activeFileName);
-        const activeIsMarkdown = activeMime === "text/markdown" || /\.(md|markdown)$/i.test(activeFileName);
-        const activeIsText = (activeMime.startsWith("text/") || /\.(txt|py|js|ts|json)$/i.test(activeFileName)) && !activeIsMarkdown;
-
-        // 1. Try the /thumbnail endpoint first.
-        //    It returns { url, thumbnail_type: "webp" | "fallback" }.
+      // If this is an internal link pointing to a browse path, resolve target material first
+      if (isLink && internalBrowsePath !== null) {
         try {
-          const thumbData = await getMaterialThumbnail(activeMaterialId);
-          if (mounted && thumbData && thumbData.url) {
-            setUrl(thumbData.url);
-            setThumbnailType(thumbData.thumbnailType ?? "webp");
-            setLoading(false);
-            return;
-          }
+          const browseRes = (await fetchBrowsePath(internalBrowsePath)) as {
+            type?: string;
+            material?: MaterialDetail;
+          } | null;
+          if (!mounted) return;
+          if (browseRes?.type !== "material" || !browseRes.material) return;
+          activeMat = browseRes.material;
+          setResolvedTargetMat(browseRes.material);
         } catch {
-          // Thumbnail not available — fall through to inline fallback
-          console.debug("No server thumbnail available, falling back to inline source.");
-        }
-
-        if (!mounted) return;
-
-        // 2. Fallback: fetch direct inline URL for native client-side rendering
-        const isMediaOrText = activeIsImage || activeIsVideo || activeIsText || activeIsMarkdown;
-        if (!isMediaOrText) {
-          setLoading(false);
           return;
         }
+      }
 
-        const inlineUrl = await getMaterialFileUrl(activeMaterialId, controller.signal);
-        if (!mounted) return;
+      const activeVersion = activeMat.current_version_info;
+      const activeName = activeVersion?.file_name ?? "";
+      const activeMime = activeVersion?.file_mime_type ?? "";
+      // Text-like files and QCMs have a generic card and no thumbnail.
+      if (activeMime === MIME_QCM || getCodeLanguage(activeName, activeMime)) return;
 
-        if (inlineUrl) {
-          setUrl(inlineUrl);
-          setThumbnailType(null);  // plain inline URL
+      // After a regeneration the listing's embedded URL is stale: ask the API.
+      const embedded = cacheBust === 0 ? embeddedPreview(activeVersion) : undefined;
+      if (embedded !== undefined) {
+        setSource(embedded);
+        return;
+      }
 
-          // Fetch text snippet for text/markdown files
-          if (activeIsText || activeIsMarkdown) {
-            try {
-              const res = await fetch(inlineUrl, { signal: controller.signal });
-              const contentEncoding = res.headers.get("Content-Encoding");
-              let text = "";
-              if (contentEncoding === "gzip" || contentEncoding?.includes("gzip")) {
-                if (res.body && typeof DecompressionStream !== "undefined") {
-                  const decompressedStream = res.body.pipeThrough(new DecompressionStream("gzip"));
-                  const decompressedResponse = new Response(decompressedStream);
-                  text = await decompressedResponse.text();
-                } else {
-                  text = await res.text();
-                }
-              } else {
-                const blob = await res.blob();
-                const buffer = await blob.arrayBuffer();
-                const arr = new Uint8Array(buffer);
-                if (arr.length >= 2 && arr[0] === 0x1f && arr[1] === 0x8b && typeof DecompressionStream !== "undefined") {
-                  const stream = new Blob([buffer]).stream();
-                  const decompressedStream = stream.pipeThrough(new DecompressionStream("gzip"));
-                  const decompressedResponse = new Response(decompressedStream);
-                  text = await decompressedResponse.text();
-                } else {
-                  text = new TextDecoder().decode(buffer);
-                }
-              }
-              if (mounted) setTextPreview(text.slice(0, 1000));
-            } catch {
-              // ignore
-            }
-          }
+      setLoading(true);
+      try {
+        const thumbnail = await getMaterialThumbnail(String(activeMat.id));
+        if (mounted && thumbnail.url && thumbnail.thumbnailType) {
+          setSource({ url: thumbnail.url, type: thumbnail.thumbnailType });
         }
       } catch {
-        // ignore
+        // 404: the file type has no preview; the icon card stays.
       } finally {
         if (mounted) setLoading(false);
       }
@@ -318,7 +307,6 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     const timer = setTimeout(fetchPreview, 100);
     return () => {
       mounted = false;
-      controller.abort();
       clearTimeout(timer);
     };
     // Keyed on the id and the derived flags: parents pass a fresh `material`
@@ -326,11 +314,6 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     material.id,
-    isText,
-    isImage,
-    isVideo,
-    isMarkdown,
-    isPDF,
     shouldLoad,
     cacheBust,
     isLink,
@@ -340,6 +323,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
 
   // Reset the image-retry counter whenever the source URL changes, and clear any
   // pending retry timer on unmount.
+  const sourceUrl = source?.url ?? null;
   useEffect(() => {
     imgAttemptRef.current = 0;
     setImgBust(0);
@@ -349,9 +333,23 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         imgRetryTimer.current = null;
       }
     };
-  }, [url]);
+  }, [sourceUrl]);
 
   const handleImgError = () => {
+    const activeId = String(effectiveMat.id);
+    if (!urlRefreshedRef.current) {
+      urlRefreshedRef.current = true;
+      refreshMaterialThumbnail(activeId)
+        .then((thumbnail) => {
+          if (thumbnail.thumbnailType && thumbnail.url !== sourceUrl) {
+            setSource({ url: thumbnail.url, type: thumbnail.thumbnailType });
+          } else {
+            handleImgError();
+          }
+        })
+        .catch(() => setSource(null));
+      return;
+    }
     if (imgRetryTimer.current || imgAttemptRef.current >= MAX_IMG_RETRIES) return;
     const delay = 500 * 2 ** imgAttemptRef.current;
     imgRetryTimer.current = setTimeout(() => {
@@ -362,14 +360,10 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
   };
 
   const imgSrc = (() => {
-    if (!url) return null;
-    let finalUrl = url;
-    if (cacheBust > 0) {
-      finalUrl = `${finalUrl}${finalUrl.includes("?") ? "&" : "?"}_t=${cacheBust}`;
-    }
-    if (imgBust > 0) {
-      finalUrl = `${finalUrl}${finalUrl.includes("?") ? "&" : "?"}_r=${imgBust}`;
-    }
+    if (!sourceUrl) return null;
+    let finalUrl = sourceUrl;
+    if (cacheBust > 0) finalUrl = withQuery(finalUrl, "_t", cacheBust);
+    if (imgBust > 0) finalUrl = withQuery(finalUrl, "_r", imgBust);
     return finalUrl;
   })();
 
@@ -385,38 +379,66 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
     effectiveType,
   );
 
-  const handleVideoLoaded = () => {
-    if (videoRef.current) {
-      const duration = videoRef.current.duration;
-      const seekTime = Math.min(duration * 0.1, 2);
-      videoRef.current.currentTime = Math.max(seekTime, 0.5);
-      setVideoLoaded(true);
+  // Videos with a generated thumbnail play on hover: the file URL is only
+  // requested the first time the pointer enters. Without one, the original
+  // file is already the source and doubles as the poster frame.
+  const videoSrc = isVideo ? (source?.type === "fallback" ? source.url : hoverVideoUrl) : null;
+  const hasWebpPoster = source?.type === "webp";
+
+  const handlePointerEnter = (event: React.PointerEvent) => {
+    if (!isVideo || !canHover(event)) return;
+    setHovering(true);
+    if (hasWebpPoster && !hoverVideoUrl) {
+      getMaterialFileUrl(String(effectiveMat.id))
+        .then((url) => setHoverVideoUrl(url))
+        .catch(() => {});
+    } else {
+      videoRef.current?.play().catch(() => {});
     }
   };
 
-  // An image URL that should render as <img>:
-  //   - "webp"     → real generated WebP thumbnail (always render as <img>, even for videos/PDFs)
-  //   - "fallback" → raw file returned by the server; only renderable for non-video, non-PDF types
-  //   - null       → came from the /inline fallback path (isImage must be true)
-  const showAsImg =
-    url &&
-    (thumbnailType === "webp" ||
-      (!isVideo && !isPDF && (thumbnailType === "fallback" || (thumbnailType === null && isImage))));
+  const handlePointerLeave = () => {
+    if (!isVideo) return;
+    setHovering(false);
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    if (!hasWebpPoster) seekToPosterFrame(video);
+  };
+
+  const seekToPosterFrame = (video: HTMLVideoElement) => {
+    const duration = video.duration;
+    if (isFinite(duration) && duration > 0) {
+      video.currentTime = Math.max(Math.min(duration * 0.1, 2), 0.5);
+    }
+  };
+
+  const handleVideoLoaded = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (hasWebpPoster) {
+      if (hovering) video.play().catch(() => {});
+    } else {
+      seekToPosterFrame(video);
+    }
+    setVideoLoaded(true);
+  };
+
+  // An <img> renders the generated WebP for every type, and the original file
+  // for images. Fallback videos use <video>; fallback PDFs use pdf.js.
+  const showAsImg = !!source && (source.type === "webp" || (!isVideo && !isPDF));
 
   // PDF fallback: raw PDF file returned by server → render first page with pdf.js.
   // Disabled in lazy/grid mode — instantiating pdf.js per card is too expensive.
-  const showAsPdf = url && isPDF && thumbnailType === "fallback" && !lazy;
+  const showAsPdf = !!source && isPDF && source.type === "fallback" && !lazy;
 
-  // PDF with a real generated WebP thumbnail → just use <img>
-  const showPdfWebp = url && isPDF && thumbnailType === "webp";
+  const showVideo = !!videoSrc && videoLoaded && (!hasWebpPoster || hovering);
 
   const showContent =
     showAsImg ||
     showAsPdf ||
-    showPdfWebp ||
-    (url && isVideo && videoLoaded) ||
-    (url && isText && textPreview) ||
-    (url && isMarkdown && textPreview) ||
+    showVideo ||
+    !!codeLanguage ||
     isQCM;
 
   return (
@@ -427,6 +449,8 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         gradient,
         className
       )}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
     >
       {/* ── Decorative "Paper Stack" for Documents (until a preview loads) ── */}
       {(isPDF || isOffice) && !showContent && (
@@ -455,11 +479,11 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         )}
       />
 
-      {/* ── Real WebP thumbnail or native image ─────────────────────────── */}
-      {(showAsImg || showPdfWebp) && (
+      {/* ── Generated WebP thumbnail or native image ─────────────────────── */}
+      {showAsImg && imgSrc && (
         /* eslint-disable-next-line @next/next/no-img-element */
         <img
-          src={imgSrc!}
+          src={imgSrc}
           alt={material.title}
           className={cn(
             "absolute inset-0 h-full w-full object-cover",
@@ -481,7 +505,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
           )}
         >
           <PdfThumbnailCanvas
-            url={url!}
+            url={source.url}
             width={containerWidth}
             onReady={handlePdfReady}
             onError={handlePdfError}
@@ -491,64 +515,25 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
         </div>
       )}
 
-      {/* ── Native Video Preview ─────────────────────────────────────────── */}
-      {url && isVideo && (
+      {/* ── Video: poster frame without a thumbnail, hover playback with one ── */}
+      {videoSrc && (
         <video
           ref={videoRef}
-          src={url}
+          src={videoSrc}
           muted
           loop
           playsInline
           preload="metadata"
           onLoadedData={handleVideoLoaded}
           className={cn(
-            "absolute inset-0 h-full w-full object-cover transition-opacity duration-700",
-            videoLoaded ? "opacity-100" : "opacity-0"
+            "absolute inset-0 h-full w-full object-cover transition-opacity duration-500",
+            showVideo ? "opacity-100" : "opacity-0"
           )}
-          onMouseEnter={(e) => e.currentTarget.play().catch(() => {})}
-          onMouseLeave={(e) => {
-            e.currentTarget.pause();
-            const duration = e.currentTarget.duration;
-            if (isFinite(duration) && duration > 0) {
-              const seekTime = Math.min(duration * 0.1, 2);
-              e.currentTarget.currentTime = Math.max(seekTime, 0.5);
-            }
-          }}
         />
       )}
 
-      {/* ── Text Snippet Preview (Code/Txt) ─────────────────────────────── */}
-      {thumbnailType === null && isText && textPreview && (
-        <div className="absolute inset-0 p-4 font-mono text-[10px] leading-relaxed text-white/80 overflow-hidden select-none animate-in fade-in slide-in-from-bottom-2 duration-700 bg-black/5">
-          <div className="line-clamp-10 whitespace-pre-wrap opacity-60">
-            {textPreview}
-          </div>
-          <div className="absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-black/20 to-transparent" />
-        </div>
-      )}
-
-      {/* ── Hifi Markdown Preview Card (full viewer only) ───────────────── */}
-      {thumbnailType === null && isMarkdown && textPreview && !lazy && (
-        <div className="absolute inset-0 p-3 overflow-hidden select-none animate-in fade-in slide-in-from-bottom-2 duration-700 origin-top">
-          <div className="scale-[0.55] origin-top opacity-60 group-hover:opacity-100 group-hover:scale-[0.58] transition-[opacity,transform] duration-500">
-            <MarkdownRenderer
-              content={textPreview}
-              previewMode={true}
-              className="text-white prose-invert"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* ── Markdown grid card: plain text snippet (avoids rehype pipeline) ─ */}
-      {thumbnailType === null && isMarkdown && textPreview && lazy && (
-        <div className="absolute inset-0 p-4 font-mono text-[10px] leading-relaxed text-white/80 overflow-hidden select-none animate-in fade-in slide-in-from-bottom-2 duration-700 bg-black/5">
-          <div className="line-clamp-10 whitespace-pre-wrap opacity-60">
-            {textPreview}
-          </div>
-          <div className="absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-black/20 to-transparent" />
-        </div>
-      )}
+      {/* ── Generic card for code, markup and plain text ─────────────────── */}
+      {codeLanguage && <CodeCard language={codeLanguage} title={effectiveMat.title || material.title} ext={ext} />}
 
       {/* ── QCM HTML Preview Card ─────────────────────────────────────────── */}
       {isQCM && (
@@ -573,7 +558,7 @@ export function MaterialPreview({ material, className, lazy }: MaterialPreviewPr
       )}
 
       {/* ── Loading Overlay ──────────────────────────────────────────────── */}
-      {loading && !url && !textPreview && (
+      {loading && !source && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/5">
           <Loader2 className="h-6 w-6 animate-spin text-white/40" />
         </div>

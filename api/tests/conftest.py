@@ -106,6 +106,7 @@ def db_lock():
 def mock_redis() -> AsyncMock:
     redis = AsyncMock()
     redis.get = AsyncMock(return_value=None)
+    redis.getdel = AsyncMock(return_value=None)
     redis.mget = AsyncMock(return_value=[b"0", b"0", None])
     redis.hlen = AsyncMock(return_value=0)
     redis.hgetall = AsyncMock(return_value={})

@@ -12,7 +12,7 @@ from app.models.directory import Directory, DirectoryFavourite
 from app.models.material import Material, MaterialFavourite
 from app.schemas.collection import SavedItemOut
 from app.services.directory import get_directory_paths
-from app.services.material import version_orm_to_dict
+from app.services.material import attach_thumbnail_urls, version_orm_to_dict
 
 
 async def _serialize_targets(
@@ -82,6 +82,7 @@ async def _serialize_targets(
             )
         )
 
+    await attach_thumbnail_urls(item.current_version_info for item in items)
     items.sort(key=lambda item: item.added_at, reverse=True)
     return items
 

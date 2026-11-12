@@ -137,6 +137,12 @@ export function getMaterialThumbnail(materialId: string): Promise<MaterialThumbn
     return request;
 }
 
+/** Drop the cached entry and fetch a freshly signed URL (e.g. after an expired one failed to load). */
+export function refreshMaterialThumbnail(materialId: string): Promise<MaterialThumbnail> {
+    dropMaterialThumbnailCache(materialId);
+    return getMaterialThumbnail(materialId);
+}
+
 const listeners = new Set<(materialId: string, timestamp: number) => void>();
 
 function notifyMaterialThumbnail(materialId: string, timestamp: number): void {
@@ -202,7 +208,8 @@ export async function recalculateMaterialThumbnail(materialId: string): Promise<
     // cache after the regeneration request has been accepted.
     dropMaterialThumbnailCache(materialId);
 
-    if (res?.status === "ok") {
+    // "skipped": the file has no thumbnail (any old one was removed).
+    if (res?.status === "ok" || res?.status === "skipped") {
         notifyMaterialThumbnail(materialId, res.timestamp ?? Date.now());
         return;
     }

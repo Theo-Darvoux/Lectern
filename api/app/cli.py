@@ -494,7 +494,7 @@ async def _migrate_cas_v2(dry_run: bool, batch_size: int) -> None:
 def recalculate_thumbnails(
     batch_size: int = typer.Option(50, help="Number of files to query per batch"),
     max_concurrency: int = typer.Option(
-        50, help="Maximum in-flight recalculation jobs queued on workers"
+        50, min=1, help="Maximum in-flight recalculation jobs queued on workers"
     ),
     limit: int | None = typer.Option(None, help="Maximum number of materials to process"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without dispatching"),
@@ -530,21 +530,25 @@ async def _recalculate_thumbnails(
 
     import app.core.database.redis as redis_core
     from app.core.database.database import async_session_factory
-    from app.core.database.redis import close_arq_pool, init_arq_pool, redis_client
+    from app.core.database.redis import close_arq_pool, init_arq_pool
     from app.models.material import MaterialVersion
     from app.routers.upload.helpers import _processing_queue_name
 
-    async with async_session_factory() as db:
-        query = select(MaterialVersion).where(MaterialVersion.file_key.is_not(None))
-        if not force:
-            # Target materials with no thumbnail OR that previously failed generation.
-            query = query.where(
-                or_(
-                    MaterialVersion.thumbnail_key.is_(None),
-                    MaterialVersion.thumbnail_status == "failed",
-                )
-            )
+    query = select(MaterialVersion).where(MaterialVersion.file_key.is_not(None))
+    if not force:
+        # Missing or failed thumbnails. "skipped" files have nothing to render.
+        query = query.where(
+            or_(
+                MaterialVersion.thumbnail_status.is_(None),
+                MaterialVersion.thumbnail_status != "skipped",
+            ),
+            or_(
+                MaterialVersion.thumbnail_key.is_(None),
+                MaterialVersion.thumbnail_status == "failed",
+            ),
+        )
 
+    async with async_session_factory() as db:
         total_available = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
 
     if total_available == 0:
@@ -553,7 +557,8 @@ async def _recalculate_thumbnails(
 
     target_total = min(total_available, limit) if limit is not None else total_available
     typer.echo(
-        f"Found {total_available} material(s) {'missing/failed' if not force else 'targeted for'} thumbnails."
+        f"Found {total_available} material version(s) "
+        f"{'targeted for' if force else 'with missing or failed'} thumbnails."
     )
     if limit is not None:
         typer.echo(f"Processing up to {target_total} item(s) due to --limit={limit}.")
@@ -567,120 +572,82 @@ async def _recalculate_thumbnails(
         typer.echo("ERROR: Failed to connect to Redis ARQ worker pool.", err=True)
         return
 
+    counts = {"ok": 0, "skipped": 0, "failed": 0}
     dispatched = 0
-    completed = 0
-    failed = 0
-    skipped = 0
-    offset = 0
     active_jobs: dict[str, Job] = {}
-    cancelled = False
 
-    typer.echo(
-        f"Dispatching jobs to worker pool (max in-flight: {max_concurrency}). Press Ctrl+C to stop at any time.\n"
-    )
+    def report() -> None:
+        done = sum(counts.values())
+        sys.stdout.write(
+            f"\rProgress: {done}/{target_total} | Dispatched: {dispatched} | "
+            f"Active: {len(active_jobs)} | OK: {counts['ok']} | "
+            f"Skipped: {counts['skipped']} | Failed: {counts['failed']}"
+        )
+        sys.stdout.flush()
 
     async def poll_active_jobs() -> None:
-        nonlocal completed, failed, skipped
-        finished_ids = []
         for job_id, job in list(active_jobs.items()):
             try:
                 status = await job.status()
-                if status == JobStatus.complete:
-                    result_info = await job.result_info()
-                    if result_info and result_info.success:
-                        if result_info.result is True:
-                            completed += 1
-                        else:
-                            skipped += 1
-                    else:
-                        failed += 1
-                    finished_ids.append(job_id)
-                elif status == JobStatus.not_found:
-                    completed += 1
-                    finished_ids.append(job_id)
+                if status not in (JobStatus.complete, JobStatus.not_found):
+                    continue
+                info = await job.result_info() if status == JobStatus.complete else None
+                result = info.result if info is not None and info.success else "failed"
             except Exception:
-                finished_ids.append(job_id)
-                failed += 1
+                result = "failed"
+            counts[result if result in counts else "failed"] += 1
+            active_jobs.pop(job_id, None)
 
-        for jid in finished_ids:
-            active_jobs.pop(jid, None)
-
-    try:
-        while dispatched < target_total and not cancelled:
+    async def wait_for_slot(capacity: int) -> None:
+        while len(active_jobs) > capacity:
+            await asyncio.sleep(0.2)
             await poll_active_jobs()
+            report()
 
-            while len(active_jobs) >= max_concurrency:
-                await asyncio.sleep(0.1)
-                await poll_active_jobs()
-                progress_str = f"Progress: {completed + failed + skipped}/{target_total} | Dispatched: {dispatched} | Active: {len(active_jobs)} | OK: {completed} | Skipped: {skipped} | Failed: {failed}"
-                sys.stdout.write(f"\r{progress_str}")
-                sys.stdout.flush()
-
-            current_batch = min(batch_size, target_total - dispatched)
+    typer.echo(
+        f"Dispatching jobs to worker pool (max in-flight: {max_concurrency}). "
+        "Press Ctrl+C to stop at any time.\n"
+    )
+    # Keyset pagination: finished jobs drop out of the filtered set, so an
+    # OFFSET would skip rows.
+    last_id = None
+    try:
+        while dispatched < target_total:
+            batch_query = query.order_by(MaterialVersion.id).limit(
+                min(batch_size, target_total - dispatched)
+            )
+            if last_id is not None:
+                batch_query = batch_query.where(MaterialVersion.id > last_id)
             async with async_session_factory() as db:
-                batch_query = query.offset(offset).limit(current_batch)
                 versions = (await db.execute(batch_query)).scalars().all()
-
             if not versions:
                 break
-
-            offset += len(versions)
+            last_id = versions[-1].id
 
             for mv in versions:
-                if cancelled:
-                    break
-
-                while len(active_jobs) >= max_concurrency:
-                    await asyncio.sleep(0.1)
-                    await poll_active_jobs()
-                    progress_str = f"Progress: {completed + failed + skipped}/{target_total} | Dispatched: {dispatched} | Active: {len(active_jobs)} | OK: {completed} | Skipped: {skipped} | Failed: {failed}"
-                    sys.stdout.write(f"\r{progress_str}")
-                    sys.stdout.flush()
-
-                if redis_client is not None:
-                    try:
-                        await redis_client.delete(f"thumbnail:v1:{mv.material_id}")
-                    except Exception:
-                        pass
-
-                queue_name = _processing_queue_name(
-                    mv.file_mime_type or "",
-                    mv.file_size or 0,
-                )
-
+                await wait_for_slot(max_concurrency - 1)
                 enqueue_job = cast(Any, redis_core.arq_pool.enqueue_job)
                 job = await enqueue_job(
                     "recalculate_thumbnail",
-                    _queue_name=queue_name,
+                    _queue_name=_processing_queue_name(mv.file_mime_type or "", mv.file_size or 0),
                     material_id=str(mv.material_id),
                     version_id=str(mv.id),
                 )
                 if job:
                     active_jobs[job.job_id] = job
-
                 dispatched += 1
-                progress_str = f"Progress: {completed + failed + skipped}/{target_total} | Dispatched: {dispatched} | Active: {len(active_jobs)} | OK: {completed} | Skipped: {skipped} | Failed: {failed}"
-                sys.stdout.write(f"\r{progress_str}")
-                sys.stdout.flush()
+                report()
 
-        # Drain remaining active jobs
-        if not cancelled and active_jobs:
-            while active_jobs:
-                await asyncio.sleep(0.2)
-                await poll_active_jobs()
-                progress_str = f"Progress: {completed + failed + skipped}/{target_total} | Dispatched: {dispatched} | Active: {len(active_jobs)} | OK: {completed} | Skipped: {skipped} | Failed: {failed}"
-                sys.stdout.write(f"\r{progress_str}")
-                sys.stdout.flush()
-
+        await wait_for_slot(0)
     except (KeyboardInterrupt, asyncio.CancelledError):
-        cancelled = True
         sys.stdout.write("\n\nExecution interrupted (Ctrl+C).\n")
     finally:
         sys.stdout.write("\n")
         sys.stdout.flush()
         typer.echo(
-            f"Done. Dispatched: {dispatched}, Completed: {completed}, "
-            f"Skipped: {skipped}, Failed: {failed}, In flight: {len(active_jobs)}"
+            f"Done. Dispatched: {dispatched}, OK: {counts['ok']}, "
+            f"Skipped: {counts['skipped']}, Failed: {counts['failed']}, "
+            f"In flight: {len(active_jobs)}"
         )
         await close_arq_pool()
 

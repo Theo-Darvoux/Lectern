@@ -1,6 +1,7 @@
 import { FileText, Image as ImageIcon, Video, Music, Code2, File, ExternalLink, Link2, ListChecks } from "lucide-react";
 import type { ElementType } from "react";
 import { getFileExtension, MIME_QCM } from "@/lib/file-utils";
+import { getCodeLanguage } from "@/lib/code-languages";
 
 export interface FileTypeStyle {
     /** Tailwind gradient classes, e.g. "from-red-400 to-rose-600" */
@@ -11,20 +12,14 @@ export interface FileTypeStyle {
     Icon: ElementType;
 }
 
-const CODE_EXTENSIONS = new Set([
-    "js", "ts", "jsx", "tsx", "py", "java", "c", "cpp", "h", "hpp",
-    "rs", "go", "rb", "php", "cs", "swift", "kt", "scala", "sh", "bash",
-    "zsh", "lua", "r", "m", "ml", "hs", "ex", "exs", "clj",
-    "html", "css", "scss", "sql",
-]);
-
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "avi", "mkv", "mov"]);
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "flac", "aac", "m4a"]);
 const DOC_EXTENSIONS = new Set(["doc", "docx", "odt"]);
-const SHEET_EXTENSIONS = new Set(["xls", "xlsx", "ods", "csv"]);
+const SHEET_EXTENSIONS = new Set(["xls", "xlsx", "ods"]);
 const SLIDE_EXTENSIONS = new Set(["ppt", "pptx"]);
-const TEXT_EXTENSIONS = new Set(["md", "markdown", "txt"]);
+// Text formats read as documents rather than code: drawn with a page icon.
+const PROSE_EXTENSIONS = new Set(["md", "markdown", "rst", "adoc", "txt", "log", "csv", "bib"]);
 const EBOOK_EXTENSIONS = new Set(["epub", "djvu", "djv"]);
 
 /**
@@ -73,9 +68,11 @@ export function getFileTypeStyle(
         return { gradient: "from-amber-400 to-orange-500", iconColorClass: "text-white", Icon: Music };
     }
 
-    // Code
-    if (CODE_EXTENSIONS.has(ext)) {
-        return { gradient: "from-sky-400 to-blue-600", iconColorClass: "text-white", Icon: Code2 };
+    // Code, markup, config and plain text: the language's own colors.
+    const language = getCodeLanguage(fileName, mimeType);
+    if (language) {
+        const Icon = PROSE_EXTENSIONS.has(ext) || !ext ? FileText : Code2;
+        return { gradient: language.gradient, iconColorClass: "text-white", Icon };
     }
 
     // Word documents
@@ -103,11 +100,6 @@ export function getFileTypeStyle(
         (mimeType?.includes("powerpoint") ?? false)
     ) {
         return { gradient: "from-orange-400 to-amber-600", iconColorClass: "text-white", Icon: FileText };
-    }
-
-    // Markdown / plain text
-    if (TEXT_EXTENSIONS.has(ext)) {
-        return { gradient: "from-slate-700 to-slate-900", iconColorClass: "text-white", Icon: FileText };
     }
 
     // E-books

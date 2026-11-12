@@ -74,13 +74,15 @@ EXPOSE 8000
 
 # ── Stage 2b: worker OS base ─────────────────────────────────────────────────
 # Adds the document/media processing toolchain used by the upload pipeline:
-#   poppler-utils & poppler-data (PDF rendering & CMaps), ghostscript (PDF fallback/compression),
-#   ffmpeg (audio/video), exiftool (metadata strip), libreoffice-nogui (Office→PDF thumbnails),
-#   librsvg2-bin (SVG→PNG thumbnails), and standard TrueType fallback fonts.
+#   poppler-utils & poppler-data (PDF rendering & CMaps), ghostscript (PDF compression),
+#   ffmpeg (audio/video, frame and cover-art thumbnails), exiftool (metadata strip),
+#   libreoffice-nogui (Office→PDF thumbnails), librsvg2-bin (SVG→PNG thumbnails),
+#   djvulibre-bin (DjVu page thumbnails), and standard TrueType fallback fonts.
 # ~1.1 GB installed; kept ahead of the venv and code so it stays cached across deploys.
 FROM runtime-base AS worker-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    djvulibre-bin \
     ghostscript \
     ffmpeg \
     libimage-exiftool-perl \

@@ -239,8 +239,8 @@ in MiB unless noted.
 | `PDF_QUALITY` | `75` | PDF compression quality (0–100). Set to `100` to keep images lossless — fonts are still subsetted and objects packed, but images are never downsampled or re-encoded. |
 | `PDF_COMPRESSION_LEVEL` | *(unset)* | Ghostscript-style alias (`screen`/`ebook`/`printer`/`prepress`); when set it overrides `PDF_QUALITY`. |
 | `VIDEO_COMPRESSION_PROFILE` | `medium` | ffmpeg profile: `none`, `light`, `medium`, `aggressive`, `heavy`, `extreme`. |
-| `THUMBNAIL_QUALITY` | `85` | Thumbnail JPEG quality (0–100). |
-| `THUMBNAIL_SIZE_PX` | `640` | Thumbnail longest-edge size in pixels. |
+| `THUMBNAIL_QUALITY` | `85` | Thumbnail WebP quality (0–100). |
+| `THUMBNAIL_SIZE_PX` | `640` | Longest edge of generated thumbnails, in pixels (64–2048). Existing thumbnails keep their size until regenerated. |
 
 ### tus resumable-upload internals
 

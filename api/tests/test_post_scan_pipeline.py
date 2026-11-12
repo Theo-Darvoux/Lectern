@@ -599,6 +599,43 @@ async def test_post_scan_thumbnail_failure_yields_no_thumbnail() -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_scan_render_error_is_not_retried() -> None:
+    """A deterministic render error (ValueError) fails the thumbnail without a retry."""
+    from app.workers.process_upload_post_scan import process_upload_post_scan
+    from app.workers.upload.stages.thumbnail import ThumbnailRenderError
+
+    ctx = _make_ctx()
+    stage = AsyncMock(side_effect=ThumbnailRenderError("pdftoppm failed"))
+    sleep = AsyncMock()
+
+    with (
+        patch(
+            "app.workers.process_upload_post_scan.run_download_and_validate",
+            AsyncMock(return_value=_make_download_result(pf=_make_pf())),
+        ),
+        patch("app.workers.process_upload_post_scan.run_thumbnail_stage", stage),
+        patch("app.workers.process_upload_post_scan.delete_object", AsyncMock()),
+        patch("app.workers.process_upload_post_scan._trigger_pending_auto_merges", AsyncMock()),
+        patch("app.workers.process_upload_post_scan.UploadWorkerRepository") as mock_repo,
+        patch("app.workers.process_upload_post_scan.asyncio.sleep", sleep),
+    ):
+        repo = mock_repo.return_value
+        repo.update_processing_status = AsyncMock()
+        repo.update_upload_status = AsyncMock()
+        repo.get_auth_config = AsyncMock(return_value={})
+        repo.maybe_dispatch_webhook = AsyncMock()
+        repo.insert_dead_letter = AsyncMock()
+
+        await process_upload_post_scan(ctx, **_post_scan_kwargs())
+
+    assert stage.await_count == 1
+    sleep.assert_not_awaited()
+    upload = ctx["db_sessionmaker"].return_value.scalar.return_value
+    assert upload.processing_status == "complete"
+    assert upload.thumbnail_status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_post_scan_thumbnail_retried_once_then_succeeds() -> None:
     """If thumbnail raises on the first attempt but succeeds on retry, status is 'ok'."""
     from app.workers.process_upload_post_scan import process_upload_post_scan

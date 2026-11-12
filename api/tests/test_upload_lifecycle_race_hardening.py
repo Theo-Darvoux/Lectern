@@ -1386,12 +1386,9 @@ def test_thumbnail_keys_are_upload_specific() -> None:
     import inspect
 
     from app.workers import process_upload_post_scan, retroactive_quarantine
-    from app.workers.upload.stages import finalize
 
     post_scan_source = inspect.getsource(process_upload_post_scan.process_upload_post_scan)
-    finalize_source = inspect.getsource(finalize.run_finalize_storage)
     assert 'f"thumbnails/{cas_id}/{upload_id}.webp"' in post_scan_source
-    assert 'f"thumbnails/{cas_id}/{input_data.upload_id}.webp"' in finalize_source
     assert retroactive_quarantine._thumbnail_owned_by_upload(
         "thumbnails/cas-id/upload-123.webp", "upload-123"
     )

@@ -5,7 +5,7 @@ import { File } from "lucide-react";
 import { getMaterialThumbnail, subscribeMaterialThumbnail } from "@/lib/material-preview-source";
 import { useInView } from "@/hooks/use-in-view";
 
-type CellInfo = { url: string; type: "webp" | "fallback" } | null | false;
+type CellInfo = { url: string } | null | false;
 
 interface DirectoryPreviewCollageProps {
   materialIds: string[];
@@ -36,12 +36,13 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
       ids.map((id) =>
         getMaterialThumbnail(id)
           .then((info): CellInfo => {
-            if (!info || !info.thumbnailType) return false;
+            // A "fallback" may be a PDF or video, which an <img> cannot show.
+            if (!info || info.thumbnailType !== "webp") return false;
             let finalUrl = info.url;
             if (cacheBust > 0) {
               finalUrl = `${finalUrl}${finalUrl.includes("?") ? "&" : "?"}_t=${cacheBust}`;
             }
-            return { url: finalUrl, type: info.thumbnailType };
+            return { url: finalUrl };
           })
           .catch((): CellInfo => false),
       ),
@@ -74,15 +75,12 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
                 alt=""
                 className="w-full h-full object-cover"
                 draggable={false}
-                onError={
-                  cell.type === "fallback"
-                    ? () =>
-                        setCells((prev) => {
-                          const next = [...prev];
-                          next[i] = false;
-                          return next;
-                        })
-                    : undefined
+                onError={() =>
+                  setCells((prev) => {
+                    const next = [...prev];
+                    next[i] = false;
+                    return next;
+                  })
                 }
               />
             )}

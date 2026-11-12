@@ -3594,6 +3594,10 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Thumbnail Url */
+            thumbnail_url?: string | null;
+            /** Thumbnail Type */
+            thumbnail_type?: ("webp" | "fallback" | "none") | null;
         };
         /** MoveItemOp */
         MoveItemOp: {

@@ -324,7 +324,6 @@ class UploadPipeline:
             initial_size=self.initial_size,
             final_mime=self.mime_type,
             content_encoding=None,
-            thumbnail_path=None,
             content_sha256=content_sha256,
         )
         # Garbage collection and CAS admission share a PostgreSQL advisory lock.

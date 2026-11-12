@@ -389,7 +389,7 @@ async def test_recalculate_thumbnail_permissions_and_enqueue(
 
     # 4. Moderator -> 200 + ok/queued
     mock_job = AsyncMock()
-    mock_job.result = AsyncMock(return_value=True)
+    mock_job.result = AsyncMock(return_value="ok")
     mock_pool = AsyncMock()
     mock_pool.enqueue_job = AsyncMock(return_value=mock_job)
 

@@ -29,7 +29,11 @@ from app.schemas.material import (
 )
 from app.schemas.pull_request import PullRequestOut
 from app.services.directory import get_directory_paths, get_preview_material_ids
-from app.services.material import get_liked_favourited_sets, material_orm_to_dict
+from app.services.material import (
+    attach_material_thumbnails,
+    get_liked_favourited_sets,
+    material_orm_to_dict,
+)
 from app.services.pr_visibility import project_pr_for_viewer
 
 router = APIRouter(prefix="/api/home", tags=["home"])
@@ -63,6 +67,7 @@ async def _build_material_details(
             is_favourited=material.id in favourited_ids,
         )
         mat_dicts.append(mat_dict)
+    await attach_material_thumbnails(mat_dicts)
 
     dir_ids = {m["directory_id"] for m in mat_dicts if m.get("directory_id")}
     paths = await get_directory_paths(db, dir_ids)
@@ -111,6 +116,7 @@ async def _build_featured_out(
             boost_dir_ids.add(directory.id)
             staged_directories.append((featured, directory))
 
+    await attach_material_thumbnails(mat_dict for _, mat_dict in staged_materials)
     all_dir_ids = mat_dir_ids | boost_dir_ids
     paths = await get_directory_paths(db, all_dir_ids)
     preview_ids = await get_preview_material_ids(db, list(boost_dir_ids))

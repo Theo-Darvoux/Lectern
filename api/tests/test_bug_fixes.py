@@ -188,11 +188,7 @@ async def test_thumbnail_pdf_cleans_temp_png_on_image_error(tmp_path: Path) -> N
     # Renderer creates the temp_png file
     async def fake_renderer(cmd: list[str], **kwargs: object) -> MagicMock:
         nonlocal actual_temp_png
-        if cmd[0] == "pdftoppm":
-            actual_temp_png = Path(f"{cmd[-1]}.png")
-        else:
-            output_arg = next(a for a in cmd if a.startswith("-sOutputFile="))
-            actual_temp_png = Path(output_arg.split("=", 1)[1])
+        actual_temp_png = Path(f"{cmd[-1]}.png")
         proc = MagicMock()
         proc.returncode = 0
         proc.stdout = b""
@@ -221,8 +217,8 @@ async def test_thumbnail_pdf_cleans_temp_png_on_image_error(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_thumbnail_video_cleans_temp_jpg_on_image_error(tmp_path: Path) -> None:
-    """_thumbnail_video must delete temp_jpg even when _thumbnail_image raises."""
-    from app.workers.upload.stages.thumbnail import _thumbnail_video
+    """_thumbnail_av must delete its frame even when the WebP render raises."""
+    from app.workers.upload.stages.thumbnail import _thumbnail_av
 
     input_vid = tmp_path / "in.mp4"
     input_vid.write_bytes(b"fakevideo")
@@ -231,11 +227,14 @@ async def test_thumbnail_video_cleans_temp_jpg_on_image_error(tmp_path: Path) ->
 
     async def fake_ffmpeg(cmd: list[str], **kwargs: object) -> MagicMock:
         nonlocal actual_temp_jpg
-        actual_temp_jpg = Path(cmd[-1])
         proc = MagicMock()
         proc.returncode = 0
-        proc.stdout = b""
         proc.stderr = b""
+        if cmd[0] == "ffprobe":
+            proc.stdout = b'{"streams": [{"index": 0, "disposition": {"attached_pic": 0}}]}'
+            return proc
+        proc.stdout = b""
+        actual_temp_jpg = Path(cmd[-1])
         actual_temp_jpg.write_bytes(b"fakejpg")
         return proc
 
@@ -245,12 +244,12 @@ async def test_thumbnail_video_cleans_temp_jpg_on_image_error(tmp_path: Path) ->
             side_effect=fake_ffmpeg,
         ),
         patch(
-            "app.workers.upload.stages.thumbnail._thumbnail_image",
+            "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
             AsyncMock(side_effect=OSError("PIL failure")),
         ),
         pytest.raises(OSError),
     ):
-        await _thumbnail_video(input_vid, output_webp, (320, 240), 80)
+        await _thumbnail_av(input_vid, output_webp, (320, 240), 80, "video/mp4")
 
     assert actual_temp_jpg is not None
     assert not actual_temp_jpg.exists(), (

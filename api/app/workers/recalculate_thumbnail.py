@@ -1,7 +1,7 @@
 import logging
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select, update
 
@@ -24,6 +24,15 @@ from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
 logger = logging.getLogger(__name__)
 
+RecalculateResult = Literal["ok", "skipped", "failed"]
+
+
+def _parse_uuid(value: str | None) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(value) if value else None
+    except (ValueError, TypeError, AttributeError):
+        return None
+
 
 async def _delete_thumbnail_if_unreferenced(sessionmaker: Any, thumbnail_key: str) -> None:
     """Delete a superseded thumbnail only after re-checking authoritative DB liveness."""
@@ -35,171 +44,114 @@ async def _delete_thumbnail_if_unreferenced(sessionmaker: Any, thumbnail_key: st
         await db.commit()
 
 
+async def _swap_thumbnail_pointer(
+    sessionmaker: Any,
+    version_id: uuid.UUID,
+    thumbnail_key: str | None,
+    status: RecalculateResult,
+) -> str | None:
+    """Point the version at ``thumbnail_key`` and return the key it replaced.
+
+    The row lock serializes concurrent regenerations: the last publisher sees
+    the previous key and is the one that retires it.
+    """
+    async with sessionmaker() as db:
+        version = await db.scalar(
+            select(MaterialVersion).where(MaterialVersion.id == version_id).with_for_update()
+        )
+        if version is None:
+            raise RuntimeError("Material version disappeared during thumbnail regeneration")
+        replaced = version.thumbnail_key
+        version.thumbnail_key = thumbnail_key
+        version.thumbnail_status = status
+        await db.commit()
+    return replaced
+
+
 async def recalculate_thumbnail(
     ctx: dict[str, Any],
     material_id: str,
     version_id: str | None = None,
-) -> bool:
-    """Worker task: regenerates the WebP thumbnail for a material version."""
+) -> RecalculateResult:
+    """Worker task: regenerate the WebP thumbnail for a material version.
+
+    Returns "ok" when a new thumbnail was published, "skipped" when the file
+    has no thumbnail (any previous one is removed), and "failed" otherwise.
+    """
     sessionmaker = ctx.get("db_sessionmaker")
     if sessionmaker is None:
         from app.core.database.database import async_session_factory
 
         sessionmaker = async_session_factory
 
-    try:
-        mid = uuid.UUID(material_id)
-    except (ValueError, TypeError):
-        logger.error("Invalid material ID for thumbnail recalculation: %s", material_id)
-        return False
-
-    vid = uuid.UUID(version_id) if version_id else None
+    mid = _parse_uuid(material_id)
+    vid = _parse_uuid(version_id)
+    if mid is None or (version_id and vid is None):
+        logger.error("Invalid IDs for thumbnail recalculation: %s / %s", material_id, version_id)
+        return "failed"
 
     async with sessionmaker() as db:
+        query = select(MaterialVersion).join(Material, Material.id == MaterialVersion.material_id)
         if vid:
-            result = await db.execute(select(MaterialVersion).where(MaterialVersion.id == vid))
-            version = result.scalar_one_or_none()
+            query = query.where(MaterialVersion.id == vid, MaterialVersion.material_id == mid)
         else:
-            result = await db.execute(
-                select(MaterialVersion)
-                .join(Material, Material.id == MaterialVersion.material_id)
-                .where(
-                    Material.id == mid,
-                    MaterialVersion.version_number == Material.current_version,
-                )
+            query = query.where(
+                Material.id == mid, MaterialVersion.version_number == Material.current_version
             )
-            version = result.scalar_one_or_none()
-
-        if (
-            not version
-            or not version.file_key
-            or not version.file_name
-            or not version.file_mime_type
-        ):
-            logger.warning(
-                "Cannot recalculate thumbnail for material %s: version or file details missing",
-                material_id,
-            )
-            return False
-
+        version = await db.scalar(query)
+        if version is None or not version.file_key or not version.file_mime_type:
+            logger.warning("Cannot recalculate thumbnail for material %s: no file", material_id)
+            return "failed"
         auth_config = await get_full_auth_config(db)
         file_key = version.file_key
-        file_name = version.file_name
+        file_name = version.file_name or ""
         file_mime_type = version.file_mime_type
         target_version_id = version.id
-        previous_thumbnail_key = version.thumbnail_key
+        previous_key = version.thumbnail_key
 
-    generated_thumbnail_key: str | None = None
-    published_thumbnail_key: str | None = None
-    replaced_thumbnail_key = previous_thumbnail_key
+    generated_key: str | None = None
+    published = False
+    replaced_key: str | None = previous_key
+    result: RecalculateResult = "failed"
 
-    # Run generation in sandboxed processing directory
     with processing_temp_dir(prefix="thumbnail-recalc-") as tmp_dir:
         try:
-            local_path = tmp_dir / Path(file_name).name
+            # Never derive a local path from the user's filename.
+            local_path = tmp_dir / "source"
             await download_file(file_key, local_path, decompress=True)
-
             pf = ProcessingFile(local_path, local_path.stat().st_size)
-            thumb_path_str = await run_thumbnail_stage(
-                pf,
-                file_mime_type,
-                file_name,
-                config=auth_config,
+            thumb_path = await run_thumbnail_stage(
+                pf, file_mime_type, file_name, config=auth_config
             )
 
-            if thumb_path_str:
-                thumb_path = Path(thumb_path_str)
-
-                # Thumbnail responses are edge-cached by object path. Never overwrite
-                # a key that may already be cached: publish each regeneration to a
-                # fresh immutable key, then atomically switch the DB pointer.
-                generated_thumbnail_key = f"thumbnails/{target_version_id}/{uuid.uuid4().hex}.webp"
-
-                with open(thumb_path, "rb") as f:
-                    thumb_bytes = f.read()
-
-                # Fence the new key from admin orphan pruning between physical upload
-                # and authoritative MaterialVersion publication.
-                async with storage_lifecycle_lock(sessionmaker, generated_thumbnail_key):
-                    await upload_file(
-                        thumb_bytes,
-                        generated_thumbnail_key,
-                        content_type="image/webp",
-                    )
-
-                    # Serialize publication for concurrent regeneration requests. The
-                    # last publisher observes the prior key and may safely retire it.
-                    async with sessionmaker() as db:
-                        result = await db.execute(
-                            select(MaterialVersion)
-                            .where(MaterialVersion.id == target_version_id)
-                            .with_for_update()
-                        )
-                        current_version = result.scalar_one_or_none()
-                        if current_version is None:
-                            raise RuntimeError(
-                                "Material version disappeared during thumbnail regeneration"
-                            )
-
-                        replaced_thumbnail_key = current_version.thumbnail_key
-                        current_version.thumbnail_key = generated_thumbnail_key
-                        current_version.thumbnail_status = "ok"
-                        await db.commit()
-
-                published_thumbnail_key = generated_thumbnail_key
-
-                # Re-check liveness under the same lifecycle fence used by admin
-                # pruning before deleting the old object. A recent Upload row may
-                # still own the old thumbnail during its grace period.
-                if replaced_thumbnail_key and replaced_thumbnail_key != published_thumbnail_key:
-                    try:
-                        await _delete_thumbnail_if_unreferenced(
-                            sessionmaker,
-                            replaced_thumbnail_key,
-                        )
-                    except Exception as cleanup_exc:
-                        logger.warning(
-                            "Failed to retire superseded thumbnail %s: %s",
-                            replaced_thumbnail_key,
-                            cleanup_exc,
-                        )
-
-                logger.info(
-                    "Recalculated thumbnail for material %s: %s",
-                    material_id,
-                    published_thumbnail_key,
+            if thumb_path is None:
+                replaced_key = await _swap_thumbnail_pointer(
+                    sessionmaker, target_version_id, None, "skipped"
                 )
+                result = "skipped"
             else:
-                async with sessionmaker() as db:
-                    await db.execute(
-                        update(MaterialVersion)
-                        .where(MaterialVersion.id == target_version_id)
-                        .values(thumbnail_status="skipped")
+                # Thumbnails are edge-cached by object path: publish every
+                # regeneration under a fresh immutable key, then swap the pointer.
+                generated_key = f"thumbnails/{target_version_id}/{uuid.uuid4().hex}.webp"
+                thumb_bytes = Path(thumb_path).read_bytes()
+                # Fence the new key from orphan pruning until the pointer is published.
+                async with storage_lifecycle_lock(sessionmaker, generated_key):
+                    await upload_file(thumb_bytes, generated_key, content_type="image/webp")
+                    replaced_key = await _swap_thumbnail_pointer(
+                        sessionmaker, target_version_id, generated_key, "ok"
                     )
-                    await db.commit()
-                logger.info(
-                    "Thumbnail generation skipped for material %s (unsupported type)",
-                    material_id,
-                )
-
+                published = True
+                result = "ok"
+            logger.info("Thumbnail recalculation for material %s: %s", material_id, result)
         except Exception as exc:
-            # If the new object was uploaded but never published, remove it so a
-            # failed DB update does not leak storage.
-            if generated_thumbnail_key and published_thumbnail_key != generated_thumbnail_key:
+            logger.error("Failed to recalculate thumbnail for material %s: %s", material_id, exc)
+            if generated_key and not published:
                 try:
-                    await delete_object(generated_thumbnail_key)
+                    await delete_object(generated_key)
                 except Exception as cleanup_exc:
                     logger.warning(
-                        "Failed to delete unpublished thumbnail %s: %s",
-                        generated_thumbnail_key,
-                        cleanup_exc,
+                        "Failed to delete unpublished thumbnail %s: %s", generated_key, cleanup_exc
                     )
-
-            logger.error(
-                "Failed to recalculate thumbnail for material %s: %s",
-                material_id,
-                exc,
-            )
             try:
                 async with sessionmaker() as db:
                     await db.execute(
@@ -208,25 +160,35 @@ async def recalculate_thumbnail(
                         .values(thumbnail_status="failed")
                     )
                     await db.commit()
-            except Exception:
-                pass
-            return False
+            except Exception as status_exc:
+                logger.warning("Failed to mark thumbnail as failed: %s", status_exc)
+            return "failed"
         finally:
-            # Invalidate DB metadata and any signed-URL entries for both sides of
-            # the pointer swap. The storage backend owns the exact Redis key format.
-            try:
-                from app.core.database.redis import redis_client
+            await _invalidate_caches(
+                material_id, {previous_key, replaced_key, generated_key if published else None}
+            )
 
-                if redis_client is not None:
-                    await redis_client.delete(f"thumbnail:v1:{material_id}")
-                    for thumbnail_key in {
-                        previous_thumbnail_key,
-                        replaced_thumbnail_key,
-                        published_thumbnail_key,
-                    }:
-                        if thumbnail_key:
-                            await bust_presign_cache(thumbnail_key, redis_client)
-            except Exception:
-                pass
+    # A recent Upload row may still own the old object during its grace
+    # period; the liveness re-check under the lifecycle fence handles that.
+    current_key = generated_key if published else None
+    if replaced_key and replaced_key != current_key:
+        try:
+            await _delete_thumbnail_if_unreferenced(sessionmaker, replaced_key)
+        except Exception as cleanup_exc:
+            logger.warning("Failed to retire thumbnail %s: %s", replaced_key, cleanup_exc)
+    return result
 
-    return True
+
+async def _invalidate_caches(material_id: str, thumbnail_keys: set[str | None]) -> None:
+    """Drop the cached thumbnail lookup and signed URLs on both sides of the swap."""
+    from app.core.database.redis import redis_client
+
+    if redis_client is None:
+        return
+    try:
+        await redis_client.delete(f"thumbnail:v1:{material_id}")
+        for key in thumbnail_keys:
+            if key:
+                await bust_presign_cache(key, redis_client)
+    except Exception as exc:
+        logger.warning("Failed to invalidate thumbnail caches for %s: %s", material_id, exc)

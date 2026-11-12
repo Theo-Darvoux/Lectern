@@ -253,15 +253,16 @@ async def render_thumbnail_isolated(
     return blank
 
 
-async def extract_office_thumbnail_isolated(
+async def _render_embedded_image_isolated(
+    operation: str,
     input_path: Path,
     output_path: Path,
     *,
     size: tuple[int, int],
     quality: int,
-    timeout: int = 30,
+    timeout: int,
 ) -> bool:
-    """Extract and render an Office fallback image in the parser sandbox."""
+    """Run an archive-image parser operation; return whether it wrote a WebP."""
     output_path.touch(mode=0o600, exist_ok=True)
     output_path.chmod(0o600)
     async with image_guard():
@@ -270,7 +271,7 @@ async def extract_office_thumbnail_isolated(
                 str(Path(sys.executable).resolve()),
                 "-m",
                 "app.core.security.parser_child",
-                "office-thumbnail",
+                operation,
                 str(input_path),
                 str(output_path),
                 str(size[0]),
@@ -284,21 +285,52 @@ async def extract_office_thumbnail_isolated(
             check=False,
         )
     if result.returncode != 0:
+        output_path.unlink(missing_ok=True)
         detail = _child_error_detail(result.stderr)
-        raise ValueError(detail or "Isolated Office thumbnail fallback failed")
+        raise ValueError(detail or f"Isolated {operation} rendering failed")
     try:
         produced = json.loads(result.stdout)["produced"]
         if not isinstance(produced, bool):
             raise TypeError
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("Isolated Office thumbnail returned an invalid response") from exc
-    if produced:
-        header = output_path.read_bytes()[:16]
-        if not header.startswith(b"RIFF") or b"WEBP" not in header:
-            raise ValueError("Isolated Office thumbnail returned an invalid WebP file")
-    else:
         output_path.unlink(missing_ok=True)
-    return produced
+        raise RuntimeError(f"Isolated {operation} returned an invalid response") from exc
+    if not produced:
+        output_path.unlink(missing_ok=True)
+        return False
+    header = output_path.read_bytes()[:16]
+    if not header.startswith(b"RIFF") or b"WEBP" not in header:
+        output_path.unlink(missing_ok=True)
+        raise ValueError(f"Isolated {operation} returned an invalid WebP file")
+    return True
+
+
+async def extract_office_thumbnail_isolated(
+    input_path: Path,
+    output_path: Path,
+    *,
+    size: tuple[int, int],
+    quality: int,
+    timeout: int = 30,
+) -> bool:
+    """Render the largest image embedded in an OOXML/ODF file in the parser sandbox."""
+    return await _render_embedded_image_isolated(
+        "office-thumbnail", input_path, output_path, size=size, quality=quality, timeout=timeout
+    )
+
+
+async def extract_epub_cover_isolated(
+    input_path: Path,
+    output_path: Path,
+    *,
+    size: tuple[int, int],
+    quality: int,
+    timeout: int = 30,
+) -> bool:
+    """Render the cover image an EPUB declares in the parser sandbox."""
+    return await _render_embedded_image_isolated(
+        "epub-cover", input_path, output_path, size=size, quality=quality, timeout=timeout
+    )
 
 
 async def scan_yara_isolated(

@@ -173,12 +173,51 @@ A follow-up `process_upload_post_scan` job runs:
 
 It downloads the sanitized CAS object, so nothing is scanned or stripped twice.
 
-**Thumbnail generation** (soft failure):
-- Images, video: WebP, 640 px wide, 85% quality
-- Documents: first-page render
-- Stored at `thumbnails/{cas_id}.webp`
+**Thumbnail generation** (soft failure). Every thumbnail is a WebP that fits in a
+`THUMBNAIL_SIZE_PX` square (default 640 px) at `THUMBNAIL_QUALITY` (default 85).
+The renderer is chosen from the detected MIME type
+(`api/app/core/media/thumbnails.py`):
 
-On completion, `processing_status=complete`. Failure after 3 attempts sets `processing_status=degraded`: the sanitized file is served without a thumbnail.
+| File type | Thumbnail |
+|---|---|
+| PNG, JPEG, WebP, GIF | Resized image. Animated GIF/WebP use their first frame. |
+| SVG | Rendered by `rsvg-convert`, flattened onto white. |
+| DjVu | Page 1, rendered by `ddjvu`. |
+| PDF | Page 1, or page 2 when page 1 is blank (cover sheets), rendered by `pdftoppm`. |
+| Word, Excel, PowerPoint, OpenDocument | Converted to PDF by LibreOffice, then page 1. If that fails, the largest image embedded in the file. |
+| EPUB | The cover image the book declares. No cover: no thumbnail. |
+| Video | A frame 2 s in, or the first frame for shorter clips. |
+| Audio | The embedded cover art. No cover: no thumbnail. |
+| Text, code, Markdown, notebooks, QCM, archives | None. The interface shows a generic card with the language or format. |
+
+The thumbnail is stored at `thumbnails/{cas_id}/{upload_id}.webp`, so each upload
+owns its own object. `thumbnail_status` records the outcome: `ok`, `skipped` (the
+file type or the file has nothing to show), or `failed`. A render error (a corrupt
+file, a crashed converter) is not retried: the same bytes would fail again. Other
+errors, such as a timeout, get one more attempt.
+
+On completion, `processing_status=complete`, whatever the thumbnail outcome. If the
+job itself fails 3 times (for example, the sanitized object cannot be downloaded),
+`processing_status=degraded`. In both cases the file is served without a thumbnail.
+
+**Regenerating thumbnails.** Moderators can regenerate one material's thumbnail
+from its menu. To regenerate in bulk, for example after a renderer change, run from
+`api/`:
+
+```bash
+uv run python -m app.cli recalculate-thumbnails            # missing or failed thumbnails
+uv run python -m app.cli recalculate-thumbnails --force    # every file
+```
+
+Each regeneration publishes a new object key, then removes the old object when
+nothing references it.
+
+**Serving.** Directory listings, the home page, profiles and saved items include
+`thumbnail_url` and `thumbnail_type` in each material's `current_version_info`,
+so cards need no extra request. Without a generated thumbnail, images, videos and
+PDFs fall back to the original file (`thumbnail_type: "fallback"`), which the
+browser renders itself. Other types get `thumbnail_type: "none"`.
+`GET /api/materials/{id}/thumbnail` returns the same information for one material.
 
 ---
 

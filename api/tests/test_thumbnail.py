@@ -11,10 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security.parser_child import is_blank_image
 from app.core.security.processing_paths import make_processing_temp_path
 
-
-def _is_blank_thumbnail(path: Path) -> bool:
-    with Image.open(path) as image:
-        return is_blank_image(image)
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 def _write_minimal_xlsx(path: Path) -> None:
@@ -75,26 +72,6 @@ def test_pale_page_with_title_bar_is_not_blank() -> None:
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, 200, 25], fill=(40, 60, 120))
     assert is_blank_image(img) is False
-
-
-@pytest.mark.parametrize(
-    "mime_type",
-    [
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "application/vnd.oasis.opendocument.text",
-        "application/vnd.oasis.opendocument.spreadsheet",
-        "application/vnd.oasis.opendocument.presentation",
-        "application/msword",
-        "application/vnd.ms-excel",
-        "application/vnd.ms-powerpoint",
-    ],
-)
-def test_all_supported_office_families_share_the_converter(mime_type: str) -> None:
-    from app.workers.upload.stages.thumbnail import _is_office_mime
-
-    assert _is_office_mime(mime_type) is True
 
 
 def test_soffice_command_bootstraps_private_libraries_without_proc_self() -> None:
@@ -187,7 +164,7 @@ async def test_recalculate_thumbnails_cli_dispatch(db_session: AsyncSession) -> 
     mock_job.status = AsyncMock(return_value=JobStatus.complete)
     mock_result_info = MagicMock()
     mock_result_info.success = True
-    mock_result_info.result = True
+    mock_result_info.result = "ok"
     mock_job.result_info = AsyncMock(return_value=mock_result_info)
 
     mock_pool = AsyncMock()
@@ -213,45 +190,6 @@ async def test_recalculate_thumbnails_cli_dispatch(db_session: AsyncSession) -> 
 
 
 @pytest.mark.asyncio
-async def test_video_thumbnail_preserves_aspect_ratio_without_lossy_intermediate() -> None:
-    from app.workers.upload.stages.thumbnail import _thumbnail_video
-
-    input_path = make_processing_temp_path(suffix=".mp4")
-    input_path.write_bytes(b"video")
-    output_path = make_processing_temp_path(suffix=".webp")
-    output_path.unlink()
-    process = MagicMock(returncode=0, stdout=b"", stderr=b"")
-
-    async def fake_run(command, **_kwargs):
-        Image.new("RGB", (640, 360), "blue").save(Path(command[-1]))
-        return process
-
-    try:
-        with (
-            patch(
-                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
-                side_effect=fake_run,
-            ) as sandbox_run,
-            patch(
-                "app.workers.upload.stages.thumbnail._thumbnail_image",
-                new_callable=AsyncMock,
-            ) as render_image,
-        ):
-            await _thumbnail_video(input_path, output_path, (640, 640), 85)
-
-        command = sandbox_run.call_args.args[0]
-        assert "-s" not in command
-        assert command[command.index("-vf") + 1] == (
-            "scale=w=640:h=640:force_original_aspect_ratio=decrease"
-        )
-        assert Path(command[-1]).suffix == ".png"
-        assert render_image.await_args.args[0].suffix == ".png"
-    finally:
-        input_path.unlink(missing_ok=True)
-        output_path.unlink(missing_ok=True)
-
-
-@pytest.mark.asyncio
 async def test_pdf_thumbnail_raster_work_scales_with_requested_output() -> None:
     from app.workers.upload.stages.thumbnail import _thumbnail_pdf
 
@@ -262,12 +200,7 @@ async def test_pdf_thumbnail_raster_work_scales_with_requested_output() -> None:
     process = MagicMock(returncode=0, stdout=b"", stderr=b"")
 
     async def fake_run(command, **_kwargs):
-        if command[0] == "pdftoppm":
-            target = Path(f"{command[-1]}.png")
-        else:
-            png_argument = next(value for value in command if value.startswith("-sOutputFile="))
-            target = Path(png_argument.split("=", 1)[1])
-        Image.new("RGB", (992, 1403), "white").save(target)
+        Image.new("RGB", (679, 960), "white").save(Path(f"{command[-1]}.png"))
         return process
 
     async def fake_render(_input, rendered_output, **_kwargs):
@@ -276,10 +209,6 @@ async def test_pdf_thumbnail_raster_work_scales_with_requested_output() -> None:
 
     try:
         with (
-            patch(
-                "app.workers.upload.stages.thumbnail.shutil.which",
-                return_value="/usr/bin/pdftoppm",
-            ),
             patch(
                 "app.workers.upload.stages.thumbnail.async_sandboxed_run",
                 side_effect=fake_run,
@@ -294,55 +223,10 @@ async def test_pdf_thumbnail_raster_work_scales_with_requested_output() -> None:
         command = sandbox_run.call_args.args[0]
         assert command[0] == "pdftoppm"
         assert "-png" in command
-        assert "-r" in command
-        assert "116" in command
         assert "-singlefile" in command
-    finally:
-        input_path.unlink(missing_ok=True)
-        output_path.unlink(missing_ok=True)
-
-
-@pytest.mark.asyncio
-async def test_pdf_thumbnail_falls_back_to_ghostscript_when_pdftoppm_missing() -> None:
-    from app.workers.upload.stages.thumbnail import _thumbnail_pdf
-
-    input_path = make_processing_temp_path(suffix=".pdf")
-    input_path.write_bytes(b"%PDF-1.4\n")
-    output_path = make_processing_temp_path(suffix=".webp")
-    output_path.unlink()
-    process = MagicMock(returncode=0, stdout=b"", stderr=b"")
-
-    async def fake_run(command, **_kwargs):
-        png_argument = next(value for value in command if value.startswith("-sOutputFile="))
-        Image.new("RGB", (992, 1403), "white").save(Path(png_argument.split("=", 1)[1]))
-        return process
-
-    async def fake_render(_input, rendered_output, **_kwargs):
-        rendered_output.write_bytes(b"webp")
-        return False
-
-    try:
-        with (
-            patch(
-                "app.workers.upload.stages.thumbnail.shutil.which",
-                return_value=None,
-            ),
-            patch(
-                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
-                side_effect=fake_run,
-            ) as sandbox_run,
-            patch(
-                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
-                side_effect=fake_render,
-            ),
-        ):
-            await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
-
-        command = sandbox_run.call_args.args[0]
-        assert command[0] == "gs"
-        assert "-r116" in command
-        assert "-dTextAlphaBits=4" in command
-        assert "-dGraphicsAlphaBits=4" in command
+        # The long side is bounded at 1.5x the target, whatever the page size.
+        assert command[command.index("-scale-to") + 1] == "960"
+        assert "-r" not in command
     finally:
         input_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
@@ -362,12 +246,7 @@ async def test_sparse_single_page_pdf_keeps_first_page_when_second_is_missing() 
         nonlocal calls
         calls += 1
         if calls == 1:
-            if command[0] == "pdftoppm":
-                target = Path(f"{command[-1]}.png")
-            else:
-                png_argument = next(value for value in command if value.startswith("-sOutputFile="))
-                target = Path(png_argument.split("=", 1)[1])
-            Image.new("RGB", (640, 640), "white").save(target)
+            Image.new("RGB", (640, 640), "white").save(Path(f"{command[-1]}.png"))
             return MagicMock(returncode=0, stdout=b"", stderr=b"")
         return MagicMock(returncode=99, stdout=b"", stderr=b"Page not found")
 
@@ -377,10 +256,6 @@ async def test_sparse_single_page_pdf_keeps_first_page_when_second_is_missing() 
 
     try:
         with (
-            patch(
-                "app.workers.upload.stages.thumbnail.shutil.which",
-                return_value="/usr/bin/pdftoppm",
-            ),
             patch(
                 "app.workers.upload.stages.thumbnail.async_sandboxed_run",
                 side_effect=fake_run,
@@ -394,202 +269,6 @@ async def test_sparse_single_page_pdf_keeps_first_page_when_second_is_missing() 
 
         assert calls == 2
         assert output_path.read_bytes() == b"usable-first-page"
-    finally:
-        input_path.unlink(missing_ok=True)
-        output_path.unlink(missing_ok=True)
-
-
-def test_compute_pdf_render_dpi_standard_and_oversized() -> None:
-    import pikepdf
-
-    from app.workers.upload.stages.thumbnail import (
-        _compute_pdf_render_dpi,
-        _get_pdf_page_dimension_inches,
-    )
-
-    # 1. Standard A4 PDF (595.28 x 841.89 pt = 8.27 x 11.69 in)
-    pdf_a4 = pikepdf.new()
-    pdf_a4.pages.append(
-        pikepdf.Page(
-            pikepdf.Dictionary(
-                Type=pikepdf.Name("/Page"),
-                MediaBox=[0, 0, 595.28, 841.89],
-            )
-        )
-    )
-    a4_path = make_processing_temp_path(suffix=".pdf")
-    pdf_a4.save(a4_path)
-
-    try:
-        dim = _get_pdf_page_dimension_inches(a4_path, 0)
-        assert dim is not None
-        assert abs(dim[0] - 8.27) < 0.1
-        assert abs(dim[1] - 11.69) < 0.1
-
-        # Target 640x640 -> target max dim 960 px -> 960 / 11.69 ≈ 82 DPI
-        dpi_a4 = _compute_pdf_render_dpi(a4_path, 1, (640, 640))
-        assert 75 <= dpi_a4 <= 90
-    finally:
-        a4_path.unlink(missing_ok=True)
-
-    # 2. Oversized / digital whiteboard / poster PDF (4320 x 5400 pt = 60 x 75 in)
-    pdf_huge = pikepdf.new()
-    pdf_huge.pages.append(
-        pikepdf.Page(
-            pikepdf.Dictionary(
-                Type=pikepdf.Name("/Page"),
-                MediaBox=[0, 0, 4320, 5400],
-            )
-        )
-    )
-    huge_path = make_processing_temp_path(suffix=".pdf")
-    pdf_huge.save(huge_path)
-
-    try:
-        dim_huge = _get_pdf_page_dimension_inches(huge_path, 0)
-        assert dim_huge is not None
-        assert abs(dim_huge[0] - 60.0) < 0.1
-        assert abs(dim_huge[1] - 75.0) < 0.1
-
-        # Target 640x640 -> target max dim 960 px -> 960 / 75 = 13 DPI (downscaled!)
-        dpi_huge = _compute_pdf_render_dpi(huge_path, 1, (640, 640))
-        assert dpi_huge == 13
-    finally:
-        huge_path.unlink(missing_ok=True)
-
-    # 3. PDF with /UserUnit multiplier (e.g. 595 x 842 with UserUnit=10 -> 82.7 x 116.9 in)
-    pdf_userunit = pikepdf.new()
-    pdf_userunit.pages.append(
-        pikepdf.Page(
-            pikepdf.Dictionary(
-                Type=pikepdf.Name("/Page"),
-                MediaBox=[0, 0, 595.28, 841.89],
-                UserUnit=10.0,
-            )
-        )
-    )
-    userunit_path = make_processing_temp_path(suffix=".pdf")
-    pdf_userunit.save(userunit_path)
-
-    try:
-        dim_uu = _get_pdf_page_dimension_inches(userunit_path, 0)
-        assert dim_uu is not None
-        assert abs(dim_uu[0] - 82.7) < 0.2
-        assert abs(dim_uu[1] - 116.9) < 0.2
-
-        # 960 / 116.9 ≈ 8 DPI -> clamped to minimum 12 DPI
-        dpi_uu = _compute_pdf_render_dpi(userunit_path, 1, (640, 640))
-        assert dpi_uu == 12
-    finally:
-        userunit_path.unlink(missing_ok=True)
-
-
-@pytest.mark.asyncio
-async def test_pdf_thumbnail_uses_dynamic_dpi_for_oversized_pdf() -> None:
-    import pikepdf
-
-    from app.workers.upload.stages.thumbnail import _thumbnail_pdf
-
-    pdf_huge = pikepdf.new()
-    pdf_huge.pages.append(
-        pikepdf.Page(
-            pikepdf.Dictionary(
-                Type=pikepdf.Name("/Page"),
-                MediaBox=[0, 0, 4320, 5400],
-            )
-        )
-    )
-    input_path = make_processing_temp_path(suffix=".pdf")
-    pdf_huge.save(input_path)
-    output_path = make_processing_temp_path(suffix=".webp")
-    output_path.unlink(missing_ok=True)
-    process = MagicMock(returncode=0, stdout=b"", stderr=b"")
-
-    async def fake_run(command, **_kwargs):
-        target = Path(f"{command[-1]}.png")
-        Image.new("RGB", (780, 975), "white").save(target)
-        return process
-
-    async def fake_render(_input, rendered_output, **_kwargs):
-        rendered_output.write_bytes(b"webp")
-        return False
-
-    try:
-        with (
-            patch(
-                "app.workers.upload.stages.thumbnail.shutil.which",
-                return_value="/usr/bin/pdftoppm",
-            ),
-            patch(
-                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
-                side_effect=fake_run,
-            ) as sandbox_run,
-            patch(
-                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
-                side_effect=fake_render,
-            ),
-        ):
-            await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
-
-        command = sandbox_run.call_args.args[0]
-        assert command[0] == "pdftoppm"
-        assert "-r" in command
-        assert "13" in command
-    finally:
-        input_path.unlink(missing_ok=True)
-        output_path.unlink(missing_ok=True)
-
-
-@pytest.mark.asyncio
-async def test_pdf_thumbnail_uses_dynamic_dpi_for_oversized_pdf_ghostscript_fallback() -> None:
-    import pikepdf
-
-    from app.workers.upload.stages.thumbnail import _thumbnail_pdf
-
-    pdf_huge = pikepdf.new()
-    pdf_huge.pages.append(
-        pikepdf.Page(
-            pikepdf.Dictionary(
-                Type=pikepdf.Name("/Page"),
-                MediaBox=[0, 0, 4320, 5400],
-            )
-        )
-    )
-    input_path = make_processing_temp_path(suffix=".pdf")
-    pdf_huge.save(input_path)
-    output_path = make_processing_temp_path(suffix=".webp")
-    output_path.unlink(missing_ok=True)
-    process = MagicMock(returncode=0, stdout=b"", stderr=b"")
-
-    async def fake_run(command, **_kwargs):
-        png_argument = next(value for value in command if value.startswith("-sOutputFile="))
-        Image.new("RGB", (780, 975), "white").save(Path(png_argument.split("=", 1)[1]))
-        return process
-
-    async def fake_render(_input, rendered_output, **_kwargs):
-        rendered_output.write_bytes(b"webp")
-        return False
-
-    try:
-        with (
-            patch(
-                "app.workers.upload.stages.thumbnail.shutil.which",
-                return_value=None,
-            ),
-            patch(
-                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
-                side_effect=fake_run,
-            ) as sandbox_run,
-            patch(
-                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
-                side_effect=fake_render,
-            ),
-        ):
-            await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
-
-        command = sandbox_run.call_args.args[0]
-        assert command[0] == "gs"
-        assert "-r13" in command
     finally:
         input_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
@@ -622,72 +301,6 @@ async def test_run_thumbnail_stage_svg() -> None:
         assert thumb_path.suffix == ".webp"
         with Image.open(thumb_path) as img:
             assert img.format == "WEBP"
-    finally:
-        pf.cleanup()
-        if thumb_path_str:
-            Path(thumb_path_str).unlink(missing_ok=True)
-
-
-@pytest.mark.integration  # needs soffice (libreoffice)
-@pytest.mark.asyncio
-async def test_run_thumbnail_stage_markdown() -> None:
-    """Markdown files should be successfully converted to a WebP thumbnail."""
-    from app.core.events.processing import ProcessingFile
-    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
-
-    # Create a temp markdown file
-    temp_path = make_processing_temp_path(suffix=".md")
-    temp_path.write_text(
-        "# Hello World\n\nThis is a sample markdown document to test thumbnail generation.\n\n- Bullet point 1\n- Bullet point 2\n"
-    )
-
-    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
-    thumb_path_str = None
-    try:
-        thumb_path_str = await run_thumbnail_stage(pf, "text/markdown", "test.md")
-        assert thumb_path_str is not None
-        thumb_path = Path(thumb_path_str)
-        assert thumb_path.exists()
-        assert thumb_path.suffix == ".webp"
-
-        # Verify it's a valid image and not blank
-        with Image.open(thumb_path) as img:
-            assert img.format == "WEBP"
-
-        assert _is_blank_thumbnail(thumb_path) is False
-    finally:
-        pf.cleanup()
-        if thumb_path_str:
-            Path(thumb_path_str).unlink(missing_ok=True)
-
-
-@pytest.mark.integration  # needs soffice (libreoffice)
-@pytest.mark.asyncio
-async def test_run_thumbnail_stage_text() -> None:
-    """Text/code files should be successfully converted to a WebP thumbnail."""
-    from app.core.events.processing import ProcessingFile
-    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
-
-    # Create a temp latex file
-    temp_path = make_processing_temp_path(suffix=".tex")
-    temp_path.write_text(
-        "\\documentclass{article}\n\\begin{document}\nHello World from LaTeX!\n\\end{document}\n"
-    )
-
-    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
-    thumb_path_str = None
-    try:
-        thumb_path_str = await run_thumbnail_stage(pf, "text/x-tex", "test.tex")
-        assert thumb_path_str is not None
-        thumb_path = Path(thumb_path_str)
-        assert thumb_path.exists()
-        assert thumb_path.suffix == ".webp"
-
-        # Verify it's a valid image and not blank
-        with Image.open(thumb_path) as img:
-            assert img.format == "WEBP"
-
-        assert _is_blank_thumbnail(thumb_path) is False
     finally:
         pf.cleanup()
         if thumb_path_str:
@@ -781,9 +394,9 @@ async def test_run_thumbnail_stage_cleans_up_partial_file_on_failure() -> None:
     temp_path.write_bytes(b"\xff\xd8\xff" + b"\x00" * 64)
 
     pf = ProcessingFile(temp_path, temp_path.stat().st_size)
-    expected_thumb = pf.path.parent / f"thumb_{pf.path.name}.webp"
+    expected_thumb = pf.path.with_name(f"{pf.path.name}.thumb.webp")
 
-    async def _write_then_fail(input_path, output_path, size, quality):
+    async def _write_then_fail(input_path, output_path, size, quality, mime):
         output_path.write_bytes(b"partial")
         raise OSError("disk full")
 
@@ -804,31 +417,6 @@ async def test_run_thumbnail_stage_cleans_up_partial_file_on_failure() -> None:
 
 
 # ── Regression tests: DOCX and Office thumbnail generation ───────────────────
-
-
-@pytest.mark.parametrize(
-    ("filename", "expected"),
-    [
-        ("Entretien Intervenant Kaizen.docx", True),
-        ("notes.DOCX", True),
-        ("sheet.xlsx", True),
-        ("slides.pptx", True),
-        ("legacy.doc", True),
-        ("legacy.xls", True),
-        ("legacy.ppt", True),
-        ("document.odt", True),
-        ("sheet.ods", True),
-        ("presentation.odp", True),
-        ("formatted.rtf", True),
-        ("image.png", False),
-        ("document.pdf", False),
-        ("notes.txt", False),
-    ],
-)
-def test_is_office_filename_detects_all_office_extensions(filename: str, expected: bool) -> None:
-    from app.workers.upload.stages.thumbnail import _is_office_filename
-
-    assert _is_office_filename(filename) is expected
 
 
 @pytest.mark.asyncio
@@ -870,7 +458,13 @@ async def test_thumbnail_office_creates_proper_suffix_and_runs_soffice() -> None
                 new_callable=AsyncMock,
             ) as mock_pdf_thumb,
         ):
-            await _thumbnail_office(input_path, output_path, (640, 640), 85, suffix=".docx")
+            await _thumbnail_office(
+                input_path,
+                output_path,
+                (640, 640),
+                85,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
 
             assert executed_cmd is not None
             assert executed_cmd[-1].endswith("document.docx")
@@ -886,7 +480,8 @@ async def test_thumbnail_office_creates_proper_suffix_and_runs_soffice() -> None
 
 @pytest.mark.asyncio
 async def test_run_thumbnail_stage_docx_routes_correctly() -> None:
-    """DOCX files are routed to _thumbnail_office both with official and fallback MIME types."""
+    """DOCX files reach _thumbnail_office with their MIME type, or via the extension
+    when the stored type is generic."""
     from app.core.events.processing import ProcessingFile
     from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 
@@ -900,8 +495,9 @@ async def test_run_thumbnail_stage_docx_routes_correctly() -> None:
             new_callable=AsyncMock,
         ) as mock_office:
 
-            async def fake_office(input_path, output_path, size, quality, suffix=".docx"):
+            async def fake_office(input_path, output_path, size, quality, mime):
                 output_path.write_bytes(b"webp thumbnail")
+                return True
 
             mock_office.side_effect = fake_office
 
@@ -913,7 +509,7 @@ async def test_run_thumbnail_stage_docx_routes_correctly() -> None:
             )
             assert result is not None
             assert Path(result).exists()
-            assert mock_office.call_args.kwargs.get("suffix") == ".docx"
+            assert mock_office.call_args.args[4] == DOCX_MIME
             Path(result).unlink(missing_ok=True)
 
             # 2. With application/octet-stream MIME type (from sniffing heuristic)
@@ -924,269 +520,8 @@ async def test_run_thumbnail_stage_docx_routes_correctly() -> None:
             )
             assert result2 is not None
             assert Path(result2).exists()
-            assert mock_office.call_args.kwargs.get("suffix") == ".docx"
+            assert mock_office.call_args.args[4] == DOCX_MIME
             Path(result2).unlink(missing_ok=True)
-    finally:
-        pf.cleanup()
-
-
-def test_ipynb_to_markdown_extracts_markdown_code_and_plots() -> None:
-    import base64
-    import json
-
-    from app.core.security.processing_paths import processing_temp_dir
-    from app.workers.upload.stages.thumbnail import _ipynb_to_markdown
-
-    tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    nb = {
-        "nbformat": 4,
-        "metadata": {"language_info": {"name": "python"}},
-        "cells": [
-            {
-                "cell_type": "markdown",
-                "source": ["# Deep Learning\n", "Project notes."],
-            },
-            {
-                "cell_type": "code",
-                "execution_count": 1,
-                "source": ["import torch\n", "print(torch.__version__)"],
-                "outputs": [
-                    {
-                        "output_type": "display_data",
-                        "data": {
-                            "image/png": tiny_png_b64,
-                            "text/plain": ["<Figure size 640x480>"],
-                        },
-                    },
-                    {
-                        "output_type": "stream",
-                        "text": ["2.0.0+cu118\n"],
-                    },
-                ],
-            },
-        ],
-    }
-    raw_bytes = json.dumps(nb).encode("utf-8")
-    with processing_temp_dir(prefix="test-nb-") as tmp_dir:
-        md_text, first_img = _ipynb_to_markdown(raw_bytes, tmp_dir)
-        assert "# Deep Learning" in md_text
-        assert "```python\nimport torch" in md_text
-        assert "![Output](output_1.png)" in md_text
-        assert "> Output: `2.0.0+cu118`" in md_text
-        assert first_img is not None
-        assert first_img.exists()
-        assert first_img.read_bytes() == base64.b64decode(tiny_png_b64)
-
-
-@pytest.mark.asyncio
-async def test_run_thumbnail_stage_ipynb_routes_correctly() -> None:
-    """IPYNB files are routed to _thumbnail_ipynb."""
-    from app.core.events.processing import ProcessingFile
-    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
-
-    temp_path = make_processing_temp_path(suffix=".ipynb")
-    temp_path.write_bytes(b'{"cells": []}')
-    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
-
-    try:
-        with patch(
-            "app.workers.upload.stages.thumbnail._thumbnail_ipynb",
-            new_callable=AsyncMock,
-        ) as mock_ipynb:
-
-            async def fake_ipynb(input_path, output_path, size, quality):
-                output_path.write_bytes(b"webp thumbnail")
-
-            mock_ipynb.side_effect = fake_ipynb
-
-            result = await run_thumbnail_stage(
-                pf,
-                "application/json",
-                "projet_deep_learning_l.ipynb",
-            )
-            assert result is not None
-            assert Path(result).exists()
-            assert mock_ipynb.called
-            Path(result).unlink(missing_ok=True)
-    finally:
-        pf.cleanup()
-
-
-@pytest.mark.asyncio
-async def test_thumbnail_ipynb_calls_soffice_and_thumbnail_pdf() -> None:
-    """_thumbnail_ipynb writes markdown and calls soffice/pdf pipeline."""
-    import json
-
-    from app.workers.upload.stages.thumbnail import _thumbnail_ipynb
-
-    nb = {
-        "nbformat": 4,
-        "metadata": {"language_info": {"name": "python"}},
-        "cells": [
-            {"cell_type": "markdown", "source": "# Test Notebook"},
-            {"cell_type": "code", "execution_count": 1, "source": "x = 10", "outputs": []},
-        ],
-    }
-    input_path = make_processing_temp_path(suffix=".ipynb")
-    input_path.write_text(json.dumps(nb), encoding="utf-8")
-    output_path = make_processing_temp_path(suffix=".webp")
-
-    try:
-        with (
-            patch(
-                "app.workers.upload.stages.thumbnail.shutil.which",
-                return_value="/opt/libreoffice/program/soffice",
-            ),
-            patch(
-                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
-                new_callable=AsyncMock,
-            ) as mock_run,
-            patch(
-                "app.workers.upload.stages.thumbnail._thumbnail_pdf",
-                new_callable=AsyncMock,
-            ) as mock_thumb_pdf,
-        ):
-
-            async def fake_sandboxed_run(cmd, ro_paths, rw_paths, timeout=60):
-                # Simulate LibreOffice creating document.pdf in rw_paths[0]
-                tmp_dir = rw_paths[0]
-                (tmp_dir / "document.pdf").write_bytes(b"%PDF-1.4 mock")
-                mock_proc = MagicMock()
-                mock_proc.returncode = 0
-                mock_proc.stdout = b""
-                mock_proc.stderr = b""
-                return mock_proc
-
-            async def fake_pdf(pdf_path, out_path, size, quality):
-                out_path.write_bytes(b"webp image data")
-
-            mock_run.side_effect = fake_sandboxed_run
-            mock_thumb_pdf.side_effect = fake_pdf
-
-            await _thumbnail_ipynb(input_path, output_path, (640, 640), 85)
-            assert mock_run.called
-            assert mock_thumb_pdf.called
-            assert output_path.exists()
-            assert output_path.read_bytes() == b"webp image data"
-    finally:
-        input_path.unlink(missing_ok=True)
-        output_path.unlink(missing_ok=True)
-
-
-@pytest.mark.asyncio
-async def test_thumbnail_ipynb_falls_back_to_embedded_plot_if_soffice_fails() -> None:
-    """If LibreOffice conversion fails, fallback to rendering the extracted plot image."""
-    import json
-
-    from app.workers.upload.stages.thumbnail import _thumbnail_ipynb
-
-    tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    nb = {
-        "nbformat": 4,
-        "metadata": {"language_info": {"name": "python"}},
-        "cells": [
-            {
-                "cell_type": "code",
-                "execution_count": 1,
-                "source": "plt.plot([1, 2])",
-                "outputs": [
-                    {
-                        "output_type": "display_data",
-                        "data": {"image/png": tiny_png_b64},
-                    }
-                ],
-            }
-        ],
-    }
-    input_path = make_processing_temp_path(suffix=".ipynb")
-    input_path.write_text(json.dumps(nb), encoding="utf-8")
-    output_path = make_processing_temp_path(suffix=".webp")
-
-    try:
-        with (
-            patch(
-                "app.workers.upload.stages.thumbnail.shutil.which",
-                return_value="/opt/libreoffice/program/soffice",
-            ),
-            patch(
-                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
-                new_callable=AsyncMock,
-            ) as mock_run,
-            patch(
-                "app.workers.upload.stages.thumbnail._thumbnail_image",
-                new_callable=AsyncMock,
-            ) as mock_thumb_img,
-        ):
-            # Simulate LibreOffice failing (no PDF generated)
-            mock_proc = MagicMock()
-            mock_proc.returncode = 1
-            mock_proc.stdout = b""
-            mock_proc.stderr = b"soffice error"
-            mock_run.return_value = mock_proc
-
-            async def fake_img(img_path, out_path, size, quality):
-                out_path.write_bytes(b"webp image from fallback")
-
-            mock_thumb_img.side_effect = fake_img
-
-            await _thumbnail_ipynb(input_path, output_path, (640, 640), 85)
-            assert mock_thumb_img.called
-            assert output_path.exists()
-            assert output_path.read_bytes() == b"webp image from fallback"
-    finally:
-        input_path.unlink(missing_ok=True)
-        output_path.unlink(missing_ok=True)
-
-
-@pytest.mark.integration  # needs soffice (libreoffice) and Ghostscript with bwrap namespaces
-@pytest.mark.asyncio
-async def test_run_thumbnail_stage_ipynb_e2e_renders_webp() -> None:
-    """Real end-to-end rendering of a Jupyter notebook to WebP."""
-    import json
-
-    from app.core.events.processing import ProcessingFile
-    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
-
-    tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    nb = {
-        "nbformat": 4,
-        "metadata": {"language_info": {"name": "python"}},
-        "cells": [
-            {
-                "cell_type": "markdown",
-                "source": ["# Analysis Report\n", "Introductory summary."],
-            },
-            {
-                "cell_type": "code",
-                "execution_count": 1,
-                "source": ["import numpy as np\n", "print('done')"],
-                "outputs": [
-                    {
-                        "output_type": "display_data",
-                        "data": {"image/png": tiny_png_b64},
-                    }
-                ],
-            },
-        ],
-    }
-    temp_path = make_processing_temp_path(suffix=".ipynb")
-    temp_path.write_text(json.dumps(nb), encoding="utf-8")
-    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
-
-    try:
-        result = await run_thumbnail_stage(
-            pf,
-            "application/json",
-            "notebook.ipynb",
-        )
-        assert result is not None
-        result_path = Path(result)
-        assert result_path.exists()
-        assert result_path.stat().st_size > 0
-        # Verify it is a valid image
-        with Image.open(result_path) as img:
-            assert img.format == "WEBP"
-        result_path.unlink(missing_ok=True)
     finally:
         pf.cleanup()
 
@@ -1271,8 +606,8 @@ async def test_recalculate_thumbnail_worker_success(db_session: AsyncSession) ->
         ) as mock_upload,
     ):
         mock_stage.return_value = str(mock_thumb_file)
-        success = await recalculate_thumbnail(ctx, str(material.id))
-        assert success is True
+        result = await recalculate_thumbnail(ctx, str(material.id))
+        assert result == "ok"
 
         assert mock_download.call_count == 1
         mock_stage.assert_awaited_once()
@@ -1344,6 +679,8 @@ async def test_recalculate_thumbnail_worker_skipped_and_failed(db_session: Async
         file_name="binary.bin",
         file_size=1024,
         file_mime_type="application/octet-stream",
+        thumbnail_key=f"thumbnails/{'a' * 64}/old-upload.webp",
+        thumbnail_status="ok",
     )
     db_session.add(version)
     await db_session.commit()
@@ -1361,15 +698,23 @@ async def test_recalculate_thumbnail_worker_skipped_and_failed(db_session: Async
     with (
         patch("app.workers.recalculate_thumbnail.download_file", side_effect=_fake_download),
         patch(
+            "app.workers.recalculate_thumbnail._delete_thumbnail_if_unreferenced",
+            new_callable=AsyncMock,
+        ) as retire,
+        patch(
             "app.workers.recalculate_thumbnail.run_thumbnail_stage", new_callable=AsyncMock
         ) as mock_stage,
     ):
         mock_stage.return_value = None
-        success = await recalculate_thumbnail(ctx, str(material.id))
-        assert success is True
+        result = await recalculate_thumbnail(ctx, str(material.id))
+        assert result == "skipped"
 
     await db_session.refresh(version)
     assert version.thumbnail_status == "skipped"
+    # A file that no longer gets a thumbnail loses its old one.
+    assert version.thumbnail_key is None
+    retire.assert_awaited_once()
+    assert retire.await_args.args[1] == f"thumbnails/{'a' * 64}/old-upload.webp"
 
     # Case 2: exception raised -> failed
     with (
@@ -1378,8 +723,474 @@ async def test_recalculate_thumbnail_worker_skipped_and_failed(db_session: Async
             side_effect=RuntimeError("Storage error"),
         ),
     ):
-        success = await recalculate_thumbnail(ctx, str(material.id))
-        assert success is False
+        result = await recalculate_thumbnail(ctx, str(material.id))
+        assert result == "failed"
 
     await db_session.refresh(version)
     assert version.thumbnail_status == "failed"
+
+
+# ── File classification ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("mime_type", "file_name", "expected"),
+    [
+        ("image/png", "a.png", "image"),
+        ("image/gif", "a.gif", "image"),
+        ("image/svg+xml", "a.svg", "svg"),
+        ("image/vnd.djvu", "a.djvu", "djvu"),
+        ("video/mp4", "a.mp4", "video"),
+        ("audio/mpeg", "a.mp3", "audio"),
+        ("application/pdf", "a.pdf", "pdf"),
+        ("application/epub+zip", "a.epub", "epub"),
+        (DOCX_MIME, "a.docx", "office"),
+        ("application/vnd.ms-powerpoint", "a.ppt", "office"),
+        ("application/vnd.oasis.opendocument.spreadsheet", "a.ods", "office"),
+        # Generic stored types fall back to the extension.
+        ("application/octet-stream", "a.docx", "office"),
+        ("", "a.pdf", "pdf"),
+        # Text formats show a generic card instead.
+        ("text/plain", "a.txt", None),
+        ("text/markdown", "a.md", None),
+        ("text/x-python", "a.py", None),
+        ("application/json", "a.ipynb", None),
+        ("application/json", "a.json", None),
+        ("application/octet-stream", "a.bin", None),
+        # A detected type wins over a misleading extension.
+        ("text/plain", "fake.png", None),
+    ],
+)
+def test_thumbnail_kind(mime_type: str, file_name: str, expected: str | None) -> None:
+    from app.core.media.thumbnails import thumbnail_kind
+
+    kind = thumbnail_kind(mime_type, file_name)
+    assert (kind.value if kind else None) == expected
+
+
+@pytest.mark.parametrize(
+    ("mime_type", "expected"),
+    [
+        ("image/jpeg", True),
+        ("image/svg+xml", True),
+        ("video/webm", True),
+        ("application/pdf", True),
+        ("image/vnd.djvu", False),
+        ("audio/mpeg", False),
+        (DOCX_MIME, False),
+        ("text/plain", False),
+    ],
+)
+def test_native_preview_only_for_browser_renderable_types(mime_type: str, expected: bool) -> None:
+    from app.core.media.thumbnails import has_native_preview
+
+    assert has_native_preview(mime_type) is expected
+
+
+@pytest.mark.asyncio
+async def test_run_thumbnail_stage_skips_text_files_without_rendering() -> None:
+    from app.core.events.processing import ProcessingFile
+    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
+
+    temp_path = make_processing_temp_path(suffix=".py")
+    temp_path.write_text("print('hello')\n")
+    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
+    try:
+        with patch("app.workers.upload.stages.thumbnail.async_sandboxed_run") as sandbox_run:
+            assert await run_thumbnail_stage(pf, "text/x-python", "solver.py") is None
+        sandbox_run.assert_not_called()
+    finally:
+        pf.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_run_thumbnail_stage_returns_none_when_renderer_finds_nothing() -> None:
+    from app.core.events.processing import ProcessingFile
+    from app.workers.upload.stages.thumbnail import run_thumbnail_stage
+
+    temp_path = make_processing_temp_path(suffix=".mp3")
+    temp_path.write_bytes(b"ID3")
+    pf = ProcessingFile(temp_path, temp_path.stat().st_size)
+    try:
+        with patch(
+            "app.workers.upload.stages.thumbnail._thumbnail_av",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            assert await run_thumbnail_stage(pf, "audio/mpeg", "song.mp3") is None
+        assert not pf.path.with_name(f"{pf.path.name}.thumb.webp").exists()
+    finally:
+        pf.cleanup()
+
+
+# ── PDF ─────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pdf_page_two_render_failure_keeps_blank_page_one() -> None:
+    from app.workers.upload.stages.thumbnail import _thumbnail_pdf
+
+    input_path = make_processing_temp_path(suffix=".pdf")
+    input_path.write_bytes(b"%PDF-1.4\n")
+    output_path = make_processing_temp_path(suffix=".webp")
+    output_path.unlink()
+
+    async def fake_run(command, **_kwargs):
+        Image.new("RGB", (640, 640), "white").save(Path(f"{command[-1]}.png"))
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    async def render(source, rendered_output, **_kwargs):
+        if source.name == "page-2.png":
+            rendered_output.write_bytes(b"partial")
+            raise ValueError("decompression bomb")
+        rendered_output.write_bytes(b"page-one")
+        return True  # blank: page 2 is tried
+
+    try:
+        with (
+            patch(
+                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+                side_effect=fake_run,
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
+                side_effect=render,
+            ),
+        ):
+            assert await _thumbnail_pdf(input_path, output_path, (640, 640), 85) is True
+        assert output_path.read_bytes() == b"page-one"
+    finally:
+        input_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_pdf_uses_non_blank_page_two() -> None:
+    from app.workers.upload.stages.thumbnail import _thumbnail_pdf
+
+    input_path = make_processing_temp_path(suffix=".pdf")
+    input_path.write_bytes(b"%PDF-1.4\n")
+    output_path = make_processing_temp_path(suffix=".webp")
+    output_path.unlink()
+
+    async def fake_run(command, **_kwargs):
+        Image.new("RGB", (640, 640), "white").save(Path(f"{command[-1]}.png"))
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    async def render(source, rendered_output, **_kwargs):
+        rendered_output.write_bytes(source.stem.encode())
+        return source.name == "page-1.png"
+
+    try:
+        with (
+            patch(
+                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+                side_effect=fake_run,
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
+                side_effect=render,
+            ),
+        ):
+            await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
+        assert output_path.read_bytes() == b"page-2"
+    finally:
+        input_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_pdf_first_page_render_failure_raises_render_error() -> None:
+    from app.workers.upload.stages.thumbnail import ThumbnailRenderError, _thumbnail_pdf
+
+    input_path = make_processing_temp_path(suffix=".pdf")
+    input_path.write_bytes(b"not a pdf")
+    output_path = make_processing_temp_path(suffix=".webp")
+    output_path.unlink()
+    try:
+        with patch(
+            "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+            new_callable=AsyncMock,
+            return_value=MagicMock(returncode=1, stdout=b"", stderr=b"Syntax Error"),
+        ):
+            with pytest.raises(ThumbnailRenderError):
+                await _thumbnail_pdf(input_path, output_path, (640, 640), 85)
+    finally:
+        input_path.unlink(missing_ok=True)
+
+
+# ── Office ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_office_falls_back_to_embedded_image_when_converted_pdf_fails() -> None:
+    from app.workers.upload.stages.thumbnail import ThumbnailRenderError, _thumbnail_office
+
+    input_path = make_processing_temp_path()
+    input_path.write_bytes(b"docx")
+    output_path = make_processing_temp_path(suffix=".webp")
+    output_path.unlink()
+
+    async def fake_run(cmd, rw_paths=None, **_kwargs):
+        (Path(rw_paths[0]) / "document.pdf").write_bytes(b"%PDF-1.4\n")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    try:
+        with (
+            patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value="/usr/bin/soffice",
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+                side_effect=fake_run,
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail._thumbnail_pdf",
+                new_callable=AsyncMock,
+                side_effect=ThumbnailRenderError("pdftoppm failed"),
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail.extract_office_thumbnail_isolated",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as embedded,
+        ):
+            assert await _thumbnail_office(input_path, output_path, (640, 640), 85, DOCX_MIME)
+        embedded.assert_awaited_once()
+    finally:
+        input_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_office_without_any_render_raises_render_error() -> None:
+    from app.workers.upload.stages.thumbnail import ThumbnailRenderError, _thumbnail_office
+
+    input_path = make_processing_temp_path()
+    input_path.write_bytes(b"ole2")
+    output_path = make_processing_temp_path(suffix=".webp")
+    output_path.unlink()
+    try:
+        with (
+            patch(
+                "app.workers.upload.stages.thumbnail.shutil.which",
+                return_value="/usr/bin/soffice",
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+                new_callable=AsyncMock,
+                return_value=MagicMock(returncode=1, stdout=b"", stderr=b"crash"),
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail.extract_office_thumbnail_isolated",
+                new_callable=AsyncMock,
+                side_effect=ValueError("File is not a zip file"),
+            ),
+        ):
+            with pytest.raises(ThumbnailRenderError):
+                await _thumbnail_office(
+                    input_path, output_path, (640, 640), 85, "application/msword"
+                )
+    finally:
+        input_path.unlink(missing_ok=True)
+
+
+# ── Video and audio ────────────────────────────────────────────────────────────
+
+
+def _ffprobe_result(streams: list[dict[str, Any]]) -> MagicMock:
+    import json
+
+    return MagicMock(returncode=0, stdout=json.dumps({"streams": streams}).encode(), stderr=b"")
+
+
+async def _run_av(
+    mime: str, streams: list[dict[str, Any]], frame_from_seek: str | None = None
+) -> tuple[bool, list[list[str]]]:
+    from app.workers.upload.stages.thumbnail import _thumbnail_av
+
+    input_path = make_processing_temp_path()
+    input_path.write_bytes(b"media")
+    output_path = make_processing_temp_path(suffix=".webp")
+    output_path.unlink()
+    commands: list[list[str]] = []
+
+    async def fake_run(command, **_kwargs):
+        commands.append(command)
+        if command[0] == "ffprobe":
+            return _ffprobe_result(streams)
+        seek = command[command.index("-ss") + 1] if "-ss" in command else None
+        if frame_from_seek == "any" or seek == frame_from_seek:
+            Image.new("RGB", (640, 360), "blue").save(Path(command[-1]))
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    try:
+        with (
+            patch(
+                "app.workers.upload.stages.thumbnail.async_sandboxed_run",
+                side_effect=fake_run,
+            ),
+            patch(
+                "app.workers.upload.stages.thumbnail.render_thumbnail_isolated",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            produced = await _thumbnail_av(input_path, output_path, (640, 640), 85, mime)
+        return produced, commands
+    finally:
+        input_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_video_frame_keeps_aspect_ratio_and_lossless_intermediate() -> None:
+    produced, commands = await _run_av(
+        "video/mp4", [{"index": 0, "disposition": {"attached_pic": 0}}], frame_from_seek="2"
+    )
+    assert produced is True
+    ffmpeg = commands[1]
+    assert ffmpeg[ffmpeg.index("-ss") + 1] == "2"
+    assert ffmpeg[ffmpeg.index("-map") + 1] == "0:0"
+    assert ffmpeg[ffmpeg.index("-vf") + 1] == (
+        "scale=w=640:h=640:force_original_aspect_ratio=decrease"
+    )
+    assert Path(ffmpeg[-1]).suffix == ".png"
+
+
+@pytest.mark.asyncio
+async def test_short_video_falls_back_to_first_frame() -> None:
+    produced, commands = await _run_av(
+        "video/webm", [{"index": 0, "disposition": {"attached_pic": 0}}], frame_from_seek="0"
+    )
+    assert produced is True
+    assert [c[c.index("-ss") + 1] for c in commands[1:]] == ["2", "0"]
+
+
+@pytest.mark.asyncio
+async def test_video_prefers_a_real_frame_over_embedded_cover() -> None:
+    streams = [
+        {"index": 0, "disposition": {"attached_pic": 0}},
+        {"index": 2, "disposition": {"attached_pic": 1}},
+    ]
+    _produced, commands = await _run_av("video/mp4", streams, frame_from_seek="any")
+    assert commands[1][commands[1].index("-map") + 1] == "0:0"
+
+
+@pytest.mark.asyncio
+async def test_audio_uses_embedded_cover_without_seeking() -> None:
+    produced, commands = await _run_av(
+        "audio/mpeg", [{"index": 1, "disposition": {"attached_pic": 1}}], frame_from_seek="any"
+    )
+    assert produced is True
+    ffmpeg = commands[1]
+    assert "-ss" not in ffmpeg
+    assert ffmpeg[ffmpeg.index("-map") + 1] == "0:1"
+
+
+@pytest.mark.asyncio
+async def test_audio_without_cover_has_no_thumbnail() -> None:
+    produced, commands = await _run_av("audio/ogg", [])
+    assert produced is False
+    assert [c[0] for c in commands] == ["ffprobe"]
+
+
+# ── Isolated parser operations (run in-process here) ──────────────────────────
+
+
+def test_animated_gif_thumbnail_uses_first_frame() -> None:
+    from app.core.security.parser_child import _render_thumbnail
+
+    source = make_processing_temp_path(suffix=".gif")
+    output = make_processing_temp_path(suffix=".webp")
+    frames = [Image.new("RGB", (300, 200), color) for color in ("red", "blue", "green")]
+    frames[0].save(source, save_all=True, append_images=frames[1:], duration=100, loop=0)
+    try:
+        result = _render_thumbnail([str(source), str(output), "640", "640", "85", "0"])
+        assert result["blank"] is False
+        with Image.open(output) as image:
+            assert getattr(image, "n_frames", 1) == 1
+            red, green, blue = image.convert("RGB").getpixel((5, 5))
+            assert red > 200 and green < 60 and blue < 60
+    finally:
+        source.unlink(missing_ok=True)
+        output.unlink(missing_ok=True)
+
+
+def _write_epub(path: Path, opf: str, images: dict[str, Image.Image]) -> None:
+    from io import BytesIO
+
+    container = (
+        '<?xml version="1.0"?><container version="1.0" '
+        'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+        '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>'
+        "</rootfiles></container>"
+    )
+    with ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/epub+zip")
+        archive.writestr("META-INF/container.xml", container)
+        archive.writestr("OEBPS/content.opf", opf)
+        for name, image in images.items():
+            buffer = BytesIO()
+            image.save(buffer, "PNG")
+            archive.writestr(name, buffer.getvalue())
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        # EPUB 3
+        '<item id="c" href="img/cover%20art.png" media-type="image/png" properties="cover-image"/>',
+        # EPUB 2
+        '<item id="c" href="img/cover%20art.png" media-type="image/png"/>',
+    ],
+)
+def test_epub_cover_extraction(manifest: str) -> None:
+    from app.core.security.parser_child import _extract_epub_cover
+
+    opf = (
+        '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">'
+        '<metadata><meta name="cover" content="c"/></metadata><manifest>'
+        f'{manifest}<item id="big" href="img/big.png" media-type="image/png"/>'
+        "</manifest></package>"
+    )
+    source = make_processing_temp_path(suffix=".epub")
+    output = make_processing_temp_path(suffix=".webp")
+    _write_epub(
+        source,
+        opf,
+        {
+            "OEBPS/img/cover art.png": Image.new("RGB", (600, 900), "orange"),
+            "OEBPS/img/big.png": Image.new("RGB", (2000, 2000), "white"),
+        },
+    )
+    try:
+        assert _extract_epub_cover([str(source), str(output), "640", "640", "85"]) == {
+            "produced": True
+        }
+        with Image.open(output) as image:
+            assert image.size == (427, 640)
+            red, green, _blue = image.convert("RGB").getpixel((5, 5))
+            assert red > 200 and 120 < green < 200
+    finally:
+        source.unlink(missing_ok=True)
+        output.unlink(missing_ok=True)
+
+
+def test_epub_without_declared_cover_produces_nothing() -> None:
+    from app.core.security.parser_child import _extract_epub_cover
+
+    opf = (
+        '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">'
+        '<manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>'
+        '<item id="fig" href="fig.png" media-type="image/png"/></manifest></package>'
+    )
+    source = make_processing_temp_path(suffix=".epub")
+    output = make_processing_temp_path(suffix=".webp")
+    _write_epub(source, opf, {"OEBPS/fig.png": Image.new("RGB", (10, 10), "red")})
+    try:
+        assert _extract_epub_cover([str(source), str(output), "640", "640", "85"]) == {
+            "produced": False
+        }
+    finally:
+        source.unlink(missing_ok=True)
+        output.unlink(missing_ok=True)

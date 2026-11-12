@@ -27,7 +27,11 @@ from app.models.upload import Upload
 from app.models.user import User
 from app.models.view_history import ViewHistory
 from app.services.avatar import is_owned_avatar_storage_key
-from app.services.material import get_liked_favourited_sets, material_orm_to_dict
+from app.services.material import (
+    attach_material_thumbnails,
+    get_liked_favourited_sets,
+    material_orm_to_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +155,7 @@ async def get_recently_viewed(
         db, uid, [material.id for material, _ in rows]
     )
 
-    return [
+    materials_out = [
         material_orm_to_dict(
             material,
             current_user_id=uid,
@@ -161,6 +165,8 @@ async def get_recently_viewed(
         )
         for material, version in rows
     ]
+    await attach_material_thumbnails(materials_out)
+    return materials_out
 
 
 async def get_user_contributions(
@@ -224,6 +230,7 @@ async def get_user_contributions(
             )
             for material, version in rows
         ]
+        await attach_material_thumbnails(materials_out)
         return materials_out, total
     elif contribution_type == "annotations":
         ann_base = (

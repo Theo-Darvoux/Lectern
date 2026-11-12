@@ -56,7 +56,11 @@ export function PROperationThumbnail({
     const staged = useQuery({ ...uploadPreviewQuery(stagedKey ?? ""), enabled: !!stagedKey });
     const published = useQuery({
         queryKey: ["material-thumbnail", publishedId],
-        queryFn: async () => (await getMaterialThumbnail(publishedId!))?.url ?? null,
+        // A "fallback" is the original file: only images render in an <img>.
+        queryFn: async () => {
+            const thumbnail = await getMaterialThumbnail(publishedId!);
+            return thumbnail.thumbnailType === "webp" || isImage ? thumbnail.url : null;
+        },
         enabled: !!publishedId,
     });
     const queryClient = useQueryClient();

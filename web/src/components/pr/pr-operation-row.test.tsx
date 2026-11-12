@@ -43,7 +43,10 @@ vi.mock("@/lib/api-client", () => ({
 }));
 
 vi.mock("@/lib/material-preview-source", () => ({
-  getMaterialThumbnail: vi.fn().mockResolvedValue({ url: "https://thumb.example/img.webp" }),
+  getMaterialThumbnail: vi
+    .fn()
+    .mockResolvedValue({ url: "https://thumb.example/img.webp", thumbnailType: "webp" }),
+  subscribeMaterialThumbnail: vi.fn(() => () => {}),
 }));
 
 vi.mock("@/components/pr/pr-comments", () => ({

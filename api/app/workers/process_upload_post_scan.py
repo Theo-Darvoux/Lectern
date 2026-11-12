@@ -61,7 +61,8 @@ from app.workers.upload.stages.thumbnail import run_thumbnail_stage
 logger = logging.getLogger(__name__)
 
 _POST_MAX_RETRIES = 3
-# Max total attempts for thumbnail generation (includes initial attempt + retries).
+# Max total attempts for thumbnail generation after a non-deterministic error
+# (timeout, crashed renderer). Render errors (ValueError) are not retried.
 _THUMB_MAX_ATTEMPTS = 2
 # Settled processing statuses — a PR can auto-merge when all its files reach one of these.
 _SETTLED_STATUSES = _AUTO_MERGE_SETTLED_STATUSES
@@ -237,8 +238,17 @@ async def process_upload_post_scan(
                 thumbnail_path = await run_thumbnail_stage(
                     pf, actual_mime, original_filename, tracer, config=auth_config
                 )
-                # None means unsupported type — not a failure, no retry needed.
+                # None means no thumbnail for this file — not a failure, no retry needed.
                 thumbnail_status = "ok" if thumbnail_path else "skipped"
+                break
+            except ValueError as exc:
+                # Render and parser errors are deterministic: the same bytes fail again.
+                logger.warning(
+                    "Thumbnail generation failed for upload %s: %s — proceeding without thumbnail.",
+                    upload_id,
+                    exc,
+                )
+                thumbnail_status = "failed"
                 break
             except Exception as exc:
                 if _thumb_attempt < _THUMB_MAX_ATTEMPTS:

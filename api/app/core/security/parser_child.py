@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -159,8 +160,8 @@ def _render_thumbnail(arguments: list[str]) -> dict[str, object]:
     flatten = arguments[5] == "1"
     with Image.open(input_path) as base_img:
         _validate_image_size(base_img)
-        if getattr(base_img, "n_frames", 1) != 1 or getattr(base_img, "is_animated", False):
-            raise ValueError("Animated thumbnail sources are not supported")
+        # Animated GIF/WebP/APNG: the thumbnail is the first frame.
+        base_img.seek(0)
         base_img.load()
         oriented = ImageOps.exif_transpose(base_img)
         try:
@@ -189,13 +190,48 @@ def _render_thumbnail(arguments: list[str]) -> dict[str, object]:
     return {"blank": blank, "size": output_path.stat().st_size}
 
 
+_EMBEDDED_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+_EPUB_XML_MAX_BYTES = 5 * 1024 * 1024
+_RASTER_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+
+
+def _read_zip_member(archive: zipfile.ZipFile, member: zipfile.ZipInfo, limit: int) -> bytes:
+    """Read one archive member, refusing declared or actual sizes above ``limit``."""
+    if member.file_size > limit:
+        raise ValueError(f"Archive member {member.filename!r} exceeds byte limit")
+    with archive.open(member) as source:
+        data = source.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"Archive member {member.filename!r} expanded beyond byte limit")
+    return data
+
+
+def _render_zip_image(
+    archive: zipfile.ZipFile, member: zipfile.ZipInfo, arguments: list[str]
+) -> dict[str, object]:
+    """Render one image stored in an archive to the WebP output path."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.core.security.file_security._image import _validate_image_size
+
+    data = _read_zip_member(archive, member, _EMBEDDED_IMAGE_MAX_BYTES)
+    with BytesIO(data) as encoded, Image.open(encoded) as image:
+        _validate_image_size(image)
+        image.seek(0)
+        image.load()
+        rendered = image.convert("RGB") if image.mode not in ("RGB", "RGBA") else image
+        rendered.thumbnail((int(arguments[2]), int(arguments[3])), Image.Resampling.LANCZOS)
+        rendered.save(Path(arguments[1]), "WEBP", quality=int(arguments[4]))
+    return {"produced": True}
+
+
 def _extract_office_thumbnail(arguments: list[str]) -> dict[str, object]:
+    """Render the largest raster image embedded in an OOXML/ODF container."""
     if len(arguments) != 5:
         raise ValueError("office-thumbnail requires input, output, width, height and quality")
-    import zipfile
-
-    input_path, output_path = Path(arguments[0]), Path(arguments[1])
-    with zipfile.ZipFile(input_path, "r") as archive:
+    with zipfile.ZipFile(arguments[0], "r") as archive:
         candidates = [
             entry
             for entry in archive.infolist()
@@ -204,26 +240,88 @@ def _extract_office_thumbnail(arguments: list[str]) -> dict[str, object]:
         if not candidates:
             return {"produced": False}
         largest = max(candidates, key=lambda entry: entry.file_size)
-        if largest.file_size > 20 * 1024 * 1024:
-            raise ValueError("Embedded thumbnail candidate exceeds byte limit")
-        with archive.open(largest) as source:
-            data = source.read(20 * 1024 * 1024 + 1)
-        if len(data) > 20 * 1024 * 1024:
-            raise ValueError("Embedded thumbnail candidate expanded beyond byte limit")
-    from io import BytesIO
+        return _render_zip_image(archive, largest, arguments)
 
-    from PIL import Image
 
-    from app.core.security.file_security._image import _validate_image_size
+def _epub_cover_member(archive: zipfile.ZipFile) -> zipfile.ZipInfo | None:
+    """Find the cover image an EPUB package declares, if any.
 
-    with BytesIO(data) as encoded, Image.open(encoded) as image:
-        _validate_image_size(image)
-        if getattr(image, "n_frames", 1) != 1 or getattr(image, "is_animated", False):
-            raise ValueError("Animated embedded thumbnails are not supported")
-        image.load()
-        image.thumbnail((int(arguments[2]), int(arguments[3])), Image.Resampling.LANCZOS)
-        image.save(output_path, "WEBP", quality=int(arguments[4]))
-    return {"produced": True}
+    Order: EPUB 3 ``properties="cover-image"``, EPUB 2 ``<meta name="cover">``,
+    then a manifest image whose id or href names a cover.
+    """
+    import posixpath
+    from urllib.parse import unquote
+
+    from defusedxml import ElementTree
+
+    def local(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1]
+
+    names = set(archive.namelist())
+    if "META-INF/container.xml" not in names:
+        return None
+    container = ElementTree.fromstring(
+        _read_zip_member(archive, archive.getinfo("META-INF/container.xml"), _EPUB_XML_MAX_BYTES)
+    )
+    opf_path = next(
+        (
+            element.get("full-path", "")
+            for element in container.iter()
+            if local(element.tag) == "rootfile"
+        ),
+        "",
+    )
+    if opf_path not in names:
+        return None
+    package = ElementTree.fromstring(
+        _read_zip_member(archive, archive.getinfo(opf_path), _EPUB_XML_MAX_BYTES)
+    )
+
+    items: list[dict[str, str]] = []
+    cover_id = ""
+    for element in package.iter():
+        tag = local(element.tag)
+        if tag == "item":
+            items.append({key: value or "" for key, value in element.attrib.items()})
+        elif tag == "meta" and element.get("name") == "cover":
+            cover_id = element.get("content", "")
+
+    images = [
+        item
+        for item in items
+        if item.get("media-type", "").startswith("image/")
+        or item.get("href", "").lower().endswith(_RASTER_SUFFIXES)
+    ]
+    chosen = (
+        next((i for i in images if "cover-image" in i.get("properties", "").split()), None)
+        or next((i for i in images if cover_id and i.get("id") == cover_id), None)
+        or next(
+            (
+                i
+                for i in images
+                if "cover" in i.get("id", "").lower() or "cover" in i.get("href", "").lower()
+            ),
+            None,
+        )
+    )
+    if chosen is None or not chosen.get("href"):
+        return None
+    member_path = posixpath.normpath(
+        posixpath.join(posixpath.dirname(opf_path), unquote(chosen["href"]))
+    )
+    if member_path not in names or not member_path.lower().endswith(_RASTER_SUFFIXES):
+        return None
+    return archive.getinfo(member_path)
+
+
+def _extract_epub_cover(arguments: list[str]) -> dict[str, object]:
+    if len(arguments) != 5:
+        raise ValueError("epub-cover requires input, output, width, height and quality")
+    with zipfile.ZipFile(arguments[0], "r") as archive:
+        member = _epub_cover_member(archive)
+        if member is None:
+            return {"produced": False}
+        return _render_zip_image(archive, member, arguments)
 
 
 def _extract_zip(arguments: list[str]) -> dict[str, object]:
@@ -270,6 +368,8 @@ def main() -> int:
             payload = _render_thumbnail(arguments)
         elif operation == "office-thumbnail":
             payload = _extract_office_thumbnail(arguments)
+        elif operation == "epub-cover":
+            payload = _extract_epub_cover(arguments)
         elif operation == "extract-zip":
             payload = _extract_zip(arguments)
         else:

@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 import typing
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -9,9 +11,13 @@ from sqlalchemy.orm import selectinload
 
 from app.core.common.exceptions import NotFoundError
 from app.core.common.natural_sorting import content_status_sort_key, natural_sort_key
+from app.core.media.thumbnails import effective_mime, has_native_preview
+from app.core.storage.facade import generate_presigned_get, generate_presigned_get_cached
 from app.models.material import Material, MaterialFavourite, MaterialLike, MaterialVersion
 from app.models.view_history import ViewHistory
 from app.services.reaction_lock import acquire_reaction_toggle_lock
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_uuid(value: str | uuid.UUID) -> uuid.UUID:
@@ -203,6 +209,76 @@ async def get_material_thumbnail_info(
     return data
 
 
+ThumbnailType = typing.Literal["webp", "fallback"]
+
+
+async def resolve_thumbnail(
+    version: typing.Mapping[str, typing.Any],
+    redis: typing.Any = None,
+) -> tuple[str, ThumbnailType] | None:
+    """Return a signed URL for a version's card preview, or None when it has none.
+
+    ``version`` needs ``thumbnail_key``, ``file_key``, ``file_mime_type`` and
+    ``file_name``. A generated WebP wins ("webp"). Without one, images, videos
+    and PDFs fall back to the original file, which the browser renders itself
+    ("fallback"). Other types show a generic card.
+    """
+    file_name = version.get("file_name") or None
+    if thumbnail_key := version.get("thumbnail_key"):
+        key, content_type, kind = thumbnail_key, "image/webp", "webp"
+    elif version.get("file_key") and has_native_preview(version.get("file_mime_type"), file_name):
+        key = version["file_key"]
+        content_type = effective_mime(version.get("file_mime_type"), file_name)
+        kind = "fallback"
+    else:
+        return None
+
+    options: dict[str, typing.Any] = {
+        "force_download": False,
+        "filename": f"thumb_{file_name or 'file'}.webp" if kind == "webp" else file_name,
+        "content_type": content_type,
+    }
+    if redis is not None:
+        url = await generate_presigned_get_cached(key, redis=redis, **options)
+    else:
+        url = await generate_presigned_get(key, **options)
+    return url, typing.cast(ThumbnailType, kind)
+
+
+async def attach_thumbnail_urls(
+    version_infos: typing.Iterable[dict[str, typing.Any] | None],
+    redis: typing.Any = None,
+) -> None:
+    """Add ``thumbnail_url`` and ``thumbnail_type`` to serialized versions in place.
+
+    Listings embed the preview URL so cards need no extra request. A version
+    without a preview gets ``thumbnail_type="none"``, which tells the client not
+    to ask. Signing failures leave the fields unset, so the client falls back to
+    ``GET /materials/{id}/thumbnail``.
+    """
+    if redis is None:
+        from app.core.database import redis as redis_module
+
+        redis = redis_module.redis_client
+
+    infos = [info for info in version_infos if info is not None]
+    results = await asyncio.gather(
+        *(resolve_thumbnail(info, redis) for info in infos), return_exceptions=True
+    )
+    for info, resolved in zip(infos, results, strict=True):
+        if isinstance(resolved, BaseException):
+            logger.warning("Could not sign thumbnail URL: %s", resolved)
+            continue
+        info["thumbnail_url"], info["thumbnail_type"] = resolved or (None, "none")
+
+
+async def attach_material_thumbnails(
+    materials: typing.Iterable[dict[str, typing.Any]], redis: typing.Any = None
+) -> None:
+    """Attach preview URLs to each serialized material's current version."""
+    await attach_thumbnail_urls((m.get("current_version_info") for m in materials), redis)
+
+
 async def get_material_by_id(db: AsyncSession, material_id: str | uuid.UUID) -> Material:
     material_id = _ensure_uuid(material_id)
     result = await db.execute(
@@ -281,7 +357,7 @@ async def get_material_with_version(
 
     liked_ids, favourited_ids = await get_liked_favourited_sets(db, current_user_id, [material.id])
 
-    return material_orm_to_dict(
+    detail = material_orm_to_dict(
         material,
         attachment_count=att_count,
         comment_count=com_count,
@@ -291,6 +367,8 @@ async def get_material_with_version(
         is_liked=material.id in liked_ids,
         is_favourited=material.id in favourited_ids,
     )
+    await attach_material_thumbnails([detail])
+    return detail
 
 
 async def get_material_versions(
@@ -345,7 +423,7 @@ async def get_material_attachments(
     liked_ids, favourited_ids = await get_liked_favourited_sets(
         db, current_user_id, [material.id for material, _ in rows]
     )
-    return [
+    attachments = [
         material_orm_to_dict(
             material,
             current_user_id=current_user_id,
@@ -355,6 +433,8 @@ async def get_material_attachments(
         )
         for material, version in rows
     ]
+    await attach_material_thumbnails(attachments)
+    return attachments
 
 
 async def increment_download_count(db: AsyncSession, material_id: str | uuid.UUID) -> Material:

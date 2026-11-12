@@ -1,4 +1,3 @@
-import contextlib
 import logging
 import time
 from dataclasses import dataclass
@@ -27,7 +26,6 @@ class FinalizeInput:
     initial_size: int
     final_mime: str
     content_encoding: str | None = None
-    thumbnail_path: str | None = None
     content_sha256: str | None = None
 
 
@@ -39,7 +37,6 @@ class FinalizeResult:
     new_cas_ref: int
     db_cas_key: str
     safe_name: str
-    thumbnail_key: str | None = None
 
 
 async def run_finalize_storage(
@@ -73,18 +70,6 @@ async def run_finalize_storage(
             content_type=input_data.final_mime,
             content_encoding=input_data.content_encoding,
         )
-
-        thumbnail_key = None
-        if input_data.thumbnail_path:
-            thumbnail_key = f"thumbnails/{cas_id}/{input_data.upload_id}.webp"
-            await upload_file_multipart(
-                Path(input_data.thumbnail_path),
-                thumbnail_key,
-                content_type="image/webp",
-            )
-            # Cleanup thumbnail temp file
-            with contextlib.suppress(Exception):
-                Path(input_data.thumbnail_path).unlink(missing_ok=True)
 
     final_size = input_data.pf.size
 
@@ -129,5 +114,4 @@ async def run_finalize_storage(
         new_cas_ref=new_cas_ref,
         db_cas_key=db_cas_key,
         safe_name=safe_name,
-        thumbnail_key=thumbnail_key,
     )

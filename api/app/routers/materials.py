@@ -14,7 +14,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.common.exceptions import AppError, BadRequestError, NotFoundError
+from app.core.common.exceptions import BadRequestError, NotFoundError
 from app.core.common.upload_errors import UploadErrorCode
 from app.core.common.upload_keys import UPLOAD_QUOTA_PREFIX
 from app.core.common.upload_limits import enforce_upload_size_limit
@@ -58,6 +58,7 @@ from app.services.material import (
     get_material_with_version,
     increment_download_count,
     record_view,
+    resolve_thumbnail,
     set_favourite,
     toggle_like,
 )
@@ -308,61 +309,26 @@ async def thumbnail_material(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
-    """
-    Generate a presigned URL for a material version's thumbnail.
+    """Return a signed URL for a material's card preview.
+
     Returns {"url": ..., "thumbnail_type": "webp" | "fallback"}.
-    - "webp": a real generated WebP thumbnail is served.
-    - "fallback": no dedicated thumbnail; the original file URL is returned so
-      the frontend can render it natively (react-pdf for PDFs, <video> for videos,
-      <img> for images).
-    Raises 404 for types without any renderable fallback (Office, audio, etc.).
+    - "webp": a generated WebP thumbnail.
+    - "fallback": no generated thumbnail; the original image, video or PDF, which
+      the browser renders itself.
+    Raises 404 for types without either (text, Office, audio, archives…).
     """
-    mid = uuid.UUID(material_id)
+    try:
+        mid = uuid.UUID(material_id)
+    except ValueError:
+        raise NotFoundError("Material not found") from None
     version = await get_material_thumbnail_info(db, mid, redis)
     if not version:
-        raise AppError(404, "Material version not found")
-
-    # 1. Prefer dedicated stored thumbnail
-    target_key = version.get("thumbnail_key")
-    content_type = "image/webp"
-    is_dedicated = bool(target_key)
-
-    # 2. Fallback to main file for types the browser can natively render inline
-    #    (images, videos, PDFs). Audio, Office, and generic blobs are excluded
-    #    because the browser cannot render them in an <img> / <video> thumbnail.
-    if not target_key:
-        file_mime = (version.get("file_mime_type") or "").lower()
-        file_name = (version.get("file_name") or "").lower()
-        is_pdf = file_mime == "application/pdf" or file_name.endswith(".pdf")
-        is_image = file_mime.startswith("image/") or file_name.endswith(
-            (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg")
-        )
-        is_video = file_mime.startswith("video/") or file_name.endswith(
-            (".mp4", ".webm", ".avi", ".mkv", ".mov")
-        )
-
-        if is_pdf or is_image or is_video:
-            target_key = version["file_key"]
-            content_type = (
-                file_mime if file_mime and "/" in file_mime else "application/octet-stream"
-            )
-            if is_pdf and not file_mime:
-                content_type = "application/pdf"
-        else:
-            raise AppError(404, "Thumbnail not available for this file type")
-
-    thumb_filename = f"thumb_{version.get('file_name') or 'file'}.webp"
-    url = await _presigned_url(
-        target_key,
-        redis,
-        force_download=False,
-        filename=thumb_filename,
-        content_type=content_type,
-    )
-    return {
-        "url": url,
-        "thumbnail_type": "webp" if is_dedicated else "fallback",
-    }
+        raise NotFoundError("Material version not found")
+    resolved = await resolve_thumbnail(version, redis)
+    if resolved is None:
+        raise NotFoundError("Thumbnail not available for this file type")
+    url, thumbnail_type = resolved
+    return {"url": url, "thumbnail_type": thumbnail_type}
 
 
 @router.post("/{material_id}/recalculate-thumbnail")
@@ -370,12 +336,13 @@ async def recalculate_material_thumbnail(
     material_id: str,
     user: Annotated[User, Depends(require_moderator())],
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
     """Force recreate the thumbnail for a material.
 
-    Moderator or admin privileges required. Dispatches the thumbnail recalculation
-    job to a free background worker and waits for completion when possible.
+    Moderator or admin privileges required. Dispatches the recalculation job and
+    waits briefly for it. ``status`` is the job result ("ok", "skipped" or
+    "failed"), or "queued" when the job is still running. The worker invalidates
+    the thumbnail caches itself.
     """
     import time
     from typing import cast
@@ -388,18 +355,6 @@ async def recalculate_material_thumbnail(
         raise NotFoundError("No file available for thumbnail generation")
 
     target_version_id = version.get("id")
-
-    # Invalidate Redis thumbnail cache immediately
-    if redis is not None:
-        try:
-            await redis.delete(f"thumbnail:v1:{material_id}")
-            if target_version_id:
-                async for key in redis.scan_iter(
-                    match=f"presign:get:thumbnails/{target_version_id}.webp*"
-                ):
-                    await redis.delete(key)
-        except Exception:
-            pass
 
     if redis_core.arq_pool is None:
         raise BadRequestError("Background processing is temporarily unavailable. Please try again.")
@@ -420,22 +375,10 @@ async def recalculate_material_thumbnail(
     if job is not None:
         try:
             res = await job.result(timeout=15.0, poll_delay=0.2)
-            if res is True:
-                status = "ok"
+            if res in ("ok", "skipped", "failed"):
+                status = res
         except Exception:
             status = "queued"
-
-    # Invalidate Redis caches again after worker run
-    if redis is not None:
-        try:
-            await redis.delete(f"thumbnail:v1:{material_id}")
-            if target_version_id:
-                async for key in redis.scan_iter(
-                    match=f"presign:get:thumbnails/{target_version_id}.webp*"
-                ):
-                    await redis.delete(key)
-        except Exception:
-            pass
 
     return {
         "status": status,

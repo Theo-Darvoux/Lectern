@@ -11,6 +11,9 @@ export interface MaterialVersionInfo {
     pr_id: string | null;
     virus_scan_result: string;
     created_at: string;
+    /** Card preview resolved by the listing; see `MaterialVersionOut` in the API. */
+    thumbnail_url?: string | null;
+    thumbnail_type?: "webp" | "fallback" | "none" | null;
 }
 
 export interface MaterialDetail {

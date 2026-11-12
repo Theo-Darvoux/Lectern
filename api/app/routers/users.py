@@ -33,7 +33,11 @@ from app.schemas.user import (
 )
 from app.services.avatar import is_owned_avatar_storage_key, is_trusted_external_avatar_url
 from app.services.directory import get_directory_paths
-from app.services.material import get_liked_favourited_sets, material_orm_to_dict
+from app.services.material import (
+    attach_material_thumbnails,
+    get_liked_favourited_sets,
+    material_orm_to_dict,
+)
 from app.services.pr_visibility import can_see_anonymous_authors
 from app.services.saved import get_favourite_items
 from app.services.user import (
@@ -167,6 +171,7 @@ async def get_my_favourites(
             is_favourited=material.id in favourited_ids,
         )
         materials_out.append(mat_dict)
+    await attach_material_thumbnails(materials_out)
 
     dir_ids = {m["directory_id"] for m in materials_out if m.get("directory_id") is not None}
     paths = await get_directory_paths(db, dir_ids)

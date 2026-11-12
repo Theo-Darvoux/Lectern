@@ -349,7 +349,11 @@ async def _attach_version_and_counts(
     directory_path: str | None,
 ) -> list[dict[str, typing.Any]]:
     """Batch-fetch attachment counts and current versions for a list of materials."""
-    from app.services.material import get_liked_favourited_sets, material_orm_to_dict
+    from app.services.material import (
+        attach_material_thumbnails,
+        get_liked_favourited_sets,
+        material_orm_to_dict,
+    )
 
     if not materials:
         return []
@@ -382,7 +386,7 @@ async def _attach_version_and_counts(
     # full likes/favourites collections per material (like_count is a column).
     liked_ids, favourited_ids = await get_liked_favourited_sets(db, current_user_id, mat_ids)
 
-    return [
+    materials_out = [
         material_orm_to_dict(
             material,
             attachment_count=att_counts.get(material.id, 0),
@@ -394,6 +398,8 @@ async def _attach_version_and_counts(
         )
         for material in materials
     ]
+    await attach_material_thumbnails(materials_out)
+    return materials_out
 
 
 async def get_directory_by_id(db: AsyncSession, directory_id: str | uuid.UUID) -> Directory:
