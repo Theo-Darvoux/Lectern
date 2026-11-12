@@ -146,6 +146,22 @@ export function DirectoryListing({
 
   const stagedIndex = useMemo(() => indexStagedOps(allOps), [allOps]);
 
+  // Draft children per draft parent, counted once instead of per ghost row.
+  const draftCounts = useMemo(() => {
+    const dirs = new Map<string, number>();
+    const mats = new Map<string, number>();
+    const attachments = new Map<string, number>();
+    const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1);
+    for (const o of allOps) {
+      if (o.op === "create_directory" && o.parent_id) bump(dirs, o.parent_id);
+      if (o.op === "create_material") {
+        if (o.directory_id) bump(mats, o.directory_id);
+        if (o.parent_material_id) bump(attachments, o.parent_material_id);
+      }
+    }
+    return { dirs, mats, attachments };
+  }, [allOps]);
+
   const dirRow = (dir: Record<string, unknown>) => {
     const info = stagedIndex.dirs.get(String(dir.id));
     return { staged: info?.staged ?? null, data: applyStagedEdits(dir, info?.edits) };
@@ -167,8 +183,8 @@ export function DirectoryListing({
       id: tempId,
       name: (op.op === "create_directory" ? op.name : op.target_name) || "Unnamed",
       parent_id: dirId || null,
-      child_directory_count: allOps.filter(o => o.op === "create_directory" && o.parent_id === tempId).length,
-      child_material_count: allOps.filter(o => o.op === "create_material" && o.directory_id === tempId).length,
+      child_directory_count: draftCounts.dirs.get(tempId) ?? 0,
+      child_material_count: draftCounts.mats.get(tempId) ?? 0,
     };
     const data = isMove ? applyStagedEdits(base, stagedIndex.dirs.get(tempId)?.edits) : base;
     return {
@@ -201,9 +217,7 @@ export function DirectoryListing({
       ghostFileMimeType: op.op === "create_material" ? (op.file_mime_type ?? null) : null,
       draftAttachmentCount:
         op.op === "create_material" && op.temp_id
-          ? allOps.filter(
-              (o) => o.op === "create_material" && o.parent_material_id === op.temp_id,
-            ).length
+          ? (draftCounts.attachments.get(op.temp_id) ?? 0)
           : 0,
     };
   };
@@ -284,8 +298,16 @@ export function DirectoryListing({
     setLastSelectedIndex(null);
   }, [directory?.id, selectMode]);
 
+  // Rows are memoized: read the listing and the range anchor through a ref so
+  // this handler keeps its identity and a click does not re-render every row.
+  const selectionStateRef = useRef({ flatItems, lastSelectedIndex, dirId });
+  useEffect(() => {
+    selectionStateRef.current = { flatItems, lastSelectedIndex, dirId };
+  });
+
   const handleToggleItem = useCallback(
     (index: number, e?: React.MouseEvent) => {
+      const { flatItems, lastSelectedIndex, dirId } = selectionStateRef.current;
       const item = flatItems[index];
       if (!item) return;
 
@@ -349,7 +371,7 @@ export function DirectoryListing({
       }
       setLastSelectedIndex(index);
     },
-    [flatItems, lastSelectedIndex, selectAll, toggleSelect, dirId],
+    [selectAll, toggleSelect],
   );
 
   const pathBase = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;

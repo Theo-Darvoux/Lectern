@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useRef } from "react";
-import { prefetchBrowsePath } from "@/lib/browse-prefetch";
+import { memo } from "react";
+import { childBrowsePath, useHoverPrefetch } from "@/hooks/use-hover-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
 import { ThumbsUp } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -80,19 +80,10 @@ function DirectoryLineItemImpl({
         return previewPrId ? `${dirPath}?preview_pr=${previewPrId}` : dirPath;
     };
 
-    const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const handlePointerEnter = () => {
-        if (!slug || staged === "deleted" || onNavigate) return;
-        prefetchTimer.current = setTimeout(() => {
-            // Prefetch the browse API response.
-            const builtPath = buildPath();
-            const browsePath = builtPath.replace(/^\/browse\/?/, "").split("?")[0].replace(/\/$/, "");
-            prefetchBrowsePath(browsePath);
-        }, 100);
-    };
-    const handlePointerLeave = () => {
-        if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
-    };
+    const { onPointerEnter: handlePointerEnter, onPointerLeave: handlePointerLeave } =
+        useHoverPrefetch(
+            !slug || staged === "deleted" || onNavigate ? null : childBrowsePath(pathBase, slug),
+        );
 
     const handleCardClick = (e: React.MouseEvent) => {
         if (staged === "deleted") {

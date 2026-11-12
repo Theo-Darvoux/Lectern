@@ -136,6 +136,7 @@ export function MarkdownViewer({
     targetAnnotationId,
 }: MarkdownViewerProps) {
     const tPreview = useTranslations("Preview");
+    const tViewers = useTranslations("Viewers");
     const proseRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -147,7 +148,7 @@ export function MarkdownViewer({
         clientY: number;
     } | null>(null);
 
-    const { content, loading, error, reload } = useMaterialFile({
+    const { content, loading, error, truncated, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "text",
@@ -284,6 +285,8 @@ export function MarkdownViewer({
             loading={loading}
             error={error ? tPreview("failedToLoad") : null}
             onRetry={reload}
+            truncatedMessage={truncated ? tViewers("textTruncated") : null}
+            downloadMaterialId={materialId}
             toolbarRight={
                 <ZoomControls
                     zoom={zoom}

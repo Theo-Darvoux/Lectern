@@ -300,6 +300,8 @@
     "signOut": "Se déconnecter"
   },
   "Browse": {
+    "notFoundTitle": "Introuvable",
+    "notFoundDescription": "Ce dossier ou ce fichier n'existe pas. Il a peut-être été déplacé, renommé ou supprimé.",
     "staged": "En préparation",
     "directoryDetails": "Détails du dossier",
     "select": "Sélectionner",
@@ -1075,6 +1077,9 @@
     "linkBadge": "Lien"
   },
   "Viewers": {
+    "downloadOriginal": "Télécharger l'original",
+    "textTruncated": "Le fichier dépasse 10 Mo : seul le début est affiché.",
+    "tooLargeToPreview": "Ce fichier dépasse 10 Mo et ne peut pas être prévisualisé.",
     "notebook": {
       "title": "Notebook Jupyter",
       "invalid": "Ce fichier n’est pas un notebook Jupyter valide.",
@@ -1293,6 +1298,7 @@
     "failed": "Échec de l'envoi"
   },
   "FileEdit": {
+    "tooLargeToEdit": "Ce fichier dépasse 10 Mo : il ne peut pas être modifié ici. Remplacez le fichier à la place.",
     "title": "Modifier {type}",
     "description": "Modification de {name}. Les changements peuvent être ajoutés au brouillon ou soumis directement.",
     "editText": "Modifier le texte",

@@ -1,6 +1,7 @@
 import { ApiError, apiFetch, apiFetchWithResponse } from "@/lib/api-client";
 import { operationName, type Operation } from "@/lib/staging-store";
-import { useAuthStore, useBrowseRefreshStore, useConfigStore } from "@/lib/stores";
+import { useAuthStore, useConfigStore } from "@/lib/stores";
+import { refreshBrowse } from "@/lib/browse-prefetch";
 import { usePendingContributionsStore } from "@/lib/pending-contributions";
 import { toast } from "sonner";
 import type { useTranslations } from "next-intl";
@@ -47,7 +48,7 @@ export function reconcileSubmittedOperations(
     submittingOwnerId?: string | null,
 ): void {
     if (result.status === "approved") {
-        useBrowseRefreshStore.getState().triggerBrowseRefresh();
+        refreshBrowse();
         return;
     }
     if (result.status === "open") {
@@ -78,7 +79,7 @@ export async function reconcilePendingContribution(id: string): Promise<void> {
 
     if (id in usePendingContributionsStore.getState().contributions) {
         usePendingContributionsStore.getState().resolve(id);
-        useBrowseRefreshStore.getState().triggerBrowseRefresh();
+        refreshBrowse();
     }
 }
 

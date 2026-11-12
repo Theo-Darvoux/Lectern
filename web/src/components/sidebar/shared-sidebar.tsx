@@ -164,12 +164,15 @@ export function SharedSidebar() {
 
   if (!mounted) return null;
 
-  // Desktop: render directly inside the page's bounded container with transition
+  // Desktop: render directly inside the page's bounded container with transition.
+  // Below `lg` the panel floats over the content instead of pushing it, so the
+  // tree, the listing and the inspector do not have to share a tablet's width.
   if (isDesktop) {
     return (
       <aside
         className={cn(
           "relative h-full min-h-full transition-all duration-150 ease-in-out overflow-hidden bg-background border-l border-border",
+          "max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-30 max-lg:shadow-xl",
           sidebarOpen ? "w-80 opacity-100" : "w-0 opacity-0 border-transparent pointer-events-none"
         )}
       >

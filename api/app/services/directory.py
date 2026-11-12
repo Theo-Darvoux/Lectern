@@ -1,3 +1,6 @@
+import asyncio
+import json
+import logging
 import re
 import typing
 import unicodedata
@@ -9,9 +12,12 @@ from sqlalchemy.orm import aliased, selectinload
 
 from app.core.common.exceptions import NotFoundError
 from app.core.common.natural_sorting import content_status_sort_key, natural_sort_key
+from app.core.database.content_generation import get_content_generation
 from app.models.directory import Directory, DirectoryFavourite, DirectoryLike
 from app.models.material import Material, MaterialVersion
 from app.services.reaction_lock import acquire_reaction_toggle_lock
+
+logger = logging.getLogger(__name__)
 
 
 def slugify(text: str) -> str:
@@ -56,18 +62,174 @@ def directory_orm_to_dict(
 
 
 _PREVIEW_MAX_DEPTH = 32
+_PREVIEW_CACHE_PREFIX = "dir-preview:v1"
+# Safety net: entries are orphaned by the content generation on every relevant
+# commit, and expire on their own for changes made where Redis was unreachable.
+_PREVIEW_CACHE_TTL_SECONDS = 600
+
+
+def _redis_client() -> typing.Any:
+    from app.core.database import redis as redis_module
+
+    return redis_module.redis_client
 
 
 async def get_preview_material_ids(
-    db: AsyncSession, dir_ids: list[uuid.UUID]
+    db: AsyncSession, dir_ids: list[uuid.UUID], redis: typing.Any = None
 ) -> dict[uuid.UUID, list[str]]:
     """Return up to four preview material IDs from each bounded subtree.
 
-    Direct materials win over descendants. The recursive depth cap prevents a
-    corrupted directory cycle from running forever.
+    Direct materials win over descendants. Results are cached per directory
+    under the browse content generation (see ``content_generation``), because
+    the subtree walk is the costliest query of a listing.
     """
     if not dir_ids:
         return {}
+    redis = redis if redis is not None else _redis_client()
+    generation = await get_content_generation(redis)
+    if generation is None:
+        return await _compute_preview_material_ids(db, dir_ids)
+
+    keys = [f"{_PREVIEW_CACHE_PREFIX}:{generation}:{dir_id}" for dir_id in dir_ids]
+    result: dict[uuid.UUID, list[str]] = {}
+    misses: list[uuid.UUID] = []
+    try:
+        cached = list(await redis.mget(keys))
+        if len(cached) != len(dir_ids):
+            raise ValueError("unexpected MGET reply length")
+    except Exception as exc:
+        logger.debug("Preview cache read failed: %s", exc)
+        cached = [None] * len(dir_ids)
+    for dir_id, raw in zip(dir_ids, cached, strict=True):
+        try:
+            ids = json.loads(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            ids = None
+        if not isinstance(ids, list):
+            misses.append(dir_id)
+        elif ids:
+            result[dir_id] = [str(i) for i in ids]
+    if not misses:
+        return result
+
+    computed = await _compute_preview_material_ids(db, misses)
+    result.update(computed)
+    try:
+        pipe = redis.pipeline(transaction=False)
+        for dir_id in misses:
+            pipe.set(
+                f"{_PREVIEW_CACHE_PREFIX}:{generation}:{dir_id}",
+                json.dumps(computed.get(dir_id, [])),
+                ex=_PREVIEW_CACHE_TTL_SECONDS,
+            )
+        await pipe.execute()
+    except Exception as exc:
+        logger.debug("Preview cache write failed: %s", exc)
+    return result
+
+
+async def attach_preview_thumbnails(
+    db: AsyncSession, directories: list[dict[str, typing.Any]], redis: typing.Any = None
+) -> None:
+    """Add ``preview_thumbnails`` (signed WebP URLs) to serialized directories.
+
+    One query covers every preview material of the listing, so collage cards
+    need no request of their own. A material without a generated WebP gets a
+    null URL (the card shows a file icon). Signing failures leave the field
+    unset and the client falls back to ``GET /materials/{id}/thumbnail``.
+    """
+    from app.services.material import resolve_thumbnail
+
+    wanted = {mid for d in directories for mid in d.get("preview_material_ids") or []}
+    if not wanted:
+        for d in directories:
+            d["preview_thumbnails"] = []
+        return
+    rows = await db.execute(
+        select(
+            Material.id,
+            MaterialVersion.thumbnail_key,
+            MaterialVersion.file_key,
+            MaterialVersion.file_mime_type,
+            MaterialVersion.file_name,
+        )
+        .join(MaterialVersion, MaterialVersion.material_id == Material.id)
+        .where(
+            Material.id.in_([uuid.UUID(mid) for mid in wanted]),
+            MaterialVersion.version_number == Material.current_version,
+        )
+    )
+    versions = {
+        str(row.id): {
+            "thumbnail_key": row.thumbnail_key,
+            "file_key": row.file_key,
+            "file_mime_type": row.file_mime_type,
+            "file_name": row.file_name,
+        }
+        for row in rows
+    }
+    redis = redis if redis is not None else _redis_client()
+
+    async def sign(mid: str) -> str | None:
+        version = versions.get(mid)
+        if version is None:
+            return None
+        resolved = await resolve_thumbnail(version, redis)
+        # Only a generated WebP fits a collage cell; a "fallback" may be a PDF.
+        return resolved[0] if resolved and resolved[1] == "webp" else None
+
+    ids = sorted(wanted)
+    try:
+        urls = dict(zip(ids, await asyncio.gather(*(sign(mid) for mid in ids)), strict=True))
+    except Exception as exc:
+        logger.warning("Could not sign directory preview thumbnails: %s", exc)
+        return
+    for d in directories:
+        d["preview_thumbnails"] = [
+            {"material_id": mid, "url": urls.get(mid)}
+            for mid in d.get("preview_material_ids") or []
+        ]
+
+
+async def _child_counts(
+    db: AsyncSession, dir_ids: list[uuid.UUID]
+) -> tuple[dict[uuid.UUID, int], dict[uuid.UUID, int]]:
+    """Child directory and top-level material counts per directory."""
+    if not dir_ids:
+        return {}, {}
+    dir_rows = await db.execute(
+        select(Directory.parent_id, func.count().label("cnt"))
+        .where(Directory.parent_id.in_(dir_ids))
+        .group_by(Directory.parent_id)
+    )
+    mat_rows = await db.execute(
+        select(Material.directory_id, func.count().label("cnt"))
+        .where(Material.directory_id.in_(dir_ids), Material.parent_material_id.is_(None))
+        .group_by(Material.directory_id)
+    )
+    return (
+        {r.parent_id: r.cnt for r in dir_rows.all()},
+        {r.directory_id: r.cnt for r in mat_rows.all()},
+    )
+
+
+def _sort_directories(directories: typing.Iterable[Directory]) -> list[Directory]:
+    # sort_order stays primary; natural order on name breaks ties ("Chapitre 2"
+    # before "Chapitre 10"). Natural sort has no portable SQL form, so order here.
+    return sorted(
+        directories,
+        key=lambda d: (
+            content_status_sort_key(getattr(d, "status", "current")),
+            d.sort_order,
+            natural_sort_key(d.name),
+        ),
+    )
+
+
+async def _compute_preview_material_ids(
+    db: AsyncSession, dir_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[str]]:
+    """The uncached subtree walk. The depth cap stops a corrupted cycle."""
 
     base = select(
         Directory.id.label("root_id"),
@@ -261,34 +423,10 @@ async def get_root_directories(
         select(Directory).options(selectinload(Directory.tags)).where(Directory.parent_id.is_(None))
     )
     result = await db.execute(stmt)
-    # sort_order stays primary; natural order on name breaks ties ("Chapitre 2"
-    # before "Chapitre 10"). Natural sort has no portable SQL form, so order here.
-    directories = sorted(
-        result.scalars().all(),
-        key=lambda d: (
-            content_status_sort_key(getattr(d, "status", "current")),
-            d.sort_order,
-            natural_sort_key(d.name),
-        ),
-    )
+    directories = _sort_directories(result.scalars().all())
 
     dir_ids = [d.id for d in directories]
-
-    # Batch: child directory counts per parent
-    dir_count_rows = await db.execute(
-        select(Directory.parent_id, func.count().label("cnt"))
-        .where(Directory.parent_id.in_(dir_ids))
-        .group_by(Directory.parent_id)
-    )
-    dir_counts: dict[uuid.UUID, int] = {r.parent_id: r.cnt for r in dir_count_rows.all()}
-
-    # Batch: child material counts per directory
-    mat_count_rows = await db.execute(
-        select(Material.directory_id, func.count().label("cnt"))
-        .where(Material.directory_id.in_(dir_ids), Material.parent_material_id.is_(None))
-        .group_by(Material.directory_id)
-    )
-    mat_counts: dict[uuid.UUID, int] = {r.directory_id: r.cnt for r in mat_count_rows.all()}
+    dir_counts, mat_counts = await _child_counts(db, dir_ids)
 
     # Batch: liked / favourited sets for the current user
     liked_ids: set[uuid.UUID] = set()
@@ -323,6 +461,7 @@ async def get_root_directories(
         )
         for d in directories
     ]
+    await attach_preview_thumbnails(db, items)
 
     # Root-level materials. is_liked/is_favourited are resolved in a batched
     # query inside _attach_version_and_counts, so we don't eagerly load the
@@ -444,32 +583,10 @@ async def get_directory_children(
         .where(Directory.parent_id == directory.id)
     )
     dir_result = await db.execute(dir_stmt)
-    child_dirs = sorted(
-        dir_result.scalars().all(),
-        key=lambda d: (
-            content_status_sort_key(getattr(d, "status", "current")),
-            d.sort_order,
-            natural_sort_key(d.name),
-        ),
-    )
+    child_dirs = _sort_directories(dir_result.scalars().all())
 
     child_dir_ids = [d.id for d in child_dirs]
-
-    # Batch: grandchild directory counts
-    gc_dir_rows = await db.execute(
-        select(Directory.parent_id, func.count().label("cnt"))
-        .where(Directory.parent_id.in_(child_dir_ids))
-        .group_by(Directory.parent_id)
-    )
-    gc_dir_counts: dict[uuid.UUID, int] = {r.parent_id: r.cnt for r in gc_dir_rows.all()}
-
-    # Batch: grandchild material counts
-    gc_mat_rows = await db.execute(
-        select(Material.directory_id, func.count().label("cnt"))
-        .where(Material.directory_id.in_(child_dir_ids), Material.parent_material_id.is_(None))
-        .group_by(Material.directory_id)
-    )
-    gc_mat_counts: dict[uuid.UUID, int] = {r.directory_id: r.cnt for r in gc_mat_rows.all()}
+    gc_dir_counts, gc_mat_counts = await _child_counts(db, child_dir_ids)
 
     # Batch: liked / favourited child directories
     liked_dir_ids: set[uuid.UUID] = set()
@@ -505,6 +622,7 @@ async def get_directory_children(
         )
         for d in child_dirs
     ]
+    await attach_preview_thumbnails(db, dirs_with_counts)
 
     mat_stmt = (
         select(Material)
@@ -610,6 +728,95 @@ async def get_directory_breadcrumb_paths(
     return paths
 
 
+async def get_tree_children(
+    db: AsyncSession, directory_id: uuid.UUID | None
+) -> dict[str, list[dict[str, typing.Any]]]:
+    """The light listing behind the directory tree sidebar.
+
+    Only what a tree node shows: names, slugs, paths, child counts and what
+    picks a material's icon. No versions, likes, previews or signed URLs.
+    ``directory_id`` None lists the root.
+    """
+    parent_path = ""
+    if directory_id is not None:
+        await get_directory_by_id(db, directory_id)  # 404 for a missing or deleted folder
+        segments = await get_directory_path(db, directory_id)
+        parent_path = "/".join(s["slug"] for s in segments)
+
+    dir_parent = (
+        Directory.parent_id.is_(None)
+        if directory_id is None
+        else Directory.parent_id == directory_id
+    )
+    child_dirs = _sort_directories(
+        (await db.execute(select(Directory).where(dir_parent))).scalars()
+    )
+    dir_counts, mat_counts = await _child_counts(db, [d.id for d in child_dirs])
+
+    mat_parent = (
+        Material.directory_id.is_(None)
+        if directory_id is None
+        else Material.directory_id == directory_id
+    )
+    mat_rows = (
+        await db.execute(
+            select(
+                Material.id,
+                Material.title,
+                Material.slug,
+                Material.type,
+                Material.status,
+                Material.metadata_,
+                MaterialVersion.file_name,
+                MaterialVersion.file_mime_type,
+            )
+            .outerjoin(
+                MaterialVersion,
+                (MaterialVersion.material_id == Material.id)
+                & (MaterialVersion.version_number == Material.current_version),
+            )
+            .where(mat_parent, Material.parent_material_id.is_(None))
+        )
+    ).all()
+    mat_rows = sorted(
+        mat_rows, key=lambda m: (content_status_sort_key(m.status), natural_sort_key(m.title))
+    )
+
+    def child_path(slug: str) -> str:
+        return f"{parent_path}/{slug}" if parent_path else slug
+
+    return {
+        "directories": [
+            {
+                "id": str(d.id),
+                "parent_id": str(d.parent_id) if d.parent_id else None,
+                "name": d.name,
+                "slug": d.slug,
+                "full_path": child_path(d.slug),
+                "child_directory_count": dir_counts.get(d.id, 0),
+                "child_material_count": mat_counts.get(d.id, 0),
+            }
+            for d in child_dirs
+        ],
+        "materials": [
+            {
+                "id": str(m.id),
+                "title": m.title,
+                "slug": m.slug,
+                "type": m.type.value if hasattr(m.type, "value") else m.type,
+                "file_name": m.file_name,
+                "file_mime_type": m.file_mime_type,
+                "url": str((m.metadata_ or {}).get("url") or "") or None,
+            }
+            for m in mat_rows
+        ],
+    }
+
+
+def _chain_breadcrumbs(chain: list[Directory]) -> list[dict[str, typing.Any]]:
+    return [{"id": str(d.id), "name": d.name, "slug": d.slug} for d in chain]
+
+
 async def resolve_browse_path(
     db: AsyncSession, path: str, current_user_id: uuid.UUID | None = None
 ) -> dict[str, typing.Any]:
@@ -620,7 +827,8 @@ async def resolve_browse_path(
         return {"type": "directory_listing", **roots}
 
     current_dir: Directory | None = None
-    last_material: Material | None = None
+    # Directories walked so far: they are the breadcrumbs, so no path CTE is needed.
+    chain: list[Directory] = []
 
     # Resolve the directory chain in a single query rather than one round-trip
     # per segment: fetch every directory whose slug appears in the path, then
@@ -650,6 +858,7 @@ async def resolve_browse_path(
         nxt_dir = dir_map.get((parent_key, segment))
         if nxt_dir:
             current_dir = nxt_dir
+            chain.append(nxt_dir)
             continue
 
         # If no directory found, check for material in current_dir (or root if current_dir is None)
@@ -659,42 +868,40 @@ async def resolve_browse_path(
                 from app.services.material import get_material_with_version
 
                 detail = await get_material_with_version(
-                    db, str(mat.id), current_user_id=current_user_id
+                    db, mat.id, current_user_id=current_user_id, material=mat
                 )
-                return {"type": "material", "material": detail}
+                return {
+                    "type": "material",
+                    "material": detail,
+                    "_breadcrumbs": _chain_breadcrumbs(chain),
+                }
 
         raise NotFoundError(f"Path segment '{segment}' not found")
 
     if current_dir:
-        # Resolve the directory's path once and reuse it for the directory's own
-        # full_path, the children listing, and the breadcrumbs (avoids running
-        # the recursive path CTE three times per navigation).
-        path_segments = await get_directory_path(db, current_dir.id)
-        current_dir_full_path = "/".join([s["slug"] for s in path_segments])
+        # The walked chain is the directory's path: reuse it for its full_path,
+        # the children listing and the breadcrumbs.
+        path_segments = _chain_breadcrumbs(chain)
+        current_dir_full_path = "/".join(d.slug for d in chain)
 
         is_liked = False
         is_favourited = False
         if current_user_id:
-            is_liked = bool(
-                await db.scalar(
+            flags = (
+                await db.execute(
                     select(
                         exists().where(
                             DirectoryLike.directory_id == current_dir.id,
                             DirectoryLike.user_id == current_user_id,
-                        )
-                    )
-                )
-            )
-            is_favourited = bool(
-                await db.scalar(
-                    select(
+                        ),
                         exists().where(
                             DirectoryFavourite.directory_id == current_dir.id,
                             DirectoryFavourite.user_id == current_user_id,
-                        )
+                        ),
                     )
                 )
-            )
+            ).one()
+            is_liked, is_favourited = bool(flags[0]), bool(flags[1])
 
         children = await get_directory_children(
             db,

@@ -65,6 +65,7 @@ describe("routing", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
     expect(res.headers.get("Access-Control-Allow-Methods")).toBe("GET");
+    expect(res.headers.get("Access-Control-Allow-Headers")).toBe("Range");
   });
 
   it("returns 405 for non-GET requests", async () => {
@@ -155,6 +156,7 @@ describe("/file/", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(res.headers.get("Access-Control-Expose-Headers")).toContain("Content-Range");
     expect(await res.text()).toBe("hello world");
   });
 

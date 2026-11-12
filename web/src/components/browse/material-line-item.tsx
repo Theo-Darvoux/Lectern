@@ -2,7 +2,7 @@
 
 import { memo, useRef } from "react";
 import dynamic from "next/dynamic";
-import { prefetchBrowsePath } from "@/lib/browse-prefetch";
+import { childBrowsePath, useHoverPrefetch } from "@/hooks/use-hover-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
 import {
     Paperclip,
@@ -141,21 +141,14 @@ function MaterialLineItemImpl({
         }
     }
 
-    const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const handlePointerEnter = () => {
-        if (!slug || staged === "deleted" || onNavigate) return;
-        // Don't prefetch PR preview pages — they aren't browse routes
-        if (staged === "edited" && previewPrId && previewOpIndex !== undefined) return;
-        prefetchTimer.current = setTimeout(() => {
-            // Prefetch the browse API response.
-            const builtPath = buildPath();
-            const browsePath = builtPath.replace(/^\/browse\/?/, "").split("?")[0].replace(/\/$/, "");
-            prefetchBrowsePath(browsePath);
-        }, 100);
-    };
-    const handlePointerLeave = () => {
-        if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
-    };
+    // PR preview pages are not browse routes: nothing to prefetch there.
+    const isPrPreview = staged === "edited" && !!previewPrId && previewOpIndex !== undefined;
+    const { onPointerEnter: handlePointerEnter, onPointerLeave: handlePointerLeave } =
+        useHoverPrefetch(
+            !slug || staged === "deleted" || onNavigate || isPrPreview
+                ? null
+                : childBrowsePath(pathBase, slug),
+        );
 
     const router = useRouter();
     const openLink = useExternalLinkStore((s) => s.openLink);

@@ -38,11 +38,13 @@ function useMediaQuery(query: string): boolean {
     return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
+// One breakpoint, aligned on Tailwind's `md` (768px): below it the phone layout
+// (FAB, drawers), from it the desktop layout. The two hooks are exact
+// complements, so no width gets a mix of both.
 export function useIsMobile(): boolean {
-    return useMediaQuery("(max-width: 768px)");
+    return useMediaQuery("(max-width: 767.98px)");
 }
 
-
 export function useIsDesktop(): boolean {
-    return useMediaQuery("(min-width: 1025px)");
+    return useMediaQuery("(min-width: 768px)");
 }

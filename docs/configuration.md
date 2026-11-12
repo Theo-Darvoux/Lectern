@@ -65,6 +65,13 @@ S3 / server-side streaming. When the self-hosted worker uses an external S3
 service, set `SELFHOST_WORKER_S3_ENDPOINT`; the production SeaweedFS profile
 otherwise targets `seaweedfs-s3:8333`.
 
+The PDF viewer reads documents with HTTP range requests, so the first pages
+show before a large file has downloaded. The worker already allows this. Without
+the worker (presigned S3 URLs), the bucket's CORS rules must expose
+`Accept-Ranges`, `Content-Range`, `Content-Length` and `Content-Encoding`
+(see `infra/nginx/cors.json`); otherwise the viewer still works but waits for
+the whole file.
+
 ---
 
 ## Setting up sign-in

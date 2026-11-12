@@ -308,10 +308,20 @@ async def get_material_file_info(db: AsyncSession, material_id: str | uuid.UUID)
 
 
 async def get_material_with_version(
-    db: AsyncSession, material_id: str | uuid.UUID, current_user_id: uuid.UUID | None = None
+    db: AsyncSession,
+    material_id: str | uuid.UUID,
+    current_user_id: uuid.UUID | None = None,
+    *,
+    material: Material | None = None,
 ) -> dict[str, typing.Any]:
+    """Serialize a material with its current version and counts.
+
+    ``material`` may be passed by a caller that already loaded it (with its
+    tags) to skip the lookup.
+    """
     material_id = _ensure_uuid(material_id)
-    material = await get_material_by_id(db, material_id)
+    if material is None or material.id != material_id:
+        material = await get_material_by_id(db, material_id)
 
     version_result = await db.execute(
         select(MaterialVersion).where(

@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useRef, useCallback } from "react";
-import { Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle, Download } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useFullscreen } from "@/hooks/use-fullscreen";
 import { useScrollHide } from "@/hooks/use-scroll-hide";
+import { useDownload } from "@/hooks/use-download";
 import { ViewerToolbar } from "./viewer-toolbar";
 import { FullscreenToggle } from "./fullscreen-toggle";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,9 @@ interface ViewerShellProps {
     /** When provided, the error state shows a button that re-runs the fetch. */
     onRetry?: () => void;
     truncatedMessage?: string | null;
+    /** Offer the original file for download in the truncation banner and the
+     *  error state (a file too large to preview is still downloadable). */
+    downloadMaterialId?: string;
     toolbarLeft?: React.ReactNode;
     toolbarCenter?: React.ReactNode;
     toolbarRight?: React.ReactNode;
@@ -30,6 +34,7 @@ export function ViewerShell({
     error,
     onRetry,
     truncatedMessage,
+    downloadMaterialId,
     toolbarLeft,
     toolbarCenter,
     toolbarRight,
@@ -41,6 +46,17 @@ export function ViewerShell({
     const { isFullscreen, toggleFullscreen } = useFullscreen(containerRef);
     const internalScrollRef = useRef<HTMLDivElement>(null);
     useScrollHide(internalScrollRef);
+    const { downloadMaterial, isDownloading } = useDownload();
+    const downloadButton = downloadMaterialId ? (
+        <button
+            onClick={() => void downloadMaterial(downloadMaterialId)}
+            disabled={isDownloading}
+            className="inline-flex items-center gap-1.5 rounded-md border border-current px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-foreground/5 disabled:opacity-50"
+        >
+            {isDownloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+            {t("downloadOriginal")}
+        </button>
+    ) : null;
 
     // Merge the external scrollRef (used by pinch-zoom etc.) with our internal one
     const setScrollEl = useCallback(
@@ -83,8 +99,9 @@ export function ViewerShell({
             >
                 {truncatedMessage && (
                     <div className="sticky top-0 z-20 flex items-center gap-2 border-b bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-                        <AlertCircle className="h-3 w-3" />
-                        <span>{truncatedMessage}</span>
+                        <AlertCircle className="h-3 w-3 shrink-0" />
+                        <span className="flex-1">{truncatedMessage}</span>
+                        {downloadButton}
                     </div>
                 )}
 
@@ -95,6 +112,7 @@ export function ViewerShell({
                 ) : error ? (
                     <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center text-sm text-destructive">
                         <span>{error}</span>
+                        {downloadButton}
                         {onRetry && (
                             <button
                                 onClick={onRetry}

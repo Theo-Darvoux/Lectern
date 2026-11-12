@@ -7,18 +7,45 @@ import { useInView } from "@/hooks/use-in-view";
 
 type CellInfo = { url: string } | null | false;
 
-interface DirectoryPreviewCollageProps {
-  materialIds: string[];
+/** A preview the listing already signed (null url: no generated WebP). */
+export interface PreviewThumbnail {
+  material_id: string;
+  url: string | null;
 }
 
-export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollageProps) {
+interface DirectoryPreviewCollageProps {
+  materialIds: string[];
+  /** Signed URLs sent with the listing. Without them (or once one fails to
+   *  load, e.g. an expired signature) each cell asks for its thumbnail. */
+  thumbnails?: PreviewThumbnail[] | null;
+}
+
+function withCacheBust(url: string, cacheBust: number): string {
+  if (cacheBust <= 0) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}_t=${cacheBust}`;
+}
+
+export function DirectoryPreviewCollage({ materialIds, thumbnails }: DirectoryPreviewCollageProps) {
   // Keyed by content so a new array with the same ids does not refetch.
   const idsKey = materialIds.slice(0, 4).join(",");
   const ids = useMemo(() => (idsKey ? idsKey.split(",") : []), [idsKey]);
-  const [cells, setCells] = useState<CellInfo[]>(Array(ids.length).fill(null));
+  const [fetchedCells, setFetchedCells] = useState<CellInfo[]>(Array(ids.length).fill(null));
+  const [failedCells, setFailedCells] = useState<Set<number>>(() => new Set());
+  const [inlineFailed, setInlineFailed] = useState(false);
   const [cacheBust, setCacheBust] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const visible = useInView(ref);
+
+  const inline = useMemo(() => {
+    if (!thumbnails || inlineFailed) return null;
+    const byId = new Map(thumbnails.map((thumb) => [thumb.material_id, thumb.url]));
+    // A listing signed before a preview changed lacks the new id: fetch instead.
+    if (!ids.every((id) => byId.has(id))) return null;
+    return ids.map((id): CellInfo => {
+      const url = byId.get(id);
+      return url ? { url: withCacheBust(url, cacheBust) } : false;
+    });
+  }, [thumbnails, inlineFailed, ids, cacheBust]);
 
   useEffect(() => {
     return subscribeMaterialThumbnail((id, ts) => {
@@ -29,40 +56,37 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
   }, [ids]);
 
   useEffect(() => {
-    if (!visible || ids.length === 0) return;
+    if (inline || !visible || ids.length === 0) return;
     let cancelled = false;
-    setCells(Array(ids.length).fill(null));
+    setFetchedCells(Array(ids.length).fill(null));
     Promise.all(
       ids.map((id) =>
         getMaterialThumbnail(id)
           .then((info): CellInfo => {
             // A "fallback" may be a PDF or video, which an <img> cannot show.
             if (!info || info.thumbnailType !== "webp") return false;
-            let finalUrl = info.url;
-            if (cacheBust > 0) {
-              finalUrl = `${finalUrl}${finalUrl.includes("?") ? "&" : "?"}_t=${cacheBust}`;
-            }
-            return { url: finalUrl };
+            return { url: withCacheBust(info.url, cacheBust) };
           })
           .catch((): CellInfo => false),
       ),
     ).then((results) => {
-      if (!cancelled) setCells(results);
+      if (!cancelled) setFetchedCells(results);
     });
     return () => {
       cancelled = true;
     };
-  }, [visible, ids, cacheBust]);
+  }, [inline, visible, ids, cacheBust]);
 
+  const cells = inline ?? fetchedCells;
   const gridClass = ids.length === 1 ? "grid-cols-1" : "grid-cols-2";
 
   return (
     <div ref={ref} className={`grid ${gridClass} gap-0.5 w-full h-full`}>
       {ids.map((id, i) => {
-        const cell = cells[i];
+        const cell = failedCells.has(i) ? false : cells[i];
         return (
           <div key={id} className="relative overflow-hidden">
-            {cell === null ? (
+            {cell === null || cell === undefined ? (
               <div className="w-full h-full animate-pulse bg-white/10" />
             ) : cell === false ? (
               <div className="w-full h-full flex items-center justify-center bg-white/5">
@@ -75,13 +99,11 @@ export function DirectoryPreviewCollage({ materialIds }: DirectoryPreviewCollage
                 alt=""
                 className="w-full h-full object-cover"
                 draggable={false}
-                onError={() =>
-                  setCells((prev) => {
-                    const next = [...prev];
-                    next[i] = false;
-                    return next;
-                  })
-                }
+                loading="lazy"
+                onError={() => {
+                  if (inline) setInlineFailed(true);
+                  else setFailedCells((prev) => new Set(prev).add(i));
+                }}
               />
             )}
           </div>

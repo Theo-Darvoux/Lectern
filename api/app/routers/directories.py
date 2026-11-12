@@ -25,7 +25,7 @@ from app.dependencies.auth import ReadUser, get_current_user
 from app.dependencies.rate_limit import check_download_budget, rate_limit_downloads
 from app.models.material import Material
 from app.models.user import User
-from app.schemas.directory import DirectoryBreadcrumb, DirectoryOut
+from app.schemas.directory import DirectoryBreadcrumb
 from app.services import directory as directory_service
 
 logger = logging.getLogger(__name__)
@@ -100,35 +100,7 @@ async def resolve_paths(
     return resp
 
 
-@router.get("/{id}", response_model=DirectoryOut)
-async def get_directory(
-    id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-) -> DirectoryOut:
-    directory = await directory_service.get_directory_by_id(db, id)
-    return DirectoryOut.model_validate(directory)
-
-
-@router.get("/{id}/children")
-async def get_directory_children(
-    id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-) -> dict[str, Any]:
-    return await directory_service.get_directory_children(db, id)
-
-
-@router.get("/{id}/path", response_model=list[DirectoryBreadcrumb])
-async def get_directory_path(
-    id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-) -> list[DirectoryBreadcrumb]:
-    path = await directory_service.get_directory_path(db, id)
-    return [DirectoryBreadcrumb.model_validate(p) for p in path]
-
-
+# GET /{id}, /{id}/children and /{id}/path are served by the browse router.
 async def _generate_zip(entries: list[tuple[str, str]]) -> AsyncGenerator[bytes, None]:
     """Stream a ZIP with bounded memory and storage backpressure.
 

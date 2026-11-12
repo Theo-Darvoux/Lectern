@@ -335,34 +335,47 @@ const _urlCache = new ResourceCache<string, string>({
     ttlMs: _URL_CACHE_TTL_MS,
 });
 
+/** Cache key for a material's signed URL. The file key pins the version, so a
+ *  new version never reuses the previous one's URL even if its live-update
+ *  event was missed. Callers that do not know it share the per-material entry. */
+function fileUrlCacheKey(materialId: string, fileKey?: string): string {
+    return fileKey ? `${materialId}:${fileKey}` : materialId;
+}
+
 export async function getMaterialFileUrl(
     materialId: string,
     signal?: AbortSignal,
+    fileKey?: string,
 ): Promise<string> {
-    const cached = _urlCache.get(materialId);
+    const key = fileUrlCacheKey(materialId, fileKey);
+    const cached = _urlCache.get(key);
     if (cached) return cached;
     const { url } = await apiFetch<{ url: string }>(`/materials/${materialId}/inline`, {
         signal,
         timeoutMs: 15_000,
     });
-    _urlCache.set(materialId, url, { tags: [`material:${materialId}`] });
+    _urlCache.set(key, url, { tags: [`material:${materialId}`] });
     return url;
 }
 
-/** Drop the cached presigned URL for a material so the next read re-issues a
+/** Drop the cached presigned URLs for a material so the next read re-issues a
  *  fresh one. Call after a material's content changes (e.g. a new version) —
  *  otherwise the stale URL keeps pointing at the previous version's file_key. */
 export function invalidateMaterialFileUrl(materialId: string): void {
-    _urlCache.delete(materialId);
+    _urlCache.invalidateTag(`material:${materialId}`);
 }
 
-export async function fetchMaterialFile(materialId: string, signal?: AbortSignal): Promise<Response> {
-    const url = await getMaterialFileUrl(materialId, signal);
+export async function fetchMaterialFile(
+    materialId: string,
+    signal?: AbortSignal,
+    fileKey?: string,
+): Promise<Response> {
+    const url = await getMaterialFileUrl(materialId, signal, fileKey);
     const res = await fetch(url, signal ? { signal } : undefined);
     if (!res.ok) {
         // A failed signed-URL fetch is usually a stale/expired token or an edge
         // error; drop the cached URL so the next attempt re-issues a fresh one.
-        _urlCache.delete(materialId);
+        _urlCache.delete(fileUrlCacheKey(materialId, fileKey));
         throw new ApiError(res.status, `Failed to fetch file: ${res.statusText}`);
     }
     return res;

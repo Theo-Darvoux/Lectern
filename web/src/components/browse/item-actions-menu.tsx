@@ -64,7 +64,8 @@ import { useStagingStore, type EditDirectoryOp, type EditMaterialOp } from "@/li
 import { applyStagedEdits } from "@/hooks/use-augmented-listing";
 import { useSelectionStore } from "@/lib/selection-store";
 import { submitDirectOperations } from "@/lib/pr-client";
-import { useAuthStore, useBrowseRefreshStore, useUIStore } from "@/lib/stores";
+import { useAuthStore, useUIStore } from "@/lib/stores";
+import { refreshBrowse } from "@/lib/browse-prefetch";
 import { isGuest, isStaff } from "@/lib/guest";
 import { FileEditDialog } from "@/components/pr/file-edit-dialog";
 import { isThumbnailEligible } from "@/lib/file-utils";
@@ -160,7 +161,6 @@ function useItemActions(item: ItemData, itemPath?: string) {
   }
 
   const [isRecalculatingThumbnail, setIsRecalculatingThumbnail] = useState(false);
-  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const handleRecalculateThumbnail = async () => {
     if (isRecalculatingThumbnail || !isMaterial) return;
@@ -169,7 +169,7 @@ function useItemActions(item: ItemData, itemPath?: string) {
     try {
       await recalculateMaterialThumbnail(item.id);
       toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${item.id}` });
-      triggerBrowseRefresh();
+      refreshBrowse();
     } catch {
       toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${item.id}` });
     } finally {

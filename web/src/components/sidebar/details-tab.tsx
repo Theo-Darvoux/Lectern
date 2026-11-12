@@ -39,7 +39,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 import { QueryError } from "@/components/query-error";
 import { ExpandableText } from "@/components/ui/expandable-text";
-import { useUIStore, useBrowseRefreshStore, useLikeOverrides, useDirectoryIconOverrides, useDirectoryColorOverrides } from "@/lib/stores";
+import { useUIStore, useLikeOverrides, useDirectoryIconOverrides, useDirectoryColorOverrides } from "@/lib/stores";
+import { refreshBrowse } from "@/lib/browse-prefetch";
 import { isGuest, isStaff } from "@/lib/guest";
 import { DIRECTORY_ICONS, getDirectoryIcon } from "@/lib/directory-icons";
 import { DIRECTORY_COLORS, getDirectoryColor } from "@/lib/directory-colors";
@@ -183,9 +184,6 @@ function InteractionBar({
   const updateSidebarData = useUIStore((state) => state.updateSidebarData);
   const { user } = useAuth();
   const t = useTranslations("Sidebar");
-  const triggerBrowseRefresh = useBrowseRefreshStore(
-    (s) => s.triggerBrowseRefresh,
-  );
 
   useEffect(() => {
     setIsLiked(effectiveIsLiked);
@@ -211,7 +209,7 @@ function InteractionBar({
           : `/directories/${targetId}/like`;
       await apiFetch(endpoint, { method: "POST" });
       updateSidebarData({ is_liked: next, like_count: nextCount });
-      triggerBrowseRefresh();
+      refreshBrowse();
     } catch {
       setIsLiked(!next);
       setLikeCount(likeCount);
@@ -230,7 +228,7 @@ function InteractionBar({
     try {
       await setFavourite(targetType, targetId, next);
       updateSidebarData({ is_favourited: next });
-      triggerBrowseRefresh();
+      refreshBrowse();
     } catch {
       setIsFavourited(!next);
       toast.error(t("failedToUpdateFavourite"));
@@ -678,7 +676,6 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
   const isRestricted = isRestrictedTarget(String(data.id ?? ""), searchParams.get("preview_pr"));
 
   const [isRecalculatingThumbnail, setIsRecalculatingThumbnail] = useState(false);
-  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const handleRecalculateThumbnail = async () => {
     if (isRecalculatingThumbnail || !id) return;
@@ -687,7 +684,7 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
     try {
       await recalculateMaterialThumbnail(id);
       toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${id}` });
-      triggerBrowseRefresh();
+      refreshBrowse();
     } catch {
       toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${id}` });
     } finally {
@@ -1003,7 +1000,7 @@ function MaterialDetails({ data }: { data: Record<string, unknown> }) {
                                     try {
                                       await recalculateMaterialThumbnail(attId);
                                       toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${attId}` });
-                                      triggerBrowseRefresh();
+                                      refreshBrowse();
                                     } catch {
                                       toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${attId}` });
                                     }

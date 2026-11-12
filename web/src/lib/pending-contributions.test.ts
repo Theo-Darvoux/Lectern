@@ -5,7 +5,8 @@ import {
   usePendingContributionsStore,
 } from "./pending-contributions";
 import { reconcileSubmittedOperations } from "./pr-client";
-import { useAuthStore, useBrowseRefreshStore } from "./stores";
+import { useAuthStore } from "./stores";
+import { refreshBrowse } from "./browse-prefetch";
 
 const apiFetch = vi.hoisted(() => vi.fn());
 
@@ -19,10 +20,12 @@ vi.mock("./api-client", () => ({
   apiFetchWithResponse: vi.fn(),
 }));
 
+vi.mock("./browse-prefetch", () => ({ refreshBrowse: vi.fn() }));
+
 describe("pending contributions", () => {
   beforeEach(() => {
     usePendingContributionsStore.setState({ ownerId: null, contributions: {} });
-    useBrowseRefreshStore.setState({ refreshCount: 0 });
+    vi.mocked(refreshBrowse).mockClear();
     useAuthStore.setState({ user: null, isAuthenticated: false });
     apiFetch.mockReset();
     apiFetch.mockResolvedValue({ status: "open" });
@@ -73,7 +76,7 @@ describe("pending contributions", () => {
 
     reconcileSubmittedOperations({ id: "pr-approved", status: "approved" }, [operation]);
 
-    expect(useBrowseRefreshStore.getState().refreshCount).toBe(1);
+    expect(refreshBrowse).toHaveBeenCalledTimes(1);
     expect(pendingOperations(usePendingContributionsStore.getState())).toEqual([]);
   });
 
@@ -93,7 +96,7 @@ describe("pending contributions", () => {
     await vi.waitFor(() => {
       expect(usePendingContributionsStore.getState().contributions).toEqual({});
     });
-    expect(useBrowseRefreshStore.getState().refreshCount).toBe(1);
+    expect(refreshBrowse).toHaveBeenCalledTimes(1);
   });
 
   it("namespaces temporary IDs across simultaneous contributions", () => {

@@ -5,6 +5,7 @@ import { ZoomIn, ZoomOut, BookOpen, Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import type { ThreadData } from "@/hooks/use-annotations";
 import { useMaterialFile } from "@/hooks/use-material-file";
+import { invalidateMaterialFileUrl } from "@/lib/api-client";
 import { usePdfjsDocument } from "@/hooks/use-pdfjs-document";
 import { paintPageHighlights, type PageAnnotation } from "@/lib/pdf-annotations";
 import { ViewerShell } from "./viewer-shell";
@@ -27,7 +28,9 @@ export function PdfViewer({
     const shellScrollRef = useRef<HTMLDivElement>(null);
     const scrolledPdfTargetRef = useRef<string | null>(null);
 
-    const { blobUrl, loading, error, reload } = useMaterialFile({ materialId, fileKey, mode: "blob" });
+    // A signed URL, not a blob: pdf.js streams it with range requests, so the
+    // first pages show before a large course has fully downloaded.
+    const { blobUrl: fileUrl, loading, error, reload } = useMaterialFile({ materialId, fileKey, mode: "url" });
 
     const [twoPageView, setTwoPageView] = useState(false);
     const [activeAnnotation, setActiveAnnotation] = useState<{
@@ -101,10 +104,10 @@ export function PdfViewer({
     }, [targetAnnotationId]);
 
     const {
-        containerRef, viewerElRef, status, error: pdfError,
+        containerRef, viewerElRef, status, error: pdfError, loadProgress,
         numPages, currentPage, scalePercent,
         zoomIn, zoomOut, resetZoom, goToPage, setSpread, reload: reloadDoc,
-    } = usePdfjsDocument({ url: blobUrl, initialPage: targetPage, onTextLayerRendered });
+    } = usePdfjsDocument({ url: fileUrl, initialPage: targetPage, onTextLayerRendered });
 
     // The pdf.js container must stay mounted across loading/error so its init
     // effect can attach exactly once (ViewerShell otherwise swaps children out
@@ -113,9 +116,11 @@ export function PdfViewer({
     const combinedError = error || (status === "error" && pdfError ? t(`pdf.${pdfError}`) : null);
     const showSpinner = !combinedError && (loading || status === "loading");
     const handleRetry = useCallback(() => {
-        if (error) reload();
-        else reloadDoc();
-    }, [error, reload, reloadDoc]);
+        // The signed URL may have expired mid-read: sign a fresh one, then reopen.
+        invalidateMaterialFileUrl(materialId);
+        reload();
+        if (!error) reloadDoc();
+    }, [error, materialId, reload, reloadDoc]);
 
     // Two-page (spread) view toggle.
     useEffect(() => {
@@ -265,8 +270,11 @@ export function PdfViewer({
                     <div ref={viewerElRef} className="pdfViewer" />
                 </div>
                 {showSpinner && (
-                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2">
                         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        {loadProgress !== null && (
+                            <span className="text-xs tabular-nums text-muted-foreground">{loadProgress}%</span>
+                        )}
                     </div>
                 )}
                 {combinedError && (

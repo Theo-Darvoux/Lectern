@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useRef } from "react";
-import { prefetchBrowsePath } from "@/lib/browse-prefetch";
+import { memo } from "react";
+import { childBrowsePath, useHoverPrefetch } from "@/hooks/use-hover-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemActionsMenu, ItemActionsDropdownTrigger } from "./item-actions-menu";
@@ -10,7 +10,7 @@ import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { getDirectoryIcon } from "@/lib/directory-icons";
 import { getDirectoryColor } from "@/lib/directory-colors";
-import { DirectoryPreviewCollage } from "./directory-preview-collage";
+import { DirectoryPreviewCollage, type PreviewThumbnail } from "./directory-preview-collage";
 import {
   selectDirectoryColorOverride,
   selectDirectoryIconOverride,
@@ -67,6 +67,9 @@ function DirectoryGridCardImpl({
   const previewMaterialIds = Array.isArray(directory.preview_material_ids)
     ? (directory.preview_material_ids as string[])
     : [];
+  const previewThumbnails = Array.isArray(directory.preview_thumbnails)
+    ? (directory.preview_thumbnails as PreviewThumbnail[])
+    : null;
   const { Icon: ThumbnailIcon } = getDirectoryIcon(thumbnailIconId);
   const { iconClass: customIconClass, folderBodyClass: customFolderBody, folderTabClass: customFolderTab } = getDirectoryColor(thumbnailColorId);
   const showCollage = !thumbnailIconId && previewMaterialIds.length > 0;
@@ -126,20 +129,10 @@ function DirectoryGridCardImpl({
           ? `text-${themeColor}-700 dark:text-${themeColor}-400`
           : "";
 
-  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handlePointerEnter = () => {
-    if (!slug || staged === "deleted" || onNavigate) return;
-    prefetchTimer.current = setTimeout(() => {
-      const browsePath = `${pathBase}/${slug}`.replace(/^\/browse\/?/, "").replace(/\/$/, "");
-      prefetchBrowsePath(browsePath);
-    }, 100);
-  };
-  const handlePointerLeave = () => {
-    if (prefetchTimer.current) {
-      clearTimeout(prefetchTimer.current);
-      prefetchTimer.current = null;
-    }
-  };
+  const { onPointerEnter: handlePointerEnter, onPointerLeave: handlePointerLeave } =
+    useHoverPrefetch(
+      !slug || staged === "deleted" || onNavigate ? null : childBrowsePath(pathBase, slug),
+    );
 
   const handleCardClick = (e: React.MouseEvent) => {
     if (staged === "deleted") {
@@ -204,7 +197,7 @@ function DirectoryGridCardImpl({
                 {showCollage ? (
                   <div className="absolute inset-[6%] rounded-lg overflow-hidden ring-1 ring-black/15 dark:ring-black/40 shadow-md">
                     {/* Thumbnail collage inset inside the folder — gaps kept around it */}
-                    <DirectoryPreviewCollage materialIds={previewMaterialIds} />
+                    <DirectoryPreviewCollage materialIds={previewMaterialIds} thumbnails={previewThumbnails} />
                   </div>
                 ) : (
                   <>

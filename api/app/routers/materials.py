@@ -9,7 +9,7 @@ from io import BytesIO
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Request
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,7 @@ from app.core.storage.facade import (
     generate_presigned_get,
     generate_presigned_get_cached,
     read_full_object,
+    stream_object,
 )
 from app.core.storage.facade import (
     upload_file as storage_upload_file,
@@ -52,6 +53,7 @@ from app.schemas.material import (
 from app.services.audit import record_download
 from app.services.material import (
     get_material_attachments,
+    get_material_file_info,
     get_material_thumbnail_info,
     get_material_version,
     get_material_versions,
@@ -81,6 +83,10 @@ _TEXT_MIME_EXACT = frozenset(
 _TEXT_READABLE_EXACT = frozenset({"image/svg+xml"})
 _TEXT_EDIT_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB cap on raw text body
 _TEXT_DECOMPRESS_MAX_BYTES = _TEXT_EDIT_MAX_BYTES
+# Viewers read at most this much text; larger files are cut and flagged with
+# the ``X-Content-Truncated`` header so the client can offer the original.
+_TEXT_VIEW_MAX_BYTES = 10 * 1024 * 1024
+_TEXT_READ_CHUNK_BYTES = 64 * 1024
 _TEXT_DIFF_MAX_BYTES = 1024 * 1024  # 1 MiB bound on text diff output
 _TEXT_DIFF_INPUT_MAX_BYTES = 1024 * 1024  # Detailed diffs only for <= 1 MiB inputs
 _TEXT_DIFF_MAX_LINES = 10_000  # Bound split-list and SequenceMatcher state
@@ -117,6 +123,21 @@ async def _presigned_url(
         filename=filename,
         content_type=content_type,
     )
+
+
+async def _current_file(db: AsyncSession, material_id: str, missing: str) -> Any:
+    """The material's current version, loaded with one JOIN query.
+
+    File endpoints only need the version row; the full material detail (counts,
+    likes, thumbnail signing) is not worth its half-dozen queries here.
+    """
+    try:
+        version = await get_material_file_info(db, material_id)
+    except NotFoundError:
+        raise NotFoundError(missing) from None
+    if not version.file_key:
+        raise NotFoundError(missing)
+    return version
 
 
 def _is_text_mime(mime: str) -> bool:
@@ -241,21 +262,18 @@ async def get_material_download_url(
     _: Annotated[None, Depends(rate_limit_downloads)],
     redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
-    data = await get_material_with_version(db, material_id)
-    version = data.get("current_version_info")
-    if version is None or version.get("file_key") is None:
-        raise NotFoundError("No file available for download")
+    version = await _current_file(db, material_id, "No file available for download")
 
-    file_mime = version.get("file_mime_type") or ""
-    file_name = version.get("file_name") or ""
+    file_mime = version.file_mime_type or ""
+    file_name = version.file_name or ""
     is_pdf = file_mime == "application/pdf" or file_name.lower().endswith(".pdf")
 
     url = await _presigned_url(
-        version["file_key"],
+        version.file_key,
         redis,
         force_download=not is_pdf,
-        filename=version.get("file_name"),
-        content_type=version.get("file_mime_type"),
+        filename=version.file_name,
+        content_type=version.file_mime_type,
     )
 
     await increment_download_count(db, material_id)
@@ -263,13 +281,13 @@ async def get_material_download_url(
         db,
         user.id,
         uuid.UUID(material_id),
-        version["version_number"],
+        version.version_number,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
     await db.commit()
 
-    return {"url": url, "filename": version.get("file_name")}
+    return {"url": url, "filename": version.file_name}
 
 
 @router.get("/{material_id}/inline")
@@ -279,27 +297,24 @@ async def inline_material(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
-    data = await get_material_with_version(db, material_id)
-    version = data.get("current_version_info")
-    if version is None or version.get("file_key") is None:
-        raise NotFoundError("No file available for preview")
+    version = await _current_file(db, material_id, "No file available for preview")
 
     # Images, PDFs, and Videos are safe to render inline; all other types are forced
     # to download so the browser never executes or parses unknown content.
-    file_mime = version.get("file_mime_type") or ""
+    file_mime = version.file_mime_type or ""
     inline_safe = (
         file_mime.startswith("image/")
         or file_mime.startswith("video/")
         or file_mime == "application/pdf"
     )
     url = await _presigned_url(
-        version["file_key"],
+        version.file_key,
         redis,
         force_download=not inline_safe,
-        filename=version.get("file_name"),
-        content_type=version.get("file_mime_type"),
+        filename=version.file_name,
+        content_type=version.file_mime_type,
     )
-    return {"url": url, "filename": version.get("file_name")}
+    return {"url": url, "filename": version.file_name}
 
 
 @router.get("/{material_id}/thumbnail")
@@ -349,20 +364,13 @@ async def recalculate_material_thumbnail(
 
     import app.core.database.redis as redis_core
 
-    data = await get_material_with_version(db, material_id)
-    version = data.get("current_version_info")
-    if version is None or version.get("file_key") is None:
-        raise NotFoundError("No file available for thumbnail generation")
-
-    target_version_id = version.get("id")
+    version = await _current_file(db, material_id, "No file available for thumbnail generation")
+    target_version_id = version.id
 
     if redis_core.arq_pool is None:
         raise BadRequestError("Background processing is temporarily unavailable. Please try again.")
 
-    queue_name = _processing_queue_name(
-        version.get("file_mime_type") or "",
-        version.get("file_size") or 0,
-    )
+    queue_name = _processing_queue_name(version.file_mime_type or "", version.file_size or 0)
     enqueue_job = cast(Any, redis_core.arq_pool.enqueue_job)
     job = await enqueue_job(
         "recalculate_thumbnail",
@@ -391,24 +399,23 @@ async def recalculate_material_thumbnail(
 @router.get("/{material_id}/file")
 async def stream_material_file(
     material_id: str,
-    request: Request,
     user: ReadUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[RedisClient | None, Depends(get_redis)] = None,
 ) -> Any:
-    """Redirect a read-authenticated client to an immutable presigned object URL."""
+    """Redirect a read-authenticated client to an immutable presigned object URL.
+
+    This is the in-page media stream (video/audio players). Playback is not a
+    download: it is neither recorded nor charged to the download quota. Explicit
+    downloads go through ``/download-url``.
+    """
     if redis is None:
         redis = redis_client
 
-    await rate_limit_downloads(request, user, db, redis)
-
-    data = await get_material_with_version(db, material_id)
-    version = data.get("current_version_info")
-    if version is None or version.get("file_key") is None:
-        raise NotFoundError("No file available")
+    version = await _current_file(db, material_id, "No file available")
 
     # S3/MinIO handles Range requests (206), which native media players require.
-    file_mime = version.get("file_mime_type") or ""
+    file_mime = version.file_mime_type or ""
     inline_safe = (
         file_mime.startswith("image/")
         or file_mime.startswith("video/")
@@ -416,23 +423,12 @@ async def stream_material_file(
         or file_mime == "application/pdf"
     )
     url = await _presigned_url(
-        version["file_key"],
+        version.file_key,
         redis,
         force_download=not inline_safe,
-        filename=version.get("file_name"),
+        filename=version.file_name,
         content_type=file_mime or None,
     )
-
-    await record_download(
-        db,
-        user.id,
-        uuid.UUID(material_id),
-        version["version_number"],
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-    )
-    await db.commit()
-
     return RedirectResponse(url=url, status_code=302)
 
 
@@ -471,7 +467,6 @@ async def get_version_download_url(
     _: Annotated[None, Depends(rate_limit_downloads)],
     redis: Annotated[Redis | None, Depends(get_redis)] = None,
 ) -> dict[str, Any]:
-    data = await get_material_with_version(db, material_id)
     version = await get_material_version(db, material_id, version_number)
     if not version.file_key:
         raise NotFoundError("No file available for download")
@@ -568,21 +563,22 @@ async def unfavourite_material(
 @router.get("/{material_id}/text-content", response_class=PlainTextResponse)
 async def get_material_text_content(
     material_id: str,
+    request: Request,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> PlainTextResponse:
-    """Return the raw UTF-8 text of the material's current version.
+) -> Response:
+    """Return the UTF-8 text of the material's current version.
 
     Works for both plain-text files and gzip-compressed text files (.gz).
-    Only available for text-based MIME types.
+    Only available for text-based MIME types. At most ``_TEXT_VIEW_MAX_BYTES``
+    of (decompressed) text is returned; a longer file is cut and the response
+    carries ``X-Content-Truncated: 1``. The ETag is the version's file key, so
+    reopening an unchanged file is a 304.
     """
-    data = await get_material_with_version(db, material_id)
-    version = data.get("current_version_info")
-    if version is None or version.get("file_key") is None:
-        raise NotFoundError("No file available")
+    version = await _current_file(db, material_id, "No file available")
 
-    mime = (version.get("file_mime_type") or "").lower()
-    filename = (version.get("file_name") or "").lower()
+    mime = (version.file_mime_type or "").lower()
+    filename = (version.file_name or "").lower()
 
     # Allow gzip-wrapped text files (e.g. original.md.gz)
     is_gzip_wrapped = mime == "application/gzip" or filename.endswith(".gz")
@@ -590,23 +586,77 @@ async def get_material_text_content(
     if not is_gzip_wrapped and not _is_text_mime(mime) and mime not in _TEXT_READABLE_EXACT:
         raise BadRequestError("This file is not a text-based document and cannot be edited as text")
 
-    raw_bytes = await read_full_object(version["file_key"])
+    etag = f'"{version.file_key}:{_TEXT_VIEW_MAX_BYTES}"'
+    cache_headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=cache_headers)
 
-    # Legacy gzip content is accepted only through the bounded decoder. Magic
-    # bytes are authoritative so a disguised gzip stream cannot bypass limits.
-    if is_gzip_wrapped or raw_bytes.startswith(_GZIP_MAGIC):
-        raw_bytes = _decompress_gzip_text(raw_bytes)
+    raw_bytes, truncated = await _read_text_prefix(
+        version.file_key, gzip_hint=is_gzip_wrapped, limit=_TEXT_VIEW_MAX_BYTES
+    )
 
     # Detect and strip UTF-8 BOM if present
     if raw_bytes.startswith(b"\xef\xbb\xbf"):
         raw_bytes = raw_bytes[3:]
 
-    try:
-        text = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        text = raw_bytes.decode("latin-1")
+    text = _decode_text(raw_bytes, truncated=truncated)
+    headers = dict(cache_headers)
+    if truncated:
+        headers["X-Content-Truncated"] = "1"
+    return PlainTextResponse(content=text, media_type="text/plain; charset=utf-8", headers=headers)
 
-    return PlainTextResponse(content=text, media_type="text/plain; charset=utf-8")
+
+async def _read_text_prefix(file_key: str, *, gzip_hint: bool, limit: int) -> tuple[bytes, bool]:
+    """Read at most ``limit`` bytes of text, decompressing gzip on the fly.
+
+    Returns the bytes and whether the file was longer. Only the needed prefix
+    is pulled from storage, and gzip output is bounded per input chunk, so a
+    huge file or a gzip bomb never lands in memory. Magic bytes are
+    authoritative: a disguised gzip stream is decoded, never served raw.
+    """
+    out = bytearray()
+    decoder: Any = None
+    async with stream_object(file_key) as body:
+        first = True
+        while True:
+            chunk: bytes = await body.read(_TEXT_READ_CHUNK_BYTES)
+            if first:
+                first = False
+                if gzip_hint or chunk.startswith(_GZIP_MAGIC):
+                    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            if not chunk:
+                return bytes(out), False
+            if decoder is None:
+                out += chunk
+                if len(out) > limit:
+                    return bytes(out[:limit]), True
+                continue
+            data = chunk
+            try:
+                while data:
+                    piece = decoder.decompress(data, limit + 1 - len(out))
+                    out += piece
+                    if len(out) > limit:
+                        return bytes(out[:limit]), True
+                    tail = decoder.unconsumed_tail
+                    if not piece and tail == data:
+                        break
+                    data = tail
+            except zlib.error as exc:
+                raise BadRequestError("Failed to decompress gzip-wrapped text") from exc
+
+
+def _decode_text(raw_bytes: bytes, *, truncated: bool) -> str:
+    """Decode UTF-8, tolerating a multi-byte character split by truncation."""
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        if truncated and exc.start >= len(raw_bytes) - 3:
+            try:
+                return raw_bytes[: exc.start].decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+        return raw_bytes.decode("latin-1")
 
 
 @router.post("/{material_id}/text-content")
@@ -628,13 +678,10 @@ async def save_material_text_content(
     user_id_str = str(user.id)
     user_role = user.role
 
-    data = await get_material_with_version(db, material_id)
-    version = data.get("current_version_info")
-    if version is None:
-        raise NotFoundError("No version found for this material")
+    version = await _current_file(db, material_id, "No version found for this material")
 
-    current_mime = (version.get("file_mime_type") or "").lower()
-    current_name = version.get("file_name") or ""
+    current_mime = (version.file_mime_type or "").lower()
+    current_name = version.file_name or ""
 
     # Strip any previous .gz suffix to derive the "logical" original name
     logical_name = current_name[:-3] if current_name.endswith(".gz") else current_name
@@ -666,7 +713,7 @@ async def save_material_text_content(
     # the editor itself; preflight byte/line bounds before splitlines()/difflib.
     old_bytes = b""
     try:
-        old_bytes = await read_full_object(version["file_key"])
+        old_bytes = await read_full_object(version.file_key)
         if is_gzip_wrapped or old_bytes.startswith(_GZIP_MAGIC):
             old_bytes = _decompress_gzip_text(old_bytes)
         if old_bytes.startswith(b"\xef\xbb\xbf"):

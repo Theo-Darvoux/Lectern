@@ -4,7 +4,7 @@
 import { ContentStatusBadge, normalizeContentStatus } from "@/components/content-status-badge";
 import { memo, useRef } from "react";
 import dynamic from "next/dynamic";
-import { prefetchBrowsePath } from "@/lib/browse-prefetch";
+import { childBrowsePath, useHoverPrefetch } from "@/hooks/use-hover-prefetch";
 import { BrowseLink } from "@/components/browse/browse-link";
 import { Paperclip } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -156,21 +156,14 @@ function MaterialGridCardImpl({
           ? `text-${themeColor}-700 dark:text-${themeColor}-400`
           : "";
 
-  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handlePointerEnter = () => {
-    if (!slug || staged === "deleted" || onNavigate) return;
-    if (staged === "edited" && previewPrId && previewOpIndex !== undefined) return;
-    prefetchTimer.current = setTimeout(() => {
-      const browsePath = `${pathBase}/${slug}`.replace(/^\/browse\/?/, "").replace(/\/$/, "");
-      prefetchBrowsePath(browsePath);
-    }, 100);
-  };
-  const handlePointerLeave = () => {
-    if (prefetchTimer.current) {
-      clearTimeout(prefetchTimer.current);
-      prefetchTimer.current = null;
-    }
-  };
+  // PR preview pages are not browse routes: nothing to prefetch there.
+  const isPrPreview = staged === "edited" && !!previewPrId && previewOpIndex !== undefined;
+  const { onPointerEnter: handlePointerEnter, onPointerLeave: handlePointerLeave } =
+    useHoverPrefetch(
+      !slug || staged === "deleted" || onNavigate || isPrPreview
+        ? null
+        : childBrowsePath(pathBase, slug),
+    );
 
   const router = useRouter();
   const openLink = useExternalLinkStore((s) => s.openLink);

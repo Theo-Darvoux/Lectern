@@ -18,17 +18,34 @@ import { useConfigStore } from "@/lib/stores";
 import type { PDFWorker as PdfJsWorker } from "pdfjs-dist";
 
 // Suppress known pdf.js console noise (cancelled renders / aborted loads). These
-// are handled in the hook's error path; pdf.js still logs them unprompted.
-if (typeof window !== "undefined") {
-    const orig = { error: console.error, warn: console.warn };
-    const isNoise = (args: unknown[]) => {
-        const msg = args[0];
-        if (typeof msg === "string" && (msg.includes("AbortException") || msg.includes("InvalidPDFException"))) return true;
-        if (msg instanceof Error && (msg.name === "AbortException" || msg.name === "InvalidPDFException")) return true;
-        return false;
+// are handled in the hook's error path; pdf.js still logs them unprompted. The
+// filter is installed only while a PDF viewer is mounted, so the rest of the
+// app keeps an untouched console.
+let consoleFilterUsers = 0;
+let restoreConsole: (() => void) | null = null;
+
+function acquireConsoleFilter(): () => void {
+    if (consoleFilterUsers++ === 0) {
+        const orig = { error: console.error, warn: console.warn };
+        const isNoise = (args: unknown[]) => {
+            const msg = args[0];
+            if (typeof msg === "string" && (msg.includes("AbortException") || msg.includes("InvalidPDFException"))) return true;
+            if (msg instanceof Error && (msg.name === "AbortException" || msg.name === "InvalidPDFException")) return true;
+            return false;
+        };
+        console.error = (...args) => { if (!isNoise(args)) orig.error(...args); };
+        console.warn = (...args) => { if (!isNoise(args)) orig.warn(...args); };
+        restoreConsole = () => {
+            console.error = orig.error;
+            console.warn = orig.warn;
+        };
+    }
+    return () => {
+        if (--consoleFilterUsers === 0) {
+            restoreConsole?.();
+            restoreConsole = null;
+        }
     };
-    console.error = (...args) => { if (!isNoise(args)) orig.error(...args); };
-    console.warn = (...args) => { if (!isNoise(args)) orig.warn(...args); };
 }
 
 // pdf.js TextLayerMode.ENABLE / AnnotationMode values.
@@ -42,7 +59,12 @@ const PRESET_SCALES = new Set(["auto", "page-actual", "page-width", "page-fit", 
  *  zoom is smooth and never flickers; the crisp re-render swaps in afterwards. */
 const GESTURE_DRAWING_DELAY = 400;
 const PDF_ENGINE_TIMEOUT_MS = 45_000;
-const PDF_DOCUMENT_TIMEOUT_MS = 60_000;
+/** Give up when the download makes no progress for this long (a stall, not a
+ *  slow link: a large file on bad wifi keeps loading as long as bytes arrive). */
+const PDF_STALL_TIMEOUT_MS = 60_000;
+/** Bytes per HTTP range request. pdf.js fetches what the visible pages need
+ *  first, then the rest in the background. */
+const PDF_RANGE_CHUNK_BYTES = 256 * 1024;
 
 export type PdfSpread = "none" | "odd" | "even";
 const SPREAD_VALUE: Record<PdfSpread, number> = { none: 0, odd: 1, even: 2 };
@@ -50,7 +72,9 @@ const SPREAD_VALUE: Record<PdfSpread, number> = { none: 0, odd: 1, even: 2 };
 export type PdfStatus = "loading" | "ready" | "error";
 
 interface UsePdfjsDocumentOptions {
-    /** Object/blob URL of the PDF. `null` while the upstream fetch is in flight. */
+    /** URL of the PDF (a signed file URL: pdf.js reads it with range requests,
+     *  so the first pages render before the whole file has arrived). `null`
+     *  while the URL is being resolved. */
     url: string | null;
     /** Optional initial page number to navigate to upon loading */
     initialPage?: number;
@@ -70,6 +94,8 @@ interface UsePdfjsDocumentReturn {
     viewerElRef: React.RefObject<HTMLDivElement | null>;
     status: PdfStatus;
     error: PdfErrorCode | null;
+    /** Download progress (0–100) while the document opens, null when unknown. */
+    loadProgress: number | null;
     numPages: number;
     currentPage: number;
     /** Current zoom as a whole percentage (currentScale * 100). */
@@ -127,12 +153,15 @@ export function usePdfjsDocument({
 
     const [modulesReady, setModulesReady] = useState(false);
     const [status, setStatus] = useState<PdfStatus>("loading");
+    const [loadProgress, setLoadProgress] = useState<number | null>(null);
     const [error, setError] = useState<PdfErrorCode | null>(null);
     const [numPages, setNumPages] = useState(0);
     const [currentPage, setCurrentPage] = useState(1);
     const [scalePercent, setScalePercent] = useState(100);
     const [reloadNonce, setReloadNonce] = useState(0);
     const [engineNonce, setEngineNonce] = useState(0);
+
+    useEffect(() => acquireConsoleFilter(), []);
 
     // ── Initialise the imperative viewer once ────────────────────────────────
     useEffect(() => {
@@ -239,22 +268,39 @@ export function usePdfjsDocument({
         if (!modulesReady || !pdfjs || !viewer || !linkService || !url) return;
 
         let cancelled = false;
+        let opened = false;
         setStatus("loading");
         setError(null);
+        setLoadProgress(null);
 
-        const task = pdfjs.getDocument({ url, worker: pdfWorkerRef.current ?? undefined });
+        const task = pdfjs.getDocument({
+            url,
+            worker: pdfWorkerRef.current ?? undefined,
+            rangeChunkSize: PDF_RANGE_CHUNK_BYTES,
+        });
         loadingTaskRef.current = task;
         let timedOut = false;
-        const loadTimeout = window.setTimeout(() => {
-            if (cancelled) return;
-            timedOut = true;
-            setError("loadTimeout");
-            setStatus("error");
-            void task.destroy();
-        }, PDF_DOCUMENT_TIMEOUT_MS);
+        let loadTimeout = 0;
+        const armStallTimeout = () => {
+            window.clearTimeout(loadTimeout);
+            loadTimeout = window.setTimeout(() => {
+                if (cancelled) return;
+                timedOut = true;
+                setError("loadTimeout");
+                setStatus("error");
+                void task.destroy();
+            }, PDF_STALL_TIMEOUT_MS);
+        };
+        armStallTimeout();
+        task.onProgress = ({ loaded, total }: { loaded: number; total: number }) => {
+            if (opened || cancelled) return;
+            armStallTimeout();
+            if (total > 0) setLoadProgress(Math.min(100, Math.round((loaded / total) * 100)));
+        };
 
         task.promise.then(
             (doc) => {
+                opened = true;
                 window.clearTimeout(loadTimeout);
                 if (cancelled || timedOut) { doc.destroy(); return; }
                 docRef.current?.destroy();
@@ -418,6 +464,7 @@ export function usePdfjsDocument({
         viewerElRef,
         status,
         error,
+        loadProgress,
         numPages,
         currentPage,
         scalePercent,

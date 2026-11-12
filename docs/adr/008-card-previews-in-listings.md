@@ -39,6 +39,14 @@ a DjVu file shown in an `<img>`.
    for (C#, PowerShell, MATLAB, SQL…) show a text mark instead.
 4. A video card shows its WebP thumbnail and requests the video file only when the
    pointer first enters the card, then plays it.
+5. Directory cards (the collage of up to four previews) get `preview_thumbnails` in
+   directory listings: the signed WebP URL of each preview material, or `null`
+   when it has none. Choosing those materials walks the folder's whole subtree, so
+   `preview_material_ids` is cached in Redis per folder, keyed by a "browse content
+   generation" counter (`api/app/core/database/content_generation.py`). Session
+   events bump the counter after any commit that creates, deletes, moves, renames
+   or re-ranks a material or folder, which orphans every cached entry; entries
+   also expire after 10 minutes.
 
 ## Consequences
 

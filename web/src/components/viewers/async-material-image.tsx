@@ -22,19 +22,22 @@ interface AsyncMaterialImageProps {
     className?: string;
 }
 
-// Simple in-memory cache to prevent duplicate requests for the same directory/material
-// when rendering multiple images in the same markdown file.
-const fetchCache = new Map<string, Promise<unknown>>();
+// Short-lived cache so the images of one markdown file share their lookups
+// (same directory / material). Entries expire, so an attachment added or
+// replaced later shows up on the next render, and signed URLs never go stale.
+const FETCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const fetchCache = new Map<string, { promise: Promise<unknown>; expiresAt: number }>();
 
 function cachedApiFetch<T>(url: string): Promise<T> {
-    if (!fetchCache.has(url)) {
-        const promise = apiFetch<T>(url).catch((err) => {
-            fetchCache.delete(url); // Don't cache errors aggressively
-            throw err;
-        });
-        fetchCache.set(url, promise);
-    }
-    return fetchCache.get(url)! as Promise<T>;
+    const now = Date.now();
+    const hit = fetchCache.get(url);
+    if (hit && hit.expiresAt > now) return hit.promise as Promise<T>;
+    const promise = apiFetch<T>(url).catch((err) => {
+        fetchCache.delete(url); // Don't cache errors aggressively
+        throw err;
+    });
+    fetchCache.set(url, { promise, expiresAt: now + FETCH_CACHE_TTL_MS });
+    return promise;
 }
 
 // ────────────────────────────────────────────────────────────────────────────────
@@ -324,10 +327,12 @@ export function AsyncMaterialImage({ src, alt, material, className }: AsyncMater
 
                 function matchesFileName(m: Record<string, unknown>): boolean {
                     const vInfo = m.current_version_info as Record<string, unknown> | undefined;
+                    // Full listings nest the file name in the version; tree nodes carry it flat.
+                    const name = vInfo?.file_name ?? m.file_name;
                     return (
                         m.title === fileName ||
-                        vInfo?.file_name === fileName ||
-                        (altFileName !== null && (m.title === altFileName || vInfo?.file_name === altFileName))
+                        name === fileName ||
+                        (altFileName !== null && (m.title === altFileName || name === altFileName))
                     );
                 }
 
@@ -347,8 +352,9 @@ export function AsyncMaterialImage({ src, alt, material, className }: AsyncMater
                 // Step 2: Try siblings in the same directory
                 if (!targetMaterialId && material.directory_id) {
                     try {
+                        // The light tree listing: names are all this lookup needs.
                         const children = await cachedApiFetch<{ materials: Record<string, unknown>[] }>(
-                            `/directories/${material.directory_id}/children`
+                            `/directories/${material.directory_id}/tree`
                         );
                         const matched = children.materials?.find(matchesFileName);
                         if (matched) targetMaterialId = matched.id as string;

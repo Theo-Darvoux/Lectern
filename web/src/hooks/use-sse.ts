@@ -4,10 +4,10 @@ import { useEffect } from "react";
 import { fetchUnreadCount } from "@/lib/notifications";
 import {
     useAuthStore,
-    useBrowseRefreshStore,
     useNotificationStore,
     usePRStore,
 } from "@/lib/stores";
+import { refreshBrowse } from "@/lib/browse-prefetch";
 import { setSSEIdentity, subscribeToSSE } from "@/lib/sse-client";
 import { isGuest } from "@/lib/guest";
 import { fetchOpenPRCount, reconcilePendingContribution } from "@/lib/pr-client";
@@ -71,7 +71,7 @@ export function useSSE() {
                       pr_opened: reconcile,
                       pr_closed: (event) => {
                           resolvePendingContributionEvent(event);
-                          useBrowseRefreshStore.getState().triggerBrowseRefresh();
+                          refreshBrowse();
                           reconcile();
                       },
                   },

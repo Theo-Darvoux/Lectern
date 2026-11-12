@@ -12,7 +12,6 @@ import { useTranslations } from "next-intl";
 const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
 const ZOOM_STEP = 10;
-const MAX_FETCH_BYTES = 10 * 1024 * 1024; // 10 MiB
 const PAGE_SIZE = 100;
 
 interface CsvViewerProps {
@@ -32,7 +31,6 @@ export function CsvViewer({ materialId, fileKey }: CsvViewerProps) {
         materialId,
         fileKey,
         mode: "text",
-        maxBytes: MAX_FETCH_BYTES,
     });
 
     const { zoom, zoomIn, zoomOut, resetZoom } = usePinchZoom({
@@ -86,6 +84,7 @@ export function CsvViewer({ materialId, fileKey }: CsvViewerProps) {
             error={error}
             onRetry={reload}
             truncatedMessage={truncated ? t("csv.truncated", { rows: rows.length.toLocaleString() }) : null}
+            downloadMaterialId={materialId}
             toolbarLeft={
                 !loading && !error && (
                     <span className="text-xs font-medium text-muted-foreground">

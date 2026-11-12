@@ -3,29 +3,19 @@
 import { useEffect, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { apiFetch } from "@/lib/api-client";
+import { ApiError, apiFetch } from "@/lib/api-client";
 import { AuthGuard } from "@/components/auth-guard";
-import { useIsDesktop } from "@/hooks/use-media-query";
-import { useUIStore, useBrowseRefreshStore, useConfigStore } from "@/lib/stores";
+import { useUIStore, useConfigStore } from "@/lib/stores";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
-import { AlertCircle, Eye, X } from "lucide-react";
+import { AlertCircle, Eye, FileQuestion, X } from "lucide-react";
 import { useBrowseSSE } from "@/hooks/use-browse-sse";
 import type { Operation } from "@/lib/staging-store";
-import { browseQuery, invalidateBrowsePath } from "@/lib/browse-prefetch";
+import { browseQuery, isKnownMaterialPath } from "@/lib/browse-prefetch";
 import { useQuery } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { useViewMode } from "@/hooks/use-view-mode";
-
-interface BrowseResponse {
-  type: "directory_listing" | "material";
-  directory?: Record<string, unknown> | null;
-  directories?: Record<string, unknown>[];
-  materials?: Record<string, unknown>[];
-  material?: Record<string, unknown>;
-  breadcrumbs?: { id: string; name: string; slug: string }[];
-}
 
 function BrowseSkeleton({ isMaterial = false }: { isMaterial?: boolean }) {
   const { mode: viewMode } = useViewMode();
@@ -143,12 +133,15 @@ const DirectoryTreeSidebar = dynamic(() => import("@/components/browse/directory
 });
 
 
+/** The browse path of the parent folder ("" for the root), as an href. */
+function parentHref(path: string): string {
+  const parent = path.split("/").slice(0, -1).join("/");
+  return parent ? `/browse/${parent}` : "/browse";
+}
+
 function BrowseContent() {
   const pathname = usePathname();
-  const isDesktop = useIsDesktop();
-  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const setSidebarTarget = useUIStore((s) => s.setSidebarTarget);
-  const refreshCount = useBrowseRefreshStore((s) => s.refreshCount);
 
   const t = useTranslations("Browse");
   const config = useConfigStore((state) => state.config);
@@ -158,9 +151,8 @@ function BrowseContent() {
   // revalidates in the background; another path shows a skeleton, never the
   // previous directory's payload.
   const browse = useQuery(browseQuery(path));
-  const data = (browse.data as BrowseResponse | undefined) ?? null;
-  const isFetching = browse.isPending;
-  const error = browse.isError && !data ? t("loadError") : null;
+  const data = browse.data ?? null;
+  const notFound = !data && browse.error instanceof ApiError && browse.error.status === 404;
 
   const searchParams = useSearchParams();
   const previewPrId = searchParams.get("preview_pr");
@@ -174,105 +166,70 @@ function BrowseContent() {
     enabled: !!previewPrId,
   });
 
-  const isDirectoryListing = data?.type === "directory_listing";
+  // The first listing of a path seeds the inspector with its folder; later
+  // refetches only refresh the counts, and only while the inspector still
+  // shows that folder (the user may have selected another item since).
   const seededPathRef = useRef<string | null>(null);
-
   useEffect(() => {
-    if (!isDirectoryListing) return;
-
-    const dir = data?.directory;
-    const currentDirId = dir ? String(dir.id) : path === "" ? "root" : null;
-    if (!currentDirId) return;
-
-    if (seededPathRef.current === path) return;
-    seededPathRef.current = path;
-
-    if (dir) {
-      setSidebarTarget({
-        type: "directory",
-        id: currentDirId,
-        data: {
-          ...dir,
-          child_directory_count: data?.directories?.length ?? 0,
-          child_material_count: data?.materials?.length ?? 0,
-        },
-      });
-    } else {
-      setSidebarTarget({
-        type: "directory",
-        id: "root",
-        data: {
-          name: t("home"),
-          type: "folder",
-          child_directory_count: data?.directories?.length ?? 0,
-          child_material_count: data?.materials?.length ?? 0,
-        },
-      });
-    }
-  }, [isDirectoryListing, path, data, setSidebarTarget, t]);
-
-  useEffect(() => {
-    if (!isDirectoryListing || !data) return;
+    if (data?.type !== "directory_listing") return;
     const dir = data.directory;
-    const currentDirId = dir ? String(dir.id) : path === "" ? "root" : null;
-    if (!currentDirId) return;
-    // Read the target without subscribing: this effect sets it, so depending
-    // on it would loop. It only refreshes the counts when the listing changes.
-    const sidebarTarget = useUIStore.getState().sidebarTarget;
-    if (
-      sidebarTarget?.type === "directory" &&
-      sidebarTarget.id === currentDirId
-    ) {
-      setSidebarTarget({
-        type: "directory",
-        id: currentDirId,
-        data: dir
-          ? {
-            ...dir,
-            child_directory_count: data.directories?.length ?? 0,
-            child_material_count: data.materials?.length ?? 0,
-          }
-          : {
-            name: t("home"),
-            type: "folder",
-            child_directory_count: data.directories?.length ?? 0,
-            child_material_count: data.materials?.length ?? 0,
-          },
-      });
+    const id = dir ? dir.id : "root";
+    if (seededPathRef.current === path) {
+      const current = useUIStore.getState().sidebarTarget;
+      if (current?.type !== "directory" || current.id !== id) return;
     }
-  }, [isDirectoryListing, data, path, setSidebarTarget, t]);
+    seededPathRef.current = path;
+    setSidebarTarget({
+      type: "directory",
+      id,
+      data: {
+        ...(dir ?? { name: t("home"), type: "folder" }),
+        child_directory_count: data.directories.length,
+        child_material_count: data.materials.length,
+      },
+    });
+  }, [data, path, setSidebarTarget, t]);
 
   useEffect(() => {
-    if (data) {
-      const siteName = config?.site_name || "";
-      if (data.type === "material" && data.material) {
-        document.title = siteName ? `${data.material.title} • ${siteName}` : (data.material.title as string);
-      } else if (data.directory) {
-        document.title = siteName ? `${data.directory.name as string} • ${siteName}` : (data.directory.name as string);
-      } else if (path === "") {
-        document.title = siteName;
-      }
+    if (!data) return;
+    const siteName = config?.site_name || "";
+    const name =
+      data.type === "material" ? data.material.title : data.directory?.name ?? null;
+    if (name) {
+      document.title = siteName ? `${name} • ${siteName}` : name;
+    } else if (path === "") {
+      document.title = siteName;
     }
   }, [data, path, config]);
 
-  const prevRefreshCountRef = useRef(refreshCount);
-  useEffect(() => {
-    if (refreshCount > prevRefreshCountRef.current) {
-      prevRefreshCountRef.current = refreshCount;
-      invalidateBrowsePath(path);
-    }
-  }, [path, refreshCount]);
-
   useBrowseSSE(data, path);
 
-  const isLikelyMaterial = path.split("/").filter(Boolean).length >= 3;
-
-  const isDirectoryView = data?.type === "directory_listing";
-
   let inner: React.ReactNode;
-  if (!data && isFetching) {
-    inner = <BrowseSkeleton isMaterial={isLikelyMaterial} />;
-  } else if (error) {
+  if (!data && browse.isPending) {
+    inner = <BrowseSkeleton isMaterial={isKnownMaterialPath(path)} />;
+  } else if (notFound) {
+    inner = (
+      <div className="flex w-full flex-col items-center justify-center gap-5 px-4 py-20 text-muted-foreground">
+        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          <FileQuestion className="h-6 w-6" />
+        </span>
+        <div className="flex flex-col items-center gap-1 text-center">
+          <p className="text-lg font-medium text-foreground">{t("notFoundTitle")}</p>
+          <p className="max-w-md text-sm">{t("notFoundDescription")}</p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {path.includes("/") && (
+            <Button variant="outline" size="sm" asChild>
+              <Link href={parentHref(path)}>{t("backToParentFolder")}</Link>
+            </Button>
+          )}
+          <Button size="sm" asChild>
+            <Link href="/browse">{t("backToBrowse")}</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  } else if (!data) {
     inner = (
       <div className="flex w-full flex-col items-center justify-center gap-5 px-4 py-20 text-muted-foreground">
         <span className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10 text-destructive">
@@ -280,7 +237,7 @@ function BrowseContent() {
         </span>
         <div className="flex flex-col items-center gap-1 text-center">
           <p className="text-lg font-medium text-foreground">{t("loadFailedTitle")}</p>
-          <p className="max-w-md text-sm">{error}</p>
+          <p className="max-w-md text-sm">{t("loadError")}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" asChild>
@@ -290,20 +247,14 @@ function BrowseContent() {
         </div>
       </div>
     );
-  } else if (!data) {
-    inner = null;
-  } else if (data.type === "material" && data.material) {
+  } else if (data.type === "material") {
     inner = (
       <MaterialViewer material={data.material} breadcrumbs={data.breadcrumbs} />
     );
   } else {
     inner = (
-      <div
-        className={`flex h-full w-full overflow-hidden gap-0 transition-opacity duration-200 ${isFetching ? "opacity-50 pointer-events-none" : "opacity-100"}`}
-      >
-        <div
-          className={`flex-1 min-h-0 overflow-y-auto px-4 py-6 pb-36 md:pb-6 ${isDesktop && sidebarOpen ? "min-w-0" : ""}`}
-        >
+      <div className="relative flex h-full w-full overflow-hidden gap-0">
+        <div className="flex-1 min-h-0 min-w-0 overflow-y-auto px-4 py-6 pb-36 md:pb-6">
           {previewPr && (
             <div className="mb-6 flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 dark:border-blue-800/40 dark:bg-blue-950/20">
               <div className="flex items-center gap-3">
@@ -333,20 +284,17 @@ function BrowseContent() {
             </div>
           )}
 
-          {isDirectoryView && (
-            <DirectoryListing
-              directory={data.directory ?? null}
-              directories={data.directories ?? []}
-              materials={data.materials ?? []}
-              breadcrumbs={data.breadcrumbs}
-              previewOperations={previewPr?.payload}
-              previewPrId={previewPr?.id}
-            />
-          )}
+          <DirectoryListing
+            directory={data.directory}
+            directories={data.directories}
+            materials={data.materials}
+            breadcrumbs={data.breadcrumbs}
+            previewOperations={previewPr?.payload}
+            previewPrId={previewPr?.id}
+          />
           <div className="h-28 md:hidden shrink-0 pointer-events-none" aria-hidden="true" />
         </div>
-        {!isDesktop && <SharedSidebar />}
-        {isDesktop && isDirectoryView && <SharedSidebar />}
+        <SharedSidebar />
       </div>
     );
   }

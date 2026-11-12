@@ -28,7 +28,7 @@ export function SvgViewer({ materialId, fileKey, fileName }: SvgViewerProps) {
 
     // Fetch via text-content endpoint which handles gzip decompression server-side,
     // then re-wrap as an image/svg+xml blob so <img> renders it correctly.
-    const { content, loading, error, reload } = useMaterialFile({
+    const { content, loading, error, truncated, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "text",
@@ -85,8 +85,10 @@ export function SvgViewer({ materialId, fileKey, fileName }: SvgViewerProps) {
         <ViewerShell
             scrollRef={scrollRef}
             loading={loading}
-            error={error}
-            onRetry={reload}
+            // A cut SVG does not parse: offer the download instead.
+            error={error ?? (truncated ? t("tooLargeToPreview") : null)}
+            onRetry={truncated ? undefined : reload}
+            downloadMaterialId={materialId}
             toolbarLeft={
                 <>
                     <button

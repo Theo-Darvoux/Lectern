@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiRequest, fetchMaterialFile, ApiError } from "@/lib/api-client";
+import { apiRequest, fetchMaterialFile, getMaterialFileUrl, ApiError } from "@/lib/api-client";
 
 interface UseMaterialFileOptions {
     materialId: string;
     fileKey: string;
     mode?: "text" | "blob" | "arrayBuffer" | "url";
+    /** Cut text beyond this many characters (on top of the server's own limit). */
     maxBytes?: number;
 }
 
@@ -16,6 +17,7 @@ interface UseMaterialFileReturn {
     arrayBuffer: ArrayBuffer | null;
     loading: boolean;
     error: string | null;
+    /** The text was cut: by the server (file over its viewer limit) or by maxBytes. */
     truncated: boolean;
     /** Re-run the fetch (e.g. from a "Retry" button) without a full page reload. */
     reload: () => void;
@@ -131,8 +133,7 @@ export function useMaterialFile({
         // sets the relevant state on success.
         const runAttempt = async (signal: AbortSignal): Promise<void> => {
             if (mode === "url") {
-                const { getMaterialFileUrl } = await import("@/lib/api-client");
-                const url = await getMaterialFileUrl(materialId, signal);
+                const url = await getMaterialFileUrl(materialId, signal, fileKey);
                 if (!cancelled && !signal.aborted) setBlobUrl(url);
                 return;
             }
@@ -147,7 +148,7 @@ export function useMaterialFile({
                     signal,
                 });
                 let text = await res.text();
-                let didTruncate = false;
+                let didTruncate = res.headers.get("x-content-truncated") === "1";
                 if (maxBytes && text.length > maxBytes) {
                     text = text.slice(0, maxBytes);
                     didTruncate = true;
@@ -159,7 +160,7 @@ export function useMaterialFile({
                 return;
             }
 
-            const res = await fetchMaterialFile(materialId, signal);
+            const res = await fetchMaterialFile(materialId, signal, fileKey);
 
             if (mode === "blob") {
                 const blob = await res.blob();

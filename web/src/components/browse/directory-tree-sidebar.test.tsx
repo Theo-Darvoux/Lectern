@@ -28,12 +28,11 @@ vi.mock("next-intl", () => ({
   },
 }));
 
-const mockApiFetchRetry = vi.fn();
 const mockApiFetch = vi.fn();
 
 vi.mock("@/lib/api-client", () => ({
-  apiFetchRetry: (...args: any[]) => mockApiFetchRetry(...args),
   apiFetch: (...args: any[]) => mockApiFetch(...args),
+  isRetriableError: () => false,
 }));
 
 const mockSubscribeToSSE = vi.fn((..._args: any[]) => ({ close: vi.fn() }));
@@ -41,8 +40,10 @@ vi.mock("@/lib/sse-client", () => ({
   subscribeToSSE: (...args: any[]) => mockSubscribeToSSE(...args),
 }));
 
+import { QueryClientProvider } from "@tanstack/react-query";
 import { DirectoryTreeSidebar } from "./directory-tree-sidebar";
 import { useUIStore } from "@/lib/stores";
+import { getQueryClient } from "@/lib/query-client";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -54,15 +55,17 @@ async function render(node: React.ReactElement) {
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => {
-    root.render(node);
+    root.render(
+      React.createElement(QueryClientProvider, { client: getQueryClient() }, node),
+    );
   });
 }
 
 describe("DirectoryTreeSidebar", () => {
   beforeEach(() => {
     mockPush.mockClear();
-    mockApiFetchRetry.mockReset();
     mockApiFetch.mockReset();
+    getQueryClient().clear();
     mockSubscribeToSSE.mockClear();
     mockPathname = "/browse/parent-dir/child-dir";
     useUIStore.setState({ treeSidebarOpen: true });
@@ -71,8 +74,8 @@ describe("DirectoryTreeSidebar", () => {
       container.remove();
     }
 
-    mockApiFetchRetry.mockImplementation(async (url: string) => {
-      if (url === "/browse") {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === "/directories/root/tree") {
         return {
           directories: [
             {
@@ -82,12 +85,13 @@ describe("DirectoryTreeSidebar", () => {
               full_path: "parent-dir",
               child_directory_count: 1,
               child_material_count: 0,
+              parent_id: null,
             },
           ],
           materials: [],
         };
       }
-      if (url === "/directories/dir-parent/children") {
+      if (url === "/directories/dir-parent/tree") {
         return {
           directories: [
             {
@@ -98,25 +102,6 @@ describe("DirectoryTreeSidebar", () => {
               child_directory_count: 0,
               child_material_count: 0,
               parent_id: "dir-parent",
-            },
-          ],
-          materials: [],
-        };
-      }
-      return { directories: [], materials: [] };
-    });
-
-    mockApiFetch.mockImplementation(async (url: string) => {
-      if (url === "/browse") {
-        return {
-          directories: [
-            {
-              id: "dir-parent",
-              name: "Parent Folder",
-              slug: "parent-dir",
-              full_path: "parent-dir",
-              child_directory_count: 1,
-              child_material_count: 0,
             },
           ],
           materials: [],
@@ -177,8 +162,8 @@ describe("DirectoryTreeSidebar", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
 
-    const initialFetchCount = mockApiFetchRetry.mock.calls.filter(
-      ([url]) => url === "/browse",
+    const initialFetchCount = mockApiFetch.mock.calls.filter(
+      ([url]) => url === "/directories/root/tree",
     ).length;
 
     const toggleButtons = container.querySelectorAll("button[aria-expanded]");
@@ -194,8 +179,8 @@ describe("DirectoryTreeSidebar", () => {
       parentToggleBtn.click();
     });
 
-    const finalFetchCount = mockApiFetchRetry.mock.calls.filter(
-      ([url]) => url === "/browse",
+    const finalFetchCount = mockApiFetch.mock.calls.filter(
+      ([url]) => url === "/directories/root/tree",
     ).length;
 
     // Toggling should NOT trigger new /browse network requests

@@ -486,14 +486,20 @@ export function FileEditDialog({
         setLoadingText(true);
         setLoadError("");
         apiRequest(`/materials/${target.id}/text-content`)
-            .then((res) => res.text())
+            .then((res) => {
+                // Saving a cut file would silently drop its end: refuse to edit it.
+                if (res.headers.get("x-content-truncated") === "1") {
+                    throw new Error(t("tooLargeToEdit"));
+                }
+                return res.text();
+            })
             .then((text) => {
                 setOriginalText(text);
                 setEditorText(text);
             })
             .catch((e: Error) => setLoadError(e.message))
             .finally(() => setLoadingText(false));
-    }, [open, activeTab, canEditText, target.id, originalText]);
+    }, [open, activeTab, canEditText, target.id, originalText, t]);
 
     // ── Metadata dirty check ──────────────────────────────────────────────
     const hasTagsChanged = () => {

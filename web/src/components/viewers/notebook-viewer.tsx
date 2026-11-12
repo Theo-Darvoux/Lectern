@@ -12,7 +12,8 @@ interface NotebookViewerProps {
 
 export function NotebookViewer({ materialId, fileKey }: NotebookViewerProps) {
     const t = useTranslations("Viewers.notebook");
-    const { content, loading, error, reload } = useMaterialFile({
+    const tViewers = useTranslations("Viewers");
+    const { content, loading, error, truncated, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "text",
@@ -21,8 +22,10 @@ export function NotebookViewer({ materialId, fileKey }: NotebookViewerProps) {
     return (
         <ViewerShell
             loading={loading}
-            error={error}
-            onRetry={reload}
+            // A cut notebook is not valid JSON: offer the download instead.
+            error={error ?? (truncated ? tViewers("tooLargeToPreview") : null)}
+            onRetry={truncated ? undefined : reload}
+            downloadMaterialId={materialId}
             toolbarLeft={(
                 <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
                     {t("title")}

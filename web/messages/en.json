@@ -300,6 +300,8 @@
     "signOut": "Sign out"
   },
   "Browse": {
+    "notFoundTitle": "Not found",
+    "notFoundDescription": "This folder or file does not exist. It may have been moved, renamed or deleted.",
     "staged": "Staged",
     "directoryDetails": "Directory details",
     "select": "Select",
@@ -1075,6 +1077,9 @@
     "linkBadge": "Link"
   },
   "Viewers": {
+    "downloadOriginal": "Download original",
+    "textTruncated": "The file exceeds 10 MiB: only its beginning is shown.",
+    "tooLargeToPreview": "This file exceeds 10 MiB and cannot be previewed.",
     "notebook": {
       "title": "Jupyter notebook",
       "invalid": "This file is not a valid Jupyter notebook.",
@@ -1293,6 +1298,7 @@
     "failed": "Failed to submit"
   },
   "FileEdit": {
+    "tooLargeToEdit": "This file exceeds 10 MiB and cannot be edited here. Replace the file instead.",
     "title": "Edit {type}",
     "description": "Editing {name}. Changes can be added to your draft or submitted directly.",
     "editText": "Edit text",

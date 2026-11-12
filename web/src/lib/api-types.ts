@@ -905,6 +905,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/directories/{directory_id}/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tree
+         * @description Light children listing for the tree sidebar. ``root`` lists the top level.
+         */
+        get: operations["get_tree_api_directories__directory_id__tree_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/directories/{directory_id}/path": {
         parameters: {
             query?: never;
@@ -1040,57 +1060,6 @@ export interface paths {
         put?: never;
         /** Resolve Paths */
         post: operations["resolve_paths_api_directories_resolve_paths_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/directories/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Directory */
-        get: operations["get_directory_api_directories__id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/directories/{id}/children": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Directory Children */
-        get: operations["get_directory_children_api_directories__id__children_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/directories/{id}/path": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Directory Path */
-        get: operations["get_directory_path_api_directories__id__path_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1322,13 +1291,13 @@ export interface paths {
         };
         /**
          * Thumbnail Material
-         * @description Generate a presigned URL for a material version's thumbnail.
+         * @description Return a signed URL for a material's card preview.
+         *
          *     Returns {"url": ..., "thumbnail_type": "webp" | "fallback"}.
-         *     - "webp": a real generated WebP thumbnail is served.
-         *     - "fallback": no dedicated thumbnail; the original file URL is returned so
-         *       the frontend can render it natively (react-pdf for PDFs, <video> for videos,
-         *       <img> for images).
-         *     Raises 404 for types without any renderable fallback (Office, audio, etc.).
+         *     - "webp": a generated WebP thumbnail.
+         *     - "fallback": no generated thumbnail; the original image, video or PDF, which
+         *       the browser renders itself.
+         *     Raises 404 for types without either (text, Office, audio, archives…).
          */
         get: operations["thumbnail_material_api_materials__material_id__thumbnail_get"];
         put?: never;
@@ -1352,8 +1321,10 @@ export interface paths {
          * Recalculate Material Thumbnail
          * @description Force recreate the thumbnail for a material.
          *
-         *     Moderator or admin privileges required. Dispatches the thumbnail recalculation
-         *     job to a free background worker and waits for completion when possible.
+         *     Moderator or admin privileges required. Dispatches the recalculation job and
+         *     waits briefly for it. ``status`` is the job result ("ok", "skipped" or
+         *     "failed"), or "queued" when the job is still running. The worker invalidates
+         *     the thumbnail caches itself.
          */
         post: operations["recalculate_material_thumbnail_api_materials__material_id__recalculate_thumbnail_post"];
         delete?: never;
@@ -1372,6 +1343,10 @@ export interface paths {
         /**
          * Stream Material File
          * @description Redirect a read-authenticated client to an immutable presigned object URL.
+         *
+         *     This is the in-page media stream (video/audio players). Playback is not a
+         *     download: it is neither recorded nor charged to the download quota. Explicit
+         *     downloads go through ``/download-url``.
          */
         get: operations["stream_material_file_api_materials__material_id__file_get"];
         put?: never;
@@ -1511,10 +1486,13 @@ export interface paths {
         };
         /**
          * Get Material Text Content
-         * @description Return the raw UTF-8 text of the material's current version.
+         * @description Return the UTF-8 text of the material's current version.
          *
          *     Works for both plain-text files and gzip-compressed text files (.gz).
-         *     Only available for text-based MIME types.
+         *     Only available for text-based MIME types. At most ``_TEXT_VIEW_MAX_BYTES``
+         *     of (decompressed) text is returned; a longer file is cut and the response
+         *     carries ``X-Content-Truncated: 1``. The ETag is the version's file key, so
+         *     reopening an unchanged file is a 304.
          */
         get: operations["get_material_text_content_api_materials__material_id__text_content_get"];
         put?: never;
@@ -2804,6 +2782,106 @@ export interface components {
             /** File */
             file: string;
         };
+        /** BrowseDirectory */
+        BrowseDirectory: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Name */
+            name: string;
+            /** Slug */
+            slug: string;
+            /** Type */
+            type: string;
+            /** Description */
+            description: string | null;
+            /**
+             * Status
+             * @default current
+             */
+            status: string;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Sort Order */
+            sort_order: number;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
+            /** Full Path */
+            full_path?: string | null;
+            /**
+             * Preview Material Ids
+             * @default []
+             */
+            preview_material_ids: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Like Count
+             * @default 0
+             */
+            like_count: number;
+            /**
+             * Is Liked
+             * @default false
+             */
+            is_liked: boolean;
+            /**
+             * Is Favourited
+             * @default false
+             */
+            is_favourited: boolean;
+            /** Child Directory Count */
+            child_directory_count?: number | null;
+            /** Child Material Count */
+            child_material_count?: number | null;
+            /** Preview Thumbnails */
+            preview_thumbnails?: components["schemas"]["DirectoryPreviewThumbnail"][] | null;
+        };
+        /** BrowseListing */
+        BrowseListing: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "directory_listing";
+            directory: components["schemas"]["BrowseDirectory"] | null;
+            /** Directories */
+            directories: components["schemas"]["BrowseDirectory"][];
+            /** Materials */
+            materials: (components["schemas"]["MaterialDetail"] | components["schemas"]["PublicMaterialDetail"])[];
+            /**
+             * Breadcrumbs
+             * @default []
+             */
+            breadcrumbs: components["schemas"]["DirectoryBreadcrumb"][];
+        };
+        /** BrowseMaterial */
+        BrowseMaterial: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "material";
+            /** Material */
+            material: components["schemas"]["MaterialDetail"] | components["schemas"]["PublicMaterialDetail"];
+            /**
+             * Breadcrumbs
+             * @default []
+             */
+            breadcrumbs: components["schemas"]["DirectoryBreadcrumb"][];
+        };
         /** BulkUserActionIn */
         BulkUserActionIn: {
             /** User Ids */
@@ -3091,6 +3169,13 @@ export interface components {
             /** Slug */
             slug: string;
         };
+        /** DirectoryChildren */
+        DirectoryChildren: {
+            /** Directories */
+            directories: components["schemas"]["BrowseDirectory"][];
+            /** Materials */
+            materials: (components["schemas"]["MaterialDetail"] | components["schemas"]["PublicMaterialDetail"])[];
+        };
         /** DirectoryOut */
         DirectoryOut: {
             /**
@@ -3136,6 +3221,16 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** DirectoryPreviewThumbnail */
+        DirectoryPreviewThumbnail: {
+            /**
+             * Material Id
+             * Format: uuid
+             */
+            material_id: string;
+            /** Url */
+            url: string | null;
         };
         /** DomainCreate */
         DomainCreate: {
@@ -4399,6 +4494,53 @@ export interface components {
             user: components["schemas"]["UserBrief"];
             /** Is New User */
             is_new_user: boolean;
+        };
+        /** TreeChildren */
+        TreeChildren: {
+            /** Directories */
+            directories: components["schemas"]["TreeDirectory"][];
+            /** Materials */
+            materials: components["schemas"]["TreeMaterial"][];
+        };
+        /** TreeDirectory */
+        TreeDirectory: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Name */
+            name: string;
+            /** Slug */
+            slug: string;
+            /** Full Path */
+            full_path: string;
+            /** Child Directory Count */
+            child_directory_count: number;
+            /** Child Material Count */
+            child_material_count: number;
+        };
+        /** TreeMaterial */
+        TreeMaterial: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Title */
+            title: string;
+            /** Slug */
+            slug: string;
+            /** Type */
+            type: string;
+            /** File Name */
+            file_name: string | null;
+            /** File Mime Type */
+            file_mime_type: string | null;
+            /** Url */
+            url: string | null;
         };
         /** TutorialCompleteIn */
         TutorialCompleteIn: {
@@ -6319,9 +6461,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["BrowseListing"] | components["schemas"]["BrowseMaterial"];
                 };
             };
         };
@@ -6343,9 +6483,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["BrowseListing"] | components["schemas"]["BrowseMaterial"];
                 };
             };
             /** @description Validation Error */
@@ -6407,9 +6545,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["DirectoryChildren"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tree_api_directories__directory_id__tree_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                directory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreeChildren"];
                 };
             };
             /** @description Validation Error */
@@ -6829,101 +6996,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResolvePathsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_directory_api_directories__id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DirectoryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_directory_children_api_directories__id__children_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_directory_path_api_directories__id__path_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DirectoryBreadcrumb"][];
                 };
             };
             /** @description Validation Error */

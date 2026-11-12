@@ -38,7 +38,6 @@ vi.mock("@/lib/stores", () => ({
     selector ? selector({ openSidebar: vi.fn(), updateSidebarData: vi.fn() }) : { openSidebar: vi.fn(), updateSidebarData: vi.fn() },
   useAuthStore: (selector?: (s: { user: null; isAuthenticated: boolean; isLoading: boolean }) => unknown) =>
     selector ? selector({ user: null, isAuthenticated: false, isLoading: false }) : { user: null, isAuthenticated: false, isLoading: false },
-  useBrowseRefreshStore: () => ({ triggerBrowseRefresh: vi.fn() }),
 }));
 vi.mock("@/components/home/material-preview", () => ({
   MaterialPreview: ({ material }: { material: { title?: string } }) => (

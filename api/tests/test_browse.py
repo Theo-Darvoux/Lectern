@@ -425,3 +425,66 @@ async def test_material_attachments_endpoint(client: AsyncClient, db_session: As
     assert len(data) == 1
     assert data[0]["title"] == "Annex"
     assert data[0]["current_version_info"] is not None
+
+
+async def test_directory_tree_lists_light_nodes(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user = await _create_user(db_session)
+    parent = await _create_directory(db_session, user, name="Course", slug="course")
+    child = await _create_directory(
+        db_session, user, name="Chapter", slug="chapter", parent_id=parent.id
+    )
+    await _create_material(db_session, child, user, title="Deep", slug="deep")
+    material = await _create_material(db_session, parent, user, title="Notes", slug="notes")
+    await _create_version(db_session, material, file_name="notes.pdf")
+    await db_session.commit()
+
+    root = await client.get("/api/directories/root/tree", headers=_auth_headers(user))
+    assert root.status_code == 200
+    assert [d["slug"] for d in root.json()["directories"]] == ["course"]
+
+    response = await client.get(f"/api/directories/{parent.id}/tree", headers=_auth_headers(user))
+    assert response.status_code == 200
+    data = response.json()
+    assert data["directories"] == [
+        {
+            "id": str(child.id),
+            "parent_id": str(parent.id),
+            "name": "Chapter",
+            "slug": "chapter",
+            "full_path": "course/chapter",
+            "child_directory_count": 0,
+            "child_material_count": 1,
+        }
+    ]
+    assert data["materials"] == [
+        {
+            "id": str(material.id),
+            "title": "Notes",
+            "slug": "notes",
+            "type": "pdf",
+            "file_name": "notes.pdf",
+            "file_mime_type": "application/pdf",
+            "url": None,
+        }
+    ]
+
+    missing = await client.get(f"/api/directories/{uuid.uuid4()}/tree", headers=_auth_headers(user))
+    assert missing.status_code == 404
+
+
+async def test_browse_material_breadcrumbs_come_from_the_walked_path(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user = await _create_user(db_session)
+    a = await _create_directory(db_session, user, name="A", slug="a")
+    b = await _create_directory(db_session, user, name="B", slug="b", parent_id=a.id)
+    await _create_material(db_session, b, user, title="Leaf", slug="leaf")
+    await db_session.commit()
+
+    response = await client.get("/api/browse/a/b/leaf", headers=_auth_headers(user))
+    assert response.status_code == 200
+    data = response.json()
+    assert data["type"] == "material"
+    assert [bc["slug"] for bc in data["breadcrumbs"]] == ["a", "b"]

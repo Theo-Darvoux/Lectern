@@ -116,3 +116,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             session.info.pop(PostCommitKey.MANAGED_TRANSACTION, None)
             session.info.pop(PostCommitKey.TRANSACTION_COMMIT_CALLBACKS, None)
             session.info.pop(PostCommitKey.TRANSACTION_ROLLBACK_CALLBACKS, None)
+
+
+# Registers the session listeners that invalidate cached browse previews.
+from app.core.database import content_generation as _content_generation  # noqa: E402, F401

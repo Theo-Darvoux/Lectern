@@ -17,6 +17,9 @@
  * between the two deployments needs no code change.
  */
 
+/** Response headers a cross-origin file reader may inspect. */
+const FILE_EXPOSED_HEADERS = "Accept-Ranges, Content-Range, Content-Length, Content-Encoding";
+
 export interface TokenPayload {
   exp: number;
   r2_key?: string;
@@ -183,6 +186,8 @@ export async function handleRequest(
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET",
+        // pdf.js reads documents with byte ranges.
+        "Access-Control-Allow-Headers": "Range",
         "Access-Control-Max-Age": "86400",
       },
     });
@@ -325,6 +330,8 @@ export async function handleRequest(
     // so variants for one object cannot poison each other's headers.
     const headers = new Headers(response.headers);
     headers.set("Access-Control-Allow-Origin", "*");
+    // Cross-origin readers (pdf.js) decide to use range requests from these.
+    headers.set("Access-Control-Expose-Headers", FILE_EXPOSED_HEADERS);
     applyFileResponseOverrides(headers, payload);
     return new Response(response.body, {
       status: response.status,

@@ -1,5 +1,7 @@
 import gzip
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,6 +12,25 @@ from app.core.database.post_commit import PostCommitKey, rollback_transaction_ca
 from app.models.material import Material, MaterialVersion
 from app.routers.materials import save_material_text_content
 from tests.test_materials import _auth_headers, _create_directory, _create_user
+
+
+class _FakeBody:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    async def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            size = len(self._payload)
+        chunk, self._payload = self._payload[:size], self._payload[size:]
+        return chunk
+
+
+def fake_stream_object(payload: bytes):  # noqa: ANN201
+    @asynccontextmanager
+    async def _stream(_file_key: str) -> AsyncIterator[_FakeBody]:
+        yield _FakeBody(payload)
+
+    return _stream
 
 
 @pytest.mark.asyncio
@@ -50,10 +71,7 @@ async def test_get_material_text_content_implicit_gzip(
     original_text = "# Chapitre 6: Droit\n\nContenu du cours..."
     gzipped_bytes = gzip.compress(original_text.encode("utf-8"))
 
-    # Mock read_full_object to return gzipped bytes
-    with patch("app.routers.materials.read_full_object", new_callable=AsyncMock) as mock_read:
-        mock_read.return_value = gzipped_bytes
-
+    with patch("app.routers.materials.stream_object", new=fake_stream_object(gzipped_bytes)):
         response = await client.get(
             f"/api/materials/{material.id}/text-content", headers=_auth_headers(user)
         )
@@ -142,12 +160,61 @@ async def test_get_material_text_content_plain_text(
 
     original_text = "Just some plain text."
 
-    with patch("app.routers.materials.read_full_object", new_callable=AsyncMock) as mock_read:
-        mock_read.return_value = original_text.encode("utf-8")
-
+    with patch(
+        "app.routers.materials.stream_object",
+        new=fake_stream_object(original_text.encode("utf-8")),
+    ):
         response = await client.get(
             f"/api/materials/{material.id}/text-content", headers=_auth_headers(user)
         )
 
         assert response.status_code == 200
         assert response.text == original_text
+
+
+@pytest.mark.asyncio
+async def test_get_material_text_content_truncates_and_revalidates(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A long file is cut to the viewer limit and flagged; an unchanged one is a 304."""
+    user = await _create_user(db_session)
+    directory = await _create_directory(db_session, user)
+    material = Material(
+        directory_id=directory.id,
+        title="Huge Log",
+        slug="huge-log",
+        type="document",
+        author_id=user.id,
+    )
+    db_session.add(material)
+    db_session.add(
+        MaterialVersion(
+            material=material,
+            version_number=1,
+            file_key="materials/test/huge.txt",
+            file_name="huge.txt",
+            file_size=0,
+            file_mime_type="text/plain",
+        )
+    )
+    await db_session.commit()
+
+    payload = "é" * (6 * 1024 * 1024)  # 12 MiB of 2-byte characters
+    with (
+        patch("app.routers.materials._TEXT_VIEW_MAX_BYTES", 1001),
+        patch("app.routers.materials.stream_object", new=fake_stream_object(payload.encode())),
+    ):
+        response = await client.get(
+            f"/api/materials/{material.id}/text-content", headers=_auth_headers(user)
+        )
+        assert response.status_code == 200
+        assert response.headers["X-Content-Truncated"] == "1"
+        # The cut lands mid-character: the partial byte is dropped, not mis-decoded.
+        assert response.text == "é" * 500
+
+        etag = response.headers["ETag"]
+        cached = await client.get(
+            f"/api/materials/{material.id}/text-content",
+            headers={**_auth_headers(user), "If-None-Match": etag},
+        )
+        assert cached.status_code == 304

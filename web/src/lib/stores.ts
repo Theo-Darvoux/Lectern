@@ -160,17 +160,6 @@ export const useLikeOverrides = create<LikeOverridesState>((set) => ({
 // Browse refresh store — incremented after a direct-approved PR so the browse
 // page re-fetches immediately without a manual page reload.
 // ---------------------------------------------------------------------------
-interface BrowseRefreshState {
-    refreshCount: number;
-    triggerBrowseRefresh: () => void;
-}
-
-export const useBrowseRefreshStore = create<BrowseRefreshState>((set) => ({
-    refreshCount: 0,
-    triggerBrowseRefresh: () =>
-        set((state) => ({ refreshCount: state.refreshCount + 1 })),
-}));
-
 interface DirectoryIconOverrideState {
     overrides: Map<string, string | null>;
     setIconOverride: (directoryId: string, icon: string | null) => void;

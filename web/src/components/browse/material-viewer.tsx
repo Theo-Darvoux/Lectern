@@ -32,7 +32,8 @@ import {
   isThumbnailEligible,
   MIME_QCM,
 } from "@/lib/file-utils";
-import { useUIStore, useAuthStore, useBrowseRefreshStore } from "@/lib/stores";
+import { useUIStore, useAuthStore } from "@/lib/stores";
+import { refreshBrowse } from "@/lib/browse-prefetch";
 import { isGuest, isStaff } from "@/lib/guest";
 import { apiFetch } from "@/lib/api-client";
 import { hasFileKey, useStagingStore } from "@/lib/staging-store";
@@ -42,152 +43,6 @@ import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
-
-// --- Dynamic Viewer Imports ---
-// This prevents large libraries (like pdf.js, mermaid, monaco) from being compiled
-// simultaneously when only one is needed, drastically reducing dev memory pressure.
-
-const PdfViewer = dynamic(
-  () => import("@/components/viewers/pdf-viewer").then((mod) => mod.PdfViewer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const MarkdownViewer = dynamic(
-  () =>
-    import("@/components/viewers/markdown-viewer").then(
-      (mod) => mod.MarkdownViewer,
-    ),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const ImageViewer = dynamic(
-  () =>
-    import("@/components/viewers/image-viewer").then((mod) => mod.ImageViewer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const SvgViewer = dynamic(
-  () =>
-    import("@/components/viewers/svg-viewer").then((mod) => mod.SvgViewer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const VideoPlayer = dynamic(
-  () =>
-    import("@/components/viewers/video-player").then((mod) => mod.VideoPlayer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const AudioPlayer = dynamic(
-  () =>
-    import("@/components/viewers/audio-player").then((mod) => mod.AudioPlayer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const CodeViewer = dynamic(
-  () =>
-    import("@/components/viewers/code-viewer").then((mod) => mod.CodeViewer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const NotebookViewer = dynamic(
-  () =>
-    import("@/components/viewers/notebook-viewer").then(
-      (mod) => mod.NotebookViewer,
-    ),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const CsvViewer = dynamic(
-  () => import("@/components/viewers/csv-viewer").then((mod) => mod.CsvViewer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const OfficeViewer = dynamic(
-  () =>
-    import("@/components/viewers/office-viewer").then(
-      (mod) => mod.OfficeViewer,
-    ),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const EpubViewer = dynamic(
-  () =>
-    import("@/components/viewers/epub-viewer").then((mod) => mod.EpubViewer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const DjvuViewer = dynamic(
-  () =>
-    import("@/components/viewers/djvu-viewer").then((mod) => mod.DjvuViewer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const GenericViewer = dynamic(
-  () =>
-    import("@/components/viewers/generic-viewer").then(
-      (mod) => mod.GenericViewer,
-    ),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const QCMViewer = dynamic(
-  () =>
-    import("@/components/viewers/qcm-viewer").then((mod) => mod.QCMViewer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
-const LinkViewer = dynamic(
-  () =>
-    import("@/components/viewers/link-viewer").then((mod) => mod.LinkViewer),
-  {
-    loading: () => <Skeleton className="h-full w-full rounded-none" />,
-    ssr: false,
-  },
-);
-
 
 import { SharedSidebar } from "@/components/sidebar/shared-sidebar";
 import { ViewerFab } from "@/components/browse/viewer-fab";
@@ -200,6 +55,31 @@ import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
 import { useTranslations } from "next-intl";
 import { useDropZoneStore } from "@/lib/drop-zone-store";
+
+// Each viewer is its own chunk, so large libraries (pdf.js, mermaid,
+// highlight.js…) load only for the file type being opened.
+function lazyViewer<P>(load: () => Promise<React.ComponentType<P>>) {
+  return dynamic(load, {
+    loading: () => <Skeleton className="h-full w-full rounded-none" />,
+    ssr: false,
+  });
+}
+
+const PdfViewer = lazyViewer(() => import("@/components/viewers/pdf-viewer").then((m) => m.PdfViewer));
+const MarkdownViewer = lazyViewer(() => import("@/components/viewers/markdown-viewer").then((m) => m.MarkdownViewer));
+const ImageViewer = lazyViewer(() => import("@/components/viewers/image-viewer").then((m) => m.ImageViewer));
+const SvgViewer = lazyViewer(() => import("@/components/viewers/svg-viewer").then((m) => m.SvgViewer));
+const VideoPlayer = lazyViewer(() => import("@/components/viewers/video-player").then((m) => m.VideoPlayer));
+const AudioPlayer = lazyViewer(() => import("@/components/viewers/audio-player").then((m) => m.AudioPlayer));
+const CodeViewer = lazyViewer(() => import("@/components/viewers/code-viewer").then((m) => m.CodeViewer));
+const NotebookViewer = lazyViewer(() => import("@/components/viewers/notebook-viewer").then((m) => m.NotebookViewer));
+const CsvViewer = lazyViewer(() => import("@/components/viewers/csv-viewer").then((m) => m.CsvViewer));
+const OfficeViewer = lazyViewer(() => import("@/components/viewers/office-viewer").then((m) => m.OfficeViewer));
+const EpubViewer = lazyViewer(() => import("@/components/viewers/epub-viewer").then((m) => m.EpubViewer));
+const DjvuViewer = lazyViewer(() => import("@/components/viewers/djvu-viewer").then((m) => m.DjvuViewer));
+const GenericViewer = lazyViewer(() => import("@/components/viewers/generic-viewer").then((m) => m.GenericViewer));
+const QCMViewer = lazyViewer(() => import("@/components/viewers/qcm-viewer").then((m) => m.QCMViewer));
+const LinkViewer = lazyViewer(() => import("@/components/viewers/link-viewer").then((m) => m.LinkViewer));
 
 interface MaterialViewerProps {
   material: Record<string, unknown>;
@@ -216,7 +96,8 @@ export function MaterialViewer({
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
-  const isRestricted = (material.id as string)?.startsWith("$") || !!searchParams.get("preview_pr");
+  const previewPrId = searchParams.get("preview_pr");
+  const isRestricted = (material.id as string)?.startsWith("$") || !!previewPrId;
   const guest = isGuest(useAuthStore((s) => s.user));
 
   // Derive the parent folder URL by dropping the last path segment
@@ -224,9 +105,9 @@ export function MaterialViewer({
     const stripped = pathname.replace(/^\/browse\/?/, "").replace(/\/$/, "");
     const segments = stripped ? stripped.split("/") : [];
     const parentSegments = segments.slice(0, -1);
-    return parentSegments.length > 0
-      ? `/browse/${parentSegments.join("/")}`
-      : "/browse";
+    const base = parentSegments.length > 0 ? `/browse/${parentSegments.join("/")}` : "/browse";
+    // Stay in the contribution preview the user came from.
+    return previewPrId ? `${base}?preview_pr=${encodeURIComponent(previewPrId)}` : base;
   })();
   const isMobile = useIsMobile();
   const openSidebar = useUIStore((state) => state.openSidebar);
@@ -308,13 +189,14 @@ export function MaterialViewer({
     return () => setBrowseContext(null);
   }, [directoryId, isRestricted, materialId, setBrowseContext, title]);
 
-  // Record view in background
+  // Record view in background. A draft or a contribution preview is not a view
+  // of the live material (a draft id does not even exist on the server).
   useEffect(() => {
-    if (!materialId) return;
+    if (!materialId || isRestricted) return;
     apiFetch(`/materials/${materialId}/view`, { method: "POST" }).catch(() => {
       // Silently fail if view tracking fails
     });
-  }, [materialId]);
+  }, [materialId, isRestricted]);
 
   const isLink =
     displayMaterial.type === "link" ||
@@ -335,7 +217,6 @@ export function MaterialViewer({
   const user = useAuthStore((s) => s.user);
   const isEligible = isThumbnailEligible(mimeType, fileName || title);
   const [isRecalculatingThumbnail, setIsRecalculatingThumbnail] = useState(false);
-  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const handleRecalculateThumbnail = async () => {
     if (isRecalculatingThumbnail || !materialId) return;
@@ -344,7 +225,7 @@ export function MaterialViewer({
     try {
       await recalculateMaterialThumbnail(materialId);
       toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${materialId}` });
-      triggerBrowseRefresh();
+      refreshBrowse();
     } catch {
       toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${materialId}` });
     } finally {
@@ -362,7 +243,7 @@ export function MaterialViewer({
   useEffect(() => {
     if (!canPrint) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "p") {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
         e.preventDefault();
         print();
       }
@@ -428,7 +309,7 @@ export function MaterialViewer({
 
   return (
     <AnnotationsContext.Provider value={annotationsData}>
-      <div className="flex h-full w-full overflow-hidden gap-0">
+      <div className="relative flex h-full w-full overflow-hidden gap-0">
         <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
           <div
             className="z-20 flex shrink-0 items-center justify-between gap-3 border-b bg-background/95 p-2 backdrop-blur-sm sm:px-4 sm:py-2.5 md:px-6"
@@ -446,7 +327,7 @@ export function MaterialViewer({
               <Breadcrumbs
                 items={breadcrumbItems}
                 linkLast={false}
-                previewPrId={searchParams.get("preview_pr") || undefined}
+                previewPrId={previewPrId || undefined}
               >
                 <div className="flex items-center gap-1.5 ml-1.5 shrink-0">
                   <ContentStatusBadge

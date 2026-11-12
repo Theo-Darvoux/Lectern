@@ -3,22 +3,21 @@ import { useRouter } from "next/navigation";
 import { subscribeToSSE, type SSEChannel } from "@/lib/sse-client";
 import { invalidateMaterialFileUrl } from "@/lib/api-client";
 import { invalidateBrowseEntity } from "@/lib/browse-prefetch";
+
+type Breadcrumb = { id: string; name: string; slug: string };
+/** The part of a browse response the subscription needs. */
+type BrowseSSEData =
+    | { type: "directory_listing"; directory: { id: string } | null; breadcrumbs?: Breadcrumb[] }
+    | { type: "material"; material: { id: string }; breadcrumbs?: Breadcrumb[] };
 import { resolvePendingContributionEvent } from "@/lib/pending-contributions";
 
-interface BrowseData {
-    type: "directory_listing" | "material";
-    directory?: Record<string, unknown> | null;
-    material?: Record<string, unknown> | null;
-    breadcrumbs?: { id: string; name: string; slug: string }[];
-}
-
 // The logical topic changes only with the entity.
-function browseChannel(data: BrowseData | null): SSEChannel | null {
+function browseChannel(data: BrowseSSEData | null): SSEChannel | null {
     if (data?.type === "directory_listing") {
-        return `directory:${data.directory ? String(data.directory.id) : "root"}`;
+        return `directory:${data.directory ? data.directory.id : "root"}`;
     }
-    if (data?.type === "material" && data.material) {
-        return `material:${String(data.material.id)}`;
+    if (data?.type === "material") {
+        return `material:${data.material.id}`;
     }
     return null;
 }
@@ -37,7 +36,7 @@ function browseChannel(data: BrowseData | null): SSEChannel | null {
  * always see the latest version without triggering reconnects. Invalidating a
  * path on screen refetches it.
  */
-export function useBrowseSSE(data: BrowseData | null, path: string): void {
+export function useBrowseSSE(data: BrowseSSEData | null, path: string): void {
     const router = useRouter();
 
     const channel = browseChannel(data);

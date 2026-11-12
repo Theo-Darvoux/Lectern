@@ -31,7 +31,8 @@ import { FlagButton } from "@/components/flags/flag-button";
 import { ConfirmDeleteDialog } from "@/components/ui/confirm-delete-dialog";
 import { useDownload } from "@/hooks/use-download";
 import { usePrint } from "@/hooks/use-print";
-import { useUIStore, useAuthStore, useLikeOverrides, useBrowseRefreshStore } from "@/lib/stores";
+import { useUIStore, useAuthStore, useLikeOverrides } from "@/lib/stores";
+import { refreshBrowse } from "@/lib/browse-prefetch";
 import { isGuest, isStaff } from "@/lib/guest";
 import { isThumbnailEligible } from "@/lib/file-utils";
 import { recalculateMaterialThumbnail } from "@/lib/material-preview-source";
@@ -162,7 +163,6 @@ export function ViewerFab({
   const staff = isStaff(user);
   const isEligible = isThumbnailEligible(mimeType, fileName || materialTitle);
   const [isRecalculatingThumbnail, setIsRecalculatingThumbnail] = useState(false);
-  const triggerBrowseRefresh = useBrowseRefreshStore((s) => s.triggerBrowseRefresh);
 
   const handleRecalculateThumbnail = async () => {
     if (isRecalculatingThumbnail || !materialId) return;
@@ -171,7 +171,7 @@ export function ViewerFab({
     try {
       await recalculateMaterialThumbnail(materialId);
       toast.success(t("thumbnailRecalculated"), { id: `thumb-recalc-${materialId}` });
-      triggerBrowseRefresh();
+      refreshBrowse();
     } catch {
       toast.error(t("failedToRecalculateThumbnail"), { id: `thumb-recalc-${materialId}` });
     } finally {

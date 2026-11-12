@@ -17,7 +17,8 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { isStaff } from "@/lib/guest";
 import { apiFetch } from "@/lib/api-client";
-import { useBrowseRefreshStore, useUIStore } from "@/lib/stores";
+import { useUIStore } from "@/lib/stores";
+import { refreshBrowse } from "@/lib/browse-prefetch";
 import { cn } from "@/lib/utils";
 
 export type ContentStatus = "important" | "current" | "deprecated" | "archived";
@@ -102,7 +103,7 @@ export function useUpdateContentStatus() {
         ),
       });
       showStatusInSidebar(target.id, status);
-      useBrowseRefreshStore.getState().triggerBrowseRefresh();
+      refreshBrowse();
       toast.success(t("updated", { status: t(`labels.${status}`) }));
       return true;
     } catch {

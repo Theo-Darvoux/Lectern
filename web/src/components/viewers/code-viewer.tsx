@@ -6,6 +6,7 @@ import { List, type RowComponentProps } from "react-window";
 import { usePinchZoom } from "@/hooks/use-pinch-zoom";
 import { useMaterialFile } from "@/hooks/use-material-file";
 import { ViewerShell } from "./viewer-shell";
+import { useTranslations } from "next-intl";
 import { ZoomControls } from "./zoom-controls";
 
 // Languages from highlight.js/lib/common... (kept same as original)
@@ -245,9 +246,10 @@ function CodeRow({
 }
 
 export function CodeViewer({ materialId, fileKey, fileName }: CodeViewerProps) {
+    const t = useTranslations("Viewers");
     const scrollRef = useRef<HTMLDivElement>(null);
 
-    const { content, loading, error, reload } = useMaterialFile({
+    const { content, loading, error, truncated, reload } = useMaterialFile({
         materialId,
         fileKey,
         mode: "text",
@@ -301,6 +303,8 @@ export function CodeViewer({ materialId, fileKey, fileName }: CodeViewerProps) {
             loading={loading}
             error={error}
             onRetry={reload}
+            truncatedMessage={truncated ? t("textTruncated") : null}
+            downloadMaterialId={materialId}
             toolbarLeft={
                 lang && (
                     <span className="text-xs font-medium uppercase text-muted-foreground px-1.5 py-0.5 bg-muted rounded truncate">

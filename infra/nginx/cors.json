@@ -1,9 +1,26 @@
 [
     {
-        "AllowedHeaders": ["*"],
-        "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
-        "AllowedOrigins": ["http://localhost:3000", "http://localhost:8000"],
-        "ExposeHeaders": ["ETag"],
+        "AllowedHeaders": [
+            "*"
+        ],
+        "AllowedMethods": [
+            "GET",
+            "PUT",
+            "POST",
+            "DELETE",
+            "HEAD"
+        ],
+        "AllowedOrigins": [
+            "http://localhost:3000",
+            "http://localhost:8000"
+        ],
+        "ExposeHeaders": [
+            "ETag",
+            "Accept-Ranges",
+            "Content-Range",
+            "Content-Length",
+            "Content-Encoding"
+        ],
         "MaxAgeSeconds": 3000
     }
 ]

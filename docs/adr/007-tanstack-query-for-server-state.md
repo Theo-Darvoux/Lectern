@@ -32,7 +32,9 @@ also fetched it separately.
    sees another account's responses.
 5. Query keys start with the resource name, so one `invalidateQueries` call
    refreshes every view of it: `["pull-requests", …]`, `["users", id, …]`,
-   `["browse", path]`, `["home", …]`, `["leaderboard", …]`.
+   `["browse", path]`, `["directory-tree", id]`, `["home", …]`, `["leaderboard", …]`.
+   A change made from this client (`refreshBrowse()`) invalidates every browse
+   listing and tree branch; SSE events invalidate only the entities they name.
 6. A failed query renders `<QueryError>` with a Retry button, never an empty state.
 7. Tests wrap components with `withQueryClient` (`web/src/test/query.tsx`), which
    disables retries.
