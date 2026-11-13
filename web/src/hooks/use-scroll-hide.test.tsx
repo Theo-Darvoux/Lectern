@@ -69,4 +69,27 @@ describe("useScrollHide hook", () => {
     });
     expect(useUIStore.getState().navbarVisible).toBe(true);
   });
+
+  it("restores the navbar when the scroll container unmounts", async () => {
+    await act(async () => {
+      root.render(<TestScrollComponent />);
+    });
+
+    const scrollContainer = container.querySelector("[data-testid='scroll-container']") as HTMLElement;
+    Object.defineProperty(scrollContainer, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scrollContainer, "clientHeight", { value: 500, configurable: true });
+
+    act(() => {
+      Object.defineProperty(scrollContainer, "scrollTop", { value: 200, configurable: true });
+      scrollContainer.dispatchEvent(new Event("scroll"));
+    });
+    expect(useUIStore.getState().navbarVisible).toBe(false);
+
+    // Leaving the viewer (e.g. back to a directory listing) must not leave the
+    // navbar stuck hidden.
+    await act(async () => {
+      root.render(<div />);
+    });
+    expect(useUIStore.getState().navbarVisible).toBe(true);
+  });
 });

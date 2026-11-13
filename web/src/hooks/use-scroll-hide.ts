@@ -27,6 +27,11 @@ export function useScrollHide(
     }
   }, [navbarVisible]);
 
+  // The hidden state lives in the global store, so it would outlive the
+  // viewer: pages without a scroll-hide container (e.g. the browse listing)
+  // have no scroll gesture to bring the navbar back. Restore it on unmount.
+  useEffect(() => () => setNavbarVisible(true), [setNavbarVisible]);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;

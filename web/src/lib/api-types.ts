@@ -8645,7 +8645,10 @@ export interface operations {
     };
     get_eurooffice_config_api_eurooffice_config__material_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                lang?: "en" | "fr";
+                theme?: "light" | "dark";
+            };
             header?: never;
             path: {
                 material_id: string;

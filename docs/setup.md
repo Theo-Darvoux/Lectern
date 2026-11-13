@@ -23,7 +23,10 @@ Two mechanisms handle environment differences:
   in `.env`. The `seaweedfs-dev` profile (default in `.env.example`) starts the
   local SeaweedFS single-node storage. The `seaweedfs-prod` profile starts the
   production cluster. The `selfhost-worker` profile adds the self-hosted
-  HMAC-signed delivery worker.
+  HMAC-signed delivery worker. The `eurooffice` profile (default in
+  `.env.example`) runs the EuroOffice document server that previews Office
+  files; it needs about 2 GB of RAM. Without it, Office files show an error
+  with a download button.
 - **Production Overrides** — production specific server commands (Gunicorn), 
   build targets (runner stage), resource limits, and production Nginx config templates 
   are configured in `compose.prod.yaml`. Production deployments merge both files.
@@ -36,7 +39,7 @@ Two mechanisms handle environment differences:
 # 1. Copy and fill the env file (single file at project root)
 cp .env.example .env
 
-# 2. Start all services — COMPOSE_PROFILES=seaweedfs-dev is the default
+# 2. Start all services — COMPOSE_PROFILES=postgres,seaweedfs-dev,eurooffice is the default
 docker compose up
 ```
 
@@ -62,7 +65,7 @@ Services available after `docker compose up`:
 | redis | 6379 | Cache, rate limiting, ARQ queues |
 | meilisearch | 7700 | Full-text search |
 | seaweedfs | 8333 / 8888 / 9333 | Local S3 storage / filer UI / master UI |
-| eurooffice | — | EuroOffice document server (internal only) |
+| eurooffice | — | EuroOffice document server (internal only, `eurooffice` profile) |
 | worker | — | ARQ worker (non-upload tasks + fallback) |
 | worker-fast | — | ARQ worker for small uploads (text, images) |
 | worker-slow | — | ARQ worker for large uploads (video, PDF, Office) |
@@ -89,8 +92,9 @@ docker compose -f compose.yaml -f compose.prod.yaml up -d
 
 To deploy (or roll back to) a specific build, set `IMAGE_TAG`, for example
 `IMAGE_TAG=sha-<commit>` or `IMAGE_TAG=alpha-3`, in `.env` or the shell.
-Optional `postgres`, `seaweedfs-prod` and `selfhost-worker` services are enabled
-through `COMPOSE_PROFILES` (or `--profile` flags on both commands).
+Optional `postgres`, `seaweedfs-prod`, `selfhost-worker` and `eurooffice` services
+are enabled through `COMPOSE_PROFILES` (or `--profile` flags on both commands).
+Include `eurooffice` in production, or Office files cannot be previewed.
 
 What production mode changes relative to the dev defaults:
 - App services use the pre-built GHCR images (`IMAGE_TAG`, default `latest`) instead of building locally

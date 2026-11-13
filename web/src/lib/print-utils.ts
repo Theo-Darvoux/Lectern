@@ -148,3 +148,44 @@ export function printInIframe(content: string, options: PrintIframeOptions = {})
     }, 100);
   });
 }
+
+/**
+ * Prints a PDF through a hidden same-origin iframe (blob URL), so no popup or
+ * user-activation window is needed after an async conversion. Browsers that
+ * refuse to print an embedded PDF get it opened in a new tab instead.
+ */
+export function printPdfBlob(blob: Blob): void {
+  const pdf = blob.type === "application/pdf" ? blob : new Blob([blob], { type: "application/pdf" });
+  const blobUrl = URL.createObjectURL(pdf);
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-9999px";
+  iframe.style.top = "-9999px";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "none";
+
+  // The print dialog blocks the page, so a generous delay keeps the blob alive
+  // until the browser has spooled the document.
+  const cleanup = () =>
+    setTimeout(() => {
+      iframe.remove();
+      URL.revokeObjectURL(blobUrl);
+    }, 60_000);
+
+  iframe.addEventListener(
+    "load",
+    () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch {
+        window.open(blobUrl, "_blank");
+      }
+      cleanup();
+    },
+    { once: true },
+  );
+  iframe.src = blobUrl;
+  document.body.appendChild(iframe);
+}

@@ -1,5 +1,7 @@
 const API_SCRIPT_SELECTOR = "script[data-eurooffice-api]";
-const DEFAULT_TIMEOUT_MS = 15_000;
+// api.js is a small bootstrap script: a slow response means the document
+// server is down or starting, and the viewer should say so quickly.
+const DEFAULT_TIMEOUT_MS = 8_000;
 
 type DocsApiWindow = Window & {
   DocsAPI?: {

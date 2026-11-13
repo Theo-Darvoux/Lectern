@@ -1137,7 +1137,11 @@
       "initFailed": "Échec de l'initialisation : {message}",
       "startupError": "Euro-Office n'a pas pu démarrer : {message}",
       "readyTimeout": "Euro-Office met trop de temps à ouvrir ce document. Veuillez réessayer.",
-      "unknownError": "erreur inconnue"
+      "unknownError": "erreur inconnue",
+      "errorDownload": "Le serveur de documents n'a pas pu récupérer ce fichier. Réessayez ou téléchargez l'original.",
+      "errorConversion": "Ce document n'a pas pu être ouvert. Il est peut-être endommagé ou dans un format non pris en charge.",
+      "errorTimeout": "L'ouverture de ce document a pris trop de temps sur le serveur. Réessayez.",
+      "errorTooLarge": "Ce document est trop volumineux pour être ouvert dans la visionneuse. Téléchargez l'original."
     },
     "retry": "Réessayer",
     "imageLoadFailed": "Cette image n'a pas pu être affichée. Elle n'a peut-être pas été téléchargée entièrement.",

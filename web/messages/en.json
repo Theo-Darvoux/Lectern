@@ -1137,7 +1137,11 @@
       "initFailed": "Initialization failed: {message}",
       "startupError": "Euro-Office could not start: {message}",
       "readyTimeout": "Euro-Office took too long to open this document. Please try again.",
-      "unknownError": "unknown error"
+      "unknownError": "unknown error",
+      "errorDownload": "The document server could not fetch this file. Try again, or download the original.",
+      "errorConversion": "This document could not be opened. It may be damaged or in an unsupported format.",
+      "errorTimeout": "Opening this document took too long on the server. Try again.",
+      "errorTooLarge": "This document is too large to open in the viewer. Download the original instead."
     },
     "retry": "Retry",
     "imageLoadFailed": "This image could not be displayed. It may not have downloaded fully.",

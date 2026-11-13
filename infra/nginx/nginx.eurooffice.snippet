@@ -5,9 +5,19 @@
 # 1. Include this snippet inside the `server` block in `nginx.conf`:
 #    include /etc/nginx/nginx.eurooffice.snippet;
 # 2. Ensure NEXT_PUBLIC_EUROOFFICE_URL is set in the environment
-# 3. Add 'unsafe-eval' to the default script-src in the CSP map
-#    in nginx.conf — the EuroOffice api.js script requires it.
+# 3. If a Content-Security-Policy is ever added for the web app, its
+#    script-src needs 'unsafe-eval': the EuroOffice editor requires it.
+# 4. Start the `eurooffice` compose profile. Upstreams resolve at request
+#    time through the server's `resolver`, so nginx still starts without it.
 
+
+# Deny the document server's internal and admin endpoints (conversion and
+# command APIs, health and stats pages, demo app), with or without the
+# /eurooffice/ prefix or a versioned build path. Regex locations match in
+# order, so this must stay before every other EuroOffice location.
+location ~* ^/(eurooffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+/)?(converter|healthcheck|info|example|ConvertService\.ashx|coauthoring/CommandService\.ashx)(/|$) {
+    return 403;
+}
 
 # 1. Specific fix for themes.json (must be before prefix matches)
 location ~* ^/(eurooffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/themes.json$ {
@@ -58,11 +68,6 @@ location /eurooffice/ {
 
     # Rewrite Location header for redirects (e.g. login pages)
     proxy_redirect http://$host/ $scheme://$host/eurooffice/;
-}
-
-# Deny access to EuroOffice internal and admin paths from the public network
-location ~* ^/(converter|healthcheck)/ {
-    return 403;
 }
 
 # 4. Versioned build paths (for absolute requests like /9.2.1-hash/web-apps/...)

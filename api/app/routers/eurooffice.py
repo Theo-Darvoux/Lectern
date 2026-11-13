@@ -1,17 +1,17 @@
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 import jwt
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.common.exceptions import NotFoundError, UnauthorizedError
+from app.core.common.exceptions import BadRequestError, NotFoundError, UnauthorizedError
 from app.core.database.database import get_db
 from app.core.storage.facade import stream_object
 from app.dependencies.auth import CurrentUser
@@ -29,8 +29,16 @@ _EXT_TO_DOCTYPE: dict[str, str] = {
     "ods": "cell",
     "pptx": "slide",
     "ppt": "slide",
+    "odp": "slide",
     "pdf": "pdf",
 }
+
+# Editor UI language and theme, chosen by the browser but signed into the
+# config here: EuroOffice validates the whole config against its token.
+EditorLang = Literal["en", "fr"]
+EditorTheme = Literal["light", "dark"]
+_EDITOR_REGION: dict[str, str] = {"en": "en-GB", "fr": "fr-FR"}
+_EDITOR_UI_THEME: dict[str, str] = {"light": "theme-light", "dark": "theme-dark"}
 
 _ALGORITHM = "HS256"
 _FILE_GRANT_ISSUER = "lectern-api"
@@ -91,10 +99,13 @@ async def get_eurooffice_config(
     material_id: uuid.UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
+    lang: Annotated[EditorLang, Query()] = "en",
+    theme: Annotated[EditorTheme, Query()] = "light",
 ) -> dict[str, Any]:
     """
     Return a signed EuroOffice editor configuration for the given material.
-    Called by the frontend (authenticated with user JWT).
+    Called by the frontend (authenticated with user JWT). ``lang`` and
+    ``theme`` follow the viewer's UI so the editor matches the app.
     """
     material_id_str = str(material_id)
     data = await get_material_with_version(db, material_id_str)
@@ -104,7 +115,10 @@ async def get_eurooffice_config(
 
     file_name: str = version.get("file_name") or ""
     ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
-    doc_type = _EXT_TO_DOCTYPE.get(ext, "word")
+    doc_type = _EXT_TO_DOCTYPE.get(ext)
+    if doc_type is None:
+        # Guessing a type makes the editor fail later with an opaque error.
+        raise BadRequestError("This file type cannot be opened in the document viewer")
 
     # This URL is returned to browser code as part of the signed editor config,
     # so it must not contain a replayable file credential. EuroOffice signs its
@@ -141,7 +155,8 @@ async def get_eurooffice_config(
         },
         "editorConfig": {
             "mode": "view",
-            "lang": "en",
+            "lang": lang,
+            "region": _EDITOR_REGION[lang],
             "user": {
                 "id": str(user.id),
                 "name": user.display_name or user.email,
@@ -154,6 +169,7 @@ async def get_eurooffice_config(
                 "help": False,
                 "plugins": False,
                 "toolbarHideFileName": True,
+                "uiTheme": _EDITOR_UI_THEME[theme],
                 "anonymous": {"request": False},
                 "logo": {
                     "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",

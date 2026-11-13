@@ -15,7 +15,7 @@ export const ACCEPTED_FILE_TYPES = [
     // Video
     ".mp4", ".webm",
     // Office (modern + legacy + ODF)
-    ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".odt", ".ods",
+    ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".odt", ".ods", ".odp",
     // Text / markup
     ".md", ".markdown", ".rst", ".adoc",
     ".txt", ".csv", ".log", ".env",
@@ -691,6 +691,7 @@ const EXT_TO_VIEWER: Record<string, string> = {
     ppt: "office",
     odt: "office",
     ods: "office",
+    odp: "office",
     epub: "epub",
     djvu: "djvu",
     djv: "djvu",

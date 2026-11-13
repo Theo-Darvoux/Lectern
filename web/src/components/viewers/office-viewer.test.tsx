@@ -18,6 +18,11 @@ vi.mock("@/lib/api-client", () => ({
 
 vi.mock("next-intl", () => ({
   useTranslations: () => translate,
+  useLocale: () => "fr",
+}));
+
+vi.mock("next-themes", () => ({
+  useTheme: () => ({ resolvedTheme: "dark" }),
 }));
 
 vi.mock("@/lib/stores", () => ({
@@ -96,6 +101,39 @@ describe("OfficeViewer", () => {
     expect(host.querySelector("[role='alert']")).toBeNull();
     expect(host.textContent).not.toContain("initializing");
     expect(DocEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests the editor in the viewer's language and theme", async () => {
+    await act(async () => {
+      root.render(
+        <OfficeViewer materialId="material-3" fileKey="file-3" fileName="slides.odp" />,
+      );
+    });
+
+    expect(apiFetch).toHaveBeenCalledWith(
+      "/eurooffice/config/material-3?lang=fr&theme=dark",
+      expect.objectContaining({ timeoutMs: 15_000 }),
+    );
+  });
+
+  it("explains known editor error codes instead of only showing the raw code", async () => {
+    const DocEditor = vi.fn(function (
+      _id: string,
+      options: { events: { onError: (e: unknown) => void } },
+    ) {
+      options.events.onError({ data: { errorCode: -4, errorDescription: "Download failed" } });
+      return { destroyEditor: vi.fn() };
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    (window as unknown as { DocsAPI: unknown }).DocsAPI = { DocEditor };
+
+    await act(async () => {
+      root.render(
+        <OfficeViewer materialId="material-4" fileKey="file-4" fileName="notes.docx" />,
+      );
+    });
+
+    expect(host.querySelector("[role='alert']")?.textContent).toBe("errorDownload (Code: -4)");
   });
 
   it("does not report an expected request cancellation when the viewer unmounts", async () => {

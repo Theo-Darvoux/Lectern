@@ -8,8 +8,9 @@
 interface PrintRegistryEntry {
   /** Returns the rendered HTML content of the viewer (used by Markdown) */
   getContent?: () => string | null | Promise<string | null>;
-  /** Directly triggers the viewer's built-in print (used by Office/OnlyOffice) */
-  print?: () => void;
+  /** Directly triggers the viewer's built-in print (used by Office/EuroOffice).
+   *  May resolve after an async export; a rejection is reported as a failure. */
+  print?: () => void | Promise<void>;
 }
 
 const registry = new Map<string, PrintRegistryEntry>();

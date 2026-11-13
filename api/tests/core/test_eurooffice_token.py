@@ -11,7 +11,7 @@ import pytest
 from starlette.requests import Request
 
 from app.config import settings
-from app.core.common.exceptions import UnauthorizedError
+from app.core.common.exceptions import BadRequestError, UnauthorizedError
 from app.routers import eurooffice
 from app.routers.eurooffice import (
     _EXT_TO_DOCTYPE,
@@ -178,8 +178,53 @@ async def test_eurooffice_file_route_ignores_legacy_query_bearer() -> None:
         ("ods", "cell"),
         ("pptx", "slide"),
         ("ppt", "slide"),
+        ("odp", "slide"),
         ("pdf", "pdf"),
     ],
 )
 def test_ext_to_doctype_known_extensions(ext: str, expected_doc_type: str) -> None:
     assert _EXT_TO_DOCTYPE[ext] == expected_doc_type
+
+
+def _mock_current_version(monkeypatch: pytest.MonkeyPatch, file_name: str) -> None:
+    monkeypatch.setattr(
+        eurooffice,
+        "get_material_with_version",
+        AsyncMock(
+            return_value={
+                "current_version_info": {
+                    "file_key": "cas/object",
+                    "file_name": file_name,
+                    "version_number": 1,
+                }
+            }
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_eurooffice_config_rejects_unknown_extension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_current_version(monkeypatch, "archive.zip")
+    user = SimpleNamespace(id=uuid.uuid4(), display_name="Viewer", email="viewer@example.com")
+    with pytest.raises(BadRequestError):
+        await get_eurooffice_config(uuid.uuid4(), user, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_eurooffice_config_signs_viewer_language_and_theme(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_current_version(monkeypatch, "slides.odp")
+    user = SimpleNamespace(id=uuid.uuid4(), display_name="Viewer", email="viewer@example.com")
+
+    config = await get_eurooffice_config(uuid.uuid4(), user, AsyncMock(), lang="fr", theme="dark")
+
+    assert config["documentType"] == "slide"
+    assert config["editorConfig"]["lang"] == "fr"
+    assert config["editorConfig"]["region"] == "fr-FR"
+    assert config["editorConfig"]["customization"]["uiTheme"] == "theme-dark"
+    signed = jwt.decode(config["token"], settings.eurooffice_jwt_secret, algorithms=[_ALGORITHM])
+    assert signed["editorConfig"]["lang"] == "fr"
+    assert signed["editorConfig"]["customization"]["uiTheme"] == "theme-dark"

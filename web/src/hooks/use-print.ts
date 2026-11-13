@@ -198,7 +198,7 @@ export function usePrint({ viewerType, materialId, fileName }: UsePrintOptions) 
         case "office": {
           const entry = getViewerPrint(materialId);
           if (entry?.print) {
-            entry.print();
+            await entry.print();
           } else {
             toast.info(t("documentLoading"));
             return;

@@ -316,7 +316,10 @@ class Settings(BaseSettings):
     # Must differ from eurooffice_jwt_secret so a compromised EuroOffice
     # container cannot forge file-download tokens.
     eurooffice_file_token_secret: str = "change-me-eurooffice-file-token-secret"
-    eurooffice_file_token_ttl: int = 60  # seconds (1 minute)
+    # Seconds. EuroOffice fetches the file only once its editor has loaded in
+    # the browser, which can take well over a minute on a slow connection. The
+    # grant is also bound to the document-server JWT and the material version.
+    eurooffice_file_token_ttl: int = 600
 
     @model_validator(mode="after")
     def _check_secrets(self) -> "Settings":

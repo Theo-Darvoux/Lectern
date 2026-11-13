@@ -127,9 +127,13 @@ cacheable; authenticated file requests must reach the token verifier.
 |---|---|---|
 | `EUROOFFICE_JWT_SECRET` | *(dev placeholder)* | **Required in prod, secret.** Shared with the EuroOffice document server. |
 | `EUROOFFICE_FILE_TOKEN_SECRET` | *(dev placeholder)* | **Required in prod, secret.** Signs short-lived file-access tokens. **Must differ from `EUROOFFICE_JWT_SECRET`** so a compromised EuroOffice container cannot forge download tokens — the validator enforces this. |
-| `EUROOFFICE_FILE_TOKEN_TTL` | `60` | Lifetime (seconds) of a file-access token. |
+| `EUROOFFICE_FILE_TOKEN_TTL` | `600` | Lifetime (seconds) of a file-access token. EuroOffice fetches the file only once its editor has loaded in the browser, so a short value breaks opening on slow connections (editor error `-4`). The token is also bound to the document-server JWT and to the material version. |
 | `EUROOFFICE_INTERNAL_API_BASE_URL` | `http://api:8000` | URL the EuroOffice container uses to fetch files from the API (internal network address). |
 | `EUROOFFICE_PUBLIC_URL` | *(unset)* | Browser-facing EuroOffice URL (can also be set as `NEXT_PUBLIC_EUROOFFICE_URL`). If unset, falls back to `/eurooffice/`. |
+| `EUROOFFICE_IMAGE` | `ghcr.io/euro-office/documentserver:v9.3.7` | Document server image (Compose, `eurooffice` profile). Pinned so upgrades are deliberate; change the tag to upgrade. |
+| `EUROOFFICE_CPU_LIMIT` | `2.0` | CPU cap for the document server container (Compose), so large conversions cannot starve the API and workers. |
+
+The document server only runs when the `eurooffice` profile is in `COMPOSE_PROFILES`.
 
 ---
 

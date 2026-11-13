@@ -4,13 +4,16 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { apiFetchRetry } from "@/lib/api-client";
 import { registerViewerPrint, unregisterViewerPrint } from "@/lib/viewer-print-registry";
+import { printPdfBlob } from "@/lib/print-utils";
 import { ViewerShell } from "./viewer-shell";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
+import { useTheme } from "next-themes";
 import { useConfigStore } from "@/lib/stores";
 import { loadEuroofficeApi } from "@/lib/eurooffice-api";
 
 interface DocEditor {
     destroyEditor: () => void;
+    downloadAs?: (format?: string) => void;
 }
 
 /** Payload of the editor's onError event; its shape differs between versions. */
@@ -20,6 +23,11 @@ interface DocsApiError {
     description?: string;
 }
 
+/** Payload of onDownloadAs: `{ fileType, url }` since 7.0, a bare URL before. */
+interface DocsApiDownloadAs {
+    data?: { fileType?: string; url?: string } | string;
+}
+
 declare global {
     interface Window {
         /** Global set by the Euro-Office (OnlyOffice) API script. */
@@ -27,8 +35,52 @@ declare global {
     }
 }
 
+interface PendingPrint {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+}
+
+const READY_TIMEOUT_MS = 30_000;
+/** Converting a large presentation to PDF can take a while on the server. */
+const PRINT_EXPORT_TIMEOUT_MS = 90_000;
+const SUPPORTED_EDITOR_LANGS = new Set(["en", "fr"]);
+
+/** Editor error codes (sdkjs `c_oAscError.ID`) that have a clearer message than the raw code. */
+const ERROR_MESSAGE_KEYS: Record<number, "errorDownload" | "errorConversion" | "errorTimeout" | "errorTooLarge"> = {
+    [-2]: "errorTimeout",
+    [-3]: "errorConversion",
+    [-4]: "errorDownload",
+    [-82]: "errorConversion",
+    [-84]: "errorTooLarge",
+};
+
 const errorMessage = (err: unknown, fallback: string) =>
     err instanceof Error && err.message ? err.message : fallback;
+
+/** The editor's compact mobile layout fits phones; tablets keep the desktop one. */
+const prefersMobileEditor = () =>
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 767px) and (pointer: coarse)").matches;
+
+/** Read the applied theme class before next-themes has resolved, to avoid a second editor load. */
+const documentTheme = (): "light" | "dark" =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark")
+        ? "dark"
+        : "light";
+
+async function printExportedPdf(url: string): Promise<void> {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`PDF export request failed (${response.status})`);
+        printPdfBlob(await response.blob());
+    } catch (err) {
+        // A document server on another origin may not allow the fetch; opening
+        // the export still lets the user print it from the browser's viewer.
+        if (!window.open(url, "_blank")) throw err;
+    }
+}
 
 interface OfficeViewerProps {
     fileKey: string;
@@ -38,22 +90,55 @@ interface OfficeViewerProps {
 
 export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProps) {
     const t = useTranslations("Viewers.office");
+    const locale = useLocale();
+    const { resolvedTheme } = useTheme();
     const config = useConfigStore((state) => state.config);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const editorRef = useRef<DocEditor | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const readyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pendingPrintRef = useRef<PendingPrint | null>(null);
     const [loadAttempt, setLoadAttempt] = useState(0);
     const reactId = useId();
     const editorContainerId = `office-editor-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
     const retry = useCallback(() => setLoadAttempt((attempt) => attempt + 1), []);
+
+    const editorLang = SUPPORTED_EDITOR_LANGS.has(locale) ? locale : "en";
+    const editorTheme = resolvedTheme === "dark" || resolvedTheme === "light" ? resolvedTheme : documentTheme();
 
     useEffect(() => {
         const container = containerRef.current;
         let isMounted = true;
         let isReady = false;
         const controller = new AbortController();
+
+        const settlePendingPrint = (failure?: Error) => {
+            const pending = pendingPrintRef.current;
+            if (!pending) return;
+            pendingPrintRef.current = null;
+            clearTimeout(pending.timer);
+            if (failure) pending.reject(failure);
+            else pending.resolve();
+        };
+
+        // The editor prints through its own PDF export: printing the iframe
+        // would only capture the editor chrome and the visible page.
+        const printDocument = () =>
+            new Promise<void>((resolve, reject) => {
+                const editor = editorRef.current;
+                if (!editor?.downloadAs) {
+                    reject(new Error("EuroOffice editor cannot export this document"));
+                    return;
+                }
+                settlePendingPrint(new Error("Superseded by a newer print request"));
+                const timer = setTimeout(
+                    () => settlePendingPrint(new Error("EuroOffice PDF export timed out")),
+                    PRINT_EXPORT_TIMEOUT_MS,
+                );
+                pendingPrintRef.current = { resolve, reject, timer };
+                editor.downloadAs("pdf");
+            });
 
         const markReady = () => {
             isReady = true;
@@ -99,40 +184,49 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                     editorRef.current = null;
                     setError(t("readyTimeout"));
                     setLoading(false);
-                }, 30000);
+                }, READY_TIMEOUT_MS);
 
                 // Initialize the editor with the backend-provided config
                 editorRef.current = new docsApi.DocEditor(editorContainerId, {
                     ...editorConfig,
+                    type: prefersMobileEditor() ? "mobile" : "desktop",
                     height: "100%",
                     width: "100%",
                     events: {
                         onAppReady: () => {
                             markReady();
-                            registerViewerPrint(materialId, {
-                                print: () => {
-                                    const iframe = containerRef.current?.querySelector("iframe");
-                                    if (iframe?.contentWindow) {
-                                        iframe.contentWindow.print();
-                                    } else {
-                                        window.print();
-                                    }
-                                }
-                            });
+                            registerViewerPrint(materialId, { print: printDocument });
+                        },
+                        onDownloadAs: (e: DocsApiDownloadAs | undefined) => {
+                            if (!pendingPrintRef.current) return;
+                            const data = e?.data;
+                            const url = typeof data === "string" ? data : data?.url;
+                            if (!url) {
+                                settlePendingPrint(new Error("EuroOffice PDF export returned no file"));
+                                return;
+                            }
+                            const pending = pendingPrintRef.current;
+                            pendingPrintRef.current = null;
+                            clearTimeout(pending.timer);
+                            printExportedPdf(url).then(pending.resolve, (err: unknown) =>
+                                pending.reject(err instanceof Error ? err : new Error(String(err))),
+                            );
                         },
                         onError: (e: DocsApiError | undefined) => {
                             const data = e?.data;
                             const code = (typeof data === "object" ? data.errorCode : data) ?? e?.errorCode;
                             const desc = (typeof data === "object" ? data.errorDescription : undefined) ?? e?.description ?? "";
                             console.error("OnlyOffice Editor Error:", { code, desc, raw: e });
+                            settlePendingPrint(new Error("EuroOffice editor error"));
                             isReady = true;
                             if (readyTimeoutRef.current) {
                                 clearTimeout(readyTimeoutRef.current);
                                 readyTimeoutRef.current = null;
                             }
                             if (isMounted) {
+                                const messageKey = code != null ? ERROR_MESSAGE_KEYS[code] : undefined;
                                 const detail = code != null ? ` (Code: ${code}${desc ? ` — ${desc}` : ""})` : "";
-                                setError(`${t("engineError")}${detail}`);
+                                setError(messageKey ? `${t(messageKey)} (Code: ${code})` : `${t("engineError")}${detail}`);
                                 setLoading(false);
                             }
                         },
@@ -176,8 +270,10 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                     throw lastError;
                 };
 
+                // Language and theme are signed into the config server-side.
+                const query = new URLSearchParams({ lang: editorLang, theme: editorTheme });
                 const [editorConfig] = await Promise.all([
-                    apiFetchRetry<Record<string, unknown>>(`/eurooffice/config/${materialId}`, {
+                    apiFetchRetry<Record<string, unknown>>(`/eurooffice/config/${materialId}?${query}`, {
                         signal: controller.signal,
                         timeoutMs: 15_000,
                     }),
@@ -202,6 +298,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
         return () => {
             isMounted = false;
             controller.abort();
+            settlePendingPrint(new Error("Document viewer closed"));
             if (readyTimeoutRef.current) {
                 clearTimeout(readyTimeoutRef.current);
                 readyTimeoutRef.current = null;
@@ -215,17 +312,23 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
             }
             unregisterViewerPrint(materialId);
         };
-    }, [materialId, fileName, fileKey, config?.eurooffice_public_url, editorContainerId, loadAttempt, t]);
+    }, [materialId, fileName, fileKey, config?.eurooffice_public_url, editorContainerId, editorLang, editorTheme, loadAttempt, t]);
 
     return (
-        <ViewerShell loading={false} error={error} onRetry={retry} className="h-full">
+        <ViewerShell
+            loading={false}
+            error={error}
+            onRetry={retry}
+            downloadMaterialId={materialId}
+            className="h-full"
+        >
             <div className="relative w-full h-full bg-muted/5">
-                {/* 
-                  We use a ref-based container and manual innerHTML to isolate OnlyOffice 
+                {/*
+                  We use a ref-based container and manual innerHTML to isolate OnlyOffice
                   from React's DOM reconciliation, preventing 'Node.removeChild' crashes.
                 */}
                 <div ref={containerRef} className="w-full h-full" />
-                
+
                 {loading && (
                     <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/85 backdrop-blur-sm">
                         <div className="flex flex-col items-center gap-4 rounded-2xl border bg-background/90 p-8 shadow-lg">

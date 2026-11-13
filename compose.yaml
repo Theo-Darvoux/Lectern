@@ -358,7 +358,11 @@ services:
           memory: ${WEB_MEMORY_RESERVATION:-1G}
 
   eurooffice:
-    image: ghcr.io/euro-office/documentserver:latest
+    # Opt-in: the document server needs ~2 GB RAM and a minute to boot. Add
+    # `eurooffice` to COMPOSE_PROFILES to run it (the default in .env.example).
+    profiles: [ eurooffice ]
+    # Pinned so upgrades are deliberate; bump EUROOFFICE_IMAGE to update.
+    image: ${EUROOFFICE_IMAGE:-ghcr.io/euro-office/documentserver:v9.3.7}
     container_name: lectern-eurooffice-1
     restart: unless-stopped
     stop_grace_period: 1m
@@ -369,8 +373,6 @@ services:
       - ALLOW_PRIVATE_IP_ADDRESS=true
     networks:
       - frontend
-    extra_hosts:
-      - "localhost:host-gateway"
     healthcheck:
       test: [ "CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost/')" ]
       interval: 30s
@@ -378,13 +380,18 @@ services:
       retries: 5
       start_period: 60s
     logging:
-      driver: "none"
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - eurooffice_data:/var/www/onlyoffice/Data
       - eurooffice_log:/var/log/onlyoffice
     deploy:
       resources:
         limits:
+          # Caps document conversion so a large file cannot starve the API and workers.
+          cpus: "${EUROOFFICE_CPU_LIMIT:-2.0}"
           memory: 4G
 
   nginx:
