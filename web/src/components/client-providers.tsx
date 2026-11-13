@@ -12,6 +12,7 @@ import { ExternalLinkDialog } from "@/components/external-link-dialog";
 import { QueryProvider } from "@/components/query-provider";
 import { StorageFullNotice } from "@/components/storage-full-notice";
 import { installToastGuard } from "@/lib/toast-guard";
+import { ConfigStoreProvider, type PublicConfig } from "@/lib/stores";
 import type { AbstractIntlMessages } from "next-intl";
 import {
   DEFAULT_LOCALE,
@@ -30,7 +31,14 @@ function getCookieLocale(): SupportedLocale {
   return val && isSupportedLocale(val) ? val : DEFAULT_LOCALE;
 }
 
-export function ClientProviders({ children }: { children: ReactNode }) {
+export function ClientProviders({
+  initialConfig,
+  children,
+}: {
+  /** Public config the root layout fetched; null when the API was unreachable. */
+  initialConfig: PublicConfig | null;
+  children: ReactNode;
+}) {
   const [locale, setLocale] = useState<SupportedLocale>(DEFAULT_LOCALE);
   const [messages, setMessages] = useState<AbstractIntlMessages>(DEFAULT_MESSAGES);
 
@@ -46,29 +54,31 @@ export function ClientProviders({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <LocaleProvider
-      initialLocale={locale}
-      initialMessages={messages}
-      supportedLocales={SUPPORTED_LOCALES}
-      loadMessages={loadLocaleMessages}
-    >
-      <ThemeProvider
-        attribute="class"
-        defaultTheme="system"
-        enableSystem
-        disableTransitionOnChange
+    <ConfigStoreProvider initialConfig={initialConfig}>
+      <LocaleProvider
+        initialLocale={locale}
+        initialMessages={messages}
+        supportedLocales={SUPPORTED_LOCALES}
+        loadMessages={loadLocaleMessages}
       >
-        <QueryProvider>
-          <ConfigProvider>
-            <AuthBootstrap />
-            <RuntimeRouter>{children}</RuntimeRouter>
-          </ConfigProvider>
-        </QueryProvider>
-        <ExternalLinkDialog />
-        <StorageFullNotice />
-        <CookieBanner />
-        <Toaster position="bottom-left" expand richColors />
-      </ThemeProvider>
-    </LocaleProvider>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
+          <QueryProvider>
+            <ConfigProvider>
+              <AuthBootstrap />
+              <RuntimeRouter>{children}</RuntimeRouter>
+            </ConfigProvider>
+          </QueryProvider>
+          <ExternalLinkDialog />
+          <StorageFullNotice />
+          <CookieBanner />
+          <Toaster position="bottom-left" expand richColors />
+        </ThemeProvider>
+      </LocaleProvider>
+    </ConfigStoreProvider>
   );
 }

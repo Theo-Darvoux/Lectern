@@ -25,6 +25,15 @@ location ~* ^/(eurooffice/)?(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/themes.json$ {
     rewrite ^ /web-apps/apps/themes/themes.json break;
     proxy_pass $eurooffice_upstream;
     proxy_set_header Host $host;
+    # Successes keep the document server's caching; errors are never cached
+    # (see the $eurooffice_cache_control map). Any add_header here stops the
+    # server-level ones from being inherited, so they are repeated.
+    proxy_hide_header Cache-Control;
+    add_header Cache-Control $eurooffice_cache_control always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 }
 
 # 2. WebSocket and Coauthoring endpoints (handles /eurooffice/ prefix and versioned paths)
@@ -66,6 +75,16 @@ location /eurooffice/ {
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
 
+    # Successes keep the document server's caching; errors are never cached
+    # (see the $eurooffice_cache_control map). Any add_header here stops the
+    # server-level ones from being inherited, so they are repeated.
+    proxy_hide_header Cache-Control;
+    add_header Cache-Control $eurooffice_cache_control always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
     # Rewrite Location header for redirects (e.g. login pages)
     proxy_redirect http://$host/ $scheme://$host/eurooffice/;
 }
@@ -81,6 +100,16 @@ location ~* ^/(\d+\.\d+\.\d+[\.-][a-zA-Z0-9]+)/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+
+    # Successes keep the document server's caching; errors are never cached
+    # (see the $eurooffice_cache_control map). Any add_header here stops the
+    # server-level ones from being inherited, so they are repeated.
+    proxy_hide_header Cache-Control;
+    add_header Cache-Control $eurooffice_cache_control always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 }
 
 # 5. Absolute asset paths (requested by the editor JS)
@@ -96,6 +125,16 @@ location ~* ^/(cache|web-apps|sdkjs|sdkjs-plugins|fonts|dictionaries|meta|printf
     proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
+
+    # Successes keep the document server's caching; errors are never cached
+    # (see the $eurooffice_cache_control map). Any add_header here stops the
+    # server-level ones from being inherited, so they are repeated.
+    proxy_hide_header Cache-Control;
+    add_header Cache-Control $eurooffice_cache_control always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
     # If EuroOffice doesn't recognise the path (404), fall through to
     # Next.js so future app routes on these prefixes still work.

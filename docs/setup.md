@@ -99,7 +99,7 @@ Include `eurooffice` in production, or Office files cannot be previewed.
 What production mode changes relative to the dev defaults:
 - App services use the pre-built GHCR images (`IMAGE_TAG`, default `latest`) instead of building locally
 - API runs under **gunicorn** with 4 uvicorn workers (defined in `compose.prod.yaml`)
-- Web is served by **nginx** from the pre-built static export (64 MB container, defined in `compose.prod.yaml`)
+- Web runs the Next.js server from the standalone build (`node server.js`, 512 MB container, defined in `compose.prod.yaml`). It renders every page with the branding it reads from the API, so the image holds no instance settings and a rebrand needs no rebuild
 - The production overlay forces `ENVIRONMENT=production`, activating secret validation and hiding OpenAPI docs
 - Resource limits are set per service (defined in `compose.prod.yaml`)
 - `worker-fast` and `worker-slow` scale horizontally via `WORKER_FAST_REPLICAS` / `WORKER_SLOW_REPLICAS`

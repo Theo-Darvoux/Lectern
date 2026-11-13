@@ -30,16 +30,23 @@ services:
   web:
     image: ghcr.io/theo-darvoux/lectern/web:${IMAGE_TAG:-latest}
     build: !reset null
-    # null restores the nginx runner image's inherited CMD. [] would clear it.
+    # null restores the runner image's CMD (node server.js). [] would clear it.
     command: null
+    # The dev source mount and published port would shadow the built server
+    # and expose it without nginx.
+    volumes: !reset []
+    ports: !reset []
+    environment:
+      NODE_OPTIONS: --max-old-space-size=384
+      WATCHPACK_POLLING: "false"
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 64M
+          cpus: "1.0"
+          memory: 512M
         reservations:
           cpus: "0.1"
-          memory: 32M
+          memory: 128M
 
   selfhost-worker:
     image: ghcr.io/theo-darvoux/lectern/selfhost-worker:${IMAGE_TAG:-latest}

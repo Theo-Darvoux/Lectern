@@ -10,7 +10,7 @@ export function Footer() {
     const t = useTranslations("Layout");
     const config = useConfigStore((state) => state.config);
     const shortCommit = commitSha?.slice(0, 7);
-    const repoUrl = config?.repo_url || process.env.NEXT_PUBLIC_REPO_URL || "";
+    const repoUrl = config?.repo_url || "";
 
     return (
         <footer className={`border-t pt-6 ${config?.footer_text ? "pb-10" : "pb-6"} w-full`}>

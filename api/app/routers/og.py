@@ -1,30 +1,44 @@
-"""Server-rendered Open Graph / link-preview metadata & dynamic banner images.
+"""Open Graph metadata and preview banners.
 
-The web frontend is a static export, so its HTML <head> is baked at build time
-and cannot reflect the runtime admin branding config. Social/link-preview
-crawlers (Slack, Discord, WhatsApp, Facebook, etc.) don't run JS, so they never
-see the branding the client applies after load. The top-level nginx routes those
-crawler User-Agents here; humans keep getting the static SPA untouched.
+The web app renders its HTML <head> on the server (Next.js ``generateMetadata``)
+from ``GET /api/og/meta``, so every client, link-preview crawlers included, gets
+the live branding and per-resource titles. ``GET /api/og/image`` draws the
+matching 1200x630 banner.
+
+Both endpoints take only a site path. The banner text is always resolved here,
+never read from the query string, so nobody can mint a banner with arbitrary
+text on this domain.
 """
 
 from __future__ import annotations
 
-import html
-from typing import Annotated
-from urllib.parse import quote
+from dataclasses import dataclass
+from typing import Annotated, Literal
+from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.database.database import get_db
+from app.core.events.limiter import limiter
 from app.core.media.og_image import generate_og_image
+from app.schemas.og import OgMetaResponse
 from app.services.directory import resolve_browse_path
 from app.services.material import get_material_by_id
 from app.services.user import get_user_by_id
 
 router = APIRouter(prefix="/api", tags=["og"])
+
+_DEFAULT_TAGS = "Cours & Annales|Partage Collaboratif|QCM & Quiz"
+_DEFAULT_BADGE = "Plateforme Académique"
+_DEFAULT_SUBTITLE = "Plateforme collaborative de cours & annales"
+_ARTICLE_BADGES = frozenset({"Document", "QCM & Quiz"})
+_BANNER_WIDTH = 1200
+_BANNER_HEIGHT = 630
+
+# A site path such as "/browse/maths/". Bounded so a lookup stays cheap.
+SitePath = Annotated[str, Query(max_length=1024, pattern=r"^/")]
 
 
 async def _resolve_resource(db: AsyncSession, path: str) -> tuple[str, str | None, str, str] | None:
@@ -82,45 +96,112 @@ async def _resolve_resource(db: AsyncSession, path: str) -> tuple[str, str | Non
     return None
 
 
-def _meta(prop: str, content: str, *, name: bool = False) -> str:
-    attr = "name" if name else "property"
-    return f'<meta {attr}="{html.escape(prop, quote=True)}" content="{html.escape(content, quote=True)}">'
+@dataclass(frozen=True)
+class _Page:
+    title: str
+    og_title: str
+    description: str
+    badge: str
+    tags: str
+    type: Literal["website", "article"]
+    is_resource: bool
+
+
+def _site_name() -> str:
+    return settings.og_site_name or settings.site_name or "Lectern"
+
+
+def _theme_color() -> str:
+    return settings.og_theme_color or settings.primary_color
+
+
+def _origin() -> str:
+    return settings.frontend_url.rstrip("/")
+
+
+async def _resolve_page(db: AsyncSession, path: str) -> _Page:
+    site_name = _site_name()
+    site_description = settings.og_description or settings.site_description or ""
+    resource = await _resolve_resource(db, path)
+    if resource is not None:
+        title, description, badge, tags = resource
+        return _Page(
+            title=f"{title} • {site_name}",
+            og_title=title,
+            description=description or site_description,
+            badge=badge,
+            tags=tags,
+            type="article" if badge in _ARTICLE_BADGES else "website",
+            is_resource=True,
+        )
+    site_title = settings.og_title or site_name
+    return _Page(
+        title=site_title,
+        og_title=site_title,
+        description=site_description,
+        badge=settings.og_tagline or _DEFAULT_BADGE,
+        tags=_DEFAULT_TAGS,
+        type="website",
+        is_resource=False,
+    )
+
+
+@router.get("/og/meta", response_model=OgMetaResponse)
+async def get_og_meta(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
+    path: SitePath = "/",
+) -> OgMetaResponse:
+    """Metadata for one page of the web app, resolved as an anonymous visitor."""
+    page = await _resolve_page(db, path)
+    origin = _origin()
+
+    configured = settings.og_image_url
+    if configured:
+        image = f"{origin}{configured}" if configured.startswith("/") else configured
+        width = height = None
+    else:
+        # Site-level pages share one banner URL, so caches hold a single copy.
+        query = f"?path={quote(path)}" if page.is_resource else ""
+        image = f"{origin}/api/og/image{query}"
+        width, height = _BANNER_WIDTH, _BANNER_HEIGHT
+
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return OgMetaResponse(
+        site_name=_site_name(),
+        title=page.title,
+        og_title=page.og_title,
+        description=page.description,
+        type=page.type,
+        locale=settings.og_locale or "fr_FR",
+        url=f"{origin}{path}",
+        image=image,
+        image_width=width,
+        image_height=height,
+        theme_color=_theme_color(),
+        twitter_site=settings.og_twitter_site,
+        twitter_creator=settings.og_twitter_creator,
+    )
 
 
 @router.get("/og/image", response_class=Response)
+@limiter.limit("30/minute")
 async def render_og_image(
     request: Request,
-    title: Annotated[str | None, Query(description="Main title to display")] = None,
-    subtitle: Annotated[str | None, Query(description="Subtitle/description")] = None,
-    badge: Annotated[str | None, Query(description="Category or section badge")] = None,
-    theme: Annotated[str | None, Query(description="Theme color hex")] = None,
-    tags: Annotated[str | None, Query(description="Pipe-separated footer tags")] = None,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    path: SitePath = "/",
 ) -> Response:
-    """Generate a dynamic 1200x630 Open Graph preview image (PNG)."""
-    site_name = settings.og_site_name or settings.site_name or "Lectern"
-    final_title = title or settings.og_title or site_name
-    final_subtitle = (
-        subtitle
-        or settings.og_description
-        or settings.site_description
-        or settings.og_tagline
-        or "Plateforme collaborative de cours & annales"
-    )
-    final_badge = badge or settings.og_tagline or "Plateforme Académique"
-    final_theme = theme or settings.og_theme_color or settings.primary_color or "#6366f1"
-    final_tags = tags or "Cours & Annales|Partage Collaboratif|QCM & Quiz"
-    host = request.headers.get("host", "")
-
+    """The 1200x630 preview banner (PNG) of one page of the web app."""
+    page = await _resolve_page(db, path)
     image_bytes = generate_og_image(
-        site_name=site_name,
-        title=final_title,
-        subtitle=final_subtitle,
-        badge=final_badge,
-        theme_color_hex=final_theme,
-        host=host,
-        footer_tags=final_tags,
+        site_name=_site_name(),
+        title=page.og_title,
+        subtitle=(page.description or settings.og_tagline or _DEFAULT_SUBTITLE)[:140],
+        badge=page.badge,
+        theme_color_hex=_theme_color(),
+        host=urlsplit(_origin()).netloc or None,
+        footer_tags=page.tags,
     )
-
     return Response(
         content=image_bytes,
         media_type="image/png",
@@ -128,109 +209,3 @@ async def render_og_image(
             "Cache-Control": "public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800",
         },
     )
-
-
-@router.get("/og", response_class=HTMLResponse)
-async def render_og(
-    request: Request,
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> HTMLResponse:
-    site_name = settings.og_site_name or settings.site_name or "Lectern"
-    site_description = settings.og_description or settings.site_description or ""
-    configured_og_image = settings.og_image_url
-    favicon = settings.site_favicon_url
-    theme_color = settings.og_theme_color or settings.primary_color or "#6366f1"
-    locale = settings.og_locale or "fr_FR"
-
-    original_path = request.headers.get("x-original-path", "/")
-    proto = request.headers.get("x-forwarded-proto", "https")
-    host = request.headers.get("host", "")
-    origin = f"{proto}://{host}" if host else ""
-    canonical = f"{origin}{original_path}" if origin else original_path
-
-    resource = await _resolve_resource(db, original_path)
-    if resource is not None:
-        resource_title, resource_description, resource_badge, resource_tags = resource
-        title = f"{resource_title} • {site_name}"
-        description = resource_description or site_description
-        og_title = resource_title
-        badge = resource_badge
-        footer_tags = resource_tags
-        og_type = "article" if resource_badge in {"Document", "QCM & Quiz"} else "website"
-    else:
-        title = settings.og_title or site_name
-        description = site_description
-        og_title = settings.og_title or site_name
-        badge = settings.og_tagline or "Plateforme Académique"
-        footer_tags = "Cours & Annales|Partage Collaboratif|QCM & Quiz"
-        og_type = "website"
-
-    # Determine OG Image URL: use configured static URL if present, otherwise dynamic generator
-    if configured_og_image:
-        if configured_og_image.startswith(("http://", "https://")):
-            og_image = configured_og_image
-        elif origin and configured_og_image.startswith("/"):
-            og_image = f"{origin}{configured_og_image}"
-        else:
-            og_image = configured_og_image
-    else:
-        # Generate dynamic image URL
-        query_params = [
-            f"title={quote(og_title)}",
-            f"subtitle={quote(description[:140])}",
-            f"badge={quote(badge)}",
-            f"theme={quote(theme_color)}",
-            f"tags={quote(footer_tags)}",
-        ]
-        img_path = f"/api/og/image?{'&'.join(query_params)}"
-        og_image = f"{origin}{img_path}" if origin else img_path
-
-    tags = [
-        '<meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>{html.escape(title)}</title>",
-        _meta("theme-color", theme_color, name=True),
-        _meta("msapplication-TileColor", theme_color, name=True),
-        _meta("description", description, name=True),
-        _meta("og:type", og_type),
-        _meta("og:site_name", site_name),
-        _meta("og:title", og_title),
-        _meta("og:description", description),
-        _meta("og:url", canonical),
-        _meta("og:locale", locale),
-        _meta("og:image", og_image),
-        _meta("og:image:type", "image/png"),
-        _meta("og:image:width", "1200"),
-        _meta("og:image:height", "630"),
-        _meta("og:image:alt", og_title),
-        _meta("twitter:card", "summary_large_image", name=True),
-        _meta("twitter:title", og_title, name=True),
-        _meta("twitter:description", description, name=True),
-        _meta("twitter:image", og_image, name=True),
-        _meta("twitter:image:alt", og_title, name=True),
-        f'<link rel="canonical" href="{html.escape(canonical, quote=True)}">',
-    ]
-
-    if proto == "https" and og_image.startswith("https://"):
-        tags.insert(13, _meta("og:image:secure_url", og_image))
-
-    if settings.og_twitter_site:
-        tags.append(_meta("twitter:site", settings.og_twitter_site, name=True))
-    if settings.og_twitter_creator:
-        tags.append(_meta("twitter:creator", settings.og_twitter_creator, name=True))
-
-    if favicon:
-        tags.append(f'<link rel="icon" href="{html.escape(favicon, quote=True)}">')
-
-    head = "\n    ".join(tags)
-    body = f'<p><a href="{html.escape(canonical, quote=True)}">{html.escape(title)}</a></p>'
-    document = (
-        "<!doctype html>\n"
-        '<html lang="fr">\n'
-        f"  <head>\n    {head}\n"
-        f'    <meta http-equiv="refresh" content="0; url={html.escape(canonical, quote=True)}">\n'
-        "  </head>\n"
-        f"  <body>\n    {body}\n  </body>\n"
-        "</html>\n"
-    )
-    return HTMLResponse(content=document, headers={"Cache-Control": "public, max-age=60"})

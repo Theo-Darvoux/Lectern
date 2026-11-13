@@ -39,21 +39,23 @@ services:
       target: runner
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
-        NEXT_PUBLIC_EUROOFFICE_URL: ${NEXT_PUBLIC_EUROOFFICE_URL:-https://intellect.clubcode.fr/eurooffice}
-        NEXT_PUBLIC_REPO_URL: ${NEXT_PUBLIC_REPO_URL:-https://github.com/Theo-Darvoux/WikINT}
-        SITE_NAME: ${SITE_NAME:-Intellect}
-        SITE_DESCRIPTION: ${SITE_DESCRIPTION:-Collaborative course materials platform}
-        SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
-        NEXT_PUBLIC_SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
+    # null restores the runner image's CMD (node server.js). [] would clear it.
     command: null
+    # The dev source mount and published port would shadow the built server
+    # and expose it without nginx.
+    volumes: !reset []
+    ports: !reset []
+    environment:
+      NODE_OPTIONS: --max-old-space-size=384
+      WATCHPACK_POLLING: "false"
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 64M
+          cpus: "1.0"
+          memory: 512M
         reservations:
           cpus: "0.1"
-          memory: 32M
+          memory: 128M
 
   nginx:
     ports:

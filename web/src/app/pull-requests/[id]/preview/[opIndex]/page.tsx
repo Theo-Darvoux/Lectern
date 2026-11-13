@@ -1,7 +1,4 @@
-import { PRPreviewPageContent } from "@/components/pr/pr-preview-page-content";
-
-export const dynamicParams = false;
-export function generateStaticParams() { return [{ id: "_", opIndex: "0" }]; }
+// The preview is rendered by pull-requests/[id]/preview/layout.tsx.
 export default function PRPreviewPage() {
-  return <PRPreviewPageContent />;
+  return null;
 }

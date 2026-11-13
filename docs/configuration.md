@@ -185,6 +185,13 @@ ORGANIZATION_URL=https://www.myschool.edu
 There's also a background watermark (`BG_WATERMARK_URL` + the two opacity
 values), dynamic social share cards (`/api/og/image` with `OG_THEME_COLOR`, `OG_TITLE`, `OG_TAGLINE`), and an advanced multi-color wordmark (`SITE_NAME_STYLE`).
 
+These are API settings. The web server reads them from the API on every
+request and renders them into the page, so the first paint already shows your
+branding, and link previews (Slack, Discord, WhatsApp…) show it too, with the
+title of the shared folder, document, profile or QCM. To apply a change, edit
+`.env` and restart the API (`docker compose up -d api`). The web image needs no
+rebuild.
+
 ### Home-screen app (phones)
 
 Users can install the site on their phone's home screen. On Android, open

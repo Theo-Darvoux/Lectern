@@ -14,39 +14,36 @@ RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
 # binary Corepack already downloaded there, instead of fetching it on every build.
 FROM deps AS builder
 COPY . .
-# NEXT_PUBLIC_* values are inlined into the static export at build time — the
-# static prod image has no Node runtime to read them later, so they MUST be
-# present as env during `pnpm build`. release.yml supplies NEXT_PUBLIC_COMMIT_SHA
-# as a build-arg; any left unset bake as "" and the app falls back to its
-# in-code default via `|| ...` (e.g. NEXT_PUBLIC_API_URL -> "/api").
+# Only build facts are baked into the bundle. Instance settings (branding,
+# public URLs) are read from the API on every request by the Next server, so
+# one image serves every deployment. NEXT_PUBLIC_* values are inlined at build
+# time; left unset they bake as "" and the app falls back to its in-code
+# default via `|| ...` (e.g. NEXT_PUBLIC_API_URL -> "/api"). release.yml
+# supplies NEXT_PUBLIC_COMMIT_SHA.
 ARG NEXT_PUBLIC_COMMIT_SHA
 ARG NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_EUROOFFICE_URL
-ARG NEXT_PUBLIC_REPO_URL
-ARG NEXT_PUBLIC_SITE_FAVICON_URL
-ARG SITE_NAME
-ARG SITE_DESCRIPTION
-ARG SITE_FAVICON_URL=/favicon.ico
 ENV NEXT_PUBLIC_COMMIT_SHA=$NEXT_PUBLIC_COMMIT_SHA \
     NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
-    NEXT_PUBLIC_EUROOFFICE_URL=$NEXT_PUBLIC_EUROOFFICE_URL \
-    NEXT_PUBLIC_REPO_URL=$NEXT_PUBLIC_REPO_URL \
-    NEXT_PUBLIC_SITE_NAME=$SITE_NAME \
-    NEXT_PUBLIC_SITE_DESCRIPTION=$SITE_DESCRIPTION \
-    NEXT_PUBLIC_SITE_FAVICON_URL=${NEXT_PUBLIC_SITE_FAVICON_URL:-$SITE_FAVICON_URL} \
-    SITE_NAME=$SITE_NAME \
-    SITE_DESCRIPTION=$SITE_DESCRIPTION \
-    SITE_FAVICON_URL=$SITE_FAVICON_URL
+    NEXT_TELEMETRY_DISABLED=1
 # Persist webpack's incremental cache between builds; a small source change then
 # rebuilds only the affected modules instead of the whole bundle.
 RUN --mount=type=cache,id=next-cache,target=/app/.next/cache \
     pnpm build
 
-FROM nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752 AS runner
-# The reviewed nginx base is digest-pinned. Security updates arrive by an
-# explicit reviewed digest refresh rather than an open-ended package upgrade.
-COPY --from=builder /app/out /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
+# `output: "standalone"` traces the server's dependencies into .next/standalone,
+# so the runtime image carries no pnpm store or dev dependencies.
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS runner
+WORKDIR /app
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
+USER node
+EXPOSE 3000
+# A static file: proves the server is up without rendering a page (which calls the API).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --quiet --spider http://localhost/ || exit 1
+  CMD wget --quiet --spider http://127.0.0.1:3000/favicon.ico || exit 1
+CMD ["node", "server.js"]

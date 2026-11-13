@@ -252,7 +252,7 @@ export function OfficeViewer({ materialId, fileName, fileKey }: OfficeViewerProp
                 // Fetch the signed config and load the editor engine in parallel.
                 // A transient engine request gets two bounded retries before the
                 // viewer presents the manual retry action.
-                const rawEuroofficeUrl = config?.eurooffice_public_url || process.env.NEXT_PUBLIC_EUROOFFICE_URL || "/eurooffice/";
+                const rawEuroofficeUrl = config?.eurooffice_public_url || "/eurooffice/";
                 const loadEngine = async () => {
                     const retryDelays = [400, 1200];
                     let lastError: unknown;

@@ -82,7 +82,7 @@ export default function SettingsPage() {
   const tLayout = useTranslations("Layout");
   const tLanguages = useTranslations("Languages");
   const config = useConfigStore((state) => state.config);
-  const repoUrl = config?.repo_url || process.env.NEXT_PUBLIC_REPO_URL || "";
+  const repoUrl = config?.repo_url || "";
   const shortCommit = commitSha?.slice(0, 7);
   const { locale, changeLocale, isPending: localePending } = useChangeLocale();
   const { show } = useConfirmDialog();

@@ -46,7 +46,7 @@ export default function HomePage() {
   const isLoading = home.isFetching;
   const { refetch } = home;
   const retry = () => void refetch();
-  const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || "Lectern";
+  const siteName = config?.site_name || "Lectern";
 
   useEffect(() => {
     document.title = `${t("home")} • ${siteName}`;

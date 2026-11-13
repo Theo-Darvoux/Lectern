@@ -130,7 +130,7 @@ cacheable; authenticated file requests must reach the token verifier.
 | `EUROOFFICE_FILE_TOKEN_TTL` | `600` | Lifetime (seconds) of a file-access token. EuroOffice fetches the file only once its editor has loaded in the browser, so a short value breaks opening on slow connections (editor error `-4`). The token is also bound to the document-server JWT and to the material version. |
 | `EUROOFFICE_INTERNAL_API_BASE_URL` | `http://api:8000` | URL the EuroOffice container uses to fetch files from the API (internal network address). |
 | `EUROOFFICE_PUBLIC_URL` | *(unset)* | Browser-facing EuroOffice URL (can also be set as `NEXT_PUBLIC_EUROOFFICE_URL`). If unset, falls back to `/eurooffice/`. |
-| `EUROOFFICE_IMAGE` | `ghcr.io/euro-office/documentserver:v9.3.7` | Document server image (Compose, `eurooffice` profile). Pinned so upgrades are deliberate; change the tag to upgrade. |
+| `EUROOFFICE_IMAGE` | `ghcr.io/euro-office/documentserver:v9.3.4` | Document server image (Compose, `eurooffice` profile). Pinned so upgrades are deliberate; change the tag to upgrade. v9.3.5 to v9.3.7 need a CPU above baseline x86-64 ([Euro-Office/DocumentServer#415](https://github.com/Euro-Office/DocumentServer/issues/415)): on a VM with a generic CPU model, the log shows `CPU ISA level is lower than required` and no document opens. |
 | `EUROOFFICE_CPU_LIMIT` | `2.0` | CPU cap for the document server container (Compose), so large conversions cannot starve the API and workers. |
 
 The document server only runs when the `eurooffice` profile is in `COMPOSE_PROFILES`.
@@ -176,8 +176,10 @@ Used for verification emails, magic links, and notifications.
 
 ## Branding
 
-All optional — sensible defaults ship in the code. Most of these can also be
-edited live in the admin dashboard.
+All optional — sensible defaults ship in the code. The API reads them at
+startup, and the web server renders them into every page it serves (title,
+favicon, colors, wordmark, link previews). A change needs an API restart only:
+no web rebuild, and no flash of the default branding on load.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -347,14 +349,18 @@ The default in `compose.yaml` is 1 replica for dev; set these to 2+ in productio
 
 ---
 
-## Frontend (build-time / runtime config)
+## Frontend
 
-These variables are either baked into the frontend static export at build time (if set as build-args) or resolved dynamically from the backend configuration at runtime.
+The web image holds no instance settings: branding, the EuroOffice URL and the
+repository URL are API settings that the web server reads on every request
+(see [ADR 009](adr/009-server-rendered-runtime-branding.md)). The web container
+gets no `.env` file. `NEXT_PUBLIC_*` values are inlined into the bundle when
+the image is built (`docker build --build-arg`), not when it starts.
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEXT_PUBLIC_API_URL` | `/api` | Browser-facing API path. Dev compose sets `http://localhost/api`. |
-| `NEXT_PUBLIC_EUROOFFICE_URL` | *(unset)* | Browser-facing EuroOffice path. Resolved dynamically from the backend's `EUROOFFICE_PUBLIC_URL` / `NEXT_PUBLIC_EUROOFFICE_URL` at runtime. Falls back to relative `/eurooffice/`. |
+| `API_INTERNAL_URL` | `http://api:8000` | Runtime. URL the web server calls to read the branding, public config and page metadata while rendering. If the API does not answer within 3 s, the page renders with neutral defaults and the browser fetches the config itself. |
+| `NEXT_PUBLIC_API_URL` | `/api` | Build-time. Browser-facing API path. Dev compose sets `http://localhost/api`. |
 | `NEXT_PUBLIC_MAX_FILE_SIZE_MB` | `100` | Client-side fallback when runtime upload configuration is unavailable. |
 | `NEXT_PUBLIC_COMMIT_SHA` | *(unset)* | Build commit SHA, shown in the About panel. Baked in at build-time. |
 | `NEXT_PUBLIC_TUTORIALS` | `on` | Build-time kill-switch for the interactive tutorials. Set to `off`/`false`/`0` to hard-disable at build. For a runtime toggle prefer the backend `TUTORIALS_ENABLED`; this build-time switch still wins if set. Baked in at build-time. |

@@ -1,4 +1,5 @@
-import { create } from "zustand";
+import { createContext, createElement, useContext, useState, type ReactNode } from "react";
+import { create, createStore, useStore, type StoreApi } from "zustand";
 import { isRestrictedTarget } from "@/lib/utils";
 import { safeLocalStorage } from "@/lib/safe-storage";
 
@@ -271,10 +272,51 @@ interface ConfigState {
     updateConfig: (patch: Partial<PublicConfig>) => void;
 }
 
-export const useConfigStore = create<ConfigState>((set) => ({
-    config: null,
-    setConfig: (config) => set({ config }),
-    updateConfig: (patch) => set((state) => ({
-        config: state.config ? { ...state.config, ...patch } : null
-    })),
-}));
+function createConfigStore(config: PublicConfig | null): StoreApi<ConfigState> {
+    return createStore<ConfigState>((set) => ({
+        config,
+        setConfig: (config) => set({ config }),
+        updateConfig: (patch) => set((state) => ({
+            config: state.config ? { ...state.config, ...patch } : null
+        })),
+    }));
+}
+
+// The browser keeps one store for the page's lifetime. It is created from the
+// config the server rendered with, so the first client render (hydration)
+// reads the same values as the server HTML. Unit tests use it without a
+// provider.
+let browserStore: StoreApi<ConfigState> | undefined;
+
+function getBrowserStore(config: PublicConfig | null = null): StoreApi<ConfigState> {
+    browserStore ??= createConfigStore(config);
+    return browserStore;
+}
+
+const ConfigStoreContext = createContext<StoreApi<ConfigState> | null>(null);
+
+/**
+ * Provides the public config fetched by the root layout. The server builds a
+ * new store per request, so one request's config never leaks into another.
+ */
+export function ConfigStoreProvider({
+    initialConfig,
+    children,
+}: {
+    initialConfig: PublicConfig | null;
+    children: ReactNode;
+}) {
+    const [store] = useState(() =>
+        typeof window === "undefined" ? createConfigStore(initialConfig) : getBrowserStore(initialConfig),
+    );
+    return createElement(ConfigStoreContext.Provider, { value: store }, children);
+}
+
+export function useConfigStore<T>(selector: (state: ConfigState) => T): T {
+    const store = useContext(ConfigStoreContext) ?? getBrowserStore();
+    return useStore(store, selector);
+}
+
+/** For code outside React (event handlers, plain modules). Browser only. */
+useConfigStore.getState = (): ConfigState => getBrowserStore().getState();
+useConfigStore.setState = (partial: Partial<ConfigState>): void => getBrowserStore().setState(partial);

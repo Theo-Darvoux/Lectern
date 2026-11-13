@@ -1579,6 +1579,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/og/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Og Meta
+         * @description Metadata for one page of the web app, resolved as an anonymous visitor.
+         */
+        get: operations["get_og_meta_api_og_meta_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/og/image": {
         parameters: {
             query?: never;
@@ -1588,7 +1608,7 @@ export interface paths {
         };
         /**
          * Render Og Image
-         * @description Generate a dynamic 1200x630 Open Graph preview image (PNG).
+         * @description The 1200x630 preview banner (PNG) of one page of the web app.
          */
         get: operations["render_og_image_api_og_image_get"];
         put?: never;
@@ -1599,15 +1619,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/og": {
+    "/api/app/manifest.webmanifest": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Render Og */
-        get: operations["render_og_api_og_get"];
+        /** Get Manifest */
+        get: operations["get_manifest_api_app_manifest_webmanifest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/app/icon-maskable-512.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Maskable Icon */
+        get: operations["get_maskable_icon_api_app_icon_maskable_512_png_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/app/icon-{size}.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Icon */
+        get: operations["get_icon_api_app_icon__size__png_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1857,7 +1911,8 @@ export interface paths {
         /**
          * Get Eurooffice Config
          * @description Return a signed EuroOffice editor configuration for the given material.
-         *     Called by the frontend (authenticated with user JWT).
+         *     Called by the frontend (authenticated with user JWT). ``lang`` and
+         *     ``theme`` follow the viewer's UI so the editor matches the app.
          */
         get: operations["get_eurooffice_config_api_eurooffice_config__material_id__get"];
         put?: never;
@@ -3747,6 +3802,41 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * OgMetaResponse
+         * @description Page metadata the web server renders into the HTML <head>.
+         */
+        OgMetaResponse: {
+            /** Site Name */
+            site_name: string;
+            /** Title */
+            title: string;
+            /** Og Title */
+            og_title: string;
+            /** Description */
+            description: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "website" | "article";
+            /** Locale */
+            locale: string;
+            /** Url */
+            url: string;
+            /** Image */
+            image: string;
+            /** Image Width */
+            image_width: number | null;
+            /** Image Height */
+            image_height: number | null;
+            /** Theme Color */
+            theme_color: string;
+            /** Twitter Site */
+            twitter_site: string | null;
+            /** Twitter Creator */
+            twitter_creator: string | null;
         };
         /** OnboardIn */
         OnboardIn: {
@@ -8051,19 +8141,41 @@ export interface operations {
             };
         };
     };
+    get_og_meta_api_og_meta_get: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OgMetaResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     render_og_image_api_og_image_get: {
         parameters: {
             query?: {
-                /** @description Main title to display */
-                title?: string | null;
-                /** @description Subtitle/description */
-                subtitle?: string | null;
-                /** @description Category or section badge */
-                badge?: string | null;
-                /** @description Theme color hex */
-                theme?: string | null;
-                /** @description Pipe-separated footer tags */
-                tags?: string | null;
+                path?: string;
             };
             header?: never;
             path?: never;
@@ -8089,7 +8201,7 @@ export interface operations {
             };
         };
     };
-    render_og_api_og_get: {
+    get_manifest_api_app_manifest_webmanifest_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -8104,7 +8216,54 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": string;
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_maskable_icon_api_app_icon_maskable_512_png_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_icon_api_app_icon__size__png_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                size: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

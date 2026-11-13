@@ -15,38 +15,18 @@ http {
         ''      close;
     }
 
+    # The document server marks every asset response "immutable" for a year,
+    # 404s included, so a file missing for a moment (fonts are generated at
+    # boot) would stay broken in the CDN and browsers. Keep its caching for
+    # successes only.
+    map $status $eurooffice_cache_control {
+        ~^[23]  $upstream_http_cache_control;
+        default "no-store";
+    }
+
     map $request_uri $loggable {
         /api/health 0;
         default 1;
-    }
-
-    # Social / link-preview crawlers don't run JS. Route them to the backend OG
-    # renderer (location @og) so shared-link previews show the live admin-config
-    # branding instead of the default baked <head>. Mirrors production nginx.
-    # Excludes search engines (they render JS and must index the real SPA).
-    map $http_user_agent $is_bot {
-        default 0;
-        "~*(facebookexternalhit|facebookcatalog|Facebot|Twitterbot|Slackbot|Slack-ImgProxy|Discordbot|WhatsApp|LinkedInBot|Pinterest|redditbot|TelegramBot|vkShare|SkypeUriPreview|Embedly|Iframely|Mastodon|Bluesky)" 1;
-    }
-
-    # SPA fallback (dev only). The Next pages keep `dynamicParams = false`
-    # (required by the production `output: export`), so `next dev` 404s any
-    # un-prerendered param like /browse/<id> or /profile/<real-id>. Map each
-    # deep dynamic URL to the shell route Next did prerender; location / then
-    # rewrites the upstream path to it while preserving the browser URL, so the
-    # client SPA reads the real path via usePathname. Mirrors what the
-    # production Nginx (web/nginx.conf) does with try_files. Regexes are tested
-    # top-to-bottom — most specific first.
-    map $uri $spa_shell {
-        default "";
-        "~^/pull-requests/[^/]+/preview/[^/]+"  "/pull-requests/_/preview/0/";
-        "~^/pull-requests/[^/]+"                "/pull-requests/_/";
-        "~^/qcm/new"                            "";
-        "~^/qcm/preview"                        "";
-        "~^/qcm/[^/]+/edit"                     "/qcm/_/edit/";
-        "~^/qcm/[^/]+"                          "/qcm/_/";
-        "~^/profile/[^/]+"                      "/profile/_/";
-        "~^/browse/.+"                          "/browse/";
     }
 
     log_format main '$remote_addr - $remote_user [$time_local] "$request" '
@@ -135,6 +115,9 @@ http {
             proxy_set_header X-Forwarded-Host $host;
             proxy_buffering off;
             proxy_read_timeout 3600s;
+            # Errors are never cached (see the $eurooffice_cache_control map).
+            proxy_hide_header Cache-Control;
+            add_header Cache-Control $eurooffice_cache_control always;
         }
         
         # B. Specific fix for themes.json
@@ -143,6 +126,9 @@ http {
             rewrite ^ /web-apps/apps/themes/themes.json break;
             proxy_pass $eurooffice_upstream;
             proxy_set_header Host $host;
+            # Errors are never cached (see the $eurooffice_cache_control map).
+            proxy_hide_header Cache-Control;
+            add_header Cache-Control $eurooffice_cache_control always;
         }
 
         # C. Main EuroOffice block with prefix
@@ -169,6 +155,10 @@ http {
             proxy_send_timeout 3600s;
             proxy_connect_timeout 60s;
 
+            # Errors are never cached (see the $eurooffice_cache_control map).
+            proxy_hide_header Cache-Control;
+            add_header Cache-Control $eurooffice_cache_control always;
+
             # Ensure redirects from EuroOffice include the /eurooffice/ prefix
             proxy_redirect / /eurooffice/;
 
@@ -190,6 +180,9 @@ http {
             proxy_read_timeout 3600s;
             proxy_intercept_errors on;
             error_page 404 = @nextjs_fallback;
+            # Errors are never cached (see the $eurooffice_cache_control map).
+            proxy_hide_header Cache-Control;
+            add_header Cache-Control $eurooffice_cache_control always;
         }
 
         # E. Direct API access (some versions use /doc/ or /coauthoring/ without version hash — EuroOffice)
@@ -207,39 +200,8 @@ http {
             proxy_read_timeout 3600s;
         }
 
-        # Backend-rendered Open Graph metadata for crawlers (see $is_bot map).
-        location @og {
-            rewrite ^ /api/og break;
-            proxy_pass http://api;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_set_header X-Original-Path $orig_uri;
-        }
-
         # Main Frontend Application
         location / {
-            set $orig_uri $uri;
-            error_page 463 = @og;
-            if ($is_bot) {
-                return 463;
-            }
-            # Deep dynamic routes that next dev didn't prerender: serve the
-            # matching shell upstream while keeping the browser URL intact.
-            #
-            # RSC payloads (*.txt) — full-page <path>/index.txt and Next 16
-            # segment-cache <path>/__next.<seg>.txt — must collapse to the
-            # shell's payload of the SAME basename, not the shell directory.
-            # Rewriting them to the directory returns the HTML shell, which the
-            # router rejects → full page reload (doMpaNavigation). This rewrite
-            # only fires for *.txt; the directory rewrite below handles HTML.
-            if ($spa_shell != "") {
-                rewrite "^.*/([^/]+\.txt)$" "${spa_shell}$1" break;
-            }
-            if ($spa_shell != "") {
-                rewrite ^ $spa_shell break;
-            }
             proxy_pass http://web;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;

@@ -20,7 +20,7 @@ function MagicLinkVerifier() {
     const attempted = useRef(false);
     const config = useConfigStore((state) => state.config);
 
-    const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || t("title") || "Lectern";
+    const siteName = config?.site_name || t("title") || "Lectern";
 
     useEffect(() => {
         document.title = `${t("verifySignIn")} • ${siteName}`;
@@ -177,7 +177,7 @@ function MagicLinkVerifier() {
 export default function MagicLinkPage() {
     const t = useTranslations("Login");
     const config = useConfigStore((state) => state.config);
-    const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || t("title") || "Lectern";
+    const siteName = config?.site_name || t("title") || "Lectern";
 
     return (
         <Suspense

@@ -29,7 +29,7 @@ export default function ResetPasswordPage() {
     const [resetComplete, setResetComplete] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const siteName = config?.site_name || process.env.NEXT_PUBLIC_SITE_NAME || "Lectern";
+    const siteName = config?.site_name || "Lectern";
 
     useEffect(() => {
         document.title = `${t("resetPasswordTitle")} • ${siteName}`;

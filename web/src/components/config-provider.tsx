@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { apiFetchRetry } from "@/lib/api-client";
 import { useConfigStore, type PublicConfig } from "@/lib/stores";
-import { parseSegments, buildFontsUrlForNames } from "@/lib/fonts";
+import { brandColorVariables, wordmarkFontsHref } from "@/lib/brand";
 import { BackgroundWatermark } from "@/components/background-watermark";
 import { normalizePathname } from "@/lib/utils";
 
@@ -20,6 +20,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     const tSetup = useTranslations("Setup");
     const [loadState, setLoadState] = useState<ConfigLoadState>(config ? "ready" : "loading");
     const [loadError, setLoadError] = useState<string | null>(null);
+    // The root layout renders with the config it fetched on the server. The
+    // client fetches it only when the server could not.
+    const renderedWithConfig = useRef(config !== null);
 
     const fetchConfig = useCallback(async (signal?: AbortSignal) => {
         setLoadState("loading");
@@ -68,63 +71,37 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             };
         }
 
-        void fetchConfig(controller.signal);
+        if (!renderedWithConfig.current) void fetchConfig(controller.signal);
         return () => {
             controller.abort();
             bc?.close();
         };
     }, [fetchConfig]);
 
-    // Apply config changes immediately to DOM/CSS whenever the store updates
+    // The server already rendered the branding into the page. Apply it again
+    // when the config arrives or changes on the client (the API was down while
+    // rendering, or another tab broadcast a refresh).
     useEffect(() => {
         if (!config) return;
 
-        // Update tab title if the page hasn't set a custom one (i.e. still the static default).
-        // Re-runs on pathname change so navigation to pages without custom titles also updates.
-        if (config.site_name && !document.title.includes(" • ")) {
-            document.title = config.site_name;
-        }
-
-        // Inject Google Fonts for any fonts used in the site name style
-        if (config.site_name_style) {
-            const segments = parseSegments(config.site_name_style);
-            if (segments) {
-                const usedFonts = [...new Set(segments.map((s) => s.font).filter(Boolean))];
-                const url = buildFontsUrlForNames(usedFonts);
-                if (url && !document.querySelector(`link[data-lectern-fonts]`)) {
-                    const link = document.createElement("link");
-                    link.rel = "stylesheet";
-                    link.href = url;
-                    link.setAttribute("data-lectern-fonts", "1");
-                    document.head.appendChild(link);
-                } else if (url) {
-                    const existing = document.querySelector(`link[data-lectern-fonts]`) as HTMLLinkElement | null;
-                    if (existing && existing.href !== url) existing.href = url;
-                }
+        const fontsHref = wordmarkFontsHref(config.site_name_style);
+        if (fontsHref) {
+            const existing = document.querySelector<HTMLLinkElement>("link[data-lectern-fonts]");
+            if (!existing) {
+                const link = document.createElement("link");
+                link.rel = "stylesheet";
+                link.href = fontsHref;
+                link.setAttribute("data-lectern-fonts", "1");
+                document.head.appendChild(link);
+            } else if (existing.href !== fontsHref) {
+                existing.href = fontsHref;
             }
         }
 
-        // Inject primary color if needed (custom CSS variable)
-        if (config.primary_color) {
-            document.documentElement.style.setProperty('--primary-custom', config.primary_color);
-
-            // Calculate and set a contrasting foreground color
-            const hex = config.primary_color.replace('#', '');
-            if (hex.length === 6) {
-                const r = parseInt(hex.substring(0, 2), 16);
-                const g = parseInt(hex.substring(2, 4), 16);
-                const b = parseInt(hex.substring(4, 6), 16);
-                const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-
-                // If the background is light, use dark text; otherwise use light text
-                const foreground = brightness > 165 ? 'oklch(0.205 0 0)' : 'oklch(0.985 0 0)';
-                document.documentElement.style.setProperty('--primary-foreground-custom', foreground);
-            } else {
-                // Fallback to light text for custom colors if we can't parse it
-                document.documentElement.style.setProperty('--primary-foreground-custom', 'oklch(0.985 0 0)');
-            }
+        for (const [name, value] of Object.entries(brandColorVariables(config.primary_color))) {
+            document.documentElement.style.setProperty(name, value);
         }
-    }, [config, pathname]);
+    }, [config]);
 
     // The setup form depends on `/auth/methods` for both the durable
     // `needs_setup` marker and whether the operator bootstrap token is required.

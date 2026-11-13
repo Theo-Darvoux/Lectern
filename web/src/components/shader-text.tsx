@@ -199,7 +199,7 @@ export function ShaderText({ text, style, segments: propSegments, className, can
     const [webglSupported, setWebglSupported] = useState(true);
 
     const configStyle = useConfigStore((state) => state.config?.site_name_style);
-    const activeStyle = style !== undefined ? style : (configStyle || (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SITE_NAME_STYLE : null) || null);
+    const activeStyle = style !== undefined ? style : (configStyle || null);
 
     const segments: NameSegment[] = useMemo(() => {
         if (propSegments && propSegments.length > 0) return propSegments;

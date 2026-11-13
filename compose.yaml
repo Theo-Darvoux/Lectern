@@ -313,16 +313,13 @@ services:
     image: ghcr.io/theo-darvoux/lectern/web:dev
     command: >-
       sh -c "CI=true pnpm install && node_modules/.bin/next dev --turbopack"
+    # No env_file: the web server reads no instance settings. Branding and the
+    # other runtime settings come from the API (API_INTERNAL_URL) on every request.
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
       API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
-      NEXT_PUBLIC_EUROOFFICE_URL: ${NEXT_PUBLIC_EUROOFFICE_URL:-http://localhost/eurooffice}
-      NEXT_PUBLIC_REPO_URL: ${NEXT_PUBLIC_REPO_URL:-}
-      NEXT_PUBLIC_SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
-      SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
       NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=3584}
       WATCHPACK_POLLING: ${WATCHPACK_POLLING:-true}
-    env_file: ${RUNTIME_ENV_FILE:-.env}
     depends_on:
       - api
     volumes:
@@ -331,7 +328,8 @@ services:
     ports:
       - "3000:3000"
     healthcheck:
-      test: [ "CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/" ]
+      # A static file: proves the server is up without rendering a page.
+      test: [ "CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/favicon.ico" ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -362,7 +360,11 @@ services:
     # `eurooffice` to COMPOSE_PROFILES to run it (the default in .env.example).
     profiles: [ eurooffice ]
     # Pinned so upgrades are deliberate; bump EUROOFFICE_IMAGE to update.
-    image: ${EUROOFFICE_IMAGE:-ghcr.io/euro-office/documentserver:v9.3.7}
+    # Stay on v9.3.4 until Euro-Office/DocumentServer#415 is fixed: from v9.3.5
+    # the converter binaries need a CPU newer than baseline x86-64 and fail
+    # with "CPU ISA level is lower than required" on generic VM CPU models, so
+    # no document opens (fonts are never generated, conversions fail).
+    image: ${EUROOFFICE_IMAGE:-ghcr.io/euro-office/documentserver:v9.3.4}
     container_name: lectern-eurooffice-1
     restart: unless-stopped
     stop_grace_period: 1m
@@ -385,8 +387,10 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      - eurooffice_data:/var/www/onlyoffice/Data
-      - eurooffice_log:/var/log/onlyoffice
+      # Euro-Office paths (not the upstream ONLYOFFICE ones): Data holds the
+      # generated secrets and custom fonts.
+      - eurooffice_data:/var/www/euro-office/Data
+      - eurooffice_log:/var/log/euro-office
     deploy:
       resources:
         limits:
