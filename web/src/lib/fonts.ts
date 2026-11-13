@@ -78,7 +78,9 @@ export function segmentStyle(seg: NameSegment): Record<string, string | number |
     return {
         fontFamily: seg.font ? `'${seg.font}', sans-serif` : undefined,
         color: seg.color ?? undefined,
-        fontWeight: seg.bold ? 700 : undefined,
-        fontStyle: seg.italic ? "italic" : undefined,
+        // Explicit both ways: the wordmark sits in bold/extrabold containers
+        // (navbar, wordmark builder), so "not bold" must not inherit their weight.
+        fontWeight: seg.bold ? 700 : 400,
+        fontStyle: seg.italic ? "italic" : "normal",
     };
 }

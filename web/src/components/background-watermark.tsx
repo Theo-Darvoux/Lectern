@@ -1,24 +1,30 @@
 "use client";
 
-import { useTheme } from "next-themes";
+import type { CSSProperties } from "react";
 import { useConfigStore } from "@/lib/stores";
+
+const DEFAULT_OPACITY = 0.05;
 
 export function BackgroundWatermark() {
     const config = useConfigStore((s) => s.config);
-    const { resolvedTheme } = useTheme();
 
     if (!config?.bg_watermark_url) return null;
 
-    const opacity =
-        resolvedTheme === "dark"
-            ? (config.bg_watermark_opacity_dark ?? 0.05)
-            : (config.bg_watermark_opacity_light ?? 0.05);
+    // The opacity is chosen by CSS from the `.dark` class rather than from
+    // `useTheme()`. The server cannot know the theme, so a JS choice renders
+    // the light value into the HTML, and React keeps server attributes on
+    // hydration: dark mode stayed at the light opacity.
+    const style = {
+        zIndex: -10,
+        "--wm-opacity-light": config.bg_watermark_opacity_light ?? DEFAULT_OPACITY,
+        "--wm-opacity-dark": config.bg_watermark_opacity_dark ?? DEFAULT_OPACITY,
+    } as CSSProperties;
 
     return (
         <div
             aria-hidden
-            className="pointer-events-none fixed inset-0 flex items-center justify-center overflow-hidden"
-            style={{ zIndex: -10, opacity }}
+            className="pointer-events-none fixed inset-0 flex items-center justify-center overflow-hidden opacity-[var(--wm-opacity-light)] dark:opacity-[var(--wm-opacity-dark)]"
+            style={style}
         >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
