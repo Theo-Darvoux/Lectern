@@ -185,7 +185,8 @@ edited live in the admin dashboard.
 | `ORGANIZATION_URL` | *(none)* | Link behind the organization name. |
 | `REPO_URL` | *(unset)* | Source-repository URL for the footer/About links (can also be set as `NEXT_PUBLIC_REPO_URL`). Hidden when empty. |
 | `SITE_LOGO_URL` | *(unset)* | Logo image URL. |
-| `SITE_FAVICON_URL` | *(unset)* | Favicon URL. |
+| `SITE_FAVICON_URL` | *(unset)* | Favicon URL. Unset: the bundled INTellect logo (`/favicon.ico`). |
+| `APP_ICON_PATH` | `app/assets/brand/app-icon.png` | Home-screen (PWA / iOS) icon: a square PNG on the API's disk; relative paths resolve against the API folder. A sibling `<name>-maskable.png`, if present, is used for Android's round-cropped icon; otherwise the image is shrunk to 80% on its corner color. Set it empty to use a monogram (first letter of the name on the theme color). See [configuration.md](configuration.md#home-screen-app-phones). |
 | `OG_IMAGE_URL` | *(unset)* | Custom Open Graph preview image. When unset, a dynamic 1200x630 branded card is generated automatically via `/api/og/image`. |
 | `OG_TITLE` | *(unset)* | Open Graph title override for site / homepage (falls back to `SITE_NAME`). |
 | `OG_DESCRIPTION` | *(unset)* | Open Graph description override for site / homepage (falls back to `SITE_DESCRIPTION`). |

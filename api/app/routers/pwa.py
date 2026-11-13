@@ -15,7 +15,12 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.core.common.exceptions import NotFoundError
-from app.core.media.app_icon import generate_app_icon, monogram_letter
+from app.core.media.app_icon import (
+    generate_app_icon,
+    monogram_letter,
+    render_icon_file,
+    resolve_icon_file,
+)
 
 router = APIRouter(prefix="/api/app", tags=["pwa"])
 
@@ -77,9 +82,13 @@ async def get_manifest() -> JSONResponse:
 
 
 def _icon_response(size: int, *, maskable: bool) -> Response:
-    image = generate_app_icon(
-        monogram_letter(_site_name()), _theme_color(), size, maskable=maskable
-    )
+    icon_file = resolve_icon_file(settings.app_icon_path)
+    if icon_file is not None:
+        image = render_icon_file(icon_file, size, maskable=maskable)
+    else:
+        image = generate_app_icon(
+            monogram_letter(_site_name()), _theme_color(), size, maskable=maskable
+        )
     return Response(
         content=image, media_type="image/png", headers={"Cache-Control": _CACHE_CONTROL}
     )

@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     site_description: str = "Collaborative course materials platform"
     site_logo_url: str | None = None
     site_favicon_url: str | None = None
+    # Home-screen (PWA / apple-touch) icon: a square image on the API's disk. Relative
+    # paths resolve against the API root. A sibling "<name>-maskable.<ext>" is used for
+    # the Android maskable icon when present. Empty: a monogram on the theme color.
+    app_icon_path: str = "app/assets/brand/app-icon.png"
     og_image_url: str | None = None
     og_title: str | None = None
     og_description: str | None = None

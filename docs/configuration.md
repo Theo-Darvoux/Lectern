@@ -199,7 +199,20 @@ after a rebrand:
   `SITE_NAME` when it is unset. Launchers show at most 12 characters under
   the icon. The theme color comes from `OG_THEME_COLOR`, or `PRIMARY_COLOR`.
 - `GET /api/app/icon-{180,192,512}.png` and `/api/app/icon-maskable-512.png`:
-  a monogram (the first letter of the name) on the theme color.
+  the image at `APP_ICON_PATH`, resized. By default this is the bundled
+  INTellect logo (`api/app/assets/brand/app-icon.png`).
+
+To use your own icon, put a square PNG (512×512 or larger, no transparency)
+where the API can read it, for example in a mounted volume, and set
+`APP_ICON_PATH` to its path. Android may crop the icon to a circle. To keep
+your artwork intact, also provide `<name>-maskable.png` next to it, with the
+important part inside the central 80% circle. Without that file, the API
+shrinks the icon to 80% and fills the margin with the color of its top-left
+pixel. Set `APP_ICON_PATH=` (empty) to get a monogram instead: the first
+letter of the name on the theme color.
+
+The browser-tab favicon is separate. It is `/favicon.ico` from the web app
+(the same INTellect logo) unless `SITE_FAVICON_URL` is set.
 
 Phones keep the icon they downloaded when the app was installed. After a
 rebrand, users must remove the shortcut and add it again to get the new
